@@ -1,0 +1,154 @@
+/* ChartControl — bar-chart styles. Pure CSS-bar approach (no SVG runtime
+   dependency); each bar is a div whose width/height percentage scales with
+   the resolved max value. */
+
+.fx-chart {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    color: #212529;
+    width: 100%;
+}
+
+.fx-chart-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: #1d4ed8;
+    font-size: 13px;
+}
+
+/* Single-series — horizontal bars stacked vertically */
+.fx-chart-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.fx-chart-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+}
+.fx-chart-row-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: #444;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fx-chart-row-bar-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 18px;
+    background: linear-gradient(to right, transparent 0, transparent calc(100% - 1px), #e5e7eb calc(100% - 1px), #e5e7eb 100%);
+}
+.fx-chart-row-bar {
+    height: 14px;
+    background: #2563eb;
+    border-radius: 2px;
+    transition: width 0.2s ease-out;
+    min-width: 1px;
+}
+.fx-chart-row-value {
+    font-size: 11px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+/* Multi-row — each row gets its own grouped vertical-bar mini-chart */
+.fx-chart-multi {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.fx-chart-multi-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    min-height: 60px;
+    border-bottom: 1px solid #f0f0f0;
+    padding: 4px 0;
+}
+.fx-chart-multi-label {
+    flex: 0 0 auto;
+    align-self: center;
+    font-size: 11px;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fx-chart-multi-bars {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 3px;
+    min-height: 50px;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 2px;
+}
+.fx-chart-bar-cell {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 2px;
+    min-width: 4px;
+    height: 100%;
+}
+.fx-chart-bar {
+    width: 100%;
+    background: #2563eb;
+    min-height: 1px;
+    transition: height 0.2s ease-out;
+    border-radius: 1px 1px 0 0;
+}
+.fx-chart-bar-value {
+    font-size: 9px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+/* Bottom axis (multi-row only) */
+.fx-chart-axis {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 2px;
+    padding-bottom: 2px;
+    font-size: 10px;
+    color: #666;
+}
+.fx-chart-axis-label-spacer {
+    flex: 0 0 auto;
+    /* Match LabelStyle min-width via inline style on the per-row label;
+       use the same default here so axis ticks align under bars. */
+    min-width: 160px;
+}
+.fx-chart-axis-bars {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 3px;
+}
+.fx-chart-axis-tick {
+    flex: 1;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-chart-empty {
+    padding: 20px;
+    text-align: center;
+    color: #888;
+    font-style: italic;
+}

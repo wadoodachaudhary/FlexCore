@@ -1,0 +1,28 @@
+@namespace Fx.ControlKit
+
+<label class="fx-checkbox @CssClass" style="@(Disabled ? "opacity:0.6;cursor:default;" : "")">
+    <input type="checkbox"
+           checked="@Checked"
+           disabled="@Disabled"
+           @onchange="OnCheckedChanged" />
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <span class="fx-checkbox-label">@Label</span>
+    }
+</label>
+
+@code {
+    [Parameter] public bool Checked { get; set; }
+    [Parameter] public EventCallback<bool> CheckedChanged { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private async Task OnCheckedChanged(ChangeEventArgs e)
+    {
+        var newVal = e.Value is bool b ? b : false;
+        Checked = newVal;
+        if (CheckedChanged.HasDelegate)
+            await CheckedChanged.InvokeAsync(newVal);
+    }
+}

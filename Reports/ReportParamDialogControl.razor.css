@@ -1,0 +1,169 @@
+/* Reuses the same overlay/dialog base as DialogControl */
+.fx-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fx-param-dialog {
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    min-width: 720px;
+    max-width: 900px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.fx-dialog-header {
+    background: linear-gradient(to bottom, #fafafa, #e8e8e8);
+    padding: 8px 12px;
+    border-bottom: 1px solid #ccc;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.fx-dialog-close {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 6px;
+    color: #666;
+}
+
+.fx-dialog-close:hover {
+    color: #000;
+}
+
+.fx-dialog-body.fx-param-body {
+    padding: 16px;
+    overflow-y: auto;
+    flex: 1;
+    background: #f0f0f0;
+}
+
+.fx-param-title {
+    font-size: 13px;
+    color: #444;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed #ddd;
+}
+
+/* Each parameter occupies a panel matching Crystal's "Enter Parameter Values" dialog. */
+.fx-param-panel {
+    background: #e8eaef;
+    border: 1px solid #c0c4cc;
+    border-radius: 3px;
+    padding: 10px 14px;
+    margin-bottom: 12px;
+}
+
+.fx-param-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+}
+
+.fx-param-prompt-text {
+    font-size: 13px;
+    color: #222;
+    font-weight: 500;
+}
+
+.fx-param-secondary-label {
+    font-size: 12px;
+    color: #555;
+    font-style: normal;
+}
+
+.fx-param-panel-body input[type="text"],
+.fx-param-panel-body input[type="number"],
+.fx-param-panel-body input[type="date"],
+.fx-param-panel-body select {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #b0b4ba;
+    border-radius: 2px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+    box-sizing: border-box;
+}
+
+.fx-param-panel-body input:focus,
+.fx-param-panel-body select:focus {
+    outline: none;
+    border-color: #0078d4;
+    box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
+}
+
+/* Crystal default-values dropdown (e.g. "Show PO Items?" Yes/No) shows the
+   description selector + an editable value box below it. */
+.fx-param-defaults-dropdown {
+    margin-bottom: 6px;
+}
+
+.fx-param-value-label {
+    display: block;
+    font-size: 12px;
+    color: #444;
+    margin: 2px 0 2px 2px;
+}
+
+.fx-param-error {
+    margin-top: 10px;
+    padding: 8px 12px;
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 3px;
+    color: #856404;
+    font-size: 13px;
+}
+
+.fx-dialog-footer {
+    padding: 10px 16px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    background: #fafafa;
+}
+
+.fx-button {
+    padding: 6px 20px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    min-width: 80px;
+}
+
+.fx-button:hover {
+    background: #f0f0f0;
+    border-color: #999;
+}
+
+.fx-button-primary {
+    background: #0078d4;
+    color: #fff;
+    border-color: #0078d4;
+}
+
+.fx-button-primary:hover {
+    background: #106ebe;
+    border-color: #106ebe;
+}

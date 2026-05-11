@@ -1,0 +1,95 @@
+@namespace Fx.ControlKit
+@typeparam TValue
+
+<input type="number"
+       class="fx-numeric @CssClass"
+       style="@(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
+       value="@FormattedValue"
+       disabled="@(!Enabled)"
+       step="@StepValue"
+       min="@(Min.HasValue ? Min.Value.ToString() : null)"
+       max="@(Max.HasValue ? Max.Value.ToString() : null)"
+       placeholder="@Placeholder"
+       @onchange="OnValueChanged" />
+
+@code {
+    [Parameter] public TValue? Value { get; set; }
+    [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
+    [Parameter] public string? Format { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public decimal? Min { get; set; }
+    [Parameter] public decimal? Max { get; set; }
+    [Parameter] public decimal Step { get; set; } = 1;
+
+    /// <summary>Event fired when value changes.</summary>
+    [Parameter] public EventCallback<NumericChangeEventArgs<TValue>> ValueChange { get; set; }
+
+    private string StepValue => Step == 1 ? "any" : Step.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private string FormattedValue
+    {
+        get
+        {
+            if (Value == null) return "";
+            if (Value is IFormattable formattable && !string.IsNullOrEmpty(Format))
+            {
+                // For numeric input, strip currency/percent symbols — just show the raw number
+                var fmt = Format.Replace("C", "F").Replace("N", "F");
+                return formattable.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture);
+            }
+            return Value.ToString() ?? "";
+        }
+    }
+
+    private async Task OnValueChanged(ChangeEventArgs e)
+    {
+        var strVal = e.Value?.ToString() ?? "";
+        TValue? newValue = default;
+        try
+        {
+            if (typeof(TValue) == typeof(decimal))
+                newValue = (TValue)(object)(decimal.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m);
+            else if (typeof(TValue) == typeof(int))
+                newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : 0);
+            else if (typeof(TValue) == typeof(double))
+                newValue = (TValue)(object)(double.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var dbl) ? dbl : 0.0);
+            else if (typeof(TValue) == typeof(float))
+                newValue = (TValue)(object)(float.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : 0f);
+            else
+                newValue = (TValue)Convert.ChangeType(strVal, typeof(TValue));
+        }
+        catch
+        {
+            newValue = default;
+        }
+
+        // Clamp to min/max
+        if (newValue != null && Min.HasValue)
+        {
+            var decVal = Convert.ToDecimal(newValue);
+            if (decVal < Min.Value)
+                newValue = (TValue)Convert.ChangeType(Min.Value, typeof(TValue));
+        }
+        if (newValue != null && Max.HasValue)
+        {
+            var decVal = Convert.ToDecimal(newValue);
+            if (decVal > Max.Value)
+                newValue = (TValue)Convert.ChangeType(Max.Value, typeof(TValue));
+        }
+
+        Value = newValue;
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(newValue);
+
+        if (ValueChange.HasDelegate)
+            await ValueChange.InvokeAsync(new NumericChangeEventArgs<TValue> { Value = newValue });
+    }
+
+    public class NumericChangeEventArgs<T>
+    {
+        public T? Value { get; set; }
+    }
+}

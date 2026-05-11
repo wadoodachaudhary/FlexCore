@@ -1,0 +1,47 @@
+@using Fx.ControlKit.Notifications
+@inject ILogger<ErrorBoundaryControl> Logger
+@inject NotificationService Notifications
+
+<ErrorBoundary @ref="_errorBoundary">
+    <ChildContent>
+        @ChildContent
+    </ChildContent>
+    <ErrorContent Context="ex">
+        @{ LogError(ex); }
+        <div class="fx-error-boundary">
+            <div class="fx-error-icon">&#x26A0;</div>
+            <div class="fx-error-text">
+                <strong>Something went wrong</strong>
+                <p>@ex.Message</p>
+            </div>
+            <button class="fx-error-retry" @onclick="Recover">Retry</button>
+        </div>
+    </ErrorContent>
+</ErrorBoundary>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Optional label for logging which component/area failed.</summary>
+    [Parameter] public string Area { get; set; } = "Component";
+
+    private ErrorBoundary? _errorBoundary;
+    private Exception? _lastLogged;
+
+    private void LogError(Exception ex)
+    {
+        // Avoid logging the same exception on re-render
+        if (ex != _lastLogged)
+        {
+            _lastLogged = ex;
+            Logger.LogError(ex, "Unhandled exception in {Area}", Area);
+            Notifications.Error($"Unhandled error in {Area}", ex.Message);
+        }
+    }
+
+    private void Recover()
+    {
+        _lastLogged = null;
+        _errorBoundary?.Recover();
+    }
+}

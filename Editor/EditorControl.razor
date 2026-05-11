@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit.Editor
+
+@* The generalized rich-text editor. Owns a single contenteditable surface
+   whose content is driven through JS interop helpers in editor-control.js.
+   Host apps bolt their own floating toolbar / result panel / etc. on top. *@
+
+<div id="@EditorId"
+     @key="_editorKey"
+     class="fx-editor fx-pw-@PageWidthClass @(CssClass ?? string.Empty)"
+     style="@EditorStyle"
+     contenteditable="true"
+     spellcheck="true"
+     @onmouseup="HandleMouseUpAsync"
+     @oninput="HandleInputAsync">
+</div>

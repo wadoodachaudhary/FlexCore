@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit
+
+@* A tab within a RibbonControl. Holds RibbonGroup children. *@
+
+@if (Parent != null && Parent.IsActive(this))
+{
+    <div class="fx-ribbon-tab-content">
+        @ChildContent
+    </div>
+}
+
+@code {
+    /// <summary>Title shown on the tab strip.</summary>
+    [Parameter] public string Title { get; set; } = "";
+
+    /// <summary>Tab content — typically RibbonGroups.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [CascadingParameter] public RibbonControl? Parent { get; set; }
+
+    protected override void OnInitialized() => Parent?.RegisterTab(this);
+}

@@ -1,0 +1,26 @@
+/* Default Cancel-button styling — used standalone. Hosts that ship a richer
+ * theme (e.g. GhostWriter's `.btn.ghost`) override via CssClass. */
+
+.fx-cancel-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.fx-cancel-button:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.fx-cancel-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

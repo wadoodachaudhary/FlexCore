@@ -1,0 +1,41 @@
+@namespace Fx.ControlKit.Editor
+@inherits ButtonControl
+
+@* Editor-flavoured button: inherits every parameter and behavior from the
+   base ButtonControl (OnClick, Disabled, Title, StopPropagation,
+   PreventMouseDownDefault, etc.) and just drops the generic .fx-button
+   base styling. Use for the top toolbar, document-toolbar, and any
+   document-chrome button where the host's theme drives the look.
+
+   Consumers supply their own class via CssClass — no base look is imposed
+   beyond marking the element as fx-editor-button so libraries / themes
+   can target all editor buttons with one selector. *@
+
+<button class="@ResolvedEditorButtonClass"
+        type="@ButtonType"
+        disabled="@Disabled"
+        title="@Title"
+        style="@Style"
+        @onclick="OnClick"
+        @onclick:stopPropagation="StopPropagation"
+        @onmousedown:preventDefault="PreventMouseDownDefault">
+    @if (!string.IsNullOrWhiteSpace(IconCss))
+    {
+        <span class="@IconCss"></span>
+    }
+    @ChildContent
+</button>
+
+@code {
+    // ButtonControl already defines every parameter used above; inheriting
+    // brings them in without redeclaration. The marker class `fx-editor-button`
+    // is always emitted so theme CSS can blanket-style editor buttons.
+    private string ResolvedEditorButtonClass
+    {
+        get
+        {
+            var c = (CssClass ?? string.Empty).Trim();
+            return string.IsNullOrEmpty(c) ? "fx-editor-button" : $"fx-editor-button {c}";
+        }
+    }
+}

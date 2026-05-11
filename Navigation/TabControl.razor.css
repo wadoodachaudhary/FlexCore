@@ -1,0 +1,32 @@
+.fx-tabs {
+    width: 100%;
+}
+
+.fx-tab-headers {
+    display: flex;
+    gap: 6px;
+    border-bottom: 1px solid #d7dbe0;
+    padding-bottom: 6px;
+}
+
+.fx-tab-button {
+    border: none;
+    background: #f0f2f5;
+    padding: 8px 14px;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+}
+
+.fx-tab-button.active {
+    background: #ffffff;
+    border: 1px solid #d7dbe0;
+    border-bottom-color: #ffffff;
+    font-weight: 600;
+}
+
+.fx-tab-content {
+    border: 1px solid #d7dbe0;
+    border-top: none;
+    padding: 12px;
+    background: #ffffff;
+}

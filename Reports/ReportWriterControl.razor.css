@@ -1,0 +1,391 @@
+/* ReportWriterControl - Report rendering styles (screen + print) */
+
+.fx-report-container {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background: #e8e8e8;
+}
+
+/* Drill-down tab bar (Crystal-Reports-style tabs above the report).
+   Only shown when there are 2+ tabs (i.e. at least one drill-down is open). */
+.fx-report-tab-bar {
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px 0 8px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #c0c0c0;
+    user-select: none;
+}
+
+.fx-report-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: #e8e8e8;
+    border: 1px solid #c0c0c0;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    color: #333;
+}
+
+.fx-report-tab:hover {
+    background: #ddd;
+}
+
+.fx-report-tab.active {
+    background: #fff;
+    font-weight: 600;
+    border-color: #888;
+    border-bottom: 1px solid #fff;
+    position: relative;
+    top: 1px;
+}
+
+.fx-report-tab-close {
+    background: transparent;
+    border: none;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+    cursor: pointer;
+    color: #888;
+}
+
+.fx-report-tab-close:hover {
+    color: #000;
+}
+
+@media print {
+    .fx-report-tab-bar {
+        display: none;
+    }
+}
+
+/* Clickable rows — every rendered row is a drill-down target. The row's data-path
+   attribute carries the group-field values used as the drill filter. */
+::deep tr.fx-drill-row {
+    cursor: pointer;
+}
+
+::deep tr.fx-drill-row:hover td {
+    background-color: #e8f0fe !important;
+    transition: background-color 0.15s ease;
+}
+
+::deep tr.fx-drill-row.fx-rpt-group-header:hover td {
+    background-color: #d4e5fa !important;
+}
+
+.fx-report-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    font-size: 16px;
+    color: #666;
+}
+
+.fx-report-error {
+    margin: 20px;
+    padding: 16px;
+    border: 1px solid #dc3545;
+    border-radius: 4px;
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.fx-report-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    font-size: 14px;
+    color: #999;
+}
+
+/* Crystal Report PDF iframe */
+.fx-report-pdf-frame {
+    width: 100%;
+    height: 100%;
+    min-height: 600px;
+    border: none;
+}
+
+/* SQL Report HTML pages */
+.fx-report-pages {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    padding: 20px;
+}
+
+.fx-report-page {
+    background: white;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    /* Reduced top/bottom padding (was 40 px) so the title sits closer to
+       the top edge — matches Crystal Reports' tighter page chrome. */
+    padding: 28px 50px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #333;
+}
+
+.fx-report-page.portrait {
+    width: 8.5in;
+    min-height: 11in;
+}
+
+.fx-report-page.landscape {
+    width: 11in;
+    min-height: 8.5in;
+}
+
+/* Report header — title + subtitle + date band. Reduced by ~30 % from
+   the previous values so the table starts closer to the top edge.
+   `.fx-rpt-date` overlaps the title row at the right edge. */
+::deep .fx-rpt-header {
+    margin-bottom: 11px;
+    border-bottom: 2px solid #333;
+    padding-bottom: 5px;
+}
+
+::deep .fx-rpt-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: #111;
+    text-align: center;  /* default — inline style overrides per XML */
+}
+
+::deep .fx-rpt-subtitle {
+    font-size: 11px;
+    color: #555;
+    margin-top: 1px;
+    text-align: center;  /* default — inline style overrides per XML */
+}
+
+::deep .fx-rpt-date {
+    font-size: 10px;
+    color: #888;
+    text-align: right;
+    /* Pulls the date up to share the title's row. -19px fits the smaller
+       title (was -24px when the title was 16px). */
+    margin-top: -19px;
+}
+
+/* Report table.
+   table-layout: fixed lets the per-column widths computed by
+   ComputeAdaptiveColumnWidths be honored exactly, so numeric columns can keep
+   nowrap and text columns wrap inside their slot rather than the browser
+   distributing space proportionally. */
+::deep .fx-rpt-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+    table-layout: fixed;
+}
+
+/* Numeric / date / boolean cells must show on one line — header included.
+   The width sizer guarantees enough space; nowrap keeps the layout safe even
+   if data exceeds the prediction (browser will overflow horizontally). */
+::deep .fx-rpt-table th.fx-rpt-col-nowrap,
+::deep .fx-rpt-table td.fx-rpt-col-nowrap {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Text cells fit on one line when possible; wrap on word boundaries when
+   the cell has more text than the computed column width. */
+::deep .fx-rpt-table th.fx-rpt-col-wrap,
+::deep .fx-rpt-table td.fx-rpt-col-wrap {
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+}
+
+::deep .fx-rpt-table thead th {
+    background: #f0f0f0;
+    border-bottom: 2px solid #999;
+    padding: 4px 6px;
+    font-weight: bold;
+    font-size: 10px;
+    white-space: nowrap;
+}
+
+::deep .fx-rpt-table tbody td {
+    border-bottom: 1px solid #f0f0f0;
+    padding: 1px 6px;            /* tighter rows — match VB6 line height */
+    line-height: 1.15;
+    vertical-align: top;
+}
+
+::deep .fx-rpt-table tbody tr:hover {
+    background: #f8f8f8;
+}
+
+/* Group header rows.
+   Levels (l0 = outermost) are progressively less prominent so the visual
+   hierarchy mirrors VB6 Crystal Reports' nested group display.
+   Indent is ~2 character widths per level (12px) — much tighter than the
+   previous 16/32/48 px steps so the report reads as one column rather than
+   a staircase. */
+::deep .fx-rpt-group-header td {
+    font-weight: bold;
+    font-size: 11px;
+    padding: 2px 6px;
+    background: transparent;
+    border-bottom: none;
+}
+
+::deep .fx-rpt-group-header.fx-rpt-group-l0 td {
+    background: #ffffff;
+    font-size: 12px;
+    padding-top: 6px;
+    /* l0 = outermost — sits flush against the left edge */
+}
+
+::deep .fx-rpt-group-header.fx-rpt-group-l1 td {
+    background: #ffffff;
+    font-size: 11px;
+    padding-left: 12px;
+}
+
+::deep .fx-rpt-group-header.fx-rpt-group-l2 td {
+    background: #ffffff;
+    font-size: 11px;
+    padding-left: 24px;
+    font-weight: bold;
+}
+
+::deep .fx-rpt-group-header.fx-rpt-group-l3 td {
+    background: #ffffff;
+    font-size: 11px;
+    padding-left: 36px;
+    font-weight: bold;
+}
+
+::deep .fx-rpt-group-header.fx-rpt-group-l4 td,
+::deep .fx-rpt-group-header.fx-rpt-group-l5 td {
+    background: #ffffff;
+    font-size: 11px;
+    padding-left: 48px;
+    font-weight: normal;
+}
+
+::deep .fx-rpt-group-footer td {
+    background: transparent;
+    padding: 2px 6px;
+    font-size: 10px;
+    border-bottom: none;
+}
+
+/* Footer indentation matches the header indentation per-level so the
+   subtotal label sits directly under its header. (Only applied to the
+   FIRST cell — the label cell — since the numeric cells live in their
+   own column slots already.) */
+::deep .fx-rpt-group-footer.fx-rpt-group-l0 td:first-child {
+    padding-left: 0;
+}
+::deep .fx-rpt-group-footer.fx-rpt-group-l1 td:first-child {
+    padding-left: 12px;
+}
+::deep .fx-rpt-group-footer.fx-rpt-group-l2 td:first-child {
+    padding-left: 24px;
+}
+::deep .fx-rpt-group-footer.fx-rpt-group-l3 td:first-child {
+    padding-left: 36px;
+}
+::deep .fx-rpt-group-footer.fx-rpt-group-l4 td:first-child,
+::deep .fx-rpt-group-footer.fx-rpt-group-l5 td:first-child {
+    padding-left: 48px;
+}
+
+::deep .fx-rpt-group-footer.fx-rpt-group-l0 td {
+    border-top: 2px solid #333;
+    font-weight: bold;
+    padding-top: 4px;
+}
+
+/* Active-group highlight — applied by hfHighlightGroup() when the host
+   page's tree is in TreeNavigationMode.Group (vs DrillDown). The user
+   clicks any node, the matching group-header row gets this red background
+   until another node is clicked. */
+::deep .fx-rpt-group-header.fx-rpt-group-active td,
+::deep tr.fx-rpt-group-active td,
+::deep td.fx-rpt-group-active {
+    background: #ffcdd2 !important;        /* light red */
+    color: #b71c1c !important;             /* deep red text */
+    border-top: 1px solid #b71c1c !important;
+    border-bottom: 1px solid #b71c1c !important;
+}
+
+/* Grand total */
+::deep .fx-rpt-grand-total td {
+    background: #e0e0e0;
+    border-top: 2px solid #333;
+    border-bottom: 2px solid #333;
+    padding: 5px 6px;
+    font-size: 11px;
+}
+
+/* Page footer — reduced by ~30 % from previous values. */
+::deep .fx-rpt-footer {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 11px;
+    padding-top: 4px;
+    border-top: 1px solid #ccc;
+    font-size: 9px;
+    color: #888;
+}
+
+/* ═══ Print styles ═══ */
+@media print {
+    .fx-report-container {
+        background: white;
+        overflow: visible;
+    }
+
+    .fx-report-pages {
+        gap: 0;
+        padding: 0;
+    }
+
+    .fx-report-page {
+        box-shadow: none;
+        page-break-after: always;
+        padding: 0.5in;
+        margin: 0;
+    }
+
+    .fx-report-page:last-child {
+        page-break-after: avoid;
+    }
+
+    .fx-report-page.portrait {
+        width: auto;
+        min-height: auto;
+    }
+
+    .fx-report-page.landscape {
+        width: auto;
+        min-height: auto;
+    }
+
+    ::deep .fx-rpt-table tbody tr:hover {
+        background: transparent;
+    }
+
+    .fx-report-loading,
+    .fx-report-error,
+    .fx-report-empty {
+        display: none;
+    }
+}

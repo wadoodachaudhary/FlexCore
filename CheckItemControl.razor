@@ -1,0 +1,39 @@
+@namespace Fx.ControlKit
+
+@*
+    CheckItemControl — checkbox + adjacent label, used for the long lists of
+    permission/setting toggles in screens like FrmUser. Differs from
+    CheckBoxControl by exposing an extra @OnChanged callback that consumers
+    can wire to a single shared "any-toggle-changed" handler (e.g. to mark a
+    form dirty), without having to plumb each individual ValueChanged.
+
+    Migrated here from per-app HomeFront/HomeFrontPOC Components/CheckItem.razor
+    so the two apps share one control. Only existing consumer is FrmUser; the
+    name and parameter shape preserve a drop-in rename (just <CheckItem> →
+    <CheckItemControl>).
+*@
+
+<div class="check-item">
+    <input type="checkbox" checked="@Value" @onchange="OnInputChanged" />
+    <span>@Label</span>
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public bool Value { get; set; }
+    [Parameter] public EventCallback<bool> ValueChanged { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+
+    private async Task OnInputChanged(ChangeEventArgs e)
+    {
+        var newValue = e.Value is bool b && b;
+        if (Value != newValue)
+        {
+            Value = newValue;
+            await ValueChanged.InvokeAsync(newValue);
+        }
+
+        if (OnChanged.HasDelegate)
+            await OnChanged.InvokeAsync();
+    }
+}

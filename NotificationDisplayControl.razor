@@ -1,0 +1,61 @@
+@using Fx.ControlKit.Notifications
+@implements IDisposable
+@inject NotificationService Notifications
+
+@if (_items.Count > 0)
+{
+    <div class="fx-notification-container">
+        @foreach (var n in _items)
+        {
+            <div class="fx-notification fx-notification-@n.Level.ToString().ToLowerInvariant()"
+                 @key="n.Id">
+                <div class="fx-notification-icon">
+                    @switch (n.Level)
+                    {
+                        case NotificationLevel.Error:   <span>&#x2716;</span> break;
+                        case NotificationLevel.Warning: <span>&#x26A0;</span> break;
+                        case NotificationLevel.Success: <span>&#x2714;</span> break;
+                        case NotificationLevel.Info:    <span>&#x2139;</span> break;
+                    }
+                </div>
+                <div class="fx-notification-body">
+                    <div class="fx-notification-message">@n.Message</div>
+                    @if (!string.IsNullOrEmpty(n.Detail))
+                    {
+                        <div class="fx-notification-detail">@n.Detail</div>
+                    }
+                </div>
+                <button class="fx-notification-close" @onclick="() => Notifications.Dismiss(n.Id)">&times;</button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<Notification> _items = new();
+
+    protected override void OnInitialized()
+    {
+        Notifications.OnChange += HandleChange;
+        Refresh();
+    }
+
+    private void HandleChange()
+    {
+        InvokeAsync(() =>
+        {
+            Refresh();
+            StateHasChanged();
+        });
+    }
+
+    private void Refresh()
+    {
+        _items = Notifications.Notifications.ToList();
+    }
+
+    public void Dispose()
+    {
+        Notifications.OnChange -= HandleChange;
+    }
+}

@@ -1,0 +1,63 @@
+@namespace Fx.ControlKit
+
+<button class="@ResolvedCssClass"
+        type="@ButtonType"
+        disabled="@Disabled"
+        title="@Title"
+        style="@Style"
+        @onclick="OnClick"
+        @onclick:stopPropagation="StopPropagation"
+        @onmousedown:preventDefault="PreventMouseDownDefault">
+    @if (!string.IsNullOrWhiteSpace(IconCss))
+    {
+        <span class="@IconCss"></span>
+    }
+    @ChildContent
+</button>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string ButtonType { get; set; } = "button";
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+
+    /// <summary>
+    /// When true, the default <c>.fx-button</c> base styling is suppressed so
+    /// the host can fully drive appearance through <see cref="CssClass"/>
+    /// (e.g. GhostWriter's <c>.toolbar-btn</c>, <c>.floating-btn</c>,
+    /// <c>.btn.primary</c>). Functionality — click wiring, disabled gating,
+    /// optional icon slot — stays identical.
+    /// </summary>
+    [Parameter] public bool BareStyle { get; set; }
+
+    /// <summary>
+    /// Stops click-event propagation past the button. Needed for hosts whose
+    /// button sits inside a parent that also handles <c>click</c> / <c>mouseup</c>
+    /// (e.g. GhostWriter's floating toolbar swallows clicks so the editor's
+    /// selection capture doesn't fire on every button press).
+    /// </summary>
+    [Parameter] public bool StopPropagation { get; set; }
+
+    /// <summary>
+    /// Prevents the default browser action on <c>mousedown</c>. In GhostWriter
+    /// the formatting buttons (Bold, Italic, …) use this so clicking the
+    /// button doesn't steal focus from the editor — otherwise the selection
+    /// collapses before <c>execCommand</c> fires.
+    /// </summary>
+    [Parameter] public bool PreventMouseDownDefault { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var trimmed = (CssClass ?? string.Empty).Trim();
+            return BareStyle
+                ? trimmed
+                : string.IsNullOrEmpty(trimmed) ? "fx-button" : $"fx-button {trimmed}";
+        }
+    }
+}

@@ -1,0 +1,126 @@
+@namespace Fx.ControlKit
+@typeparam TModel
+
+@*
+    PropertyGridControl — two-column grid of property-name / editor pairs, driven by
+    reflection over <typeparamref name="TModel"/>. Mirrors WinForms PropertyGrid.
+
+    Usage:
+        <PropertyGridControl TModel="MyViewModel" Value="@_model" ValueChanged="OnChanged" />
+
+    Discovers public instance properties and renders an editor appropriate to each
+    property's type (TextBoxControl for string, NumericTextBoxControl for numbers,
+    CheckBoxControl for bool, DropDownListControl for enums). Extension point:
+    override the CustomEditor RenderFragment to inject custom editors per property.
+*@
+
+<div class="fx-propertygrid @CssClass">
+    @if (Value != null)
+    {
+        <table class="fx-propertygrid-table">
+            <tbody>
+                @foreach (var prop in _properties)
+                {
+                    <tr>
+                        <td class="fx-propertygrid-name">@(DisplayName(prop))</td>
+                        <td class="fx-propertygrid-editor">
+                            @RenderEditor(prop)
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</div>
+
+@code {
+    /// <summary>Model whose public properties are edited.</summary>
+    [Parameter] public TModel? Value { get; set; }
+
+    /// <summary>Fires after any property is edited.</summary>
+    [Parameter] public EventCallback<TModel?> ValueChanged { get; set; }
+
+    /// <summary>Optional CSS class applied to the outer container.</summary>
+    [Parameter] public string CssClass { get; set; } = "";
+
+    /// <summary>Optional override: render a custom editor for a specific property.</summary>
+    [Parameter] public RenderFragment<(TModel? Model, System.Reflection.PropertyInfo Prop)>? CustomEditor { get; set; }
+
+    private System.Reflection.PropertyInfo[] _properties = Array.Empty<System.Reflection.PropertyInfo>();
+
+    protected override void OnParametersSet()
+    {
+        _properties = typeof(TModel)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.CanRead && p.CanWrite)
+            .ToArray();
+    }
+
+    private static string DisplayName(System.Reflection.PropertyInfo prop)
+    {
+        // Split PascalCase: "CustomerName" → "Customer Name"
+        return System.Text.RegularExpressions.Regex
+            .Replace(prop.Name, "(\\B[A-Z])", " $1");
+    }
+
+    private RenderFragment RenderEditor(System.Reflection.PropertyInfo prop) => builder =>
+    {
+        if (CustomEditor != null)
+        {
+            builder.AddContent(0, CustomEditor((Value, prop)));
+            return;
+        }
+
+        var current = Value == null ? null : prop.GetValue(Value);
+        void Setter(object? v)
+        {
+            if (Value == null) return;
+            prop.SetValue(Value, v);
+            ValueChanged.InvokeAsync(Value);
+        }
+
+        var t = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
+        if (t == typeof(bool))
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "checkbox");
+            builder.AddAttribute(2, "checked", (bool?)current ?? false);
+            builder.AddAttribute(3, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
+                this, e => Setter(bool.TryParse(e.Value?.ToString(), out var b) && b)));
+            builder.CloseElement();
+        }
+        else if (t.IsEnum)
+        {
+            builder.OpenElement(0, "select");
+            builder.AddAttribute(1, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
+                this, e => Setter(Enum.Parse(t, e.Value?.ToString() ?? ""))));
+            foreach (var v in Enum.GetValues(t))
+            {
+                builder.OpenElement(2, "option");
+                builder.AddAttribute(3, "value", v?.ToString());
+                builder.AddAttribute(4, "selected", Equals(current, v));
+                builder.AddContent(5, v?.ToString());
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+        }
+        else if (t == typeof(int) || t == typeof(long) || t == typeof(decimal) || t == typeof(double) || t == typeof(float))
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "number");
+            builder.AddAttribute(2, "value", current?.ToString() ?? "");
+            builder.AddAttribute(3, "oninput", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
+                this, e => Setter(Convert.ChangeType(e.Value ?? 0, t))));
+            builder.CloseElement();
+        }
+        else
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "text");
+            builder.AddAttribute(2, "value", current?.ToString() ?? "");
+            builder.AddAttribute(3, "oninput", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
+                this, e => Setter(e.Value?.ToString())));
+            builder.CloseElement();
+        }
+    };
+}

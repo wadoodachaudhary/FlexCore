@@ -1,0 +1,26 @@
+/* Default styling for EditorDropDownControl — used only when BareStyle is
+ * false. Host apps (like GhostWriter with .fmt-select) override by passing
+ * BareStyle="true" and their own CssClass. */
+
+.fx-dropdown {
+    display: inline-block;
+    padding: 3px 6px;
+    font-size: 0.78rem;
+    background: #f7f7f7;
+    border: 1px solid #c9c9c9;
+    border-radius: 6px;
+    color: #333;
+    cursor: pointer;
+    min-width: 60px;
+}
+
+.fx-dropdown:focus {
+    outline: none;
+    border-color: #4c6fff;
+    box-shadow: 0 0 0 2px rgba(76, 111, 255, 0.2);
+}
+
+.fx-dropdown:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

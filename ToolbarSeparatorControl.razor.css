@@ -1,0 +1,9 @@
+/* FlexCore ToolbarSeparatorControl — vertical line between toolbar groups. */
+
+.fx-toolbar-separator {
+    width: 1px;
+    height: 28px;
+    background: #ced4da;
+    margin: 0 4px;
+    flex-shrink: 0;
+}

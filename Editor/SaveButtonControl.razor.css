@@ -1,0 +1,36 @@
+/* Default Save-button styling — used standalone. Hosts that ship a richer
+ * theme (e.g. GhostWriter's `.toolbar-btn`) can override via CssClass. */
+
+.fx-save-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.fx-save-button:hover:not(:disabled) {
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.fx-save-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.fx-save-button--saving {
+    /* Subtle pulse while a save is in flight */
+    animation: fx-save-pulse 1s ease-in-out infinite;
+}
+
+@keyframes fx-save-pulse {
+    0%, 100% { opacity: 0.7; }
+    50%      { opacity: 1.0; }
+}

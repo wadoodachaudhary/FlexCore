@@ -1,0 +1,61 @@
+## .NET / Visual Studio
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.dbmdl
+*.jfm
+
+## Build artifacts
+*.dll
+*.pdb
+*.exe
+*.lib
+*.exp
+*.cache
+*.tlog
+*.tmp
+
+## Package outputs
+*.nupkg
+*.snupkg
+nupkg/
+
+## IDEs
+.vs/
+.vscode/
+.idea/
+*.sln.docstates
+*.swp
+*.DS_Store
+
+## Rider
+*.sln.iml
+*.iml
+.idea_modules/
+
+## Generated CSS isolation
+*.styles.css
+*.scp.css
+
+## Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+## NuGet
+.nuget/
+*.nuspec
+project.lock.json
+project.fragment.lock.json
+
+## Coverage
+*.coverage
+coverlet.runsettings
+coverage*.json
+coverage*.xml
+coverage*.info

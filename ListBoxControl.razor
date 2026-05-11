@@ -1,0 +1,78 @@
+@namespace Fx.ControlKit
+@typeparam TItem
+
+<div class="fx-listbox @CssClass">
+    @if (DataSource != null)
+    {
+        foreach (var item in DataSource)
+        {
+            var value = GetFieldValue(item, ValueField);
+            var text = GetFieldValue(item, TextField);
+            var isSelected = SelectedValues.Contains(value);
+            var inputType = SelectionMode == ListBoxSelectionMode.Single && !ShowCheckbox ? "radio" : "checkbox";
+            <label class="fx-listbox-item">
+                <input type="@inputType"
+                       checked="@isSelected"
+                       @onchange="e => ToggleSelection(value, e)" />
+                <span>@text</span>
+            </label>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public IEnumerable<TItem>? DataSource { get; set; }
+    [Parameter] public string TextField { get; set; } = "";
+    [Parameter] public string ValueField { get; set; } = "";
+    [Parameter] public bool ShowCheckbox { get; set; }
+    [Parameter] public ListBoxSelectionMode SelectionMode { get; set; } = ListBoxSelectionMode.Single;
+    [Parameter] public string? CssClass { get; set; }
+
+    [Parameter] public List<string>? Value { get; set; }
+    [Parameter] public EventCallback<List<string>> ValueChanged { get; set; }
+
+    private HashSet<string> SelectedValues { get; set; } = new();
+
+    protected override void OnParametersSet()
+    {
+        SelectedValues = new HashSet<string>(Value ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private string GetFieldValue(TItem item, string field)
+    {
+        if (item == null || string.IsNullOrWhiteSpace(field))
+            return string.Empty;
+
+        var prop = item.GetType().GetProperty(field);
+        var val = prop?.GetValue(item);
+        return val?.ToString() ?? string.Empty;
+    }
+
+    private async Task ToggleSelection(string value, ChangeEventArgs e)
+    {
+        var isChecked = false;
+        if (e.Value is bool b)
+            isChecked = b;
+        else if (bool.TryParse(e.Value?.ToString(), out var parsed))
+            isChecked = parsed;
+
+        if (SelectionMode == ListBoxSelectionMode.Single)
+        {
+            SelectedValues.Clear();
+            if (isChecked)
+                SelectedValues.Add(value);
+        }
+        else
+        {
+            if (isChecked)
+                SelectedValues.Add(value);
+            else
+                SelectedValues.Remove(value);
+        }
+
+        var list = SelectedValues.ToList();
+        Value = list;
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(list);
+    }
+}

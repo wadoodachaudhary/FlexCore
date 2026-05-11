@@ -1,0 +1,528 @@
+@namespace Fx.ControlKit.Diagram
+@using Microsoft.AspNetCore.Components.Web
+@inject NavigationManager NavigationManager
+
+<div class="fx-diagram @CssClass" style="@ContainerStyle">
+    <svg width="@SvgWidth" height="@SvgHeight" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            @* Arrowhead markers *@
+            @if (Connectors != null)
+            {
+                @foreach (var conn in Connectors.Where(c => c.ShowArrow))
+                {
+                    <marker id="arrow-@conn.Id"
+                            markerWidth="10" markerHeight="7"
+                            refX="10" refY="3.5"
+                            orient="auto" markerUnits="strokeWidth">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="@conn.StrokeColor" />
+                    </marker>
+                }
+            }
+            @* Drop shadow filter *@
+            <filter id="fx-shadow" x="-4%" y="-4%" width="108%" height="108%">
+                <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.15" />
+            </filter>
+
+            @* Clip paths for background images *@
+            @if (Nodes != null)
+            {
+                @foreach (var node in Nodes.Where(n => !string.IsNullOrWhiteSpace(n.BackgroundImage)))
+                {
+                    var cx = node.OffsetX - node.Width / 2;
+                    var cy = node.OffsetY - node.Height / 2;
+                    <clipPath id="clip-@node.Id">
+                        @switch (node.Shape)
+                        {
+                            case DiagramControlShape.Ellipse:
+                                <ellipse cx="@F(node.OffsetX)" cy="@F(node.OffsetY)"
+                                         rx="@F(node.Width / 2)" ry="@F(node.Height / 2)" />
+                                break;
+                            case DiagramControlShape.Diamond:
+                                var ddmx = node.OffsetX; var ddmy = node.OffsetY;
+                                var ddhw = node.Width / 2; var ddhh = node.Height / 2;
+                                <polygon points="@($"{F(ddmx)},{F(ddmy - ddhh)} {F(ddmx + ddhw)},{F(ddmy)} {F(ddmx)},{F(ddmy + ddhh)} {F(ddmx - ddhw)},{F(ddmy)}")" />
+                                break;
+                            case DiagramControlShape.Parallelogram:
+                                var cpSkew = 15.0;
+                                <polygon points="@($"{F(cx + cpSkew)},{F(cy)} {F(cx + node.Width)},{F(cy)} {F(cx + node.Width - cpSkew)},{F(cy + node.Height)} {F(cx)},{F(cy + node.Height)}")" />
+                                break;
+                            case DiagramControlShape.Stadium:
+                                var cpSr = node.Height / 2;
+                                <rect x="@F(cx)" y="@F(cy)" width="@F(node.Width)" height="@F(node.Height)" rx="@F(cpSr)" />
+                                break;
+                            default:
+                                <rect x="@F(cx)" y="@F(cy)" width="@F(node.Width)" height="@F(node.Height)" rx="@F(node.CornerRadius)" />
+                                break;
+                        }
+                    </clipPath>
+                }
+            }
+        </defs>
+
+        <g transform="translate(@F(DiagramPaddingPx),@F(DiagramPaddingPx))">
+            @* Render connectors behind nodes *@
+            @if (Connectors != null && Nodes != null)
+            {
+                @foreach (var conn in Connectors)
+                {
+                    var source = _nodeMap.GetValueOrDefault(conn.SourceId);
+                    var target = _nodeMap.GetValueOrDefault(conn.TargetId);
+                    if (source != null && target != null)
+                    {
+                        var (path, labelPos) = ComputeConnectorPath(source, target, conn);
+                        <g class="fx-diagram-connector">
+                            <path d="@path"
+                                  fill="none"
+                                  stroke="@conn.StrokeColor"
+                                  stroke-width="@conn.StrokeWidth"
+                                  stroke-dasharray="@(conn.DashArray ?? "none")"
+                                  marker-end="@(conn.ShowArrow ? $"url(#arrow-{conn.Id})" : "")" />
+                            @if (!string.IsNullOrWhiteSpace(conn.Label))
+                            {
+                                <rect x="@(labelPos.x - MeasureTextWidth(conn.Label) / 2 - 4)"
+                                      y="@(labelPos.y - 8)"
+                                      width="@(MeasureTextWidth(conn.Label) + 8)"
+                                      height="16"
+                                      rx="3" fill="white" fill-opacity="0.9" />
+                                @RenderSvgText(labelPos.x, labelPos.y + 4, "middle", conn.LabelColor, "fx-connector-label", conn.Label)
+                            }
+                        </g>
+                    }
+                }
+            }
+
+            @* Render nodes *@
+            @if (Nodes != null)
+            {
+                @foreach (var node in Nodes)
+                {
+                    var x = node.OffsetX - node.Width / 2;
+                    var y = node.OffsetY - node.Height / 2;
+                    var isClickable = node.Enabled && (!string.IsNullOrWhiteSpace(node.NavigateUrl) || NodeClicked.HasDelegate);
+                    <g class="fx-diagram-node @(isClickable ? "fx-clickable" : "") @(node.Enabled ? "" : "fx-disabled") @node.CssClass"
+                       @onclick="() => HandleNodeClick(node)"
+                       filter="url(#fx-shadow)"
+                       style="@(isClickable ? "cursor:pointer;" : "")">
+                        @if (!string.IsNullOrWhiteSpace(node.Tooltip))
+                        {
+                            <title>@node.Tooltip</title>
+                        }
+                        @switch (node.Shape)
+                        {
+                            case DiagramControlShape.Ellipse:
+                                <ellipse cx="@node.OffsetX" cy="@node.OffsetY"
+                                         rx="@(node.Width / 2)" ry="@(node.Height / 2)"
+                                         fill="@node.FillColor" stroke="@node.StrokeColor"
+                                         stroke-width="@node.StrokeWidth" />
+                                break;
+                            case DiagramControlShape.Diamond:
+                                var dmx = node.OffsetX;
+                                var dmy = node.OffsetY;
+                                var dhw = node.Width / 2;
+                                var dhh = node.Height / 2;
+                                <polygon points="@($"{dmx},{dmy - dhh} {dmx + dhw},{dmy} {dmx},{dmy + dhh} {dmx - dhw},{dmy}")"
+                                         fill="@node.FillColor" stroke="@node.StrokeColor"
+                                         stroke-width="@node.StrokeWidth" />
+                                break;
+                            case DiagramControlShape.Parallelogram:
+                                var pSkew = 15.0;
+                                <polygon points="@($"{x + pSkew},{y} {x + node.Width},{y} {x + node.Width - pSkew},{y + node.Height} {x},{y + node.Height}")"
+                                         fill="@node.FillColor" stroke="@node.StrokeColor"
+                                         stroke-width="@node.StrokeWidth" />
+                                break;
+                            case DiagramControlShape.Stadium:
+                                var sRadius = node.Height / 2;
+                                <rect x="@x" y="@y"
+                                      width="@node.Width" height="@node.Height"
+                                      rx="@sRadius"
+                                      fill="@node.FillColor" stroke="@node.StrokeColor"
+                                      stroke-width="@node.StrokeWidth" />
+                                break;
+                            case DiagramControlShape.RoundedRectangle:
+                                <rect x="@x" y="@y"
+                                      width="@node.Width" height="@node.Height"
+                                      rx="@node.CornerRadius"
+                                      fill="@node.FillColor" stroke="@node.StrokeColor"
+                                      stroke-width="@node.StrokeWidth" />
+                                break;
+                            default:
+                                <rect x="@x" y="@y"
+                                      width="@node.Width" height="@node.Height"
+                                      rx="@node.CornerRadius"
+                                      fill="@node.FillColor" stroke="@node.StrokeColor"
+                                      stroke-width="@node.StrokeWidth" />
+                                break;
+                        }
+                        @* Background image *@
+                        @if (!string.IsNullOrWhiteSpace(node.BackgroundImage))
+                        {
+                            var (imgX, imgY, imgW, imgH) = ComputeImageRect(node);
+                            <image href="@node.BackgroundImage"
+                                   x="@F(imgX)" y="@F(imgY)"
+                                   width="@F(imgW)" height="@F(imgH)"
+                                   preserveAspectRatio="@GetPreserveAspectRatio(node.BackgroundImageFit)"
+                                   opacity="@F(node.BackgroundImageOpacity)"
+                                   clip-path="url(#clip-@node.Id)"
+                                   class="fx-node-bg-image" />
+                        }
+                        @* Icon *@
+                        @if (!string.IsNullOrWhiteSpace(node.Icon))
+                        {
+                            var iconY = string.IsNullOrWhiteSpace(node.SubLabel)
+                                ? node.OffsetY - 6
+                                : node.OffsetY - 12;
+                            @RenderSvgText(node.OffsetX, iconY, "middle", node.TextColor, "fx-node-icon", node.Icon)
+                        }
+                        @* Label *@
+                        @{
+                            var hasIcon = !string.IsNullOrWhiteSpace(node.Icon);
+                            var hasBgImage = !string.IsNullOrWhiteSpace(node.BackgroundImage);
+                            var hasSubLabel = !string.IsNullOrWhiteSpace(node.SubLabel);
+                            double labelY;
+                            if (hasBgImage)
+                            {
+                                // When a background image is present, render the label below the node
+                                labelY = node.OffsetY + node.Height / 2 + 14;
+                            }
+                            else if (hasIcon && hasSubLabel)
+                                labelY = node.OffsetY + 2;
+                            else if (hasIcon)
+                                labelY = node.OffsetY + 8;
+                            else if (hasSubLabel)
+                                labelY = node.OffsetY - 6;
+                            else
+                                labelY = node.OffsetY;
+                            // Split multi-line labels (separated by \n)
+                            var labelLines = (node.Label ?? "").Split('\n');
+                        }
+                        @if (labelLines.Length > 1)
+                        {
+                            @for (var li = 0; li < labelLines.Length; li++)
+                            {
+                                @RenderSvgText(node.OffsetX, labelY + li * 15, "middle", node.TextColor, "fx-node-label", labelLines[li])
+                            }
+                        }
+                        else
+                        {
+                            @RenderSvgText(node.OffsetX, labelY, "middle", node.TextColor, "fx-node-label", node.Label ?? "")
+                        }
+                        @if (hasSubLabel)
+                        {
+                            var subY = labelLines.Length > 1 ? labelY + labelLines.Length * 15 : labelY + 16;
+                            @RenderSvgText(node.OffsetX, subY, "middle", node.TextColor, "fx-node-sublabel", node.SubLabel!)
+                        }
+                    </g>
+                }
+            }
+        </g>
+    </svg>
+</div>
+
+@code {
+    /// <summary>Collection of nodes (boxes) to render.</summary>
+    [Parameter] public List<DiagramNode>? Nodes { get; set; }
+
+    /// <summary>Collection of connectors (arrows) linking nodes.</summary>
+    [Parameter] public List<DiagramConnector>? Connectors { get; set; }
+
+    /// <summary>Width of the SVG canvas. Defaults to "100%" of container.</summary>
+    [Parameter] public string Width { get; set; } = "100%";
+
+    /// <summary>Height of the SVG canvas. Defaults to "500".</summary>
+    [Parameter] public string Height { get; set; } = "500";
+
+    /// <summary>Additional CSS class on the outer container div.</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>Extra padding around the diagram (in pixels). Applied on all sides.</summary>
+    [Parameter] public double Padding { get; set; } = 18;
+
+    /// <summary>Additional padding as a percent of the diagram size. Defaults to 10%.</summary>
+    [Parameter] public double SizePadPercent { get; set; } = 10;
+
+    /// <summary>Fired when a node is clicked. Set Handled=true to prevent default navigation.</summary>
+    [Parameter] public EventCallback<DiagramNodeClickEventArgs> NodeClicked { get; set; }
+
+    private Dictionary<string, DiagramNode> _nodeMap = new();
+
+    private string SvgWidth => WidthPx.HasValue
+        ? F(WidthPx.Value + DiagramPaddingPx * 2)
+        : (Width.EndsWith('%') || Width == "auto" ? "100%" : Width);
+    private string SvgHeight => HeightPx.HasValue
+        ? F(HeightPx.Value + DiagramPaddingPx * 2)
+        : (Height.EndsWith('%') || Height == "auto" ? "100%" : Height);
+    private double? WidthPx => TryParsePx(Width);
+    private double? HeightPx => TryParsePx(Height);
+    private double DiagramPaddingPx => ComputeDiagramPadding();
+
+    private string ContainerStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Width))
+            {
+                if (WidthPx.HasValue)
+                    parts.Add($"width:{F(WidthPx.Value + DiagramPaddingPx * 2)}px");
+                else
+                    parts.Add(Width.EndsWith('%') || Width == "auto" ? $"width:{Width}" : $"width:{Width}px");
+            }
+            if (!string.IsNullOrWhiteSpace(Height))
+            {
+                if (HeightPx.HasValue)
+                    parts.Add($"height:{F(HeightPx.Value + DiagramPaddingPx * 2)}px");
+                else
+                    parts.Add(Height.EndsWith('%') || Height == "auto" ? $"height:{Height}" : $"height:{Height}px");
+            }
+            parts.Add("border:1px solid #c7d6ea");
+            parts.Add("border-radius:6px");
+            parts.Add("overflow:hidden");
+            return string.Join(";", parts);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        _nodeMap = new Dictionary<string, DiagramNode>(StringComparer.OrdinalIgnoreCase);
+        if (Nodes != null)
+        {
+            foreach (var node in Nodes)
+            {
+                _nodeMap[node.Id] = node;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Renders an SVG text element. Uses RenderFragment to avoid Razor treating &lt;text&gt; as
+    /// the Razor text directive (RZ1023).
+    /// </summary>
+    private RenderFragment RenderSvgText(double x, double y, string anchor, string fill, string cssClass, string content) => builder =>
+    {
+        builder.OpenElement(0, "text");
+        builder.AddAttribute(1, "x", F(x));
+        builder.AddAttribute(2, "y", F(y));
+        builder.AddAttribute(3, "text-anchor", anchor);
+        builder.AddAttribute(4, "dominant-baseline", "middle");
+        builder.AddAttribute(5, "fill", fill);
+        builder.AddAttribute(6, "class", cssClass);
+        builder.AddContent(7, content);
+        builder.CloseElement();
+    };
+
+    private async Task HandleNodeClick(DiagramNode node)
+    {
+        if (!node.Enabled)
+            return;
+
+        if (NodeClicked.HasDelegate)
+        {
+            var args = new DiagramNodeClickEventArgs { Node = node };
+            await NodeClicked.InvokeAsync(args);
+            if (args.Handled)
+                return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(node.NavigateUrl))
+        {
+            NavigationManager.NavigateTo(node.NavigateUrl);
+        }
+    }
+
+    // ---------- Connector path computation ----------
+
+    private const double ArrowPull = 6.0;
+    private const double BottomLabelGapSingle = 14.0;
+    private const double BottomLabelGapMulti = 28.0;
+
+    private (string path, (double x, double y) labelPos) ComputeConnectorPath(
+        DiagramNode source, DiagramNode target, DiagramConnector conn)
+    {
+        var sourcePort = ResolveAutoPort(source, target, conn.SourcePort);
+        var targetPort = ResolveAutoPort(target, source, conn.TargetPort);
+
+        var (sx, sy) = GetPort(source, sourcePort, target);
+        var (tx, ty) = GetPort(target, targetPort, source);
+
+        if (NeedsLabelAvoidance(target, source, targetPort))
+        {
+            var gap = GetBottomLabelGap(target);
+            tx = target.OffsetX;
+            ty = target.OffsetY + target.Height / 2 + gap;
+        }
+
+        // Pull target point back slightly so arrowhead tip lands on the edge
+        if (conn.ShowArrow)
+        {
+            var angle = Math.Atan2(ty - sy, tx - sx);
+            tx -= Math.Cos(angle) * ArrowPull;
+            ty -= Math.Sin(angle) * ArrowPull;
+        }
+
+        if (conn.Type == ConnectorType.Straight)
+        {
+            var midX = (sx + tx) / 2;
+            var midY = (sy + ty) / 2;
+            return ($"M {F(sx)} {F(sy)} L {F(tx)} {F(ty)}", (midX, midY));
+        }
+        else // Orthogonal
+        {
+            return ComputeOrthogonalPath(sx, sy, tx, ty, source, target, conn);
+        }
+    }
+
+    private static bool NeedsLabelAvoidance(DiagramNode target, DiagramNode source, DiagramPort targetPort)
+    {
+        if (targetPort != DiagramPort.Bottom)
+            return false;
+        if (string.IsNullOrWhiteSpace(target.BackgroundImage))
+            return false;
+        if (string.IsNullOrWhiteSpace(target.Label))
+            return false;
+        return source.OffsetY > target.OffsetY;
+    }
+
+    private static double GetBottomLabelGap(DiagramNode target)
+    {
+        if (string.IsNullOrWhiteSpace(target.Label))
+            return BottomLabelGapSingle;
+        return target.Label.Contains('\n') ? BottomLabelGapMulti : BottomLabelGapSingle;
+    }
+
+    private (string path, (double x, double y) labelPos) ComputeOrthogonalPath(
+        double sx, double sy, double tx, double ty,
+        DiagramNode source, DiagramNode target, DiagramConnector conn)
+    {
+        var sourcePort = ResolveAutoPort(source, target, conn.SourcePort);
+        var targetPort = ResolveAutoPort(target, source, conn.TargetPort);
+
+        // Determine if going vertical-first or horizontal-first based on ports
+        bool sourceVertical = sourcePort == DiagramPort.Top || sourcePort == DiagramPort.Bottom;
+        bool targetVertical = targetPort == DiagramPort.Top || targetPort == DiagramPort.Bottom;
+
+        double midX, midY;
+
+        if (sourceVertical && targetVertical)
+        {
+            // Both vertical ports: go down from source, horizontal segment, up to target
+            midY = (sy + ty) / 2;
+            var path = $"M {F(sx)} {F(sy)} L {F(sx)} {F(midY)} L {F(tx)} {F(midY)} L {F(tx)} {F(ty)}";
+            return (path, ((sx + tx) / 2, midY));
+        }
+        else if (!sourceVertical && !sourceVertical)
+        {
+            // Both horizontal ports: go right from source, vertical segment, left to target
+            midX = (sx + tx) / 2;
+            var path = $"M {F(sx)} {F(sy)} L {F(midX)} {F(sy)} L {F(midX)} {F(ty)} L {F(tx)} {F(ty)}";
+            return (path, (midX, (sy + ty) / 2));
+        }
+        else if (sourceVertical)
+        {
+            // Source vertical, target horizontal: L-bend
+            var path = $"M {F(sx)} {F(sy)} L {F(sx)} {F(ty)} L {F(tx)} {F(ty)}";
+            return (path, (sx, ty));
+        }
+        else
+        {
+            // Source horizontal, target vertical: L-bend
+            var path = $"M {F(sx)} {F(sy)} L {F(tx)} {F(sy)} L {F(tx)} {F(ty)}";
+            return (path, (tx, sy));
+        }
+    }
+
+    private (double x, double y) GetPort(DiagramNode node, DiagramPort port, DiagramNode other)
+    {
+        var resolved = ResolveAutoPort(node, other, port);
+        return resolved switch
+        {
+            DiagramPort.Top => (node.OffsetX, node.OffsetY - node.Height / 2),
+            DiagramPort.Bottom => (node.OffsetX, node.OffsetY + node.Height / 2),
+            DiagramPort.Left => (node.OffsetX - node.Width / 2, node.OffsetY),
+            DiagramPort.Right => (node.OffsetX + node.Width / 2, node.OffsetY),
+            _ => (node.OffsetX, node.OffsetY + node.Height / 2)
+        };
+    }
+
+    private DiagramPort ResolveAutoPort(DiagramNode node, DiagramNode other, DiagramPort port)
+    {
+        if (port != DiagramPort.Auto)
+            return port;
+
+        var dx = other.OffsetX - node.OffsetX;
+        var dy = other.OffsetY - node.OffsetY;
+
+        // Choose the port on the side closest to the other node
+        if (Math.Abs(dy) > Math.Abs(dx))
+            return dy > 0 ? DiagramPort.Bottom : DiagramPort.Top;
+        else
+            return dx > 0 ? DiagramPort.Right : DiagramPort.Left;
+    }
+
+    // ---------- Background Image ----------
+
+    /// <summary>
+    /// Computes the x, y, width, height for the background image element
+    /// based on the node dimensions, padding, and fit mode.
+    /// </summary>
+    private static (double x, double y, double w, double h) ComputeImageRect(DiagramNode node)
+    {
+        var pad = node.BackgroundImagePadding;
+        var nx = node.OffsetX - node.Width / 2 + pad;
+        var ny = node.OffsetY - node.Height / 2 + pad;
+        var nw = node.Width - pad * 2;
+        var nh = node.Height - pad * 2;
+
+        return node.BackgroundImageFit switch
+        {
+            // Cover: use the full node rect (no padding) — the clip path crops overflow
+            ImageFit.Cover => (node.OffsetX - node.Width / 2, node.OffsetY - node.Height / 2, node.Width, node.Height),
+            // Contain / Icon: use the padded inner rect
+            _ => (nx, ny, nw, nh)
+        };
+    }
+
+    /// <summary>
+    /// Maps ImageFit to the SVG preserveAspectRatio attribute value.
+    /// </summary>
+    private static string GetPreserveAspectRatio(ImageFit fit) => fit switch
+    {
+        ImageFit.Cover => "xMidYMid slice",   // fill and crop
+        ImageFit.Icon => "xMidYMid meet",     // center at natural size
+        _ => "xMidYMid meet"                     // Contain — fit inside
+    };
+
+    // ---------- Utilities ----------
+
+    private static double MeasureTextWidth(string text)
+    {
+        // Approximate: ~7px per character at default font size
+        return (text?.Length ?? 0) * 7.0;
+    }
+
+    private static string F(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static double? TryParsePx(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+        if (value.EndsWith('%') || value == "auto")
+            return null;
+        var trimmed = value.EndsWith("px", StringComparison.OrdinalIgnoreCase)
+            ? value[..^2]
+            : value;
+        if (double.TryParse(trimmed, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var v))
+            return v;
+        return null;
+    }
+
+    private double ComputeDiagramPadding()
+    {
+        var padFromSize = 0.0;
+        if (WidthPx.HasValue)
+            padFromSize = Math.Max(padFromSize, WidthPx.Value * (SizePadPercent / 100.0) / 2.0);
+        if (HeightPx.HasValue)
+            padFromSize = Math.Max(padFromSize, HeightPx.Value * (SizePadPercent / 100.0) / 2.0);
+        return Padding + padFromSize;
+    }
+}

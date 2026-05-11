@@ -1,0 +1,11 @@
+@namespace Fx.ControlKit.Navigation
+
+@* Optional grouping wrapper for TabItem children (matches the Syncfusion API shape). *@
+
+<div class="fx-tab-items">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

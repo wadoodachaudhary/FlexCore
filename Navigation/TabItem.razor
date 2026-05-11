@@ -1,0 +1,20 @@
+@namespace Fx.ControlKit.Navigation
+
+@* A single tab within a <TabControl>. Renderless — TabControl selects the active
+   item's content and renders it in the content pane. Supports either a named
+   Content parameter or default child content. *@
+
+@code {
+    [CascadingParameter] public TabControl? Parent { get; set; }
+
+    [Parameter] public string HeaderText { get; set; } = string.Empty;
+    [Parameter] public RenderFragment? Content { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    internal RenderFragment? RenderContent => Content ?? ChildContent;
+
+    protected override void OnInitialized()
+    {
+        Parent?.Register(this);
+    }
+}

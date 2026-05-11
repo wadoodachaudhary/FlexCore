@@ -1,0 +1,115 @@
+/* Scoped styles for OutlineControl. All elements are Blazor-rendered so no
+ * ::deep is needed here. */
+
+.fx-outline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.25rem;
+    overflow-y: auto;
+    background: var(--panel, #fffaf1);
+    border-right: 1px solid var(--border, #dfcdbd);
+}
+
+.fx-outline-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border, #dfcdbd);
+}
+
+.fx-outline-empty {
+    color: var(--muted, #5d5147);
+    font-size: 0.85rem;
+    padding: 0.5rem 0;
+}
+
+.fx-outline-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.fx-outline-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.fx-outline-item {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: var(--ink, #1b1a16);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fx-outline-item:hover {
+    background: rgba(31, 111, 95, 0.08);
+}
+
+.fx-outline-level-1 { font-weight: 600; }
+.fx-outline-level-2 {
+    padding-left: 22px;
+    font-size: 0.8rem;
+    color: var(--muted, #5d5147);
+}
+
+.fx-outline-current {
+    background: rgba(198, 75, 57, 0.1);
+    color: var(--accent-strong, #a63c2d);
+}
+
+.fx-outline-row-actions {
+    display: inline-flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 0.12s;
+}
+
+.fx-outline-row:hover .fx-outline-row-actions { opacity: 1; }
+
+.fx-outline-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    background: transparent;
+    color: var(--muted, #5d5147);
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.fx-outline-action-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--ink, #1b1a16);
+}
+
+.fx-outline-action-btn.danger:hover {
+    background: rgba(200, 30, 30, 0.12);
+    color: #c81e1e;
+}
+
+.fx-outline-action-btn.confirm:hover {
+    background: rgba(31, 111, 95, 0.14);
+    color: var(--accent-2, #1f6f5f);
+}
+
+.fx-outline-footer {
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border, #dfcdbd);
+}

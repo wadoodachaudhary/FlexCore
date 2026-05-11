@@ -1,0 +1,1169 @@
+/* ═══════════════════════════════════════════════════════════════════
+   GridControl — Scoped styles (equivalent to SyncFusion .e-grid)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Grid Container ───────────────────────────────────────────────── */
+.fx-grid {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    color: #212529;
+    overflow: hidden;
+    position: relative;
+}
+
+/* ── Grid Lines ───────────────────────────────────────────────────── */
+.fx-grid-lines-none ::deep .fx-grid-table td,
+.fx-grid-lines-none ::deep .fx-grid-table th {
+    border: none;
+}
+.fx-grid-lines-horizontal ::deep .fx-grid-table td,
+.fx-grid-lines-horizontal ::deep .fx-grid-table th {
+    border-left: none;
+    border-right: none;
+}
+.fx-grid-lines-vertical ::deep .fx-grid-table td,
+.fx-grid-lines-vertical ::deep .fx-grid-table th {
+    border-top: none;
+    border-bottom: none;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────── */
+.fx-grid-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #dee2e6;
+    background: #f8f9fa;
+}
+.fx-toolbar-btn {
+    padding: 5px 14px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.fx-toolbar-btn:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+/* Built-in icon buttons (Expand All / Collapse All etc.) — compact square
+   buttons that sit on the left of the grid toolbar before any custom items. */
+.fx-grid-toolbar-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    color: #495057;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-grid-toolbar-icon-btn:hover {
+    background: #e9ecef;
+    border-color: #4a7ab5;
+    color: #4a7ab5;
+}
+.fx-grid-toolbar-icon-btn:active {
+    background: #d9e3f0;
+}
+.fx-grid-toolbar-icon {
+    display: inline-block;
+    line-height: 1;
+}
+.fx-grid-toolbar-sep {
+    width: 1px;
+    height: 22px;
+    background: #ced4da;
+    margin: 0 4px;
+}
+
+.fx-toolbar-search {
+    margin-left: auto;
+}
+.fx-toolbar-search input {
+    padding: 5px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 13px;
+    width: 200px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GROUP DROP AREA — Drag-and-drop grouping
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-drop-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    min-height: 38px;
+    border-bottom: 1px solid #dee2e6;
+    background: #f5f6f8;
+    transition: background 0.2s, border-color 0.2s;
+    flex-wrap: wrap;
+}
+.fx-group-drop-area.fx-group-drop-hover {
+    background: #dbeafe;
+    border-bottom-color: #93c5fd;
+    outline: 2px dashed #3b82f6;
+    outline-offset: -2px;
+}
+.fx-group-drop-hint {
+    color: #868e96;
+    font-size: 13px;
+    font-style: italic;
+}
+.fx-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px 3px 12px;
+    border-radius: 16px;
+    /* Themed by GroupedColumnColor (default blue). Falls back to a neutral grey
+       if the variable hasn't been set (e.g. older callers). */
+    background: var(--fx-grid-group-color, #2563eb);
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    cursor: grab;
+    user-select: none;
+    transition: filter 0.15s;
+}
+.fx-group-chip:hover {
+    filter: brightness(0.92);
+}
+.fx-group-chip:active {
+    cursor: grabbing;
+}
+.fx-group-chip-text {
+    white-space: nowrap;
+}
+.fx-group-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    font-size: 14px;
+    line-height: 1;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.fx-group-chip-remove:hover {
+    background: rgba(255,255,255,0.35);
+    color: #fff;
+}
+
+/* Icon-style "Clear All" — removes every active group. Sized to match the
+   neighboring expand/collapse toggle so the two read as a control pair. */
+.fx-group-clear-all-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: 4px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #475569;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-group-clear-all-btn:hover {
+    background: #fff5f5;
+    border-color: #f08080;
+    color: #c0392b;
+}
+
+/* ── Group Header Row ────────────────────────────────────────────── */
+.fx-group-header-row {
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.fx-group-header-row:hover {
+    background: #f0f6ff;
+}
+.fx-group-header-cell {
+    /* VB6-style group header: normal white background, only the VALUE text
+       picks up GroupedColumnColor via the inline style on .fx-group-header-value.
+       Background and caption stay neutral so the column header up top doesn't
+       compete for attention. */
+    padding: 4px 8px;
+    background: #fff;
+    border-bottom: 1px solid #e9ecef;
+    font-weight: 500;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #333;
+}
+.fx-group-header-row .fx-group-header-cell {
+    background: #fff !important;
+    border-bottom: 1px solid #e9ecef;
+}
+.fx-group-header-row:hover .fx-group-header-cell {
+    background: #f5f7fa !important;
+}
+/* The value span — coloured inline with the grid's GroupedColumnColor. */
+.fx-group-header-value {
+    font-weight: 600;
+}
+/* Legacy class kept for any external consumers. */
+.fx-group-header-row .fx-group-header-text {
+    color: inherit;
+}
+.fx-group-expand-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 11px;
+    line-height: 1;
+    color: #444;
+    margin-right: 6px;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+/* Triangle variant — keep compact, no border. */
+.fx-group-expand-icon-triangle {
+    width: 16px;
+    font-size: 10px;
+    color: #64748b;
+}
+
+/* Plus/Minus variant — visual styling lives INLINE on the rendered span
+   (see GridControl.RenderGroupedRows). Inline styles guarantee the
+   black-bordered rectangle paints regardless of Blazor's component-scoped
+   CSS attribute behaviour for builder-emitted elements. The class name
+   below is kept for selector-based hooks (e.g. tests) but carries no
+   layout — only the hover tint, which is fine to keep external. */
+.fx-group-expand-icon.fx-group-expand-icon-plusminus:hover {
+    background: #e3f2fd !important;
+}
+
+.fx-group-header-text {
+    color: #1e293b;
+    font-weight: 700;
+}
+.fx-group-count {
+    color: #94a3b8;
+    font-weight: 400;
+    margin-left: 6px;
+    font-size: 12px;
+}
+.fx-group-header-right {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.fx-group-indent {
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0 !important;
+    border-right: 1px solid #e9ecef;
+    background: #f9fafb;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+.fx-grid-content {
+    overflow: auto;
+}
+.fx-grid-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+    table-layout: fixed;
+}
+
+.fx-grid-table th,
+.fx-grid-table td {
+    border: 1px solid #d0d0d0;
+    box-sizing: border-box;
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.fx-grid-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    border-bottom: 2px solid #b6b6b6;
+}
+.fx-header-cell {
+    padding: 4px 4px;
+    background: #f1f3f5;
+    border-bottom: 2px solid #dee2e6;
+    border-right: 1px solid #dee2e6;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    position: relative;
+}
+.fx-header-cell:last-child {
+    border-right: none;
+}
+.fx-header-cell:hover {
+    background: #e9ecef;
+}
+.fx-header-cell.fx-sorted {
+    background: #e2e6ea;
+}
+.fx-header-cell.fx-filtered .fx-filter-icon {
+    color: #0d6efd;
+}
+.fx-header-text {
+    margin-right: 4px;
+}
+.fx-sort-icon {
+    font-size: 10px;
+    margin-left: 4px;
+    color: #495057;
+}
+.fx-filter-icon {
+    font-size: 11px;
+    margin-left: 6px;
+    color: #adb5bd;
+    cursor: pointer;
+    padding: 2px;
+    border-radius: 3px;
+}
+.fx-filter-icon:hover,
+.fx-filter-icon.active {
+    color: #0d6efd;
+    background: #e7f1ff;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   COLUMN RESIZE
+   ══════════════════════════════════════════════════════════════════ */
+.fx-header-cell.fx-resizable {
+    padding-right: 18px;
+}
+.fx-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 3;
+    background: transparent;
+    transition: background 0.15s;
+}
+.fx-resize-handle:hover,
+.fx-resize-handle:active {
+    background: #3b82f6;
+    opacity: 0.5;
+}
+.fx-resize-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    cursor: col-resize;
+}
+
+/* ── Filter Row ───────────────────────────────────────────────────── */
+.fx-filter-row {
+    background: #f8f9fa;
+}
+.fx-filter-cell {
+    padding: 4px 6px;
+    border-bottom: 1px solid #dee2e6;
+    border-right: 1px solid #dee2e6;
+}
+.fx-filter-cell:last-child {
+    border-right: none;
+}
+.fx-filter-input {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    font-size: 12px;
+    box-sizing: border-box;
+}
+.fx-filter-input:focus {
+    border-color: #86b7fe;
+    outline: 0;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+
+/* ── Body Rows ────────────────────────────────────────────────────── */
+.fx-row {
+    transition: background 0.1s;
+}
+.fx-grid-body tr:first-child td {
+    padding-top: 10px;
+}
+.fx-row.fx-hover:hover {
+    background: #f0f6ff !important;
+}
+.fx-alt-row {
+    background: #f8f9fa;
+}
+.fx-selected {
+    background: #9bbcff !important;
+}
+.fx-cell {
+    padding: 4px 20px;
+    border-bottom: 1px solid #e9ecef;
+    border-right: 1px solid #f1f3f5;
+    vertical-align: middle;
+}
+/* Cell focus / hover indicator.
+   The active and hover rectangles used to be a solid 2px brand blue, which
+   read as a heavy "you've selected this" stroke on every cell the user
+   moused over (see screenshots). They're now reduced to a 1px translucent
+   tint — present so an editable cell announces itself, but barely
+   perceptible against the row. The actively-edited cell (.fx-batch-editing)
+   keeps a slightly stronger tint so the user can see exactly which cell
+   they're typing into. */
+.fx-cell-active-editable,
+.fx-grid ::deep .fx-cell-active-editable {
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.45);
+}
+.fx-grid ::deep .fx-cell-editable:hover {
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.18);
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing {
+    box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.65);
+}
+.fx-grid ::deep .fx-batch-input:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+.fx-cell-selected {
+    background: #fff3cd;
+    outline: 1px solid #f0ad4e;
+}
+.fx-cell:last-child {
+    border-right: none;
+}
+.fx-checkbox-cell {
+    text-align: center;
+    width: 50px;
+}
+.fx-empty-row {
+    text-align: center;
+    padding: 40px;
+    color: #868e96;
+    font-style: italic;
+}
+
+/* ── Batch Cell Editing ───────────────────────────────────────────── */
+.fx-batch-editing {
+    padding: 2px 4px !important;
+    background: #fff9e6 !important;
+}
+.fx-batch-input {
+    width: 100%;
+    padding: 4px 8px;
+    border: 2px solid #0d6efd;
+    border-radius: 3px;
+    font-size: 13px;
+    box-sizing: border-box;
+    background: #fff;
+    outline: none;
+}
+.fx-batch-input:focus {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+/* ── Edit Row ─────────────────────────────────────────────────────── */
+.fx-edit-row {
+    background: #fff9e6 !important;
+}
+.fx-edit-cell {
+    padding: 4px 6px;
+}
+.fx-edit-input {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #86b7fe;
+    border-radius: 3px;
+    font-size: 13px;
+    box-sizing: border-box;
+    background: #fff;
+}
+.fx-edit-input:focus {
+    border-color: #0d6efd;
+    outline: 0;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.25);
+}
+
+/* ── Command Buttons ──────────────────────────────────────────────── */
+.fx-cmd-btn {
+    padding: 3px 10px;
+    margin: 0 2px;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 12px;
+    cursor: pointer;
+}
+.fx-cmd-btn:hover {
+    background: #e9ecef;
+}
+.fx-cmd-edit { color: #0d6efd; border-color: #0d6efd; }
+.fx-cmd-edit:hover { background: #e7f1ff; }
+.fx-cmd-delete { color: #dc3545; border-color: #dc3545; }
+.fx-cmd-delete:hover { background: #f8d7da; }
+.fx-cmd-save { color: #198754; border-color: #198754; }
+.fx-cmd-save:hover { background: #d1e7dd; }
+.fx-cmd-cancel { color: #6c757d; border-color: #6c757d; }
+.fx-cmd-cancel:hover { background: #e9ecef; }
+
+/* ── Pager ────────────────────────────────────────────────────────── */
+.fx-grid-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.fx-pager-info {
+    color: #6c757d;
+}
+.fx-pager-nav {
+    display: flex;
+    gap: 2px;
+}
+.fx-pager-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+.fx-pager-btn:hover:not(:disabled) {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+.fx-pager-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.fx-pager-active {
+    background: #0d6efd !important;
+    color: #fff !important;
+    border-color: #0d6efd !important;
+}
+.fx-pager-size select {
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+/* ── Filter Popup ─────────────────────────────────────────────────── */
+.fx-filter-popup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fx-filter-popup {
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+    padding: 16px;
+    min-width: 260px;
+    max-height: 400px;
+    display: flex;
+    flex-direction: column;
+}
+.fx-filter-popup-header {
+    font-weight: 600;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e9ecef;
+}
+.fx-filter-popup-input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.fx-filter-checkbox-list {
+    max-height: 250px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.fx-filter-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 13px;
+    cursor: pointer;
+}
+.fx-filter-popup-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid #e9ecef;
+}
+.fx-filter-popup-btn {
+    padding: 5px 16px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+}
+.fx-filter-popup-btn:hover {
+    background: #e9ecef;
+}
+.fx-filter-popup-btn.fx-primary {
+    background: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+}
+.fx-filter-popup-btn.fx-primary:hover {
+    background: #0b5ed7;
+}
+
+/* ── Dialog (Edit Mode) ───────────────────────────────────────────── */
+.fx-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fx-dialog {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+    min-width: 400px;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fx-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    font-weight: 600;
+    font-size: 16px;
+    border-bottom: 1px solid #dee2e6;
+}
+.fx-dialog-close {
+    background: none;
+    border: none;
+    font-size: 22px;
+    cursor: pointer;
+    color: #6c757d;
+    padding: 0 4px;
+}
+.fx-dialog-close:hover {
+    color: #212529;
+}
+.fx-dialog-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+.fx-dialog-field {
+    margin-bottom: 16px;
+}
+.fx-dialog-field label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 4px;
+    font-size: 13px;
+    color: #495057;
+}
+.fx-dialog-field input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+.fx-dialog-field input:focus {
+    border-color: #86b7fe;
+    outline: 0;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+.fx-dialog-field input:disabled {
+    background: #e9ecef;
+    color: #6c757d;
+}
+.fx-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+}
+.fx-dialog-btn {
+    padding: 6px 20px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 14px;
+}
+.fx-dialog-btn:hover {
+    background: #e9ecef;
+}
+.fx-dialog-btn.fx-primary {
+    background: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+}
+.fx-dialog-btn.fx-primary:hover {
+    background: #0b5ed7;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SELECTION INFO BAR
+   ══════════════════════════════════════════════════════════════════ */
+.fx-selection-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: #e0f0ff;
+    border-bottom: 1px solid #b6d4fe;
+    font-size: 13px;
+    font-weight: 500;
+    color: #084298;
+}
+.fx-selection-clear-btn {
+    padding: 2px 10px;
+    border: 1px solid #b6d4fe;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    color: #0d6efd;
+    margin-left: auto;
+}
+.fx-selection-clear-btn:hover {
+    background: #cfe2ff;
+}
+.fx-typeahead-display {
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: #fff;
+    border: 1px solid #0d6efd;
+    font-family: monospace;
+    font-size: 13px;
+    color: #0d6efd;
+    font-weight: 600;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   EXPAND / COLLAPSE ALL BUTTON
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-expand-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    color: #475569;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
+}
+.fx-group-expand-collapse-btn:hover {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+}
+
+/* ── Enhanced group expand icon ───────────────────────────────── */
+.fx-group-expand-icon {
+    transition: transform 0.15s ease;
+}
+.fx-group-expand-icon.collapsed {
+    color: #94a3b8;
+}
+.fx-group-expand-icon.expanded {
+    color: #3b82f6;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GROUP FOOTER (Aggregate Row)
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-footer-row {
+    background: #f0fdf4;
+    border-bottom: 2px solid #bbf7d0;
+}
+.fx-group-footer-row .fx-aggregate-cell {
+    padding: 6px 12px;
+    font-weight: 700;
+    font-size: 13px;
+    color: #166534;
+    border-bottom: 1px solid #dcfce7;
+}
+
+/* ── Choose Columns Dialog ───────────────────────────────────────────
+   Mirrors the legacy VB6 "Choose Columns" dialog: a checkbox list with
+   Move Up / Move Down / Show / Hide / Show All / Hide All / Restore
+   Default Layout buttons on the right and OK / Cancel at the bottom. */
+.fx-choose-columns-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    background: rgba(0, 0, 0, 0.25);
+}
+.fx-choose-columns-dialog {
+    position: fixed;
+    z-index: 1501;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 460px;
+    max-height: 86vh;
+    background: #f0f0f0;
+    border: 1px solid #909090;
+    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    color: #1f2937;
+}
+.fx-choose-columns-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 4px 10px;
+    background: linear-gradient(to bottom, #f0f0f0, #d8d8d8);
+    border-bottom: 1px solid #909090;
+    font-weight: 600;
+    font-size: 13px;
+}
+.fx-choose-columns-close {
+    width: 22px;
+    height: 22px;
+    border: 1px solid #909090;
+    background: #f8f8f8;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+.fx-choose-columns-close:hover {
+    background: #e0e0e0;
+}
+.fx-choose-columns-instructions {
+    padding: 8px 12px;
+    font-size: 12px;
+    color: #374151;
+    line-height: 1.35;
+    background: #f0f0f0;
+}
+.fx-choose-columns-body {
+    display: flex;
+    gap: 10px;
+    padding: 6px 12px 10px 12px;
+}
+.fx-choose-columns-list {
+    flex: 1;
+    height: 320px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #adadad;
+    padding: 2px 0;
+}
+.fx-choose-columns-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+    user-select: none;
+}
+.fx-choose-columns-row.selected {
+    background: #316ac5;
+    color: #ffffff;
+}
+.fx-choose-columns-row:hover:not(.selected) {
+    background: #e5f0ff;
+}
+.fx-choose-columns-row input[type=checkbox] {
+    margin: 0;
+    cursor: pointer;
+}
+.fx-choose-columns-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fx-choose-columns-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 130px;
+}
+.fx-choose-columns-buttons button {
+    padding: 4px 8px;
+    border: 1px solid #adadad;
+    background: linear-gradient(to bottom, #ffffff, #e8e8e8);
+    border-radius: 2px;
+    font-size: 12px;
+    cursor: pointer;
+    font: inherit;
+}
+.fx-choose-columns-buttons button:hover:not(:disabled) {
+    background: linear-gradient(to bottom, #ffffff, #d8d8d8);
+}
+.fx-choose-columns-buttons button:disabled {
+    color: #9ca3af;
+    cursor: default;
+}
+.fx-choose-columns-restore {
+    margin-top: auto;
+    padding: 6px 8px !important;
+    line-height: 1.2;
+}
+.fx-choose-columns-footer {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 12px 14px 12px;
+    border-top: 1px solid #d0d0d0;
+}
+.fx-choose-columns-footer button {
+    width: 80px;
+    padding: 5px 0;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    background: linear-gradient(to bottom, #ffffff, #e8e8e8);
+    font-size: 12px;
+    cursor: pointer;
+    font: inherit;
+}
+.fx-choose-columns-footer button:hover {
+    background: linear-gradient(to bottom, #ffffff, #d8d8d8);
+}
+.fx-choose-columns-ok {
+    border-color: #6b7280 !important;
+    font-weight: 600;
+}
+
+/* ── Header Context Menu ─────────────────────────────────────────────
+   Right-click on a column header opens this menu. Style mimics the legacy
+   VB6 "Group on this column / Expand All / Hide / Insert / Rename" panel
+   (see screenshot in repo). Used by every consumer of GridControl. */
+.fx-grid-header-context-menu {
+    position: fixed;
+    /* Sits above any host-level context menu (e.g. FAssembly's data-row menu
+       which uses z-index:1000). Without the bump the host menu — sometimes
+       opened by the same right-click event when stopPropagation didn't catch
+       in time — would paint on top of this one. */
+    z-index: 1100;
+    min-width: 200px;
+    padding: 2px 0;
+    background: #ffffff;
+    border: 1px solid #adadad;
+    box-shadow: 2px 2px 6px rgba(0,0,0,0.18);
+    font-size: 13px;
+    color: #1f2937;
+    user-select: none;
+}
+.fx-grid-header-context-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 4px 12px 4px 6px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    white-space: nowrap;
+}
+.fx-grid-header-context-item:hover:not(:disabled) {
+    background: #316ac5;
+    color: #ffffff;
+}
+.fx-grid-header-context-item:disabled {
+    color: #9ca3af;
+    cursor: default;
+}
+.fx-grid-header-context-check {
+    display: inline-block;
+    width: 18px;
+    color: #1f2937;
+    font-weight: 700;
+    text-align: center;
+    flex-shrink: 0;
+}
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-check {
+    color: #ffffff;
+}
+.fx-grid-header-context-arrow {
+    margin-left: auto;
+    padding-left: 12px;
+    color: #6b7280;
+    font-size: 11px;
+}
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-arrow {
+    color: #ffffff;
+}
+.fx-grid-header-context-sep {
+    height: 1px;
+    margin: 4px 4px;
+    background: #d4d4d4;
+}
+.fx-grid-header-context-submenu {
+    border-top: 1px dashed #e5e7eb;
+    margin: 2px 4px;
+    padding: 2px 0;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.fx-grid-header-context-rename {
+    display: flex;
+    gap: 4px;
+    padding: 4px 8px;
+    border-top: 1px dashed #e5e7eb;
+    border-bottom: 1px dashed #e5e7eb;
+    margin: 2px 0;
+}
+.fx-grid-header-context-rename-input {
+    flex: 1;
+    padding: 3px 6px;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    font-size: 12px;
+}
+.fx-grid-header-context-rename-ok {
+    padding: 3px 10px;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    background: #f3f4f6;
+    font-size: 12px;
+    cursor: pointer;
+}
+.fx-grid-header-context-rename-ok:hover {
+    background: #e5e7eb;
+}
+
+/* Column-aligned aggregate cells living INLINE on the group header row
+   (rendered when an AggregateRow has ShowInGroupHeader=true). Matches the
+   grand-total row palette at the bottom of the grid (.fx-aggregate-footer-row)
+   so a group's total reads as a smaller-scale grand total scoped to the group. */
+.fx-group-header-row .fx-group-header-aggregate-cell {
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 13px;
+    color: #1e40af;
+    background: #eff6ff;
+}
+
+/* ── Grid Footer (total aggregate row) ────────────────────────── */
+.fx-grid-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+}
+.fx-aggregate-footer-row {
+    background: #eff6ff;
+    border-top: 2px solid #93c5fd;
+}
+.fx-aggregate-footer-row .fx-aggregate-cell {
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 13px;
+    color: #1e40af;
+    border-top: 1px solid #bfdbfe;
+}
+
+/* ── Aggregate Value ──────────────────────────────────────────── */
+.fx-aggregate-value {
+    white-space: nowrap;
+}
+
+/* ── Group Caption Aggregate (inline in header row) ───────────── */
+.fx-group-caption-agg {
+    display: inline-block;
+    margin-left: 16px;
+    padding: 1px 8px;
+    background: #dbeafe;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1d4ed8;
+}
+
+/* ── Enhanced Selected Row ────────────────────────────────────── */
+.fx-selected {
+    background: #9bbcff !important;
+    box-shadow: inset 0 0 0 1px #6b8fd6;
+}
+.fx-row.fx-selected > td,
+.fx-row.fx-selected .fx-cell {
+    background: #9bbcff !important;
+}
+.fx-grid ::deep tr.fx-row.fx-selected > td,
+.fx-grid ::deep tr.fx-row.fx-selected .fx-cell,
+.fx-grid ::deep tr.fx-row.fx-selected {
+    background: #9bbcff !important;
+}
+.fx-selected:hover {
+    background: #8fb1f5 !important;
+}

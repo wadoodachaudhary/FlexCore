@@ -1,0 +1,107 @@
+@namespace Fx.ControlKit
+@typeparam TValue
+@typeparam TItem
+
+<select class="fx-dropdown @CssClass"
+        style="@(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
+        disabled="@(!Enabled)"
+        @onchange="OnSelectionChanged">
+    @if (!string.IsNullOrEmpty(Placeholder))
+    {
+        <option value="" disabled selected="@(Value == null || Value.Equals(default(TValue)))">@Placeholder</option>
+    }
+    @if (DataSource != null)
+    {
+        foreach (var item in DataSource)
+        {
+            var val = GetFieldValue(item, ValueFieldName);
+            var txt = GetFieldValue(item, TextFieldName);
+            var isSelected = Value != null && Value.ToString() == val;
+            <option value="@val" selected="@isSelected">@txt</option>
+        }
+    }
+</select>
+
+@code {
+    [Parameter] public IEnumerable<TItem>? DataSource { get; set; }
+    [Parameter] public TValue? Value { get; set; }
+    [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public bool AllowFiltering { get; set; }
+
+    /// <summary>Field settings — set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
+    [Parameter] public string TextFieldName { get; set; } = "";
+    [Parameter] public string ValueFieldName { get; set; } = "";
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Event fired when value changes. Provides the new value.</summary>
+    [Parameter] public EventCallback<ChangeEventArgs<TValue, TItem>> ValueChange { get; set; }
+
+    private string GetFieldValue(TItem item, string field)
+    {
+        if (item == null) return "";
+        if (string.IsNullOrWhiteSpace(field))
+        {
+            // If TItem is string, just return the string
+            if (item is string s) return s;
+            return item.ToString() ?? "";
+        }
+        var prop = typeof(TItem).GetProperty(field);
+        return prop?.GetValue(item)?.ToString() ?? "";
+    }
+
+    private async Task OnSelectionChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        var strVal = e.Value?.ToString() ?? "";
+        TValue? newValue = default;
+        try
+        {
+            if (typeof(TValue) == typeof(string))
+                newValue = (TValue)(object)strVal;
+            else if (typeof(TValue) == typeof(int))
+                newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : 0);
+            else if (typeof(TValue) == typeof(decimal))
+                newValue = (TValue)(object)(decimal.TryParse(strVal, out var d) ? d : 0m);
+            else
+                newValue = (TValue)Convert.ChangeType(strVal, typeof(TValue));
+        }
+        catch
+        {
+            newValue = default;
+        }
+
+        Value = newValue;
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(newValue);
+
+        if (ValueChange.HasDelegate)
+        {
+            TItem item = default!;
+            if (DataSource != null)
+            {
+                foreach (var x in DataSource)
+                {
+                    if (GetFieldValue(x, ValueFieldName) == strVal)
+                    {
+                        item = x;
+                        break;
+                    }
+                }
+            }
+            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
+        }
+    }
+
+    /// <summary>
+    /// Event args for dropdown value change events.
+    /// </summary>
+    public class ChangeEventArgs<TVal, TItm>
+    {
+        public TVal? Value { get; set; }
+        public TItm ItemData { get; set; } = default!;
+    }
+}

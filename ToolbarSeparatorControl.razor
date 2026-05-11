@@ -1,0 +1,9 @@
+<div class="@ResolvedCssClass" role="separator" aria-orientation="vertical"></div>
+
+@code {
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-toolbar-separator"
+        : $"fx-toolbar-separator {CssClass}";
+}

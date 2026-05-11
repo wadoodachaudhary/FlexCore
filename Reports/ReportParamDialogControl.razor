@@ -1,0 +1,215 @@
+@* ReportParamDialogControl — modal prompt for Crystal Reports parameter values.
+
+   Mirrors the VB6/Crystal "Enter Parameter Values" dialog. For each required parameter
+   it renders a panel containing:
+     - left:  the prompt text (e.g. "Enter Job:")
+     - right: a secondary label with the parameter's display name (e.g. "Job Filter (optional)")
+     - body:  one of {free-text input, typed input, pick-list dropdown, default-values dropdown}
+
+   Lives in FlexCore (no DB or app-specific dependencies). The host app
+   registers an IReportPickListProvider implementation (or none — the dialog
+   gracefully falls back to free-text inputs).
+
+   Usage:
+     <ReportParamDialogControl @ref="paramDialog" />
+     ...
+     var values = await paramDialog.PromptAsync(reportTitle, definition.Parameters);
+     if (values == null) return; // user cancelled
+*@
+
+@namespace Fx.ControlKit.Reports
+
+@if (_visible)
+{
+    <div class="fx-dialog-overlay">
+        <div class="fx-dialog fx-param-dialog">
+            <div class="fx-dialog-header">
+                <span>Enter Parameter Values</span>
+                <button class="fx-dialog-close" type="button" @onclick="Cancel">×</button>
+            </div>
+            <div class="fx-dialog-body fx-param-body">
+                @if (!string.IsNullOrWhiteSpace(_title))
+                {
+                    <div class="fx-param-title">@_title</div>
+                }
+                @foreach (var p in _parameters)
+                {
+                    var pickList = _pickLists.TryGetValue(p.Name, out var list) ? list : null;
+                    var hasDefaultsDropdown = p.DefaultValues.Count >= 2;
+                    var optionalLabel = p.IsOptional ? " (optional)" : "";
+                    <div class="fx-param-panel">
+                        <div class="fx-param-panel-header">
+                            <span class="fx-param-prompt-text">
+                                @(!string.IsNullOrEmpty(p.Prompt) ? p.Prompt : p.Name)
+                            </span>
+                            <span class="fx-param-secondary-label">
+                                @(!string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name)
+                            </span>
+                        </div>
+                        <div class="fx-param-panel-body">
+                            @if (hasDefaultsDropdown)
+                            {
+                                @* Crystal default-values dropdown — shows description, sets value behind it *@
+                                <select class="fx-param-defaults-dropdown"
+                                        @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
+                                    @foreach (var choice in p.DefaultValues)
+                                    {
+                                        <option value="@choice.Value"
+                                                selected="@(_values.GetValueOrDefault(p.Name) == choice.Value)">
+                                            @(string.IsNullOrWhiteSpace(choice.Description) ? choice.Value : choice.Description)
+                                        </option>
+                                    }
+                                </select>
+                                <label class="fx-param-value-label">Enter a Value:</label>
+                                <input type="text"
+                                       class="fx-param-value-input"
+                                       value="@_values.GetValueOrDefault(p.Name)"
+                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                            }
+                            else if (pickList != null && pickList.Count > 0)
+                            {
+                                <select class="fx-param-picklist-dropdown"
+                                        @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
+                                    <option value="" selected="@(string.IsNullOrEmpty(_values.GetValueOrDefault(p.Name)))">
+                                        @(p.IsOptional ? "..." : "--")
+                                    </option>
+                                    @foreach (var item in pickList)
+                                    {
+                                        <option value="@item.Value" selected="@(_values.GetValueOrDefault(p.Name) == item.Value)">@item.Display</option>
+                                    }
+                                </select>
+                            }
+                            else if (p.ParameterType == ReportParameterType.Integer || p.ParameterType == ReportParameterType.Decimal)
+                            {
+                                <input type="number"
+                                       value="@_values.GetValueOrDefault(p.Name)"
+                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                            }
+                            else if (p.ParameterType == ReportParameterType.Date)
+                            {
+                                <input type="date"
+                                       value="@_values.GetValueOrDefault(p.Name)"
+                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                            }
+                            else if (p.ParameterType == ReportParameterType.Boolean)
+                            {
+                                <select @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
+                                    <option value="True" selected="@(_values.GetValueOrDefault(p.Name) == "True")">True</option>
+                                    <option value="False" selected="@(_values.GetValueOrDefault(p.Name) == "False")">False</option>
+                                </select>
+                            }
+                            else
+                            {
+                                <input type="text"
+                                       value="@_values.GetValueOrDefault(p.Name)"
+                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                            }
+                        </div>
+                    </div>
+                }
+                @if (!string.IsNullOrEmpty(_error))
+                {
+                    <div class="fx-param-error">@_error</div>
+                }
+            </div>
+            <div class="fx-dialog-footer">
+                <button class="fx-button fx-button-primary" type="button" @onclick="Accept">OK</button>
+                <button class="fx-button" type="button" @onclick="Cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>
+    /// Optional pick-list source. When null (no implementation registered in DI)
+    /// every parameter falls back to a free-text / typed input.
+    /// </summary>
+    [Inject] private IReportPickListProvider? PickLists { get; set; }
+
+    private bool _visible;
+    private string _title = "";
+    private List<ReportParameter> _parameters = new();
+    private Dictionary<string, string> _values = new();
+    private Dictionary<string, IReadOnlyList<PickListItem>> _pickLists = new();
+    private string? _error;
+    private TaskCompletionSource<Dictionary<string, object>?>? _tcs;
+
+    /// <summary>
+    /// Shows the dialog, waits for user input, and returns a parameter-value dictionary
+    /// suitable for <see cref="ReportWriterControl.ShowSqlReport"/>. Returns null if cancelled.
+    /// </summary>
+    public async Task<Dictionary<string, object>?> PromptAsync(string title, List<ReportParameter> parameters)
+    {
+        _title = title;
+        // Only prompt for parameters that are both "Required" and don't already have a default value.
+        _parameters = parameters.Where(p => p.Required).ToList();
+        if (_parameters.Count == 0)
+            return new Dictionary<string, object>();
+
+        _values = _parameters.ToDictionary(p => p.Name, p => p.DefaultValue ?? "");
+        _pickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
+        if (PickLists != null)
+        {
+            foreach (var p in _parameters)
+            {
+                var list = PickLists.GetPickList(p.Name);
+                if (list != null && list.Count > 0)
+                    _pickLists[p.Name] = list;
+            }
+        }
+
+        _error = null;
+        _visible = true;
+        _tcs = new TaskCompletionSource<Dictionary<string, object>?>();
+        StateHasChanged();
+        return await _tcs.Task;
+    }
+
+    private void SetValue(string name, string value)
+    {
+        _values[name] = value;
+    }
+
+    private void Accept()
+    {
+        // Validate — required (non-optional) params must be filled in.
+        var missing = _parameters
+            .Where(p => !p.IsOptional && string.IsNullOrWhiteSpace(_values.GetValueOrDefault(p.Name)))
+            .ToList();
+        if (missing.Count > 0)
+        {
+            _error = "Please provide: " + string.Join(", ",
+                missing.Select(p => string.IsNullOrWhiteSpace(p.DisplayName) ? p.Name : p.DisplayName));
+            StateHasChanged();
+            return;
+        }
+
+        var result = new Dictionary<string, object>();
+        foreach (var p in _parameters)
+        {
+            var raw = _values.GetValueOrDefault(p.Name, "");
+            result[p.Name] = ConvertValue(raw, p.ParameterType);
+        }
+
+        _visible = false;
+        _tcs?.TrySetResult(result);
+        StateHasChanged();
+    }
+
+    private void Cancel()
+    {
+        _visible = false;
+        _tcs?.TrySetResult(null);
+        StateHasChanged();
+    }
+
+    private static object ConvertValue(string raw, ReportParameterType type) => type switch
+    {
+        ReportParameterType.Integer => long.TryParse(raw, out var i) ? i : 0L,
+        ReportParameterType.Decimal => decimal.TryParse(raw, out var d) ? d : 0m,
+        ReportParameterType.Date => DateTime.TryParse(raw, out var dt) ? dt : DateTime.MinValue,
+        ReportParameterType.Boolean => bool.TryParse(raw, out var b) && b,
+        _ => raw
+    };
+}

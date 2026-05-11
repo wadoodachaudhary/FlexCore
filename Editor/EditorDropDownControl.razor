@@ -1,0 +1,78 @@
+@namespace Fx.ControlKit.Editor
+
+@* Editor-flavoured dropdown. Sits alongside the generic DropDownListControl
+   but trades its reflection-based TextFieldName/ValueFieldName for a direct
+   record-typed <see cref="EditorDropDownOption"/> list. That makes it
+   natural to use with in-place option tables (font families, page widths,
+   line heights, chapter lists, …) without needing intermediate DTO classes.
+
+   Emits a plain <select> so every GhostWriter-style <option> attribute
+   (selected, disabled, value) works. Supports BareStyle — when true, the
+   library's .fx-dropdown class is suppressed so the host drives visuals
+   entirely via CssClass. *@
+
+<select class="@ResolvedCssClass"
+        style="@Style"
+        disabled="@(!Enabled)"
+        value="@Value"
+        @onchange="HandleChangeAsync">
+    @if (!string.IsNullOrWhiteSpace(Placeholder))
+    {
+        <option value="" disabled selected="@string.IsNullOrEmpty(Value)">@Placeholder</option>
+    }
+    @if (Options is not null)
+    {
+        foreach (var opt in Options)
+        {
+            <option value="@opt.Value" selected="@(string.Equals(opt.Value, Value, StringComparison.Ordinal))">@opt.Label</option>
+        }
+    }
+</select>
+
+@code {
+    /// <summary>
+    /// A single entry in the dropdown. <see cref="Value"/> is what's written
+    /// to the &lt;option value=""&gt; attribute (and flowed back through
+    /// <see cref="ValueChanged"/>); <see cref="Label"/> is the visible text.
+    /// </summary>
+    public sealed record EditorDropDownOption(string Value, string Label);
+
+    [Parameter] public IEnumerable<EditorDropDownOption>? Options { get; set; }
+
+    /// <summary>Currently-selected option's value (as a string).</summary>
+    [Parameter] public string? Value { get; set; }
+
+    /// <summary>Fires with the new option's value every time the user picks one.</summary>
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+
+    /// <summary>When false, the &lt;select&gt; is rendered disabled.</summary>
+    [Parameter] public bool Enabled { get; set; } = true;
+
+    /// <summary>
+    /// Suppresses the library's <c>.fx-dropdown</c> base class so the host
+    /// owns every visual detail through <see cref="CssClass"/> (e.g.
+    /// GhostWriter's <c>.fmt-select</c>, <c>.chapter-select</c>).
+    /// </summary>
+    [Parameter] public bool BareStyle { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var c = (CssClass ?? string.Empty).Trim();
+            if (BareStyle) return c;
+            return string.IsNullOrEmpty(c) ? "fx-dropdown" : $"fx-dropdown {c}";
+        }
+    }
+
+    private async Task HandleChangeAsync(ChangeEventArgs e)
+    {
+        var next = e.Value?.ToString() ?? string.Empty;
+        Value = next;
+        if (ValueChanged.HasDelegate) await ValueChanged.InvokeAsync(next);
+    }
+}

@@ -1,0 +1,19 @@
+@namespace Fx.ControlKit
+
+@* A titled group of ribbon buttons. *@
+
+<div class="fx-ribbon-group">
+    <div class="fx-ribbon-group-body">@ChildContent</div>
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <div class="fx-ribbon-group-title">@Title</div>
+    }
+</div>
+
+@code {
+    /// <summary>Group title (shown at the bottom of the group).</summary>
+    [Parameter] public string Title { get; set; } = "";
+
+    /// <summary>Group content — typically RibbonButtons.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

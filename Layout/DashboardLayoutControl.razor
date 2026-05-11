@@ -1,0 +1,56 @@
+@namespace Fx.ControlKit.Layout
+
+@*
+    DashboardLayoutControl — CSS-grid-based dashboard panel container.
+    Replaces the former Syncfusion SfDashboardLayout with a zero-dependency
+    FlexCore equivalent (same parameter surface).
+
+    Usage:
+        <DashboardLayoutControl Columns="12" CellSpacing="@(new double[] { 8, 8 })">
+            <DashboardLayoutPanels>
+                <DashboardLayoutPanel Row="0" Column="0" SizeX="3" SizeY="2">…</DashboardLayoutPanel>
+                …
+            </DashboardLayoutPanels>
+        </DashboardLayoutControl>
+*@
+
+<CascadingValue Value="@Config" IsFixed="true">
+    <div class="fx-dashboard-layout @CssClass" style="@LayoutStyle">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    private static readonly double[] DefaultSpacing = [0, 0];
+
+    [Parameter] public int Columns { get; set; } = 1;
+    [Parameter] public double[]? CellSpacing { get; set; }
+    [Parameter] public double CellAspectRatio { get; set; } = 1;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private DashboardLayoutConfig Config => new(
+        Columns <= 0 ? 1 : Columns,
+        ResolveSpacing(),
+        CellAspectRatio <= 0 ? 1 : CellAspectRatio);
+
+    private string LayoutStyle
+    {
+        get
+        {
+            var spacing = ResolveSpacing();
+            return string.Join(" ",
+                $"grid-template-columns: repeat({(Columns <= 0 ? 1 : Columns)}, minmax(0, 1fr));",
+                $"column-gap: {spacing[0]}px;",
+                $"row-gap: {spacing[1]}px;",
+                $"--fx-dashboard-aspect: {(CellAspectRatio <= 0 ? 1 : CellAspectRatio)};");
+        }
+    }
+
+    private double[] ResolveSpacing()
+    {
+        if (CellSpacing is { Length: >= 2 })
+            return [CellSpacing[0], CellSpacing[1]];
+        return DefaultSpacing;
+    }
+}
