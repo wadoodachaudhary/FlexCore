@@ -1,0 +1,13 @@
+.fx-listbox {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 320px;
+    overflow: auto;
+}
+
+.fx-listbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}

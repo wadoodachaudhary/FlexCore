@@ -1,0 +1,85 @@
+@namespace Fx.ControlKit.Dialogs
+
+@*
+    MessageBoxControl — standard message box dialog.
+    Show via setting Visible=true or calling ShowAsync().
+*@
+
+@if (Visible)
+{
+    <div class="fx-msgbox-overlay" @onclick="HandleOverlayClick">
+        <div class="fx-msgbox @CssClass" @onclick:stopPropagation="true">
+            <div class="fx-msgbox-header">
+                <span>@Title</span>
+                <button class="fx-msgbox-close" @onclick="Close">&times;</button>
+            </div>
+            <div class="fx-msgbox-body">
+                @if (!string.IsNullOrEmpty(IconCss))
+                {
+                    <span class="fx-msgbox-icon @IconCss"></span>
+                }
+                <div class="fx-msgbox-message">@Message</div>
+            </div>
+            <div class="fx-msgbox-footer">
+                @switch (Buttons)
+                {
+                    case MessageBoxButtons.Ok:
+                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
+                        break;
+                    case MessageBoxButtons.OkCancel:
+                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
+                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        break;
+                    case MessageBoxButtons.YesNo:
+                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
+                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
+                        break;
+                    case MessageBoxButtons.YesNoCancel:
+                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
+                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
+                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        break;
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "Message";
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public MessageBoxButtons Buttons { get; set; } = MessageBoxButtons.Ok;
+    [Parameter] public EventCallback<MessageBoxResult> OnResult { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private TaskCompletionSource<MessageBoxResult>? _tcs;
+
+    public Task<MessageBoxResult> ShowAsync(string message, string title = "Message",
+        MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null)
+    {
+        Message = message;
+        Title = title;
+        Buttons = buttons;
+        IconCss = icon;
+        Visible = true;
+        _tcs = new TaskCompletionSource<MessageBoxResult>();
+        StateHasChanged();
+        return _tcs.Task;
+    }
+
+    private async Task CloseWith(MessageBoxResult result)
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+        if (OnResult.HasDelegate)
+            await OnResult.InvokeAsync(result);
+        _tcs?.TrySetResult(result);
+    }
+
+    private Task Close() => CloseWith(MessageBoxResult.Cancel);
+    private Task HandleOverlayClick() => Close();
+}

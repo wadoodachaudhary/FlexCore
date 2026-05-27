@@ -1,0 +1,313 @@
+@namespace Fx.ControlKit
+
+<div class="fx-listview fx-listview-@ViewMode.ToString().ToLowerInvariant() @CssClass" style="@RootStyle">
+    @switch (ViewMode)
+    {
+        case ListViewMode.Details:
+            @RenderDetailsView()
+            break;
+        case ListViewMode.LargeIcon:
+            @RenderLargeIconView()
+            break;
+        case ListViewMode.SmallIcon:
+            @RenderSmallIconView()
+            break;
+        case ListViewMode.List:
+            @RenderListView()
+            break;
+        case ListViewMode.Tile:
+            @RenderTileView()
+            break;
+    }
+</div>
+
+@code {
+    [Parameter] public List<ListViewItem>? Items { get; set; }
+    [Parameter] public ListViewMode ViewMode { get; set; } = ListViewMode.Details;
+    [Parameter] public ListViewItem? SelectedItem { get; set; }
+    [Parameter] public EventCallback<ListViewItem> SelectedItemChanged { get; set; }
+    [Parameter] public EventCallback<ListViewItem> OnItemClick { get; set; }
+    [Parameter] public EventCallback<ListViewItem> OnItemDoubleClick { get; set; }
+    [Parameter] public List<ListViewColumn>? Columns { get; set; }
+    [Parameter] public bool AllowMultiSelect { get; set; }
+    [Parameter] public bool ShowHeader { get; set; } = true;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Height { get; set; }
+
+    private string? RootStyle => Height != null ? $"height:{Height};overflow:auto;" : null;
+
+    private string GetItemCss(ListViewItem item)
+    {
+        var css = "fx-listview-item";
+        if (item.IsSelected || item == SelectedItem)
+            css += " fx-listview-item-selected";
+        return css;
+    }
+
+    private async Task HandleItemClick(ListViewItem item)
+    {
+        if (!AllowMultiSelect)
+        {
+            if (SelectedItem != null)
+                SelectedItem.IsSelected = false;
+            item.IsSelected = true;
+            SelectedItem = item;
+            if (SelectedItemChanged.HasDelegate)
+                await SelectedItemChanged.InvokeAsync(item);
+        }
+        else
+        {
+            item.IsSelected = !item.IsSelected;
+        }
+
+        if (OnItemClick.HasDelegate)
+            await OnItemClick.InvokeAsync(item);
+    }
+
+    private async Task HandleItemDoubleClick(ListViewItem item)
+    {
+        if (OnItemDoubleClick.HasDelegate)
+            await OnItemDoubleClick.InvokeAsync(item);
+    }
+
+    private string GetColumnValue(ListViewItem item, string field)
+    {
+        if (item.SubItems.TryGetValue(field, out var value))
+            return value;
+        return "";
+    }
+
+    private RenderFragment RenderDetailsView() => builder =>
+    {
+        builder.OpenElement(0, "table");
+        builder.AddAttribute(1, "class", "fx-listview-table");
+
+        if (ShowHeader && Columns != null && Columns.Count > 0)
+        {
+            builder.OpenElement(2, "thead");
+            builder.OpenElement(3, "tr");
+            foreach (var col in Columns)
+            {
+                builder.OpenElement(4, "th");
+                if (!string.IsNullOrEmpty(col.Width))
+                    builder.AddAttribute(5, "style", $"width:{col.Width};");
+                builder.AddContent(6, col.Header);
+                builder.CloseElement();
+            }
+            builder.CloseElement(); // tr
+            builder.CloseElement(); // thead
+        }
+
+        builder.OpenElement(7, "tbody");
+        if (Items != null)
+        {
+            foreach (var item in Items)
+            {
+                var capturedItem = item;
+                builder.OpenElement(8, "tr");
+                builder.AddAttribute(9, "class", GetItemCss(capturedItem));
+                builder.AddAttribute(10, "onclick", EventCallback.Factory.Create(this, () => HandleItemClick(capturedItem)));
+                builder.AddAttribute(11, "ondblclick", EventCallback.Factory.Create(this, () => HandleItemDoubleClick(capturedItem)));
+
+                if (Columns != null && Columns.Count > 0)
+                {
+                    for (int i = 0; i < Columns.Count; i++)
+                    {
+                        builder.OpenElement(12, "td");
+                        if (i == 0)
+                        {
+                            if (!string.IsNullOrEmpty(capturedItem.IconCss))
+                            {
+                                builder.OpenElement(13, "span");
+                                builder.AddAttribute(14, "class", "fx-listview-icon " + capturedItem.IconCss);
+                                builder.CloseElement();
+                            }
+                            builder.AddContent(15, capturedItem.Text);
+                        }
+                        else
+                        {
+                            builder.AddContent(16, GetColumnValue(capturedItem, Columns[i].Field));
+                        }
+                        builder.CloseElement(); // td
+                    }
+                }
+                else
+                {
+                    builder.OpenElement(17, "td");
+                    if (!string.IsNullOrEmpty(capturedItem.IconCss))
+                    {
+                        builder.OpenElement(18, "span");
+                        builder.AddAttribute(19, "class", "fx-listview-icon " + capturedItem.IconCss);
+                        builder.CloseElement();
+                    }
+                    builder.AddContent(20, capturedItem.Text);
+                    builder.CloseElement(); // td
+                }
+
+                builder.CloseElement(); // tr
+            }
+        }
+        builder.CloseElement(); // tbody
+        builder.CloseElement(); // table
+    };
+
+    private RenderFragment RenderLargeIconView() => builder =>
+    {
+        if (Items == null) return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "fx-listview-grid");
+
+        foreach (var item in Items)
+        {
+            var capturedItem = item;
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", GetItemCss(capturedItem));
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => HandleItemClick(capturedItem)));
+            builder.AddAttribute(5, "ondblclick", EventCallback.Factory.Create(this, () => HandleItemDoubleClick(capturedItem)));
+
+            if (!string.IsNullOrEmpty(capturedItem.ImageUrl))
+            {
+                builder.OpenElement(6, "img");
+                builder.AddAttribute(7, "src", capturedItem.ImageUrl);
+                builder.AddAttribute(8, "class", "fx-listview-image-large");
+                builder.AddAttribute(9, "alt", capturedItem.Text);
+                builder.CloseElement();
+            }
+            else if (!string.IsNullOrEmpty(capturedItem.IconCss))
+            {
+                builder.OpenElement(10, "span");
+                builder.AddAttribute(11, "class", "fx-listview-icon-large " + capturedItem.IconCss);
+                builder.CloseElement();
+            }
+
+            builder.OpenElement(12, "span");
+            builder.AddAttribute(13, "class", "fx-listview-text");
+            builder.AddContent(14, capturedItem.Text);
+            builder.CloseElement();
+
+            builder.CloseElement(); // item div
+        }
+
+        builder.CloseElement(); // grid div
+    };
+
+    private RenderFragment RenderSmallIconView() => builder =>
+    {
+        if (Items == null) return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "fx-listview-grid fx-listview-grid-small");
+
+        foreach (var item in Items)
+        {
+            var capturedItem = item;
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", GetItemCss(capturedItem));
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => HandleItemClick(capturedItem)));
+            builder.AddAttribute(5, "ondblclick", EventCallback.Factory.Create(this, () => HandleItemDoubleClick(capturedItem)));
+
+            if (!string.IsNullOrEmpty(capturedItem.IconCss))
+            {
+                builder.OpenElement(6, "span");
+                builder.AddAttribute(7, "class", "fx-listview-icon " + capturedItem.IconCss);
+                builder.CloseElement();
+            }
+
+            builder.OpenElement(8, "span");
+            builder.AddAttribute(9, "class", "fx-listview-text");
+            builder.AddContent(10, capturedItem.Text);
+            builder.CloseElement();
+
+            builder.CloseElement(); // item div
+        }
+
+        builder.CloseElement(); // grid div
+    };
+
+    private RenderFragment RenderListView() => builder =>
+    {
+        if (Items == null) return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "fx-listview-list");
+
+        foreach (var item in Items)
+        {
+            var capturedItem = item;
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", GetItemCss(capturedItem));
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => HandleItemClick(capturedItem)));
+            builder.AddAttribute(5, "ondblclick", EventCallback.Factory.Create(this, () => HandleItemDoubleClick(capturedItem)));
+
+            if (!string.IsNullOrEmpty(capturedItem.IconCss))
+            {
+                builder.OpenElement(6, "span");
+                builder.AddAttribute(7, "class", "fx-listview-icon " + capturedItem.IconCss);
+                builder.CloseElement();
+            }
+
+            builder.OpenElement(8, "span");
+            builder.AddAttribute(9, "class", "fx-listview-text");
+            builder.AddContent(10, capturedItem.Text);
+            builder.CloseElement();
+
+            builder.CloseElement(); // item div
+        }
+
+        builder.CloseElement(); // list div
+    };
+
+    private RenderFragment RenderTileView() => builder =>
+    {
+        if (Items == null) return;
+
+        builder.OpenElement(0, "div");
+        builder.AddAttribute(1, "class", "fx-listview-grid fx-listview-grid-tile");
+
+        foreach (var item in Items)
+        {
+            var capturedItem = item;
+            builder.OpenElement(2, "div");
+            builder.AddAttribute(3, "class", GetItemCss(capturedItem));
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => HandleItemClick(capturedItem)));
+            builder.AddAttribute(5, "ondblclick", EventCallback.Factory.Create(this, () => HandleItemDoubleClick(capturedItem)));
+
+            if (!string.IsNullOrEmpty(capturedItem.ImageUrl))
+            {
+                builder.OpenElement(6, "img");
+                builder.AddAttribute(7, "src", capturedItem.ImageUrl);
+                builder.AddAttribute(8, "class", "fx-listview-image-tile");
+                builder.AddAttribute(9, "alt", capturedItem.Text);
+                builder.CloseElement();
+            }
+            else if (!string.IsNullOrEmpty(capturedItem.IconCss))
+            {
+                builder.OpenElement(10, "span");
+                builder.AddAttribute(11, "class", "fx-listview-icon-tile " + capturedItem.IconCss);
+                builder.CloseElement();
+            }
+
+            builder.OpenElement(12, "div");
+            builder.AddAttribute(13, "class", "fx-listview-tile-content");
+
+            builder.OpenElement(14, "span");
+            builder.AddAttribute(15, "class", "fx-listview-text");
+            builder.AddContent(16, capturedItem.Text);
+            builder.CloseElement();
+
+            if (!string.IsNullOrEmpty(capturedItem.SubText))
+            {
+                builder.OpenElement(17, "span");
+                builder.AddAttribute(18, "class", "fx-listview-subtext");
+                builder.AddContent(19, capturedItem.SubText);
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // tile-content div
+            builder.CloseElement(); // item div
+        }
+
+        builder.CloseElement(); // grid div
+    };
+}

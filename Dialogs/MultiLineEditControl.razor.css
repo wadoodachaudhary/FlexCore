@@ -1,0 +1,128 @@
+/* Modal styling parallels InputDialogControl — same color palette, same
+   header / footer rhythm — so a host UI looks consistent regardless of
+   which dialog is open. The body grows taller (300px textarea) since
+   this dialog targets paragraph-level edits (notes, formulas). */
+
+.fx-mled-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.fx-mled {
+    background: #fff;
+    border-radius: 8px;
+    min-width: 480px;
+    max-width: 720px;
+    width: 80vw;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 80vh;
+}
+
+.fx-mled-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #0d3b66;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.fx-mled-close {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.fx-mled-close:hover {
+    color: #e5e7eb;
+}
+
+.fx-mled-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+    min-height: 0;
+}
+
+.fx-mled-label {
+    font-size: 13px;
+    color: #374151;
+    font-weight: 500;
+}
+
+.fx-mled-textarea {
+    width: 100%;
+    min-height: 240px;
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 13px;
+    line-height: 1.45;
+    outline: none;
+    box-sizing: border-box;
+    resize: vertical;
+    font-family: inherit;
+}
+
+.fx-mled-textarea:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.fx-mled-counter {
+    font-size: 11px;
+    color: #6b7280;
+    text-align: right;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+.fx-mled-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+.fx-mled-btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+}
+
+.fx-mled-btn:hover {
+    background: #f3f4f6;
+}
+
+.fx-mled-btn-primary {
+    background: #1b6ec2;
+    color: #fff;
+    border-color: #1861ac;
+}
+
+.fx-mled-btn-primary:hover {
+    background: #1a65b3;
+}

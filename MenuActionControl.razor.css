@@ -1,0 +1,34 @@
+.fx-menu-action {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #0f172a;
+    padding: 0 8px;
+    text-align: left;
+    font-size: 0.83rem;
+    cursor: pointer;
+}
+
+.fx-menu-action:hover {
+    background: #edf3ff;
+    border-color: #d8e3fb;
+}
+
+.fx-menu-action:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-menu-action-icon {
+    min-width: 14px;
+    text-align: center;
+}
+
+.fx-menu-action-text {
+    flex: 1;
+}

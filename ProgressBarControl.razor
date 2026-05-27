@@ -1,0 +1,124 @@
+@namespace Fx.ControlKit
+
+@*
+   Progress bar with optional status header, detail subtext, error state,
+   indeterminate (looping) animation, and a Cancel button.
+
+   Determinate use:
+       <ProgressBarControl Value="42.5"
+                           Status="Pulling llama3.1:8b"
+                           Detail="2.21 GB of 4.68 GB · 38.4 MB/s · ETA 1m 04s"
+                           OnCancel="StopAsync" />
+
+   Indeterminate (no Value known):
+       <ProgressBarControl Indeterminate="true" Status="Verifying digest…" />
+
+   Error state:
+       <ProgressBarControl Value="0" IsError="true"
+                           Status="Pulling foo:bar"
+                           ErrorMessage="pull model manifest: file does not exist"
+                           OnCancel="StopAsync" />
+
+   Use anywhere a long-running task wants to show progress in a way that
+   matches GhostWriter's other FlexCore-based pages.
+*@
+
+<div class="@RootCssClass" style="@Style">
+    @if (!string.IsNullOrWhiteSpace(Status) || !string.IsNullOrWhiteSpace(Title) || OnCancel.HasDelegate)
+    {
+        <div class="fx-progress-header">
+            @if (!string.IsNullOrWhiteSpace(Title))
+            {
+                <strong>@Title</strong>
+            }
+            @if (!string.IsNullOrWhiteSpace(Status))
+            {
+                <span class="fx-progress-status">@(Title is null ? "" : "·") @Status</span>
+            }
+            @if (OnCancel.HasDelegate)
+            {
+                <ButtonControl CssClass="fx-progress-cancel" BareStyle="true"
+                               Disabled="@CancelDisabled"
+                               OnClick="OnCancel"
+                               Title="Cancel">
+                    @(CancelDisabled ? "cancelling…" : (CancelText ?? "Cancel"))
+                </ButtonControl>
+            }
+        </div>
+    }
+
+    @if (IsError && !string.IsNullOrWhiteSpace(ErrorMessage))
+    {
+        <p class="fx-progress-error-text">✗ @ErrorMessage</p>
+    }
+
+    <div class="fx-progress-track">
+        <div class="fx-progress-fill @(Indeterminate ? "fx-progress-indeterminate" : "")"
+             style="@FillStyle"></div>
+    </div>
+
+    @if (!string.IsNullOrWhiteSpace(Detail) || ShowPercent)
+    {
+        <p class="fx-progress-detail">
+            @if (ShowPercent && !Indeterminate)
+            {
+                <span>@_displayValue.ToString("0.#")%</span>
+                @if (!string.IsNullOrWhiteSpace(Detail)) { <span> · </span> }
+            }
+            @if (!string.IsNullOrWhiteSpace(Detail))
+            {
+                @Detail
+            }
+        </p>
+    }
+</div>
+
+
+@code {
+    /// <summary>Percent complete, 0–100. Ignored when <see cref="Indeterminate"/> is true.</summary>
+    [Parameter] public double Value { get; set; }
+
+    /// <summary>Optional bold lead-in label (e.g. "Pulling llama3.1:8b").</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>Lighter status word/phrase shown after the title (e.g. "downloading", "verifying").</summary>
+    [Parameter] public string? Status { get; set; }
+
+    /// <summary>Mono-formatted detail line under the bar (e.g. "2.2 GB / 4.6 GB · 40 MB/s").</summary>
+    [Parameter] public string? Detail { get; set; }
+
+    /// <summary>If true, the bar shows a looping animation instead of a fill width.</summary>
+    [Parameter] public bool Indeterminate { get; set; }
+
+    /// <summary>Renders the bar in red. Pair with <see cref="ErrorMessage"/>.</summary>
+    [Parameter] public bool IsError { get; set; }
+
+    /// <summary>Error text shown above the track when <see cref="IsError"/> is true.</summary>
+    [Parameter] public string? ErrorMessage { get; set; }
+
+    /// <summary>If non-null, a Cancel button is rendered in the header.</summary>
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    /// <summary>When true, the cancel button shows "cancelling…" and is disabled.</summary>
+    [Parameter] public bool CancelDisabled { get; set; }
+
+    /// <summary>Custom label for the cancel button (default: "Cancel").</summary>
+    [Parameter] public string? CancelText { get; set; }
+
+    /// <summary>Whether to show the numeric percentage in the detail line. Default true.</summary>
+    [Parameter] public bool ShowPercent { get; set; } = true;
+
+    /// <summary>Extra CSS class on the wrapper.</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>Inline style on the wrapper.</summary>
+    [Parameter] public string? Style { get; set; }
+
+    private double _displayValue => Math.Max(0, Math.Min(100, Value));
+
+    private string RootCssClass =>
+        $"fx-progress {(IsError ? "fx-progress-error" : "")} {CssClass ?? ""}".Trim();
+
+    private string FillStyle =>
+        Indeterminate ? "" : $"width: {_displayValue.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}%";
+}

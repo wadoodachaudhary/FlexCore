@@ -1,0 +1,33 @@
+/* FlexCore ToolbarControl — default toolbar styling.
+   Single-row by default; sets a light bordered background and consistent
+   gap between items. Consumers add their own class via the CssClass param
+   if they need to tweak (e.g. tighter padding for a dense toolbar). */
+
+.fx-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #f8f9fa;
+    /* Single-row by default. overflow:visible lets absolutely-positioned
+       descendants (e.g. an Export dropdown) escape the toolbar's bounding
+       box — overflow:hidden / auto would clip them invisibly below the
+       toolbar's bottom edge. Toolbars that legitimately need horizontal
+       scroll can opt in via .fx-toolbar--scroll. */
+    flex-wrap: nowrap;
+    overflow: visible;
+    box-sizing: border-box;
+    min-height: 44px;
+    margin-bottom: 8px;
+}
+
+.fx-toolbar.fx-toolbar--wrap {
+    flex-wrap: wrap;
+}
+
+.fx-toolbar.fx-toolbar--scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+}

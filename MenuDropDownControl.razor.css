@@ -1,0 +1,37 @@
+.fx-menu-dropdown {
+    position: relative;
+}
+
+.fx-menu-trigger {
+    height: 28px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #0f172a;
+    padding: 0 10px;
+    font-size: 0.84rem;
+    cursor: pointer;
+}
+
+.fx-menu-trigger:hover,
+.fx-menu-trigger.active {
+    background: #e6eefc;
+    border-color: #bcccf0;
+}
+
+.fx-menu-trigger.disabled {
+    opacity: 0.55;
+}
+
+.fx-menu-panel {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    min-width: 220px;
+    padding: 6px;
+    border: 1px solid #d7deea;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
+    z-index: 1200;
+}

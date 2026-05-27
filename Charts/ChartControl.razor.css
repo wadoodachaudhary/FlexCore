@@ -1,0 +1,226 @@
+/* ChartControl — comprehensive chart styles.
+   Supports both legacy CSS-bar rendering and new SVG chart modes. */
+
+/* === Root container === */
+.fx-chart {
+    position: relative;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    color: #212529;
+    width: 100%;
+}
+
+.fx-chart-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: #1f2937;
+}
+
+.fx-chart svg {
+    display: block;
+    width: 100%;
+}
+
+.fx-chart-empty {
+    color: #9ca3af;
+    font-style: italic;
+    padding: 24px;
+    text-align: center;
+}
+
+/* === Legend === */
+.fx-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 8px 0;
+    justify-content: center;
+}
+
+.fx-chart-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    color: #4b5563;
+}
+
+.fx-chart-legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+/* === KPI Card === */
+.fx-chart-kpi {
+    text-align: center;
+    padding: 24px;
+}
+
+.fx-chart-kpi-value {
+    font-size: 48px;
+    font-weight: 800;
+    color: #0d3b66;
+}
+
+.fx-chart-kpi-label {
+    font-size: 14px;
+    color: #6b7280;
+    margin-top: 4px;
+}
+
+.fx-chart-kpi-trend {
+    font-size: 14px;
+    margin-top: 8px;
+}
+
+.fx-chart-kpi-trend.up {
+    color: #16a34a;
+}
+
+.fx-chart-kpi-trend.down {
+    color: #dc2626;
+}
+
+/* === Legacy: Single-series horizontal bars === */
+.fx-chart-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.fx-chart-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+}
+
+.fx-chart-row-label {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: #444;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-chart-row-bar-container {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 18px;
+    background: linear-gradient(to right, transparent 0, transparent calc(100% - 1px), #e5e7eb calc(100% - 1px), #e5e7eb 100%);
+}
+
+.fx-chart-row-bar {
+    height: 14px;
+    background: #2563eb;
+    border-radius: 2px;
+    transition: width 0.2s ease-out;
+    min-width: 1px;
+}
+
+.fx-chart-row-value {
+    font-size: 11px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+/* === Legacy: Multi-row grouped vertical bars === */
+.fx-chart-multi {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fx-chart-multi-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    min-height: 60px;
+    border-bottom: 1px solid #f0f0f0;
+    padding: 4px 0;
+}
+
+.fx-chart-multi-label {
+    flex: 0 0 auto;
+    align-self: center;
+    font-size: 11px;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-chart-multi-bars {
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 3px;
+    min-height: 50px;
+    border-bottom: 1px solid #cbd5e1;
+    padding-bottom: 2px;
+}
+
+.fx-chart-bar-cell {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 2px;
+    min-width: 4px;
+    height: 100%;
+}
+
+.fx-chart-bar {
+    width: 100%;
+    background: #2563eb;
+    min-height: 1px;
+    transition: height 0.2s ease-out;
+    border-radius: 1px 1px 0 0;
+}
+
+.fx-chart-bar-value {
+    font-size: 9px;
+    color: #555;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+/* === Legacy: Bottom axis (multi-row) === */
+.fx-chart-axis {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 2px;
+    padding-bottom: 2px;
+    font-size: 10px;
+    color: #666;
+}
+
+.fx-chart-axis-label-spacer {
+    flex: 0 0 auto;
+    min-width: 160px;
+}
+
+.fx-chart-axis-bars {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    gap: 3px;
+}
+
+.fx-chart-axis-tick {
+    flex: 1;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

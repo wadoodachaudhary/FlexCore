@@ -1,0 +1,38 @@
+@namespace Fx.ControlKit
+
+<button class="fx-menu-action @CssClass"
+        type="button"
+        disabled="@Disabled"
+        role="menuitem"
+        @onclick="HandleClick">
+    @if (!string.IsNullOrWhiteSpace(Icon))
+    {
+        <span class="fx-menu-action-icon">@Icon</span>
+    }
+    <span class="fx-menu-action-text">@Text</span>
+</button>
+
+@code {
+    [Parameter] public string Text { get; set; } = string.Empty;
+    [Parameter] public string Icon { get; set; } = string.Empty;
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+    [Parameter] public EventCallback OnClick { get; set; }
+
+    [CascadingParameter] public MenuDropDownControl? ParentMenu { get; set; }
+
+    private async Task HandleClick()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        if (OnClick.HasDelegate)
+        {
+            await OnClick.InvokeAsync();
+        }
+
+        ParentMenu?.RequestClose();
+    }
+}

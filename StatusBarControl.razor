@@ -1,0 +1,34 @@
+@namespace Fx.ControlKit
+
+@*
+    StatusBarControl — horizontal status bar with multiple panels.
+    Typically placed at the bottom of a page or panel layout.
+*@
+
+<div class="fx-statusbar @CssClass">
+    @if (Panels != null)
+    {
+        @foreach (var panel in Panels)
+        {
+            <div class="fx-statusbar-panel @(panel.Spring ? "fx-statusbar-spring" : "")"
+                 style="@(panel.Width != null && !panel.Spring ? $"width:{panel.Width};" : "")"
+                 title="@panel.Tooltip">
+                @if (!string.IsNullOrEmpty(panel.IconCss))
+                {
+                    <span class="fx-statusbar-icon @panel.IconCss"></span>
+                }
+                @if (!string.IsNullOrEmpty(panel.Text))
+                {
+                    <span class="fx-statusbar-text">@panel.Text</span>
+                }
+            </div>
+        }
+    }
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public List<StatusBarPanel>? Panels { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+}

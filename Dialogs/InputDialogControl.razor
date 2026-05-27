@@ -1,0 +1,83 @@
+@namespace Fx.ControlKit.Dialogs
+
+@*
+    InputDialogControl — prompt dialog for collecting a single text value.
+    Usage: call ShowAsync("Enter name:", "New Item") and await the result.
+*@
+
+@if (Visible)
+{
+    <div class="fx-inputdlg-overlay" @onclick="Cancel">
+        <div class="fx-inputdlg @CssClass" @onclick:stopPropagation="true">
+            <div class="fx-inputdlg-header">
+                <span>@Title</span>
+                <button class="fx-inputdlg-close" @onclick="Cancel">&times;</button>
+            </div>
+            <div class="fx-inputdlg-body">
+                @if (!string.IsNullOrEmpty(Prompt))
+                {
+                    <label class="fx-inputdlg-label">@Prompt</label>
+                }
+                <input type="@InputType" class="fx-inputdlg-input" @bind="InputValue"
+                       placeholder="@Placeholder" maxlength="@MaxLength"
+                       @onkeydown="HandleKeyDown" />
+            </div>
+            <div class="fx-inputdlg-footer">
+                <button class="fx-inputdlg-btn fx-inputdlg-btn-primary" @onclick="Confirm">OK</button>
+                <button class="fx-inputdlg-btn" @onclick="Cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "Input";
+    [Parameter] public string? Prompt { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string InputValue { get; set; } = "";
+    [Parameter] public EventCallback<string?> OnResult { get; set; }
+    [Parameter] public string InputType { get; set; } = "text";
+    [Parameter] public int MaxLength { get; set; } = 256;
+    [Parameter] public string? CssClass { get; set; }
+
+    private TaskCompletionSource<string?>? _tcs;
+
+    public Task<string?> ShowAsync(string prompt, string title = "Input", string defaultValue = "")
+    {
+        Prompt = prompt;
+        Title = title;
+        InputValue = defaultValue;
+        Visible = true;
+        _tcs = new TaskCompletionSource<string?>();
+        StateHasChanged();
+        return _tcs.Task;
+    }
+
+    private async Task Confirm()
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+        if (OnResult.HasDelegate)
+            await OnResult.InvokeAsync(InputValue);
+        _tcs?.TrySetResult(InputValue);
+    }
+
+    private async Task Cancel()
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+        if (OnResult.HasDelegate)
+            await OnResult.InvokeAsync(null);
+        _tcs?.TrySetResult(null);
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Confirm();
+        else if (e.Key == "Escape") await Cancel();
+    }
+}

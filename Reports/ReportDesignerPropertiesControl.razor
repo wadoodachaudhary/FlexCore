@@ -1,0 +1,77 @@
+@namespace Fx.ControlKit.Reports
+
+<details class="fx-rd-properties-drawer">
+    <summary>Properties</summary>
+    <div class="fx-rd-properties-content">
+        @if (SelectedElement is not null)
+        {
+            var selected = SelectedElement;
+            <div class="fx-rd-property-card">
+                <h3>Object</h3>
+                <label>Name<input @bind="selected.Name" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                <label>Kind<input value="@selected.Kind" readonly /></label>
+
+                @if (selected.Kind.Equals("Text", StringComparison.OrdinalIgnoreCase) || selected.Kind.Equals("FieldHeading", StringComparison.OrdinalIgnoreCase))
+                {
+                    <label>Text<textarea @bind="selected.Text" @bind:event="oninput" @bind:after="NotifyChangedAsync"></textarea></label>
+                }
+                else if (selected.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase))
+                {
+                    <label>Subreport<input @bind="selected.SubreportName" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                    <label>XML Path<input @bind="selected.SubreportXmlPath" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                }
+                else
+                {
+                    <label>Binding<input @bind="selected.Binding" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                }
+            </div>
+
+            <div class="fx-rd-property-card grid2">
+                <h3>Position</h3>
+                <label>Left<input type="number" @bind="selected.LeftTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Top<input type="number" @bind="selected.TopTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Width<input type="number" @bind="selected.WidthTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Height<input type="number" @bind="selected.HeightTwips" @bind:after="NotifyChangedAsync" /></label>
+            </div>
+        }
+        else if (SelectedSection is not null)
+        {
+            var section = SelectedSection;
+            <div class="fx-rd-property-card">
+                <h3>Section</h3>
+                <label>Name<input @bind="section.Name" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                <label>Kind<input @bind="section.Kind" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                <label>Height<input type="number" @bind="section.HeightTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Background<input type="color" @bind="section.BackgroundColor" @bind:after="NotifyChangedAsync" /></label>
+                <label class="check"><input type="checkbox" @bind="section.IsSuppressed" @bind:after="NotifyChangedAsync" /> Suppressed</label>
+                <label class="check"><input type="checkbox" @bind="section.KeepTogether" @bind:after="NotifyChangedAsync" /> Keep Together</label>
+            </div>
+        }
+
+        <div class="fx-rd-property-card grid2">
+            <h3>Page</h3>
+            <label>Title<input @bind="Document.Title" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+            <label>Orientation
+                <select @bind="Document.Page.Orientation" @bind:after="NotifyChangedAsync">
+                    <option>Portrait</option>
+                    <option>Landscape</option>
+                </select>
+            </label>
+            <label>Width<input type="number" @bind="Document.Page.ContentWidthTwips" @bind:after="NotifyChangedAsync" /></label>
+            <label>Height<input type="number" @bind="Document.Page.ContentHeightTwips" @bind:after="NotifyChangedAsync" /></label>
+        </div>
+    </div>
+</details>
+
+@code {
+    [Parameter] public ReportDesignerDocument Document { get; set; } = ReportDesignerDocument.CreateBlank();
+    [Parameter] public ReportDesignerSection? SelectedSection { get; set; }
+    [Parameter] public ReportDesignerElement? SelectedElement { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+
+    private async Task NotifyChangedAsync()
+    {
+        if (Changed.HasDelegate)
+            await Changed.InvokeAsync();
+    }
+}

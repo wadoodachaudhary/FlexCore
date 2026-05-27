@@ -1,0 +1,2435 @@
+/* ═══════════════════════════════════════════════════════════════════
+   GridControl — Scoped styles (equivalent to SyncFusion .e-grid)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Grid Container ───────────────────────────────────────────────── */
+.fx-grid {
+    --fx-grid-bg: #fff;
+    --fx-grid-text-color: #212529;
+    --fx-grid-border-color: #dee2e6;
+    --fx-grid-table-border-color: #d9d9d9;
+    --fx-grid-header-bg: #f1f3f5;
+    --fx-grid-header-hover-bg: #e9ecef;
+    --fx-grid-header-selected-bg: #e2e6ea;
+    --fx-grid-header-text-color: #212529;
+    --fx-grid-row-hover-bg: #f0f6ff;
+    --fx-grid-alt-row-bg: #f8f9fa;
+    --fx-grid-cell-border-color: #e9ecef;
+    --fx-grid-cell-border-right-color: #f1f3f5;
+    --fx-grid-selected-row-bg: #b6c8dd;
+    --fx-grid-selected-row-hover-bg: #adc0d7;
+    --fx-grid-selected-row-border: #7f9db9;
+    --fx-grid-selected-cell-bg: #d9d9d9;
+    --fx-grid-selected-cell-border: #808080;
+    --fx-grid-active-cell-bg: transparent;
+    --fx-grid-active-cell-border: #000;
+    --fx-grid-filter-mark-color: #0d6efd;
+    --fx-grid-checkbox-accent: #000;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--fx-grid-border-color);
+    border-radius: 4px;
+    background: var(--fx-grid-bg);
+    font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
+    font-size: 11px;
+    line-height: 1.1;
+    color: var(--fx-grid-text-color);
+    overflow: hidden;
+    position: relative;
+}
+
+.fx-grid input[type="checkbox"] {
+    accent-color: var(--fx-grid-checkbox-accent, #000);
+}
+
+.fx-grid-theme-vb6-windows {
+    --fx-grid-bg: #fff;
+    --fx-grid-text-color: #000;
+    --fx-grid-border-color: #808080;
+    --fx-grid-table-border-color: #c0c0c0;
+    --fx-grid-header-bg: #d4d0c8;
+    --fx-grid-header-hover-bg: #c8c8c8;
+    --fx-grid-header-selected-bg: #c0c0c0;
+    --fx-grid-header-text-color: #000;
+    --fx-grid-row-hover-bg: #e8e8e8;
+    --fx-grid-alt-row-bg: #fff;
+    --fx-grid-cell-border-color: #e5e5e5;
+    --fx-grid-cell-border-right-color: #d8d8d8;
+    --fx-grid-selected-row-bg: #d4d0c8;
+    --fx-grid-selected-row-hover-bg: #c8c8c8;
+    --fx-grid-selected-row-border: #808080;
+    --fx-grid-selected-cell-bg: #d9d9d9;
+    --fx-grid-selected-cell-border: #808080;
+    --fx-grid-active-cell-bg: #fff;
+    --fx-grid-active-cell-border: #000;
+    --fx-grid-filter-mark-color: #000;
+    --fx-grid-group-color: #000;
+    --fx-grid-group-item-text-color: #000;
+    --fx-grid-group-total-text-color: #000;
+    --fx-grid-checkbox-accent: #000;
+}
+
+.fx-grid-theme-excel-light-blue {
+    --fx-grid-header-bg: #d9eaf7;
+    --fx-grid-header-hover-bg: #c7e0f4;
+    --fx-grid-header-selected-bg: #bdd7ee;
+    --fx-grid-row-hover-bg: #edf7fd;
+    --fx-grid-alt-row-bg: #f4fbff;
+    --fx-grid-selected-row-bg: #cfe8f8;
+    --fx-grid-selected-row-border: #5aa7d8;
+    --fx-grid-filter-mark-color: #2f75b5;
+}
+
+.fx-grid-theme-excel-light-green {
+    --fx-grid-header-bg: #e2f0d9;
+    --fx-grid-header-hover-bg: #d5eac7;
+    --fx-grid-header-selected-bg: #c6e0b4;
+    --fx-grid-row-hover-bg: #f1f8eb;
+    --fx-grid-alt-row-bg: #f7fbf4;
+    --fx-grid-selected-row-bg: #d9ead3;
+    --fx-grid-selected-row-border: #70ad47;
+    --fx-grid-filter-mark-color: #548235;
+}
+
+.fx-grid-theme-excel-light-orange {
+    --fx-grid-header-bg: #fce4d6;
+    --fx-grid-header-hover-bg: #f8d3bf;
+    --fx-grid-header-selected-bg: #f4b183;
+    --fx-grid-row-hover-bg: #fff3ec;
+    --fx-grid-alt-row-bg: #fff8f4;
+    --fx-grid-selected-row-bg: #f8cbad;
+    --fx-grid-selected-row-border: #ed7d31;
+    --fx-grid-filter-mark-color: #c65911;
+}
+
+.fx-grid-theme-excel-medium-blue {
+    --fx-grid-header-bg: #1f4e79;
+    --fx-grid-header-hover-bg: #173b5d;
+    --fx-grid-header-selected-bg: #c0c0c0;
+    --fx-grid-header-text-color: #fff;
+    --fx-grid-row-hover-bg: #edf7fd;
+    --fx-grid-alt-row-bg: #ddebf7;
+    --fx-grid-selected-row-bg: #bdd7ee;
+    --fx-grid-selected-row-border: #5b9bd5;
+    --fx-grid-filter-mark-color: #1f4e79;
+}
+
+.fx-grid-theme-excel-medium-green {
+    --fx-grid-header-bg: #548235;
+    --fx-grid-header-hover-bg: #3f6328;
+    --fx-grid-header-selected-bg: #c0c0c0;
+    --fx-grid-header-text-color: #fff;
+    --fx-grid-row-hover-bg: #f1f8eb;
+    --fx-grid-alt-row-bg: #e2f0d9;
+    --fx-grid-selected-row-bg: #c6e0b4;
+    --fx-grid-selected-row-border: #70ad47;
+    --fx-grid-filter-mark-color: #548235;
+}
+
+.fx-grid-theme-excel-dark-slate {
+    --fx-grid-bg: #111827;
+    --fx-grid-text-color: #e5e7eb;
+    --fx-grid-border-color: #374151;
+    --fx-grid-table-border-color: #374151;
+    --fx-grid-header-bg: #2f3542;
+    --fx-grid-header-hover-bg: #374151;
+    --fx-grid-header-selected-bg: #4b5563;
+    --fx-grid-header-text-color: #f8fafc;
+    --fx-grid-row-hover-bg: #243145;
+    --fx-grid-alt-row-bg: #182132;
+    --fx-grid-cell-border-color: #374151;
+    --fx-grid-cell-border-right-color: #374151;
+    --fx-grid-selected-row-bg: #334155;
+    --fx-grid-selected-row-border: #94a3b8;
+    --fx-grid-selected-cell-bg: #1f2937;
+    --fx-grid-selected-cell-border: #94a3b8;
+    --fx-grid-active-cell-bg: #172554;
+    --fx-grid-active-cell-border: #93c5fd;
+    --fx-grid-filter-mark-color: #e5e7eb;
+    --fx-grid-checkbox-accent: #000;
+}
+
+.fx-grid-theme-vb6-windows .fx-filter-icon,
+.fx-grid-theme-vb6-windows .fx-sort-icon {
+    color: #000;
+}
+
+.fx-grid-theme-vb6-windows ::deep .fx-pivot-hdr-total,
+.fx-grid-theme-vb6-windows ::deep .fx-pivot-cell-total,
+.fx-grid-theme-vb6-windows ::deep .fx-pivot-cell-subtotal-grand {
+    background: #d4d0c8;
+    border-color: #808080;
+    color: #000;
+}
+
+.fx-grid ::deep .fx-pivot-table thead th:has(.fx-pivot-sort) {
+    background: var(--fx-grid-header-selected-bg, #d4d0c8);
+    color: var(--fx-grid-header-text-color, #000);
+}
+
+.fx-grid.fx-grid-dark {
+    background: #111827;
+    color: #e5e7eb;
+    border-color: #374151;
+}
+
+.fx-grid.fx-grid-options-rail-on > .fx-grid-toolbar,
+.fx-grid.fx-grid-options-rail-on > .fx-group-drop-area,
+.fx-grid.fx-grid-options-rail-on > .fx-selection-info-bar,
+.fx-grid.fx-grid-options-rail-on > .fx-grid-content,
+.fx-grid.fx-grid-options-rail-on > .fx-grid-pager {
+    margin-left: 36px;
+}
+
+.fx-grid.fx-grid-options-panel-open > .fx-grid-toolbar,
+.fx-grid.fx-grid-options-panel-open > .fx-group-drop-area,
+.fx-grid.fx-grid-options-panel-open > .fx-selection-info-bar,
+.fx-grid.fx-grid-options-panel-open > .fx-grid-content,
+.fx-grid.fx-grid-options-panel-open > .fx-grid-pager {
+    margin-left: 344px;
+}
+
+.fx-grid-options-rail {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 25;
+    width: 36px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 4px;
+    border-right: 1px solid #d8dee8;
+    background: #f4f6fa;
+}
+
+.fx-grid-options-rail-top {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.fx-grid-option-btn {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid #d7dce5;
+    border-radius: 5px;
+    background: #fff;
+    color: #334155;
+    font: inherit;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+.fx-grid-option-btn:hover,
+.fx-grid-option-btn.active {
+    background: #334155;
+    border-color: #334155;
+    color: #fff;
+}
+
+.fx-grid-theme-btn {
+    margin-top: auto;
+    width: 32px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: -0.4px;
+}
+
+.fx-grid-theme-panel-body {
+    gap: 12px;
+}
+
+.fx-grid-theme-current {
+    padding: 6px 8px;
+    border: 1px solid #d7dce5;
+    border-radius: 4px;
+    background: #f8fafc;
+    color: #334155;
+    font-size: 11px;
+}
+
+.fx-grid-theme-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.fx-grid-theme-section-title {
+    color: #475569;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.fx-grid-theme-gallery {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+.fx-grid-theme-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+    padding: 5px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #1f2937;
+    font: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.fx-grid-theme-tile:hover,
+.fx-grid-theme-tile.selected {
+    border-color: #808080;
+    background: #f3f4f6;
+}
+
+.fx-grid-theme-preview {
+    display: grid;
+    grid-template-rows: 10px repeat(3, 8px);
+    width: 100%;
+    min-height: 35px;
+    overflow: hidden;
+    border: 1px solid var(--fx-theme-accent);
+    background: var(--fx-theme-body);
+}
+
+.fx-grid-theme-preview span {
+    display: block;
+    border-bottom: 1px solid color-mix(in srgb, var(--fx-theme-accent) 55%, white);
+    background: var(--fx-theme-body);
+}
+
+.fx-grid-theme-preview span:first-child {
+    background: var(--fx-theme-header);
+}
+
+.fx-grid-theme-preview span:nth-child(3) {
+    background: var(--fx-theme-alt);
+}
+
+.fx-grid-theme-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-grid-side-panel {
+    position: absolute;
+    top: 0;
+    left: 36px;
+    bottom: 0;
+    z-index: 24;
+    width: 308px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #d8dee8;
+    background: #fff;
+    color: #1f2937;
+    box-shadow: 3px 0 10px rgba(15, 23, 42, 0.08);
+}
+
+.fx-grid-side-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 38px;
+    padding: 8px 10px 8px 12px;
+    border-bottom: 1px solid #e5e7eb;
+    background: #f8fafc;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.fx-grid-side-panel-close {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #475569;
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+}
+
+.fx-grid-side-panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    overflow: auto;
+}
+
+.fx-grid-side-search {
+    width: 100%;
+    height: 26px;
+    padding: 3px 7px;
+    border: 1px solid #aeb7c4;
+    border-radius: 3px;
+    background: #fff;
+    color: #1f2937;
+    font: inherit;
+    font-size: 11px;
+    box-sizing: border-box;
+}
+
+.fx-grid-side-search:focus {
+    outline: 1px solid #4a7ab5;
+    border-color: #4a7ab5;
+}
+
+.fx-grid-column-option-list,
+.fx-grid-pivot-field-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.fx-grid-check-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 22px;
+    color: #1f2937;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.fx-grid-check-row input {
+    margin: 0;
+}
+
+.fx-grid-check-row span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-grid-panel-action,
+.fx-grid-mini-btn {
+    min-height: 24px;
+    padding: 3px 8px;
+    border: 1px solid #b8c3d1;
+    border-radius: 3px;
+    background: #fff;
+    color: #334155;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.fx-grid-panel-action:hover,
+.fx-grid-mini-btn:hover {
+    background: #e8f2ff;
+    border-color: #4a7ab5;
+}
+
+.fx-grid-panel-link {
+    align-self: flex-start;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #1d4ed8;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.fx-grid-panel-link:hover {
+    text-decoration: underline;
+}
+
+.fx-grid-panel-label {
+    display: block;
+    margin-bottom: 4px;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.fx-grid-expression-panel {
+    padding-bottom: 8px;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.fx-grid-expression-panel-row {
+    display: flex;
+    gap: 4px;
+}
+
+.fx-grid-panel-error {
+    margin-top: 4px;
+    color: #b42318;
+    font-size: 11px;
+}
+
+.fx-grid-panel-empty {
+    padding: 4px 0;
+    color: #94a3b8;
+    font-size: 11px;
+    font-style: italic;
+}
+
+.fx-grid-pivot-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0 8px;
+    border-bottom: 1px solid #e5e7eb;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.fx-grid-pivot-field-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 3px 4px;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    background: #fff;
+}
+
+.fx-grid-pivot-field-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-grid-pivot-field-actions {
+    display: inline-flex;
+    gap: 3px;
+}
+
+.fx-grid-pivot-field-actions button {
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 3px;
+    background: #fff;
+    color: #334155;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.fx-grid-pivot-field-actions button:hover:not(:disabled) {
+    background: #e8f2ff;
+    border-color: #4a7ab5;
+}
+
+.fx-grid-pivot-field-actions button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.fx-grid-pivot-zones {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.fx-grid-pivot-zone {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+    min-height: 44px;
+    padding: 7px;
+    border: 1px dashed #cbd5e1;
+    border-radius: 5px;
+    background: #f8fafc;
+}
+
+.fx-grid-pivot-zone-title {
+    flex-basis: 100%;
+    color: #475569;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.fx-grid-pivot-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    padding: 3px 6px;
+    border-radius: 999px;
+    background: #e2e8f0;
+    color: #1e293b;
+    font-size: 11px;
+}
+
+.fx-grid-pivot-chip button {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 50%;
+    background: #fff;
+    color: #64748b;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.fx-grid-pivot-value-chip {
+    border-radius: 6px;
+}
+
+.fx-grid-pivot-value-chip select,
+.fx-grid-pivot-format-input {
+    max-width: 76px;
+    height: 20px;
+    border: 1px solid #cbd5e1;
+    border-radius: 3px;
+    background: #fff;
+    font: inherit;
+    font-size: 10px;
+}
+
+.fx-grid-pivot-format-input {
+    width: 70px;
+    padding: 0 4px;
+}
+
+.fx-grid-pivot-shell {
+    padding: 0;
+    background: #fff;
+}
+
+/* ── Grid Lines ───────────────────────────────────────────────────── */
+.fx-grid-lines-none ::deep .fx-grid-table td,
+.fx-grid-lines-none ::deep .fx-grid-table th {
+    border: none;
+}
+.fx-grid-lines-horizontal ::deep .fx-grid-table td,
+.fx-grid-lines-horizontal ::deep .fx-grid-table th {
+    border-left: none;
+    border-right: none;
+}
+.fx-grid-lines-vertical ::deep .fx-grid-table td,
+.fx-grid-lines-vertical ::deep .fx-grid-table th {
+    border-top: none;
+    border-bottom: none;
+}
+
+/* ── Toolbar ──────────────────────────────────────────────────────── */
+.fx-grid-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid #dee2e6;
+    background: #f8f9fa;
+}
+.fx-toolbar-btn {
+    padding: 5px 14px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.fx-toolbar-btn:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+/* Built-in icon buttons (Expand All / Collapse All etc.) — compact square
+   buttons that sit on the left of the grid toolbar before any custom items. */
+.fx-grid-toolbar-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    color: #495057;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-grid-toolbar-icon-btn:hover {
+    background: #e9ecef;
+    border-color: #4a7ab5;
+    color: #4a7ab5;
+}
+.fx-grid-toolbar-icon-btn:active {
+    background: #d9e3f0;
+}
+.fx-grid-toolbar-icon {
+    display: inline-block;
+    line-height: 1;
+}
+.fx-grid-toolbar-sep {
+    width: 1px;
+    height: 22px;
+    background: #ced4da;
+    margin: 0 4px;
+}
+
+.fx-toolbar-search {
+    margin-left: auto;
+}
+.fx-toolbar-search input {
+    padding: 5px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 12px;
+    width: 200px;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GROUP DROP AREA — Drag-and-drop grouping
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-drop-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    min-height: 38px;
+    border-bottom: 1px solid #dee2e6;
+    background: #f5f6f8;
+    transition: background 0.2s, border-color 0.2s;
+    flex-wrap: wrap;
+}
+.fx-group-drop-main {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 180px;
+    flex-wrap: wrap;
+}
+.fx-group-drop-area.fx-group-drop-hover {
+    background: #dbeafe;
+    border-bottom-color: #93c5fd;
+    outline: 2px dashed #3b82f6;
+    outline-offset: -2px;
+}
+.fx-group-drop-hint {
+    color: #868e96;
+    font-size: 12px;
+    font-style: italic;
+}
+.fx-group-advanced-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #475569;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-group-advanced-toggle-btn:hover {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+    color: #334155;
+}
+.fx-group-advanced-toggle-btn.active {
+    background: #334155;
+    border-color: #334155;
+    color: #fff;
+}
+.fx-group-advanced-toggle-btn.active:hover {
+    background: #1f2937;
+    border-color: #1f2937;
+    color: #fff;
+}
+.fx-group-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px 3px 12px;
+    border-radius: 16px;
+    /* Themed by GroupedColumnColor (default blue). Falls back to a neutral grey
+       if the variable hasn't been set (e.g. older callers). */
+    background: var(--fx-grid-group-color, #2563eb);
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    cursor: grab;
+    user-select: none;
+    transition: filter 0.15s;
+}
+.fx-group-chip:hover {
+    filter: brightness(0.92);
+}
+.fx-group-chip:active {
+    cursor: grabbing;
+}
+.fx-group-chip-text {
+    white-space: nowrap;
+}
+.fx-group-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    font-size: 13px;
+    line-height: 1;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.fx-group-chip-remove:hover {
+    background: rgba(255,255,255,0.35);
+    color: #fff;
+}
+
+/* Icon-style "Clear All" — removes every active group. Sized to match the
+   neighboring expand/collapse toggle so the two read as a control pair. */
+.fx-group-clear-all-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: 4px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-group-clear-all-btn:hover {
+    background: #fff5f5;
+    border-color: #f08080;
+    color: #c0392b;
+}
+.fx-expression-filter-area {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    min-width: 28px;
+    max-width: 100%;
+    flex: 0 1 auto;
+}
+.fx-expression-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.fx-expression-filter-btn:hover,
+.fx-expression-filter-btn.active {
+    background: #e8f2ff;
+    border-color: #4a7ab5;
+    color: #174f8a;
+}
+.fx-expression-filter-editor {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 280px;
+    max-width: min(620px, 62vw);
+}
+.fx-expression-filter-input {
+    width: 360px;
+    max-width: 42vw;
+    height: 24px;
+    padding: 2px 6px;
+    border: 1px solid #b8c3d1;
+    border-radius: 3px;
+    font: inherit;
+    font-size: 11px;
+    background: #fff;
+    color: #1f2937;
+}
+.fx-expression-filter-input:focus {
+    outline: 1px solid #4a7ab5;
+    border-color: #4a7ab5;
+}
+.fx-expression-filter-apply,
+.fx-expression-filter-clear {
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid #b8c3d1;
+    border-radius: 3px;
+    background: #fff;
+    font: inherit;
+    font-size: 11px;
+    color: #334155;
+    cursor: pointer;
+}
+.fx-expression-filter-apply:hover,
+.fx-expression-filter-clear:hover {
+    background: #e8f2ff;
+    border-color: #4a7ab5;
+}
+.fx-expression-filter-clear {
+    min-width: 44px;
+    padding: 0 10px;
+    font-size: 11px;
+    line-height: 1;
+}
+.fx-expression-filter-error {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #b42318;
+    font-size: 11px;
+}
+
+/* ── Group Header Row ────────────────────────────────────────────── */
+.fx-group-header-row {
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.fx-group-header-row:hover {
+    background: #f0f6ff;
+}
+.fx-group-header-cell {
+    /* VB6-style group header: normal white background, only the VALUE text
+       picks up GroupedColumnColor via the inline style on .fx-group-header-value.
+       Background and caption stay neutral so the column header up top doesn't
+       compete for attention. */
+    padding: 4px 8px;
+    background: #fff;
+    border-bottom: 1px solid #e9ecef;
+    font-weight: 500;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #333;
+}
+.fx-group-header-row .fx-group-header-cell {
+    background: #fff !important;
+    border-bottom: 1px solid #e9ecef;
+}
+.fx-group-header-row:hover .fx-group-header-cell {
+    background: #f5f7fa !important;
+}
+/* The value span — coloured inline with the grid's GroupedColumnColor. */
+.fx-group-header-value {
+    font-weight: 600;
+    color: var(--fx-grid-group-item-text-color, inherit);
+}
+/* Legacy class kept for any external consumers. */
+.fx-group-header-row .fx-group-header-text {
+    color: inherit;
+}
+.fx-group-expand-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 10px;
+    line-height: 1;
+    color: #444;
+    margin-right: 6px;
+    user-select: none;
+    flex-shrink: 0;
+}
+
+/* Triangle variant — keep compact, no border. */
+.fx-group-expand-icon-triangle {
+    width: 16px;
+    font-size: 9px;
+    color: #64748b;
+}
+
+/* Plus/Minus variant — visual styling lives INLINE on the rendered span
+   (see GridControl.RenderGroupedRows). Inline styles guarantee the
+   black-bordered rectangle paints regardless of Blazor's component-scoped
+   CSS attribute behaviour for builder-emitted elements. The class name
+   below is kept for selector-based hooks (e.g. tests) but carries no
+   layout — only the hover tint, which is fine to keep external. */
+.fx-group-expand-icon.fx-group-expand-icon-plusminus:hover {
+    background: #e3f2fd !important;
+}
+
+.fx-group-header-text {
+    color: #1e293b;
+    font-weight: 700;
+}
+.fx-group-count {
+    color: #94a3b8;
+    font-weight: 400;
+    margin-left: 6px;
+    font-size: 11px;
+}
+.fx-group-header-right {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+.fx-group-indent {
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    padding: 0 !important;
+    border-right: 1px solid #e9ecef;
+    background: #f9fafb;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+.fx-grid-content {
+    overflow: auto;
+}
+.fx-grid-table {
+    width: 100%;
+    border-collapse: collapse;
+    border-spacing: 0;
+    table-layout: fixed;
+}
+
+.fx-grid.fx-grid-width-fit-columns {
+    display: inline-flex;
+    width: max-content;
+    max-width: 100%;
+    vertical-align: top;
+}
+
+.fx-grid-table th,
+.fx-grid-table td {
+    border: 1px solid var(--fx-grid-table-border-color);
+    box-sizing: border-box;
+}
+
+/* ── Header ───────────────────────────────────────────────────────── */
+.fx-grid-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    border-bottom: 2px solid #b6b6b6;
+}
+.fx-header-cell {
+    padding: 2px 4px;
+    background: var(--fx-grid-header-bg);
+    border-bottom: 2px solid #dee2e6;
+    border-right: 1px solid #dee2e6;
+    font-weight: 400;
+    color: var(--fx-grid-header-text-color);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    position: relative;
+}
+.fx-header-drop-zone {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 50%;
+    display: none;
+    z-index: 7;
+    background: transparent;
+}
+.fx-header-drop-zone-left {
+    left: 0;
+}
+.fx-header-drop-zone-right {
+    right: 0;
+}
+.fx-grid.fx-header-drag-active .fx-header-drop-zone {
+    display: block;
+}
+.fx-header-cell:last-child {
+    border-right: none;
+}
+.fx-header-cell:hover {
+    background: var(--fx-grid-header-hover-bg);
+}
+.fx-header-cell.fx-sorted {
+    background: var(--fx-grid-header-selected-bg);
+}
+.fx-header-cell.fx-filtered .fx-filter-icon {
+    color: var(--fx-grid-filter-mark-color);
+}
+.fx-filter-applied-mark {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-left: 4px;
+    border-radius: 50%;
+    background: var(--fx-grid-filter-mark-color);
+    box-shadow: 0 0 0 1px #ffffff, 0 0 0 2px rgba(13, 110, 253, 0.22);
+    vertical-align: middle;
+}
+.fx-header-text {
+    margin-right: 4px;
+}
+.fx-header-cell.fx-drop-left,
+.fx-header-cell.fx-drop-right {
+    background: #e7f1ff;
+}
+.fx-header-cell.fx-drop-left {
+    box-shadow: inset 4px 0 0 var(--fx-grid-reorder-pipe-color, #2b2b2b);
+}
+.fx-header-cell.fx-drop-right {
+    box-shadow: inset -4px 0 0 var(--fx-grid-reorder-pipe-color, #2b2b2b);
+}
+.fx-header-cell.fx-drop-left::before,
+.fx-header-cell.fx-drop-right::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 3px;
+    background: var(--fx-grid-reorder-pipe-color, #2b2b2b);
+    pointer-events: none;
+}
+.fx-header-cell.fx-drop-left::before {
+    left: -1px;
+}
+.fx-header-cell.fx-drop-right::after {
+    right: -1px;
+}
+.fx-sort-icon {
+    font-size: 9px;
+    margin-left: 4px;
+    color: #495057;
+}
+.fx-filter-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    min-width: 12px;
+    height: 12px;
+    font-size: 9px;
+    line-height: 1;
+    margin-left: 4px;
+    color: #2c7a7b;
+    cursor: pointer;
+    padding: 0;
+    border-radius: 2px;
+    position: relative;
+    vertical-align: middle;
+}
+.fx-filter-icon-default::before {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1px;
+    width: 7px;
+    height: 7px;
+    border: 1.4px solid currentColor;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+.fx-filter-icon-default::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 7px;
+    width: 5px;
+    height: 1.4px;
+    background: currentColor;
+    border-radius: 999px;
+    transform: rotate(45deg);
+    transform-origin: left center;
+}
+.fx-filter-icon-custom {
+    width: auto;
+    min-width: 10px;
+}
+.fx-filter-icon:hover,
+.fx-filter-icon.active {
+    color: #0d6efd;
+    background: #eef5ff;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   COLUMN RESIZE
+   ══════════════════════════════════════════════════════════════════ */
+.fx-header-cell.fx-resizable {
+    padding-right: 18px;
+}
+.fx-resize-handle {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 6px;
+    cursor: col-resize;
+    z-index: 3;
+    background: transparent;
+    transition: background 0.15s;
+}
+.fx-resize-handle:hover,
+.fx-resize-handle:active {
+    background: #3b82f6;
+    opacity: 0.5;
+}
+.fx-resize-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    cursor: col-resize;
+}
+.fx-resize-overlay.fx-row-resize-overlay {
+    cursor: row-resize;
+}
+.fx-row-resize-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -2px;
+    height: 5px;
+    cursor: row-resize;
+    z-index: 4;
+    background: transparent;
+}
+.fx-row-resize-handle:hover,
+.fx-row-resize-handle:active {
+    background: #555;
+    opacity: 0.35;
+}
+
+/* ── Body Rows ────────────────────────────────────────────────────── */
+
+/* Suppress the browser's native text-selection on data rows.
+ *
+ * The grid has its own row / cell selection model. The browser's
+ * drag-to-select-text overlay would otherwise paint every cell the
+ * cursor sweeps through (the "every cell looks individually selected"
+ * effect under a Shift+click range or drag-select), AND that overlay
+ * persists after row selection is cleared because clearing row
+ * selection is a different operation than clearing the document's
+ * text selection.
+ *
+ * Scoped intentionally to .fx-grid-body so the toolbar / header /
+ * pager can still expose normal text selection for copy gestures.
+ * The .fx-batch-input override below re-enables text selection inside
+ * an active edit input so the user can still highlight / replace the
+ * value they're typing.
+ */
+.fx-grid-body,
+.fx-grid-body tr,
+.fx-grid-body td,
+.fx-grid ::deep .fx-grid-body,
+.fx-grid ::deep .fx-grid-body tr,
+.fx-grid ::deep .fx-grid-body td {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+/* Re-enable text selection inside the batch-edit input — the user
+ * needs to be able to highlight / drag-select the current value to
+ * replace it. This is also where SelectAllOnEdit lands its
+ * select() call, so the highlight must be visible. */
+.fx-batch-input,
+.fx-grid ::deep .fx-batch-input {
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.fx-row {
+    transition: background 0.1s;
+}
+.fx-grid-body tr:first-child td {
+    padding-top: 1px;
+}
+.fx-row.fx-hover:hover {
+    background: var(--fx-grid-row-hover-bg) !important;
+}
+.fx-alt-row {
+    background: var(--fx-grid-alt-row-bg);
+}
+.fx-selected {
+    background: var(--fx-grid-selected-row-bg) !important;
+}
+.fx-cell {
+    padding: 1px 4px;
+    border-bottom: 1px solid var(--fx-grid-cell-border-color);
+    border-right: 1px solid var(--fx-grid-cell-border-right-color);
+    vertical-align: middle;
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+    position: relative;
+}
+
+.fx-grid ::deep .fx-cell > .inline-edit {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.fx-grid ::deep .fx-cell > .inline-edit > span {
+    min-width: 0;
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* Cell focus / hover indicator.
+   Hover and single-click selection use a VB6-style dotted rectangle. When the
+   cell is fully open for editing, the caret in the input is the cue, so the
+   cell outline is intentionally suppressed. */
+.fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell),
+.fx-grid ::deep .fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell),
+.fx-cell-active-editable:not(.fx-batch-editing),
+.fx-grid ::deep .fx-cell-active-editable:not(.fx-batch-editing) {
+    outline: 1px dotted var(--fx-grid-active-cell-border);
+    outline-offset: -2px;
+    box-shadow: none;
+}
+.fx-grid ::deep .fx-cell-editable:hover:not(.fx-batch-editing) {
+    outline: 1px dotted rgba(0, 0, 0, 0.25);
+    outline-offset: -2px;
+    box-shadow: none;
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing {
+    outline: none !important;
+    box-shadow: none;
+}
+.fx-grid ::deep .fx-batch-input:focus {
+    outline: none;
+    box-shadow: none;
+}
+.fx-grid ::deep .fx-cell .fx-grid-popup-btn,
+.fx-grid ::deep .fx-cell .poindex-btn {
+    width: 16px;
+    min-width: 16px;
+    height: 12px;
+    margin: 0;
+    padding: 0 2px;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    background: transparent;
+    color: #555;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 10px;
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+}
+.fx-grid ::deep .fx-cell.fx-cell-active .fx-grid-popup-btn,
+.fx-grid ::deep .fx-cell.fx-cell-active .poindex-btn,
+.fx-grid ::deep .fx-cell:focus-within .fx-grid-popup-btn,
+.fx-grid ::deep .fx-cell:focus-within .poindex-btn {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+}
+.fx-grid ::deep .fx-cell.fx-cell-active .fx-grid-popup-btn:hover:not(:disabled),
+.fx-grid ::deep .fx-cell.fx-cell-active .poindex-btn:hover:not(:disabled) {
+    border-color: #b8b8b8;
+    background: #f3f3f3;
+}
+.fx-grid ::deep .fx-cell .fx-grid-popup-btn:disabled,
+.fx-grid ::deep .fx-cell .poindex-btn:disabled {
+    color: #aaa;
+    cursor: default;
+}
+.fx-grid ::deep .fx-cell.fx-cell-selected,
+.fx-cell.fx-cell-selected {
+    background-color: var(--fx-grid-selected-cell-bg) !important;
+    box-shadow: none;
+    outline: none;
+}
+.fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell),
+.fx-cell.fx-cell-selected.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell) {
+    outline: 1px dotted var(--fx-grid-active-cell-border);
+    outline-offset: -2px;
+    box-shadow: none;
+}
+.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell),
+.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell) {
+    background: var(--fx-grid-active-cell-bg) !important;
+    box-shadow: none;
+}
+.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell)::after,
+.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell)::after {
+    content: none;
+}
+.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-selected.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell),
+.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-selected.fx-cell-active:not(.fx-batch-editing):not(.fx-typeahead-preview-cell) {
+    background-color: var(--fx-grid-selected-cell-bg) !important;
+    box-shadow: none;
+    outline: 1px dotted var(--fx-grid-active-cell-border);
+    outline-offset: -2px;
+}
+.fx-grid ::deep .fx-cell.fx-typeahead-preview-cell,
+.fx-cell.fx-typeahead-preview-cell {
+    background: #fff9e6 !important;
+    outline: 1px dotted var(--fx-grid-active-cell-border);
+    outline-offset: -2px;
+    box-shadow: none;
+    color: #1f2937;
+    font-weight: 600;
+}
+.fx-grid ::deep .fx-typeahead-preview-value,
+.fx-typeahead-preview-value {
+    display: block;
+    min-width: 100%;
+}
+.fx-cell:last-child {
+    border-right: none;
+}
+.fx-checkbox-cell {
+    text-align: center;
+    width: 50px;
+}
+.fx-empty-row {
+    text-align: center;
+    padding: 40px;
+    color: #868e96;
+    font-style: italic;
+}
+
+/* ── Batch Cell Editing ───────────────────────────────────────────── */
+.fx-batch-editing,
+.fx-grid ::deep .fx-cell.fx-batch-editing {
+    padding: 0 !important;
+    background: #fff !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+.fx-batch-input,
+.fx-grid ::deep .fx-batch-input {
+    display: block;
+    width: 100%;
+    min-width: 100%;
+    height: 100%;
+    min-height: calc(1em + 2px);
+    margin: 0;
+    padding: 1px 4px;
+    border: 0 !important;
+    border-radius: 0;
+    font: inherit;
+    line-height: inherit;
+    box-sizing: border-box;
+    background: transparent;
+    outline: none !important;
+    box-shadow: none !important;
+    color: inherit;
+}
+.fx-batch-input:focus,
+.fx-grid ::deep .fx-batch-input:focus {
+    border: 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+/* ── Edit Row ─────────────────────────────────────────────────────── */
+.fx-edit-row {
+    background: #fff9e6 !important;
+}
+.fx-edit-cell {
+    padding: 4px 6px;
+}
+.fx-edit-input {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #86b7fe;
+    border-radius: 3px;
+    font-size: 12px;
+    box-sizing: border-box;
+    background: #fff;
+}
+.fx-edit-input:focus {
+    border-color: #000;
+    outline: 1px dotted #000;
+    outline-offset: -3px;
+    box-shadow: none;
+}
+
+/* ── Command Buttons ──────────────────────────────────────────────── */
+.fx-cmd-btn {
+    padding: 3px 10px;
+    margin: 0 2px;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    background: #fff;
+    font-size: 11px;
+    cursor: pointer;
+}
+.fx-cmd-btn:hover {
+    background: #e9ecef;
+}
+.fx-cmd-edit { color: #0d6efd; border-color: #0d6efd; }
+.fx-cmd-edit:hover { background: #e7f1ff; }
+.fx-cmd-delete { color: #dc3545; border-color: #dc3545; }
+.fx-cmd-delete:hover { background: #f8d7da; }
+.fx-cmd-save { color: #198754; border-color: #198754; }
+.fx-cmd-save:hover { background: #d1e7dd; }
+.fx-cmd-cancel { color: #6c757d; border-color: #6c757d; }
+.fx-cmd-cancel:hover { background: #e9ecef; }
+
+/* ── Pager ────────────────────────────────────────────────────────── */
+.fx-grid-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+.fx-pager-info {
+    color: #6c757d;
+}
+.fx-pager-nav {
+    display: flex;
+    gap: 2px;
+}
+.fx-pager-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+.fx-pager-btn:hover:not(:disabled) {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+.fx-pager-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.fx-pager-active {
+    background: #0d6efd !important;
+    color: #fff !important;
+    border-color: #0d6efd !important;
+}
+.fx-pager-size select {
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+/* ── Filter Popup ─────────────────────────────────────────────────── */
+.fx-filter-popup-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: transparent;
+}
+.fx-filter-popup {
+    position: absolute;
+    background: #fff;
+    border: 2px solid #64748b;
+    border-radius: 7px;
+    box-shadow: 0 14px 34px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.9) inset;
+    width: 340px;
+    max-height: min(420px, calc(100vh - 16px));
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fx-filter-popup-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-weight: 600;
+    padding: 10px 12px;
+    border-bottom: 1px solid #e9ecef;
+    color: #1f2937;
+}
+.fx-filter-popup-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #94a3b8;
+    border-radius: 3px;
+    background: #f8fafc;
+    color: #334155;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+}
+.fx-filter-popup-close:hover {
+    background: #dbeafe;
+    border-color: #2563eb;
+    color: #1e3a8a;
+}
+.fx-filter-popup-search {
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid #eef2f7;
+}
+.fx-filter-condition {
+    display: grid;
+    grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr);
+    gap: 8px;
+    padding: 10px 12px 0;
+}
+.fx-filter-operator-select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 12px;
+    box-sizing: border-box;
+    background: #fff;
+    color: #1f2937;
+}
+.fx-filter-popup-input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 12px;
+    box-sizing: border-box;
+}
+.fx-filter-popup-summary {
+    margin-top: 6px;
+    color: #64748b;
+    font-size: 11px;
+}
+.fx-filter-number-panel {
+    display: flex;
+    flex-direction: column;
+}
+.fx-filter-number-panel > .fx-filter-popup-summary {
+    margin: 0;
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid #eef2f7;
+}
+.fx-filter-number-custom {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef2f7;
+}
+.fx-filter-number-inputs {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    flex: 1;
+}
+.fx-filter-number-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: #475569;
+    font-size: 11px;
+    font-weight: 600;
+}
+.fx-filter-number-input {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 12px;
+    box-sizing: border-box;
+}
+.fx-filter-checkbox-list {
+    max-height: 230px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 12px 8px;
+}
+.fx-filter-checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    cursor: pointer;
+    color: #1f2937;
+}
+.fx-filter-checkbox-item span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fx-filter-range-list {
+    max-height: 230px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 6px 12px 8px;
+}
+.fx-filter-range-item span {
+    flex: 1;
+}
+.fx-filter-range-item em {
+    color: #64748b;
+    font-size: 11px;
+    font-style: normal;
+    white-space: nowrap;
+}
+.fx-filter-select-all-row {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eef2f7;
+    font-weight: 600;
+}
+.fx-filter-popup-empty {
+    padding: 12px 0;
+    color: #64748b;
+    font-size: 12px;
+}
+.fx-filter-popup-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid #e9ecef;
+}
+.fx-filter-auto-apply {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #334155;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+.fx-filter-auto-apply input {
+    margin: 0;
+}
+.fx-filter-popup-action-buttons {
+    display: flex;
+    gap: 8px;
+}
+.fx-filter-popup-btn {
+    padding: 5px 16px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 12px;
+}
+.fx-filter-popup-btn:hover {
+    background: #e9ecef;
+}
+.fx-filter-popup-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+.fx-filter-popup-btn:disabled:hover {
+    background: #fff;
+}
+.fx-filter-popup-btn.fx-primary {
+    background: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+}
+.fx-filter-popup-btn.fx-primary:hover {
+    background: #0b5ed7;
+}
+
+/* ── Dialog (Edit Mode) ───────────────────────────────────────────── */
+.fx-dialog-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.fx-dialog {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+    min-width: 400px;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fx-dialog-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid #dee2e6;
+}
+.fx-dialog-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    color: #6c757d;
+    padding: 0 4px;
+}
+.fx-dialog-close:hover {
+    color: #212529;
+}
+.fx-dialog-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+.fx-dialog-field {
+    margin-bottom: 16px;
+}
+.fx-dialog-field label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: #495057;
+}
+.fx-dialog-field input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: 13px;
+    box-sizing: border-box;
+}
+.fx-dialog-field input:focus {
+    border-color: #86b7fe;
+    outline: 0;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+}
+.fx-dialog-field input:disabled {
+    background: #e9ecef;
+    color: #6c757d;
+}
+.fx-dialog-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+}
+.fx-dialog-btn {
+    padding: 6px 20px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 13px;
+}
+.fx-dialog-btn:hover {
+    background: #e9ecef;
+}
+.fx-dialog-btn.fx-primary {
+    background: #0d6efd;
+    color: #fff;
+    border-color: #0d6efd;
+}
+.fx-dialog-btn.fx-primary:hover {
+    background: #0b5ed7;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SELECTION INFO BAR
+   ══════════════════════════════════════════════════════════════════ */
+.fx-selection-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: #e0f0ff;
+    border-bottom: 1px solid #b6d4fe;
+    font-size: 12px;
+    font-weight: 500;
+    color: #084298;
+}
+.fx-selection-clear-btn {
+    padding: 2px 10px;
+    border: 1px solid #b6d4fe;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 11px;
+    cursor: pointer;
+    color: #0d6efd;
+    margin-left: auto;
+}
+.fx-selection-clear-btn:hover {
+    background: #cfe2ff;
+}
+.fx-typeahead-display {
+    padding: 2px 8px;
+    border-radius: 3px;
+    background: #fff;
+    border: 1px solid #0d6efd;
+    font-family: monospace;
+    font-size: 12px;
+    color: #0d6efd;
+    font-weight: 600;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   EXPAND / COLLAPSE ALL BUTTON
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-expand-collapse-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    background: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    color: #475569;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
+}
+.fx-group-expand-collapse-btn:hover {
+    background: #e2e8f0;
+    border-color: #94a3b8;
+}
+
+/* ── Enhanced group expand icon ───────────────────────────────── */
+.fx-group-expand-icon {
+    transition: transform 0.15s ease;
+}
+.fx-group-expand-icon.collapsed {
+    color: #94a3b8;
+}
+.fx-group-expand-icon.expanded {
+    color: #3b82f6;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GROUP FOOTER (Aggregate Row)
+   ══════════════════════════════════════════════════════════════════ */
+.fx-group-footer-row {
+    background: #f0fdf4;
+    border-bottom: 2px solid #bbf7d0;
+}
+.fx-group-footer-row .fx-aggregate-cell {
+    padding: 6px 12px;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--fx-grid-group-total-text-color, #166534);
+    border-bottom: 1px solid #dcfce7;
+}
+
+/* ── Choose Columns Dialog ───────────────────────────────────────────
+   Mirrors the legacy VB6 "Choose Columns" dialog: a checkbox list with
+   Move Up / Move Down / Show / Hide / Show All / Hide All / Restore
+   Default Layout buttons on the right and OK / Cancel at the bottom. */
+.fx-choose-columns-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1500;
+    background: rgba(0, 0, 0, 0.25);
+}
+.fx-choose-columns-dialog {
+    position: fixed;
+    z-index: 1501;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 460px;
+    max-height: 86vh;
+    background: #f0f0f0;
+    border: 1px solid #909090;
+    box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    font-size: 12px;
+    color: #1f2937;
+}
+.fx-choose-columns-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 6px 4px 10px;
+    background: linear-gradient(to bottom, #f0f0f0, #d8d8d8);
+    border-bottom: 1px solid #909090;
+    font-weight: 600;
+    font-size: 12px;
+}
+.fx-choose-columns-close {
+    width: 22px;
+    height: 22px;
+    border: 1px solid #909090;
+    background: #f8f8f8;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+}
+.fx-choose-columns-close:hover {
+    background: #e0e0e0;
+}
+.fx-choose-columns-instructions {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: #374151;
+    line-height: 1.35;
+    background: #f0f0f0;
+}
+.fx-choose-columns-body {
+    display: flex;
+    gap: 10px;
+    padding: 6px 12px 10px 12px;
+}
+.fx-choose-columns-list {
+    flex: 1;
+    height: 320px;
+    overflow-y: auto;
+    background: #ffffff;
+    border: 1px solid #adadad;
+    padding: 2px 0;
+}
+.fx-choose-columns-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    cursor: pointer;
+    user-select: none;
+}
+.fx-choose-columns-row.selected {
+    background: #316ac5;
+    color: #ffffff;
+}
+.fx-choose-columns-row:hover:not(.selected) {
+    background: #e5f0ff;
+}
+.fx-choose-columns-row input[type=checkbox] {
+    margin: 0;
+    cursor: pointer;
+}
+.fx-choose-columns-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fx-choose-columns-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 130px;
+}
+.fx-choose-columns-buttons button {
+    padding: 4px 8px;
+    border: 1px solid #adadad;
+    background: linear-gradient(to bottom, #ffffff, #e8e8e8);
+    border-radius: 2px;
+    font-size: 11px;
+    cursor: pointer;
+    font: inherit;
+}
+.fx-choose-columns-buttons button:hover:not(:disabled) {
+    background: linear-gradient(to bottom, #ffffff, #d8d8d8);
+}
+.fx-choose-columns-buttons button:disabled {
+    color: #9ca3af;
+    cursor: default;
+}
+.fx-choose-columns-restore {
+    margin-top: auto;
+    padding: 6px 8px !important;
+    line-height: 1.2;
+}
+.fx-choose-columns-footer {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    padding: 10px 12px 14px 12px;
+    border-top: 1px solid #d9d9d9;
+}
+.fx-choose-columns-footer button {
+    width: 80px;
+    padding: 5px 0;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    background: linear-gradient(to bottom, #ffffff, #e8e8e8);
+    font-size: 11px;
+    cursor: pointer;
+    font: inherit;
+}
+.fx-choose-columns-footer button:hover {
+    background: linear-gradient(to bottom, #ffffff, #d8d8d8);
+}
+.fx-choose-columns-ok {
+    border-color: #6b7280 !important;
+    font-weight: 600;
+}
+
+/* ── Header Context Menu ─────────────────────────────────────────────
+   Right-click on a column header opens this menu. Style mimics the legacy
+   VB6 "Group on this column / Expand All / Hide / Insert / Rename" panel
+   (see screenshot in repo). Used by every consumer of GridControl. */
+.fx-grid-header-context-menu {
+    position: fixed;
+    /* Sits above any host-level context menu (e.g. FAssembly's data-row menu
+       which uses z-index:1000). Without the bump the host menu — sometimes
+       opened by the same right-click event when stopPropagation didn't catch
+       in time — would paint on top of this one. */
+    z-index: 1100;
+    min-width: 200px;
+    padding: 2px 0;
+    background: #ffffff;
+    border: 1px solid #adadad;
+    box-shadow: 2px 2px 6px rgba(0,0,0,0.18);
+    font-size: 12px;
+    color: #1f2937;
+    user-select: none;
+}
+.fx-grid-header-context-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 4px 12px 4px 6px;
+    border: none;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    white-space: nowrap;
+}
+.fx-grid-header-context-item:hover:not(:disabled) {
+    background: #316ac5;
+    color: #ffffff;
+}
+.fx-grid-header-context-item:disabled {
+    color: #9ca3af;
+    cursor: default;
+}
+.fx-grid-header-context-check {
+    display: inline-block;
+    width: 18px;
+    color: #1f2937;
+    font-weight: 700;
+    text-align: center;
+    flex-shrink: 0;
+}
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-check {
+    color: #ffffff;
+}
+.fx-grid-header-context-arrow {
+    margin-left: auto;
+    padding-left: 12px;
+    color: #6b7280;
+    font-size: 10px;
+}
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-arrow {
+    color: #ffffff;
+}
+.fx-grid-header-context-sep {
+    height: 1px;
+    margin: 4px 4px;
+    background: #d4d4d4;
+}
+.fx-grid-header-context-submenu {
+    border-top: 1px dashed #e5e7eb;
+    margin: 2px 4px;
+    padding: 2px 0;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.fx-grid-header-context-rename {
+    display: flex;
+    gap: 4px;
+    padding: 4px 8px;
+    border-top: 1px dashed #e5e7eb;
+    border-bottom: 1px dashed #e5e7eb;
+    margin: 2px 0;
+}
+.fx-grid-header-context-rename-input {
+    flex: 1;
+    padding: 3px 6px;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    font-size: 11px;
+}
+.fx-grid-header-context-rename-ok {
+    padding: 3px 10px;
+    border: 1px solid #adadad;
+    border-radius: 2px;
+    background: #f3f4f6;
+    font-size: 11px;
+    cursor: pointer;
+}
+.fx-grid-header-context-rename-ok:hover {
+    background: #e5e7eb;
+}
+
+/* Column-aligned aggregate cells living INLINE on the group header row
+   (rendered when an AggregateRow has ShowInGroupHeader=true). Matches the
+   grand-total row palette at the bottom of the grid (.fx-aggregate-footer-row)
+   so a group's total reads as a smaller-scale grand total scoped to the group. */
+.fx-group-header-row .fx-group-header-aggregate-cell {
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--fx-grid-group-total-text-color, #1e40af);
+    background: #eff6ff;
+}
+
+/* ── Grid Footer (total aggregate row) ────────────────────────── */
+.fx-grid-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+}
+.fx-aggregate-footer-row {
+    background: #eff6ff;
+    border-top: 2px solid #93c5fd;
+}
+.fx-aggregate-footer-row .fx-aggregate-cell {
+    padding: 8px 12px;
+    font-weight: 700;
+    font-size: 12px;
+    color: #1e40af;
+    border-top: 1px solid #bfdbfe;
+}
+
+/* ── Aggregate Value ──────────────────────────────────────────── */
+.fx-aggregate-value {
+    white-space: nowrap;
+}
+
+/* ── Group Caption Aggregate (inline in header row) ───────────── */
+.fx-group-caption-agg {
+    display: inline-block;
+    margin-left: 16px;
+    padding: 1px 8px;
+    background: #dbeafe;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fx-grid-group-total-text-color, #1d4ed8);
+}
+
+/* ── Enhanced Selected Row ────────────────────────────────────── */
+.fx-selected {
+    background: var(--fx-grid-selected-row-bg) !important;
+    box-shadow: inset 0 0 0 1px var(--fx-grid-selected-row-border);
+}
+.fx-row.fx-selected > td,
+.fx-row.fx-selected .fx-cell {
+    background: var(--fx-grid-selected-row-bg) !important;
+}
+.fx-grid ::deep tr.fx-row.fx-selected > td,
+.fx-grid ::deep tr.fx-row.fx-selected .fx-cell,
+.fx-grid ::deep tr.fx-row.fx-selected {
+    background: var(--fx-grid-selected-row-bg) !important;
+}
+.fx-selected:hover {
+    background: var(--fx-grid-selected-row-hover-bg, var(--fx-grid-selected-row-bg)) !important;
+}
+
+/* ── Local dark mode, scoped to this GridControl instance ───────────── */
+.fx-grid.fx-grid-dark .fx-grid-toolbar,
+.fx-grid.fx-grid-dark .fx-group-drop-area,
+.fx-grid.fx-grid-dark .fx-grid-pager,
+.fx-grid.fx-grid-dark .fx-selection-info-bar,
+.fx-grid.fx-grid-dark .fx-grid-options-rail,
+.fx-grid.fx-grid-dark .fx-side-panel-header {
+    background: #1f2937;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-side-panel,
+.fx-grid.fx-grid-dark .fx-grid-side-panel-header,
+.fx-grid.fx-grid-dark .fx-filter-section,
+.fx-grid.fx-grid-dark .fx-grid-pivot-field-row,
+.fx-grid.fx-grid-dark .fx-grid-pivot-zone {
+    background: #111827;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-header-cell,
+.fx-grid.fx-grid-dark .fx-group-indent {
+    background: #1f2937;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-table th,
+.fx-grid.fx-grid-dark .fx-grid-table td {
+    border-color: #374151;
+}
+
+.fx-grid.fx-grid-dark .fx-row,
+.fx-grid.fx-grid-dark .fx-pivot-shell {
+    background: #111827;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-alt-row {
+    background: #182132;
+}
+
+.fx-grid.fx-grid-dark .fx-row.fx-hover:hover,
+.fx-grid.fx-grid-dark .fx-header-cell:hover {
+    background: #243145 !important;
+}
+
+.fx-grid.fx-grid-dark .fx-group-header-cell,
+.fx-grid.fx-grid-dark .fx-group-header-row .fx-group-header-cell {
+    background: #111827 !important;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-group-header-row:hover .fx-group-header-cell {
+    background: #1f2937 !important;
+}
+
+.fx-grid.fx-grid-dark .fx-toolbar-btn,
+.fx-grid.fx-grid-dark .fx-grid-option-btn,
+.fx-grid.fx-grid-dark .fx-group-advanced-toggle-btn,
+.fx-grid.fx-grid-dark .fx-group-expand-collapse-btn,
+.fx-grid.fx-grid-dark .fx-group-clear-all-btn,
+.fx-grid.fx-grid-dark .fx-expression-filter-btn,
+.fx-grid.fx-grid-dark .fx-grid-side-panel-close,
+.fx-grid.fx-grid-dark .fx-grid-panel-action,
+.fx-grid.fx-grid-dark .fx-grid-mini-btn,
+.fx-grid.fx-grid-dark .fx-grid-pivot-field-actions button,
+.fx-grid.fx-grid-dark .fx-grid-pivot-chip button {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-group-advanced-toggle-btn.active {
+    background: #2563eb;
+    border-color: #60a5fa;
+    color: #fff;
+}
+
+.fx-grid.fx-grid-dark .fx-toolbar-search input,
+.fx-grid.fx-grid-dark .fx-expression-filter-input,
+.fx-grid.fx-grid-dark .fx-grid-side-search,
+.fx-grid.fx-grid-dark .fx-grid-pivot-value-chip select,
+.fx-grid.fx-grid-dark .fx-grid-pivot-format-input,
+.fx-grid.fx-grid-dark .fx-filter-operator-select,
+.fx-grid.fx-grid-dark .fx-filter-popup-input,
+.fx-grid.fx-grid-dark .fx-filter-number-input,
+.fx-grid.fx-grid-dark .fx-pager-size select {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-popup {
+    background: #111827;
+    border-color: #475569;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-popup-header,
+.fx-grid.fx-grid-dark .fx-filter-condition,
+.fx-grid.fx-grid-dark .fx-filter-popup-search,
+.fx-grid.fx-grid-dark .fx-filter-number-panel > .fx-filter-popup-summary,
+.fx-grid.fx-grid-dark .fx-filter-number-custom,
+.fx-grid.fx-grid-dark .fx-filter-select-all-row,
+.fx-grid.fx-grid-dark .fx-filter-popup-actions {
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-checkbox-item,
+.fx-grid.fx-grid-dark .fx-filter-auto-apply,
+.fx-grid.fx-grid-dark .fx-filter-number-field {
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-popup-summary,
+.fx-grid.fx-grid-dark .fx-filter-popup-empty,
+.fx-grid.fx-grid-dark .fx-filter-range-item em {
+    color: #94a3b8;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-popup-close,
+.fx-grid.fx-grid-dark .fx-filter-popup-btn {
+    background: #0f172a;
+    border-color: #475569;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-pivot-zone {
+    background: #182132;
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-check-row,
+.fx-grid.fx-grid-dark .fx-grid-panel-label,
+.fx-grid.fx-grid-dark .fx-grid-pivot-zone-title,
+.fx-grid.fx-grid-dark .fx-grid-pivot-field-name {
+    color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-pivot-chip {
+    background: #334155;
+    color: #f8fafc;
+}

@@ -1,0 +1,229 @@
+@namespace Fx.ControlKit.Grid
+@typeparam TValue
+@using System.Globalization
+@using System.Reflection
+
+<div class="fx-pivot @(Interactive ? "fx-pivot-interactive" : "") @CssClass" style="@ResolvedStyle">
+
+    @* ── Interactive Field Builder ───────────────────────────────── *@
+    @if (Interactive)
+    {
+        <div class="fx-pivot-builder">
+            <div class="fx-pivot-builder-header">PivotTable Fields</div>
+
+            @* Available Fields *@
+            <div class="fx-pivot-field-list">
+                @foreach (var field in _unplacedFields)
+                {
+                    <div class="fx-pivot-field-chip fx-pivot-chip-available"
+                         draggable="true"
+                         @ondragstart="() => OnDragStart(field, PivotArea.None)"
+                         @ondragend="OnDragEnd">
+                        <span class="fx-pivot-chip-icon">☐</span>
+                        <span>@GetFieldLabel(field)</span>
+                    </div>
+                }
+                @if (_unplacedFields.Count == 0)
+                {
+                    <div class="fx-pivot-field-empty">All fields placed</div>
+                }
+            </div>
+
+            <div class="fx-pivot-zones">
+                @* Filters Zone *@
+                <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Filter ? "fx-pivot-zone-hover" : "")"
+                     @ondragover="() => OnDragOverZone(PivotArea.Filter)"
+                     @ondragover:preventDefault="true"
+                     @ondragleave="OnDragLeaveZone"
+                     @ondrop="() => OnDropZone(PivotArea.Filter)">
+                    <div class="fx-pivot-zone-label">⊞ FILTERS</div>
+                    <div class="fx-pivot-zone-chips">
+                        @foreach (var field in _filterFieldsActive)
+                        {
+                            <div class="fx-pivot-field-chip fx-pivot-chip-filter"
+                                 draggable="true"
+                                 @ondragstart="() => OnDragStart(field, PivotArea.Filter)"
+                                 @ondragend="OnDragEnd">
+                                <span>@GetFieldLabel(field)</span>
+                                <button class="fx-pivot-chip-remove" @onclick="() => RemoveField(field, PivotArea.Filter)">✕</button>
+                            </div>
+                        }
+                        @if (_filterFieldsActive.Count == 0)
+                        {
+                            <span class="fx-pivot-zone-hint">Drop fields here</span>
+                        }
+                    </div>
+                </div>
+
+                <div class="fx-pivot-zones-grid">
+                    @* Rows Zone *@
+                    <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Row ? "fx-pivot-zone-hover" : "")"
+                         @ondragover="() => OnDragOverZone(PivotArea.Row)"
+                         @ondragover:preventDefault="true"
+                         @ondragleave="OnDragLeaveZone"
+                         @ondrop="() => OnDropZone(PivotArea.Row)">
+                        <div class="fx-pivot-zone-label">≡ ROWS</div>
+                        <div class="fx-pivot-zone-chips">
+                            @foreach (var field in _rowFieldsActive)
+                            {
+                                <div class="fx-pivot-field-chip fx-pivot-chip-row"
+                                     draggable="true"
+                                     @ondragstart="() => OnDragStart(field, PivotArea.Row)"
+                                     @ondragend="OnDragEnd">
+                                    <span>@GetFieldLabel(field)</span>
+                                    <button class="fx-pivot-chip-remove" @onclick="() => RemoveField(field, PivotArea.Row)">✕</button>
+                                </div>
+                            }
+                            @if (_rowFieldsActive.Count == 0)
+                            {
+                                <span class="fx-pivot-zone-hint">Drop row fields</span>
+                            }
+                        </div>
+                    </div>
+
+                    @* Columns Zone *@
+                    <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Column ? "fx-pivot-zone-hover" : "")"
+                         @ondragover="() => OnDragOverZone(PivotArea.Column)"
+                         @ondragover:preventDefault="true"
+                         @ondragleave="OnDragLeaveZone"
+                         @ondrop="() => OnDropZone(PivotArea.Column)">
+                        <div class="fx-pivot-zone-label">⊞ COLUMNS</div>
+                        <div class="fx-pivot-zone-chips">
+                            @foreach (var field in _columnFieldsActive)
+                            {
+                                <div class="fx-pivot-field-chip fx-pivot-chip-col"
+                                     draggable="true"
+                                     @ondragstart="() => OnDragStart(field, PivotArea.Column)"
+                                     @ondragend="OnDragEnd">
+                                    <span>@GetFieldLabel(field)</span>
+                                    <button class="fx-pivot-chip-remove" @onclick="() => RemoveField(field, PivotArea.Column)">✕</button>
+                                </div>
+                            }
+                            @if (_columnFieldsActive.Count == 0)
+                            {
+                                <span class="fx-pivot-zone-hint">Drop column fields</span>
+                            }
+                        </div>
+                    </div>
+                </div>
+
+                @* Values Zone *@
+                <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Value ? "fx-pivot-zone-hover" : "")"
+                     @ondragover="() => OnDragOverZone(PivotArea.Value)"
+                     @ondragover:preventDefault="true"
+                     @ondragleave="OnDragLeaveZone"
+                     @ondrop="() => OnDropZone(PivotArea.Value)">
+                    <div class="fx-pivot-zone-label">Σ VALUES</div>
+                    <div class="fx-pivot-zone-chips">
+                        @foreach (var vc in _valueFieldsActive)
+                        {
+                            <div class="fx-pivot-field-chip fx-pivot-chip-value">
+                                <span>@vc.DisplayLabel</span>
+                                <select class="fx-pivot-agg-select"
+                                        value="@vc.Aggregation"
+                                        @onchange="(e) => ChangeAggregation(vc, e)">
+                                    <option value="Sum">Sum</option>
+                                    <option value="Count">Count</option>
+                                    <option value="Average">Average</option>
+                                    <option value="Min">Min</option>
+                                    <option value="Max">Max</option>
+                                </select>
+                                <input class="fx-pivot-format-input"
+                                       value="@vc.Format"
+                                       placeholder="Format"
+                                       title=".NET format, e.g. N0, N2, C2. Blank uses plain numbers."
+                                       @oninput="(e) => ChangeValueFormat(vc, e)" />
+                                <button class="fx-pivot-chip-remove" @onclick="() => RemoveValueField(vc)">✕</button>
+                            </div>
+                        }
+                        @if (_valueFieldsActive.Count == 0)
+                        {
+                            <span class="fx-pivot-zone-hint">Drop value fields</span>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ── Pivot Table ─────────────────────────────────────────────── *@
+    <div class="fx-pivot-content">
+
+        @* Filter Dropdowns *@
+        @if (_activeFilters.Count > 0)
+        {
+            <div class="fx-pivot-filter-bar">
+                @foreach (var filter in _activeFilters)
+                {
+                    <div class="fx-pivot-filter-item">
+                        <label>@GetFieldLabel(filter.Field):</label>
+                        <select @onchange="(e) => OnFilterChanged(filter.Field, e)">
+                            <option value="">(All)</option>
+                            @foreach (var val in filter.UniqueValues)
+                            {
+                                <option value="@val" selected="@(filter.SelectedValue == val)">@val</option>
+                            }
+                        </select>
+                    </div>
+                }
+            </div>
+        }
+
+        @if (_effectiveRowFields.Count == 0 && _effectiveValueFields.Count == 0)
+        {
+            <div class="fx-pivot-empty">
+                <div class="fx-pivot-empty-icon">⊞</div>
+                <div>Drag fields into the <strong>Rows</strong> and <strong>Values</strong> areas to build a pivot table.</div>
+            </div>
+        }
+        else
+        {
+            <div class="fx-pivot-scroll" style="overflow:auto; max-height:@Height; @(string.IsNullOrEmpty(Width) ? "" : $"max-width:{Width};")">
+                <table class="fx-pivot-table">
+                    @* ── Multi-level Column Headers ── *@
+                    @if (_headerLevels.Count > 0)
+                    {
+                        <thead>
+                            @for (var lvl = 0; lvl < _headerLevels.Count; lvl++)
+                            {
+                                <tr class="fx-pivot-header @(lvl < _headerLevels.Count - 1 ? "fx-pivot-header-group" : "fx-pivot-header-leaf")">
+                                    @foreach (var cell in _headerLevels[lvl])
+                                    {
+                                        <th colspan="@cell.Colspan"
+                                            rowspan="@cell.Rowspan"
+                                            class="@cell.CssClass"
+                                            @onclick="() => HandleHeaderClick(cell)">
+                                            @cell.Text
+                                            @if (cell.IsSortable && !string.IsNullOrEmpty(_sortField) && _sortField == cell.SortField)
+                                            {
+                                                <span class="fx-pivot-sort">@(_sortAscending ? "▲" : "▼")</span>
+                                            }
+                                        </th>
+                                    }
+                                </tr>
+                            }
+                        </thead>
+                    }
+
+                    @* ── Data Rows ── *@
+                    <tbody>
+                        @foreach (var row in _displayRows)
+                        {
+                            <tr class="@row.CssClass">
+                                @foreach (var cell in row.Cells)
+                                {
+                                    @if (cell.Rowspan > 0)
+                                    {
+                                        <td rowspan="@(cell.Rowspan > 1 ? cell.Rowspan : 1)"
+                                            colspan="@(cell.Colspan > 1 ? cell.Colspan : 1)"
+                                            class="@cell.CssClass">@cell.DisplayValue</td>
+                                    }
+                                }
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</div>

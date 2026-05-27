@@ -1,0 +1,38 @@
+@namespace Fx.ControlKit
+
+@* A button inside a RibbonGroup. *@
+
+<button class="fx-ribbon-button @(Large ? "fx-ribbon-button-large" : "") @(Disabled ? "disabled" : "") @CssClass"
+        type="button"
+        disabled="@Disabled"
+        title="@(string.IsNullOrWhiteSpace(Tooltip) ? Text : Tooltip)"
+        @onclick="OnClick">
+    @if (!string.IsNullOrWhiteSpace(Icon))
+    {
+        <span class="fx-ribbon-button-icon">@Icon</span>
+    }
+    <span class="fx-ribbon-button-text">@Text</span>
+</button>
+
+@code {
+    /// <summary>Visible label.</summary>
+    [Parameter] public string Text { get; set; } = "";
+
+    /// <summary>Emoji/icon or HTML markup for the glyph (rendered above the text when Large).</summary>
+    [Parameter] public string Icon { get; set; } = "";
+
+    /// <summary>Hover tooltip (defaults to <see cref="Text"/>).</summary>
+    [Parameter] public string Tooltip { get; set; } = "";
+
+    /// <summary>Use the large "first column of a group" style.</summary>
+    [Parameter] public bool Large { get; set; }
+
+    /// <summary>Disable the button.</summary>
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>Optional extra CSS classes.</summary>
+    [Parameter] public string CssClass { get; set; } = "";
+
+    /// <summary>Fires when the button is clicked.</summary>
+    [Parameter] public EventCallback OnClick { get; set; }
+}

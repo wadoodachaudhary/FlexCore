@@ -1,0 +1,350 @@
+/* ═══════════════════════════════════════════════════════════════════
+   TreeGridControl — Scoped styles (equivalent to SyncFusion SfTreeGrid)
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Container ───────────────────────────────────────────────────── */
+.fx-treegrid {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    color: #212529;
+    overflow: hidden;
+}
+
+/* ── Content / Scroll Area ───────────────────────────────────────── */
+.fx-treegrid-content {
+    overflow: auto;
+    flex: 1;
+}
+
+/* ── Table ────────────────────────────────────────────────────────── */
+.fx-treegrid-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+/* ── Header ──────────────────────────────────────────────────────── */
+.fx-treegrid-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+.fx-treegrid-header-cell {
+    padding: 10px 12px;
+    background: #d5dadc;
+    border-bottom: 2px solid #c9c9c9;
+    border-right: 1px solid #c9c9c9;
+    font-weight: 600;
+    font-size: 13px;
+    color: #333;
+    white-space: nowrap;
+    user-select: none;
+}
+.fx-treegrid-header-cell:last-child {
+    border-right: none;
+}
+
+/* ── Body Rows ───────────────────────────────────────────────────── */
+.fx-treegrid-row {
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.fx-treegrid-row.fx-treegrid-hover:hover {
+    background: #f0f6ff !important;
+}
+.fx-treegrid-row.fx-treegrid-selected {
+    background: #e3f2fd !important;
+}
+.fx-treegrid-row.fx-treegrid-selected:hover {
+    background: #bbdefb !important;
+}
+
+/* ── Cells ────────────────────────────────────────────────────────── */
+.fx-treegrid-cell {
+    padding: 8px 12px;
+    border-bottom: 1px solid #e9ecef;
+    border-right: 1px solid #f1f3f5;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fx-treegrid-cell:last-child {
+    border-right: none;
+}
+
+/* ── Expand/Collapse Icon ────────────────────────────────────────── */
+.fx-treegrid-expand-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    font-size: 14px;
+    cursor: pointer;
+    margin-right: 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    user-select: none;
+    vertical-align: middle;
+}
+.fx-treegrid-icon {
+    width: 16px;
+    height: 16px;
+    image-rendering: auto;
+}
+.fx-treegrid-expand-icon:hover {
+    background: #e3f2fd;
+}
+.fx-treegrid-leaf-icon {
+    font-size: 13px;
+    cursor: default;
+    opacity: 0.6;
+}
+.fx-treegrid-leaf-icon:hover {
+    background: transparent;
+}
+
+.fx-treegrid-indent-segment {
+    position: relative;
+    display: inline-block;
+    height: 18px;
+    vertical-align: middle;
+}
+
+.fx-treegrid-indent-segment.continues::before,
+.fx-treegrid-indent-segment.elbow::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -8px;
+    bottom: -8px;
+    border-left: 1px dotted #9c9c9c;
+}
+
+.fx-treegrid-indent-segment.elbow:not(.continues)::before {
+    bottom: 50%;
+}
+
+.fx-treegrid-indent-segment.elbow::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    right: 1px;
+    top: 50%;
+    border-top: 1px dotted #9c9c9c;
+}
+
+.fx-treegrid-node-folder {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+    vertical-align: middle;
+}
+
+.fx-treegrid-yellow-folder .fx-treegrid-expand-icon:not(.fx-treegrid-expand-icon-plusminus) {
+    width: 18px;
+    height: 18px;
+    margin-right: 4px;
+}
+
+.fx-treegrid-yellow-folder .fx-treegrid-leaf-icon {
+    opacity: 1;
+}
+
+.fx-treegrid-folder-icon {
+    position: relative;
+    display: inline-block;
+    width: 15px;
+    height: 12px;
+    flex: 0 0 15px;
+}
+
+.fx-treegrid-folder-icon::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 1px;
+    width: 8px;
+    height: 4px;
+    border: 1px solid #9c7a1c;
+    border-bottom: none;
+    background: #f8dc73;
+    box-sizing: border-box;
+}
+
+.fx-treegrid-folder-icon::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 4px;
+    width: 14px;
+    height: 8px;
+    border: 1px solid #9c7a1c;
+    background: #f4c242;
+    box-sizing: border-box;
+}
+
+.fx-treegrid-folder-icon.open::before {
+    top: 0;
+    background: #ffe38a;
+}
+
+.fx-treegrid-folder-icon.open::after {
+    top: 5px;
+    height: 7px;
+    background: #efb735;
+    transform: skewX(-10deg);
+    transform-origin: left bottom;
+}
+
+.fx-treegrid-blue-leaf-folder .fx-treegrid-folder-icon-leaf::before {
+    border-color: #6d8795;
+    background: #c9e7f5;
+}
+
+.fx-treegrid-blue-leaf-folder .fx-treegrid-folder-icon-leaf::after {
+    border-color: #6d8795;
+    background: #8bbfd8;
+}
+
+.fx-treegrid-blue-leaf-folder .fx-treegrid-folder-icon-leaf.open::before {
+    background: #d8f0fb;
+}
+
+.fx-treegrid-blue-leaf-folder .fx-treegrid-folder-icon-leaf.open::after {
+    background: #76aecb;
+}
+
+/* ── Cell Text ────────────────────────────────────────────────────── */
+.fx-treegrid-cell-text {
+    vertical-align: middle;
+}
+.fx-treegrid-parent-text {
+    font-weight: 600;
+    color: #1565c0;
+}
+
+/* ── Empty Row ────────────────────────────────────────────────────── */
+.fx-treegrid-empty {
+    text-align: center;
+    padding: 40px;
+    color: #868e96;
+    font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   PLUS/MINUS NODE ICON — project-default node expand/collapse glyph.
+   Identical box style to .fx-group-expand-icon-plusminus on GridControl,
+   so tree nodes and grid group rows look like the same control family.
+   Black border so it's clearly visible against any row background.
+   ═══════════════════════════════════════════════════════════════════ */
+.fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus,
+.fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.collapsed,
+.fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.expanded {
+    width: 12px;
+    height: 12px;
+    font-size: 10px;
+    line-height: 1;
+    border: 1px solid #000;
+    background: #fff;
+    color: #000;
+    font-weight: 700;
+    border-radius: 1px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 4px;
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+.fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus:hover {
+    background: #e3f2fd;
+}
+/* Leaf placeholder — invisible spacer matching the icon's footprint so
+   leaf cells align with their parent siblings. */
+.fx-treegrid-leaf-plusminus {
+    width: 12px;
+    height: 12px;
+    border: none;
+    background: transparent;
+    margin-right: 4px;
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   COMPACT VARIANT — VB6-style dense tree (small font, tight rows,
+   triangle expand icons). Apply by setting CssClass="fx-treegrid-compact".
+   ═══════════════════════════════════════════════════════════════════ */
+.fx-treegrid-compact {
+    font-size: 10px;
+    border-radius: 0;
+}
+.fx-treegrid-compact .fx-treegrid-header-cell {
+    padding: 3px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    background: #ece9d8;          /* VB6 toolbar grey */
+    border-bottom: 1px solid #aca899;
+    border-right: 1px solid #d4d0c8;
+    color: #000;
+}
+.fx-treegrid-compact .fx-treegrid-cell {
+    padding: 1px 6px;
+    border-bottom: 1px solid #f3f3f3;
+    border-right: none;
+    line-height: 1.4;
+}
+.fx-treegrid-compact .fx-treegrid-row {
+    height: 18px;                 /* tight row height like VB6 VSFlexGrid */
+}
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected {
+    background: #316ac5 !important;
+    color: #fff;
+}
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-parent-text {
+    color: #fff;
+}
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-hover:hover {
+    background: #d8e4f8 !important;
+}
+/* Selected + hovered: keep the dark blue background and white text. Without
+   this, the bare hover rule above wins on background but the white text from
+   .fx-treegrid-selected stays — making the row's text disappear (white-on-light-blue)
+   while the cursor sits on it. */
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected.fx-treegrid-hover:hover,
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover {
+    background: #2c5fb0 !important;   /* slightly darker than the selected blue, for hover affordance */
+    color: #fff;
+}
+.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-parent-text {
+    color: #fff;
+}
+.fx-treegrid-compact .fx-treegrid-parent-text {
+    font-weight: 400;             /* VB6 doesn't bold parent rows */
+    color: inherit;
+}
+/* Compact expand icon — slightly tighter padding/margin than the standard
+   plus/minus box defined above. The actual glyph (+ / −) is now rendered as
+   element text content (see TreeGridControl.razor) so we don't add ::before
+   pseudo content here — that previously double-rendered the symbol. */
+.fx-treegrid-compact .fx-treegrid-expand-icon {
+    margin-right: 2px;
+}
+.fx-treegrid-compact .fx-treegrid-expand-icon img {
+    display: none;                /* hide the folder.ico when triangle mode is used in compact tree */
+}

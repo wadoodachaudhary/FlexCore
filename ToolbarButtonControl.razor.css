@@ -1,0 +1,62 @@
+/* FlexCore ToolbarButtonControl — default button styling.
+   Flat / borderless look with a hover lift. Two layouts:
+       horizontal (default) — icon next to label
+       vertical             — icon above label (set Vertical="true")
+   The button never shrinks (flex-shrink:0) so the toolbar's nowrap layout
+   stays single-row even when content gets long. */
+
+.fx-toolbar-btn {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border: 1px solid transparent;        /* no black browser border */
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.2;
+    color: inherit;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background-color 0.12s ease, border-color 0.12s ease;
+    box-sizing: border-box;
+    min-height: 32px;
+}
+
+.fx-toolbar-btn:hover:not(:disabled) {
+    background: #e9ecef;
+    border-color: #ced4da;
+}
+
+.fx-toolbar-btn:active:not(:disabled) {
+    background: #dee2e6;
+}
+
+.fx-toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Vertical layout — used by report toolbar (icon on top, label under) */
+.fx-toolbar-btn.fx-toolbar-btn--vertical {
+    flex-direction: column;
+    gap: 2px;
+    min-width: 56px;
+    padding: 4px 8px;
+}
+
+.fx-toolbar-btn-icon {
+    width: 18px;
+    height: 18px;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.fx-toolbar-btn-label {
+    font-size: 11px;
+    line-height: 1.1;
+}

@@ -1,0 +1,25 @@
+.fx-button {
+    padding: 4px 16px;
+    min-width: 75px;
+    font-size: 13px;
+    border: 1px solid #c9c9c9;
+    background: #f7f7f7;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #333;
+}
+
+.fx-button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.fx-button.fx-dialog-btn {
+    padding: 6px 12px;
+}
+
+.fx-button.mini-btn {
+    padding: 2px 6px;
+    font-size: 12px;
+    background: #fff;
+}

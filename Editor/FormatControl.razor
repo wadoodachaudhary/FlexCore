@@ -1,0 +1,173 @@
+@namespace Fx.ControlKit.Editor
+
+@* Composite formatting toolbar. Bundles:
+     • Inline text formatting (Bold, Italic, Underline, Strikethrough)
+     • Font family / size / page width / line height dropdowns
+     • Paragraph alignment (Left, Center, Right, Justify)
+
+   Every action is host-driven via callbacks; this control owns layout
+   and markup only. Visual defaults are shipped in the scoped CSS file
+   beside this control — hosts with their own theme can override via
+   CssClass on the outer container. *@
+
+<div class="fx-format-control @(CssClass ?? string.Empty)">
+
+    @* Inline text formatting *@
+    <div class="fx-format-group" role="group" aria-label="Text formatting">
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnBoldClicked"
+                             Title="Bold (selection)">
+            <strong>B</strong>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnItalicClicked"
+                             Title="Italic (selection)">
+            <em>I</em>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnUnderlineClicked"
+                             Title="Underline (selection)">
+            <span style="text-decoration: underline;">U</span>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnStrikeClicked"
+                             Title="Strikethrough (selection)">
+            <span style="text-decoration: line-through;">S</span>
+        </EditorButtonControl>
+    </div>
+
+    @if (OnHeading1Clicked.HasDelegate || OnHeading2Clicked.HasDelegate)
+    {
+        <div class="fx-format-heading" role="group" aria-label="Heading styles">
+            <span class="fx-format-field-label">Head</span>
+            <EditorButtonControl CssClass="fx-format-btn fx-format-heading-btn"
+                                 PreventMouseDownDefault="true"
+                                 OnClick="OnHeading1Clicked"
+                                 Title="Heading 1 — applies a large bold heading style to the current selection">
+                H1
+            </EditorButtonControl>
+            <EditorButtonControl CssClass="fx-format-btn fx-format-heading-btn"
+                                 PreventMouseDownDefault="true"
+                                 OnClick="OnHeading2Clicked"
+                                 Title="Heading 2 — applies a medium bold heading style to the current selection">
+                H2
+            </EditorButtonControl>
+        </div>
+    }
+
+    @* Font / Size / Width / Line dropdowns *@
+    @if (FontFamilyOptions is not null)
+    {
+        <label class="fx-format-field" title="Font family — applies to the current selection">
+            <span class="fx-format-field-label">Font</span>
+            <EditorDropDownControl BareStyle="true"
+                                   CssClass="fx-format-select"
+                                   Options="FontFamilyOptions"
+                                   Value="@FontFamily"
+                                   ValueChanged="OnFontFamilyChanged" />
+        </label>
+    }
+    @if (FontSizeOptions is not null)
+    {
+        <label class="fx-format-field" title="Font size — applies to the current selection">
+            <span class="fx-format-field-label">Size</span>
+            <EditorDropDownControl BareStyle="true"
+                                   CssClass="fx-format-select fx-format-select-sm"
+                                   Options="FontSizeOptions"
+                                   Value="@FontSizePx.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                                   ValueChanged="OnFontSizeChanged" />
+        </label>
+    }
+    @if (PageWidthOptions is not null)
+    {
+        <label class="fx-format-field" title="Page width — applies to the whole document">
+            <span class="fx-format-field-label">Width</span>
+            <EditorDropDownControl BareStyle="true"
+                                   CssClass="fx-format-select"
+                                   Options="PageWidthOptions"
+                                   Value="@PageWidth"
+                                   ValueChanged="OnPageWidthChanged" />
+        </label>
+    }
+    @if (LineHeightOptions is not null)
+    {
+        <label class="fx-format-field" title="Line height — applies to the selected paragraph(s)">
+            <span class="fx-format-field-label">Line</span>
+            <EditorDropDownControl BareStyle="true"
+                                   CssClass="fx-format-select fx-format-select-sm"
+                                   Options="LineHeightOptions"
+                                   Value="@LineHeight"
+                                   ValueChanged="OnLineHeightChanged" />
+        </label>
+    }
+
+    <span class="fx-format-divider"></span>
+
+    @* Paragraph alignment *@
+    <div class="fx-format-group" role="group" aria-label="Paragraph alignment">
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnAlignLeftClicked"
+                             Title="Align left">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnAlignCenterClicked"
+                             Title="Align center">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnAlignRightClicked"
+                             Title="Align right">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="9" y1="12" x2="21" y2="12"/><line x1="6" y1="18" x2="21" y2="18"/></svg>
+        </EditorButtonControl>
+        <EditorButtonControl CssClass="fx-format-btn"
+                             PreventMouseDownDefault="true"
+                             OnClick="OnAlignJustifyClicked"
+                             Title="Justify">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </EditorButtonControl>
+    </div>
+</div>
+
+@code {
+    // ─── Current state (bound values) ────────────────────────────────────
+    [Parameter] public string? FontFamily { get; set; }
+    [Parameter] public int FontSizePx { get; set; }
+    [Parameter] public string? PageWidth { get; set; }
+    [Parameter] public string? LineHeight { get; set; }
+
+    // ─── Option tables — omit any to hide that dropdown ──────────────────
+    [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? FontFamilyOptions { get; set; }
+    [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? FontSizeOptions { get; set; }
+    [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? PageWidthOptions { get; set; }
+    [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? LineHeightOptions { get; set; }
+
+    // ─── Change handlers ────────────────────────────────────────────────
+    [Parameter] public EventCallback<string> OnFontFamilyChanged { get; set; }
+    [Parameter] public EventCallback<string> OnFontSizeChanged { get; set; }
+    [Parameter] public EventCallback<string> OnPageWidthChanged { get; set; }
+    [Parameter] public EventCallback<string> OnLineHeightChanged { get; set; }
+
+    // ─── Inline formatting (selection-scoped) ───────────────────────────
+    [Parameter] public EventCallback OnBoldClicked { get; set; }
+    [Parameter] public EventCallback OnItalicClicked { get; set; }
+    [Parameter] public EventCallback OnUnderlineClicked { get; set; }
+    [Parameter] public EventCallback OnStrikeClicked { get; set; }
+    [Parameter] public EventCallback OnHeading1Clicked { get; set; }
+    [Parameter] public EventCallback OnHeading2Clicked { get; set; }
+
+    // ─── Paragraph alignment ────────────────────────────────────────────
+    [Parameter] public EventCallback OnAlignLeftClicked { get; set; }
+    [Parameter] public EventCallback OnAlignCenterClicked { get; set; }
+    [Parameter] public EventCallback OnAlignRightClicked { get; set; }
+    [Parameter] public EventCallback OnAlignJustifyClicked { get; set; }
+
+    [Parameter] public string? CssClass { get; set; }
+}

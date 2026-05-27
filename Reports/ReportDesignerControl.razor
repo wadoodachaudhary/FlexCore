@@ -1,0 +1,645 @@
+@namespace Fx.ControlKit.Reports
+
+@using Microsoft.AspNetCore.Components.Forms
+
+<div class="fx-rd">
+    <div class="fx-rd-toolbar">
+        @if (AllowFileOpen)
+        {
+            <label class="fx-rd-file-button" title="Open a Crystal Reports XML export">
+                Open XML
+                <InputFile OnChange="OpenFileAsync" accept=".xml,text/xml,application/xml" />
+            </label>
+        }
+        <button type="button" @onclick="ReloadAsync" disabled="@(!CanReload)">Reload</button>
+        <span class="fx-rd-separator"></span>
+        <button type="button" @onclick="AddTextElement">Text</button>
+        <button type="button" @onclick="AddFieldElement" disabled="@(!_document.Fields.Any())">Field</button>
+        <button type="button" @onclick="DuplicateSelected" disabled="@(_selectedElement is null)">Duplicate</button>
+        <button type="button" @onclick="RemoveSelected" disabled="@(_selectedElement is null)">Remove</button>
+        <span class="fx-rd-separator"></span>
+        <button type="button" @onclick="ExportXmlAsync">Apply XML</button>
+        <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
+        <span class="fx-rd-status @(_document.IsDirty ? "dirty" : "")">@StatusText</span>
+    </div>
+
+    <div class="fx-rd-shell">
+        <main class="fx-rd-stage-wrap">
+            <div class="fx-rd-document-tabs">
+                <button type="button" class="active">Design</button>
+                <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
+                <div class="fx-rd-document-title">
+                    <strong>@_document.Title</strong>
+                    <span>@_document.SourceName</span>
+                </div>
+            </div>
+
+            <div class="fx-rd-workbench">
+                <ReportDesignerCanvasControl Document="@_document"
+                                             SelectedSection="@_selectedSection"
+                                             SelectedElement="@_selectedElement"
+                                             SectionSelected="SelectSection"
+                                             ElementSelected="SelectElement"
+                                             SectionResized="OnSectionResizedAsync" />
+            </div>
+        </main>
+
+        <aside class="fx-rd-dock">
+            <ExplorerControl Title="@ActiveExplorerTitle"
+                             Nodes="@ActiveExplorerNodes"
+                             SelectedNode="@_selectedExplorerNode"
+                             SelectedNodeChanged="OnExplorerSelectedNodeChanged"
+                             OnNodeClick="OnExplorerNodeClickAsync"
+                             CssClass="fx-rd-explorer"
+                             TreeCssClass="fx-rd-explorer-tree"
+                             UseVb6TreeStyle="false"
+                             FolderStyle="TreeFolderStyle.None"
+                             TreeIndentPixels="18">
+                <ToolbarContent>
+                    <ToolbarButtonControl Label="+" OnClick="AddFieldElement" Disabled="@(!IsFieldExplorerActive || !_document.Fields.Any())" />
+                    <ToolbarButtonControl Label="R" OnClick="ReloadAsync" Disabled="@(!CanReload)" />
+                    <ToolbarButtonControl Label="fx" Disabled="true" />
+                    <ToolbarButtonControl Label="/" Disabled="@(_selectedElement is null)" />
+                    <ToolbarButtonControl Label="X" OnClick="RemoveSelected" Disabled="@(_selectedElement is null)" />
+                </ToolbarContent>
+                <FooterContent>
+                    <ReportDesignerPropertiesControl Document="@_document"
+                                                     SelectedSection="@_selectedSection"
+                                                     SelectedElement="@_selectedElement"
+                                                     Changed="MarkDirtyAsync" />
+                    <div class="fx-rd-dock-tabs">
+                        <button type="button" class="@(IsFieldExplorerActive ? "active" : "")" @onclick="() => ShowExplorerTab(FieldExplorerTab)">Field Explorer</button>
+                        <button type="button" class="@(!IsFieldExplorerActive ? "active" : "")" @onclick="() => ShowExplorerTab(ReportExplorerTab)">Report Explorer</button>
+                    </div>
+                </FooterContent>
+            </ExplorerControl>
+        </aside>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? XmlPath { get; set; }
+    [Parameter] public string? XmlContent { get; set; }
+    [Parameter] public ReportDesignerDocument? Document { get; set; }
+    [Parameter] public EventCallback<ReportDesignerDocument> DocumentChanged { get; set; }
+    [Parameter] public EventCallback<string> XmlChanged { get; set; }
+    [Parameter] public EventCallback<ReportDesignerDocument> PreviewRequested { get; set; }
+    [Parameter] public bool AllowFileOpen { get; set; } = true;
+    [Parameter] public long MaxXmlBytes { get; set; } = 20 * 1024 * 1024;
+
+    private ReportDesignerDocument _document = ReportDesignerDocument.CreateBlank();
+    private ReportDesignerDocument? _lastDocument;
+    private string? _lastXmlPath;
+    private string? _lastXmlContent;
+    private ReportDesignerSection? _selectedSection;
+    private ReportDesignerElement? _selectedElement;
+    private string _status = "Ready";
+    private string _activeExplorerTab = FieldExplorerTab;
+    private List<TreeNode> _fieldExplorerNodes = new();
+    private List<TreeNode> _reportExplorerNodes = new();
+    private TreeNode? _selectedExplorerNode;
+
+    private const string FieldExplorerTab = "fields";
+    private const string ReportExplorerTab = "report";
+    private const int SectionRailWidthPx = 126;
+
+    private static readonly string[] SpecialFieldNames =
+    [
+        "Content Locale",
+        "Current CE User ID",
+        "Current CE User Name",
+        "Current CE User Time Zone",
+        "Data Date",
+        "Data Time",
+        "Data Time Zone",
+        "File Author",
+        "File Creation Date",
+        "File Path and Name",
+        "Group Number",
+        "Group Selection Formula",
+        "Horizontal Page Number",
+        "Modification Date",
+        "Modification Time",
+        "Page N of M",
+        "Page Number",
+        "Print Date",
+        "Print Time",
+        "Print Time Zone",
+        "Record Number",
+        "Record Selection Formula",
+        "Report Comments",
+        "Report Title",
+        "Selection Locale",
+        "Total Page Count"
+    ];
+
+    private bool CanReload => !string.IsNullOrWhiteSpace(XmlPath) || !string.IsNullOrWhiteSpace(XmlContent) || Document is not null;
+    private string StatusText => _document.IsDirty ? "Unsaved designer changes" : _status;
+    private bool IsFieldExplorerActive => string.Equals(_activeExplorerTab, FieldExplorerTab, StringComparison.Ordinal);
+    private string ActiveExplorerTitle => IsFieldExplorerActive ? "Field Explorer" : "Report Explorer";
+    private List<TreeNode> ActiveExplorerNodes => IsFieldExplorerActive ? _fieldExplorerNodes : _reportExplorerNodes;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Document is not null && !ReferenceEquals(Document, _lastDocument))
+        {
+            SetDocument(Document);
+            _lastDocument = Document;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(XmlContent) && !string.Equals(XmlContent, _lastXmlContent, StringComparison.Ordinal))
+        {
+            await LoadXmlAsync(XmlContent!, XmlPath ?? "Report.xml");
+            _lastXmlContent = XmlContent;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(XmlPath) && !string.Equals(XmlPath, _lastXmlPath, StringComparison.Ordinal))
+        {
+            await LoadPathAsync(XmlPath!);
+            _lastXmlPath = XmlPath;
+        }
+    }
+
+    public async Task LoadPathAsync(string xmlPath)
+    {
+        if (!File.Exists(xmlPath))
+        {
+            _status = $"XML file not found: {xmlPath}";
+            return;
+        }
+
+        var xml = await File.ReadAllTextAsync(xmlPath);
+        await LoadXmlAsync(xml, Path.GetFileName(xmlPath), xmlPath);
+    }
+
+    public async Task LoadXmlAsync(string xml, string sourceName = "Report.xml", string? sourcePath = null)
+    {
+        try
+        {
+            SetDocument(ReportDesignerXmlSerializer.FromXml(xml, sourceName, sourcePath));
+            _status = _document.StatusMessage;
+            _lastXmlContent = xml;
+            _lastXmlPath = sourcePath;
+            await NotifyDocumentChangedAsync(markDirty: false);
+        }
+        catch (Exception ex)
+        {
+            _status = $"Could not load report XML: {ex.Message}";
+        }
+    }
+
+    public string ExportXml()
+    {
+        var xml = ReportDesignerXmlSerializer.ToXml(_document);
+        _document.IsDirty = false;
+        _status = "XML generated.";
+        return xml;
+    }
+
+    private async Task ExportXmlAsync()
+    {
+        var xml = ExportXml();
+        if (XmlChanged.HasDelegate)
+            await XmlChanged.InvokeAsync(xml);
+
+        await NotifyDocumentChangedAsync(markDirty: false);
+    }
+
+    private async Task PreviewAsync()
+    {
+        if (PreviewRequested.HasDelegate)
+            await PreviewRequested.InvokeAsync(_document);
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (Document is not null)
+        {
+            SetDocument(Document);
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(XmlContent))
+        {
+            await LoadXmlAsync(XmlContent!, XmlPath ?? "Report.xml");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(XmlPath))
+            await LoadPathAsync(XmlPath!);
+    }
+
+    private async Task OpenFileAsync(InputFileChangeEventArgs args)
+    {
+        var file = args.File;
+        await using var stream = file.OpenReadStream(MaxXmlBytes);
+        using var reader = new StreamReader(stream);
+        var xml = await reader.ReadToEndAsync();
+        await LoadXmlAsync(xml, file.Name);
+    }
+
+    private void SetDocument(ReportDesignerDocument document)
+    {
+        _document = document;
+        _document.IsDirty = false;
+        _selectedSection = _document.Sections.FirstOrDefault();
+        _selectedElement = null;
+        _status = _document.StatusMessage;
+        RebuildExplorerNodes();
+    }
+
+    private void SelectSection(ReportDesignerSection section)
+    {
+        _selectedSection = section;
+        _selectedElement = null;
+        UpdateExplorerSelection();
+    }
+
+    private void SelectElement(ReportDesignerSection section, ReportDesignerElement element)
+    {
+        _selectedSection = section;
+        _selectedElement = element;
+        UpdateExplorerSelection();
+    }
+
+    private void SelectElement(ReportDesignerElementSelection selection)
+    {
+        SelectElement(selection.Section, selection.Element);
+    }
+
+    private void ShowExplorerTab(string tab)
+    {
+        _activeExplorerTab = tab;
+        UpdateExplorerSelection();
+    }
+
+    private async Task OnSectionResizedAsync(ReportDesignerSection section)
+    {
+        SelectSection(section);
+        await MarkDirtyAsync();
+    }
+
+    private Task OnExplorerSelectedNodeChanged(TreeNode node)
+    {
+        _selectedExplorerNode = node;
+        return Task.CompletedTask;
+    }
+
+    private async Task OnExplorerNodeClickAsync(TreeNode node)
+    {
+        switch (node.Tag)
+        {
+            case ReportDesignerField field:
+                await AddFieldElement(field);
+                break;
+            case ReportDesignerSection section:
+                SelectSection(section);
+                break;
+        }
+    }
+
+    private async Task AddTextElement()
+    {
+        var section = GetActiveSection();
+        var element = new ReportDesignerElement
+        {
+            SectionId = section.Id,
+            Name = NextObjectName("Text"),
+            Kind = "Text",
+            Text = "Text",
+            LeftTwips = 240,
+            TopTwips = 120,
+            WidthTwips = 1800,
+            HeightTwips = 300
+        };
+
+        section.Elements.Add(element);
+        SelectElement(section, element);
+        await MarkDirtyAsync();
+    }
+
+    private async Task AddFieldElement()
+    {
+        var field = _document.Fields.FirstOrDefault();
+        if (field != null)
+            await AddFieldElement(field);
+    }
+
+    private async Task AddFieldElement(ReportDesignerField field)
+    {
+        var section = GetActiveSection();
+        var binding = string.IsNullOrWhiteSpace(field.Formula) ? $"{{{field.DisplayName}}}" : field.Formula;
+        var element = new ReportDesignerElement
+        {
+            SectionId = section.Id,
+            Name = NextObjectName(field.Name),
+            Kind = "Field",
+            Binding = binding,
+            LeftTwips = 240,
+            TopTwips = Math.Max(0, section.Elements.Count * 280),
+            WidthTwips = 2160,
+            HeightTwips = 240,
+            TextColor = "#000000"
+        };
+
+        section.Elements.Add(element);
+        SelectElement(section, element);
+        await MarkDirtyAsync();
+    }
+
+    private async Task DuplicateSelected()
+    {
+        if (_selectedElement is null || _selectedSection is null)
+            return;
+
+        var clone = _selectedElement.CloneFor(_selectedSection.Id, NextObjectName(_selectedElement.Name));
+        _selectedSection.Elements.Add(clone);
+        SelectElement(_selectedSection, clone);
+        await MarkDirtyAsync();
+    }
+
+    private async Task RemoveSelected()
+    {
+        if (_selectedElement is null || _selectedSection is null)
+            return;
+
+        _selectedSection.Elements.Remove(_selectedElement);
+        _selectedElement = null;
+        await MarkDirtyAsync();
+    }
+
+    private async Task NudgeSelected(int dxTwips, int dyTwips)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.LeftTwips = Math.Max(0, _selectedElement.LeftTwips + dxTwips);
+        _selectedElement.TopTwips = Math.Max(0, _selectedElement.TopTwips + dyTwips);
+        await MarkDirtyAsync();
+    }
+
+    private ReportDesignerSection GetActiveSection()
+    {
+        if (_selectedSection != null)
+            return _selectedSection;
+
+        if (_document.Sections.Count == 0)
+            _document.Sections.Add(ReportDesignerDocument.CreateBlank(_document.Title).Sections[0]);
+
+        _selectedSection = _document.Sections.First();
+        return _selectedSection;
+    }
+
+    private string NextObjectName(string stem)
+    {
+        var clean = string.Concat((string.IsNullOrWhiteSpace(stem) ? "Object" : stem).Where(char.IsLetterOrDigit));
+        if (string.IsNullOrWhiteSpace(clean))
+            clean = "Object";
+
+        var names = _document.Elements.Select(element => element.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidate = clean;
+        var suffix = 1;
+        while (names.Contains(candidate))
+            candidate = $"{clean}{++suffix}";
+
+        return candidate;
+    }
+
+    private async Task MarkDirtyAsync()
+    {
+        await NotifyDocumentChangedAsync(markDirty: true);
+    }
+
+    private async Task NotifyDocumentChangedAsync(bool markDirty)
+    {
+        if (markDirty)
+        {
+            _document.IsDirty = true;
+            _status = "Changed";
+        }
+
+        if (DocumentChanged.HasDelegate)
+            await DocumentChanged.InvokeAsync(_document);
+    }
+
+    private void RebuildExplorerNodes()
+    {
+        _fieldExplorerNodes = BuildFieldExplorerNodes();
+        _reportExplorerNodes = BuildReportExplorerNodes();
+        UpdateExplorerSelection();
+    }
+
+    private List<TreeNode> BuildFieldExplorerNodes()
+    {
+        var databaseFields = NewExplorerNode("Database Fields", "fx-explorer-icon-database", isExpanded: true);
+        foreach (var tableGroup in GetDatabaseFieldGroups())
+        {
+            var table = NewExplorerNode(tableGroup.Key, "fx-explorer-icon-table", isExpanded: IsTableExpandedByDefault(tableGroup));
+            foreach (var field in tableGroup)
+                table.Children.Add(NewExplorerNode(field.Name, "fx-explorer-icon-field", tag: field));
+            databaseFields.Children.Add(table);
+        }
+
+        var formulaFields = NewExplorerNode("Formula Fields", "fx-explorer-icon-formula", isExpanded: _document.Fields.Any(field => field.IsFormula));
+        foreach (var formula in _document.Fields.Where(field => field.IsFormula))
+            formulaFields.Children.Add(NewExplorerNode(formula.Name, "fx-explorer-icon-field", tag: formula));
+
+        var parameterFields = NewExplorerNode("Parameter Fields", "fx-explorer-icon-parameter", isExpanded: true);
+        foreach (var parameter in _document.Parameters)
+            parameterFields.Children.Add(NewExplorerNode(parameter.Name, "fx-explorer-icon-key", tag: parameter, isDisabled: true));
+        if (!_document.Parameters.Any())
+            parameterFields.Children.Add(NewExplorerNode("No parameter fields.", "fx-explorer-icon-field", isDisabled: true));
+
+        var groupNameFields = NewExplorerNode("Group Name Fields", "fx-explorer-icon-group", isExpanded: true);
+        foreach (var group in _document.Groups)
+            groupNameFields.Children.Add(NewExplorerNode(group.Name, "fx-explorer-icon-field", tag: group, isDisabled: true));
+
+        var specialFields = NewExplorerNode("Special Fields", "fx-explorer-icon-special");
+        foreach (var fieldName in SpecialFieldNames)
+            specialFields.Children.Add(NewExplorerNode(fieldName, "fx-explorer-icon-field", isDisabled: true));
+
+        return
+        [
+            databaseFields,
+            formulaFields,
+            NewExplorerNode("SQL Expression Fields", "fx-explorer-icon-sql", isExpanded: true),
+            parameterFields,
+            NewExplorerNode("Running Total Fields", "fx-explorer-icon-total", isExpanded: true),
+            groupNameFields,
+            specialFields
+        ];
+    }
+
+    private List<TreeNode> BuildReportExplorerNodes()
+    {
+        var root = NewExplorerNode(GetReportFileName(), "fx-explorer-icon-report", isExpanded: true);
+        foreach (var section in _document.Sections)
+        {
+            var text = SectionDisplayName(section.Kind);
+            if (section.IsSuppressed)
+                text += "    suppressed";
+
+            root.Children.Add(NewExplorerNode(text, "fx-explorer-icon-section", tag: section));
+        }
+
+        return [root];
+    }
+
+    private static TreeNode NewExplorerNode(
+        string text,
+        string iconCss,
+        object? tag = null,
+        bool isExpanded = false,
+        bool isDisabled = false)
+    {
+        return new TreeNode
+        {
+            Text = text,
+            IconCss = iconCss,
+            Tag = tag,
+            IsExpanded = isExpanded,
+            IsDisabled = isDisabled
+        };
+    }
+
+    private void UpdateExplorerSelection()
+    {
+        foreach (var node in FlattenNodes(_fieldExplorerNodes.Concat(_reportExplorerNodes)))
+            node.IsSelected = false;
+
+        if (!IsFieldExplorerActive || _selectedSection is null)
+        {
+            _selectedExplorerNode = null;
+            return;
+        }
+
+        _selectedExplorerNode = FlattenNodes(_reportExplorerNodes)
+            .FirstOrDefault(node => ReferenceEquals(node.Tag, _selectedSection));
+
+        if (_selectedExplorerNode is not null)
+            _selectedExplorerNode.IsSelected = true;
+    }
+
+    private static IEnumerable<TreeNode> FlattenNodes(IEnumerable<TreeNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            yield return node;
+            foreach (var child in FlattenNodes(node.Children))
+                yield return child;
+        }
+    }
+
+    private string GetPageStyle()
+    {
+        var width = Math.Clamp(ReportDesignerMetrics.TwipsToPixels(_document.Page.ContentWidthTwips), 480, 1600) + SectionRailWidthPx;
+        return $"width:{width}px;";
+    }
+
+    private string GetRulerStyle()
+    {
+        var width = Math.Clamp(ReportDesignerMetrics.TwipsToPixels(_document.Page.ContentWidthTwips), 480, 1600);
+        return $"width:{width}px;";
+    }
+
+    private string GetSectionStyle(ReportDesignerSection section)
+    {
+        var height = Math.Max(24, ReportDesignerMetrics.TwipsToPixels(section.HeightTwips));
+        return $"height:{height}px;background:{CssColor(section.BackgroundColor, "#ffffff")};";
+    }
+
+    private string GetElementStyle(ReportDesignerElement element)
+    {
+        var left = ReportDesignerMetrics.TwipsToPixels(element.LeftTwips);
+        var top = ReportDesignerMetrics.TwipsToPixels(element.TopTwips) + 3;
+        var width = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.WidthTwips));
+        var height = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.HeightTwips));
+        var fontSize = element.FontSize <= 0 ? 10m : element.FontSize;
+        var align = element.HorizontalAlignment switch
+        {
+            "Right" => "right",
+            "HorizontalCenter" => "center",
+            "Center" => "center",
+            "Justified" => "justify",
+            _ => "left"
+        };
+
+        return $"left:{left}px;top:{top}px;width:{width}px;height:{height}px;color:{CssColor(element.TextColor, "#000")};font-family:'{element.FontFamily}',Arial,sans-serif;font-size:{fontSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}pt;font-weight:{(element.Bold ? "700" : "400")};font-style:{(element.Italic ? "italic" : "normal")};text-decoration:{(element.Underline ? "underline" : "none")};text-align:{align};";
+    }
+
+    private string GetElementClass(ReportDesignerElement element)
+    {
+        var selected = ReferenceEquals(element, _selectedElement) ? "selected" : "";
+        var kind = element.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase) ? "subreport" : element.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase) ? "field" : "text";
+        var suppressed = element.IsSuppressed ? "suppressed" : "";
+        return $"{selected} {kind} {suppressed}";
+    }
+
+    private string GetElementTitle(ReportDesignerElement element)
+    {
+        return string.IsNullOrWhiteSpace(element.Binding)
+            ? $"{element.Kind}: {element.Name}"
+            : $"{element.Kind}: {element.Name}\n{element.Binding}";
+    }
+
+    private static string CssColor(string value, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private IEnumerable<IGrouping<string, ReportDesignerField>> GetDatabaseFieldGroups()
+    {
+        return _document.Fields
+            .Where(field => !field.IsFormula && !string.IsNullOrWhiteSpace(field.Table))
+            .GroupBy(field => field.Table)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool IsTableExpandedByDefault(IGrouping<string, ReportDesignerField> tableGroup)
+    {
+        return tableGroup.Count() <= 20;
+    }
+
+    private string GetReportFileName()
+    {
+        if (!string.IsNullOrWhiteSpace(_document.SourceName))
+            return _document.SourceName;
+
+        if (!string.IsNullOrWhiteSpace(_document.SourcePath))
+            return Path.GetFileName(_document.SourcePath);
+
+        return string.IsNullOrWhiteSpace(_document.Title) ? "Report.rpt" : $"{_document.Title}.rpt";
+    }
+
+    private static string SectionDisplayName(string kind)
+    {
+        return kind switch
+        {
+            "ReportHeader" => "Report Header",
+            "PageHeader" => "Page Header",
+            "GroupHeader" => "Group Header",
+            "Detail" => "Details",
+            "GroupFooter" => "Group Footer",
+            "ReportFooter" => "Report Footer",
+            "PageFooter" => "Page Footer",
+            _ => kind
+        };
+    }
+
+    private static string SectionGlyph(string kind)
+    {
+        return kind switch
+        {
+            "ReportHeader" => "RH",
+            "PageHeader" => "PH",
+            "GroupHeader" => "GH",
+            "Detail" => "DT",
+            "GroupFooter" => "GF",
+            "ReportFooter" => "RF",
+            "PageFooter" => "PF",
+            _ => "S"
+        };
+    }
+}

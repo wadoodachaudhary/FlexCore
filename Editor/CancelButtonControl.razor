@@ -1,0 +1,62 @@
+@namespace Fx.ControlKit.Editor
+@inherits ButtonControl
+
+@* Cancel verb, as a first-class control. Sibling to SaveButtonControl.
+
+   Renders a "Cancel" button with an optional X icon. Hosts drive the
+   look via CssClass + the BareStyle / ShowIcon / Label knobs:
+
+     • Default                   — X icon + "Cancel", rounded library theme.
+     • ShowIcon=false            — text-only "Cancel" (e.g. `btn ghost small`).
+     • Label=""                  — icon-only (e.g. outline rename cancel).
+
+   All base-ButtonControl parameters (CssClass, Disabled, BareStyle,
+   Title, StopPropagation, PreventMouseDownDefault, …) still apply. *@
+
+<button class="@ResolvedCancelButtonClass"
+        type="@ButtonType"
+        disabled="@Disabled"
+        title="@(Title ?? "Cancel")"
+        style="@Style"
+        @onclick="OnClick"
+        @onclick:stopPropagation="StopPropagation"
+        @onmousedown:preventDefault="PreventMouseDownDefault">
+    @if (ShowIcon)
+    {
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+    }
+    @if (ChildContent is not null)
+    {
+        @ChildContent
+    }
+    else if (!string.IsNullOrEmpty(ResolvedLabel))
+    {
+        @ResolvedLabel
+    }
+</button>
+
+@code {
+    /// <summary>Label shown next to the icon. Defaults to "Cancel". Pass "" for icon-only.</summary>
+    [Parameter] public string? Label { get; set; }
+
+    /// <summary>
+    /// Whether to render the built-in X icon. Defaults to true. Set false
+    /// for text-only Cancel buttons (e.g. <c>btn ghost small</c>).
+    /// </summary>
+    [Parameter] public bool ShowIcon { get; set; } = true;
+
+    private string ResolvedLabel => Label ?? "Cancel";
+
+    private string ResolvedCancelButtonClass
+    {
+        get
+        {
+            var trimmed = (CssClass ?? string.Empty).Trim();
+            if (BareStyle) return trimmed;
+            return string.IsNullOrEmpty(trimmed) ? "fx-cancel-button" : $"fx-cancel-button {trimmed}";
+        }
+    }
+}

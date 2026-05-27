@@ -1,0 +1,76 @@
+.fx-imagelist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+}
+
+.fx-imagelist-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    padding: 6px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.fx-imagelist-item:hover {
+    background: #f3f4f6;
+}
+
+.fx-imagelist-item-selected {
+    border-color: #2563eb;
+    background: #eff6ff;
+}
+
+.fx-imagelist-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border-radius: 4px;
+    background: #f9fafb;
+}
+
+.fx-imagelist-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.fx-imagelist-icon {
+    color: #6b7280;
+}
+
+.fx-imagelist-placeholder {
+    background: #e5e7eb;
+    width: 100%;
+    height: 100%;
+    border-radius: 4px;
+}
+
+.fx-imagelist-caption {
+    text-align: center;
+    font-size: 11px;
+    color: #4b5563;
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+/* Size variants */
+.fx-imagelist-small .fx-imagelist-thumb { width: 32px; height: 32px; }
+.fx-imagelist-small .fx-imagelist-icon { font-size: 18px; }
+.fx-imagelist-small .fx-imagelist-item { max-width: 60px; }
+
+.fx-imagelist-medium .fx-imagelist-thumb { width: 64px; height: 64px; }
+.fx-imagelist-medium .fx-imagelist-icon { font-size: 32px; }
+.fx-imagelist-medium .fx-imagelist-item { max-width: 90px; }
+
+.fx-imagelist-large .fx-imagelist-thumb { width: 128px; height: 128px; }
+.fx-imagelist-large .fx-imagelist-icon { font-size: 56px; }
+.fx-imagelist-large .fx-imagelist-item { max-width: 150px; }

@@ -1,0 +1,96 @@
+@namespace Fx.ControlKit.Editor
+
+@* Generic outline / table-of-contents control. Takes a flat item list
+   (level 1 = top-level, level 2 = nested) and renders it as a clickable
+   tree with per-item action buttons, an optional header (close / pin /
+   breadcrumb), and an optional footer (e.g. "add at end" affordances). *@
+
+<aside class="fx-outline @(CssClass ?? string.Empty)">
+    @if (HeaderContent is not null)
+    {
+        <div class="fx-outline-header">@HeaderContent</div>
+    }
+
+    @if (Items is null || Items.Count == 0)
+    {
+        <p class="fx-outline-empty">@(EmptyMessage ?? "Nothing to show yet.")</p>
+    }
+    else
+    {
+        <ul class="fx-outline-list">
+            @for (var i = 0; i < Items.Count; i++)
+            {
+                var item = Items[i];
+                var itemId = item.Id;
+                var isRenaming = string.Equals(item.Id, RenamingItemId, StringComparison.Ordinal);
+                <li class="fx-outline-row">
+                    @if (isRenaming && RenameTemplate is not null)
+                    {
+                        @RenameTemplate(item)
+                    }
+                    else
+                    {
+                        <button class="fx-outline-item fx-outline-level-@item.Level @(item.IsCurrent ? "fx-outline-current" : "")"
+                                @onclick="() => OnItemClick.InvokeAsync(itemId)">
+                            @item.Title
+                        </button>
+                        @if (item.Actions is { Count: > 0 })
+                        {
+                            <span class="fx-outline-row-actions">
+                                @foreach (var action in item.Actions)
+                                {
+                                    <button class="fx-outline-action-btn @(action.IsDanger ? "danger" : "") @(action.IsConfirm ? "confirm" : "")"
+                                            title="@action.Title"
+                                            @onclick="() => action.OnClick.InvokeAsync(itemId)">
+                                        @((MarkupString)action.IconSvg)
+                                    </button>
+                                }
+                            </span>
+                        }
+                    }
+                </li>
+            }
+        </ul>
+    }
+
+    @if (FooterContent is not null)
+    {
+        <div class="fx-outline-footer">@FooterContent</div>
+    }
+</aside>
+
+@code {
+    /// <summary>An entry in the outline — a chapter, section, heading, etc.</summary>
+    public sealed record OutlineItem(
+        string Id,
+        string Title,
+        int Level,
+        bool IsCurrent = false,
+        IReadOnlyList<OutlineItemAction>? Actions = null);
+
+    /// <summary>
+    /// A row-level action button (rename, delete, insert-after, etc.). The
+    /// icon is raw SVG markup so the host can supply its own styled icons.
+    /// </summary>
+    public sealed record OutlineItemAction(
+        string Title,
+        string IconSvg,
+        EventCallback<string> OnClick,
+        bool IsDanger = false,
+        bool IsConfirm = false);
+
+    [Parameter] public IReadOnlyList<OutlineItem>? Items { get; set; }
+    [Parameter] public EventCallback<string> OnItemClick { get; set; }
+
+    /// <summary>
+    /// The id of the item currently in "rename" mode. When set, that row
+    /// yields its markup to <see cref="RenameTemplate"/>.
+    /// </summary>
+    [Parameter] public string? RenamingItemId { get; set; }
+    [Parameter] public RenderFragment<OutlineItem>? RenameTemplate { get; set; }
+
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+    [Parameter] public string? EmptyMessage { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+}

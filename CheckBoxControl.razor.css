@@ -1,0 +1,17 @@
+.fx-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: inherit;
+}
+
+.fx-checkbox input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.fx-checkbox-label {
+    user-select: none;
+}

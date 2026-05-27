@@ -1,0 +1,64 @@
+.fx-rd-properties-drawer {
+    border-top: 1px solid #b8c8d6;
+    background: #f4f4f4;
+}
+
+.fx-rd-properties-drawer > summary {
+    padding: 7px 8px;
+    cursor: default;
+    font-weight: 700;
+    background: #efefef;
+}
+
+.fx-rd-properties-content {
+    display: grid;
+    gap: 10px;
+    max-height: 360px;
+    overflow: auto;
+    padding: 10px;
+}
+
+.fx-rd-property-card {
+    display: grid;
+    gap: 6px;
+    padding: 10px;
+    background: #fff;
+    border: 1px solid #c5c5c5;
+}
+
+.fx-rd-property-card.grid2 {
+    grid-template-columns: 1fr 1fr;
+}
+
+.fx-rd-property-card h3 {
+    grid-column: 1 / -1;
+    margin: 0 0 3px;
+    font-size: 12px;
+}
+
+.fx-rd-property-card label {
+    display: grid;
+    gap: 3px;
+    color: #555;
+}
+
+.fx-rd-property-card label.check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fx-rd-property-card input,
+.fx-rd-property-card select,
+.fx-rd-property-card textarea {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid #aaa;
+    padding: 4px 6px;
+    font: inherit;
+}
+
+.fx-rd-property-card textarea {
+    min-height: 60px;
+    resize: vertical;
+}

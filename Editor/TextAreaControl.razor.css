@@ -1,0 +1,30 @@
+/* Default multiline text area. Hosts with a theme (like GhostWriter's
+ * `.editor-area`, `.paste-area`) override via CssClass. The base rule keeps
+ * a reasonable standalone appearance. */
+
+.fx-textarea {
+    display: block;
+    width: 100%;
+    min-height: 72px;
+    padding: 0.5rem 0.65rem;
+    border: 1px solid #c9c9c9;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    resize: vertical;
+    background: #fff;
+    color: inherit;
+    box-sizing: border-box;
+}
+
+.fx-textarea:focus {
+    outline: none;
+    border-color: #4c6fff;
+    box-shadow: 0 0 0 2px rgba(76, 111, 255, 0.2);
+}
+
+.fx-textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

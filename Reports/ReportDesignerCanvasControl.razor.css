@@ -1,0 +1,152 @@
+.fx-rd-canvas {
+    min-height: 0;
+    height: 100%;
+    overflow: auto;
+    padding: 0 16px 32px;
+    background:
+        radial-gradient(circle at 0 0, rgba(255,255,255,0.28), transparent 240px),
+        linear-gradient(135deg, rgba(255,255,255,0.12) 0 19%, transparent 20% 100%),
+        #7fa6d2;
+}
+
+.fx-rd-canvas ::deep .fx-grid.fx-rd-canvas-grid {
+    display: inline-flex;
+    min-width: 0;
+    width: auto;
+    height: auto;
+    min-height: 760px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #111;
+    font-family: Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
+    font-size: 12px;
+    overflow: visible;
+}
+
+.fx-rd-canvas ::deep .fx-grid-content {
+    overflow: visible !important;
+}
+
+.fx-rd-canvas ::deep .fx-grid-table {
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.fx-rd-canvas ::deep .fx-header-cell {
+    height: 25px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    overflow: visible;
+}
+
+.fx-rd-canvas ::deep .fx-grid-body .fx-row,
+.fx-rd-canvas ::deep .fx-grid-body .fx-row:hover {
+    background: transparent !important;
+}
+
+.fx-rd-canvas ::deep .fx-cell {
+    padding: 0;
+    border: 0;
+    vertical-align: top;
+    overflow: visible;
+    background: transparent;
+}
+
+.fx-rd-ruler-corner {
+    height: 25px;
+    border-right: 1px solid #547da8;
+    background: linear-gradient(#afd0ee, #8eb7df);
+}
+
+.fx-rd-band-label {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    padding: 0 8px;
+    border: 0;
+    border-bottom: 1px solid #8799aa;
+    background: rgba(214, 232, 248, 0.38);
+    color: #123f62;
+    text-align: left;
+    font: 12px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    cursor: default;
+}
+
+.fx-rd-band-label.selected {
+    color: #004b85;
+    font-weight: 700;
+    background: rgba(234, 246, 255, 0.64);
+}
+
+.fx-rd-band-label.suppressed {
+    color: #516b7d;
+}
+
+.fx-rd-band-body {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 22px;
+    overflow: hidden;
+    border-top: 1px solid #8799aa;
+    border-bottom: 1px solid #8799aa;
+    background-image: repeating-linear-gradient(135deg, rgba(0,0,0,0.08) 0 1px, transparent 1px 9px);
+}
+
+.fx-rd-band-body.selected {
+    outline: 1px solid #2f6fae;
+    outline-offset: -1px;
+}
+
+.fx-rd-band-caption {
+    position: absolute;
+    top: 2px;
+    left: 5px;
+    right: 5px;
+    display: flex;
+    justify-content: space-between;
+    pointer-events: none;
+    color: rgba(32, 32, 32, 0.45);
+    font-size: 11px;
+}
+
+.fx-rd-band-caption em {
+    font-style: normal;
+}
+
+.fx-rd-object {
+    position: absolute;
+    display: block;
+    margin: 0;
+    padding: 0 2px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: default;
+    text-align: left;
+}
+
+.fx-rd-object:hover {
+    border-color: #4d77aa;
+}
+
+.fx-rd-object.selected {
+    border-color: #111;
+    background: rgba(255, 255, 255, 0.25);
+    outline: 1px dotted #111;
+}
+
+.fx-rd-object.subreport {
+    color: #0645ad;
+    text-decoration: underline;
+}
+
+.fx-rd-object.suppressed {
+    opacity: 0.45;
+}

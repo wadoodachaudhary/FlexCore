@@ -1,0 +1,74 @@
+@namespace Fx.ControlKit.Editor
+@inherits ButtonControl
+
+@* Save verb, as a first-class control.
+
+   Renders a "Save" button with an optional disk icon. Hosts with their
+   own visual language (GhostWriter's `.btn.primary`, `.toolbar-btn`, the
+   outline rename icon-only buttons) drive the look via CssClass + the
+   BareStyle / ShowIcon / Label knobs:
+
+     • Default                            — icon + "Save", rounded library theme.
+     • ShowIcon=false                     — text-only "Save" (e.g. `btn primary small`).
+     • Label=""                           — icon-only (e.g. outline rename confirm).
+     • IsSaving=true                      — disabled + "Saving…" unless Label is custom.
+
+   All base-ButtonControl parameters (CssClass, Disabled, BareStyle,
+   Title, StopPropagation, PreventMouseDownDefault, …) still apply. *@
+
+<button class="@ResolvedSaveButtonClass"
+        type="@ButtonType"
+        disabled="@(Disabled || IsSaving)"
+        title="@(Title ?? (IsSaving ? "Saving…" : "Save"))"
+        style="@Style"
+        @onclick="OnClick"
+        @onclick:stopPropagation="StopPropagation"
+        @onmousedown:preventDefault="PreventMouseDownDefault">
+    @if (ShowIcon)
+    {
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+        </svg>
+    }
+    @if (ChildContent is not null)
+    {
+        @ChildContent
+    }
+    else if (!string.IsNullOrEmpty(ResolvedLabel))
+    {
+        @ResolvedLabel
+    }
+</button>
+
+@code {
+    /// <summary>Label shown next to the icon. Defaults to "Save" / "Saving…". Pass "" for icon-only.</summary>
+    [Parameter] public string? Label { get; set; }
+
+    /// <summary>
+    /// True while a save is in flight — disables the button and swaps the
+    /// label to "Saving…" unless the host supplied a custom Label.
+    /// </summary>
+    [Parameter] public bool IsSaving { get; set; }
+
+    /// <summary>
+    /// Whether to render the built-in disk icon. Defaults to true. Set false
+    /// for text-only Save buttons (e.g. <c>btn primary small</c>).
+    /// </summary>
+    [Parameter] public bool ShowIcon { get; set; } = true;
+
+    private string ResolvedLabel
+        => Label ?? (IsSaving ? "Saving…" : "Save");
+
+    private string ResolvedSaveButtonClass
+    {
+        get
+        {
+            var trimmed = (CssClass ?? string.Empty).Trim();
+            if (BareStyle) return trimmed;
+            var baseC = IsSaving ? "fx-save-button fx-save-button--saving" : "fx-save-button";
+            return string.IsNullOrEmpty(trimmed) ? baseC : $"{baseC} {trimmed}";
+        }
+    }
+}

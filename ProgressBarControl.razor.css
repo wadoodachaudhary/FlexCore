@@ -1,0 +1,78 @@
+/* ProgressBarControl — matches the visual language of GridControl /
+   ButtonControl / DialogControl in FlexCore. */
+
+.fx-progress {
+    margin: 0.6rem 0;
+    padding: 0.7rem 0.9rem;
+    background: #f7f9fc;
+    border: 1px solid #b8d4f0;
+    border-radius: 8px;
+    color: #1f2933;
+}
+
+.fx-progress-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.95rem;
+    margin-bottom: 0.4rem;
+}
+
+.fx-progress-status {
+    color: #52606d;
+    font-weight: 400;
+}
+
+.fx-progress-cancel {
+    margin-left: auto;
+}
+
+.fx-progress-track {
+    height: 10px;
+    background: #e2e8f0;
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 0.35rem 0;
+}
+
+.fx-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #2c6cdf, #4a90e2);
+    transition: width 0.25s ease-out;
+}
+
+/* Indeterminate state — looping shimmer when total is unknown
+   (verifying, writing manifest, …). 30 % wide block sweeps L→R. */
+.fx-progress-indeterminate {
+    width: 30% !important;
+    animation: fx-progress-loop 1.4s linear infinite;
+}
+
+@keyframes fx-progress-loop {
+    0%   { margin-left: -30%; }
+    100% { margin-left: 100%; }
+}
+
+.fx-progress-detail {
+    margin: 0;
+    font-size: 0.82rem;
+    font-family: ui-monospace, SF Mono, Menlo, monospace;
+    color: #52606d;
+}
+
+/* Error variant — pink background, red bar, no animation. */
+.fx-progress-error {
+    background: #fff3f3;
+    border-color: #f0a8a8;
+}
+
+.fx-progress-error .fx-progress-fill {
+    background: #c53030;
+    animation: none;
+}
+
+.fx-progress-error-text {
+    margin: 0.3rem 0 0;
+    font-size: 0.88rem;
+    color: #8a2424;
+}

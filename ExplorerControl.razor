@@ -1,0 +1,68 @@
+@namespace Fx.ControlKit
+
+<div class="@ResolvedCssClass" style="@Style">
+    <div class="fx-explorer-title">
+        <strong>@Title</strong>
+        @if (!string.IsNullOrWhiteSpace(WindowToolsText))
+        {
+            <span class="fx-explorer-window-tools">@WindowToolsText</span>
+        }
+    </div>
+
+    <ToolbarControl CssClass="fx-explorer-toolbar" Role="toolbar">
+        @if (ToolbarContent is not null)
+        {
+            @ToolbarContent
+        }
+    </ToolbarControl>
+
+    <div class="fx-explorer-body">
+        <TreeViewControl Nodes="@Nodes"
+                         SelectedNode="@SelectedNode"
+                         SelectedNodeChanged="@SelectedNodeChanged"
+                         OnNodeClick="@OnNodeClick"
+                         OnNodeDoubleClick="@OnNodeDoubleClick"
+                         OnNodeExpand="@OnNodeExpand"
+                         ShowCheckboxes="@ShowCheckboxes"
+                         ShowIcons="@ShowIcons"
+                         AllowMultiSelect="@AllowMultiSelect"
+                         UseVb6TreeStyle="@UseVb6TreeStyle"
+                         FolderStyle="@FolderStyle"
+                         TreeIndentPixels="@TreeIndentPixels"
+                         CssClass="@TreeCssClass"
+                         Height="100%" />
+    </div>
+
+    @if (FooterContent is not null)
+    {
+        <div class="fx-explorer-footer">
+            @FooterContent
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Explorer";
+    [Parameter] public List<TreeNode>? Nodes { get; set; }
+    [Parameter] public TreeNode? SelectedNode { get; set; }
+    [Parameter] public EventCallback<TreeNode> SelectedNodeChanged { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeClick { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeDoubleClick { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeExpand { get; set; }
+    [Parameter] public RenderFragment? ToolbarContent { get; set; }
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+    [Parameter] public bool ShowCheckboxes { get; set; }
+    [Parameter] public bool ShowIcons { get; set; } = true;
+    [Parameter] public bool AllowMultiSelect { get; set; }
+    [Parameter] public bool UseVb6TreeStyle { get; set; }
+    [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.None;
+    [Parameter] public int TreeIndentPixels { get; set; } = 16;
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string TreeCssClass { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+    [Parameter] public string WindowToolsText { get; set; } = "PIN X";
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-explorer"
+        : $"fx-explorer {CssClass.Trim()}";
+}

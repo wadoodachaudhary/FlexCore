@@ -1,0 +1,200 @@
+@namespace Fx.ControlKit.Grid
+@typeparam TValue
+
+<div class="fx-treegrid @CssClass"
+     style="@(string.IsNullOrEmpty(Height) ? "" : $"height:{Height};") @(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")">
+
+    @* ── Collect column definitions ─────────────────────────────── *@
+    <CascadingValue Value="@((ITreeGridControlOwner)this)" IsFixed="true">
+        <div style="display:none">
+            @ChildContent
+        </div>
+    </CascadingValue>
+
+    @* ── Tree Table ─────────────────────────────────────────────── *@
+    <div class="fx-treegrid-content">
+        <table class="fx-treegrid-table">
+            <thead class="fx-treegrid-header">
+                <tr>
+                    @foreach (var col in VisibleColumns)
+                    {
+                        <th class="fx-treegrid-header-cell"
+                            style="@col.GetHeaderStyle()">
+                            @col.DisplayHeader
+                        </th>
+                    }
+                </tr>
+            </thead>
+            <tbody class="fx-treegrid-body">
+                @{ var rowIdx = 0; }
+                @foreach (var node in VisibleNodes)
+                {
+                    var currentIdx = rowIdx;
+                    var isSelected = AllowSelection && _selectedItem != null && EqualityComparer<TValue>.Default.Equals(node.Data, _selectedItem);
+
+                    <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "")"
+                        @onclick="() => HandleRowClick(node, currentIdx)">
+
+                        @{ var colIdx = 0; }
+                        @foreach (var col in VisibleColumns)
+                        {
+                            <td class="fx-treegrid-cell" style="@col.GetCellStyle()">
+                                @if (colIdx == ResolvedTreeColumnIndex)
+                                {
+                                    @* Indent + expand/collapse icon + cell value.
+                                       Per-level indent comes from IndentPerLevel
+                                       (default 16px). VB6 trees use ~14-16px;
+                                       40px makes the column needlessly wide. *@
+                                    @if (UseDottedTreeLines)
+                                    {
+                                        @for (var indentLevel = 0; indentLevel < node.Level; indentLevel++)
+                                        {
+                                            var isElbow = indentLevel == node.Level - 1;
+                                            var continues = isElbow
+                                                ? !node.IsLastSibling
+                                                : node.AncestorLineContinuations.ElementAtOrDefault(indentLevel);
+
+                                            <span class="fx-treegrid-indent-segment @(continues ? "continues" : "") @(isElbow ? "elbow" : "")"
+                                                  style="width:@(IndentPerLevel)px;"></span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        <span style="display:inline-block; width:@(node.Level * IndentPerLevel)px;"></span>
+                                    }
+
+                                    @* Per-node expand/collapse icon. Resolution
+                                       order — caller-supplied first:
+                                         1. ExpandIconTemplate / LeafIconTemplate
+                                            (full RenderFragment override; caller
+                                             handles markup AND click)
+                                         2. CollapsedGlyph / ExpandedGlyph /
+                                            LeafGlyph + *Style strings
+                                         3. NodeExpandIconStyle preset (toolkit
+                                            built-in default — PlusMinus or
+                                            Triangle / folder.ico) *@
+                                    @if (node.HasChildren)
+                                    {
+                                        @if (ExpandIconTemplate != null)
+                                        {
+                                            @ExpandIconTemplate(node.IsExpanded)
+                                        }
+                                        else if (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus
+                                                 || CollapsedGlyph != null || ExpandedGlyph != null)
+                                        {
+                                            @* Glyph + style path — covers PlusMinus preset
+                                               AND any caller that supplied custom glyph strings. *@
+                                            <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(node.IsExpanded ? "expanded" : "collapsed")"
+                                                  style="@ResolveExpandIconStyle()"
+                                                  @onclick="() => ToggleNode(node)"
+                                                  @onclick:stopPropagation="true">
+                                                @(node.IsExpanded ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
+                                            </span>
+
+                                            @if (UseTreeFolderIcons)
+                                            {
+                                                <span class="fx-treegrid-node-folder" aria-hidden="true">
+                                                    <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @(node.IsExpanded ? "open" : "closed")"></span>
+                                                </span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            @* Triangle preset → original folder.ico look. *@
+                                            <span class="fx-treegrid-expand-icon @(node.IsExpanded ? "expanded" : "collapsed")"
+                                                  @onclick="() => ToggleNode(node)"
+                                                  @onclick:stopPropagation="true">
+                                                @if (UseYellowFolderIcons)
+                                                {
+                                                    <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @(node.IsExpanded ? "open" : "closed")" aria-hidden="true"></span>
+                                                }
+                                                else
+                                                {
+                                                    <img class="fx-treegrid-icon"
+                                                         src="@(node.IsExpanded ? "images/32/open.ico" : "images/32/folder.ico")"
+                                                         alt="" />
+                                                }
+                                            </span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @if (LeafIconTemplate != null)
+                                        {
+                                            @LeafIconTemplate
+                                        }
+                                        else if (LeafGlyph != null)
+                                        {
+                                            <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon"
+                                                  style="@ResolveLeafIconStyle()">@LeafGlyph</span>
+                                        }
+                                        else if (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus)
+                                        {
+                                            @* Invisible placeholder of identical width so
+                                               leaf cells align with parent siblings. *@
+                                            <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon fx-treegrid-leaf-plusminus"
+                                                  style="@ResolveLeafIconStyle()"></span>
+
+                                            @if (UseTreeFolderIcons)
+                                            {
+                                                <span class="fx-treegrid-node-folder" aria-hidden="true">
+                                                    <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-leaf closed"></span>
+                                                </span>
+                                            }
+                                        }
+                                        else
+                                        {
+                                            <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon">
+                                                @if (UseYellowFolderIcons)
+                                                {
+                                                    <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-leaf closed" aria-hidden="true"></span>
+                                                }
+                                                else
+                                                {
+                                                    <img class="fx-treegrid-icon" src="images/32/folder.ico" alt="" />
+                                                }
+                                            </span>
+                                        }
+                                    }
+
+                                    @if (col.Template != null)
+                                    {
+                                        @col.Template((object)node.Data!)
+                                    }
+                                    else
+                                    {
+                                        <span class="fx-treegrid-cell-text @(node.HasChildren ? "fx-treegrid-parent-text" : "")">
+                                            @GetCellDisplayValue(node.Data, col)
+                                        </span>
+                                    }
+                                }
+                                else
+                                {
+                                    @if (col.Template != null)
+                                    {
+                                        @col.Template((object)node.Data!)
+                                    }
+                                    else
+                                    {
+                                        @GetCellDisplayValue(node.Data, col)
+                                    }
+                                }
+                            </td>
+                            colIdx++;
+                        }
+                    </tr>
+                    rowIdx++;
+                }
+
+                @if (!VisibleNodes.Any())
+                {
+                    <tr>
+                        <td colspan="@VisibleColumns.Count" class="fx-treegrid-empty">
+                            No records to display
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>

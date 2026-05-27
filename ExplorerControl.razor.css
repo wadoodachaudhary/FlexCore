@@ -1,0 +1,167 @@
+.fx-explorer {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    color: #111;
+    background: #fff;
+    border-left: 1px solid #78a7d0;
+    font-family: Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
+    font-size: 12px;
+}
+
+.fx-explorer-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 32px;
+    padding: 4px 8px;
+    color: #07538c;
+    background: linear-gradient(#d7ecff, #b8dcfb);
+    border-bottom: 1px solid #91bbdf;
+    font-size: 14px;
+}
+
+.fx-explorer-window-tools {
+    color: #5e7180;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+}
+
+.fx-explorer-toolbar {
+    min-height: 32px;
+    padding: 3px 6px;
+    gap: 4px;
+    background: #efefef;
+    border-bottom: 1px solid #d4d4d4;
+}
+
+.fx-explorer ::deep .fx-toolbar-btn {
+    min-width: 22px;
+    min-height: 22px;
+    padding: 1px 5px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #666;
+    border-radius: 0;
+    font: 700 11px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    box-shadow: none;
+}
+
+.fx-explorer ::deep .fx-toolbar-btn:hover:not(:disabled) {
+    border-color: #8aaed0;
+    background: #f8fbff;
+}
+
+.fx-explorer-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fx-explorer ::deep .fx-treeview {
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    padding: 7px 4px;
+    overflow: auto;
+    font-size: 12px;
+}
+
+.fx-explorer ::deep .fx-treeview-node {
+    min-height: 20px;
+    margin: 0;
+    padding-top: 1px;
+    padding-bottom: 1px;
+    border-radius: 0;
+}
+
+.fx-explorer ::deep .fx-treeview-node-selected,
+.fx-explorer ::deep .fx-treeview-node-selected:hover {
+    background: #0a68c4;
+    color: #fff;
+    font-weight: 400;
+}
+
+.fx-explorer ::deep .fx-treeview-icon {
+    width: 20px;
+    margin-right: 4px;
+    color: #316fc2;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-database::before {
+    content: "DB";
+    color: #b77c00;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-table::before {
+    content: "T";
+    color: #b77c00;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-field::before {
+    content: "F";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-formula::before {
+    content: "fx";
+    color: #316fc2;
+    font-style: italic;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-sql::before {
+    content: "SQL";
+    color: #006fb0;
+    font-size: 9px;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-parameter::before {
+    content: "?";
+    color: #333;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-key::before {
+    content: "K";
+    font-size: 10px;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-total::before {
+    content: "#";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-group::before {
+    content: "G";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-special::before {
+    content: "S";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-report::before {
+    content: "R";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-explorer-icon-section::before {
+    content: "S";
+    color: #316fc2;
+}
+
+.fx-explorer ::deep .fx-treeview-node-disabled {
+    opacity: 1;
+    color: #111;
+    cursor: default;
+}
+
+.fx-explorer-footer {
+    flex: 0 0 auto;
+    background: #b8dcfb;
+    border-top: 1px solid #91bbdf;
+}

@@ -1,0 +1,68 @@
+@namespace Fx.ControlKit.Navigation
+
+@*
+    TabControl — horizontal tab bar with a single active content pane below.
+    Replaces the Syncfusion SfTab. Usage:
+
+        <TabControl @bind-SelectedIndex="_activeTab">
+            <TabItems>
+                <TabItem HeaderText="Summary">…</TabItem>
+                <TabItem HeaderText="Details">…</TabItem>
+            </TabItems>
+        </TabControl>
+
+    The <TabItems> wrapper is optional — TabItem children can also be direct
+    descendants of TabControl. Children register themselves on initialization,
+    so ordering follows declaration order.
+*@
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="fx-tabs @CssClass">
+        <div class="fx-tab-headers">
+            @for (var i = 0; i < _items.Count; i++)
+            {
+                var idx = i;
+                <button class="fx-tab-button @(idx == SelectedIndex ? "active" : "")"
+                        type="button"
+                        @onclick="() => SelectTab(idx)">
+                    @_items[idx].HeaderText
+                </button>
+            }
+        </div>
+        <div class="fx-tab-content">
+            @if (SelectedIndex >= 0 && SelectedIndex < _items.Count)
+            {
+                @_items[SelectedIndex].RenderContent
+            }
+        </div>
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    private readonly List<TabItem> _items = new();
+
+    [Parameter] public int SelectedIndex { get; set; }
+    [Parameter] public EventCallback<int> SelectedIndexChanged { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    internal void Register(TabItem item)
+    {
+        if (!_items.Contains(item))
+        {
+            _items.Add(item);
+            StateHasChanged();
+        }
+    }
+
+    private async Task SelectTab(int index)
+    {
+        if (SelectedIndex != index)
+        {
+            SelectedIndex = index;
+            if (SelectedIndexChanged.HasDelegate)
+                await SelectedIndexChanged.InvokeAsync(index);
+        }
+    }
+}

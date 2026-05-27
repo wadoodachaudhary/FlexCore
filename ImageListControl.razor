@@ -1,0 +1,63 @@
+@namespace Fx.ControlKit
+
+@*
+    ImageListControl — thumbnail gallery/grid with selection.
+    Displays images in a configurable grid layout with optional captions.
+*@
+
+<div class="fx-imagelist @($"fx-imagelist-{Size.ToString().ToLowerInvariant()}") @CssClass"
+     style="@(Height != null ? $"height:{Height};overflow:auto;" : "")">
+    @if (Items != null)
+    {
+        @foreach (var item in Items)
+        {
+            <div class="fx-imagelist-item @(item == SelectedItem ? "fx-imagelist-item-selected" : "")"
+                 @onclick="() => SelectItem(item)"
+                 @ondblclick="() => DoubleClickItem(item)"
+                 title="@item.Tooltip">
+                <div class="fx-imagelist-thumb">
+                    @if (!string.IsNullOrEmpty(item.ImageUrl))
+                    {
+                        <img src="@item.ImageUrl" alt="@item.Caption" />
+                    }
+                    else if (!string.IsNullOrEmpty(item.IconCss))
+                    {
+                        <span class="fx-imagelist-icon @item.IconCss"></span>
+                    }
+                    else
+                    {
+                        <span class="fx-imagelist-placeholder"></span>
+                    }
+                </div>
+                @if (ShowCaptions && !string.IsNullOrEmpty(item.Caption))
+                {
+                    <div class="fx-imagelist-caption">@item.Caption</div>
+                }
+            </div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public List<ImageListItem>? Items { get; set; }
+    [Parameter] public ImageListItem? SelectedItem { get; set; }
+    [Parameter] public EventCallback<ImageListItem> SelectedItemChanged { get; set; }
+    [Parameter] public EventCallback<ImageListItem> OnItemDoubleClick { get; set; }
+    [Parameter] public ImageListSize Size { get; set; } = ImageListSize.Medium;
+    [Parameter] public bool ShowCaptions { get; set; } = true;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Height { get; set; }
+
+    private async Task SelectItem(ImageListItem item)
+    {
+        SelectedItem = item;
+        if (SelectedItemChanged.HasDelegate)
+            await SelectedItemChanged.InvokeAsync(item);
+    }
+
+    private async Task DoubleClickItem(ImageListItem item)
+    {
+        if (OnItemDoubleClick.HasDelegate)
+            await OnItemDoubleClick.InvokeAsync(item);
+    }
+}

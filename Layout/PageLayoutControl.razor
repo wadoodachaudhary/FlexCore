@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit.Layout
+
+<div class="@ResolvedCssClass" style="@ContainerStyle">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Height { get; set; } = "100%";
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var extra = CssClass?.Trim();
+            return string.IsNullOrEmpty(extra) ? "fx-page-layout" : $"fx-page-layout {extra}";
+        }
+    }
+
+    private string ContainerStyle => $"display:flex; height:{Height ?? "100%"}; overflow:hidden;";
+}

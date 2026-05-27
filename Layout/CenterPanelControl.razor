@@ -1,0 +1,19 @@
+@namespace Fx.ControlKit.Layout
+
+<div class="@ResolvedCssClass" style="flex:1; overflow:auto; min-width:0;">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var extra = CssClass?.Trim();
+            return string.IsNullOrEmpty(extra) ? "fx-center-panel" : $"fx-center-panel {extra}";
+        }
+    }
+}

@@ -1,0 +1,61 @@
+@namespace Fx.ControlKit.Dialogs
+@using System.Globalization
+
+@*
+    ColorPickerControl — color selection dialog with palette grid and custom hex input.
+*@
+
+<div class="fx-colorpicker @CssClass">
+    <div class="fx-colorpicker-preview" style="background:@Value;" title="@Value"></div>
+    <div class="fx-colorpicker-palette">
+        @foreach (var color in _palette)
+        {
+            <div class="fx-colorpicker-swatch @(color == Value ? "fx-colorpicker-swatch-selected" : "")"
+                 style="background:@color;"
+                 title="@color"
+                 @onclick="() => SelectColor(color)"></div>
+        }
+    </div>
+    <div class="fx-colorpicker-custom">
+        <label class="fx-colorpicker-label">Hex:</label>
+        <input type="text" class="fx-colorpicker-input" value="@Value" maxlength="7"
+               @onchange="HandleInputChange" />
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Value { get; set; } = "#2563eb";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private static readonly string[] _palette =
+    {
+        "#000000", "#434343", "#666666", "#999999", "#b7b7b7", "#cccccc", "#d9d9d9", "#efefef", "#f3f3f3", "#ffffff",
+        "#980000", "#ff0000", "#ff9900", "#ffff00", "#00ff00", "#00ffff", "#4a86e8", "#0000ff", "#9900ff", "#ff00ff",
+        "#e6b8af", "#f4cccc", "#fce5cd", "#fff2cc", "#d9ead3", "#d0e0e3", "#c9daf8", "#cfe2f3", "#d9d2e9", "#ead1dc",
+        "#dd7e6b", "#ea9999", "#f9cb9c", "#ffe599", "#b6d7a8", "#a2c4c9", "#a4c2f4", "#9fc5e8", "#b4a7d6", "#d5a6bd",
+        "#cc4125", "#e06666", "#f6b26b", "#ffd966", "#93c47d", "#76a5af", "#6d9eeb", "#6fa8dc", "#8e7cc3", "#c27ba0",
+        "#a61c00", "#cc0000", "#e69138", "#f1c232", "#6aa84f", "#45818e", "#3c78d8", "#3d85c6", "#674ea7", "#a64d79",
+        "#85200c", "#990000", "#b45f06", "#bf9000", "#38761d", "#134f5c", "#1155cc", "#0b5394", "#351c75", "#741b47",
+    };
+
+    private async Task SelectColor(string color)
+    {
+        Value = color;
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(color);
+    }
+
+    private async Task HandleInputChange(ChangeEventArgs e)
+    {
+        var input = e.Value?.ToString()?.Trim() ?? "";
+        if (!input.StartsWith('#'))
+            input = "#" + input;
+        if (input.Length == 7 || input.Length == 4)
+        {
+            Value = input;
+            if (ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(input);
+        }
+    }
+}

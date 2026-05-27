@@ -1,0 +1,11 @@
+@namespace Fx.ControlKit.Layout
+
+@* Optional wrapper grouping DashboardLayoutPanel children (matches the Syncfusion API shape). *@
+
+<div class="fx-dashboard-panels">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

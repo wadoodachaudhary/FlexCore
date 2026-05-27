@@ -1,0 +1,184 @@
+.fx-listview {
+    font-family: inherit;
+    font-size: 0.875rem;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    user-select: none;
+}
+
+/* Details mode - table */
+.fx-listview-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.fx-listview-table thead th {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 2px solid #dee2e6;
+    font-weight: 600;
+    font-size: 0.8125rem;
+    color: #495057;
+    background: #f8f9fa;
+    white-space: nowrap;
+}
+
+.fx-listview-table tbody tr {
+    border-bottom: 1px solid #f0f0f0;
+}
+
+.fx-listview-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.fx-listview-table td {
+    padding: 6px 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Shared item styles */
+.fx-listview-item {
+    cursor: pointer;
+}
+
+.fx-listview-item:hover {
+    background-color: #f0f4f8;
+}
+
+.fx-listview-item-selected {
+    background-color: #e2ecf7;
+}
+
+.fx-listview-item-selected:hover {
+    background-color: #d4e3f5;
+}
+
+/* Icon styles */
+.fx-listview-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    margin-right: 6px;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.fx-listview-icon-large {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    font-size: 32px;
+    margin-bottom: 6px;
+}
+
+.fx-listview-icon-tile {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    font-size: 28px;
+    flex-shrink: 0;
+}
+
+/* Image styles */
+.fx-listview-image-large {
+    width: 48px;
+    height: 48px;
+    object-fit: cover;
+    border-radius: 4px;
+    margin-bottom: 6px;
+}
+
+.fx-listview-image-tile {
+    width: 40px;
+    height: 40px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+/* Text styles */
+.fx-listview-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fx-listview-subtext {
+    font-size: 0.75rem;
+    color: #6c757d;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Grid layout for LargeIcon / SmallIcon / Tile */
+.fx-listview-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 8px;
+}
+
+.fx-listview-grid > .fx-listview-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 16px;
+    border-radius: 4px;
+    min-width: 80px;
+    text-align: center;
+}
+
+/* SmallIcon grid */
+.fx-listview-grid-small > .fx-listview-item {
+    flex-direction: row;
+    justify-content: flex-start;
+    align-items: center;
+    min-width: 140px;
+    padding: 6px 10px;
+    text-align: left;
+}
+
+/* Tile grid */
+.fx-listview-grid-tile > .fx-listview-item {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    min-width: 200px;
+    max-width: 280px;
+    padding: 10px 12px;
+    border: 1px solid #eee;
+    border-radius: 6px;
+    text-align: left;
+}
+
+.fx-listview-tile-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+/* List mode - vertical single column */
+.fx-listview-list {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+}
+
+.fx-listview-list > .fx-listview-item {
+    display: flex;
+    align-items: center;
+    padding: 5px 12px;
+    gap: 6px;
+}

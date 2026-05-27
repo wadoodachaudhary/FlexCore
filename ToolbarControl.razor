@@ -1,0 +1,13 @@
+<div class="@ResolvedCssClass" role="@Role">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+    [Parameter] public string Role { get; set; } = "toolbar";
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-toolbar"
+        : $"fx-toolbar {CssClass}";
+}

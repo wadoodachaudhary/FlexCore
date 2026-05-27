@@ -1,0 +1,194 @@
+@namespace Fx.ControlKit.Reports
+@using Fx.ControlKit.Grid
+
+<div class="fx-rd-canvas">
+    <GridControl TValue="ReportDesignerSection"
+                 DataSource="@Document.Sections"
+                 Height="100%"
+                 WidthMode="GridWidthMode.FitColumns"
+                 CssClass="fx-rd-canvas-grid"
+                 GridLines="GridLines.None"
+                 AllowSelection="false"
+                 AllowSorting="false"
+                 AllowFiltering="false"
+                 AllowGrouping="false"
+                 AllowResizing="false"
+                 AllowColumnReorder="false"
+                 AllowRowResizing="@AllowSectionRowResizing"
+                 RowHeightSelector="GetSectionRowHeight"
+                 MinRowHeight="22"
+                 EnableAltRow="false"
+                 EnableHover="false"
+                 ShowGridToolbar="false"
+                 RowResized="HandleSectionRowResizedAsync">
+        <GridColumnsBase>
+            <GridColumn Field="Kind"
+                        HeaderText=""
+                        Width="@($"{SectionRailWidthPx}px")"
+                        AllowSorting="false"
+                        AllowFiltering="false"
+                        AllowEditing="false"
+                        AllowGrouping="false"
+                        AllowResizing="false">
+                <HeaderTemplate>
+                    <div class="fx-rd-ruler-corner"></div>
+                </HeaderTemplate>
+                <Template Context="context">
+                    @{
+                        var reportSection = (ReportDesignerSection)context;
+                    }
+                    <button type="button"
+                            class="fx-rd-band-label @(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "") @(reportSection.IsSuppressed ? "suppressed" : "")"
+                            title="@reportSection.Name"
+                            @onclick="() => SelectSectionAsync(reportSection)">
+                        @SectionDisplayName(reportSection.Kind)
+                    </button>
+                </Template>
+            </GridColumn>
+
+            <GridColumn Field="Name"
+                        HeaderText=""
+                        Width="@($"{ContentWidthPx}px")"
+                        AllowSorting="false"
+                        AllowFiltering="false"
+                        AllowEditing="false"
+                        AllowGrouping="false"
+                        AllowResizing="false">
+                <HeaderTemplate>
+                    <RulerControl Width="@($"{ContentWidthPx}px")" TickCount="10" />
+                </HeaderTemplate>
+                <Template Context="context">
+                    @{
+                        var reportSection = (ReportDesignerSection)context;
+                    }
+                    <div class="fx-rd-band-body @(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "") @(reportSection.IsSuppressed ? "suppressed" : "")"
+                         style="@GetSectionBodyStyle(reportSection)"
+                         @onclick="() => SelectSectionAsync(reportSection)">
+                        <div class="fx-rd-band-caption">
+                            <span>@reportSection.Name</span>
+                            <em>@reportSection.HeightTwips twips</em>
+                        </div>
+                        @foreach (var element in reportSection.Elements)
+                        {
+                            <button type="button"
+                                    class="fx-rd-object @GetElementClass(element)"
+                                    style="@GetElementStyle(element)"
+                                    title="@GetElementTitle(element)"
+                                    @onclick:stopPropagation="true"
+                                    @onclick="() => SelectElementAsync(reportSection, element)">
+                                <span>@element.DisplayText</span>
+                            </button>
+                        }
+                    </div>
+                </Template>
+            </GridColumn>
+        </GridColumnsBase>
+    </GridControl>
+</div>
+
+@code {
+    [Parameter] public ReportDesignerDocument Document { get; set; } = ReportDesignerDocument.CreateBlank();
+    [Parameter] public ReportDesignerSection? SelectedSection { get; set; }
+    [Parameter] public ReportDesignerElement? SelectedElement { get; set; }
+    [Parameter] public EventCallback<ReportDesignerSection> SectionSelected { get; set; }
+    [Parameter] public EventCallback<ReportDesignerElementSelection> ElementSelected { get; set; }
+    [Parameter] public EventCallback<ReportDesignerSection> SectionResized { get; set; }
+    [Parameter] public bool AllowSectionRowResizing { get; set; } = true;
+    [Parameter] public int SectionRailWidthPx { get; set; } = 126;
+
+    private int ContentWidthPx => Math.Clamp(ReportDesignerMetrics.TwipsToPixels(Document.Page.ContentWidthTwips), 480, 1600);
+
+    private double? GetSectionRowHeight(ReportDesignerSection reportSection, int rowIndex)
+    {
+        return Math.Max(22, ReportDesignerMetrics.TwipsToPixels(reportSection.HeightTwips));
+    }
+
+    private async Task HandleSectionRowResizedAsync(RowResizeEventArgs<ReportDesignerSection> args)
+    {
+        if (args.Data is null)
+            return;
+
+        args.Data.HeightTwips = ReportDesignerMetrics.PixelsToTwips((int)Math.Round(args.NewHeight));
+        if (SectionResized.HasDelegate)
+            await SectionResized.InvokeAsync(args.Data);
+    }
+
+    private async Task SelectSectionAsync(ReportDesignerSection reportSection)
+    {
+        if (SectionSelected.HasDelegate)
+            await SectionSelected.InvokeAsync(reportSection);
+    }
+
+    private async Task SelectElementAsync(ReportDesignerSection reportSection, ReportDesignerElement element)
+    {
+        if (ElementSelected.HasDelegate)
+        {
+            await ElementSelected.InvokeAsync(new ReportDesignerElementSelection
+            {
+                Section = reportSection,
+                Element = element
+            });
+        }
+    }
+
+    private string GetSectionBodyStyle(ReportDesignerSection reportSection)
+    {
+        return $"background:{CssColor(reportSection.BackgroundColor, "#ffffff")};";
+    }
+
+    private string GetElementStyle(ReportDesignerElement element)
+    {
+        var left = ReportDesignerMetrics.TwipsToPixels(element.LeftTwips);
+        var top = ReportDesignerMetrics.TwipsToPixels(element.TopTwips) + 3;
+        var width = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.WidthTwips));
+        var height = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.HeightTwips));
+        var fontSize = element.FontSize <= 0 ? 10m : element.FontSize;
+        var align = element.HorizontalAlignment switch
+        {
+            "Right" => "right",
+            "HorizontalCenter" => "center",
+            "Center" => "center",
+            "Justified" => "justify",
+            _ => "left"
+        };
+
+        return $"left:{left}px;top:{top}px;width:{width}px;height:{height}px;color:{CssColor(element.TextColor, "#000")};font-family:'{element.FontFamily}',Arial,sans-serif;font-size:{fontSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}pt;font-weight:{(element.Bold ? "700" : "400")};font-style:{(element.Italic ? "italic" : "normal")};text-decoration:{(element.Underline ? "underline" : "none")};text-align:{align};";
+    }
+
+    private string GetElementClass(ReportDesignerElement element)
+    {
+        var selected = ReferenceEquals(element, SelectedElement) ? "selected" : "";
+        var kind = element.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase)
+            ? "subreport"
+            : element.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase) ? "field" : "text";
+        var suppressed = element.IsSuppressed ? "suppressed" : "";
+        return $"{selected} {kind} {suppressed}";
+    }
+
+    private string GetElementTitle(ReportDesignerElement element)
+    {
+        return string.IsNullOrWhiteSpace(element.Binding)
+            ? $"{element.Kind}: {element.Name}"
+            : $"{element.Kind}: {element.Name}\n{element.Binding}";
+    }
+
+    private static string CssColor(string value, string fallback)
+    {
+        return string.IsNullOrWhiteSpace(value) ? fallback : value;
+    }
+
+    private static string SectionDisplayName(string kind)
+    {
+        return kind switch
+        {
+            "ReportHeader" => "Report Header",
+            "PageHeader" => "Page Header",
+            "GroupHeader" => "Group Header",
+            "Detail" => "Details",
+            "GroupFooter" => "Group Footer",
+            "ReportFooter" => "Report Footer",
+            "PageFooter" => "Page Footer",
+            _ => kind
+        };
+    }
+}

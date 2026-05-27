@@ -1,0 +1,33 @@
+@namespace Fx.ControlKit
+
+<div class="@ResolvedCssClass" style="@ResolvedStyle" role="presentation">
+    @for (var tick = 1; tick <= TickCount; tick++)
+    {
+        <span class="fx-ruler-tick" style="@GetTickStyle(tick)">@GetTickLabel(tick)</span>
+    }
+</div>
+
+@code {
+    [Parameter] public string Width { get; set; } = "480px";
+    [Parameter] public int TickCount { get; set; } = 10;
+    [Parameter] public int StartLabel { get; set; } = 1;
+    [Parameter] public bool ShowLabels { get; set; } = true;
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-ruler"
+        : $"fx-ruler {CssClass.Trim()}";
+
+    private string ResolvedStyle => string.IsNullOrWhiteSpace(Style)
+        ? $"width:{Width};"
+        : $"width:{Width};{Style.Trim()}";
+
+    private string GetTickStyle(int tick)
+    {
+        var count = Math.Max(1, TickCount);
+        return $"left:{tick * 100d / count:0.###}%;";
+    }
+
+    private string GetTickLabel(int tick) => ShowLabels ? (StartLabel + tick - 1).ToString() : "";
+}

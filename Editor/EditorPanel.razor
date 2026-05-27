@@ -1,0 +1,44 @@
+@namespace Fx.ControlKit.Editor
+
+@*
+    EditorPanel — a labeled form-style panel for hosting editors in a consistent layout.
+    Each editor lives in a labeled row; labels right-align and the editor column expands.
+
+    Usage:
+        <EditorPanel Title="Customer Details">
+            <EditorPanelRow Label="Name">
+                <TextBoxControl @bind-Value="Name" />
+            </EditorPanelRow>
+            <EditorPanelRow Label="Phone">
+                <TextBoxControl @bind-Value="Phone" />
+            </EditorPanelRow>
+        </EditorPanel>
+*@
+
+<div class="fx-editor-panel @CssClass">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <div class="fx-editor-panel-title">@Title</div>
+    }
+    <div class="fx-editor-panel-body">
+        @ChildContent
+    </div>
+    @if (FooterContent != null)
+    {
+        <div class="fx-editor-panel-footer">@FooterContent</div>
+    }
+</div>
+
+@code {
+    /// <summary>Optional title displayed at the top of the panel.</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>The editor rows (use <c>EditorPanelRow</c> children).</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Optional footer (buttons, etc).</summary>
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+
+    /// <summary>Optional CSS class for the outer container.</summary>
+    [Parameter] public string CssClass { get; set; } = "";
+}

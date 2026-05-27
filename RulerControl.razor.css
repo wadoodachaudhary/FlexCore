@@ -1,0 +1,31 @@
+.fx-ruler {
+    position: relative;
+    height: 25px;
+    min-width: 240px;
+    background: linear-gradient(#fbfbfb, #e7e7e7);
+    border: 1px solid #6d6d6d;
+    border-bottom: 0;
+    box-shadow: inset 0 1px 0 #fff;
+    overflow: hidden;
+    color: #111;
+    font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font-size: 10px;
+}
+
+.fx-ruler::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        repeating-linear-gradient(90deg, transparent 0, transparent 14px, #303030 14px, #303030 15px),
+        repeating-linear-gradient(90deg, transparent 0, transparent 74px, #303030 74px, #303030 76px);
+    opacity: 0.75;
+}
+
+.fx-ruler-tick {
+    position: absolute;
+    top: 4px;
+    transform: translateX(-50%);
+    line-height: 1;
+    z-index: 1;
+}

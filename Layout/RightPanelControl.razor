@@ -1,0 +1,53 @@
+@namespace Fx.ControlKit.Layout
+
+<div class="@ResolvedCssClass" style="@PanelStyle">
+    @if (Collapsible)
+    {
+        <button class="fx-panel-toggle fx-panel-toggle-right"
+                type="button"
+                title="@(Collapsed ? "Expand panel" : "Collapse panel")"
+                @onclick="ToggleCollapse">
+            @(Collapsed ? "◀" : "▶")
+        </button>
+    }
+    <div class="fx-right-panel-content">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? Width { get; set; } = "250px";
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Collapsible { get; set; }
+    [Parameter] public bool Collapsed { get; set; }
+    [Parameter] public EventCallback<bool> CollapsedChanged { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var extra = CssClass?.Trim();
+            var collapsed = Collapsed ? " fx-panel-collapsed" : "";
+            return string.IsNullOrEmpty(extra)
+                ? $"fx-right-panel{collapsed}"
+                : $"fx-right-panel{collapsed} {extra}";
+        }
+    }
+
+    private string PanelStyle
+    {
+        get
+        {
+            if (Collapsed)
+                return "width:0; overflow:hidden;";
+            return $"width:{Width ?? "250px"};";
+        }
+    }
+
+    private async Task ToggleCollapse()
+    {
+        Collapsed = !Collapsed;
+        await CollapsedChanged.InvokeAsync(Collapsed);
+    }
+}

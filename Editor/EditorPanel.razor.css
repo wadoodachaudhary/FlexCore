@@ -1,0 +1,49 @@
+.fx-editor-panel {
+    background: #fff;
+    border: 1px solid #c0c0c0;
+    border-radius: 3px;
+    font-size: 13px;
+}
+
+.fx-editor-panel-title {
+    padding: 8px 12px;
+    background: linear-gradient(to bottom, #fafafa, #e8e8e8);
+    border-bottom: 1px solid #c0c0c0;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.fx-editor-panel-body {
+    padding: 10px 14px;
+}
+
+::deep .fx-editor-panel-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+::deep .fx-editor-panel-row:last-child {
+    margin-bottom: 0;
+}
+
+::deep .fx-editor-panel-label {
+    flex: 0 0 140px;
+    text-align: right;
+    color: #333;
+    font-weight: 500;
+}
+
+::deep .fx-editor-panel-editor {
+    flex: 1;
+}
+
+.fx-editor-panel-footer {
+    padding: 8px 12px;
+    background: #fafafa;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}

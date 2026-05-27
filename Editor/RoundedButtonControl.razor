@@ -1,0 +1,58 @@
+@namespace Fx.ControlKit.Editor
+@inherits ButtonControl
+
+@* Pill-shaped button — 999px border-radius, colored background, used as
+   chip-style affordances ("2,341 words", "No model", tab toggles, etc.).
+
+   Variant drives the default color scheme:
+     "accent"  — host accent color, primary CTA-ish
+     "muted"   — neutral/pill, indicating state but not demanding attention
+     "danger"  — red tint for destructive hints
+     "success" — green tint for confirmations
+
+   Hosts that already ship pill styling (e.g. GhostWriter's .stat-chip,
+   .model-chip-row) can set `BareStyle="true"` to suppress the library's
+   own .fx-rounded-button base + variant classes and just drive visuals
+   via CssClass. *@
+
+<button class="@ResolvedRoundedButtonClass"
+        type="@ButtonType"
+        disabled="@Disabled"
+        title="@Title"
+        style="@Style"
+        @onclick="OnClick"
+        @onclick:stopPropagation="StopPropagation"
+        @onmousedown:preventDefault="PreventMouseDownDefault">
+    @if (!string.IsNullOrWhiteSpace(IconCss))
+    {
+        <span class="@IconCss"></span>
+    }
+    @ChildContent
+</button>
+
+@code {
+    /// <summary>Visual variant: "accent" | "muted" | "danger" | "success".</summary>
+    [Parameter] public string Variant { get; set; } = "muted";
+
+    private string ResolvedRoundedButtonClass
+    {
+        get
+        {
+            var c = (CssClass ?? string.Empty).Trim();
+            if (BareStyle)
+            {
+                return c;
+            }
+
+            var v = (Variant ?? "muted").ToLowerInvariant();
+            var variantClass = v switch
+            {
+                "accent"  => "fx-rounded-button fx-rounded-button--accent",
+                "danger"  => "fx-rounded-button fx-rounded-button--danger",
+                "success" => "fx-rounded-button fx-rounded-button--success",
+                _         => "fx-rounded-button fx-rounded-button--muted"
+            };
+            return string.IsNullOrEmpty(c) ? variantClass : $"{variantClass} {c}";
+        }
+    }
+}

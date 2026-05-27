@@ -1,0 +1,59 @@
+@namespace Fx.ControlKit
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="@ResolvedCssClass" role="menubar" @onclick="CloseAllFromBackground">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+
+    internal MenuDropDownControl? ActiveMenu { get; private set; }
+    internal bool HasActiveMenu => ActiveMenu is not null;
+
+    internal void Toggle(MenuDropDownControl menu)
+    {
+        if (ReferenceEquals(ActiveMenu, menu))
+        {
+            ActiveMenu = null;
+        }
+        else
+        {
+            ActiveMenu = menu;
+        }
+
+        StateHasChanged();
+    }
+
+    internal void Activate(MenuDropDownControl menu)
+    {
+        if (!HasActiveMenu || ReferenceEquals(ActiveMenu, menu))
+        {
+            return;
+        }
+
+        ActiveMenu = menu;
+        StateHasChanged();
+    }
+
+    internal void CloseAll()
+    {
+        if (ActiveMenu is null)
+        {
+            return;
+        }
+
+        ActiveMenu = null;
+        StateHasChanged();
+    }
+
+    private void CloseAllFromBackground()
+    {
+        CloseAll();
+    }
+
+    private string ResolvedCssClass =>
+        string.IsNullOrWhiteSpace(CssClass) ? "fx-menu-bar" : $"fx-menu-bar {CssClass}";
+}

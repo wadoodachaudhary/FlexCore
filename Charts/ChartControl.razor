@@ -1,0 +1,1539 @@
+@namespace Fx.ControlKit.Charts
+@using System.Globalization
+@using Microsoft.AspNetCore.Components
+
+@*
+    ChartControl — comprehensive SVG charting component.
+
+    Supports 30+ chart types rendered as pure SVG with no JS dependencies.
+
+    Backwards-compatible usage (single-series horizontal bars):
+        <ChartControl Title="My Chart"
+                      Bars="@(new[] { new ChartBar("Q1", 100), new ChartBar("Q2", 250) })" />
+
+    Multi-row mode (unchanged):
+        <ChartControl DataSource="@rows" LabelField="Name" ValueFields="@fields" />
+
+    New SVG chart mode:
+        <ChartControl Type="ChartType.Line"
+                      Series="@mySeries"
+                      Title="Revenue Over Time"
+                      Height="400px" />
+*@
+
+<div class="fx-chart @CssClass" style="@RootStyle">
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <div class="fx-chart-title">@Title</div>
+    }
+
+    @if (UseLegacyMode)
+    {
+        @* === LEGACY: Single-series horizontal bars === *@
+        @if (Bars is { Count: > 0 })
+        {
+            <div class="fx-chart-rows">
+                @foreach (var bar in Bars)
+                {
+                    <div class="fx-chart-row">
+                        @if (ShowLabels)
+                        {
+                            <div class="fx-chart-row-label" style="@LabelStyle">@bar.Label</div>
+                        }
+                        <div class="fx-chart-row-bar-container">
+                            <div class="fx-chart-row-bar"
+                                 style="width:@PercentOf(bar.Value, _maxValue)%; background:@ResolveBarColor(bar);"
+                                 title="@bar.Label: @bar.Value.ToString("N2", CultureInfo.CurrentCulture)"></div>
+                            @if (ShowValues)
+                            {
+                                <span class="fx-chart-row-value">@bar.Value.ToString(ValueFormat, CultureInfo.CurrentCulture)</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (HasMultiRowData)
+        {
+            <div class="fx-chart-multi">
+                @foreach (var row in _resolvedRows)
+                {
+                    <div class="fx-chart-multi-row">
+                        @if (ShowLabels)
+                        {
+                            <div class="fx-chart-multi-label" style="@LabelStyle" title="@row.Label">@row.Label</div>
+                        }
+                        <div class="fx-chart-multi-bars">
+                            @for (var i = 0; i < row.Values.Count; i++)
+                            {
+                                var v = row.Values[i];
+                                var lbl = i < (ValueLabels?.Count ?? 0) ? ValueLabels![i] : "";
+                                <div class="fx-chart-bar-cell" title="@lbl: @v.ToString("N2", CultureInfo.CurrentCulture)">
+                                    <div class="fx-chart-bar"
+                                         style="height:@PercentOf(v, _maxValue)%; background:@(BarColor ?? "#2563eb");"></div>
+                                    @if (ShowValues)
+                                    {
+                                        <span class="fx-chart-bar-value">@v.ToString(ValueFormat, CultureInfo.CurrentCulture)</span>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+            @if (ShowAxisLabels && ValueLabels is { Count: > 0 })
+            {
+                <div class="fx-chart-axis">
+                    <div class="fx-chart-axis-label-spacer"></div>
+                    <div class="fx-chart-axis-bars">
+                        @foreach (var lbl in ValueLabels)
+                        {
+                            <div class="fx-chart-axis-tick">@lbl</div>
+                        }
+                    </div>
+                </div>
+            }
+        }
+        else
+        {
+            <div class="fx-chart-empty">No data</div>
+        }
+    }
+    else
+    {
+        @* === NEW SVG CHART MODE === *@
+        @if (_effectiveSeries.Count == 0 && Type != ChartType.Gauge && Type != ChartType.KpiCard)
+        {
+            <div class="fx-chart-empty">No data</div>
+        }
+        else
+        {
+            @switch (Type)
+            {
+                case ChartType.KpiCard:
+                    @RenderKpiCard()
+                    break;
+                case ChartType.Gauge:
+                    @RenderGauge()
+                    break;
+                case ChartType.Sparkline:
+                    @RenderSparkline()
+                    break;
+                case ChartType.Pie:
+                case ChartType.Donut:
+                    @RenderPieDonut()
+                    break;
+                case ChartType.Radar:
+                    @RenderRadar()
+                    break;
+                case ChartType.Funnel:
+                case ChartType.Pyramid:
+                    @RenderFunnelPyramid()
+                    break;
+                case ChartType.Heatmap:
+                    @RenderHeatmap()
+                    break;
+                case ChartType.Scatter:
+                case ChartType.Bubble:
+                    @RenderScatterBubble()
+                    break;
+                case ChartType.Gantt:
+                    @RenderGantt()
+                    break;
+                case ChartType.BoxPlot:
+                    @RenderBoxPlot()
+                    break;
+                case ChartType.DotPlot:
+                    @RenderDotPlot()
+                    break;
+                case ChartType.Waterfall:
+                    @RenderWaterfall()
+                    break;
+                case ChartType.Histogram:
+                    @RenderHistogram()
+                    break;
+                case ChartType.Line:
+                case ChartType.MultiLine:
+                case ChartType.Spline:
+                case ChartType.StepLine:
+                case ChartType.Area:
+                case ChartType.StackedArea:
+                    @RenderLineArea()
+                    break;
+                default:
+                    @RenderBarChart()
+                    break;
+            }
+
+            @if (ShowLegend && _effectiveSeries.Count > 1)
+            {
+                <div class="fx-chart-legend">
+                    @for (var i = 0; i < _effectiveSeries.Count; i++)
+                    {
+                        var s = _effectiveSeries[i];
+                        <div class="fx-chart-legend-item">
+                            <div class="fx-chart-legend-swatch" style="background:@GetSeriesColor(i)"></div>
+                            <span>@s.Name</span>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    }
+</div>
+
+@code {
+    #region Parameters — Legacy (backwards compatible)
+
+    /// <summary>Type of each row in DataSource (multi-row mode).</summary>
+    [Parameter] public Type? RowType { get; set; }
+
+    /// <summary>Optional title shown above the chart.</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>CSS width (e.g. "100%", "400px"). Default: full width.</summary>
+    [Parameter] public string? Width { get; set; }
+
+    /// <summary>Extra CSS class on the root container.</summary>
+    [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>Single-series bars — used when no DataSource is supplied.</summary>
+    [Parameter] public IList<ChartBar>? Bars { get; set; }
+
+    /// <summary>Multi-row data source. Each row is rendered as its own grouped-bar chart.</summary>
+    [Parameter] public System.Collections.IEnumerable? DataSource { get; set; }
+
+    /// <summary>Property name on each row to use as the row label (multi-row mode).</summary>
+    [Parameter] public string? LabelField { get; set; }
+
+    /// <summary>Property names on each row to use as bar values (multi-row mode).</summary>
+    [Parameter] public IList<string>? ValueFields { get; set; }
+
+    /// <summary>Optional human-readable labels for each value field (axis ticks).</summary>
+    [Parameter] public IList<string>? ValueLabels { get; set; }
+
+    /// <summary>Show the row label column. Default true.</summary>
+    [Parameter] public bool ShowLabels { get; set; } = true;
+
+    /// <summary>Show numeric value next to each bar / above each bar. Default false.</summary>
+    [Parameter] public bool ShowValues { get; set; } = false;
+
+    /// <summary>Format string for value labels (default "N2").</summary>
+    [Parameter] public string ValueFormat { get; set; } = "N2";
+
+    /// <summary>Render the bottom axis labels in multi-row mode. Default true.</summary>
+    [Parameter] public bool ShowAxisLabels { get; set; } = true;
+
+    /// <summary>Default bar color. Override per-bar via ChartBar.Color.</summary>
+    [Parameter] public string? BarColor { get; set; } = "#2563eb";
+
+    /// <summary>Inline style applied to the row label cell.</summary>
+    [Parameter] public string? LabelStyle { get; set; } = "min-width:160px;";
+
+    #endregion
+
+    #region Parameters — New
+
+    /// <summary>Chart visualization type.</summary>
+    [Parameter] public ChartType Type { get; set; } = ChartType.Bar;
+
+    /// <summary>Multi-series data for new SVG chart modes.</summary>
+    [Parameter] public List<ChartSeries>? Series { get; set; }
+
+    /// <summary>X-axis configuration.</summary>
+    [Parameter] public ChartAxis? XAxis { get; set; }
+
+    /// <summary>Y-axis configuration.</summary>
+    [Parameter] public ChartAxis? YAxis { get; set; }
+
+    /// <summary>Legend configuration.</summary>
+    [Parameter] public ChartLegend? Legend { get; set; }
+
+    /// <summary>Chart height CSS value.</summary>
+    [Parameter] public string? Height { get; set; } = "300px";
+
+    /// <summary>Enable CSS animation on chart elements.</summary>
+    [Parameter] public bool Animate { get; set; } = false;
+
+    /// <summary>Custom color palette for series.</summary>
+    [Parameter] public string[]? ColorPalette { get; set; }
+
+    /// <summary>Donut inner radius as proportion of outer radius (0-1).</summary>
+    [Parameter] public double? InnerRadius { get; set; }
+
+    /// <summary>Gauge current value.</summary>
+    [Parameter] public double? GaugeValue { get; set; }
+
+    /// <summary>Gauge minimum value.</summary>
+    [Parameter] public double? GaugeMin { get; set; }
+
+    /// <summary>Gauge maximum value.</summary>
+    [Parameter] public double? GaugeMax { get; set; }
+
+    /// <summary>KPI display value.</summary>
+    [Parameter] public string? KpiValue { get; set; }
+
+    /// <summary>KPI descriptive label.</summary>
+    [Parameter] public string? KpiLabel { get; set; }
+
+    /// <summary>KPI trend indicator (e.g. "+12%", "-5%", "up", "down").</summary>
+    [Parameter] public string? KpiTrend { get; set; }
+
+    #endregion
+
+    #region State
+
+    private double _maxValue = 1;
+    private List<ResolvedRow> _resolvedRows = new();
+    private bool HasMultiRowData => _resolvedRows.Count > 0;
+    private List<ChartSeries> _effectiveSeries = new();
+
+    private static readonly string[] DefaultPalette =
+    {
+        "#2563eb", "#dc2626", "#16a34a", "#ca8a04", "#9333ea", "#0891b2", "#e11d48", "#4f46e5"
+    };
+
+    private bool UseLegacyMode =>
+        Series == null && (Bars != null || DataSource != null);
+
+    private bool ShowLegend =>
+        Legend?.Visible ?? true;
+
+    private string RootStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrEmpty(Width)) parts.Add($"width:{Width}");
+            return string.Join(";", parts);
+        }
+    }
+
+    private string[] EffectivePalette => ColorPalette ?? DefaultPalette;
+
+    #endregion
+
+    #region Lifecycle
+
+    protected override void OnParametersSet()
+    {
+        if (UseLegacyMode)
+        {
+            ResolveLegacyData();
+        }
+        else
+        {
+            _effectiveSeries = Series ?? new List<ChartSeries>();
+        }
+    }
+
+    private void ResolveLegacyData()
+    {
+        if (Bars is { Count: > 0 })
+        {
+            _maxValue = Bars.Max(b => b.Value);
+            if (_maxValue <= 0) _maxValue = 1;
+            _resolvedRows.Clear();
+            return;
+        }
+
+        _resolvedRows.Clear();
+        if (DataSource == null || ValueFields == null || ValueFields.Count == 0) return;
+
+        foreach (var item in DataSource)
+        {
+            if (item == null) continue;
+            var label = LabelField != null ? GetPropertyString(item, LabelField) : "";
+            var values = new List<double>(ValueFields.Count);
+            foreach (var f in ValueFields)
+                values.Add(GetPropertyDouble(item, f));
+            _resolvedRows.Add(new ResolvedRow(label, values));
+        }
+
+        var allValues = _resolvedRows.SelectMany(r => r.Values);
+        _maxValue = allValues.Any() ? allValues.Max() : 1;
+        if (_maxValue <= 0) _maxValue = 1;
+    }
+
+    #endregion
+
+    #region Helpers
+
+    private string GetSeriesColor(int index)
+    {
+        if (index < _effectiveSeries.Count)
+        {
+            var series = _effectiveSeries[index];
+            if (!string.IsNullOrEmpty(series.Color)) return series.Color!;
+        }
+        return EffectivePalette[index % EffectivePalette.Length];
+    }
+
+    private string GetPointColor(ChartDataPoint point, int seriesIndex, int pointIndex)
+    {
+        if (!string.IsNullOrEmpty(point.Color)) return point.Color!;
+        if (_effectiveSeries.Count > 1) return GetSeriesColor(seriesIndex);
+        return EffectivePalette[pointIndex % EffectivePalette.Length];
+    }
+
+    private static string F(double v) => v.ToString("F2", CultureInfo.InvariantCulture);
+    private static string F1(double v) => v.ToString("F1", CultureInfo.InvariantCulture);
+    private static string F0(double v) => v.ToString("F0", CultureInfo.InvariantCulture);
+
+    private static string PercentOf(double value, double max)
+    {
+        if (max <= 0) return "0";
+        var pct = (value / max) * 100.0;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        return pct.ToString("F2", CultureInfo.InvariantCulture);
+    }
+
+    private string ResolveBarColor(ChartBar bar) =>
+        !string.IsNullOrEmpty(bar.Color) ? bar.Color! : (BarColor ?? "#2563eb");
+
+    private static string GetPropertyString(object obj, string propName)
+    {
+        var p = obj.GetType().GetProperty(propName);
+        return p?.GetValue(obj)?.ToString() ?? "";
+    }
+
+    private static double GetPropertyDouble(object obj, string propName)
+    {
+        var p = obj.GetType().GetProperty(propName);
+        if (p == null) return 0;
+        var v = p.GetValue(obj);
+        if (v == null) return 0;
+        try { return Convert.ToDouble(v, CultureInfo.InvariantCulture); }
+        catch { return 0; }
+    }
+
+    private (double min, double max) GetDataRange(List<ChartSeries> series)
+    {
+        var allValues = series.SelectMany(s => s.DataPoints.Select(p => p.Value));
+        if (!allValues.Any()) return (0, 1);
+        var min = allValues.Min();
+        var max = allValues.Max();
+        if (Math.Abs(max - min) < 0.001) { min -= 1; max += 1; }
+        return (min, max);
+    }
+
+    private (double min, double max) GetNiceRange(double dataMin, double dataMax)
+    {
+        var min = YAxis?.Min ?? (dataMin >= 0 ? 0 : dataMin * 1.1);
+        var max = YAxis?.Max ?? dataMax * 1.1;
+        if (max <= min) max = min + 1;
+        return (min, max);
+    }
+
+    private List<double> GetTicks(double min, double max, int count)
+    {
+        var ticks = new List<double>();
+        var step = (max - min) / (count - 1);
+        for (int i = 0; i < count; i++)
+            ticks.Add(min + step * i);
+        return ticks;
+    }
+
+    /// <summary>
+    /// Helper to emit SVG text elements. Razor treats &lt;text&gt; as a directive,
+    /// so we build the markup as a raw MarkupString instead.
+    /// </summary>
+    private static MarkupString SvgText(string x, string y, string content,
+        string? anchor = null, string? fontSize = null, string? fill = null,
+        string? fontWeight = null, string? transform = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("<text");
+        sb.Append($" x=\"{x}\" y=\"{y}\"");
+        if (anchor != null) sb.Append($" text-anchor=\"{anchor}\"");
+        if (fontSize != null) sb.Append($" font-size=\"{fontSize}\"");
+        if (fill != null) sb.Append($" fill=\"{fill}\"");
+        if (fontWeight != null) sb.Append($" font-weight=\"{fontWeight}\"");
+        if (transform != null) sb.Append($" transform=\"{transform}\"");
+        sb.Append('>');
+        sb.Append(System.Net.WebUtility.HtmlEncode(content));
+        sb.Append("</text>");
+        return new MarkupString(sb.ToString());
+    }
+
+    private static string Truncate(string s, int max) =>
+        s.Length > max ? s[..max] : s;
+
+    private record ResolvedRow(string Label, List<double> Values);
+
+    #endregion
+
+    #region Render — Bar Charts (Bar, HorizontalBar, GroupedBar, StackedBar, StackedBar100, Pareto, ComboBarLine)
+
+    private RenderFragment RenderBarChart() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var series = _effectiveSeries;
+        if (series.Count == 0) return;
+
+        var labels = series[0].DataPoints.Select(p => p.Label).ToList();
+        int n = labels.Count;
+        if (n == 0) return;
+
+        bool isStacked = Type == ChartType.StackedBar || Type == ChartType.StackedBar100;
+        bool isGrouped = Type == ChartType.GroupedBar || (series.Count > 1 && !isStacked);
+        bool isPareto = Type == ChartType.Pareto;
+        bool isCombo = Type == ChartType.ComboBarLine;
+
+        double maxVal;
+        if (isStacked || Type == ChartType.StackedBar100)
+        {
+            maxVal = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double sum = series.Sum(s => i < s.DataPoints.Count ? Math.Abs(s.DataPoints[i].Value) : 0);
+                if (sum > maxVal) maxVal = sum;
+            }
+            if (Type == ChartType.StackedBar100) maxVal = 100;
+        }
+        else
+        {
+            maxVal = series.SelectMany(s => s.DataPoints.Select(p => p.Value)).DefaultIfEmpty(0).Max();
+        }
+        if (maxVal <= 0) maxVal = 1;
+        var (rangeMin, rangeMax) = GetNiceRange(0, maxVal);
+
+        double barGroupWidth = plotW / n;
+        double barGap = barGroupWidth * 0.2;
+        double usableWidth = barGroupWidth - barGap;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var ticks = GetTicks(rangeMin, rangeMax, YAxis?.TickCount ?? 5); }
+            @foreach (var tick in ticks)
+            {
+                double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int i = 0; i < n; i++)
+            {
+                double groupX = padL + i * barGroupWidth + barGap / 2;
+
+                if (isStacked)
+                {
+                    double cumY = 0;
+                    for (int si = 0; si < series.Count; si++)
+                    {
+                        double val = i < series[si].DataPoints.Count ? series[si].DataPoints[i].Value : 0;
+                        if (Type == ChartType.StackedBar100)
+                        {
+                            double total = series.Sum(s => i < s.DataPoints.Count ? s.DataPoints[i].Value : 0);
+                            val = total > 0 ? (val / total) * 100 : 0;
+                        }
+                        double barH = (val / (rangeMax - rangeMin)) * plotH;
+                        double barY = padT + plotH - cumY - barH;
+                        <rect x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                              fill="@GetSeriesColor(si)" rx="2">
+                            <title>@series[si].Name: @F1(val)</title>
+                        </rect>
+                        cumY += barH;
+                    }
+                }
+                else if (isGrouped)
+                {
+                    double subBarW = usableWidth / series.Count;
+                    for (int si = 0; si < series.Count; si++)
+                    {
+                        double val = i < series[si].DataPoints.Count ? series[si].DataPoints[i].Value : 0;
+                        double barH = ((val - rangeMin) / (rangeMax - rangeMin)) * plotH;
+                        double barY = padT + plotH - barH;
+                        double barX = groupX + si * subBarW;
+                        <rect x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
+                              fill="@GetSeriesColor(si)" rx="2">
+                            <title>@series[si].Name: @F1(val)</title>
+                        </rect>
+                    }
+                }
+                else
+                {
+                    double val = i < series[0].DataPoints.Count ? series[0].DataPoints[i].Value : 0;
+                    double barH = ((val - rangeMin) / (rangeMax - rangeMin)) * plotH;
+                    double barY = padT + plotH - barH;
+                    string color = i < series[0].DataPoints.Count && !string.IsNullOrEmpty(series[0].DataPoints[i].Color)
+                        ? series[0].DataPoints[i].Color!
+                        : GetSeriesColor(0);
+                    <rect x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                          fill="@color" rx="2">
+                        <title>@labels[i]: @F1(val)</title>
+                    </rect>
+                }
+
+                {
+                    double labelX = groupX + usableWidth / 2;
+                    @SvgText(F(labelX), F(padT + plotH + 16), Truncate(labels[i], 10), anchor: "middle", fontSize: "10", fill: "#6b7280")
+                }
+            }
+
+            @if (isPareto && series.Count > 0 && n > 0)
+            {
+                double totalVal = series[0].DataPoints.Sum(p => p.Value);
+                double cum = 0;
+                var points = new List<string>();
+                for (int i = 0; i < n; i++)
+                {
+                    cum += series[0].DataPoints[i].Value;
+                    double pct = totalVal > 0 ? cum / totalVal : 0;
+                    double px = padL + i * barGroupWidth + barGroupWidth / 2;
+                    double py = padT + plotH - pct * plotH;
+                    points.Add($"{F(px)},{F(py)}");
+                }
+                <polyline points="@string.Join(" ", points)" fill="none"
+                          stroke="#dc2626" stroke-width="2" />
+            }
+
+            @if (isCombo && series.Count > 1)
+            {
+                var lineSeries = series[1];
+                var lineMax = lineSeries.DataPoints.Select(p => p.Value).DefaultIfEmpty(0).Max();
+                if (lineMax <= 0) lineMax = 1;
+                var points = new List<string>();
+                for (int i = 0; i < lineSeries.DataPoints.Count && i < n; i++)
+                {
+                    double px = padL + i * barGroupWidth + barGroupWidth / 2;
+                    double py = padT + plotH - (lineSeries.DataPoints[i].Value / lineMax) * plotH;
+                    points.Add($"{F(px)},{F(py)}");
+                }
+                <polyline points="@string.Join(" ", points)" fill="none"
+                          stroke="@GetSeriesColor(1)" stroke-width="2" />
+                @foreach (var pt in points)
+                {
+                    var coords = pt.Split(',');
+                    <circle cx="@coords[0]" cy="@coords[1]" r="3" fill="@GetSeriesColor(1)" />
+                }
+            }
+
+            @if (!string.IsNullOrEmpty(YAxis?.Title))
+            {
+                @SvgText("14", F(padT + plotH / 2), YAxis!.Title!, anchor: "middle", fontSize: "11", fill: "#374151",
+                    transform: $"rotate(-90, 14, {F(padT + plotH / 2)})")
+            }
+            @if (!string.IsNullOrEmpty(XAxis?.Title))
+            {
+                @SvgText(F(padL + plotW / 2), F(svgH - 4), XAxis!.Title!, anchor: "middle", fontSize: "11", fill: "#374151")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Line/Area Charts
+
+    private RenderFragment RenderLineArea() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var series = _effectiveSeries;
+        if (series.Count == 0) return;
+
+        var (dataMin, dataMax) = GetDataRange(series);
+        var (rangeMin, rangeMax) = GetNiceRange(dataMin, dataMax);
+        int maxPoints = series.Max(s => s.DataPoints.Count);
+        if (maxPoints == 0) return;
+
+        bool isArea = Type == ChartType.Area || Type == ChartType.StackedArea;
+        bool isStep = Type == ChartType.StepLine;
+        bool isSpline = Type == ChartType.Spline;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var ticks = GetTicks(rangeMin, rangeMax, YAxis?.TickCount ?? 5); }
+            @foreach (var tick in ticks)
+            {
+                double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int si = 0; si < series.Count; si++)
+            {
+                var s = series[si];
+                var pts = s.DataPoints;
+                if (pts.Count == 0) continue;
+
+                var pointCoords = new List<(double x, double y)>();
+                for (int i = 0; i < pts.Count; i++)
+                {
+                    double x = padL + (maxPoints > 1 ? (double)i / (maxPoints - 1) * plotW : plotW / 2);
+                    double y = padT + plotH - (pts[i].Value - rangeMin) / (rangeMax - rangeMin) * plotH;
+                    pointCoords.Add((x, y));
+                }
+
+                string pathData;
+                if (isStep)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    for (int i = 0; i < pointCoords.Count; i++)
+                    {
+                        if (i == 0) sb.Append($"M{F(pointCoords[i].x)},{F(pointCoords[i].y)}");
+                        else
+                        {
+                            sb.Append($" H{F(pointCoords[i].x)}");
+                            sb.Append($" V{F(pointCoords[i].y)}");
+                        }
+                    }
+                    pathData = sb.ToString();
+                }
+                else if (isSpline && pointCoords.Count > 2)
+                {
+                    var sb = new System.Text.StringBuilder();
+                    sb.Append($"M{F(pointCoords[0].x)},{F(pointCoords[0].y)}");
+                    for (int i = 1; i < pointCoords.Count; i++)
+                    {
+                        var prev = pointCoords[i - 1];
+                        var curr = pointCoords[i];
+                        double cpx = (prev.x + curr.x) / 2;
+                        sb.Append($" C{F(cpx)},{F(prev.y)} {F(cpx)},{F(curr.y)} {F(curr.x)},{F(curr.y)}");
+                    }
+                    pathData = sb.ToString();
+                }
+                else
+                {
+                    pathData = "M" + string.Join(" L", pointCoords.Select(p => $"{F(p.x)},{F(p.y)}"));
+                }
+
+                string color = GetSeriesColor(si);
+
+                @if (isArea)
+                {
+                    string areaPath = pathData +
+                        $" L{F(pointCoords[^1].x)},{F(padT + plotH)} L{F(pointCoords[0].x)},{F(padT + plotH)} Z";
+                    <path d="@areaPath" fill="@color" fill-opacity="0.15" stroke="none" />
+                }
+
+                <path d="@pathData" fill="none" stroke="@color" stroke-width="2" />
+
+                @foreach (var (x, y) in pointCoords)
+                {
+                    <circle cx="@F(x)" cy="@F(y)" r="3" fill="@color">
+                        <title>@F1(rangeMax - (y - padT) / plotH * (rangeMax - rangeMin))</title>
+                    </circle>
+                }
+            }
+
+            @if (series[0].DataPoints.Count > 0)
+            {
+                var pts = series[0].DataPoints;
+                int labelStep = Math.Max(1, pts.Count / 10);
+                for (int i = 0; i < pts.Count; i += labelStep)
+                {
+                    double x = padL + (maxPoints > 1 ? (double)i / (maxPoints - 1) * plotW : plotW / 2);
+                    @SvgText(F(x), F(padT + plotH + 16), Truncate(pts[i].Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
+                }
+            }
+
+            @if (!string.IsNullOrEmpty(YAxis?.Title))
+            {
+                @SvgText("14", F(padT + plotH / 2), YAxis!.Title!, anchor: "middle", fontSize: "11", fill: "#374151",
+                    transform: $"rotate(-90, 14, {F(padT + plotH / 2)})")
+            }
+            @if (!string.IsNullOrEmpty(XAxis?.Title))
+            {
+                @SvgText(F(padL + plotW / 2), F(svgH - 4), XAxis!.Title!, anchor: "middle", fontSize: "11", fill: "#374151")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Sparkline
+
+    private RenderFragment RenderSparkline() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        double minV = pts.Min(p => p.Value);
+        double maxV = pts.Max(p => p.Value);
+        if (Math.Abs(maxV - minV) < 0.001) { minV -= 1; maxV += 1; }
+
+        const double w = 200, h = 40;
+        var coords = new List<string>();
+        for (int i = 0; i < pts.Count; i++)
+        {
+            double x = pts.Count > 1 ? (double)i / (pts.Count - 1) * w : w / 2;
+            double y = h - (pts[i].Value - minV) / (maxV - minV) * h;
+            coords.Add($"{F(x)},{F(y)}");
+        }
+
+        string color = GetSeriesColor(0);
+
+        <svg viewBox="0 0 @F0(w) @F0(h)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "40px"); width:100%;" xmlns="http://www.w3.org/2000/svg">
+            <polyline points="@string.Join(" ", coords)" fill="none"
+                      stroke="@color" stroke-width="1.5" />
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Pie / Donut
+
+    private RenderFragment RenderPieDonut() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        double total = pts.Sum(p => Math.Abs(p.Value));
+        if (total <= 0) return;
+
+        const double size = 300;
+        double cx = size / 2, cy = size / 2;
+        double radius = size * 0.4;
+        double inner = Type == ChartType.Donut ? radius * (InnerRadius ?? 0.6) : 0;
+
+        double startAngle = -Math.PI / 2;
+
+        <svg viewBox="0 0 @F0(size) @F0(size)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+            @for (int i = 0; i < pts.Count; i++)
+            {
+                double sliceAngle = (Math.Abs(pts[i].Value) / total) * 2 * Math.PI;
+                double endAngle = startAngle + sliceAngle;
+                int largeArc = sliceAngle > Math.PI ? 1 : 0;
+
+                double x1 = cx + radius * Math.Cos(startAngle);
+                double y1 = cy + radius * Math.Sin(startAngle);
+                double x2 = cx + radius * Math.Cos(endAngle);
+                double y2 = cy + radius * Math.Sin(endAngle);
+
+                string path;
+                if (inner > 0)
+                {
+                    double ix1 = cx + inner * Math.Cos(startAngle);
+                    double iy1 = cy + inner * Math.Sin(startAngle);
+                    double ix2 = cx + inner * Math.Cos(endAngle);
+                    double iy2 = cy + inner * Math.Sin(endAngle);
+                    path = $"M{F(ix1)},{F(iy1)} L{F(x1)},{F(y1)} A{F(radius)},{F(radius)} 0 {largeArc} 1 {F(x2)},{F(y2)} L{F(ix2)},{F(iy2)} A{F(inner)},{F(inner)} 0 {largeArc} 0 {F(ix1)},{F(iy1)} Z";
+                }
+                else
+                {
+                    path = $"M{F(cx)},{F(cy)} L{F(x1)},{F(y1)} A{F(radius)},{F(radius)} 0 {largeArc} 1 {F(x2)},{F(y2)} Z";
+                }
+
+                string color = GetPointColor(pts[i], 0, i);
+                double pct = (Math.Abs(pts[i].Value) / total) * 100;
+
+                <path d="@path" fill="@color" stroke="white" stroke-width="1.5">
+                    <title>@pts[i].Label: @F1(pts[i].Value) (@F1(pct)%)</title>
+                </path>
+
+                startAngle = endAngle;
+            }
+        </svg>
+
+        <div class="fx-chart-legend">
+            @for (int i = 0; i < pts.Count; i++)
+            {
+                string color = GetPointColor(pts[i], 0, i);
+                <div class="fx-chart-legend-item">
+                    <div class="fx-chart-legend-swatch" style="background:@color"></div>
+                    <span>@pts[i].Label</span>
+                </div>
+            }
+        </div>
+    };
+
+    #endregion
+
+    #region Render — Scatter / Bubble
+
+    private RenderFragment RenderScatterBubble() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var series = _effectiveSeries;
+        if (series.Count == 0) return;
+
+        var allPoints = series.SelectMany(s => s.DataPoints).ToList();
+        double xMin = 0, xMax = 1, yMin = 0, yMax = 1;
+
+        var xValues = allPoints.Select(p =>
+        {
+            double.TryParse(p.Label, NumberStyles.Any, CultureInfo.InvariantCulture, out var v);
+            return v;
+        }).ToList();
+        if (xValues.Count > 0) { xMin = xValues.Min(); xMax = xValues.Max(); }
+        if (Math.Abs(xMax - xMin) < 0.001) { xMin -= 1; xMax += 1; }
+
+        yMin = allPoints.Min(p => p.Value);
+        yMax = allPoints.Max(p => p.Value);
+        if (Math.Abs(yMax - yMin) < 0.001) { yMin -= 1; yMax += 1; }
+
+        double bubbleMax = Type == ChartType.Bubble
+            ? allPoints.Where(p => p.Value2.HasValue).Select(p => p.Value2!.Value).DefaultIfEmpty(1).Max()
+            : 1;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var yTicks = GetTicks(yMin, yMax, 5); }
+            @foreach (var tick in yTicks)
+            {
+                double y = padT + plotH - (tick - yMin) / (yMax - yMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+            <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int si = 0; si < series.Count; si++)
+            {
+                string color = GetSeriesColor(si);
+                foreach (var pt in series[si].DataPoints)
+                {
+                    double.TryParse(pt.Label, NumberStyles.Any, CultureInfo.InvariantCulture, out var xVal);
+                    double px = padL + (xVal - xMin) / (xMax - xMin) * plotW;
+                    double py = padT + plotH - (pt.Value - yMin) / (yMax - yMin) * plotH;
+                    double r = Type == ChartType.Bubble && pt.Value2.HasValue
+                        ? 4 + (pt.Value2.Value / bubbleMax) * 20
+                        : 5;
+                    <circle cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color">
+                        <title>(@F1(xVal), @F1(pt.Value))</title>
+                    </circle>
+                }
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Radar
+
+    private RenderFragment RenderRadar() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0) return;
+
+        const double size = 300;
+        double cx = size / 2, cy = size / 2;
+        double radius = size * 0.38;
+
+        var labels = _effectiveSeries[0].DataPoints.Select(p => p.Label).ToList();
+        int n = labels.Count;
+        if (n < 3) return;
+
+        double maxVal = _effectiveSeries.SelectMany(s => s.DataPoints.Select(p => p.Value)).DefaultIfEmpty(1).Max();
+        if (maxVal <= 0) maxVal = 1;
+
+        <svg viewBox="0 0 @F0(size) @F0(size)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @for (int ring = 1; ring <= 4; ring++)
+            {
+                double r = radius * ring / 4.0;
+                var ringPts = new List<string>();
+                for (int i = 0; i < n; i++)
+                {
+                    double angle = -Math.PI / 2 + 2 * Math.PI * i / n;
+                    ringPts.Add($"{F(cx + r * Math.Cos(angle))},{F(cy + r * Math.Sin(angle))}");
+                }
+                <polygon points="@string.Join(" ", ringPts)" fill="none" stroke="#e5e7eb" stroke-width="0.5" />
+            }
+
+            @for (int i = 0; i < n; i++)
+            {
+                double angle = -Math.PI / 2 + 2 * Math.PI * i / n;
+                double ex = cx + radius * Math.Cos(angle);
+                double ey = cy + radius * Math.Sin(angle);
+                <line x1="@F(cx)" y1="@F(cy)" x2="@F(ex)" y2="@F(ey)"
+                      stroke="#d1d5db" stroke-width="0.5" />
+                double lx = cx + (radius + 14) * Math.Cos(angle);
+                double ly = cy + (radius + 14) * Math.Sin(angle);
+                @SvgText(F(lx), F(ly), Truncate(labels[i], 8), anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+
+            @for (int si = 0; si < _effectiveSeries.Count; si++)
+            {
+                var s = _effectiveSeries[si];
+                var polyPts = new List<string>();
+                for (int i = 0; i < n && i < s.DataPoints.Count; i++)
+                {
+                    double angle = -Math.PI / 2 + 2 * Math.PI * i / n;
+                    double r = (s.DataPoints[i].Value / maxVal) * radius;
+                    polyPts.Add($"{F(cx + r * Math.Cos(angle))},{F(cy + r * Math.Sin(angle))}");
+                }
+                string color = GetSeriesColor(si);
+                <polygon points="@string.Join(" ", polyPts)" fill="@color" fill-opacity="0.2"
+                         stroke="@color" stroke-width="2" />
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Gauge
+
+    private RenderFragment RenderGauge() => __builder =>
+    {
+        double min = GaugeMin ?? 0;
+        double max = GaugeMax ?? 100;
+        double val = GaugeValue ?? 0;
+        double pct = (val - min) / (max - min);
+        if (pct < 0) pct = 0;
+        if (pct > 1) pct = 1;
+
+        const double size = 300;
+        double cx = size / 2, cy = size * 0.6;
+        double radius = size * 0.38;
+
+        double startAngle = -225 * Math.PI / 180;
+        double endAngle = 45 * Math.PI / 180;
+        double totalSweep = endAngle - startAngle;
+        double valAngle = startAngle + pct * totalSweep;
+
+        double arcX1 = cx + radius * Math.Cos(startAngle);
+        double arcY1 = cy + radius * Math.Sin(startAngle);
+        double arcX2 = cx + radius * Math.Cos(endAngle);
+        double arcY2 = cy + radius * Math.Sin(endAngle);
+        double valX = cx + radius * Math.Cos(valAngle);
+        double valY = cy + radius * Math.Sin(valAngle);
+
+        <svg viewBox="0 0 @F0(size) @F0(size * 0.7)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "200px");" xmlns="http://www.w3.org/2000/svg">
+
+            <path d="M@(F(arcX1)),@(F(arcY1)) A@(F(radius)),@(F(radius)) 0 1 1 @(F(arcX2)),@(F(arcY2))"
+                  fill="none" stroke="#e5e7eb" stroke-width="20" stroke-linecap="round" />
+
+            <path d="M@(F(arcX1)),@(F(arcY1)) A@(F(radius)),@(F(radius)) 0 @(pct > 0.5 ? "1" : "0") 1 @(F(valX)),@(F(valY))"
+                  fill="none" stroke="@GetSeriesColor(0)" stroke-width="20" stroke-linecap="round" />
+
+            @{
+                double needleLen = radius * 0.7;
+                double nx = cx + needleLen * Math.Cos(valAngle);
+                double ny = cy + needleLen * Math.Sin(valAngle);
+            }
+            <line x1="@F(cx)" y1="@F(cy)" x2="@F(nx)" y2="@F(ny)"
+                  stroke="#374151" stroke-width="2.5" stroke-linecap="round" />
+            <circle cx="@F(cx)" cy="@F(cy)" r="5" fill="#374151" />
+
+            @SvgText(F(cx), F(cy + 30), F0(val), anchor: "middle", fontSize: "24", fill: "#1f2937", fontWeight: "bold")
+            @SvgText(F(arcX1), F(arcY1 + 20), F0(min), anchor: "middle", fontSize: "10", fill: "#6b7280")
+            @SvgText(F(arcX2), F(arcY2 + 20), F0(max), anchor: "middle", fontSize: "10", fill: "#6b7280")
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — KPI Card
+
+    private RenderFragment RenderKpiCard() => __builder =>
+    {
+        string trendClass = "";
+        string arrow = "";
+        if (!string.IsNullOrEmpty(KpiTrend))
+        {
+            if (KpiTrend!.StartsWith("+") || KpiTrend.Contains("up", StringComparison.OrdinalIgnoreCase))
+            {
+                trendClass = "up";
+                arrow = "↑ ";
+            }
+            else if (KpiTrend.StartsWith("-") || KpiTrend.Contains("down", StringComparison.OrdinalIgnoreCase))
+            {
+                trendClass = "down";
+                arrow = "↓ ";
+            }
+        }
+
+        <div class="fx-chart-kpi">
+            <div class="fx-chart-kpi-value">@(KpiValue ?? "--")</div>
+            @if (!string.IsNullOrEmpty(KpiLabel))
+            {
+                <div class="fx-chart-kpi-label">@KpiLabel</div>
+            }
+            @if (!string.IsNullOrEmpty(KpiTrend))
+            {
+                <div class="fx-chart-kpi-trend @trendClass">@arrow@KpiTrend</div>
+            }
+        </div>
+    };
+
+    #endregion
+
+    #region Render — Waterfall
+
+    private RenderFragment RenderWaterfall() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+
+        var cumulative = new double[n + 1];
+        cumulative[0] = 0;
+        for (int i = 0; i < n; i++)
+            cumulative[i + 1] = cumulative[i] + pts[i].Value;
+
+        double minCum = cumulative.Min();
+        double maxCum = cumulative.Max();
+        if (Math.Abs(maxCum - minCum) < 0.001) { minCum -= 1; maxCum += 1; }
+        var (rangeMin, rangeMax) = GetNiceRange(minCum, maxCum);
+
+        double barW = plotW / n;
+        double gap = barW * 0.2;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var ticks = GetTicks(rangeMin, rangeMax, 5); }
+            @foreach (var tick in ticks)
+            {
+                double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int i = 0; i < n; i++)
+            {
+                double val = pts[i].Value;
+                double barStart = Math.Min(cumulative[i], cumulative[i + 1]);
+                double barEnd = Math.Max(cumulative[i], cumulative[i + 1]);
+
+                double y1 = padT + plotH - (barEnd - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double y2 = padT + plotH - (barStart - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double barH = Math.Max(y2 - y1, 1);
+                double x = padL + i * barW + gap / 2;
+
+                string color = val >= 0 ? "#16a34a" : "#dc2626";
+                if (!string.IsNullOrEmpty(pts[i].Color)) color = pts[i].Color!;
+
+                <rect x="@F(x)" y="@F(y1)" width="@F(barW - gap)" height="@F(barH)"
+                      fill="@color" rx="2">
+                    <title>@pts[i].Label: @(val >= 0 ? "+" : "")@F1(val)</title>
+                </rect>
+
+                @if (i < n - 1)
+                {
+                    double connY = padT + plotH - (cumulative[i + 1] - rangeMin) / (rangeMax - rangeMin) * plotH;
+                    <line x1="@F(x + barW - gap)" y1="@F(connY)" x2="@F(x + barW + gap / 2)" y2="@F(connY)"
+                          stroke="#9ca3af" stroke-width="1" stroke-dasharray="2,2" />
+                }
+
+                @SvgText(F(x + (barW - gap) / 2), F(padT + plotH + 16), Truncate(pts[i].Label, 8), anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Heatmap
+
+    private RenderFragment RenderHeatmap() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0) return;
+
+        const double svgW = 600, svgH = 300;
+        const double padL = 80, padR = 20, padT = 30, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var categories = _effectiveSeries.Select(s => s.Name).ToList();
+        var labels = _effectiveSeries[0].DataPoints.Select(p => p.Label).ToList();
+        int rows = categories.Count;
+        int cols = labels.Count;
+        if (rows == 0 || cols == 0) return;
+
+        double cellW = plotW / cols;
+        double cellH = plotH / rows;
+
+        double minVal = _effectiveSeries.SelectMany(s => s.DataPoints.Select(p => p.Value)).Min();
+        double maxVal = _effectiveSeries.SelectMany(s => s.DataPoints.Select(p => p.Value)).Max();
+        if (Math.Abs(maxVal - minVal) < 0.001) { minVal = 0; maxVal = 1; }
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @for (int r = 0; r < rows; r++)
+            {
+                @SvgText(F(padL - 6), F(padT + r * cellH + cellH / 2 + 4), Truncate(categories[r], 10),
+                    anchor: "end", fontSize: "10", fill: "#6b7280")
+
+                @for (int c = 0; c < cols && c < _effectiveSeries[r].DataPoints.Count; c++)
+                {
+                    double val = _effectiveSeries[r].DataPoints[c].Value;
+                    double norm = (val - minVal) / (maxVal - minVal);
+                    int r2 = (int)(235 - norm * 200);
+                    int g2 = (int)(245 - norm * 200);
+                    int b2 = (int)(255 - norm * 40);
+                    string color = $"rgb({r2},{g2},{b2})";
+
+                    <rect x="@F(padL + c * cellW)" y="@F(padT + r * cellH)"
+                          width="@F(cellW - 1)" height="@F(cellH - 1)" fill="@color" rx="2">
+                        <title>@categories[r] / @labels[c]: @F1(val)</title>
+                    </rect>
+                }
+            }
+
+            @for (int c = 0; c < cols; c++)
+            {
+                @SvgText(F(padL + c * cellW + cellW / 2), F(padT + rows * cellH + 14), Truncate(labels[c], 8),
+                    anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Gantt
+
+    private RenderFragment RenderGantt() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        const double svgW = 600, svgH = 300;
+        const double padL = 100, padR = 20, padT = 20, padB = 30;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+
+        double minStart = pts.Min(p => p.Value);
+        double maxEnd = pts.Max(p => p.Value2 ?? p.Value + 1);
+        if (Math.Abs(maxEnd - minStart) < 0.001) maxEnd = minStart + 1;
+
+        double rowH = Math.Min(plotH / n, 30);
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @for (int t = 0; t <= 4; t++)
+            {
+                double x = padL + t * plotW / 4;
+                <line x1="@F(x)" y1="@F(padT)" x2="@F(x)" y2="@F(padT + plotH)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                double tickVal = minStart + t * (maxEnd - minStart) / 4;
+                @SvgText(F(x), F(padT + plotH + 14), F0(tickVal), anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+
+            @for (int i = 0; i < n; i++)
+            {
+                double start = pts[i].Value;
+                double end = pts[i].Value2 ?? start + 1;
+                double x1 = padL + (start - minStart) / (maxEnd - minStart) * plotW;
+                double x2 = padL + (end - minStart) / (maxEnd - minStart) * plotW;
+                double y = padT + i * rowH + rowH * 0.2;
+                double h = rowH * 0.6;
+                string color = GetPointColor(pts[i], 0, i);
+
+                <rect x="@F(x1)" y="@F(y)" width="@F(Math.Max(x2 - x1, 2))" height="@F(h)"
+                      fill="@color" rx="3">
+                    <title>@pts[i].Label: @F0(start) - @F0(end)</title>
+                </rect>
+
+                @SvgText(F(padL - 6), F(y + h / 2 + 4), Truncate(pts[i].Label, 12),
+                    anchor: "end", fontSize: "10", fill: "#374151")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — BoxPlot
+
+    private RenderFragment RenderBoxPlot() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+
+        double allMin = pts.Min(p => p.Value);
+        double allMax = pts.Max(p => p.Value2 ?? p.Value);
+        var (rangeMin, rangeMax) = GetNiceRange(allMin, allMax);
+
+        double boxW = plotW / n;
+        double gap = boxW * 0.3;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var ticks = GetTicks(rangeMin, rangeMax, 5); }
+            @foreach (var tick in ticks)
+            {
+                double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int i = 0; i < n; i++)
+            {
+                var p = pts[i];
+                double low = p.Value;
+                double high = p.Value2 ?? p.Value;
+                double q1 = p.Value3 ?? low;
+                double q3 = p.Value4 ?? high;
+                double median = p.Value5 ?? (q1 + q3) / 2;
+
+                double bx = padL + i * boxW + boxW / 2;
+                double halfW = (boxW - gap) / 2;
+
+                double yLow = padT + plotH - (low - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double yHigh = padT + plotH - (high - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double yQ1 = padT + plotH - (q1 - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double yQ3 = padT + plotH - (q3 - rangeMin) / (rangeMax - rangeMin) * plotH;
+                double yMed = padT + plotH - (median - rangeMin) / (rangeMax - rangeMin) * plotH;
+
+                <line x1="@F(bx)" y1="@F(yLow)" x2="@F(bx)" y2="@F(yHigh)"
+                      stroke="#374151" stroke-width="1" />
+                <line x1="@F(bx - halfW * 0.5)" y1="@F(yLow)" x2="@F(bx + halfW * 0.5)" y2="@F(yLow)"
+                      stroke="#374151" stroke-width="1" />
+                <line x1="@F(bx - halfW * 0.5)" y1="@F(yHigh)" x2="@F(bx + halfW * 0.5)" y2="@F(yHigh)"
+                      stroke="#374151" stroke-width="1" />
+                <rect x="@F(bx - halfW)" y="@F(yQ3)" width="@F(halfW * 2)"
+                      height="@F(Math.Max(yQ1 - yQ3, 1))" fill="@GetSeriesColor(0)" fill-opacity="0.3"
+                      stroke="@GetSeriesColor(0)" stroke-width="1.5" rx="2">
+                    <title>@p.Label: Q1=@F1(q1) Med=@F1(median) Q3=@F1(q3)</title>
+                </rect>
+                <line x1="@F(bx - halfW)" y1="@F(yMed)" x2="@F(bx + halfW)" y2="@F(yMed)"
+                      stroke="@GetSeriesColor(0)" stroke-width="2" />
+
+                @SvgText(F(bx), F(padT + plotH + 16), Truncate(p.Label, 8),
+                    anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — DotPlot
+
+    private RenderFragment RenderDotPlot() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 100, padR = 30, padT = 20, padB = 30;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+
+        double minVal = pts.Min(p => p.Value);
+        double maxVal = pts.Max(p => p.Value);
+        if (Math.Abs(maxVal - minVal) < 0.001) { minVal -= 1; maxVal += 1; }
+
+        double rowH = plotH / n;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @{ var xTicks = GetTicks(minVal, maxVal, 5); }
+            @foreach (var tick in xTicks)
+            {
+                double x = padL + (tick - minVal) / (maxVal - minVal) * plotW;
+                <line x1="@F(x)" y1="@F(padT)" x2="@F(x)" y2="@F(padT + plotH)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(x), F(padT + plotH + 14), F0(tick), anchor: "middle", fontSize: "9", fill: "#6b7280")
+            }
+
+            @for (int i = 0; i < n; i++)
+            {
+                double y = padT + i * rowH + rowH / 2;
+                double x = padL + (pts[i].Value - minVal) / (maxVal - minVal) * plotW;
+                string color = GetPointColor(pts[i], 0, i);
+
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(x)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" />
+                <circle cx="@F(x)" cy="@F(y)" r="5" fill="@color">
+                    <title>@pts[i].Label: @F1(pts[i].Value)</title>
+                </circle>
+                @SvgText(F(padL - 6), F(y + 4), Truncate(pts[i].Label, 12),
+                    anchor: "end", fontSize: "10", fill: "#374151")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Histogram
+
+    private RenderFragment RenderHistogram() => __builder =>
+    {
+        const double svgW = 600, svgH = 300;
+        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+
+        double maxVal = pts.Max(p => p.Value);
+        if (maxVal <= 0) maxVal = 1;
+        var (rangeMin, rangeMax) = GetNiceRange(0, maxVal);
+
+        double barW = plotW / n;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @{ var ticks = GetTicks(rangeMin, rangeMax, 5); }
+            @foreach (var tick in ticks)
+            {
+                double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
+                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+            <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
+                  stroke="#9ca3af" stroke-width="1" />
+
+            @for (int i = 0; i < n; i++)
+            {
+                double val = pts[i].Value;
+                double barH = ((val - rangeMin) / (rangeMax - rangeMin)) * plotH;
+                double x = padL + i * barW;
+                double y = padT + plotH - barH;
+
+                <rect x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(barH, 0))"
+                      fill="@GetSeriesColor(0)" stroke="white" stroke-width="0.5">
+                    <title>@pts[i].Label: @F1(val)</title>
+                </rect>
+
+                @if (i % Math.Max(1, n / 8) == 0)
+                {
+                    @SvgText(F(x + barW / 2), F(padT + plotH + 14), pts[i].Label,
+                        anchor: "middle", fontSize: "9", fill: "#6b7280")
+                }
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Funnel / Pyramid
+
+    private RenderFragment RenderFunnelPyramid() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+
+        const double svgW = 400, svgH = 300;
+        const double padT = 20, padB = 20;
+        double plotH = svgH - padT - padB;
+
+        var pts = _effectiveSeries[0].DataPoints;
+        int n = pts.Count;
+        double maxVal = pts.Max(p => Math.Abs(p.Value));
+        if (maxVal <= 0) maxVal = 1;
+
+        bool isPyramid = Type == ChartType.Pyramid;
+        double segH = plotH / n;
+        double fcx = svgW / 2;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            @for (int i = 0; i < n; i++)
+            {
+                int idx = isPyramid ? n - 1 - i : i;
+                double val = Math.Abs(pts[idx].Value);
+                double nextVal = (i + 1 < n)
+                    ? Math.Abs(pts[isPyramid ? n - 2 - i : i + 1].Value)
+                    : 0;
+
+                double topW = (val / maxVal) * (svgW * 0.8);
+                double botW = (i + 1 < n) ? (nextVal / maxVal) * (svgW * 0.8) : topW * 0.2;
+                if (isPyramid) { (topW, botW) = (botW, topW); }
+
+                double y = padT + i * segH;
+                string color = GetPointColor(pts[idx], 0, idx);
+
+                double x1 = fcx - topW / 2;
+                double x2 = fcx + topW / 2;
+                double x3 = fcx + botW / 2;
+                double x4 = fcx - botW / 2;
+
+                <polygon points="@F(x1),@F(y) @F(x2),@F(y) @F(x3),@F(y + segH) @F(x4),@F(y + segH)"
+                         fill="@color" stroke="white" stroke-width="1.5">
+                    <title>@pts[idx].Label: @F1(pts[idx].Value)</title>
+                </polygon>
+
+                @SvgText(F(fcx), F(y + segH / 2 + 4), pts[idx].Label,
+                    anchor: "middle", fontSize: "11", fill: "white", fontWeight: "500")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region ChartBar class (backwards compat)
+
+    /// <summary>Single-series bar entry — kept for backwards compatibility.</summary>
+    public class ChartBar
+    {
+        public string Label { get; set; } = "";
+        public double Value { get; set; }
+        public string? Color { get; set; }
+
+        public ChartBar() { }
+        public ChartBar(string label, double value, string? color = null)
+        {
+            Label = label;
+            Value = value;
+            Color = color;
+        }
+    }
+
+    #endregion
+}

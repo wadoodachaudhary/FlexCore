@@ -1,0 +1,16 @@
+@namespace Fx.ControlKit.Editor
+
+@* A single labeled row inside an EditorPanel. *@
+
+<div class="fx-editor-panel-row">
+    <label class="fx-editor-panel-label">@Label@(string.IsNullOrEmpty(Label) ? "" : ":")</label>
+    <div class="fx-editor-panel-editor">@ChildContent</div>
+</div>
+
+@code {
+    /// <summary>Label shown to the left of the editor.</summary>
+    [Parameter] public string Label { get; set; } = "";
+
+    /// <summary>The editor element(s).</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

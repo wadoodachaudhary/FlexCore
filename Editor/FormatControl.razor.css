@@ -1,0 +1,108 @@
+/* Scoped styles for FormatControl.
+ *
+ * The buttons + dropdowns are rendered by sub-components
+ * (EditorButtonControl, EditorDropDownControl), so their DOM nodes don't
+ * carry FormatControl's `b-xxx` attribute. `::deep` lets the cascade
+ * reach through to those JS-unrelated children and style them consistently.
+ */
+
+.fx-format-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 4px 8px;
+}
+
+.fx-format-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.fx-format-heading {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding-right: 2px;
+}
+
+.fx-format-control ::deep .fx-format-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    font-size: 0.85rem;
+    line-height: 1;
+    background: var(--surface, #fffaf1);
+    border: 1px solid var(--border, #dfcdbd);
+    border-radius: 6px;
+    color: var(--ink, #1b1a16);
+    cursor: pointer;
+}
+
+.fx-format-control ::deep .fx-format-btn:hover:not(:disabled) {
+    border-color: var(--accent, #c64b39);
+    background: rgba(0, 0, 0, 0.04);
+}
+
+.fx-format-control ::deep .fx-format-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.fx-format-control ::deep .fx-format-btn strong,
+.fx-format-control ::deep .fx-format-btn em {
+    font-size: 0.9rem;
+}
+
+.fx-format-control ::deep .fx-format-heading-btn {
+    min-width: 34px;
+    padding: 0 10px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.fx-format-field {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    color: var(--muted, #5d5147);
+}
+
+.fx-format-field-label {
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.fx-format-control ::deep .fx-format-select {
+    background: var(--surface, #fffaf1);
+    border: 1px solid var(--border, #dfcdbd);
+    border-radius: 6px;
+    padding: 3px 6px;
+    font-size: 0.78rem;
+    color: var(--ink, #1b1a16);
+    cursor: pointer;
+}
+
+.fx-format-control ::deep .fx-format-select:focus {
+    outline: none;
+    border-color: var(--accent, #c64b39);
+}
+
+.fx-format-control ::deep .fx-format-select-sm {
+    max-width: 80px;
+}
+
+.fx-format-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border, #dfcdbd);
+    margin: 0 4px;
+    flex-shrink: 0;
+}

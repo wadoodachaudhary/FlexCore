@@ -1,0 +1,99 @@
+.fx-inputdlg-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.fx-inputdlg {
+    background: #fff;
+    border-radius: 8px;
+    min-width: 360px;
+    max-width: 480px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+.fx-inputdlg-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #0d3b66;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.fx-inputdlg-close {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.fx-inputdlg-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.fx-inputdlg-label {
+    font-size: 13px;
+    color: #374151;
+    font-weight: 500;
+}
+
+.fx-inputdlg-input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    font-size: 14px;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.fx-inputdlg-input:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.fx-inputdlg-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.fx-inputdlg-btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+}
+
+.fx-inputdlg-btn:hover {
+    background: #f3f4f6;
+}
+
+.fx-inputdlg-btn-primary {
+    background: #1b6ec2;
+    color: #fff;
+    border-color: #1861ac;
+}
+
+.fx-inputdlg-btn-primary:hover {
+    background: #1a65b3;
+}

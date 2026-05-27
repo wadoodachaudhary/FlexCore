@@ -1,0 +1,21 @@
+.fx-dropdown {
+    padding: 4px 8px;
+    border: 1px solid #c9c9c9;
+    border-radius: 4px;
+    background: #fff;
+    font-size: inherit;
+    font-family: inherit;
+    cursor: pointer;
+}
+
+.fx-dropdown:disabled {
+    opacity: 0.6;
+    cursor: default;
+    background: #e9ecef;
+}
+
+.fx-dropdown:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}

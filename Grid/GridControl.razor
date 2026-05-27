@@ -1,0 +1,1041 @@
+@namespace Fx.ControlKit.Grid
+@typeparam TValue
+@using System.Reflection
+@using System.Globalization
+
+<div class="@GridHostCssClass"
+     style="@HostStyle"
+     @ref="_gridHostElement"
+     tabindex="0"
+     @onkeydown="HandleKeyDown"
+     @onmouseup="HandleGridMouseUp">
+
+    @* ── Toolbar ──────────────────────────────────────────────── *@
+    @* Built-in grid toolbar. Honors custom Toolbar items / ShowSearchBar. *@
+    @if (ShouldRenderToolbar)
+    {
+        <div class="fx-grid-toolbar">
+            @if (Toolbar is { Count: > 0 })
+            {
+                @foreach (var item in Toolbar)
+                {
+                    <button class="fx-toolbar-btn" @onclick="() => OnToolbarClick(item)">@item</button>
+                }
+            }
+            @if (ShowSearchBar)
+            {
+                <div class="fx-toolbar-search">
+                    <input type="text" placeholder="Search..."
+                           @bind="SearchText" @bind:event="oninput"
+                           @bind:after="ApplySearchDebounced" />
+                </div>
+            }
+        </div>
+    }
+
+    @* ── Group Drop Area (drag-and-drop grouping) ────────────── *@
+    @if (AllowGrouping)
+    {
+        <div class="fx-group-drop-area @(_dragOverGroupArea ? "fx-group-drop-hover" : "")"
+             @ondragover="HandleGroupAreaDragOver"
+             @ondragover:preventDefault="true"
+             @ondragleave="HandleGroupAreaDragLeave"
+             @ondrop="HandleGroupAreaDrop"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="true">
+            <div class="fx-group-drop-main">
+                @if (ShouldRenderAdvancedViewToggle)
+                {
+                    <button class="fx-group-advanced-toggle-btn @(AdvancedViewEnabled ? "active" : "")"
+                            type="button"
+                            title="@AdvancedViewToggleTitle"
+                            aria-label="@AdvancedViewToggleTitle"
+                            aria-pressed="@AdvancedViewTogglePressed"
+                            @onclick="ToggleAdvancedView"
+                            @onclick:stopPropagation="true">
+                        &#9881;
+                    </button>
+                }
+                @if (_groupDescriptors.Count == 0)
+                {
+                    <span class="fx-group-drop-hint">Drag a column header here to group by that column</span>
+                }
+                else
+                {
+                    @if (ShowGroupExpandCollapse)
+                    {
+                        <button class="fx-group-expand-collapse-btn" @onclick="ToggleExpandCollapseAll" @onclick:stopPropagation="true"
+                                title="@(_allGroupsCollapsed ? "Expand All Groups" : "Collapse All Groups")">
+                            @(_allGroupsCollapsed ? "⊞" : "⊟")
+                        </button>
+                        <button class="fx-group-clear-all-btn"
+                                type="button"
+                                title="Clear All Grouping"
+                                aria-label="Clear all grouping"
+                                @onclick="ClearAllGroupsAsync"
+                                @onclick:stopPropagation="true">
+                            🗑
+                        </button>
+                    }
+                    @foreach (var gd in _groupDescriptors)
+                    {
+                        @* Capture per-iteration field locally — without this the @onclick /
+                           @oncontextmenu lambdas would all close over the same `gd` and
+                           fire with the LAST descriptor's field after the loop. *@
+                        var capturedField = gd.Field;
+                        <span class="fx-group-chip" draggable="true"
+                              @ondragstart="() => StartGroupChipDrag(capturedField)"
+                              @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+                              @oncontextmenu:preventDefault="true"
+                              @oncontextmenu:stopPropagation="true"
+                              title="Right-click for options">
+                            <span class="fx-group-chip-text">@gd.HeaderText</span>
+                            <span class="fx-group-chip-remove"
+                                  role="button"
+                                  tabindex="0"
+                                  title="@($"Ungroup by {gd.HeaderText}")"
+                                  aria-label="@($"Ungroup by {gd.HeaderText}")"
+                                  @onclick="() => RemoveGroup(capturedField)"
+                                  @onclick:stopPropagation="true"
+                                  @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+                                  @oncontextmenu:preventDefault="true"
+                                  @oncontextmenu:stopPropagation="true">×</span>
+                        </span>
+                    }
+                }
+            </div>
+            @if (ShouldRenderExpressionFilterButton)
+            {
+                <div class="fx-expression-filter-area" @onclick:stopPropagation="true">
+                    <button class="fx-expression-filter-btn @((_expressionFilterOpen || HasExpressionFilter) ? "active" : "")"
+                            type="button"
+                            title="@ExpressionFilterToggleTitle"
+                            aria-label="@ExpressionFilterToggleTitle"
+                            aria-expanded="@ExpressionFilterToggleExpanded"
+                            @onclick="ToggleExpressionFilter">
+                        @if (_expressionFilterOpen)
+                        {
+                            <span aria-hidden="true">×</span>
+                        }
+                        else
+                        {
+                            <span aria-hidden="true">&#128269;</span>
+                        }
+                    </button>
+                    @if (_expressionFilterOpen)
+                    {
+                        <div class="fx-expression-filter-editor">
+                            <input class="fx-expression-filter-input"
+                                   placeholder="OrderQty > 100 and Price Level like Community"
+                                   value="@ExpressionFilterDraft"
+                                   @oninput="OnExpressionFilterInput"
+                                   @onkeydown="HandleExpressionFilterKeyDown" />
+                            <button class="fx-expression-filter-apply"
+                                    type="button"
+                                    title="Apply filter expression"
+                                    @onclick="ApplyExpressionFilterAsync">Apply</button>
+                            <button class="fx-expression-filter-clear"
+                                    type="button"
+                                    title="Clear filter expression"
+                                    aria-label="Clear filter expression"
+                                    @onclick="ClearExpressionFilterAsync">Clear</button>
+                        </div>
+                    }
+                    @if (!string.IsNullOrEmpty(_expressionFilterError))
+                    {
+                        <span class="fx-expression-filter-error" title="@_expressionFilterError">@_expressionFilterError</span>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    @* ── Selection Info Bar ─────────────────────────────────── *@
+    @if (AllowSelection && ShowSelectionInfoBar && (_selectedItems.Count > 1 || _selectedCells.Count > 0))
+    {
+        <div class="fx-selection-info-bar">
+            @if (_selectedItems.Count > 1)
+            {
+                <span>@_selectedItems.Count rows selected</span>
+                @if (_typeAheadBuffer.Length > 0)
+                {
+                    <span class="fx-typeahead-display">typing: @_typeAheadBuffer</span>
+                }
+            }
+            @if (_selectedCells.Count > 0)
+            {
+                <span>@_selectedCells.Count cells selected</span>
+            }
+            <button class="fx-selection-clear-btn" @onclick="ClearSelectionAsync">Clear Selection</button>
+        </div>
+    }
+
+    @* ── Collect column definitions ───────────────────────────── *@
+    <CascadingValue Value="@((IGridOwner)this)" IsFixed="true">
+        <div style="display:none">
+            @ChildContent
+        </div>
+    </CascadingValue>
+
+    @* ── Grid Options Rail / Side Panels ───────────────────────── *@
+    @if (ShouldRenderGridOptionsRail)
+    {
+        <div class="fx-grid-options-rail" @onclick:stopPropagation="true">
+            <div class="fx-grid-options-rail-top">
+                @if (ShowGridBackButton)
+                {
+                    <button type="button"
+                            class="fx-grid-option-btn"
+                            title="Back to grid"
+                            aria-label="Back to grid"
+                            @onclick="ReturnToGridView">
+                        ↩
+                    </button>
+                }
+                @if (ShowColumnOptionsButton)
+                {
+                    <button type="button"
+                            class="fx-grid-option-btn @(_activeOptionsPanel == GridOptionsPanel.Columns ? "active" : "")"
+                            title="Column options"
+                            aria-label="Column options"
+                            @onclick="() => ToggleOptionsPanel(GridOptionsPanel.Columns)">
+                        ▤
+                    </button>
+                }
+                @if (AllowPivoting && ShowPivotPanelButton)
+                {
+                    <button type="button"
+                            class="fx-grid-option-btn @(_activeOptionsPanel == GridOptionsPanel.Pivot || _pivotMode ? "active" : "")"
+                            title="Pivot mode"
+                            aria-label="Pivot mode"
+                            @onclick="() => ToggleOptionsPanel(GridOptionsPanel.Pivot)">
+                        ▦
+                    </button>
+                }
+            </div>
+            @if (ShowGridThemeToggle)
+            {
+                <button type="button"
+                        class="fx-grid-option-btn fx-grid-theme-btn @(_activeOptionsPanel == GridOptionsPanel.Theme ? "active" : "")"
+                        title="Theme"
+                        aria-label="Theme"
+                        @onclick="ToggleGridDarkMode">
+                    Theme
+                </button>
+            }
+        </div>
+    }
+
+    @if (ShouldRenderGridOptionsRail && _activeOptionsPanel != GridOptionsPanel.None)
+    {
+        <aside class="fx-grid-side-panel" @onclick:stopPropagation="true">
+            <div class="fx-grid-side-panel-header">
+                <span>@ActiveOptionsPanelTitle</span>
+                <button type="button"
+                        class="fx-grid-side-panel-close"
+                        title="Close"
+                        aria-label="Close"
+                        @onclick="CloseOptionsPanel">×</button>
+            </div>
+
+            @if (_activeOptionsPanel == GridOptionsPanel.Columns)
+            {
+                <div class="fx-grid-side-panel-body">
+                    <input class="fx-grid-side-search"
+                           placeholder="Search columns..."
+                           value="@_columnPanelSearch"
+                           @oninput="e => _columnPanelSearch = e.Value?.ToString() ?? string.Empty" />
+                    <div class="fx-grid-column-option-list">
+                        @foreach (var col in ColumnPanelColumns)
+                        {
+                            var capturedCol = col;
+                            var canHide = !IsColumnVisible(col) || Columns.Count(IsColumnVisible) > 1;
+                            <label class="fx-grid-check-row">
+                                <input type="checkbox"
+                                       checked="@IsColumnVisible(col)"
+                                       disabled="@(!canHide)"
+                                       @onchange="async e => await SetColumnPanelVisibleAsync(capturedCol, e.Value is bool b && b)" />
+                                <span>@HeaderColumnDisplay(col)</span>
+                            </label>
+                        }
+                    </div>
+                    <button type="button"
+                            class="fx-grid-panel-action"
+                            @onclick="HeaderMenuOpenChooseColumns">
+                        Advanced columns...
+                    </button>
+                </div>
+            }
+            else if (_activeOptionsPanel == GridOptionsPanel.Pivot)
+            {
+                <div class="fx-grid-side-panel-body fx-grid-pivot-panel-body">
+                    <label class="fx-grid-pivot-toggle">
+                        <input type="checkbox"
+                               checked="@_pivotMode"
+                               @onchange="e => SetPivotMode(e.Value is bool b && b)" />
+                        <span>Pivot Mode</span>
+                    </label>
+
+                    <input class="fx-grid-side-search"
+                           placeholder="Search fields..."
+                           value="@_pivotFieldSearch"
+                           @oninput="e => _pivotFieldSearch = e.Value?.ToString() ?? string.Empty" />
+
+                    <div class="fx-grid-pivot-field-list">
+                        @foreach (var col in PivotPanelColumns)
+                        {
+                            var field = col.Field;
+                            <div class="fx-grid-pivot-field-row">
+                                <span class="fx-grid-pivot-field-name">@HeaderColumnDisplay(col)</span>
+                                <div class="fx-grid-pivot-field-actions">
+                                    <button type="button"
+                                            title="Add to row groups"
+                                            disabled="@IsPivotFieldInArea(field, PivotFieldArea.Row)"
+                                            @onclick="() => AddPivotField(field, PivotFieldArea.Row)">R</button>
+                                    <button type="button"
+                                            title="Add to column labels"
+                                            disabled="@IsPivotFieldInArea(field, PivotFieldArea.Column)"
+                                            @onclick="() => AddPivotField(field, PivotFieldArea.Column)">C</button>
+                                    <button type="button"
+                                            title="Add to values"
+                                            disabled="@IsPivotFieldInArea(field, PivotFieldArea.Value)"
+                                            @onclick="() => AddPivotField(field, PivotFieldArea.Value)">Σ</button>
+                                </div>
+                            </div>
+                        }
+                    </div>
+
+                    <div class="fx-grid-pivot-zones">
+                        <section class="fx-grid-pivot-zone">
+                            <div class="fx-grid-pivot-zone-title">Row Groups</div>
+                            @foreach (var field in _pivotRowFields)
+                            {
+                                <span class="fx-grid-pivot-chip">
+                                    @GetPivotFieldLabel(field)
+                                    <button type="button" @onclick="() => RemovePivotField(field, PivotFieldArea.Row)">×</button>
+                                </span>
+                            }
+                            @if (_pivotRowFields.Count == 0)
+                            {
+                                <div class="fx-grid-panel-empty">No row groups</div>
+                            }
+                        </section>
+
+                        <section class="fx-grid-pivot-zone">
+                            <div class="fx-grid-pivot-zone-title">Values</div>
+                            @foreach (var valueField in _pivotValueFields)
+                            {
+                                <span class="fx-grid-pivot-chip fx-grid-pivot-value-chip">
+                                    @valueField.DisplayLabel
+                                    <select value="@valueField.Aggregation"
+                                            @onchange="e => ChangePivotAggregation(valueField, e)">
+                                        <option value="Sum">Sum</option>
+                                        <option value="Count">Count</option>
+                                        <option value="Average">Average</option>
+                                        <option value="Min">Min</option>
+                                        <option value="Max">Max</option>
+                                    </select>
+                                    <input class="fx-grid-pivot-format-input"
+                                           value="@valueField.Format"
+                                           placeholder="Format"
+                                           title=".NET format, e.g. N0, N2, C2. Blank uses plain numbers."
+                                           @oninput="e => SetPivotValueFormat(valueField, e)" />
+                                    <button type="button" @onclick="() => RemovePivotField(valueField.Field, PivotFieldArea.Value)">×</button>
+                                </span>
+                            }
+                            @if (_pivotValueFields.Count == 0)
+                            {
+                                <div class="fx-grid-panel-empty">No values</div>
+                            }
+                        </section>
+
+                        <section class="fx-grid-pivot-zone">
+                            <div class="fx-grid-pivot-zone-title">Column Labels</div>
+                            @foreach (var field in _pivotColumnFields)
+                            {
+                                <span class="fx-grid-pivot-chip">
+                                    @GetPivotFieldLabel(field)
+                                    <button type="button" @onclick="() => RemovePivotField(field, PivotFieldArea.Column)">×</button>
+                                </span>
+                            }
+                            @if (_pivotColumnFields.Count == 0)
+                            {
+                                <div class="fx-grid-panel-empty">No column labels</div>
+                            }
+                        </section>
+                    </div>
+                </div>
+            }
+            else if (_activeOptionsPanel == GridOptionsPanel.Theme)
+            {
+                <div class="fx-grid-side-panel-body fx-grid-theme-panel-body">
+                    <div class="fx-grid-theme-current">
+                        Current theme:
+                        <strong>@(GetThemeGalleryItem(_activeGridTheme)?.Name ?? _activeGridTheme.ToString())</strong>
+                    </div>
+                    @foreach (var group in ThemeGalleryGroups)
+                    {
+                        <section class="fx-grid-theme-section">
+                            <div class="fx-grid-theme-section-title">@group.Key</div>
+                            <div class="fx-grid-theme-gallery">
+                                @foreach (var item in group)
+                                {
+                                    <button type="button"
+                                            class="fx-grid-theme-tile @(item.Theme == _activeGridTheme ? "selected" : "")"
+                                            style="@ThemePreviewStyle(item)"
+                                            title="@item.Name"
+                                            aria-label="@($"Select {item.Name} theme")"
+                                            @onclick="() => SelectGridTheme(item.Theme)">
+                                        <span class="fx-grid-theme-preview">
+                                            <span></span><span></span><span></span><span></span>
+                                        </span>
+                                        <span class="fx-grid-theme-name">@item.Name</span>
+                                    </button>
+                                }
+                            </div>
+                        </section>
+                    }
+                </div>
+            }
+        </aside>
+    }
+
+    @* ── Chart View ──────────────────────────────────────────── *@
+    @if (_pivotMode)
+    {
+        <div class="fx-grid-content fx-grid-pivot-shell"
+             style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
+            <PivotControl TValue="TValue"
+                          DataSource="@FilteredData"
+                          RowFields="@_pivotRowFields"
+                          ColumnFields="@_pivotColumnFields"
+                          ValueFields="@_pivotValueFields"
+                          FieldLabels="@PivotFieldLabels"
+                          Height="@ResolvedPivotHeight"
+                          Width="@Width"
+                          ShowGrandTotals="true"
+                          ShowSubTotals="true"
+                          AllowSorting="@AllowSorting"
+                          CssClass="fx-grid-embedded-pivot" />
+        </div>
+    }
+    else if (ShowAsChart && ChartValueFields is { Count: > 0 })
+    {
+        <div class="fx-grid-content fx-grid-chart-content"
+             style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
+            <Fx.ControlKit.Charts.ChartControl
+                DataSource="@PagedData"
+                ValueFields="@ChartValueFields"
+                ValueLabels="@ChartValueLabels"
+                LabelField="@(ChartLabelField ?? VisibleColumns.FirstOrDefault()?.Field)"
+                BarColor="@ChartBarColor"
+                ShowValues="@ChartShowValues"
+                ShowAxisLabels="true" />
+        </div>
+    }
+    else
+    {
+
+    @* ── Grid Table ───────────────────────────────────────────── *@
+    <div class="fx-grid-content" style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
+        <table class="fx-grid-table" style="@GetTableStyle()">
+
+            @* Header *@
+            <thead class="fx-grid-header">
+                <tr>
+                    @if (ShowCheckboxColumn)
+                    {
+                        <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
+                            <input type="checkbox" checked="@AllRowsSelected"
+                                   @onchange="ToggleSelectAll" />
+                        </th>
+                    }
+                    @if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
+                    {
+                        @foreach (var gcol in GroupedLayoutColumns)
+                        {
+                            @* Capture per-iteration so the @oncontextmenu lambda
+                               binds the right field instead of closing over the
+                               loop variable. *@
+                            var capturedGroupField = gcol.Field;
+                            <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
+                                @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
+                                @oncontextmenu:preventDefault="true"
+                                @oncontextmenu:stopPropagation="true"
+                                title="Right-click for options">
+                                <span class="fx-header-text">@HeaderColumnDisplay(gcol)</span>
+                            </th>
+                        }
+                    }
+                    @foreach (var col in VisibleColumns)
+                    {
+                        var state = GetColumnState(col.Field);
+                        var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
+                        var capturedField = col.Field;
+                        var headerLabel = HeaderColumnDisplay(col);
+                        @* data-field CSS hook (header) — matches the data-cell hook so a
+                           single rule like `[data-field="Total"]` paints both the column
+                           header AND every cell underneath. *@
+                        <th class="fx-header-cell @(state.SortDirection.HasValue ? "fx-sorted" : "") @(state.FilterActive ? "fx-filtered" : "") @(AllowResizing && col.AllowResizing ? "fx-resizable" : "")"
+                            style="@col.GetHeaderStyle(); position:relative;"
+                            data-field="@capturedField"
+                            @onclick="() => HandleSort(col)"
+                            @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+                            @oncontextmenu:preventDefault="true"
+                            @oncontextmenu:stopPropagation="true"
+                            title="@headerLabel"
+                            draggable="@(headerDraggable ? "true" : "false")"
+                            @ondragstart="(e => StartColumnDrag(capturedField, e))"
+                            @ondragend="EndColumnDrag">
+
+                            @if (col.HeaderTemplate != null)
+                            {
+                                @col.HeaderTemplate
+                            }
+                            else
+                            {
+                                <span class="fx-header-text">@headerLabel</span>
+                            }
+
+                            @if (AllowSorting && col.AllowSorting && state.SortDirection.HasValue)
+                            {
+                                <span class="fx-sort-icon">@(state.SortDirection == SortDirection.Ascending ? "▲" : "▼")</span>
+                            }
+
+                            @if (state.FilterActive)
+                            {
+                                <span class="fx-filter-applied-mark" title="Filter applied" aria-label="Filter applied"></span>
+                            }
+
+                            @if (AllowFiltering && col.AllowFiltering && ShowHeaderFilterIcon)
+                            {
+                                <span class="fx-filter-icon @(UseDefaultHeaderFilterIcon ? "fx-filter-icon-default" : "fx-filter-icon-custom") @(state.FilterActive ? "active" : "")"
+                                      title="Filter"
+                                      aria-label="Filter @headerLabel"
+                                      @onclick:stopPropagation="true"
+                                      @onclick="e => ToggleFilterPopup(col.Field, e)">
+                                    @if (!UseDefaultHeaderFilterIcon)
+                                    {
+                                        @ResolvedHeaderFilterIcon
+                                    }
+                                </span>
+                            }
+
+                            @* ── Resize Handle ────────────────────────── *@
+                            @if (AllowResizing && col.AllowResizing)
+                            {
+                                <span class="fx-resize-handle"
+                                      @onmousedown="e => StartResize(col, e)"
+                                      @onmousedown:stopPropagation="true"
+                                      @onclick:stopPropagation="true"></span>
+                            }
+
+                            @if (AllowColumnReorder)
+                            {
+                                <span class="fx-header-drop-zone fx-header-drop-zone-left"
+                                      @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: false, e)"
+                                      @ondragover:preventDefault="true"
+                                      @ondragover:stopPropagation="true"
+                                      @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: false, e)"
+                                      @ondrop:preventDefault="true"
+                                      @ondrop:stopPropagation="true"></span>
+                                <span class="fx-header-drop-zone fx-header-drop-zone-right"
+                                      @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: true, e)"
+                                      @ondragover:preventDefault="true"
+                                      @ondragover:stopPropagation="true"
+                                      @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: true, e)"
+                                      @ondrop:preventDefault="true"
+                                      @ondrop:stopPropagation="true"></span>
+                            }
+                        </th>
+                    }
+                </tr>
+
+            </thead>
+
+            @* Body *@
+            <tbody class="fx-grid-body">
+                @if (_isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == -1 && EditSettingsRef.NewRowPosition == NewRowPosition.Top)
+                {
+                    @RenderEditRow()
+                }
+
+                @* ── Grouped or flat rendering ─────────────────── *@
+                @if (AllowGrouping && _groupDescriptors.Count > 0)
+                {
+                    @RenderGroupedRows(GroupedData, 0)
+                }
+                else
+                {
+                    var rowIdx = 0;
+                    @foreach (var item in PagedData)
+                    {
+                        var currentIdx = rowIdx;
+                        var isSelected = _selectedItems.Contains(item);
+                        var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
+                        // Inline background for selected rows as a
+                        // belt-and-suspenders backstop. The scoped
+                        // .fx-row.fx-selected CSS can lose specificity
+                        // fights inside isolated batch-edit cells; an
+                        // inline style wins every battle by spec.
+                        var rowStyle = GetRowStyle(item, currentIdx, isSelected);
+
+                        @if (isEditingThis)
+                        {
+                            @RenderEditRow()
+                        }
+                        else
+                        {
+                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "")"
+                                @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
+                                @ondblclick="() => HandleRowDblClick(item, currentIdx)"
+                                @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
+                                @onmouseenter="(MouseEventArgs e) => HandleRowMouseEnter(item, currentIdx, e)"
+                                style="@rowStyle">
+
+                                @if (ShowCheckboxColumn)
+                                {
+                                    <td class="fx-cell fx-checkbox-cell" style="width:50px;">
+                                        <input type="checkbox" checked="@isSelected"
+                                               @onclick:stopPropagation="true"
+                                               @onchange="() => ToggleRowSelection(item, currentIdx)" />
+                                    </td>
+                                }
+
+                                @RenderDataCells(item, currentIdx, col => col)
+                            </tr>
+                        }
+                        rowIdx++;
+                    }
+                }
+
+                @if (_isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == -1 && EditSettingsRef.NewRowPosition == NewRowPosition.Bottom)
+                {
+                    @RenderEditRow()
+                }
+
+                @if (!HasAnyData)
+                {
+                    <tr>
+                        <td colspan="@TotalColumnCount" class="fx-empty-row">
+                            No records to display
+                        </td>
+                    </tr>
+                }
+            </tbody>
+
+            @* ── Grid Footer (aggregates across all data) ──────── *@
+            @if (AggregateRows is { Count: > 0 })
+            {
+                var footerRows = AggregateRows.Where(r => r.ShowInFooter).ToList();
+                if (footerRows.Count > 0)
+                {
+                    var allItems = SortedData.ToList();
+                    var footerAggs = ComputeAggregates(allItems);
+                    <tfoot class="fx-grid-footer">
+                        @foreach (var aggRow in footerRows)
+                        {
+                            <tr class="fx-aggregate-footer-row">
+                                @if (ShowCheckboxColumn)
+                                {
+                                    <td class="fx-cell fx-aggregate-cell"></td>
+                                }
+                                @if (AllowGrouping && _groupDescriptors.Count > 0)
+                                {
+                                    @for (int gi = 0; gi < _groupDescriptors.Count; gi++)
+                                    {
+                                        <td class="fx-cell fx-group-indent"></td>
+                                    }
+                                }
+                                @foreach (var col in VisibleColumns)
+                                {
+                                    var aggCol = aggRow.Columns.FirstOrDefault(a => a.Field == col.Field);
+                                    <td class="fx-cell fx-aggregate-cell" style="@col.GetCellStyle()">
+                                        @if (aggCol != null)
+                                        {
+                                            var key = $"{aggCol.Field}_{aggCol.Type}";
+                                            footerAggs.TryGetValue(key, out var val);
+                                            <span class="fx-aggregate-value">@FormatAggregateValue(aggCol, val)</span>
+                                        }
+                                    </td>
+                                }
+                            </tr>
+                        }
+                    </tfoot>
+                }
+            }
+        </table>
+    </div>
+    }   @* /else (table render — closes ShowAsChart branch above) *@
+
+    @* ── Pager ────────────────────────────────────────────────── *@
+    @if (AllowPaging)
+    {
+        <div class="fx-grid-pager">
+            <div class="fx-pager-info">
+                @(_pageState.TotalRecords) items
+            </div>
+            <div class="fx-pager-nav">
+                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(1)">⟨⟨</button>
+                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(_pageState.CurrentPage - 1)">⟨</button>
+
+                @foreach (var p in GetPageNumbers())
+                {
+                    var page = p;
+                    <button class="fx-pager-btn @(page == _pageState.CurrentPage ? "fx-pager-active" : "")"
+                            @onclick="() => GoToPage(page)">@(page)</button>
+                }
+
+                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.CurrentPage + 1)">⟩</button>
+                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.TotalPages)">⟩⟩</button>
+            </div>
+            <div class="fx-pager-size">
+                <select @onchange="HandlePageSizeChange">
+                    @foreach (var size in ResolvedPageSizes)
+                    {
+                        <option value="@size" selected="@(size == _pageState.PageSize)">@size / page</option>
+                    }
+                </select>
+            </div>
+        </div>
+    }
+
+    @* ── Column Filter Popup ───────────────────────────────────── *@
+    @if (_filterPopupField != null)
+    {
+        var col = VisibleColumns.FirstOrDefault(c => c.Field == _filterPopupField);
+        var filterHeader = col == null ? _filterPopupField : HeaderColumnDisplay(col);
+        var isNumericFilter = IsNumericFilterColumn(col);
+
+        <div class="fx-filter-popup-overlay" @onclick="CloseFilterPopup">
+            <div class="fx-filter-popup" style="@FilterPopupStyle" @onclick:stopPropagation="true">
+                <div class="fx-filter-popup-header">
+                    <span>Filter: @filterHeader</span>
+                    <button type="button"
+                            class="fx-filter-popup-close"
+                            title="Close"
+                            aria-label="Close filter"
+                            @onclick="CloseFilterPopup">x</button>
+                </div>
+
+                @if (isNumericFilter)
+                {
+                    var numericRanges = GetNumericFilterRanges(_filterPopupField);
+                    var selectedRangeCount = GetSelectedNumericRangeCount(_filterPopupField, numericRanges);
+
+                    <div class="fx-filter-number-panel">
+                        <div class="fx-filter-popup-summary">
+                            @GetNumericFilterSummary(_filterPopupField, numericRanges, selectedRangeCount)
+                        </div>
+
+                        <div class="fx-filter-number-custom">
+                            <div class="fx-filter-number-inputs">
+                                <label class="fx-filter-number-field">
+                                    <span>Min</span>
+                                    <input type="number"
+                                           class="fx-filter-number-input"
+                                           value="@GetNumericFilterMinText(_filterPopupField)"
+                                           @oninput="e => SetNumericFilterMinText(_filterPopupField, e.Value?.ToString())" />
+                                </label>
+                                <label class="fx-filter-number-field">
+                                    <span>Max</span>
+                                    <input type="number"
+                                           class="fx-filter-number-input"
+                                           value="@GetNumericFilterMaxText(_filterPopupField)"
+                                           @oninput="e => SetNumericFilterMaxText(_filterPopupField, e.Value?.ToString())" />
+                                </label>
+                            </div>
+                            <button type="button"
+                                    class="fx-filter-popup-btn"
+                                    @onclick="() => ApplyNumericBoundsFilter(_filterPopupField)">
+                                Apply Range
+                            </button>
+                        </div>
+
+                        <div class="fx-filter-range-list">
+                            @foreach (var range in numericRanges)
+                            {
+                                var capturedRange = range;
+                                <label class="fx-filter-checkbox-item fx-filter-range-item">
+                                    <input type="checkbox"
+                                           checked="@IsNumericRangeChecked(_filterPopupField, capturedRange)"
+                                           @onchange="e => SetNumericRangeChecked(_filterPopupField, capturedRange, e.Value is bool b && b)" />
+                                    <span>@capturedRange.Label</span>
+                                    <em>@capturedRange.CountLabel</em>
+                                </label>
+                            }
+                            @if (numericRanges.Count == 0)
+                            {
+                                <div class="fx-filter-popup-empty">No numeric values</div>
+                            }
+                        </div>
+                    </div>
+                }
+                else
+                {
+                    var values = GetColumnFilterValues(_filterPopupField);
+                    var totalValueCount = GetDistinctValues(_filterPopupField).Count;
+                    var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
+
+                    <div class="fx-filter-condition">
+                        <select class="fx-filter-operator-select"
+                                value="@_filterOperatorDraft"
+                                @onchange="OnTextFilterOperatorChanged">
+                            @foreach (var op in TextFilterOperators)
+                            {
+                                <option value="@op">@GetTextFilterOperatorLabel(op)</option>
+                            }
+                        </select>
+                        <input type="text"
+                               class="fx-filter-popup-input fx-filter-condition-input"
+                               placeholder="Filter value..."
+                               value="@_filterTextDraft"
+                               @oninput="OnTextFilterInput" />
+                    </div>
+
+                    <div class="fx-filter-popup-search">
+                        <input type="text" class="fx-filter-popup-input"
+                               placeholder="Search list values..."
+                               value="@GetColumnFilterValueSearch(_filterPopupField)"
+                               @oninput="OnFilterValueSearchInput" />
+                        <div class="fx-filter-popup-summary">
+                            @selectedValueCount of @totalValueCount selected
+                        </div>
+                    </div>
+
+                    <label class="fx-filter-checkbox-item fx-filter-select-all-row">
+                        <input type="checkbox"
+                               checked="@IsFilterFieldFullySelected(_filterPopupField, values)"
+                               @onchange="e => SetFilterFieldSelected(_filterPopupField, e.Value is bool b && b, values)" />
+                        <span>(Select All)</span>
+                    </label>
+
+                    <div class="fx-filter-checkbox-list">
+                        @foreach (var val in values)
+                        {
+                            var v = val;
+                            <label class="fx-filter-checkbox-item">
+                                <input type="checkbox"
+                                       checked="@IsFilterValueChecked(_filterPopupField, v)"
+                                       @onchange="e => SetFilterValueChecked(_filterPopupField, v, e.Value is bool b && b)" />
+                                <span>@GetFilterValueDisplay(v)</span>
+                            </label>
+                        }
+                        @if (values.Count == 0)
+                        {
+                            <div class="fx-filter-popup-empty">No matching values</div>
+                        }
+                    </div>
+                }
+
+                <div class="fx-filter-popup-actions">
+                    <label class="fx-filter-auto-apply">
+                        <input type="checkbox"
+                               checked="@_filterPopupAutoApply"
+                               @onchange="OnFilterPopupAutoApplyChanged" />
+                        <span>Auto Apply</span>
+                    </label>
+                    <div class="fx-filter-popup-action-buttons">
+                        <button class="fx-filter-popup-btn" @onclick="() => ClearFilterFromPopup(_filterPopupField)">Clear Filter</button>
+                        <button class="fx-filter-popup-btn fx-primary"
+                                disabled="@_filterPopupAutoApply"
+                                @onclick="() => ApplyFilterPopupAsync(close: true)">Apply</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ── Edit Dialog ──────────────────────────────────────────── *@
+    @if (_isEditing && EditSettingsRef?.Mode == EditMode.Dialog)
+    {
+        <div class="fx-dialog-overlay" @onclick="CancelEdit">
+            <div class="fx-dialog" @onclick:stopPropagation="true">
+                <div class="fx-dialog-header">
+                    @(_editingRowIndex >= 0 ? "Edit Record" : "Add New Record")
+                    <button class="fx-dialog-close" @onclick="CancelEdit">×</button>
+                </div>
+                <div class="fx-dialog-body">
+                    @foreach (var col in VisibleColumns.Where(c => c.AllowEditing && !string.IsNullOrEmpty(c.Field) && c.Type != ColumnType.CheckBox && c.Commands == null))
+                    {
+                        <div class="fx-dialog-field">
+                            <label>@col.DisplayHeader</label>
+                            @if (col.EditTemplate != null && _editItem != null)
+                            {
+                                @col.EditTemplate((object)_editItem)
+                            }
+                            else
+                            {
+                                <input type="@(col.Type == ColumnType.Number ? "number" : col.Type == ColumnType.Date ? "date" : "text")"
+                                       value="@GetPropertyValue(_editItem, col.Field)"
+                                       disabled="@col.IsPrimaryKey"
+                                       @onchange="e => SetPropertyValue(_editItem, col.Field, e.Value?.ToString())" />
+                            }
+                        </div>
+                    }
+                </div>
+                <div class="fx-dialog-footer">
+                    <button class="fx-dialog-btn" @onclick="CancelEdit">Cancel</button>
+                    <button class="fx-dialog-btn fx-primary" @onclick="SaveEdit">Save</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @* ── Resize Overlay (captures mousemove/mouseup during resize) ─ *@
+    @if (_resizingCol != null || _resizingRowIndex >= 0)
+    {
+        <div class="fx-resize-overlay @(_resizingRowIndex >= 0 ? "fx-row-resize-overlay" : "")"
+             @onmousemove="HandleGridResizeMove"
+             @onmouseup="EndGridResize"
+             @onmouseleave="EndGridResize"></div>
+    }
+
+    @* ── Header Context Menu (right-click on a column header) ────── *@
+    @* Generic across all grids — see GridControl.razor.cs for handlers.
+       Backdrop catches clicks/right-clicks anywhere outside and dismisses. *@
+    @if (_showHeaderContextMenu)
+    {
+        <div style="position:fixed;inset:0;z-index:999;background:transparent;"
+             @onclick="CloseHeaderContextMenu"
+             @oncontextmenu="CloseHeaderContextMenu"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-header-context-menu"
+             style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
+             @onclick:stopPropagation="true">
+
+            @if (AllowGrouping && (CurrentHeaderColumn?.AllowGrouping ?? false))
+            {
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuToggleGroup">
+                    <span class="fx-grid-header-context-check">@(IsHeaderColumnGrouped ? "✓" : "")</span>
+                    Group on this column
+                </button>
+            }
+            @if (AllowGrouping)
+            {
+                <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(_groupDescriptors.Count == 0)"
+                        @onclick="HeaderMenuExpandAll">
+                    <span class="fx-grid-header-context-check"></span>
+                    Expand All
+                </button>
+                <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(_groupDescriptors.Count == 0)"
+                        @onclick="HeaderMenuCollapseAll">
+                    <span class="fx-grid-header-context-check"></span>
+                    Collapse All
+                </button>
+                <div class="fx-grid-header-context-sep"></div>
+            }
+
+            <button type="button" class="fx-grid-header-context-item"
+                    disabled="@(!CanHideHeaderColumn)"
+                    @onclick="HeaderMenuHideColumn">
+                <span class="fx-grid-header-context-check"></span>
+                Hide this column
+            </button>
+            <button type="button" class="fx-grid-header-context-item"
+                    @onclick="HeaderMenuOpenChooseColumns">
+                <span class="fx-grid-header-context-check"></span>
+                Insert a column...
+            </button>
+            <button type="button" class="fx-grid-header-context-item"
+                    @onclick="HeaderMenuStartRename">
+                <span class="fx-grid-header-context-check"></span>
+                Rename this column...
+            </button>
+            @if (_showRenameColumn)
+            {
+                <div class="fx-grid-header-context-rename">
+                    <input type="text" class="fx-grid-header-context-rename-input"
+                           value="@_renameColumnDraft"
+                           @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
+                           @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); })" />
+                    <button type="button" class="fx-grid-header-context-rename-ok"
+                            @onclick="HeaderMenuCommitRename">OK</button>
+                </div>
+            }
+
+            <div class="fx-grid-header-context-sep"></div>
+
+            <button type="button" class="fx-grid-header-context-item"
+                    @onclick="HeaderMenuPrint">
+                <span class="fx-grid-header-context-check"></span>
+                Print...
+            </button>
+            <button type="button" class="fx-grid-header-context-item"
+                    @onclick="HeaderMenuSaveAs">
+                <span class="fx-grid-header-context-check"></span>
+                Save As...
+            </button>
+        </div>
+    }
+
+    @* ── Choose Columns Dialog (modal) ─────────────────────────── *@
+    @* Mirrors the legacy VB6 "Choose Columns" dialog — checkbox list of
+       every column with Move Up / Move Down / Show / Hide / Show All /
+       Hide All / Restore Default Layout actions. OK commits to
+       _visibilityOverrides and reorders the underlying column list. *@
+    @if (_showChooseColumnsDialog)
+    {
+        <div class="fx-choose-columns-overlay"
+             @onclick="ChooseColumnsCancel"
+             @oncontextmenu="ChooseColumnsCancel"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-choose-columns-dialog" @onclick:stopPropagation="true">
+            <div class="fx-choose-columns-header">
+                <span>Choose Columns</span>
+                <button type="button" class="fx-choose-columns-close"
+                        title="Close" aria-label="Close"
+                        @onclick="ChooseColumnsCancel">×</button>
+            </div>
+            <div class="fx-choose-columns-instructions">
+                Check the columns that you would like visible in this view. Use
+                the Move Up and Move Down buttons to reorder the columns as you
+                would like them to appear.
+            </div>
+            <div class="fx-choose-columns-body">
+                <div class="fx-choose-columns-list">
+                    @foreach (var row in _chooseColumnsRows)
+                    {
+                        var capturedRow = row;
+                        <div class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
+                             @onclick="() => ChooseColumnsSelect(capturedRow.Field)">
+                            <input type="checkbox"
+                                   checked="@row.Visible"
+                                   @onchange="() => ChooseColumnsToggle(capturedRow)"
+                                   @onclick:stopPropagation="true" />
+                            <span class="fx-choose-columns-label">@row.Header</span>
+                        </div>
+                    }
+                </div>
+                <div class="fx-choose-columns-buttons">
+                    <button type="button" @onclick="ChooseColumnsMoveUp"
+                            disabled="@(_chooseColumnsRows.FindIndex(r => r.Field == _chooseColumnsSelectedField) <= 0)">
+                        Move Up
+                    </button>
+                    <button type="button" @onclick="ChooseColumnsMoveDown"
+                            disabled="@(_chooseColumnsRows.FindIndex(r => r.Field == _chooseColumnsSelectedField) < 0
+                                        || _chooseColumnsRows.FindIndex(r => r.Field == _chooseColumnsSelectedField) >= _chooseColumnsRows.Count - 1)">
+                        Move Down
+                    </button>
+                    <button type="button" @onclick="ChooseColumnsShow">Show</button>
+                    <button type="button" @onclick="ChooseColumnsShowAll">Show All</button>
+                    <button type="button" @onclick="ChooseColumnsHide">Hide</button>
+                    <button type="button" @onclick="ChooseColumnsHideAll">Hide All</button>
+                    <button type="button" class="fx-choose-columns-restore"
+                            @onclick="ChooseColumnsRestoreDefault">
+                        Restore<br/>Default Layout
+                    </button>
+                </div>
+            </div>
+            <div class="fx-choose-columns-footer">
+                <button type="button" class="fx-choose-columns-ok"
+                        @onclick="ChooseColumnsOk">OK</button>
+                <button type="button" class="fx-choose-columns-cancel"
+                        @onclick="ChooseColumnsCancel">Cancel</button>
+            </div>
+        </div>
+    }
+</div>

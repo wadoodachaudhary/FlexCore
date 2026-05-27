@@ -1,0 +1,64 @@
+@namespace Fx.ControlKit
+
+@*
+    RibbonControl — Office-style tabbed ribbon with grouped buttons/tools.
+
+    Usage:
+        <RibbonControl>
+            <RibbonTab Title="Home">
+                <RibbonGroup Title="Clipboard">
+                    <RibbonButton Text="Cut"   Icon="✂"   OnClick="OnCut" />
+                    <RibbonButton Text="Copy"  Icon="📄" OnClick="OnCopy" />
+                    <RibbonButton Text="Paste" Icon="📋" OnClick="OnPaste" />
+                </RibbonGroup>
+                <RibbonGroup Title="Font">
+                    …
+                </RibbonGroup>
+            </RibbonTab>
+            <RibbonTab Title="Insert">…</RibbonTab>
+        </RibbonControl>
+*@
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="fx-ribbon @CssClass">
+        <div class="fx-ribbon-tabs">
+            @foreach (var tab in _tabs)
+            {
+                var t = tab;
+                <div class="fx-ribbon-tab-btn @(t == _activeTab ? "active" : "")"
+                     @onclick="() => ActivateTab(t)">@t.Title</div>
+            }
+        </div>
+        <div class="fx-ribbon-body">
+            @* Children render all tabs; CSS hides non-active ones *@
+            @ChildContent
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    /// <summary>Ribbon tab children.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Optional CSS class for the outer container.</summary>
+    [Parameter] public string CssClass { get; set; } = "";
+
+    internal List<RibbonTab> _tabs = new();
+    internal RibbonTab? _activeTab;
+
+    internal void RegisterTab(RibbonTab tab)
+    {
+        if (_tabs.Contains(tab)) return;
+        _tabs.Add(tab);
+        _activeTab ??= tab;
+        StateHasChanged();
+    }
+
+    internal bool IsActive(RibbonTab tab) => _activeTab == tab;
+
+    private void ActivateTab(RibbonTab tab)
+    {
+        _activeTab = tab;
+        StateHasChanged();
+    }
+}

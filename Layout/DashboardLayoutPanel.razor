@@ -1,0 +1,46 @@
+@namespace Fx.ControlKit.Layout
+
+@*
+    A single panel inside a <DashboardLayoutControl>.
+    Sets its CSS-grid placement from Row/Column/SizeX/SizeY and applies the
+    CellAspectRatio cascaded from the parent layout.
+*@
+
+<div class="fx-dashboard-panel" style="@PanelStyle">
+    @if (ContentTemplate != null)
+    {
+        @ContentTemplate
+    }
+    else
+    {
+        @ChildContent
+    }
+</div>
+
+@code {
+    [CascadingParameter] public DashboardLayoutConfig? Layout { get; set; }
+
+    [Parameter] public int Row { get; set; }
+    [Parameter] public int Column { get; set; }
+    [Parameter] public int SizeX { get; set; } = 1;
+    [Parameter] public int SizeY { get; set; } = 1;
+    [Parameter] public RenderFragment? ContentTemplate { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string PanelStyle
+    {
+        get
+        {
+            var aspect = Layout?.CellAspectRatio ?? 1;
+            var safeSizeX = SizeX <= 0 ? 1 : SizeX;
+            var safeSizeY = SizeY <= 0 ? 1 : SizeY;
+            var ratio = aspect <= 0 ? 1 : aspect;
+            var aspectRatio = $"{safeSizeX} / {safeSizeY * ratio}";
+
+            return string.Join(" ",
+                $"grid-column: {Column + 1} / span {safeSizeX};",
+                $"grid-row: {Row + 1} / span {safeSizeY};",
+                $"aspect-ratio: {aspectRatio};");
+        }
+    }
+}

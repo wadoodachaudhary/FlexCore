@@ -1,0 +1,87 @@
+@namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
+
+@if (Visible)
+{
+    <div class="fx-dialog-overlay" @onclick="HandleOverlayClick" tabindex="0" @onkeydown="HandleKeyDown">
+        <div class="fx-dialog @CssClass" style="@DialogStyle" @onclick:stopPropagation="true">
+            <div class="fx-dialog-header">
+                <span>@Header</span>
+                @if (ShowCloseIcon)
+                {
+                    <button class="fx-dialog-close" type="button" @onclick="HandleClose">×</button>
+                }
+            </div>
+            <div class="fx-dialog-body">
+                @ChildContent
+            </div>
+            @if (FooterContent != null)
+            {
+                <div class="fx-dialog-footer">
+                    @FooterContent
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public string? Header { get; set; }
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? Height { get; set; }
+    [Parameter] public bool IsModal { get; set; } = true;
+    [Parameter] public bool ShowCloseIcon { get; set; } = true;
+    [Parameter] public bool CloseOnEscape { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public EventCallback Closed { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+
+    private string DialogStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Width))
+                parts.Add($"width:{Width}");
+            if (!string.IsNullOrWhiteSpace(Height))
+                parts.Add($"height:{Height}");
+            return string.Join(";", parts);
+        }
+    }
+
+    private async Task HandleOverlayClick()
+    {
+        if (!IsModal)
+            return;
+        await RequestClose();
+    }
+
+    private async Task HandleClose()
+    {
+        await RequestClose();
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        if (CloseOnEscape && e.Key == "Escape")
+        {
+            await RequestClose();
+        }
+    }
+
+    private async Task RequestClose()
+    {
+        if (OnClose.HasDelegate)
+            await OnClose.InvokeAsync();
+        if (Closed.HasDelegate)
+            await Closed.InvokeAsync();
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+    }
+}

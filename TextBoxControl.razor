@@ -1,0 +1,90 @@
+@namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Forms
+@using System.Linq.Expressions
+
+@if (Multiline)
+{
+    <InputTextArea class="@ResolvedCssClass"
+                   Value="@Value"
+                   ValueChanged="@ValueChanged"
+                   ValueExpression="@ValueExpression"
+                   @attributes="MergedAttributes" />
+}
+else
+{
+    <InputText class="@ResolvedCssClass"
+               Value="@Value"
+               ValueChanged="@ValueChanged"
+               ValueExpression="@ValueExpression"
+               @attributes="MergedAttributes" />
+}
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Multiline { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public int? MaxLength { get; set; }
+    [Parameter] public string InputType { get; set; } = "text";
+    [Parameter] public int? Rows { get; set; }
+    [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var classes = new List<string>();
+            if (!string.IsNullOrWhiteSpace(CssClass))
+                classes.Add(CssClass);
+            if (HtmlAttributes != null && HtmlAttributes.TryGetValue("class", out var htmlClass))
+                classes.Add(htmlClass?.ToString() ?? string.Empty);
+            if (AdditionalAttributes != null && AdditionalAttributes.TryGetValue("class", out var extraClass))
+                classes.Add(extraClass?.ToString() ?? string.Empty);
+            return string.Join(" ", classes.Where(c => !string.IsNullOrWhiteSpace(c)));
+        }
+    }
+
+    private IReadOnlyDictionary<string, object> MergedAttributes
+    {
+        get
+        {
+            var merged = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            if (AdditionalAttributes != null)
+            {
+                foreach (var kv in AdditionalAttributes)
+                {
+                    if (!string.Equals(kv.Key, "class", StringComparison.OrdinalIgnoreCase))
+                        merged[kv.Key] = kv.Value;
+                }
+            }
+            if (HtmlAttributes != null)
+            {
+                foreach (var kv in HtmlAttributes)
+                {
+                    if (!string.Equals(kv.Key, "class", StringComparison.OrdinalIgnoreCase))
+                        merged[kv.Key] = kv.Value;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(Placeholder) && !merged.ContainsKey("placeholder"))
+                merged["placeholder"] = Placeholder;
+            if (MaxLength.HasValue && !merged.ContainsKey("maxlength"))
+                merged["maxlength"] = MaxLength.Value;
+            if (Rows.HasValue && !merged.ContainsKey("rows"))
+                merged["rows"] = Rows.Value;
+            if (!Enabled && !merged.ContainsKey("disabled"))
+                merged["disabled"] = "disabled";
+            if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
+                merged["type"] = InputType;
+
+            return merged;
+        }
+    }
+}

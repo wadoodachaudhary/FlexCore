@@ -1,0 +1,2613 @@
+@* ReportWriterControl - generic SQL-driven HTML report renderer.
+
+   • Renders a ReportDefinition (built in code or loaded from a Crystal XML
+     export) to paginated HTML pages with Crystal-Reports-style group
+     headers, footers, drill-down tabs, and a clickable group tree.
+   • Renders raw Crystal Reports .rpt files via an optional IReportExporter
+     (host-provided PDF/Excel engine) — the iframe shows the engine output.
+
+   Application-agnostic: every external dependency is an interface
+   (IReportDataExecutor, IReportSessionContext, IReportExporter,
+   IReportPickListProvider). Host apps register concrete implementations
+   in their DI container.
+
+   Usage:
+     <ReportWriterControl @ref="reportWriter" />
+
+     // SQL/XML report:
+     await reportWriter.ShowSqlReport(reportDefinition, parameterValues);
+
+     // Crystal Report (.rpt, requires IReportExporter):
+     await reportWriter.ShowCrystalReport("path/to/report.rpt", parameters);
+*@
+
+@namespace Fx.ControlKit.Reports
+
+@using System.Data
+@using System.Globalization
+@using System.IO
+@using System.Text.Json
+@using Microsoft.JSInterop
+@using Microsoft.AspNetCore.Components.Web
+@implements IDisposable
+
+@inject CrystalXmlReportLoader XmlLoader
+@inject IReportDataExecutor db
+@inject IReportSessionContext SessionState
+@inject IJSRuntime JSRuntime
+@inject ILogger<ReportWriterControl> Logger
+@inject ReportOptions Options
+@* IReportExporter is OPTIONAL — Crystal-Reports binary export is host-specific.
+   When the host has no Crystal Reports DLLs available, no implementation is
+   registered, and the writer falls back to browser print-to-PDF for export. *@
+@inject IReportExporter? CrystalSvc
+@* IReportViewerSettings persists per-user viewer preferences (zoom level
+   today; room for more). Falls back to InMemoryReportViewerSettings when
+   no host adapter is registered. *@
+@inject IReportViewerSettings ViewerSettings
+
+@if (ShowChrome)
+{
+    @* Full viewer chrome — toolbar + group tree + status bar + param dialog.
+       Set ShowChrome=false on the host to drop these and render the bare
+       page area only (dashboards, modal previews, embedded thumbnails). *@
+    <div class="fx-rpt-viewer-container">
+
+        @if (IsLoading)
+        {
+            <div class="fx-rpt-loading-overlay">
+                <div class="fx-rpt-loading-spinner">⏳ Loading Report...</div>
+            </div>
+        }
+
+        @* ── Toolbar (FxControlKit ToolbarControl + ToolbarButtonControl) ──── *@
+        <ToolbarControl>
+            <div class="fx-rpt-nav">
+                <button disabled="@(CurrentPage <= 1)" @onclick="OnFirstPage" title="First Page">⏮</button>
+                <button disabled="@(CurrentPage <= 1)" @onclick="OnPreviousPage" title="Previous Page">◀</button>
+                <input type="number" value="@CurrentPage" @onchange="@(e => OnPageChanged(int.TryParse(e.Value?.ToString(), out var p) ? p : 1))" min="1" max="@PageCount" title="Page Number" />
+                <span>of @PageCount</span>
+                <button disabled="@(CurrentPage >= PageCount)" @onclick="OnNextPage" title="Next Page">▶</button>
+                <button disabled="@(CurrentPage >= PageCount)" @onclick="OnLastPage" title="Last Page">⏭</button>
+            </div>
+
+            <ToolbarSeparatorControl />
+
+            <ToolbarButtonControl Vertical="true" OnClick="OnClose">
+                <span style="font-size:18px;">✕</span>
+                <span class="fx-rpt-toolbar-label">Close</span>
+            </ToolbarButtonControl>
+
+            <ToolbarSeparatorControl />
+
+            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnPrint">
+                <span style="font-size:18px;">🖨️</span>
+                <span class="fx-rpt-toolbar-label">Print</span>
+            </ToolbarButtonControl>
+
+            <div class="fx-rpt-export-menu @(ExportMenuOpen ? "open" : "")">
+                <ToolbarButtonControl Vertical="true" OnClick="ToggleExportMenu">
+                    <span style="font-size:18px;">📤</span>
+                    <span class="fx-rpt-toolbar-label">Export ▾</span>
+                </ToolbarButtonControl>
+                <div class="fx-rpt-export-items">
+                    <button @onclick='() => ChromeOnExport("PDF")'>📄 PDF</button>
+                    <button @onclick='() => ChromeOnExport("Excel")'>📊 Excel</button>
+                    <button @onclick='() => ChromeOnExport("Word")'>📝 Word</button>
+                    <button @onclick='() => ChromeOnExport("CSV")'>📋 CSV</button>
+                </div>
+            </div>
+
+            <ToolbarSeparatorControl />
+
+            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnRefresh">
+                <span style="font-size:18px;">🔄</span>
+                <span class="fx-rpt-toolbar-label">Refresh</span>
+            </ToolbarButtonControl>
+
+            <ToolbarSeparatorControl />
+
+            <div class="fx-rpt-zoom-controls">
+                <ToolbarButtonControl OnClick="ChromeOnZoomOut">
+                    <span style="font-size:16px;">🔍−</span>
+                </ToolbarButtonControl>
+                <select @bind="ZoomLevel" @bind:after="ChromeOnZoomChanged" title="Zoom Level">
+                    <option value="25">25%</option>
+                    <option value="50">50%</option>
+                    <option value="75">75%</option>
+                    <option value="100">100%</option>
+                    <option value="125">125%</option>
+                    <option value="150">150%</option>
+                    <option value="200">200%</option>
+                    <option value="0">Fit Page</option>
+                    <option value="-1">Fit Width</option>
+                </select>
+                <ToolbarButtonControl OnClick="ChromeOnZoomIn">
+                    <span style="font-size:16px;">🔍+</span>
+                </ToolbarButtonControl>
+            </div>
+
+            <ToolbarSeparatorControl />
+
+            <div class="fx-rpt-search-controls">
+                <input type="text" @bind="SearchText" @bind:event="oninput" placeholder="Search..." @onkeydown="ChromeOnSearchKeyDown" />
+                <ToolbarButtonControl OnClick="ChromeOnSearch">
+                    <span style="font-size:16px;">🔎</span>
+                </ToolbarButtonControl>
+            </div>
+
+            <ToolbarSeparatorControl />
+
+            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnEditParameters">
+                <span style="font-size:18px;">⚙️</span>
+                <span class="fx-rpt-toolbar-label">Parameters</span>
+            </ToolbarButtonControl>
+
+            <ToolbarSeparatorControl />
+
+            <ToolbarButtonControl Vertical="true" OnClick="ToggleGroupTreePanel">
+                <span style="font-size:18px;">🌳</span>
+                <span class="fx-rpt-toolbar-label">@(ShowGroupTree ? "Hide Tree" : "Show Tree")</span>
+            </ToolbarButtonControl>
+
+            <ToolbarSeparatorControl />
+
+            <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="What happens when you click a group node">
+                <span class="fx-rpt-tree-mode-label">Tree:</span>
+                <label class="fx-rpt-tree-mode-radio">
+                    <input type="radio" name="fx-rpt-tree-mode" value="Group"
+                           checked="@(TreeMode == TreeNavigationMode.Group)"
+                           @onchange="() => SetTreeMode(TreeNavigationMode.Group)" />
+                    <span title="Click a node to scroll to that group on the current tab.">Group</span>
+                </label>
+                <label class="fx-rpt-tree-mode-radio">
+                    <input type="radio" name="fx-rpt-tree-mode" value="DrillDown"
+                           checked="@(TreeMode == TreeNavigationMode.DrillDown)"
+                           @onchange="() => SetTreeMode(TreeNavigationMode.DrillDown)" />
+                    <span title="Click a node to open a new drill-down tab filtered to that group.">Drill Down</span>
+                </label>
+            </div>
+        </ToolbarControl>
+
+        @* ── Content Area — group tree + bare renderer ────────────────── *@
+        <div class="fx-rpt-content-area">
+            @if (ShowGroupTree)
+            {
+                <div class="fx-rpt-group-tree">
+                    <strong style="font-size: 13px; display: block; margin-bottom: 8px;">Report Groups</strong>
+                    @if (GroupTree.Any())
+                    {
+                        <ul>
+                            @foreach (var node in GroupTree)
+                            {
+                                @RenderGroupTreeNode(node)
+                            }
+                        </ul>
+                    }
+                    else
+                    {
+                        <p style="color: #999; font-size: 12px;">No groups available.</p>
+                    }
+                </div>
+            }
+
+            <div class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
+                @RenderReportContent()
+            </div>
+        </div>
+
+        @* ── Status Bar ──────────────────────────────────────── *@
+        <div class="fx-rpt-status-bar">
+            <span>@StatusMessage</span>
+            <span>@(ReportLoaded ? $"Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
+        </div>
+    </div>
+
+    @* Embedded parameter prompt — opened by ShowReportAsync when the
+       report has required parameters not pre-seeded. *@
+    <ReportParamDialogControl @ref="_paramDialog" />
+}
+else
+{
+    @* Bare renderer — same content as the chrome-wrapped panel but without
+       toolbar/tree/status. Hosts that want to embed the report inside their
+       own UI (dashboards, modal previews) set ShowChrome=false. *@
+    <div class="fx-report-container">
+        @RenderReportContent()
+    </div>
+}
+
+@code {
+    // ════════════════════════════════════════════════════════════════════
+    //  PARAMETERS
+    // ════════════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// When true (default), the control renders its full viewer chrome:
+    /// toolbar (first / prev / next / last / close / print / export /
+    /// refresh / zoom / search / parameters / hide-tree / tree-mode),
+    /// left-side group tree panel, status bar, and the embedded
+    /// parameter prompt dialog. Set to false to drop the bare renderer
+    /// into a host that already provides its own UI (dashboards, modal
+    /// previews, etc.) — only the page area is shown.
+    /// </summary>
+    [Parameter] public bool ShowChrome { get; set; } = true;
+
+    /// <summary>
+    /// Fires when the user clicks the toolbar's Close button. Hosts wire
+    /// this to navigate back, close a modal, signal a tab host, etc.
+    /// When unset and ShowChrome=true, the Close button is still
+    /// rendered but the click is a no-op.
+    /// </summary>
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    /// <summary>
+    /// Fires when <see cref="ShowReportAsync"/> resolves the report to
+    /// load — receives the report's display name (filename without
+    /// extension). Hosts use this to update a parent shell's titlebar
+    /// (e.g. FMain's child-form title) without re-parsing the report
+    /// path themselves.
+    /// </summary>
+    [Parameter] public EventCallback<string> OnPageTitleChanged { get; set; }
+
+    // === Public State ===
+    public bool IsLoading { get; private set; }
+    public string? ErrorMessage { get; private set; }
+    public ReportOrientation Orientation => ActiveTab?.Orientation ?? ReportOrientation.Portrait;
+    public int PageCount => ActiveTab?.Pages.Count ?? 0;
+
+    /// <summary>Currently displayed page (1-based) in the ACTIVE tab. Adjust via <see cref="GoToPage"/>.</summary>
+    public int CurrentPage => ActiveTab?.CurrentPage ?? 1;
+
+    /// <summary>
+    /// Hierarchical group tree for the ACTIVE tab. Mirrors Crystal Reports' <c>DisplayGroupTree</c>.
+    /// </summary>
+    public List<FxGroupNode> GroupTree => ActiveTab?.Tree ?? _emptyTree;
+
+    /// <summary>All open tabs — index 0 is always the Main Report. Drill-down tabs are appended.</summary>
+    public List<ReportTab> Tabs { get; private set; } = new();
+
+    /// <summary>Index of the currently-displayed tab.</summary>
+    public int ActiveTabIndex { get; private set; } = 0;
+
+    /// <summary>Convenience accessor for the active tab (null if none open).</summary>
+    public ReportTab? ActiveTab => (Tabs.Count > 0 && ActiveTabIndex < Tabs.Count) ? Tabs[ActiveTabIndex] : null;
+
+    /// <summary>Fires after the report finishes rendering (so the viewer can refresh its tree).</summary>
+    public event Action? OnRenderComplete;
+
+    /// <summary>
+    /// Optional hook invoked on every <see cref="ReportDefinition"/> just after it is
+    /// loaded from XML and before its SQL is executed. Lets the host page tweak the
+    /// definition (e.g. rewrite single-value parameters as multi-value <c>IN</c>
+    /// clauses, swap column formats, override grouping, etc.).
+    ///
+    /// <para>
+    /// Currently invoked from <see cref="OpenDrillDown"/> so drill-down tabs share
+    /// the same massaging the host applied to the main definition before calling
+    /// <see cref="ShowSqlReport"/>.
+    /// </para>
+    /// </summary>
+    public Action<ReportDefinition>? DefinitionPostProcessor { get; set; }
+
+    // === Internal State ===
+    private string PdfDataUrl = "";
+    private static readonly List<FxGroupNode> _emptyTree = new();
+
+    // Context for drill-down — stored when ShowSqlReport runs from an XML-backed report so
+    // the tree-click handler can build drill-down tabs without re-parsing the XML.
+    private string? _xmlFilePath;
+    private Dictionary<string, object>? _lastParameters;
+
+    // .NET ↔ JS bridge for row-cell click drill-down (every rendered row is clickable).
+    private DotNetObjectReference<ReportWriterControl>? _dotNetRef;
+    private bool _jsClickHandlerRegistered;
+
+    // ════════════════════════════════════════════════════════════════════
+    //  CHROME STATE — toolbar / status bar / group tree / param dialog
+    // ════════════════════════════════════════════════════════════════════
+
+    // Public-readable status message (status bar's left cell). Updated as
+    // the user navigates / loads / cancels / errors.
+    public string StatusMessage { get; private set; } = "Ready";
+    public bool ReportLoaded { get; private set; }
+
+    // Toolbar / panel toggles.
+    private bool ShowGroupTree = true;
+    private bool ExportMenuOpen;
+
+    // Tree-click mode — Group scrolls to / highlights the matching group
+    // header on the current tab; DrillDown opens a new filtered tab.
+    private TreeNavigationMode TreeMode { get; set; } = TreeNavigationMode.Group;
+
+    // Zoom (percent; 0 = Fit Page, -1 = Fit Width). Loaded from
+    // IReportViewerSettings on first render.
+    private int ZoomLevel = 100;
+    private double ZoomScale => ZoomLevel > 0 ? ZoomLevel / 100.0 : 1.0;
+
+    // Search box state.
+    private string SearchText = "";
+
+    // Tracks the report file most recently passed to ShowReportAsync —
+    // drives the Refresh button and ReportFilePath-aware features.
+    private string ReportFilePath = "";
+
+    // Captured BEFORE multi-value rewrite so the "Parameters" toolbar
+    // button can re-prompt with the user's prior selections intact.
+    private Dictionary<string, object>? _lastPromptedValues;
+
+    // Caller-supplied / session-injected parameters merged into every
+    // ShowReportAsync run (e.g. DivisionID).
+    private readonly Dictionary<string, string> _seedParameters = new(StringComparer.OrdinalIgnoreCase);
+
+    // Embedded parameter prompt dialog — same control the page used to
+    // host. Filled in by Blazor on first render.
+    private ReportParamDialogControl? _paramDialog;
+
+    // True once OnAfterRenderAsync has loaded the persisted zoom level
+    // from IReportViewerSettings. Prevents the value from snapping back
+    // to 100 if a render fires before the load completes.
+    private bool _settingsLoaded;
+
+    // Currently-selected tree node — set in OnGroupNodeClicked, read by
+    // RenderGroupTreeNode to apply the .selected class so the user can
+    // see which node they last clicked even after the page navigation
+    // settles. Cleared on report reload.
+    private FxGroupNode? _selectedTreeNode;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            // Load persisted zoom level from the host-supplied settings
+            // store. Falls back to 100 when the host hasn't registered
+            // an adapter (InMemoryReportViewerSettings default).
+            if (!_settingsLoaded)
+            {
+                try
+                {
+                    ZoomLevel = await ViewerSettings.GetZoomLevelAsync();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to load zoom from IReportViewerSettings; using default 100");
+                    ZoomLevel = 100;
+                }
+                _settingsLoaded = true;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        // Attach/refresh the JS click delegator whenever content changes (tabs + pages can
+        // re-render at any time). hfAttachDrillHandler is idempotent.
+        if (_dotNetRef != null && Tabs.Count > 0 && !_jsClickHandlerRegistered)
+        {
+            try
+            {
+                await JSRuntime.InvokeVoidAsync("hfAttachDrillHandler", _dotNetRef);
+                _jsClickHandlerRegistered = true;
+            }
+            catch { /* JS not ready yet — will retry on next render */ }
+        }
+    }
+
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
+
+    /// <summary>
+    /// Called from JavaScript when the user clicks any row in the rendered report. The
+    /// <paramref name="pathJson"/> is a JSON array of <c>{field, value}</c> objects built
+    /// from the row's group-field columns — it describes the drill target.
+    /// </summary>
+    [JSInvokable]
+    public async Task OnCellClick(string pathJson)
+    {
+        if (string.IsNullOrWhiteSpace(pathJson)) return;
+        try
+        {
+            var entries = JsonSerializer.Deserialize<List<CellPathEntry>>(pathJson);
+            if (entries == null || entries.Count == 0) return;
+            var path = entries.Select(e => new DrillDownFilter(e.field ?? "", e.value ?? "")).ToList();
+            // Tab title = the deepest (rightmost) value the user effectively drilled to.
+            var leaf = path[^1];
+            var label = string.IsNullOrEmpty(leaf.Value) ? "(empty)" : leaf.Value;
+            var fakeNode = new FxGroupNode { Label = label, Value = leaf.Value, Field = leaf.Field };
+            await OpenDrillDown(fakeNode, path);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "OnCellClick failed for path: {Path}", pathJson);
+        }
+    }
+
+    /// <summary>JSON shape emitted in row <c>data-path</c> attributes.</summary>
+    private sealed class CellPathEntry
+    {
+        public string? field { get; set; }
+        public string? value { get; set; }
+    }
+
+    /// <summary>
+    /// Registers the source Crystal Reports XML file path for the report currently being shown.
+    /// Callers that invoke <see cref="ShowSqlReport"/> directly (rather than
+    /// <see cref="ShowXmlReport"/>) must call this beforehand so drill-down tabs can re-parse
+    /// the XML with different filters.
+    /// </summary>
+    public void SetXmlSource(string xmlFilePath)
+    {
+        _xmlFilePath = xmlFilePath;
+    }
+
+    /// <summary>Navigates to the specified page (1-based) in the active tab.</summary>
+    public void GoToPage(int pageNum)
+    {
+        var tab = ActiveTab;
+        if (tab == null || tab.Pages.Count == 0) return;
+        tab.CurrentPage = Math.Max(1, Math.Min(pageNum, tab.Pages.Count));
+        StateHasChanged();
+    }
+
+    /// <summary>Switches the active tab.</summary>
+    public void SwitchTab(int tabIndex)
+    {
+        if (tabIndex >= 0 && tabIndex < Tabs.Count)
+        {
+            ActiveTabIndex = tabIndex;
+            StateHasChanged();
+            OnRenderComplete?.Invoke();
+        }
+    }
+
+    /// <summary>Closes a drill-down tab (cannot close the Main Report tab at index 0).</summary>
+    public void CloseTab(int tabIndex)
+    {
+        if (tabIndex <= 0 || tabIndex >= Tabs.Count) return;
+        Tabs.RemoveAt(tabIndex);
+        if (ActiveTabIndex >= Tabs.Count) ActiveTabIndex = Tabs.Count - 1;
+        if (ActiveTabIndex < 0) ActiveTabIndex = 0;
+        StateHasChanged();
+        OnRenderComplete?.Invoke();
+    }
+
+    /// <summary>
+    /// Opens a drill-down tab for the given tree node. Re-queries with the drill path as an
+    /// extra WHERE filter and shows the Detail-level columns (which were suppressed at top-level).
+    /// If a tab with the same path is already open, just switches to it.
+    /// </summary>
+    public async Task OpenDrillDown(FxGroupNode node, List<DrillDownFilter> fullPath)
+    {
+        if (string.IsNullOrEmpty(_xmlFilePath))
+        {
+            Logger.LogWarning("Drill-down requested but no source XML file is tracked.");
+            return;
+        }
+
+        // If a tab with this exact path already exists, just activate it.
+        var existing = Tabs.FindIndex(t => PathEquals(t.Path, fullPath));
+        if (existing >= 0) { SwitchTab(existing); return; }
+
+        IsLoading = true;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var drillDef = XmlLoader.LoadDrillDown(_xmlFilePath, fullPath);
+
+            // Let the host page massage the drill-down definition (e.g. rewrite
+            // single-value Crystal parameters as multi-value IN clauses). The
+            // host applied the same transformation to the main definition
+            // before calling ShowSqlReport — applying it here keeps drill-down
+            // SQL in sync with the parameters in _lastParameters.
+            DefinitionPostProcessor?.Invoke(drillDef);
+
+            Orientation_DoNotSet_UseTab(drillDef.Orientation);
+
+            // Resolve parameters the same way as the main report (including any host-registered session-injected parameters).
+            var sqlParams = new Dictionary<string, object>();
+            foreach (var p in drillDef.Parameters)
+            {
+                if (_lastParameters?.TryGetValue(p.Name, out var val) == true)
+                    sqlParams[p.Name] = val;
+                else if (!string.IsNullOrEmpty(p.DefaultValue))
+                    sqlParams[p.Name] = p.DefaultValue;
+            }
+            if (_lastParameters != null)
+                foreach (var kv in _lastParameters)
+                    if (!sqlParams.ContainsKey(kv.Key)) sqlParams[kv.Key] = kv.Value;
+            AutoInjectSessionParameters(sqlParams, drillDef.Sql);
+
+            // Log what we're about to run — critical for debugging empty
+            // drill-downs. Console.WriteLine bypasses the Serilog
+            // Fx.ControlKit.Reports → Warning override that silences
+            // LogInformation, so the SQL is always visible in the
+            // process console output (and the file sink picks up the
+            // Logger.LogInformation copies as well, when the override
+            // is dialed back to Information).
+            var pathStr = string.Join(" -> ", fullPath.Select(f => $"{f.Field}={f.Value}"));
+            var paramStr = string.Join(", ", sqlParams.Select(kv => $"{kv.Key}={kv.Value} ({kv.Value?.GetType().Name})"));
+            Console.WriteLine($"\n═══ DRILL-DOWN ═══");
+            Console.WriteLine($"  Path:       [{pathStr}]");
+            Console.WriteLine($"  Parameters: {paramStr}");
+            Console.WriteLine($"  SQL:");
+            Console.WriteLine(drillDef.Sql);
+            Console.WriteLine($"═══════════════════\n");
+            Logger.LogInformation("Drill-down path: [{Path}]", pathStr);
+            Logger.LogInformation("Drill-down parameters: {Params}", paramStr);
+            Logger.LogInformation("Drill-down SQL:\n{Sql}", drillDef.Sql);
+
+            var dt = db.Execute(drillDef.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            GuardRowLimit(dt);
+            var visibleCols = drillDef.Columns.Where(c => !c.Hidden).ToList();
+            var rowsPerPage = drillDef.RowsPerPage > 0
+                ? drillDef.RowsPerPage
+                : (drillDef.Orientation == ReportOrientation.Landscape ? 49 : 70);
+
+            // Same adaptive width pass as the main report — keeps drill-down
+            // tabs visually consistent and avoids horizontal overflow when the
+            // drill-down columns differ from the summary columns.
+            ComputeAdaptiveColumnWidths(drillDef, visibleCols, dt);
+
+            var tab = new ReportTab
+            {
+                Title = node.Label,
+                Path = fullPath.ToList(),
+                Pages = RenderHtmlPages(drillDef, dt, visibleCols),
+                Tree = BuildGroupTree(dt, drillDef, rowsPerPage),
+                CurrentPage = 1,
+                Orientation = drillDef.Orientation
+            };
+
+            if (dt.Rows.Count == 0 || AllRowsAreEmpty(dt, visibleCols))
+            {
+                // Either no rows matched the filters, or the LEFT-JOINed detail tables had
+                // nothing to attach (every visible column is NULL). Show a diagnostic message
+                // so the tab isn't visually blank.
+                var reason = dt.Rows.Count == 0
+                    ? "No rows matched the drill-down filters."
+                    : "No detail rows available for this drill target (all detail-level columns are empty).";
+                tab.Pages = new List<string> {
+                    $@"<div style='padding:24px; font-family:Arial,sans-serif;'>
+                       <h3 style='color:#666;'>{reason}</h3>
+                       <p><strong>Filters applied:</strong></p>
+                       <ul>{string.Join("", fullPath.Select(f => $"<li>{System.Web.HttpUtility.HtmlEncode(f.Field)} = '{System.Web.HttpUtility.HtmlEncode(string.IsNullOrEmpty(f.Value) ? "(empty)" : f.Value)}'</li>"))}</ul>
+                       <p style='color:#888; font-size:12px;'>Usually means this is a &quot;leaf&quot; drill target — no child rows exist for it. Try a different tree node.</p>
+                    </div>"
+                };
+            }
+
+            Tabs.Add(tab);
+            ActiveTabIndex = Tabs.Count - 1;
+
+            Logger.LogInformation("Drill-down tab opened: {Title} ({Rows} rows, {Pages} pages)",
+                tab.Title, dt.Rows.Count, tab.Pages.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Drill-down failed for node {Label}", node.Label);
+            ErrorMessage = $"Drill-down error: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+            OnRenderComplete?.Invoke();
+        }
+    }
+
+    // Historical name kept for back-compat with template parsing. Orientation is now per-tab.
+    private void Orientation_DoNotSet_UseTab(ReportOrientation o) { /* no-op */ }
+
+    private static bool PathEquals(List<DrillDownFilter> a, List<DrillDownFilter> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i].Field, b[i].Field, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a[i].Value, b[i].Value, StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Returns true if every row in <paramref name="dt"/> has NULL (or empty string) in
+    /// all of the specified display columns. Used to detect drill-down queries that returned
+    /// rows only because of the anchor INNER join, but where the LEFT-JOINed detail tables
+    /// had no matching entries — the result would render as a visually-empty tab. Fully
+    /// generic: works for any report's column set.
+    /// </summary>
+    private static bool AllRowsAreEmpty(DataTable dt, List<ReportColumn> cols)
+    {
+        if (dt.Rows.Count == 0) return true;
+        foreach (DataRow row in dt.Rows)
+        {
+            foreach (var c in cols)
+            {
+                if (!dt.Columns.Contains(c.Field)) continue;
+                var v = row[c.Field];
+                if (v != null && v != DBNull.Value && !string.IsNullOrEmpty(v.ToString()))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Crystal Report (.rpt) rendering via SAP Crystal Reports Engine
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Loads a Crystal Report .rpt file, sets parameters, renders to PDF, and displays in iframe.
+    /// </summary>
+    public async Task ShowCrystalReport(string rptFilePath, params (string Name, object? Value)[] parameters)
+    {
+        await ShowCrystalReport(rptFilePath, parameters.ToDictionary(p => p.Name, p => p.Value?.ToString() ?? ""));
+    }
+
+    /// <summary>
+    /// Loads a Crystal Report .rpt file with dictionary parameters.
+    /// </summary>
+    public async Task ShowCrystalReport(string rptFilePath, Dictionary<string, string> parameters)
+    {
+        IsLoading = true;
+        ErrorMessage = null;
+        PdfDataUrl = "";
+        Tabs.Clear();
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            if (CrystalSvc == null)
+            {
+                ErrorMessage = "No Crystal Reports exporter is registered with the host.";
+                Logger.LogWarning("ShowCrystalReport called but IReportExporter is not registered.");
+                return;
+            }
+            CrystalSvc.LoadReport(rptFilePath);
+            CrystalSvc.SetParameters(parameters);
+
+            var pdfBytes = CrystalSvc.ExportToPdf();
+            PdfDataUrl = $"data:application/pdf;base64,{Convert.ToBase64String(pdfBytes)}";
+
+            Logger.LogInformation("Crystal Report rendered: {File} ({Pages} bytes PDF)", rptFilePath, pdfBytes.Length);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to render Crystal Report: {File}", rptFilePath);
+            ErrorMessage = $"Failed to load report: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Crystal XML Report rendering (CR definition exported as .xml)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Loads a Crystal Reports XML definition, parses it into a <see cref="ReportDefinition"/>,
+    /// and renders it as an HTML report (Option 4).
+    ///
+    /// Use when the report runtime is NOT available (Linux, macOS, containers) — the XML
+    /// export contains enough metadata (tables, joins, WHERE formula, groups, parameters,
+    /// detail columns) to rebuild the report as a SQL-driven HTML table.
+    /// </summary>
+    /// <param name="xmlFilePath">Absolute path to the Crystal Reports .xml export.</param>
+    /// <param name="parameters">Parameter values (e.g. <c>{"Worksheet", 12345}</c>, <c>{"TenantId", 1}</c>).</param>
+    public async Task ShowXmlReport(string xmlFilePath, Dictionary<string, object>? parameters = null)
+    {
+        IsLoading = true;
+        ErrorMessage = null;
+        PdfDataUrl = "";
+        Tabs.Clear();
+        ActiveTabIndex = 0;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            // Parse the Crystal Reports XML into a ReportDefinition
+            var definition = XmlLoader.Load(xmlFilePath);
+
+            // Track source path + parameters so drill-down tabs can re-query.
+            _xmlFilePath = xmlFilePath;
+            _lastParameters = parameters ?? new Dictionary<string, object>();
+
+            // Auto-inject configured session parameters (see ReportOptions.SessionAutoInjectParameters) if the
+            // report's SQL references them. Fully generic — driven by ReportOptions.
+            parameters ??= new Dictionary<string, object>();
+            AutoInjectSessionParameters(parameters, definition.Sql);
+
+            await ShowSqlReport(definition, parameters);
+            Logger.LogInformation("Crystal XML report rendered: {File}", xmlFilePath);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to render Crystal XML report: {File}", xmlFilePath);
+            ErrorMessage = $"Failed to load XML report: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Exports the currently loaded Crystal Report to the specified format.
+    /// Returns null when no <see cref="IReportExporter"/> is registered (the
+    /// host should fall back to browser print-to-PDF in that case).
+    /// </summary>
+    public Task<byte[]?> ExportCrystalReport(string format)
+    {
+        try
+        {
+            if (CrystalSvc == null) return Task.FromResult<byte[]?>(null);
+            return Task.FromResult<byte[]?>(format.ToUpperInvariant() switch
+            {
+                "PDF" => CrystalSvc.ExportToPdf(),
+                "EXCEL" or "XLS" => CrystalSvc.ExportToExcel(),
+                "WORD" or "DOC" => CrystalSvc.ExportToWord(),
+                "RTF" => CrystalSvc.ExportToRtf(),
+                "CSV" => CrystalSvc.ExportToCsv(),
+                _ => CrystalSvc.ExportToPdf()
+            });
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Crystal Report export failed: {Format}", format);
+            return Task.FromResult<byte[]?>(null);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // SQL Report rendering (Option 4: SQL → HTML/CSS → PDF)
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Executes a SQL-based report definition and renders it as paginated HTML.
+    /// </summary>
+    public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null)
+    {
+        IsLoading = true;
+        ErrorMessage = null;
+        PdfDataUrl = "";
+        Tabs.Clear();
+        ActiveTabIndex = 0;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            // Build parameter object for SQL query
+            var sqlParams = new Dictionary<string, object>();
+            foreach (var paramDef in definition.Parameters)
+            {
+                if (parameterValues?.TryGetValue(paramDef.Name, out var val) == true)
+                    sqlParams[paramDef.Name] = val;
+                else if (!string.IsNullOrEmpty(paramDef.DefaultValue))
+                    sqlParams[paramDef.Name] = paramDef.DefaultValue;
+            }
+
+            // Forward any caller-supplied parameter that wasn't explicitly declared in the definition
+            // (e.g. host-injected session parameters, or parameters the XML loader missed).
+            if (parameterValues != null)
+            {
+                foreach (var kv in parameterValues)
+                {
+                    if (!sqlParams.ContainsKey(kv.Key))
+                        sqlParams[kv.Key] = kv.Value;
+                }
+            }
+
+            // Auto-inject configured session parameters (see ReportOptions.SessionAutoInjectParameters; extend
+            // via ReportOptions.SessionAutoInjectParameters for other well-known keys).
+            AutoInjectSessionParameters(sqlParams, definition.Sql);
+
+            // Log what we're about to run so users can see parameter values when a query
+            // unexpectedly returns 0 rows (column type mismatch, wrong session value, etc).
+            Logger.LogInformation("Main report parameters: {Params}",
+                string.Join(", ", sqlParams.Select(kv => $"{kv.Key}={kv.Value} ({kv.Value?.GetType().Name})")));
+            Logger.LogInformation("Main report SQL:\n{Sql}", definition.Sql);
+
+            // Execute SQL
+            var dt = db.Execute(definition.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            GuardRowLimit(dt);
+            Logger.LogInformation("Main report returned {Rows} rows", dt.Rows.Count);
+
+            // Render to HTML pages
+            var visibleColumns = definition.Columns.Where(c => !c.Hidden).ToList();
+            // Compute rows-per-page here so RenderHtmlPages and BuildGroupTree stay in sync
+            // (the tree needs to know which page each group's first row lands on).
+            var rowsPerPage = definition.RowsPerPage > 0
+                ? definition.RowsPerPage
+                // Fallback when the report definition didn't carry a row cap
+                  // (e.g. code-built reports). Now interpreted as a cap on
+                  // total VISIBLE rows (data + group headers + footers) — the
+                  // splitter counts each transition's overhead so the cap
+                  // gives a uniform visual page height regardless of how
+                  // many transitions a particular page contains.
+                  : (definition.Orientation == ReportOrientation.Landscape ? 49 : 70);
+
+            // If the definition includes a separate TreeSql, run it to populate the tree
+            // with ALL group levels (outermost → innermost). Without this the tree would
+            // only show the groups in the summary SELECT, hiding deeper drill targets
+            // that exist solely in the detail-level hierarchy.
+            var treeData = dt;
+            if (!string.IsNullOrWhiteSpace(definition.TreeSql))
+            {
+                try
+                {
+                    treeData = db.Execute(definition.TreeSql, sqlParams.Count > 0 ? sqlParams : null);
+                    Logger.LogInformation("Tree SQL returned {Rows} hierarchy rows", treeData.Rows.Count);
+                }
+                catch (Exception treeEx)
+                {
+                    Logger.LogWarning(treeEx, "Tree SQL failed — falling back to main result for tree");
+                    treeData = dt;
+                }
+            }
+
+            // Adaptive column-width pass: honor the XML's stated widths as
+            // hints (which is what VB6 uses), then expand numeric columns to
+            // fully fit header + widest value, and distribute remaining space
+            // to text columns so they fit on one line where possible.
+            ComputeAdaptiveColumnWidths(definition, visibleColumns, dt);
+
+            // Populate the Main Report tab (index 0). Drill-downs are appended by OpenDrillDown.
+            var mainTab = new ReportTab
+            {
+                Title = "Main Report",
+                Path = new(),  // empty path = no drill
+                Pages = RenderHtmlPages(definition, dt, visibleColumns),
+                Tree = BuildGroupTree(treeData, definition, rowsPerPage),
+                CurrentPage = 1,
+                Orientation = definition.Orientation
+            };
+            Tabs.Add(mainTab);
+            ActiveTabIndex = 0;
+
+            // Remember parameters for drill-down queries.
+            _lastParameters = parameterValues != null
+                ? new Dictionary<string, object>(parameterValues)
+                : new Dictionary<string, object>();
+
+            Logger.LogInformation("SQL Report rendered: {Title} ({Rows} rows, {Pages} pages, {Groups} top groups)",
+                definition.Title, dt.Rows.Count, mainTab.Pages.Count, mainTab.Tree.Count);
+
+            OnRenderComplete?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to render SQL report: {Title}", definition.Title);
+            ErrorMessage = $"Report error: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Renders a DataTable as an HTML report (for ShowSQLReport-style usage).
+    /// </summary>
+    public async Task ShowDataTableReport(string title, DataTable data, ReportOrientation orientation = ReportOrientation.Portrait)
+    {
+        IsLoading = true;
+        ErrorMessage = null;
+        PdfDataUrl = "";
+        Tabs.Clear();
+        // Orientation is now stored on each tab; set in the tab construction below.
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            // Auto-generate columns from DataTable
+            var definition = new ReportDefinition
+            {
+                Title = title,
+                Orientation = orientation
+            };
+            foreach (DataColumn col in data.Columns)
+            {
+                var reportCol = new ReportColumn
+                {
+                    Field = col.ColumnName,
+                    HeaderText = col.ColumnName,
+                    ColumnType = MapDataType(col.DataType)
+                };
+                // Auto-align numbers right
+                if (reportCol.ColumnType is ReportColumnType.Decimal or ReportColumnType.Currency or ReportColumnType.Integer)
+                    reportCol.Alignment = ReportAlignment.Right;
+                definition.Columns.Add(reportCol);
+            }
+
+            var visibleColumns = definition.Columns;
+            // Populate Main Report tab for the DataTable-driven path.
+            Tabs.Clear();
+            Tabs.Add(new ReportTab
+            {
+                Title = "Main Report",
+                Pages = RenderHtmlPages(definition, data, visibleColumns),
+                Tree = new(),
+                CurrentPage = 1,
+                Orientation = orientation
+            });
+            ActiveTabIndex = 0;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Failed to render DataTable report");
+            ErrorMessage = $"Report error: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>Triggers the browser print dialog for the rendered report.</summary>
+    public async Task Print()
+    {
+        await JSRuntime.InvokeVoidAsync("window.print");
+    }
+
+    /// <summary>Clears the current report.</summary>
+    public void Clear()
+    {
+        PdfDataUrl = "";
+        Tabs.Clear();
+        ActiveTabIndex = 0;
+        ErrorMessage = null;
+        // Closing the Crystal engine is the host's responsibility — IReportExporter
+        // doesn't expose a Close() because not all implementations need one.
+        StateHasChanged();
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  UNIFIED ENTRY POINT — ShowReportAsync
+    //  ─────────────────────────────────────────────────────────────
+    //  Single high-level call that:
+    //    1. Decides .rpt vs .xml (prefers XML for cross-platform render;
+    //       falls back to the SAP Crystal Reports Engine via IReportExporter
+    //       when only the .rpt is available).
+    //    2. Prompts the user (via the embedded ReportParamDialogControl)
+    //       for any required parameters not pre-supplied.
+    //    3. Runs MultiValueParameterRewriter so dual-list-box selections
+    //       become IN-clause expansions.
+    //    4. Routes to ShowSqlReport / ShowCrystalReport and updates
+    //       toolbar / status-bar state.
+    //
+    //  Replaces FRptViewer's old per-page ShowReport orchestration —
+    //  thin host pages just call this and wire OnClose.
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Load and render a report by path (.rpt or .xml). Prompts the
+    /// user for any required parameters not supplied via
+    /// <paramref name="seedParameters"/>. Auto-injects
+    /// <c>DivisionID</c> from the session context.
+    /// </summary>
+    public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
+    {
+        try
+        {
+            IsLoading = true;
+            ReportFilePath = file;
+            await OnPageTitleChanged.InvokeAsync(Path.GetFileNameWithoutExtension(file));
+            StatusMessage = $"Loading report: {file}";
+            await InvokeAsync(StateHasChanged);
+
+            _seedParameters.Clear();
+            if (seedParameters != null)
+                foreach (var kv in seedParameters)
+                    if (!string.IsNullOrEmpty(kv.Value))
+                        _seedParameters[kv.Key] = kv.Value;
+            if (!_seedParameters.ContainsKey("DivisionID"))
+            {
+                var divId = SessionState.Get("DivisionID");
+                if (divId != null) _seedParameters["DivisionID"] = divId.ToString() ?? "";
+            }
+
+            if (!file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase)
+                && !file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            {
+                StatusMessage = $"Unsupported report extension: {file}";
+                return;
+            }
+
+            // Prefer the XML export — renders cross-platform via
+            // ShowSqlReport. Fall back to the SAP Crystal engine when
+            // only the .rpt is available.
+            var xmlPath = ResolveXmlPathLocal(file);
+            if (xmlPath != null)
+            {
+                var definition = XmlLoader.Load(xmlPath);
+                var typedParams = _seedParameters.ToDictionary(p => p.Key, p => (object)p.Value);
+
+                var missingRequired = definition.Parameters
+                    .Where(p => p.Required
+                        && !typedParams.ContainsKey(p.Name)
+                        && !string.Equals(p.Name, "DivisionID", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (missingRequired.Count > 0 && _paramDialog != null)
+                {
+                    StatusMessage = "Waiting for parameter values...";
+                    IsLoading = false;
+                    await InvokeAsync(StateHasChanged);
+
+                    var title = $"Report: {Path.GetFileNameWithoutExtension(xmlPath)}";
+                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, _lastPromptedValues);
+                    if (userValues == null)
+                    {
+                        StatusMessage = "Report cancelled.";
+                        return;
+                    }
+                    foreach (var kv in userValues)
+                        typedParams[kv.Key] = kv.Value;
+
+                    IsLoading = true;
+                    StatusMessage = $"Loading report: {xmlPath}";
+                    await InvokeAsync(StateHasChanged);
+                }
+
+                // Snapshot pre-rewrite values for the "Parameters" re-prompt.
+                _lastPromptedValues = new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase);
+
+                // Multi-value rewrite: string[] entries become IN (@N_0, @N_1, ...).
+                var multiSelections = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (var key in typedParams.Keys.ToList())
+                {
+                    if (typedParams[key] is string[] arr)
+                    {
+                        multiSelections[key] = arr;
+                        typedParams.Remove(key);
+                    }
+                }
+                if (multiSelections.Count > 0)
+                {
+                    typedParams = MultiValueParameterRewriter.Apply(definition, multiSelections, typedParams);
+
+                    // Drill-down tabs re-load a fresh definition from the
+                    // XML — with the ORIGINAL "= @Param" predicates. Capture
+                    // the multi-value selections in DefinitionPostProcessor
+                    // so OpenDrillDown rewrites the drill SQL to use the
+                    // same IN-expansion the main report got. Without this,
+                    // drill SQL would compare against @Community alone
+                    // (whichever value SQL Server binds first) and never
+                    // match rows from any other picked community.
+                    var capturedSelections = multiSelections;
+                    DefinitionPostProcessor = drillDef =>
+                    {
+                        MultiValueParameterRewriter.Apply(
+                            drillDef, capturedSelections, new Dictionary<string, object>());
+                    };
+                }
+                else
+                {
+                    // No multi-value selection this run — clear any
+                    // postprocessor from a prior load so a subsequent
+                    // drill doesn't get stale rewrites applied.
+                    DefinitionPostProcessor = null;
+                }
+
+                SetXmlSource(xmlPath);
+                await ShowSqlReport(definition, typedParams);
+                ReportLoaded = true;
+                StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)";
+            }
+            else if (file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
+            {
+                // No XML sibling — fall back to SAP engine via IReportExporter.
+                var rptParams = _seedParameters.ToDictionary(p => p.Key, p => p.Value);
+                await ShowCrystalReport(file, rptParams);
+                ReportLoaded = true;
+                StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(file)}";
+            }
+            else
+            {
+                StatusMessage = $"No XML export found and no .rpt fallback: {file}";
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorMessage = ex.Message;
+            StatusMessage = $"Error: {ex.Message}";
+            Logger.LogError(ex, "ShowReportAsync failed for {File}", file);
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the XML sibling for a given .rpt / .xml path. Looks for
+    /// .../Reports/xml/Foo.xml when the input lives under .../Reports/rpt/,
+    /// otherwise checks a sibling .xml in the same folder.
+    /// </summary>
+    private static string? ResolveXmlPathLocal(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return null;
+        if (file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
+            return File.Exists(file) ? file : null;
+        var dir = Path.GetDirectoryName(file) ?? "";
+        var baseName = Path.GetFileNameWithoutExtension(file);
+        if (!string.IsNullOrEmpty(dir) &&
+            Path.GetFileName(dir).Equals("rpt", StringComparison.OrdinalIgnoreCase))
+        {
+            var xmlDir = Path.Combine(Path.GetDirectoryName(dir) ?? "", "xml");
+            var candidate = Path.Combine(xmlDir, baseName + ".xml");
+            if (File.Exists(candidate)) return candidate;
+        }
+        var sibling = Path.Combine(dir, baseName + ".xml");
+        if (File.Exists(sibling)) return sibling;
+        return null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  CHROME HANDLERS — toolbar / group tree / status bar
+    // ═══════════════════════════════════════════════════════════════
+
+    // Page navigation — drives the toolbar's first/prev/page#/next/last.
+    private void OnFirstPage() => JumpTo(1);
+    private void OnPreviousPage() => JumpTo(CurrentPage - 1);
+    private void OnNextPage() => JumpTo(CurrentPage + 1);
+    private void OnLastPage() => JumpTo(PageCount);
+    private void OnPageChanged(int target) => JumpTo(target);
+    private void JumpTo(int target)
+    {
+        var clamped = Math.Max(1, Math.Min(target, PageCount));
+        if (ActiveTab != null) ActiveTab.CurrentPage = clamped;
+    }
+
+    private async Task ChromeOnPrint() => await Print();
+
+    private void ToggleExportMenu() => ExportMenuOpen = !ExportMenuOpen;
+
+    private async Task ChromeOnExport(string format)
+    {
+        ExportMenuOpen = false;
+        StatusMessage = $"Exporting as {format}...";
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            // Browser print-to-PDF works in all browsers for the HTML
+            // report. For Crystal-Engine export of richer formats hosts
+            // can extend IReportExporter.
+            await JSRuntime.InvokeVoidAsync("window.print");
+            StatusMessage = $"Export ({format}) sent to browser.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Export failed: {ex.Message}";
+            Logger.LogError(ex, "Export {Format} failed", format);
+        }
+    }
+
+    private async Task ChromeOnRefresh()
+    {
+        if (string.IsNullOrEmpty(ReportFilePath)) return;
+        await ShowReportAsync(ReportFilePath, _seedParameters);
+    }
+
+    private async Task ChromeOnEditParameters()
+    {
+        if (string.IsNullOrEmpty(ReportFilePath)) return;
+        // Re-run with no pre-seeded values — the dialog re-opens with
+        // the user's last selections (we cached them in _lastPromptedValues).
+        _seedParameters.Clear();
+        var divId = SessionState.Get("DivisionID");
+        if (divId != null) _seedParameters["DivisionID"] = divId.ToString() ?? "";
+        await ShowReportAsync(ReportFilePath, null);
+    }
+
+    private async Task ChromeOnZoomChanged()
+    {
+        await ViewerSettings.SetZoomLevelAsync(ZoomLevel);
+    }
+
+    // Zoom steps used by the +/- toolbar buttons. Special values
+    // 0 (Fit Page) and -1 (Fit Width) are handled by ChromeOnZoomIn /
+    // ChromeOnZoomOut treating them as 100% for stepping purposes.
+    private static readonly int[] ZoomSteps = new[] { 25, 50, 75, 100, 125, 150, 200 };
+
+    private async Task ChromeOnZoomIn()
+    {
+        var cur = ZoomLevel > 0 ? ZoomLevel : 100;
+        var next = ZoomSteps.FirstOrDefault(s => s > cur);
+        ZoomLevel = next == 0 ? 200 : next;
+        await ChromeOnZoomChanged();
+    }
+
+    private async Task ChromeOnZoomOut()
+    {
+        var cur = ZoomLevel > 0 ? ZoomLevel : 100;
+        var prev = ZoomSteps.LastOrDefault(s => s < cur);
+        ZoomLevel = prev == 0 ? 25 : prev;
+        await ChromeOnZoomChanged();
+    }
+
+    private void ChromeOnSearchKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") _ = ChromeOnSearch();
+    }
+    private Task ChromeOnSearch()
+    {
+        StatusMessage = string.IsNullOrWhiteSpace(SearchText)
+            ? "Search cleared."
+            : $"Search: \"{SearchText}\" (highlight pending).";
+        return Task.CompletedTask;
+    }
+
+    private void ToggleGroupTreePanel() => ShowGroupTree = !ShowGroupTree;
+
+    private async Task SetTreeMode(TreeNavigationMode mode)
+    {
+        if (TreeMode == mode) return;
+        TreeMode = mode;
+        // Switching OUT of Group mode: drop any in-flight red flash so
+        // the previously-highlighted header doesn't stay tinted while
+        // the user is now in DrillDown territory.
+        if (mode != TreeNavigationMode.Group)
+        {
+            try { await JSRuntime.InvokeVoidAsync("hfClearGroupHighlight"); }
+            catch { /* JS not ready — silently ignore */ }
+        }
+    }
+
+    private void ToggleGroupNode(FxGroupNode node) => node.Expanded = !node.Expanded;
+
+    private async Task OnGroupNodeClicked(FxGroupNode node)
+    {
+        // Capture the click for the visual "selected" highlight on the
+        // tree label — read back in RenderGroupTreeNode to add the
+        // .selected class. Survives the page navigation that happens
+        // immediately below.
+        _selectedTreeNode = node;
+
+        if (TreeMode == TreeNavigationMode.DrillDown && _xmlFilePath != null && _lastParameters != null)
+        {
+            // Build the drill-down path: every ancestor up to this node.
+            var path = new List<DrillDownFilter>();
+            void Collect(FxGroupNode current, List<FxGroupNode> roots)
+            {
+                // Walk roots until current is found (Crystal's tree is
+                // shallow — usually 1-3 levels, so this O(n) walk is fine).
+                bool TryFind(FxGroupNode n, List<FxGroupNode> trail)
+                {
+                    trail.Add(n);
+                    if (ReferenceEquals(n, current)) return true;
+                    foreach (var c in n.Children)
+                        if (TryFind(c, trail)) return true;
+                    trail.RemoveAt(trail.Count - 1);
+                    return false;
+                }
+                foreach (var root in roots)
+                {
+                    var trail = new List<FxGroupNode>();
+                    if (TryFind(root, trail))
+                    {
+                        foreach (var n in trail)
+                            path.Add(new DrillDownFilter(n.Field, n.Value));
+                        return;
+                    }
+                }
+            }
+            Collect(node, GroupTree);
+            if (path.Count > 0)
+                await OpenDrillDown(node, path);
+            return;
+        }
+
+        // Group mode: jump to the page that hosts this group, then ask
+        // the renderer's JS helpers to scroll to its anchor and (in
+        // Group mode) flash the matching group-header row in red so
+        // the user can spot exactly which row they navigated to.
+        // Mirrors the legacy FReportRunner.NavigateToGroupHeader flow.
+        StatusMessage = $"Group: {node.Label} (page {node.PageIndex} of {PageCount})";
+        if (node.PageIndex > 0)
+        {
+            JumpTo(node.PageIndex);
+            await InvokeAsync(StateHasChanged);
+        }
+
+        if (string.IsNullOrEmpty(node.AnchorId)) return;
+        try
+        {
+            // hfHighlightGroup = scroll + flash red. hfScrollToAnchor =
+            // just scroll. Group mode (default) gets the highlight; the
+            // DrillDown branch above already returned before this code.
+            await JSRuntime.InvokeVoidAsync("hfHighlightGroup", node.AnchorId);
+        }
+        catch
+        {
+            // JS module not loaded yet — fall back to plain scroll. If
+            // even that fails the click degrades to a page jump only.
+            try { await JSRuntime.InvokeVoidAsync("hfScrollToAnchor", node.AnchorId); }
+            catch { /* swallow */ }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // HTML Rendering Engine
+    // ═══════════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════════
+    // Group Tree builder — mirrors Crystal Reports DisplayGroupTree
+    // ═══════════════════════════════════════════════════════════════
+
+    /// <summary>
+    /// Builds a hierarchical tree of <see cref="FxGroupNode"/>s from the rendered DataTable
+    /// and the report's <see cref="ReportDefinition.Groups"/> list. Each node records which
+    /// rendered-page it lives on, so clicking the node navigates to that page.
+    ///
+    /// <para>
+    /// The tree uses the same sort order as the main report: rows are sorted by the group
+    /// columns outermost-first. For each distinct value at level 0, children are recursively
+    /// grouped by the next level's field, and so on.
+    /// </para>
+    /// </summary>
+    private List<FxGroupNode> BuildGroupTree(DataTable data, ReportDefinition def, int rowsPerPage)
+    {
+        if (def.Groups.Count == 0 || data.Rows.Count == 0)
+            return new List<FxGroupNode>();
+
+        // Sort rows outermost-first, matching what RenderHtmlPages does.
+        var rows = data.AsEnumerable().ToList();
+        foreach (var group in def.Groups.AsEnumerable().Reverse())
+        {
+            rows = group.SortDirection == ReportSortDirection.Ascending
+                ? rows.OrderBy(r => (r.Table.Columns.Contains(group.Field) ? r[group.Field]?.ToString() : "") ?? "").ToList()
+                : rows.OrderByDescending(r => (r.Table.Columns.Contains(group.Field) ? r[group.Field]?.ToString() : "") ?? "").ToList();
+        }
+
+        // Build a row-to-page lookup using the SAME pagination logic the
+        // renderer uses (rowsPerPage cap + ReportGroup.PageBreakBefore).
+        // Without this the tree's PageIndex would be off whenever a group has
+        // PageBreakBefore set (e.g. Model Costs Report breaks per Model).
+        var renderGroups = def.Groups
+            .Where(g => data.Columns.Contains(g.Field))
+            .ToList();
+        var pageSlices = SplitIntoPages(rows, renderGroups, rowsPerPage);
+        var rowToPage = new Dictionary<DataRow, int>(rows.Count);
+        for (int p = 0; p < pageSlices.Count; p++)
+            foreach (var r in pageSlices[p].Rows) rowToPage[r] = p + 1;
+
+        // Pair each row with its sorted index AND its actual page number.
+        var indexedRows = rows.Select((r, idx) =>
+            new IndexedRow(r, idx, rowToPage.TryGetValue(r, out var pn) ? pn : 1)).ToList();
+
+        return BuildGroupLevel(indexedRows, def.Groups, 0, rowsPerPage);
+    }
+
+    /// <summary>Tree-builder scratch record — row + its original sort position + its rendered page.</summary>
+    private sealed record IndexedRow(DataRow Row, int SortedIndex, int PageNumber);
+
+    private List<FxGroupNode> BuildGroupLevel(List<IndexedRow> indexed, List<ReportGroup> groups, int level, int rowsPerPage)
+    {
+        if (level >= groups.Count) return new List<FxGroupNode>();
+        var group = groups[level];
+
+        // Group indexed rows by the current level's field value.
+        var buckets = new List<(string Value, List<IndexedRow> Items, int FirstPage)>();
+        string? lastValue = null;
+        List<IndexedRow>? currentBucket = null;
+        int firstPage = 1;
+
+        foreach (var item in indexed)
+        {
+            var row = item.Row;
+            // Trim trailing whitespace from CHAR(N)-padded DB values so the tree label and the
+            // drill-down filter literal exactly match (avoids an SQL = comparison mismatch on
+            // some collations/settings).
+            var rawValue = row.Table.Columns.Contains(group.Field) ? row[group.Field]?.ToString() : "";
+            var value = (rawValue ?? "").TrimEnd();
+
+            if (currentBucket == null || value != lastValue)
+            {
+                if (currentBucket != null)
+                    buckets.Add((lastValue ?? "", currentBucket, firstPage));
+                currentBucket = new List<IndexedRow>();
+                firstPage = item.PageNumber;
+                lastValue = value;
+            }
+            currentBucket.Add(item);
+        }
+        if (currentBucket != null)
+            buckets.Add((lastValue ?? "", currentBucket, firstPage));
+
+        // Build nodes
+        var nodes = new List<FxGroupNode>();
+        foreach (var (value, items, pageIdx) in buckets)
+        {
+            var node = new FxGroupNode
+            {
+                // Display label — "(empty)" placeholder only; the raw value is preserved
+                // separately for SQL drill-down filter comparisons.
+                Label = string.IsNullOrWhiteSpace(value) ? "(empty)" : value,
+                Value = value ?? "",
+                Field = group.Field,
+                Level = level,
+                PageIndex = pageIdx,
+                AnchorId = $"group-{level}-{SanitizeForId(value ?? "")}",
+                Children = BuildGroupLevel(items, groups, level + 1, rowsPerPage)
+            };
+            nodes.Add(node);
+        }
+        return nodes;
+    }
+
+    private static string SanitizeForId(string s)
+        => new string((s ?? "").Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Column-width strategy
+    // ═══════════════════════════════════════════════════════════════════
+    //
+    // Policy (XML-first, per Crystal Reports / VB6 parity):
+    //   1. If the Crystal XML supplies an explicit width (FieldObject Width=
+    //      in twips), USE IT AS-IS. The report author chose it deliberately;
+    //      our job is to honor it, not second-guess.
+    //   2. Numeric / Date / Boolean columns get a FLOOR at max(header, widest
+    //      sampled value) — they must always show in full, no wrap. The XML
+    //      hint wins when wider than the floor.
+    //   3. Columns WITHOUT an XML hint get sized from header + sampled data
+    //      (the previous data-driven path). This kicks in for SQL reports
+    //      built in code that don't have any twips info.
+    //   4. If the resulting column-width sum exceeds the printable page
+    //      width, scale down only the TEXT columns proportionally — numeric
+    //      columns keep their floor so headers + values stay readable.
+    //      Excess text wraps via the existing word-break CSS.
+    //
+    // Pixel measurement uses ~6.5 px/char regular, ~7.5 px/char bold for
+    // proportional Arial at the report-table font size. Good enough for
+    // layout decisions; we never need pixel-perfect.
+    private void ComputeAdaptiveColumnWidths(ReportDefinition def,
+        List<ReportColumn> visibleColumns, DataTable data)
+    {
+        if (visibleColumns.Count == 0) return;
+
+        // Page-width budget — Letter @ 96 dpi minus the .fx-report-page
+        // padding (≈ 100 px total). Used only when the XML widths overflow.
+        const int kCellPadding = 14;          // 6px each side + small slack
+        const int kMinFlexFloor = 60;         // hard min for any flex column
+        int pageBudget = def.Orientation == ReportOrientation.Landscape ? 956 : 716;
+
+        // Gather per-column metrics
+        var info = new List<ColumnSizingInfo>(visibleColumns.Count);
+        foreach (var col in visibleColumns)
+        {
+            int headerPx = MeasureTextPx(col.HeaderText, bold: true) + kCellPadding;
+            int dataMaxPx = MeasureColumnDataPx(col, data, sampleSize: 250) + kCellPadding;
+            // col.Width was set by CrystalXmlReportLoader from the XML's twips
+            // value. 0 means no XML hint — we fall back to data sizing.
+            int xmlHintPx = col.Width > 0 ? col.Width : 0;
+            bool rigid = IsRigidColumnType(col.ColumnType);
+            info.Add(new ColumnSizingInfo(col, headerPx, dataMaxPx, xmlHintPx, rigid));
+        }
+
+        // Pass 1 — Assign each column its TARGET width.
+        //   • XML present → honor it (numeric also enforces header+data floor).
+        //   • XML absent  → fall back to header+data.
+        foreach (var ci in info)
+        {
+            int target;
+            if (ci.XmlHintPx > 0)
+            {
+                // Honor Crystal's stated width. For numeric columns we still
+                // enforce the floor — wrapping a numeric header / value is
+                // worse than overflowing a slightly-wider column.
+                target = ci.IsRigid
+                    ? Math.Max(ci.XmlHintPx, Math.Max(ci.HeaderPx, ci.DataMaxPx))
+                    : ci.XmlHintPx;
+            }
+            else
+            {
+                // No XML hint — size from header + widest sampled value.
+                target = Math.Max(ci.HeaderPx, ci.DataMaxPx);
+                if (!ci.IsRigid) target = Math.Max(target, kMinFlexFloor);
+            }
+            ci.Col.Width = target;
+        }
+
+        // Pass 2 — If total exceeds page budget, scale text columns down.
+        // Numeric columns are protected at their floor (header + widest value)
+        // so they keep their integrity; the remaining slack comes out of text.
+        int totalWidth = info.Sum(i => i.Col.Width);
+        if (totalWidth <= pageBudget) return;
+
+        int rigidSum = info.Where(i => i.IsRigid).Sum(i => i.Col.Width);
+        var flex = info.Where(i => !i.IsRigid).ToList();
+        if (flex.Count == 0) return;        // no text columns to give up space
+
+        int budgetForFlex = pageBudget - rigidSum;
+        int currentFlexSum = flex.Sum(i => i.Col.Width);
+        if (budgetForFlex <= 0)
+        {
+            // Numeric columns alone exceed the page — give every text column
+            // the floor and let the page scroll horizontally. Rare but safe.
+            foreach (var ci in flex) ci.Col.Width = kMinFlexFloor;
+            return;
+        }
+
+        // Scale every text column proportionally to its current (XML or
+        // data-driven) width. Floor at header+data so column headers stay
+        // readable; text content wraps when it exceeds the column.
+        double ratio = (double)budgetForFlex / currentFlexSum;
+        foreach (var ci in flex)
+        {
+            int scaled = (int)Math.Round(ci.Col.Width * ratio);
+            int floor = Math.Max(ci.HeaderPx, kMinFlexFloor);
+            ci.Col.Width = Math.Max(scaled, floor);
+        }
+    }
+
+    /// <summary>True for columns that must show in full without wrapping.</summary>
+    private static bool IsRigidColumnType(ReportColumnType t) =>
+        t is ReportColumnType.Integer
+          or ReportColumnType.Decimal
+          or ReportColumnType.Currency
+          or ReportColumnType.Percent
+          or ReportColumnType.Date
+          or ReportColumnType.DateTime
+          or ReportColumnType.Boolean;
+
+    /// <summary>
+    /// Approximate the pixel width of a string at the report-table font size
+    /// (11px Arial). Bold characters render roughly 15% wider than regular.
+    /// Numbers / commas / decimals are slightly narrower than letters but the
+    /// average is good enough for layout decisions.
+    /// </summary>
+    private static int MeasureTextPx(string? text, bool bold)
+    {
+        if (string.IsNullOrEmpty(text)) return 0;
+        double avgChar = bold ? 7.5 : 6.5;
+        return (int)Math.Ceiling(text.Length * avgChar);
+    }
+
+    /// <summary>
+    /// Returns the widest formatted-value pixel width across a sample of
+    /// rows for the given column. Sample-capped so a million-row report
+    /// doesn't pay an O(N) measurement cost.
+    /// </summary>
+    private static int MeasureColumnDataPx(ReportColumn col, DataTable data, int sampleSize)
+    {
+        if (data.Rows.Count == 0) return 0;
+        // Field name might not be in the DataTable (group-only field) — bail.
+        if (!data.Columns.Contains(col.Field)) return 0;
+
+        int n = Math.Min(data.Rows.Count, Math.Max(1, sampleSize));
+        int max = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var formatted = FormatCellValueForSizing(data.Rows[i], col);
+            int px = MeasureTextPx(formatted, bold: false);
+            if (px > max) max = px;
+        }
+        return max;
+    }
+
+    /// <summary>
+    /// Mirror of <c>FormatCellValue</c> — duplicated here as a static so the
+    /// width sizer can run without entering the per-cell render path. Uses the
+    /// column's Format string when set; otherwise stringifies the value.
+    /// </summary>
+    private static string FormatCellValueForSizing(DataRow row, ReportColumn col)
+    {
+        if (!row.Table.Columns.Contains(col.Field)) return "";
+        var v = row[col.Field];
+        if (v == null || v == DBNull.Value) return "";
+        if (!string.IsNullOrEmpty(col.Format) && v is IFormattable f)
+        {
+            try { return f.ToString(col.Format, CultureInfo.CurrentCulture); }
+            catch { /* fall through */ }
+        }
+        return v.ToString() ?? "";
+    }
+
+    /// <summary>Per-column scratchpad used by <see cref="ComputeAdaptiveColumnWidths"/>.</summary>
+    private sealed class ColumnSizingInfo
+    {
+        public ReportColumn Col;
+        public int HeaderPx;
+        public int DataMaxPx;
+        public int XmlHintPx;
+        public bool IsRigid;
+        public ColumnSizingInfo(ReportColumn col, int headerPx, int dataMaxPx, int xmlHintPx, bool isRigid)
+        { Col = col; HeaderPx = headerPx; DataMaxPx = dataMaxPx; XmlHintPx = xmlHintPx; IsRigid = isRigid; }
+    }
+
+    private List<string> RenderHtmlPages(ReportDefinition def, DataTable data, List<ReportColumn> columns)
+    {
+        // Cap on TOTAL VISIBLE rows per page (data + group headers + group
+        // footers). CrystalXmlReportLoader populates RowsPerPage from
+        // <PrintOptions PageContentHeight=...> when present; the fallbacks
+        // here apply to code-built reports.
+        var rowsPerPage = def.RowsPerPage > 0 ? def.RowsPerPage : (def.Orientation == ReportOrientation.Landscape ? 49 : 70);
+
+        // Sort/group data if groups defined.
+        // Only groups whose Field is present in the DataTable can be used for sorting —
+        // `def.Groups` may include deeper levels that live only in the separate TreeSql
+        // query result, not in the main summary result.
+        var rows = data.AsEnumerable().ToList();
+        var sortableGroups = def.Groups.Where(g => data.Columns.Contains(g.Field)).ToList();
+        if (sortableGroups.Count > 0)
+        {
+            rows = rows.OrderBy(r => 0).ToList(); // stable placeholder
+            foreach (var group in sortableGroups.AsEnumerable().Reverse())
+            {
+                rows = group.SortDirection == ReportSortDirection.Ascending
+                    ? rows.OrderBy(r => r[group.Field]?.ToString() ?? "").ToList()
+                    : rows.OrderByDescending(r => r[group.Field]?.ToString() ?? "").ToList();
+            }
+        }
+
+        // Only groups whose field lives in the DataTable can be rendered (others
+        // are tree-only navigation levels for drill-down). Computed once and
+        // shared by both pagination (which honors PageBreakBefore) and the
+        // per-page renderer (which does the actual transition detection).
+        var renderGroups = def.Groups
+            .Where(g => rows.Count == 0 || rows[0].Table.Columns.Contains(g.Field))
+            .ToList();
+
+        // ── Pass 1: split rows into pages ───────────────────────────────
+        // Honors both rowsPerPage AND any group with PageBreakBefore=true
+        // (e.g. Model Desc — every new model starts on a new page). Each
+        // slice also carries a ClosingFooterLevel: when a forced break
+        // fires at level L, the outgoing page is told to flush footers for
+        // levels L..innermost so the totals appear on the page that's
+        // ENDING (not orphaned at the top of the next page).
+        var pageSlices = SplitIntoPages(rows, renderGroups, rowsPerPage);
+
+        // ── Pass 2: render with SHARED lastValues across pages ──────────
+        // Sharing the array means a group header is emitted only when its
+        // value actually changes — NOT every time a new page begins. This
+        // gives the "don't repeat Community/Model on every page" behavior
+        // the VB6 viewer has.
+        var lastValues = new string?[renderGroups.Count];
+        var pages = new List<string>();
+        for (int p = 0; p < pageSlices.Count; p++)
+        {
+            bool isLast = (p == pageSlices.Count - 1);
+            var slice = pageSlices[p];
+            pages.Add(RenderPage(def, columns, slice.Rows, rows,
+                pageNum: p + 1, totalPages: pageSlices.Count,
+                isFirstPage: p == 0, isLastPage: isLast,
+                renderGroups, lastValues,
+                closingFooterLevel: slice.ClosingFooterLevel));
+        }
+        return pages;
+    }
+
+    /// <summary>
+    /// One paginator output: the rows that belong on this page plus a
+    /// closing-footer-level hint. <c>ClosingFooterLevel = -1</c> means the
+    /// page ends due to a row-count cap (groups continue on next page —
+    /// don't emit closing footers). Any non-negative value means a forced
+    /// page break fired at that group level; the renderer should emit
+    /// footers from innermost down to that level so the totals print on the
+    /// outgoing page rather than orphaning at the top of the next one.
+    /// </summary>
+    private sealed record PageSlice(List<DataRow> Rows, int ClosingFooterLevel);
+
+    /// <summary>
+    /// Splits the row list into pages honoring:
+    ///   • the visible-row cap (<paramref name="visibleRowsPerPage"/> = data
+    ///     rows + group headers + group footers),
+    ///   • any group's <see cref="ReportGroup.PageBreakBefore"/> flag (forces
+    ///     a new page when that group's value changes).
+    ///
+    /// <para>
+    /// Counting <em>visible</em> rows (rather than just data rows) gives a
+    /// uniform page height: a Model with many phases / sub-groups will hold
+    /// fewer detail rows on a page because each transition costs a header +
+    /// footer line. A Model with one big phase will hold more detail rows.
+    /// Both pages end up about the same vertical extent.
+    /// </para>
+    ///
+    /// <para>
+    /// The transition-cost calculation mirrors what <see cref="RenderPage"/>
+    /// does, so the splitter's prediction matches the renderer's output.
+    /// </para>
+    /// </summary>
+    private static List<PageSlice> SplitIntoPages(
+        List<DataRow> rows, List<ReportGroup> renderGroups, int visibleRowsPerPage)
+    {
+        var result = new List<PageSlice>();
+        var current = new List<DataRow>();
+        int visibleUsed = 0;
+
+        // Indices of groups that trigger a forced page break.
+        var breakLevels = renderGroups
+            .Select((g, idx) => g.PageBreakBefore ? idx : -1)
+            .Where(i => i >= 0)
+            .ToList();
+
+        // Mirrors RenderPage's lastValues — needed to predict each row's
+        // transition cost (footers + headers it will emit).
+        var lastValues = new string?[renderGroups.Count];
+
+        // Tracker for forced-break detection (separate from lastValues
+        // because it has different semantics — only updated for break-
+        // levels and only used to detect value changes).
+        var prevBreakValues = new string?[renderGroups.Count];
+
+        foreach (var row in rows)
+        {
+            // ── Compute this row's visible cost (data row + transitions) ──
+            int transitionLevel = renderGroups.Count;
+            for (int i = 0; i < renderGroups.Count; i++)
+            {
+                var grp = renderGroups[i];
+                if (!row.Table.Columns.Contains(grp.Field)) continue;
+                var v = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                if (lastValues[i] == null || v != lastValues[i])
+                {
+                    transitionLevel = i;
+                    break;
+                }
+            }
+            int rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues);
+
+            // ── Detect forced page-break (PageBreakBefore on any group) ──
+            int forcedBreakLevel = -1;
+            if (current.Count > 0 && breakLevels.Count > 0)
+            {
+                foreach (var lvl in breakLevels)
+                {
+                    var grp = renderGroups[lvl];
+                    if (!row.Table.Columns.Contains(grp.Field)) continue;
+                    var v = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                    if (prevBreakValues[lvl] != null && v != prevBreakValues[lvl])
+                    {
+                        if (forcedBreakLevel < 0 || lvl < forcedBreakLevel)
+                            forcedBreakLevel = lvl;
+                    }
+                }
+            }
+
+            // ── Decide whether to flush the current page ──
+            bool needBreak = forcedBreakLevel >= 0
+                          || (current.Count > 0 && visibleUsed + rowCost > visibleRowsPerPage);
+
+            if (needBreak)
+            {
+                result.Add(new PageSlice(current, forcedBreakLevel));
+                current = new List<DataRow>();
+                visibleUsed = 0;
+
+                if (forcedBreakLevel >= 0)
+                {
+                    // RenderPage will null lastValues for these levels after
+                    // emitting the closing footers — mirror that here so the
+                    // first row on the next page costs a fresh header chain.
+                    for (int i = forcedBreakLevel; i < renderGroups.Count; i++)
+                        lastValues[i] = null;
+
+                    // Re-derive transition + cost for the new page's first row.
+                    transitionLevel = renderGroups.Count;
+                    for (int i = 0; i < renderGroups.Count; i++)
+                    {
+                        var grp = renderGroups[i];
+                        if (!row.Table.Columns.Contains(grp.Field)) continue;
+                        var v = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                        if (lastValues[i] == null || v != lastValues[i])
+                        {
+                            transitionLevel = i;
+                            break;
+                        }
+                    }
+                    rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues);
+                }
+                // For row-cap break: lastValues stays — groups continue on
+                // next page, no closing footers, transition cost remains as
+                // computed (the row's transition will fire on the new page).
+            }
+
+            // ── Update tracking state to MATCH RenderPage's bookkeeping ──
+            if (breakLevels.Count > 0)
+            {
+                foreach (var lvl in breakLevels)
+                {
+                    var grp = renderGroups[lvl];
+                    if (!row.Table.Columns.Contains(grp.Field)) continue;
+                    prevBreakValues[lvl] = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                }
+            }
+
+            // Mirror RenderPage: when a transition fires at level L, all
+            // levels [L..innermost] get their lastValues updated to this
+            // row's values.
+            if (transitionLevel < renderGroups.Count)
+            {
+                for (int i = transitionLevel; i < renderGroups.Count; i++)
+                {
+                    var grp = renderGroups[i];
+                    if (!row.Table.Columns.Contains(grp.Field)) continue;
+                    lastValues[i] = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                }
+            }
+
+            current.Add(row);
+            visibleUsed += rowCost;
+        }
+
+        // Last page is never a forced break (it's the natural end of the report).
+        if (current.Count > 0) result.Add(new PageSlice(current, ClosingFooterLevel: -1));
+        if (result.Count == 0) result.Add(new PageSlice(new List<DataRow>(), -1));  // empty report → 1 empty page
+        return result;
+    }
+
+    /// <summary>
+    /// Visible-row cost of one detail row given the transition level.
+    /// Mirrors what <see cref="RenderPage"/> emits per row:
+    ///   • Always 1 detail row.
+    ///   • If a transition fires at level L, emit footers for every
+    ///     currently-OPEN inner level (lastValues[i] != null) from
+    ///     innermost down to L — innermost-first ordering — plus headers
+    ///     for [L..innermost] (always).
+    /// </summary>
+    private static int ComputeVisibleCost(int transitionLevel, List<ReportGroup> renderGroups, string?[] lastValues)
+    {
+        int cost = 1;   // detail row
+        if (transitionLevel < renderGroups.Count)
+        {
+            // Footers — only emitted when the level was previously open.
+            int footers = 0;
+            for (int i = renderGroups.Count - 1; i >= transitionLevel; i--)
+                if (lastValues[i] != null && renderGroups[i].ShowFooter)
+                    footers++;
+            // Headers — always emitted for the transition level + every deeper.
+            int headers = 0;
+            for (int i = transitionLevel; i < renderGroups.Count; i++)
+                if (renderGroups[i].ShowHeader)
+                    headers++;
+            cost += footers + headers;
+        }
+        return cost;
+    }
+
+    private string RenderPage(ReportDefinition def, List<ReportColumn> columns, List<DataRow> pageRows,
+        List<DataRow> allRows, int pageNum, int totalPages, bool isFirstPage, bool isLastPage,
+        List<ReportGroup> renderGroups, string?[] lastValues, int closingFooterLevel = -1)
+    {
+        var html = new System.Text.StringBuilder();
+        var now = DateTime.Now;
+
+        // Page header — title/subtitle alignment pulled from the Crystal XML (ObjectFormat
+        // HorizontalAlignment); falls back to Center when the XML doesn't specify.
+        var titleAlignStyle = AlignmentStyle(def.TitleAlignment);
+        var subtitleAlignStyle = AlignmentStyle(def.SubtitleAlignment);
+        html.AppendLine("<div class='fx-rpt-header'>");
+        html.AppendLine($"  <div class='fx-rpt-title' style='{titleAlignStyle}'>{Escape(def.Title)}</div>");
+        if (!string.IsNullOrEmpty(def.Subtitle))
+            html.AppendLine($"  <div class='fx-rpt-subtitle' style='{subtitleAlignStyle}'>{Escape(def.Subtitle)}</div>");
+        html.AppendLine($"  <div class='fx-rpt-date'>{now:yyyy-MM-dd HH:mm}</div>");
+        html.AppendLine("</div>");
+
+        // Table
+        html.AppendLine("<table class='fx-rpt-table'>");
+
+        // Column headers — emit a CSS class that mirrors the column type so
+        // numeric / date columns can opt out of wrapping and text columns can
+        // wrap on word boundaries when the data overflows the computed width.
+        html.AppendLine("<thead><tr>");
+        foreach (var col in columns)
+        {
+            var align = col.Alignment switch
+            {
+                ReportAlignment.Right => "text-align:right",
+                ReportAlignment.Center => "text-align:center",
+                _ => "text-align:left"
+            };
+            var width = col.Width > 0 ? $"width:{col.Width}px;" : "";
+            var typeCls = IsRigidColumnType(col.ColumnType) ? "fx-rpt-col-nowrap" : "fx-rpt-col-wrap";
+            html.AppendLine($"  <th class='{typeCls}' style='{align};{width}'>{Escape(col.HeaderText)}</th>");
+        }
+        html.AppendLine("</tr></thead>");
+
+        // Data rows — handle multi-level grouping like Crystal Reports.
+        // Rules per row:
+        //   • Walk groups outermost → innermost. The first group whose value differs from
+        //     the previous row is the "transition level".
+        //   • Before emitting headers for the transition: emit FOOTERS (subtotals) for
+        //     every level from innermost down to the transition level (deeper-first).
+        //   • Then emit HEADERS for the transition level and every deeper level.
+        //   • Then emit the detail row.
+        // After the LAST page's last row: emit footers for every still-open group
+        // (innermost-first). On non-last pages, group state continues onto the
+        // next page so headers/footers don't repeat unnecessarily.
+        html.AppendLine("<tbody>");
+
+        // renderGroups + lastValues are passed in from RenderHtmlPages — they
+        // are SHARED across pages so headers / footers fire only on actual
+        // value transitions (not every page boundary).
+
+        // Per-column "last rendered value" tracking for SuppressRepeats —
+        // when a column flags itself as repeat-suppressing (typically the
+        // leftmost RecordSortField, e.g. Master Assembly List's POIndex),
+        // we emit an empty cell when the current row's value matches the
+        // previous row's at the same column. Mirrors Crystal's
+        // "Suppress If Duplicated" property which RptToXml doesn't export
+        // reliably, so the loader infers it from the SortField list.
+        var lastCellValues = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var row in pageRows)
+        {
+            if (renderGroups.Count > 0)
+            {
+                // Find the outermost level whose value changed.
+                int transition = renderGroups.Count;
+                for (int i = 0; i < renderGroups.Count; i++)
+                {
+                    var v = row.Table.Columns.Contains(renderGroups[i].Field)
+                        ? (row[renderGroups[i].Field]?.ToString() ?? "").TrimEnd()
+                        : "";
+                    if (lastValues[i] == null || v != lastValues[i])
+                    {
+                        transition = i;
+                        break;
+                    }
+                }
+                // Emit footers for currently-open deeper groups (deepest first).
+                for (int i = renderGroups.Count - 1; i >= transition; i--)
+                {
+                    if (lastValues[i] != null && renderGroups[i].ShowFooter)
+                        html.AppendLine(RenderMultiLevelFooter(renderGroups, i, columns, allRows, lastValues));
+                }
+                // Emit headers for the transition level + every deeper level.
+                for (int i = transition; i < renderGroups.Count; i++)
+                {
+                    var grp = renderGroups[i];
+                    if (!row.Table.Columns.Contains(grp.Field)) continue;
+                    var v = (row[grp.Field]?.ToString() ?? "").TrimEnd();
+                    lastValues[i] = v;
+                    if (grp.ShowHeader)
+                        html.AppendLine(RenderMultiLevelHeader(grp, i, columns, row, def.Groups, v));
+                }
+
+                // A group transition resets the per-column "last value"
+                // tracking. Without this, a SuppressRepeats column whose
+                // value happens to match the previous group's last row
+                // would render blank on the first row of the new group —
+                // visually breaking the grouping the user just saw a header
+                // for.
+                if (transition < renderGroups.Count)
+                    lastCellValues.Clear();
+            }
+
+            // Detail row — clickable for drill-down (data-path = full group path of the row).
+            var rowPath = BuildCellPathAttribute(row, def.Groups);
+            var rowAttrs = string.IsNullOrEmpty(rowPath)
+                ? ""
+                : $" class='fx-drill-row' data-path='{rowPath}'";
+            html.Append($"<tr{rowAttrs}>");
+            foreach (var col in columns)
+            {
+                var align = col.Alignment switch
+                {
+                    ReportAlignment.Right => "text-align:right",
+                    ReportAlignment.Center => "text-align:center",
+                    _ => ""
+                };
+                var style = BuildCellStyle(row, col, align);
+                var typeCls = IsRigidColumnType(col.ColumnType) ? "fx-rpt-col-nowrap" : "fx-rpt-col-wrap";
+                var value = FormatCellValue(row, col);
+                var rendered = value;
+                if (col.SuppressRepeats)
+                {
+                    if (lastCellValues.TryGetValue(col.Field, out var prev) && prev == value)
+                        rendered = "";
+                    else
+                        lastCellValues[col.Field] = value;
+                }
+                html.Append($"<td class='{typeCls}'{style}>{Escape(rendered)}</td>");
+            }
+            html.AppendLine("</tr>");
+        }
+
+        // Closing footers — three cases:
+        //   1. LAST page              → flush every still-open group footer
+        //                                (the report is ending).
+        //   2. Forced PageBreakBefore → flush the breaking group + every
+        //                                INNER group on the OUTGOING page so
+        //                                their totals print on this page
+        //                                instead of orphaning at the top of
+        //                                the next page. Then null out the
+        //                                affected lastValues so the next
+        //                                page emits fresh headers.
+        //   3. Row-cap break          → leave groups OPEN; they continue on
+        //                                the next page without re-emitting
+        //                                headers/footers.
+        if (isLastPage)
+        {
+            for (int i = renderGroups.Count - 1; i >= 0; i--)
+            {
+                if (lastValues[i] != null && renderGroups[i].ShowFooter)
+                    html.AppendLine(RenderMultiLevelFooter(renderGroups, i, columns, allRows, lastValues));
+            }
+        }
+        else if (closingFooterLevel >= 0)
+        {
+            // Innermost-first so each footer renders against fully-populated
+            // group state for its inner counterparts.
+            for (int i = renderGroups.Count - 1; i >= closingFooterLevel; i--)
+            {
+                if (lastValues[i] != null && renderGroups[i].ShowFooter)
+                    html.AppendLine(RenderMultiLevelFooter(renderGroups, i, columns, allRows, lastValues));
+            }
+            // Mark these levels as "closed" so the next page's first row
+            // triggers a normal HEADER transition without the renderer also
+            // emitting redundant footers.
+            for (int i = closingFooterLevel; i < renderGroups.Count; i++)
+                lastValues[i] = null;
+        }
+
+        html.AppendLine("</tbody>");
+
+        // Grand total (if last page and aggregates defined)
+        if (isLastPage && def.Groups.Any(g => g.Aggregates.Count > 0))
+        {
+            html.AppendLine("<tfoot>");
+            html.Append("<tr class='fx-rpt-grand-total'>");
+            foreach (var col in columns)
+            {
+                var agg = def.Groups.SelectMany(g => g.Aggregates).FirstOrDefault(a => a.Field == col.Field);
+                if (agg != null)
+                {
+                    var val = ComputeAggregate(allRows, agg);
+                    html.Append($"<td style='text-align:right;font-weight:bold'>{agg.Label} {val}</td>");
+                }
+                else if (col == columns[0])
+                {
+                    html.Append($"<td style='font-weight:bold'>Grand Total ({allRows.Count} records)</td>");
+                }
+                else
+                {
+                    html.Append("<td></td>");
+                }
+            }
+            html.AppendLine("</tr>");
+            html.AppendLine("</tfoot>");
+        }
+
+        html.AppendLine("</table>");
+
+        // Page footer
+        var footerLeft = ReplacePlaceholders(def.FooterLeft, def.Title, pageNum, totalPages, now);
+        var footerCenter = ReplacePlaceholders(def.FooterCenter, def.Title, pageNum, totalPages, now);
+        var footerRight = ReplacePlaceholders(def.FooterRight, def.Title, pageNum, totalPages, now);
+
+        html.AppendLine("<div class='fx-rpt-footer'>");
+        html.AppendLine($"  <span>{Escape(footerLeft)}</span>");
+        html.AppendLine($"  <span>{Escape(footerCenter)}</span>");
+        html.AppendLine($"  <span>{Escape(footerRight)}</span>");
+        html.AppendLine("</div>");
+
+        return html.ToString();
+    }
+
+    private string RenderGroupFooter(ReportGroup group, List<ReportColumn> columns, List<DataRow> allRows, string groupValue)
+    {
+        var groupRows = allRows.Where(r => r[group.Field]?.ToString() == groupValue).ToList();
+        var html = new System.Text.StringBuilder();
+        html.Append($"<tr class='fx-rpt-group-footer'>");
+        foreach (var col in columns)
+        {
+            var agg = group.Aggregates.FirstOrDefault(a => a.Field == col.Field);
+            if (agg != null)
+            {
+                var val = ComputeAggregate(groupRows, agg);
+                html.Append($"<td style='text-align:right;font-weight:bold'>{agg.Label} {val}</td>");
+            }
+            else if (col == columns[0])
+            {
+                html.Append($"<td style='font-weight:bold'>Subtotal ({groupRows.Count})</td>");
+            }
+            else
+            {
+                html.Append("<td></td>");
+            }
+        }
+        html.Append("</tr>");
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// Emits a Crystal-Reports-style group HEADER row at <paramref name="level"/>. Layout:
+    /// <list type="bullet">
+    ///   <item><description>Indent (one cell per outer-group level) for visual nesting.</description></item>
+    ///   <item><description>The group value itself in the next cell.</description></item>
+    ///   <item><description>Remaining cells span (colspan) to fill the row.</description></item>
+    /// </list>
+    /// The row is also marked <c>fx-drill-row</c> with a <c>data-path</c> attribute so
+    /// clicking the header drills into that group.
+    /// </summary>
+    private string RenderMultiLevelHeader(ReportGroup group, int level, List<ReportColumn> columns,
+        DataRow row, List<ReportGroup> allGroups, string groupValue)
+    {
+        var html = new System.Text.StringBuilder();
+        var anchorId = $"group-{level}-" + new string(groupValue.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+        var hdrPath = BuildCellPathAttribute(row, allGroups);
+        var cls = $"fx-rpt-group-header fx-rpt-group-l{level}" + (string.IsNullOrEmpty(hdrPath) ? "" : " fx-drill-row");
+        var pathAttr = string.IsNullOrEmpty(hdrPath) ? "" : $" data-path='{hdrPath}'";
+        // Resolve the group's description column value from the current row
+        // (if a DescriptionField is configured). The loader sets this when
+        // the Crystal GroupHeader section has a FieldObject or TextObject
+        // template that references a "{Table.Field}" distinct from the
+        // group's own code — typically a self-join's "_1" alias holding
+        // the parent group's description text, or a direct reference to
+        // the lookup table's Description column. Falls back to empty when
+        // no description is configured, keeping reports without
+        // descriptions unaffected.
+        var description = !string.IsNullOrEmpty(group.DescriptionField)
+                       && row.Table.Columns.Contains(group.DescriptionField)
+            ? (row[group.DescriptionField]?.ToString()?.TrimEnd() ?? "")
+            : "";
+
+        // Emit ONE colspan'd cell across the whole row instead of N empty
+        // cells per level. Empty <td>s would inherit each column's width
+        // (e.g. ItemDesc @ 200 px), making outer groups indent way more
+        // than "2 characters". The .fx-rpt-group-l{level} CSS class adds
+        // a precise per-level padding-left (~12 px ≈ 2 char widths).
+        //
+        // When a description is configured, render it stacked above the
+        // group code on a second line — matches the legacy Crystal Viewer's
+        // typical "Major Group  <description>" / "Group Code  <value>"
+        // layout (Major Group and Category Report is the canonical example).
+        // Side-by-side concat looked cramped and didn't match the .rpt
+        // designer's vertical layout. When no description is configured we
+        // fall back to the legacy single-line "{Value}" header.
+        string cellHtml;
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            cellHtml =
+                $"<div>{Escape(description)}</div>" +
+                $"<div style='font-weight:normal;font-size:0.9em;color:#666;'>{Escape(groupValue)}</div>";
+        }
+        else
+        {
+            var headerText = group.HeaderFormat
+                .Replace("{Value}", groupValue)
+                .Replace("{Count}", "")
+                .Replace("{Description}", "");
+            cellHtml = Escape(headerText);
+        }
+
+        html.Append($"<tr class='{cls}' id='{anchorId}'{pathAttr}>");
+        html.Append($"<td colspan='{columns.Count}' style='font-weight:bold;'>{cellHtml}</td>");
+        html.AppendLine("</tr>");
+        return html.ToString();
+    }
+
+    /// <summary>
+    /// Emits a group FOOTER row at <paramref name="level"/> with subtotals for any currency
+    /// columns belonging to that group's aggregates. Indents like the matching header.
+    /// Subtotals are computed by summing the group's rows for each numeric column.
+    /// </summary>
+    private string RenderMultiLevelFooter(List<ReportGroup> renderGroups, int level,
+        List<ReportColumn> columns, List<DataRow> allRows, string?[] lastValues)
+    {
+        // Identify the rows that fall under this footer (matching all enclosing-level values).
+        var matching = allRows.AsEnumerable();
+        for (int i = 0; i <= level; i++)
+        {
+            var g = renderGroups[i];
+            var v = lastValues[i] ?? "";
+            matching = matching.Where(r => allRows.Count == 0 ||
+                ((r.Table.Columns.Contains(g.Field) ? r[g.Field]?.ToString()?.TrimEnd() : "") ?? "") == v);
+        }
+        var groupRows = matching.ToList();
+
+        var html = new System.Text.StringBuilder();
+        var label = lastValues[level] ?? "";
+
+        // Find the FIRST numeric column — the label cell colspans over every
+        // text column to its left so the totals stay in their own column slot
+        // (perfectly column-aligned with the data above). If there are no
+        // numeric columns at all, the label spans the whole row.
+        int firstNumericCol = -1;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (columns[i].ColumnType is ReportColumnType.Currency
+                                       or ReportColumnType.Decimal
+                                       or ReportColumnType.Integer)
+            {
+                firstNumericCol = i;
+                break;
+            }
+        }
+        int labelSpan = firstNumericCol < 0 ? columns.Count : firstNumericCol;
+        if (labelSpan < 1) labelSpan = 1;
+
+        html.Append($"<tr class='fx-rpt-group-footer fx-rpt-group-l{level}'>");
+
+        // Label cell — single colspan over the text columns at the left.
+        // Indent comes from the .fx-rpt-group-footer.fx-rpt-group-l{level} CSS
+        // class (padding-left), NOT from empty <td>s — those would inherit
+        // wide column widths and push the label all the way to the middle.
+        html.Append($"<td colspan='{labelSpan}' " +
+                    $"style='font-weight:bold;border-top:1px solid #999;text-align:right;'>" +
+                    $"{Escape(label)}&nbsp;</td>");
+
+        // Numeric column slots — each gets its sum (or remains empty for non-
+        // numeric columns at the right). Order matches the header so the
+        // total renders directly under its column header.
+        for (int colIdx = labelSpan; colIdx < columns.Count; colIdx++)
+        {
+            var col = columns[colIdx];
+            if (col.ColumnType is ReportColumnType.Currency
+                               or ReportColumnType.Decimal
+                               or ReportColumnType.Integer)
+            {
+                var sum = 0.0;
+                foreach (var r in groupRows)
+                {
+                    if (!r.Table.Columns.Contains(col.Field)) continue;
+                    var raw = r[col.Field];
+                    if (raw == null || raw == DBNull.Value) continue;
+                    if (double.TryParse(raw.ToString(), out var d)) sum += d;
+                }
+                var formatted = col.ColumnType == ReportColumnType.Currency
+                    ? sum.ToString("C2")
+                    : col.ColumnType == ReportColumnType.Integer
+                        ? sum.ToString("N0")
+                        : sum.ToString("N2");
+                html.Append($"<td class='fx-rpt-col-nowrap' " +
+                            $"style='text-align:right;font-weight:bold;border-top:1px solid #999;'>" +
+                            $"{Escape(formatted)}</td>");
+            }
+            else
+            {
+                html.Append("<td style='border-top:1px solid #999;'></td>");
+            }
+        }
+        html.Append("</tr>");
+        return html.ToString();
+    }
+
+    /// <summary>How many trailing money/decimal/integer columns to right-align subtotals into.</summary>
+    private static int SumColumnsCount(List<ReportColumn> columns, int startLevel)
+    {
+        int count = 0;
+        for (int i = startLevel; i < columns.Count; i++)
+        {
+            if (columns[i].ColumnType is ReportColumnType.Currency or ReportColumnType.Decimal or ReportColumnType.Integer)
+                count++;
+        }
+        return Math.Max(1, count);
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Formatting Helpers
+    // ═══════════════════════════════════════════════════════════════
+
+    private static string BuildCellStyle(DataRow row, ReportColumn col, string alignmentStyle)
+    {
+        var styles = new List<string>();
+        if (!string.IsNullOrWhiteSpace(alignmentStyle))
+            styles.Add(alignmentStyle);
+
+        var color = col.TextColor;
+        var bold = col.Bold;
+        if (col.ConditionalStyle != null && EvaluateConditionalStyle(row, col.ConditionalStyle))
+        {
+            if (!string.IsNullOrWhiteSpace(col.ConditionalStyle.TrueTextColor))
+                color = col.ConditionalStyle.TrueTextColor;
+            if (col.ConditionalStyle.TrueBold.HasValue)
+                bold = col.ConditionalStyle.TrueBold.Value;
+        }
+        else if (col.ConditionalStyle != null)
+        {
+            if (!string.IsNullOrWhiteSpace(col.ConditionalStyle.FalseTextColor))
+                color = col.ConditionalStyle.FalseTextColor;
+            if (col.ConditionalStyle.FalseBold.HasValue)
+                bold = col.ConditionalStyle.FalseBold.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(color))
+            styles.Add($"color:{color}");
+        if (bold)
+            styles.Add("font-weight:bold");
+
+        return styles.Count == 0 ? "" : $" style='{string.Join(";", styles)}'";
+    }
+
+    private static bool EvaluateConditionalStyle(DataRow row, ReportColumnConditionalStyle condition)
+    {
+        if (string.IsNullOrWhiteSpace(condition.Field) || !row.Table.Columns.Contains(condition.Field))
+            return false;
+
+        var actual = row[condition.Field];
+        if (actual == null || actual == DBNull.Value)
+            return false;
+
+        var expectedText = condition.Value;
+        if (double.TryParse(Convert.ToString(actual, CultureInfo.InvariantCulture), NumberStyles.Any, CultureInfo.InvariantCulture, out var actualNumber) &&
+            double.TryParse(expectedText, NumberStyles.Any, CultureInfo.InvariantCulture, out var expectedNumber))
+        {
+            return condition.Operator switch
+            {
+                "<>" => actualNumber != expectedNumber,
+                ">" => actualNumber > expectedNumber,
+                ">=" => actualNumber >= expectedNumber,
+                "<" => actualNumber < expectedNumber,
+                "<=" => actualNumber <= expectedNumber,
+                _ => actualNumber == expectedNumber
+            };
+        }
+
+        var comparison = string.Compare(Convert.ToString(actual, CultureInfo.InvariantCulture), expectedText,
+            StringComparison.OrdinalIgnoreCase);
+        return condition.Operator switch
+        {
+            "<>" => comparison != 0,
+            ">" => comparison > 0,
+            ">=" => comparison >= 0,
+            "<" => comparison < 0,
+            "<=" => comparison <= 0,
+            _ => comparison == 0
+        };
+    }
+
+    private static string FormatCellValue(DataRow row, ReportColumn col)
+    {
+        var val = row.Table.Columns.Contains(col.Field) ? row[col.Field] : null;
+        if (val == null || val == DBNull.Value) return "";
+
+        if (!string.IsNullOrEmpty(col.Format))
+        {
+            try
+            {
+                if (val is IFormattable formattable)
+                    return formattable.ToString(col.Format, CultureInfo.CurrentCulture);
+            }
+            catch { }
+        }
+
+        // Wrap conversions in a try — a column's inferred type can be wrong (e.g. a text
+        // column accidentally typed as Currency because its name contains "cost"); rather
+        // than crashing the whole render, fall back to the raw string.
+        try
+        {
+            return col.ColumnType switch
+            {
+                ReportColumnType.Currency => Convert.ToDouble(val).ToString("C2"),
+                ReportColumnType.Decimal => Convert.ToDouble(val).ToString("N2"),
+                ReportColumnType.Integer => Convert.ToInt64(val).ToString("N0"),
+                ReportColumnType.Percent => (Convert.ToDouble(val) * 100).ToString("N1") + "%",
+                ReportColumnType.Date => Convert.ToDateTime(val).ToString("yyyy-MM-dd"),
+                ReportColumnType.DateTime => Convert.ToDateTime(val).ToString("yyyy-MM-dd HH:mm"),
+                ReportColumnType.Boolean => Convert.ToBoolean(val) ? "Yes" : "No",
+                _ => val.ToString() ?? ""
+            };
+        }
+        catch
+        {
+            return val.ToString() ?? "";
+        }
+    }
+
+    private static string ComputeAggregate(List<DataRow> rows, ReportAggregate agg)
+    {
+        try
+        {
+            var values = rows.Where(r => r.Table.Columns.Contains(agg.Field) && r[agg.Field] != DBNull.Value)
+                             .Select(r => Convert.ToDouble(r[agg.Field]))
+                             .ToList();
+
+            if (values.Count == 0) return "";
+
+            double result = agg.AggregateType switch
+            {
+                ReportAggregateType.Sum => values.Sum(),
+                ReportAggregateType.Average => values.Average(),
+                ReportAggregateType.Count => values.Count,
+                ReportAggregateType.Min => values.Min(),
+                ReportAggregateType.Max => values.Max(),
+                _ => values.Sum()
+            };
+
+            return !string.IsNullOrEmpty(agg.Format)
+                ? result.ToString(agg.Format)
+                : result.ToString("N2");
+        }
+        catch { return ""; }
+    }
+
+    private static string ReplacePlaceholders(string text, string title, int page, int total, DateTime now)
+    {
+        if (string.IsNullOrEmpty(text)) return "";
+        return text
+            .Replace("{PageNumber}", page.ToString())
+            .Replace("{TotalPages}", total.ToString())
+            .Replace("{DateTime}", now.ToString("yyyy-MM-dd HH:mm"))
+            .Replace("{ReportTitle}", title);
+    }
+
+    private static string Escape(string? text)
+        => System.Web.HttpUtility.HtmlEncode(text ?? "");
+
+    /// <summary>Produces the inline <c>text-align</c> style for a <see cref="ReportAlignment"/>.</summary>
+    private static string AlignmentStyle(ReportAlignment alignment) => alignment switch
+    {
+        ReportAlignment.Left => "text-align:left",
+        ReportAlignment.Right => "text-align:right",
+        _ => "text-align:center"
+    };
+
+    /// <summary>
+    /// Applies the configured <see cref="ReportOptions.SessionAutoInjectParameters"/> to a
+    /// SQL parameter bag: for each configured name, if the SQL references <c>@Name</c>
+    /// and the caller didn't supply a value, pull it from session state. Lets report
+    /// writers add organization-wide default parameters (UserId, TenantId, ...)
+    /// without any report-specific code in the writer.
+    /// </summary>
+    private void AutoInjectSessionParameters(Dictionary<string, object> sqlParams, string sql)
+    {
+        foreach (var name in Options.SessionAutoInjectParameters)
+        {
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (sqlParams.ContainsKey(name)) continue;
+            if (!sql.Contains("@" + name, StringComparison.OrdinalIgnoreCase)) continue;
+            var value = ResolveSessionParameter(name);
+            if (value != null) sqlParams[name] = value;
+        }
+    }
+
+    /// <summary>
+    /// Looks up a well-known session-provided parameter value via the host-provided
+    /// <see cref="IReportSessionContext"/>. Lets the host wire any number of parameter
+    /// names (UserId, TenantId, …) without changing this control.
+    /// </summary>
+    private object? ResolveSessionParameter(string name) => SessionState.Get(name);
+
+    /// <summary>
+    /// Throws if the SQL result exceeds <see cref="ReportOptions.MaxRowsPerReport"/>. Protects
+    /// the UI from runaway result sets (a badly-filtered report could otherwise return
+    /// millions of rows and lock up the browser). Configurable per-installation.
+    /// </summary>
+    private void GuardRowLimit(System.Data.DataTable dt)
+    {
+        var limit = Options.MaxRowsPerReport;
+        if (limit > 0 && dt.Rows.Count > limit)
+            throw new InvalidOperationException(
+                $"Report returned {dt.Rows.Count} rows, exceeding the configured limit of {limit}. " +
+                $"Add more restrictive parameters or raise ReportOptions.MaxRowsPerReport.");
+    }
+
+    /// <summary>
+    /// Builds the <c>data-path</c> attribute value for a rendered row — a JSON array of
+    /// <c>{field, value}</c> entries for every group field present in the row's DataTable.
+    /// The result is HTML-attribute-encoded so it can live inside <c>data-path='...'</c>
+    /// without breaking the HTML (single quotes and &lt;/&gt; chars are escaped).
+    ///
+    /// <para>
+    /// When the user clicks the row, the JS delegator reads this attribute and passes it
+    /// to <see cref="OnCellClick"/>, which uses it to open a drill-down tab.
+    /// </para>
+    /// </summary>
+    private static string BuildCellPathAttribute(DataRow row, List<ReportGroup> groups)
+    {
+        var entries = new List<object>();
+        foreach (var g in groups)
+        {
+            if (!row.Table.Columns.Contains(g.Field)) continue;
+            var v = (row[g.Field]?.ToString() ?? "").TrimEnd();
+            entries.Add(new { field = g.Field, value = v });
+        }
+        if (entries.Count == 0) return "";
+        var json = JsonSerializer.Serialize(entries);
+        // HTML-attribute-encode the JSON (handles &, <, >, ", ') so it's safe in data-path='...'.
+        return System.Web.HttpUtility.HtmlAttributeEncode(json);
+    }
+
+    private static ReportColumnType MapDataType(Type type)
+    {
+        if (type == typeof(int) || type == typeof(long) || type == typeof(short) || type == typeof(byte))
+            return ReportColumnType.Integer;
+        if (type == typeof(decimal) || type == typeof(double) || type == typeof(float))
+            return ReportColumnType.Decimal;
+        if (type == typeof(DateTime) || type == typeof(DateTimeOffset))
+            return ReportColumnType.DateTime;
+        if (type == typeof(bool))
+            return ReportColumnType.Boolean;
+        return ReportColumnType.Text;
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    //  CHROME RENDER FRAGMENTS — bare page content + recursive tree node
+    //  (Both used by the @if (ShowChrome) { … } / else { … } branches at
+    //  the top of the markup. Defined in @code so the recursive tree
+    //  fragment can call itself.)
+    // ═══════════════════════════════════════════════════════════════
+
+    private RenderFragment RenderReportContent() => __builder =>
+    {
+        @if (IsLoading && !ShowChrome)
+        {
+            <div class="fx-report-loading">Loading report...</div>
+        }
+        else if (!string.IsNullOrEmpty(ErrorMessage))
+        {
+            <div class="fx-report-error">
+                <strong>Report Error</strong>
+                <p>@ErrorMessage</p>
+            </div>
+        }
+        else if (!string.IsNullOrEmpty(PdfDataUrl))
+        {
+            <iframe src="@PdfDataUrl" class="fx-report-pdf-frame" title="Report"></iframe>
+        }
+        else if (Tabs.Count > 0 && ActiveTab != null && ActiveTab.Pages.Count > 0)
+        {
+            @if (Tabs.Count > 1)
+            {
+                <div class="fx-report-tab-bar">
+                    @for (var i = 0; i < Tabs.Count; i++)
+                    {
+                        var idx = i;
+                        var tab = Tabs[idx];
+                        <div class="fx-report-tab @(idx == ActiveTabIndex ? "active" : "")"
+                             @onclick="() => SwitchTab(idx)">
+                            <span>@tab.Title</span>
+                            @if (idx > 0)
+                            {
+                                <button class="fx-report-tab-close"
+                                        @onclick="() => CloseTab(idx)"
+                                        @onclick:stopPropagation="true">×</button>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            <div class="fx-report-pages">
+                <div class="fx-report-page @(ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
+                    @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="fx-report-empty">No report loaded.</div>
+        }
+    };
+
+    private RenderFragment RenderGroupTreeNode(FxGroupNode node) => __builder =>
+    {
+        <li>
+            <span class="fx-rpt-tree-node">
+                @if (node.Children?.Any() == true)
+                {
+                    <span class="fx-rpt-tree-toggle" @onclick="() => ToggleGroupNode(node)" @onclick:stopPropagation="true">
+                        @(node.Expanded ? "▼" : "▶")
+                    </span>
+                }
+                else
+                {
+                    <span class="fx-rpt-tree-toggle leaf">&nbsp;</span>
+                }
+                <span class="fx-rpt-tree-label @(ReferenceEquals(_selectedTreeNode, node) ? "selected" : "")"
+                      @onclick="() => OnGroupNodeClicked(node)" title="@node.Value">
+                    @node.Label
+                </span>
+            </span>
+            @if (node.Expanded && node.Children?.Any() == true)
+            {
+                <ul>
+                    @foreach (var child in node.Children)
+                    {
+                        @RenderGroupTreeNode(child)
+                    }
+                </ul>
+            }
+        </li>
+    };
+}

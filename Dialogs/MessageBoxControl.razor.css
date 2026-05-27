@@ -1,0 +1,90 @@
+.fx-msgbox-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.fx-msgbox {
+    background: #fff;
+    border-radius: 8px;
+    min-width: 320px;
+    max-width: 480px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+.fx-msgbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #0d3b66;
+    color: #fff;
+    font-weight: 600;
+    font-size: 14px;
+}
+
+.fx-msgbox-close {
+    background: transparent;
+    border: none;
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.fx-msgbox-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 20px 16px;
+}
+
+.fx-msgbox-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.fx-msgbox-message {
+    font-size: 14px;
+    color: #374151;
+    line-height: 1.5;
+}
+
+.fx-msgbox-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid #e5e7eb;
+}
+
+.fx-msgbox-btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+}
+
+.fx-msgbox-btn:hover {
+    background: #f3f4f6;
+}
+
+.fx-msgbox-btn-primary {
+    background: #1b6ec2;
+    color: #fff;
+    border-color: #1861ac;
+}
+
+.fx-msgbox-btn-primary:hover {
+    background: #1a65b3;
+}

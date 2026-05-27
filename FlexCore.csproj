@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Fx.ControlKit</RootNamespace>
+    <AssemblyName>FlexCore</AssemblyName>
+    <!-- NuGet metadata -->
+    <PackageId>FlexCore</PackageId>
+    <Version>0.1.1</Version>
+    <Authors>FlexCore Contributors</Authors>
+    <Company>FlexCore Contributors</Company>
+    <Product>FlexCore</Product>
+    <Description>General-purpose reusable Blazor controls — grids, tree-grids, editors, ribbon, toolbars, dialogs, charts, diagrams, reports, multi-select dual-list, notifications, database access. Application-agnostic — every external dependency is exposed as an interface so host apps wire their own data layer, session model, and reporting engine.</Description>
+    <PackageTags>blazor;controls;grid;treegrid;reports;charts;ribbon;toolbar;dialog;notification;diagram;dotnet;razor;database</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/wadoodachaudhary/FlexCore</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wadoodachaudhary/FlexCore.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright (c) 2026 FlexCore Contributors</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" Condition="Exists('README.md')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

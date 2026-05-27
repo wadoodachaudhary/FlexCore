@@ -1,0 +1,46 @@
+.fx-left-panel {
+    position: relative;
+    background: #f8f9fa;
+    border-right: 1px solid #dee2e6;
+    overflow: auto;
+    box-sizing: border-box;
+    transition: width 0.2s ease;
+    flex-shrink: 0;
+}
+
+.fx-left-panel.fx-panel-collapsed {
+    border-right: none;
+}
+
+.fx-left-panel-content {
+    height: 100%;
+    overflow: auto;
+}
+
+.fx-panel-toggle {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid #dee2e6;
+    background: #fff;
+    cursor: pointer;
+    font-size: 10px;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0 4px 4px 0;
+    z-index: 10;
+    transition: background 0.15s ease;
+}
+
+.fx-panel-toggle:hover {
+    background: #e9ecef;
+}
+
+.fx-panel-toggle-left {
+    right: -20px;
+}

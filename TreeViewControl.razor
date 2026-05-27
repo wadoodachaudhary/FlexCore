@@ -1,0 +1,250 @@
+@namespace Fx.ControlKit
+
+<div class="@RootCssClass" style="@RootStyle">
+    @if (Nodes != null)
+    {
+        @RenderNodes(Nodes, 0)
+    }
+</div>
+
+@code {
+    [Parameter] public List<TreeNode>? Nodes { get; set; }
+    [Parameter] public TreeNode? SelectedNode { get; set; }
+    [Parameter] public EventCallback<TreeNode> SelectedNodeChanged { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeClick { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeDoubleClick { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeExpand { get; set; }
+    [Parameter] public bool ShowCheckboxes { get; set; }
+    [Parameter] public bool ShowIcons { get; set; } = true;
+    [Parameter] public bool AllowMultiSelect { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Height { get; set; }
+    [Parameter] public bool UseVb6TreeStyle { get; set; }
+    [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.Yellow;
+    [Parameter] public int TreeIndentPixels { get; set; } = 16;
+
+    private bool IsVb6TreeStyle => UseVb6TreeStyle || HasCssClass("fx-treeview-vb6");
+    private string? RootStyle => Height != null ? $"height:{Height};overflow:auto;" : null;
+
+    private string RootCssClass
+    {
+        get
+        {
+            var classes = new List<string> { "fx-treeview" };
+
+            if (IsVb6TreeStyle)
+            {
+                if (!HasCssClass("fx-treeview-vb6"))
+                    classes.Add("fx-treeview-vb6");
+
+                if (!HasFolderModifierClass())
+                    classes.Add(GetFolderStyleCss());
+            }
+
+            if (!string.IsNullOrWhiteSpace(CssClass))
+                classes.Add(CssClass.Trim());
+
+            return string.Join(" ", classes);
+        }
+    }
+
+    private RenderFragment RenderNodes(List<TreeNode> nodes, int level) => builder =>
+    {
+        foreach (var node in nodes)
+        {
+            var capturedNode = node;
+            var capturedLevel = level;
+
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", GetNodeCss(capturedNode, capturedLevel));
+            builder.AddAttribute(2, "style", GetNodeStyle(capturedLevel));
+            builder.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, () => HandleNodeClick(capturedNode)));
+            builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create(this, () => HandleNodeDoubleClick(capturedNode)));
+
+            // Expand/collapse arrow
+            builder.OpenElement(5, "span");
+            builder.AddAttribute(6, "class", GetArrowCss(capturedNode));
+            if (capturedNode.HasChildren)
+            {
+                builder.AddAttribute(7, "onclick", EventCallback.Factory.Create(this, () => HandleExpandClick(capturedNode)));
+                builder.AddEventStopPropagationAttribute(8, "onclick", true);
+            }
+            builder.CloseElement();
+
+            // Checkbox
+            if (ShowCheckboxes)
+            {
+                builder.OpenElement(9, "input");
+                builder.AddAttribute(10, "type", "checkbox");
+                builder.AddAttribute(11, "class", "fx-treeview-checkbox");
+                builder.AddAttribute(12, "checked", capturedNode.IsChecked);
+                builder.AddAttribute(13, "disabled", capturedNode.IsDisabled);
+                builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => HandleCheckChanged(capturedNode, e)));
+                builder.AddEventStopPropagationAttribute(15, "onclick", true);
+                builder.CloseElement();
+            }
+
+            // Icon
+            var iconCss = GetRenderedIconCss(capturedNode);
+            if (ShowIcons && !string.IsNullOrEmpty(iconCss))
+            {
+                builder.OpenElement(16, "span");
+                builder.AddAttribute(17, "class", iconCss);
+                builder.CloseElement();
+            }
+
+            // Text
+            builder.OpenElement(18, "span");
+            builder.AddAttribute(19, "class", "fx-treeview-text");
+            builder.AddContent(20, capturedNode.Text);
+            builder.CloseElement();
+
+            builder.CloseElement(); // close node div
+
+            // Render children if expanded
+            if (capturedNode.HasChildren && capturedNode.IsExpanded)
+            {
+                builder.AddContent(21, RenderNodes(capturedNode.Children, capturedLevel + 1));
+            }
+        }
+    };
+
+    private string GetNodeCss(TreeNode node, int level)
+    {
+        var css = "fx-treeview-node";
+        if (IsVb6TreeStyle)
+        {
+            css += " fx-treeview-vb6-node";
+            css += level == 0 ? " fx-treeview-root" : "";
+            css += node.HasChildren ? " fx-treeview-branch" : " fx-treeview-leaf";
+            css += node.IsExpanded ? " fx-treeview-expanded" : " fx-treeview-collapsed";
+        }
+        if (node.IsSelected || node == SelectedNode)
+            css += " fx-treeview-node-selected";
+        if (node.IsDisabled)
+            css += " fx-treeview-node-disabled";
+        return css;
+    }
+
+    private string GetNodeStyle(int level)
+    {
+        if (!IsVb6TreeStyle)
+            return $"padding-left:{level * 20}px;";
+
+        var indent = Math.Max(0, TreeIndentPixels);
+        return $"--tree-depth:{level};--tree-indent:{indent}px;--tree-node-left:{level * indent}px;";
+    }
+
+    private string GetArrowCss(TreeNode node)
+    {
+        var css = "fx-treeview-arrow";
+        if (!node.HasChildren)
+            return css + " fx-treeview-arrow-hidden";
+
+        return node.IsExpanded
+            ? css + " fx-treeview-arrow-expanded"
+            : css + " fx-treeview-arrow-collapsed";
+    }
+
+    private string GetRenderedIconCss(TreeNode node)
+    {
+        var iconCss = GetIconCss(node);
+        if (!string.IsNullOrWhiteSpace(iconCss))
+            return "fx-treeview-icon " + iconCss;
+
+        if (!IsVb6TreeStyle)
+            return "";
+
+        return node.HasChildren
+            ? $"fx-treeview-icon fx-treeview-folder-icon {(node.IsExpanded ? "open" : "closed")}"
+            : "fx-treeview-icon fx-treeview-folder-spacer";
+    }
+
+    private string GetIconCss(TreeNode node)
+    {
+        if (node.IsExpanded && !string.IsNullOrEmpty(node.ExpandedIconCss))
+            return node.ExpandedIconCss;
+        return node.IconCss ?? "";
+    }
+
+    private string GetFolderStyleCss() => FolderStyle switch
+    {
+        TreeFolderStyle.None => "fx-treeview-no-folder",
+        TreeFolderStyle.Grey => "fx-treeview-grey-folder",
+        _ => "fx-treeview-yellow-folder"
+    };
+
+    private bool HasFolderModifierClass()
+    {
+        return HasCssClass("fx-treeview-yellow-folder")
+            || HasCssClass("fx-treeview-no-folder")
+            || HasCssClass("fx-treeview-grey-folder");
+    }
+
+    private bool HasCssClass(string cssClass)
+    {
+        if (string.IsNullOrWhiteSpace(CssClass))
+            return false;
+
+        return CssClass.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Any(value => string.Equals(value, cssClass, StringComparison.Ordinal));
+    }
+
+    private async Task HandleNodeClick(TreeNode node)
+    {
+        if (node.IsDisabled) return;
+
+        if (node.HasChildren)
+        {
+            node.IsExpanded = !node.IsExpanded;
+            if (node.IsExpanded && OnNodeExpand.HasDelegate)
+                await OnNodeExpand.InvokeAsync(node);
+        }
+
+        if (!AllowMultiSelect)
+        {
+            if (SelectedNode != null)
+                SelectedNode.IsSelected = false;
+            node.IsSelected = true;
+            SelectedNode = node;
+            if (SelectedNodeChanged.HasDelegate)
+                await SelectedNodeChanged.InvokeAsync(node);
+        }
+        else
+        {
+            node.IsSelected = !node.IsSelected;
+        }
+
+        if (OnNodeClick.HasDelegate)
+            await OnNodeClick.InvokeAsync(node);
+    }
+
+    private async Task HandleNodeDoubleClick(TreeNode node)
+    {
+        if (node.IsDisabled) return;
+
+        if (OnNodeDoubleClick.HasDelegate)
+            await OnNodeDoubleClick.InvokeAsync(node);
+    }
+
+    private async Task HandleCheckChanged(TreeNode node, ChangeEventArgs e)
+    {
+        if (node.IsDisabled) return;
+
+        if (e.Value is bool b)
+            node.IsChecked = b;
+        else if (bool.TryParse(e.Value?.ToString(), out var parsed))
+            node.IsChecked = parsed;
+
+        await Task.CompletedTask;
+    }
+
+    private async Task HandleExpandClick(TreeNode node)
+    {
+        if (node.IsDisabled) return;
+
+        node.IsExpanded = !node.IsExpanded;
+        if (node.IsExpanded && OnNodeExpand.HasDelegate)
+            await OnNodeExpand.InvokeAsync(node);
+    }
+}

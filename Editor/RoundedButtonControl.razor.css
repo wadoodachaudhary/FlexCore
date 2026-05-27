@@ -1,0 +1,58 @@
+/* Pill / chip-shaped button with four variants. Hosts can override the
+ * color palette by supplying their own `.fx-rounded-button--<variant>`
+ * rules or by passing a custom CssClass. */
+
+.fx-rounded-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0.2rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.fx-rounded-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.fx-rounded-button--muted {
+    background: rgba(93, 81, 71, 0.1);
+    color: #5d5147;
+}
+
+.fx-rounded-button--muted:hover:not(:disabled) {
+    background: rgba(93, 81, 71, 0.18);
+}
+
+.fx-rounded-button--accent {
+    background: rgba(31, 111, 95, 0.12);
+    color: #1f6f5f;
+}
+
+.fx-rounded-button--accent:hover:not(:disabled) {
+    background: rgba(31, 111, 95, 0.2);
+}
+
+.fx-rounded-button--danger {
+    background: rgba(200, 30, 30, 0.08);
+    color: #c81e1e;
+    border-color: rgba(200, 30, 30, 0.3);
+}
+
+.fx-rounded-button--danger:hover:not(:disabled) {
+    background: rgba(200, 30, 30, 0.16);
+}
+
+.fx-rounded-button--success {
+    background: rgba(20, 150, 100, 0.12);
+    color: #148264;
+}
+
+.fx-rounded-button--success:hover:not(:disabled) {
+    background: rgba(20, 150, 100, 0.2);
+}

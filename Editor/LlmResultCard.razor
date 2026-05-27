@@ -1,0 +1,343 @@
+@namespace Fx.ControlKit.Editor
+@inject IJSRuntime JS
+
+@* Card that renders a single model's output in an LLM-compare strip. The
+   host manages the outer strip (one card per selected model); this control
+   owns the per-card presentation — operation label pill, model name pill,
+   loading spinner, error banner, output body, original-text disclosure,
+   and a host-defined set of action buttons (Replace, Insert, Merge, Apply,
+   Dismiss, etc.). *@
+
+<div class="fx-result-card @(CssClass ?? string.Empty)" id="@_cardId">
+    <div class="fx-result-header">
+        @if (!string.IsNullOrWhiteSpace(OperationLabel))
+        {
+            <span class="fx-result-badge">@OperationLabel</span>
+        }
+        @if (!string.IsNullOrWhiteSpace(ModelDisplayName))
+        {
+            <span class="fx-pill fx-pill-small fx-model-pill">@ModelDisplayName</span>
+        }
+        @* Copy button — copies the currently-selected text from this card
+           if any, otherwise the whole output body. Always as plain text so
+           the destination (usually GhostWriter's contenteditable) inherits
+           the document's own font / size / color instead of the card's. *@
+        <button class="fx-copy-btn"
+                type="button"
+                @onclick="CopyAsync"
+                title="Copy — selection if any, otherwise the whole output (plain text)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2"/>
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+            </svg>
+        </button>
+        @if (ShowCloseButton)
+        {
+            <button class="fx-overlay-close fx-small" @onclick="OnDismiss" title="Close">&times;</button>
+        }
+    </div>
+
+    @if (IsBusy)
+    {
+        <div class="fx-result-loading">
+            <div class="fx-spinner"></div>
+            <span>@(BusyMessage ?? "Generating…")</span>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(ErrorMessage))
+    {
+        <div class="fx-alert">@ErrorMessage</div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(ImageBase64))
+    {
+        <div class="fx-result-image">
+            <img src="@($"data:{ImageMime ?? "image/png"};base64,{ImageBase64}")"
+                 alt="@(OutputText ?? OriginalText ?? "Generated image")" />
+        </div>
+        <div class="fx-result-actions">
+            @if (Actions is { Count: > 0 })
+            {
+                @foreach (var action in Actions)
+                {
+                    <button class="@ButtonClasses(action)"
+                            disabled="@action.Disabled"
+                            title="@action.Title"
+                            @onclick="action.OnClick">
+                        @if (!string.IsNullOrWhiteSpace(action.IconSvg))
+                        {
+                            @((MarkupString)action.IconSvg)
+                        }
+                        @action.Label
+                    </button>
+                }
+            }
+        </div>
+    }
+    else if (Variants != null && Variants.Count > 0)
+    {
+        @* Tab strip — one per rewrite variant. The active tab's text is the
+           body. Switching a tab just updates ActiveVariantIndex so the host
+           can resolve the right text when an action fires. *@
+        <div class="fx-result-tabs" role="tablist">
+            @for (var vi = 0; vi < Variants.Count; vi++)
+            {
+                var idx = vi;
+                var label = Variants[idx].Label;
+                var isActive = idx == ActiveVariantIndex;
+                <button type="button"
+                        role="tab"
+                        class="fx-result-tab @(isActive ? "active" : "")"
+                        aria-selected="@(isActive ? "true" : "false")"
+                        @onclick="() => SetActiveVariantAsync(idx)">@label</button>
+            }
+        </div>
+        <div class="fx-result-output">@ActiveVariantText</div>
+        <div class="fx-result-actions">
+            @if (Actions is { Count: > 0 })
+            {
+                @foreach (var action in Actions)
+                {
+                    <button class="@ButtonClasses(action)"
+                            disabled="@action.Disabled"
+                            title="@action.Title"
+                            @onclick="action.OnClick">
+                        @if (!string.IsNullOrWhiteSpace(action.IconSvg))
+                        {
+                            @((MarkupString)action.IconSvg)
+                        }
+                        @action.Label
+                    </button>
+                }
+            }
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(OutputText))
+    {
+        // Echo banner — when the model's output starts with a long
+        // verbatim slice of its input (DeepSeek R1 total-echo, Qwen
+        // partial echo, Gemini occasional truncate-echo), surface that
+        // fact above the body so the user sees what actually changed.
+        // We don't strip the prefix from OutputText itself — the host's
+        // Replace/Insert actions need the full text — we just split it
+        // visually with the banner.
+        var echoLen = ComputeEchoLen(EchoCompareTo, OutputText);
+        var echoPct = OutputText.Length == 0 ? 0
+            : (int)Math.Round(100.0 * echoLen / OutputText.Length);
+        @if (echoLen >= EchoMinChars)
+        {
+            <div class="fx-result-echo-banner" title="The model echoed this many characters of its input verbatim before adding new prose.">
+                ↪ <strong>@echoLen</strong> chars repeated from input
+                (@echoPct% of output)
+                · <strong>@(OutputText.Length - echoLen)</strong> chars new
+            </div>
+        }
+        <div class="fx-result-output">@OutputText</div>
+        <div class="fx-result-actions">
+            @if (Actions is { Count: > 0 })
+            {
+                @foreach (var action in Actions)
+                {
+                    <button class="@ButtonClasses(action)"
+                            disabled="@action.Disabled"
+                            title="@action.Title"
+                            @onclick="action.OnClick">
+                        @if (!string.IsNullOrWhiteSpace(action.IconSvg))
+                        {
+                            @((MarkupString)action.IconSvg)
+                        }
+                        @action.Label
+                    </button>
+                }
+            }
+            else
+            {
+                @* Fallback to the original Apply / Dismiss pair when the host
+                   doesn't supply its own action set. *@
+                @if (OnApply.HasDelegate)
+                {
+                    <button class="fx-button fx-primary fx-small" @onclick="OnApply">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                        @(ApplyLabel ?? "Apply")
+                    </button>
+                }
+                @if (OnDismiss.HasDelegate)
+                {
+                    <button class="fx-button fx-ghost fx-small" @onclick="OnDismiss">@(DismissLabel ?? "Dismiss")</button>
+                }
+            }
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(OriginalText))
+    {
+        <details class="fx-result-original">
+            <summary>@(OriginalLabel ?? "Original text")</summary>
+            <div class="fx-result-original-text">@OriginalText</div>
+        </details>
+    }
+</div>
+
+@code {
+    /// <summary>
+    /// One of the buttons rendered in the card's action row. The host supplies
+    /// a list of these to get arbitrary verbs (Replace, Insert, Merge, Retry)
+    /// without the control needing to know about each one.
+    /// </summary>
+    public sealed record ResultAction(
+        string Label,
+        EventCallback OnClick,
+        bool IsPrimary = false,
+        bool Disabled = false,
+        string? Title = null,
+        string? IconSvg = null);
+
+    [Parameter] public string? OperationLabel { get; set; }
+    [Parameter] public string? ModelDisplayName { get; set; }
+
+    [Parameter] public bool IsBusy { get; set; }
+    [Parameter] public string? BusyMessage { get; set; }
+
+    [Parameter] public string? ErrorMessage { get; set; }
+    [Parameter] public string? OutputText { get; set; }
+    [Parameter] public string? OriginalText { get; set; }
+    [Parameter] public string? OriginalLabel { get; set; }
+
+    /// <summary>
+    /// Label + body for one tab. When the host supplies a non-empty list
+    /// the card renders a tab strip above the output body; the active
+    /// tab's <see cref="Text"/> becomes the body. Plain-text slots (with
+    /// <see cref="OutputText"/> only) keep the single-body layout.
+    /// </summary>
+    public sealed record Variant(string Label, string Text);
+
+    [Parameter] public IReadOnlyList<Variant>? Variants { get; set; }
+
+    /// <summary>Index of the currently-visible tab. Two-way bound so the host can react.</summary>
+    [Parameter] public int ActiveVariantIndex { get; set; }
+
+    [Parameter] public EventCallback<int> ActiveVariantIndexChanged { get; set; }
+
+    private async Task SetActiveVariantAsync(int index)
+    {
+        if (Variants is null || index < 0 || index >= Variants.Count) return;
+        if (index == ActiveVariantIndex) return;
+        ActiveVariantIndex = index;
+        if (ActiveVariantIndexChanged.HasDelegate)
+        {
+            await ActiveVariantIndexChanged.InvokeAsync(index);
+        }
+    }
+
+    // ── Clipboard integration ──────────────────────────────────────────────
+    // Unique DOM id per card instance so the JS-side copyFromCard helper can
+    // locate the right body via document.getElementById, regardless of how
+    // many cards are on screen at once.
+    private readonly string _cardId = "fx-result-" + Guid.NewGuid().ToString("N");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                // Install the global plain-text copy interceptor on first
+                // render. It's idempotent — every card calls it, only the
+                // first one actually attaches the listener.
+                await JS.InvokeVoidAsync("hfClipboard.installCopyInterceptor");
+            }
+            catch
+            {
+                // JS not ready yet (server pre-render, hot reload) — the
+                // Copy button itself still works via the async call below.
+            }
+        }
+    }
+
+    private async Task CopyAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("hfClipboard.copyFromCard", _cardId);
+        }
+        catch
+        {
+            // Best-effort — if the clipboard API is unavailable the card
+            // still shows the text, the user can always select + ⌘C.
+        }
+    }
+
+    /// <summary>Body text for whichever variant tab is active, with a bounds-safe fallback.</summary>
+    private string ActiveVariantText
+    {
+        get
+        {
+            if (Variants is null || Variants.Count == 0) return string.Empty;
+            var i = ActiveVariantIndex;
+            if (i < 0 || i >= Variants.Count) i = 0;
+            return Variants[i].Text;
+        }
+    }
+
+    /// <summary>
+    /// Base64-encoded image bytes (no data: prefix). When set, the card
+    /// renders the picture in place of <see cref="OutputText"/>. Host supplies
+    /// image-specific <see cref="Actions"/> (Download / Copy / Insert) since
+    /// Replace/Merge don't apply to pictures.
+    /// </summary>
+    [Parameter] public string? ImageBase64 { get; set; }
+
+    /// <summary>MIME type for <see cref="ImageBase64"/> — defaults to <c>image/png</c>.</summary>
+    [Parameter] public string? ImageMime { get; set; }
+
+    /// <summary>
+    /// Host-defined action buttons. When non-empty, they replace the default
+    /// Apply / Dismiss pair entirely.
+    /// </summary>
+    [Parameter] public IReadOnlyList<ResultAction>? Actions { get; set; }
+
+    [Parameter] public EventCallback OnApply { get; set; }
+    [Parameter] public EventCallback OnDismiss { get; set; }
+    [Parameter] public string? ApplyLabel { get; set; }
+    [Parameter] public string? DismissLabel { get; set; }
+
+    /// <summary>
+    /// Render a close (×) button in the card header — typically true only on
+    /// the first card of a multi-model strip so the user has one place to
+    /// dismiss the whole panel.
+    /// </summary>
+    [Parameter] public bool ShowCloseButton { get; set; }
+
+    [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>
+    /// Optional input the host wants compared against <see cref="OutputText"/>
+    /// for echo detection. For an Expand+ chain card this is the previous
+    /// step's output (i.e. THIS card's input). When set and the longest
+    /// common prefix is ≥ <see cref="EchoMinChars"/> chars, an "↪ N chars
+    /// repeated" banner appears above the output body.
+    /// </summary>
+    [Parameter] public string? EchoCompareTo { get; set; }
+
+    /// <summary>Minimum prefix overlap (chars) before the echo banner appears.</summary>
+    [Parameter] public int EchoMinChars { get; set; } = 100;
+
+    /// <summary>Length (chars) of the longest common leading prefix of
+    /// <paramref name="input"/> and <paramref name="output"/>. Used by the
+    /// echo banner; the percentage is computed inline at the call site.</summary>
+    private static int ComputeEchoLen(string? input, string? output)
+    {
+        if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(output)) return 0;
+        int n = Math.Min(input.Length, output.Length);
+        int i = 0;
+        while (i < n && input[i] == output[i]) i++;
+        return i;
+    }
+
+    private static string ButtonClasses(ResultAction a)
+    {
+        var variant = a.IsPrimary ? "fx-primary" : "fx-ghost";
+        return $"fx-button {variant} fx-small";
+    }
+}

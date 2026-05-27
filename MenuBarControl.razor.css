@@ -1,0 +1,9 @@
+.fx-menu-bar {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 2px 4px;
+    border: 1px solid #d7deea;
+    border-radius: 6px;
+    background: #f7f9fc;
+}

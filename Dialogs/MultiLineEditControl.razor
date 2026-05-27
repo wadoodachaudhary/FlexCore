@@ -1,0 +1,124 @@
+@namespace Fx.ControlKit.Dialogs
+
+@*
+    MultiLineEditControl — modal "edit a long string" popup. Used by grids
+    whose cell content is too tall for an inline editor (notes, formulas,
+    comments). Mirrors the VB6 FComments.Edit / FFormulaEditor.EditFormula
+    pattern: caller invokes ShowAsync, the user types, OK returns the new
+    text or Cancel returns null.
+
+    Usage from a grid cell template:
+
+        <button class="fx-cell-ellipsis-btn"
+                @onclick="async () => { var v = await editor.ShowAsync(row.Notes, \"Notes\", 4000); ... }">
+            …
+        </button>
+
+    The textarea grows / scrolls inside a fixed-height card so the dialog
+    doesn't blow past the viewport on very long values. MaxLength is
+    enforced both via the HTML attribute (browser stops typing) and the
+    OK-button payload (server-side truncation isn't needed but the
+    parameter is surfaced so callers can right-size the field per
+    DB column width).
+
+    Keyboard: Escape cancels; Ctrl+Enter confirms (Enter alone inserts a
+    newline so users can author paragraphs).
+*@
+
+@if (Visible)
+{
+    <div class="fx-mled-overlay" @onclick="Cancel">
+        <div class="fx-mled @CssClass" @onclick:stopPropagation="true">
+            <div class="fx-mled-header">
+                <span>@Title</span>
+                <button class="fx-mled-close" @onclick="Cancel" title="Cancel (Esc)">&times;</button>
+            </div>
+            <div class="fx-mled-body">
+                @if (!string.IsNullOrEmpty(Prompt))
+                {
+                    <label class="fx-mled-label">@Prompt</label>
+                }
+                <textarea class="fx-mled-textarea"
+                          @bind="InputValue"
+                          @bind:event="oninput"
+                          maxlength="@MaxLength"
+                          placeholder="@Placeholder"
+                          @onkeydown="HandleKeyDown"
+                          spellcheck="false"></textarea>
+                @if (MaxLength > 0)
+                {
+                    <div class="fx-mled-counter">@InputValue.Length / @MaxLength</div>
+                }
+            </div>
+            <div class="fx-mled-footer">
+                <button class="fx-mled-btn fx-mled-btn-primary"
+                        @onclick="Confirm"
+                        title="OK (Ctrl+Enter)">OK</button>
+                <button class="fx-mled-btn" @onclick="Cancel" title="Cancel (Esc)">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "Edit";
+    [Parameter] public string? Prompt { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string InputValue { get; set; } = "";
+    [Parameter] public EventCallback<string?> OnResult { get; set; }
+    /// <summary>Maximum string length. Zero disables the limit (and hides the counter).</summary>
+    [Parameter] public int MaxLength { get; set; } = 4000;
+    [Parameter] public string? CssClass { get; set; }
+
+    private TaskCompletionSource<string?>? _tcs;
+
+    /// <summary>Open the dialog and await a result. Returns the new string
+    /// when the user presses OK / Ctrl+Enter, or <c>null</c> when they
+    /// Cancel / press Esc / click the backdrop.</summary>
+    /// <param name="initial">Current value of the field being edited.</param>
+    /// <param name="title">Title bar text. Defaults to "Edit".</param>
+    /// <param name="maxLength">Optional character cap. Zero disables.</param>
+    /// <param name="prompt">Optional helper line shown above the textarea.</param>
+    public Task<string?> ShowAsync(string initial, string title = "Edit", int maxLength = 4000, string? prompt = null)
+    {
+        Title = title;
+        Prompt = prompt;
+        InputValue = initial ?? "";
+        MaxLength = maxLength;
+        Visible = true;
+        _tcs = new TaskCompletionSource<string?>();
+        StateHasChanged();
+        return _tcs.Task;
+    }
+
+    private async Task Confirm()
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+        if (OnResult.HasDelegate)
+            await OnResult.InvokeAsync(InputValue);
+        _tcs?.TrySetResult(InputValue);
+    }
+
+    private async Task Cancel()
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+        if (OnResult.HasDelegate)
+            await OnResult.InvokeAsync(null);
+        _tcs?.TrySetResult(null);
+    }
+
+    private async Task HandleKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        // Enter alone inserts a newline (default textarea behavior). Ctrl+Enter
+        // commits — same gesture as Word's accept-comment shortcut. Escape
+        // cancels regardless of focus inside the textarea.
+        if (e.Key == "Escape") await Cancel();
+        else if (e.Key == "Enter" && e.CtrlKey) await Confirm();
+    }
+}

@@ -1,0 +1,82 @@
+@namespace Fx.ControlKit.Editor
+
+@* A dedicated multi-line text control. Kept separate from TextBoxControl
+   (which supports multiline as a flag) so GhostWriter-class apps can use
+   `<TextAreaControl>` semantically in markup and so specialised behaviour
+   (auto-grow, ResizableBy, etc.) can be added later without bleeding into
+   the single-line TextBox surface.
+
+   Supports two-way binding with <c>@bind-Value</c>. Change events fire via
+   <c>oninput</c> by default so hosts see keystrokes live; set
+   <see cref="BindOnChange"/> to true to fire only on blur (matching the
+   native <c>onchange</c> semantic). *@
+
+<textarea class="@ResolvedCssClass"
+          style="@Style"
+          placeholder="@Placeholder"
+          rows="@Rows"
+          cols="@Cols"
+          maxlength="@MaxLength"
+          spellcheck="@Spellcheck"
+          disabled="@(!Enabled)"
+          readonly="@ReadOnly"
+          value="@Value"
+          @onchange="HandleChangeAsync"
+          @oninput="HandleInputAsync"></textarea>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public System.Linq.Expressions.Expression<System.Func<string?>>? ValueExpression { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+
+    /// <summary>Visible row count (maps to the <c>rows</c> HTML attribute).</summary>
+    [Parameter] public int? Rows { get; set; }
+
+    /// <summary>Visible column count.</summary>
+    [Parameter] public int? Cols { get; set; }
+
+    [Parameter] public int? MaxLength { get; set; }
+
+    /// <summary>When false, the textarea is rendered as disabled.</summary>
+    [Parameter] public bool Enabled { get; set; } = true;
+
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool Spellcheck { get; set; } = true;
+
+    /// <summary>
+    /// When true, the control fires <see cref="ValueChanged"/> only on blur
+    /// (matching native <c>onchange</c>). Default is <c>false</c> — binding
+    /// updates every keystroke via <c>oninput</c>, which is what most hosts
+    /// expect for live "dirty" tracking.
+    /// </summary>
+    [Parameter] public bool BindOnChange { get; set; }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var c = (CssClass ?? string.Empty).Trim();
+            return string.IsNullOrEmpty(c) ? "fx-textarea" : $"fx-textarea {c}";
+        }
+    }
+
+    private async Task HandleInputAsync(ChangeEventArgs e)
+    {
+        if (BindOnChange) return;
+        var next = e.Value?.ToString();
+        Value = next;
+        if (ValueChanged.HasDelegate) await ValueChanged.InvokeAsync(next);
+    }
+
+    private async Task HandleChangeAsync(ChangeEventArgs e)
+    {
+        if (!BindOnChange) return;
+        var next = e.Value?.ToString();
+        Value = next;
+        if (ValueChanged.HasDelegate) await ValueChanged.InvokeAsync(next);
+    }
+}

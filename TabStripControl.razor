@@ -1,0 +1,49 @@
+@namespace Fx.ControlKit
+
+@*
+    TabStripControl — header-only tab strip (no content panes).
+    Use when tabs control external content or routing, unlike TabControl
+    which manages its own content panes.
+*@
+
+<div class="fx-tabstrip @CssClass">
+    @for (var i = 0; i < Items.Count; i++)
+    {
+        var idx = i;
+        var item = Items[idx];
+        <div class="fx-tabstrip-tab @(idx == SelectedIndex ? "fx-tabstrip-tab-active" : "") @(item.Disabled ? "fx-tabstrip-tab-disabled" : "")"
+             @onclick="() => SelectTab(idx)">
+            @if (!string.IsNullOrEmpty(item.IconCss))
+            {
+                <span class="fx-tabstrip-icon @item.IconCss"></span>
+            }
+            <span class="fx-tabstrip-text">@item.Text</span>
+            @if (item.Closable)
+            {
+                <span class="fx-tabstrip-close" @onclick="() => CloseTab(idx)" @onclick:stopPropagation="true">&times;</span>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public List<TabStripItem> Items { get; set; } = new();
+    [Parameter] public int SelectedIndex { get; set; }
+    [Parameter] public EventCallback<int> SelectedIndexChanged { get; set; }
+    [Parameter] public EventCallback<int> OnTabClose { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private async Task SelectTab(int idx)
+    {
+        if (idx < 0 || idx >= Items.Count || Items[idx].Disabled) return;
+        SelectedIndex = idx;
+        if (SelectedIndexChanged.HasDelegate)
+            await SelectedIndexChanged.InvokeAsync(idx);
+    }
+
+    private async Task CloseTab(int idx)
+    {
+        if (OnTabClose.HasDelegate)
+            await OnTabClose.InvokeAsync(idx);
+    }
+}
