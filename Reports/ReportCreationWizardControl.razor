@@ -1,0 +1,451 @@
+@namespace Fx.ControlKit.Reports
+
+@using Fx.ControlKit
+
+<WizardControl Visible="@Visible"
+               VisibleChanged="VisibleChanged"
+               Header="Standard Report Creation Wizard"
+               Steps="@_steps"
+               CurrentStepIndex="@_stepIndex"
+               CurrentStepIndexChanged="OnStepIndexChanged"
+               CanMoveNext="@CanMoveNext"
+               CanFinish="@CanFinish"
+               FinishRequested="FinishAsync"
+               Cancelled="CancelAsync"
+               CssClass="fx-report-wizard-dialog">
+    <StepContent Context="step">
+        @if (DataSourceList.Count == 0)
+        {
+            <div class="fx-rw-empty">
+                <strong>No data sources are available.</strong>
+                <span>The designer opened, but the host did not provide database tables for the wizard.</span>
+            </div>
+        }
+        else
+        {
+            @RenderStepContent(step.StepIndex)
+        }
+    </StepContent>
+</WizardControl>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public IReadOnlyList<ReportDesignerDataTable>? DataSources { get; set; }
+    [Parameter] public EventCallback<ReportCreationWizardResult> Finished { get; set; }
+    [Parameter] public EventCallback Cancelled { get; set; }
+
+    private readonly List<WizardStepDescriptor> _steps =
+    [
+        new() { Title = "Data", Description = "Choose the data you want to report on.", IconCss = "fx-rw-step-data" },
+        new() { Title = "Fields", Description = "Choose the information to display on the report.", IconCss = "fx-rw-step-fields" },
+        new() { Title = "Grouping", Description = "(Optional) Group the information on the report.", IconCss = "fx-rw-step-grouping" },
+        new() { Title = "Summaries", Description = "(Optional) Add summary information to the report.", IconCss = "fx-rw-step-summaries" },
+        new() { Title = "Record Selection", Description = "(Optional) Select a subset of information to display.", IconCss = "fx-rw-step-selection" },
+        new() { Title = "Template", Description = "(Optional) Select a template for the report.", IconCss = "fx-rw-step-template" }
+    ];
+
+    private readonly string[] _templates =
+    [
+        "No Template",
+        "Block (Blue)",
+        "Corporate - Page Sections Only",
+        "Corporate (Blue)",
+        "Corporate (Green)",
+        "Double-Sided Page Headers/Footers",
+        "Executive Summary or Title Page",
+        "Form (Maroon)",
+        "Gray Scale",
+        "High Contrast",
+        "Contract Index",
+        "Table Grid Template"
+    ];
+
+    private readonly string[] _summaryOperations = ["Sum", "Average", "Count", "Minimum", "Maximum"];
+    private readonly string[] _filterOperators =
+    [
+        "is equal to",
+        "is not equal to",
+        "is less than",
+        "is less than or equal to",
+        "is greater than",
+        "is greater than or equal to",
+        "contains",
+        "does not contain",
+        "begins with",
+        "ends with"
+    ];
+
+    private int _stepIndex;
+    private string _selectedTemplate = "No Template";
+    private string _reportTitle = "Untitled Report";
+    private string? _activeFilterKey;
+    private string? _activeSummaryKey;
+
+    private List<ReportDesignerDataTable> _selectedTables = new();
+    private List<ReportDesignerField> _displayFields = new();
+    private List<ReportDesignerField> _groupFields = new();
+    private List<ReportDesignerField> _summaryFields = new();
+    private List<ReportDesignerSummary> _summaries = new();
+    private List<ReportDesignerField> _filterFields = new();
+    private List<ReportDesignerFilter> _filters = new();
+
+    private List<ReportDesignerDataTable> DataSourceList => (DataSources ?? Array.Empty<ReportDesignerDataTable>()).ToList();
+    private bool CanMoveNext => _stepIndex < _steps.Count - 1 && (_stepIndex != 0 || _selectedTables.Count > 0);
+    private bool CanFinish => _selectedTables.Count > 0 && (_displayFields.Count > 0 || _stepIndex == _steps.Count - 1);
+    private List<ReportDesignerField> AvailableSelectedTableFields => _selectedTables.SelectMany(table => table.Fields).ToList();
+    private List<ReportDesignerField> ReportFields => _displayFields.Count > 0 ? _displayFields : AvailableSelectedTableFields;
+    private string TemplatePreviewCss => _selectedTemplate.Contains("Blue", StringComparison.OrdinalIgnoreCase) ? "blue" : _selectedTemplate.Contains("Green", StringComparison.OrdinalIgnoreCase) ? "green" : "plain";
+
+    protected override void OnParametersSet()
+    {
+        if (Visible && _selectedTables.Count == 0 && DataSourceList.Count == 1)
+            OnSelectedTablesChanged(DataSourceList.Select(CloneTable).ToList());
+    }
+
+    private RenderFragment RenderStepContent(int stepIndex) => stepIndex switch
+    {
+        0 => RenderDataStep(),
+        1 => RenderFieldsStep(),
+        2 => RenderGroupingStep(),
+        3 => RenderSummariesStep(),
+        4 => RenderRecordSelectionStep(),
+        5 => RenderTemplateStep(),
+        _ => builder => { }
+    };
+
+    private RenderFragment RenderDataStep() => @<div class="fx-rw-step fx-rw-dual-step">
+        <MultiSelectDualListControl TItem="ReportDesignerDataTable"
+                                    Items="@DataSourceList"
+                                    SelectedItems="@_selectedTables"
+                                    SelectedItemsChanged="OnSelectedTablesChanged"
+                                    LeftHeader="Available Data Sources:"
+                                    RightHeader="Selected Tables:"
+                                    KeySelector="@TableKey"
+                                    LabelSelector="@TableLabel"
+                                    VisibleRows="16"
+                                    Height="390px"
+                                    CssClass="fx-rw-dual-list" />
+    </div>;
+
+    private RenderFragment RenderFieldsStep() => @<div class="fx-rw-step">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@AvailableSelectedTableFields"
+                                    SelectedItems="@_displayFields"
+                                    SelectedItemsChanged="OnDisplayFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Fields to Display:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="15"
+                                    Height="360px"
+                                    CssClass="fx-rw-dual-list" />
+        <div class="fx-rw-pane-actions">
+            <ButtonControl CssClass="fx-rw-small-btn" Disabled="true">Browse Data...</ButtonControl>
+            <ButtonControl CssClass="fx-rw-small-btn" Disabled="true">Find Field...</ButtonControl>
+        </div>
+    </div>;
+
+    private RenderFragment RenderGroupingStep() => @<div class="fx-rw-step">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@ReportFields"
+                                    SelectedItems="@_groupFields"
+                                    SelectedItemsChanged="OnGroupFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Group By:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="15"
+                                    Height="360px"
+                                    CssClass="fx-rw-dual-list" />
+        <div class="fx-rw-bottom-row">
+            <span class="fx-rw-label">Group sort:</span>
+            <DropDownListControl TValue="string" TItem="string"
+                                 DataSource="@SortDirections"
+                                 Value="@SelectedGroupSort"
+                                 ValueChanged="OnSelectedGroupSortChanged"
+                                 CssClass="fx-rw-select" />
+        </div>
+    </div>;
+
+    private RenderFragment RenderSummariesStep() => @<div class="fx-rw-step">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@ReportFields"
+                                    SelectedItems="@_summaryFields"
+                                    SelectedItemsChanged="OnSummaryFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Summarized Fields:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@SummaryFieldLabel"
+                                    VisibleRows="14"
+                                    Height="330px"
+                                    CssClass="fx-rw-dual-list" />
+        <div class="fx-rw-bottom-row">
+            <span class="fx-rw-label">Summary operation:</span>
+            <DropDownListControl TValue="string" TItem="string"
+                                 DataSource="@_summaryOperations"
+                                 Value="@SelectedSummaryOperation"
+                                 ValueChanged="OnSelectedSummaryOperationChanged"
+                                 Enabled="@(_summaries.Count > 0)"
+                                 CssClass="fx-rw-select" />
+        </div>
+    </div>;
+
+    private RenderFragment RenderRecordSelectionStep() => @<div class="fx-rw-step fx-rw-filter-step">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@ReportFields"
+                                    SelectedItems="@_filterFields"
+                                    SelectedItemsChanged="OnFilterFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Filter Fields:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="11"
+                                    Height="275px"
+                                    CssClass="fx-rw-dual-list" />
+        <div class="fx-rw-filter-editor">
+            <span class="fx-rw-label">Selected filter:</span>
+            <DropDownListControl TValue="string" TItem="string"
+                                 DataSource="@FilterFieldKeys"
+                                 Value="@ActiveFilterKey"
+                                 ValueChanged="OnActiveFilterChanged"
+                                 Enabled="@(_filters.Count > 0)"
+                                 CssClass="fx-rw-select wide" />
+            <DropDownListControl TValue="string" TItem="string"
+                                 DataSource="@_filterOperators"
+                                 Value="@SelectedFilterOperator"
+                                 ValueChanged="OnSelectedFilterOperatorChanged"
+                                 Enabled="@(ActiveFilter is not null)"
+                                 CssClass="fx-rw-select" />
+            <TextBoxControl Value="@SelectedFilterValue"
+                            ValueChanged="OnSelectedFilterValueChanged"
+                            Enabled="@(ActiveFilter is not null)"
+                            CssClass="fx-rw-filter-value" />
+        </div>
+    </div>;
+
+    private RenderFragment RenderTemplateStep() => @<div class="fx-rw-template-step">
+        <div class="fx-rw-pane">
+            <div class="fx-rw-pane-title">Available Templates</div>
+            <ListViewControl Items="@TemplateItems"
+                             ViewMode="ListViewMode.List"
+                             OnItemClick="OnTemplateClick"
+                             CssClass="fx-rw-listview template-list"
+                             Height="330px" />
+            <ButtonControl CssClass="fx-rw-small-btn" Disabled="true">Browse...</ButtonControl>
+        </div>
+        <div class="fx-rw-pane">
+            <div class="fx-rw-pane-title">Preview</div>
+            <div class="fx-rw-template-preview @TemplatePreviewCss">
+                <span>Report Title</span>
+                <div></div>
+                <div></div>
+                <div></div>
+            </div>
+            <label class="fx-rw-title-input">
+                Report title
+                <TextBoxControl Value="@_reportTitle" ValueChanged="OnReportTitleChanged" CssClass="fx-rw-title-box" />
+            </label>
+        </div>
+    </div>;
+
+    private string[] SortDirections => ["Ascending", "Descending", "Original Order"];
+    private string SelectedGroupSort => "Ascending";
+    private string SelectedSummaryOperation => ActiveSummary?.Operation ?? "Sum";
+    private string SelectedFilterOperator => ActiveFilter?.Operator ?? "is equal to";
+    private string SelectedFilterValue => ActiveFilter?.Value ?? "";
+    private List<string> FilterFieldKeys => _filters.Select(filter => FieldKey(filter.Field)).ToList();
+    private string? ActiveFilterKey => _activeFilterKey ?? (_filters.FirstOrDefault() is { } first ? FieldKey(first.Field) : null);
+    private ReportDesignerFilter? ActiveFilter => ActiveFilterKey is { } key ? _filters.FirstOrDefault(filter => FieldKey(filter.Field) == key) : null;
+    private ReportDesignerSummary? ActiveSummary => _activeSummaryKey is { } key ? _summaries.FirstOrDefault(summary => FieldKey(summary.Field) == key) : _summaries.FirstOrDefault();
+
+    private List<ListViewItem> TemplateItems => _templates.Select(template => new ListViewItem
+    {
+        Text = template,
+        IsSelected = string.Equals(template, _selectedTemplate, StringComparison.OrdinalIgnoreCase),
+        Tag = template
+    }).ToList();
+
+    private Task OnStepIndexChanged(int stepIndex)
+    {
+        _stepIndex = stepIndex;
+        return Task.CompletedTask;
+    }
+
+    private void OnSelectedTablesChanged(IList<ReportDesignerDataTable> tables)
+    {
+        _selectedTables = tables.Select(CloneTable).ToList();
+        TrimDependentFieldsToSelectedTables();
+    }
+
+    private void OnDisplayFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _displayFields = fields.Select(CloneField).ToList();
+        TrimDependentFieldsToSelectedTables();
+    }
+
+    private void OnGroupFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _groupFields = fields.Select(CloneField).ToList();
+    }
+
+    private void OnSummaryFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _summaryFields = fields.Select(CloneField).ToList();
+        RebuildSummariesFromFields();
+    }
+
+    private void OnFilterFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _filterFields = fields.Select(CloneField).ToList();
+        RebuildFiltersFromFields();
+    }
+
+    private Task OnTemplateClick(ListViewItem item)
+    {
+        if (item.Tag is string template)
+            _selectedTemplate = template;
+        return Task.CompletedTask;
+    }
+
+    private Task OnReportTitleChanged(string? title)
+    {
+        _reportTitle = string.IsNullOrWhiteSpace(title) ? "Untitled Report" : title;
+        return Task.CompletedTask;
+    }
+
+    private Task OnSelectedGroupSortChanged(string? _) => Task.CompletedTask;
+
+    private Task OnSelectedSummaryOperationChanged(string? operation)
+    {
+        if (ActiveSummary is not null && !string.IsNullOrWhiteSpace(operation))
+        {
+            ActiveSummary.Operation = operation;
+            _activeSummaryKey = FieldKey(ActiveSummary.Field);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task OnActiveFilterChanged(string? key)
+    {
+        _activeFilterKey = string.IsNullOrWhiteSpace(key) ? null : key;
+        return Task.CompletedTask;
+    }
+
+    private Task OnSelectedFilterOperatorChanged(string? value)
+    {
+        if (ActiveFilter is not null && !string.IsNullOrWhiteSpace(value))
+            ActiveFilter.Operator = value;
+        return Task.CompletedTask;
+    }
+
+    private Task OnSelectedFilterValueChanged(string? value)
+    {
+        if (ActiveFilter is not null)
+            ActiveFilter.Value = value ?? "";
+        return Task.CompletedTask;
+    }
+
+    private async Task FinishAsync()
+    {
+        if (_displayFields.Count == 0)
+            _displayFields = AvailableSelectedTableFields.Select(CloneField).ToList();
+
+        var result = new ReportCreationWizardResult
+        {
+            Title = _reportTitle,
+            SelectedTables = _selectedTables.Select(CloneTable).ToList(),
+            DisplayFields = _displayFields.Select(CloneField).ToList(),
+            GroupFields = _groupFields.Select(CloneField).ToList(),
+            Summaries = _summaries.Select(summary => new ReportDesignerSummary { Field = CloneField(summary.Field), Operation = summary.Operation }).ToList(),
+            Filters = _filters.Select(filter => new ReportDesignerFilter { Field = CloneField(filter.Field), Operator = filter.Operator, Value = filter.Value }).ToList(),
+            TemplateName = _selectedTemplate
+        };
+
+        await CloseAsync();
+        if (Finished.HasDelegate)
+            await Finished.InvokeAsync(result);
+    }
+
+    private async Task CancelAsync()
+    {
+        if (Cancelled.HasDelegate)
+            await Cancelled.InvokeAsync();
+    }
+
+    private async Task CloseAsync()
+    {
+        Visible = false;
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+    }
+
+    private void TrimDependentFieldsToSelectedTables()
+    {
+        var tableKeys = _selectedTables.Select(TableKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var fieldKeys = AvailableSelectedTableFields.Select(FieldKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _displayFields = _displayFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
+        _groupFields = _groupFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
+        _summaryFields = _summaryFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
+        _filterFields = _filterFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
+        _summaries.RemoveAll(summary => !tableKeys.Contains(TableKey(summary.Field.Table)) || !fieldKeys.Contains(FieldKey(summary.Field)));
+        _filters.RemoveAll(filter => !tableKeys.Contains(TableKey(filter.Field.Table)) || !fieldKeys.Contains(FieldKey(filter.Field)));
+        RebuildSummariesFromFields();
+        RebuildFiltersFromFields();
+    }
+
+    private void RebuildSummariesFromFields()
+    {
+        var existing = _summaries.ToDictionary(summary => FieldKey(summary.Field), StringComparer.OrdinalIgnoreCase);
+        _summaries = _summaryFields
+            .Select(candidate => existing.TryGetValue(FieldKey(candidate), out var summary)
+                ? summary
+                : new ReportDesignerSummary { Field = CloneField(candidate), Operation = "Sum" })
+            .ToList();
+        _activeSummaryKey = _summaries.FirstOrDefault() is { } first ? FieldKey(first.Field) : null;
+    }
+
+    private void RebuildFiltersFromFields()
+    {
+        var existing = _filters.ToDictionary(filter => FieldKey(filter.Field), StringComparer.OrdinalIgnoreCase);
+        _filters = _filterFields
+            .Select(candidate => existing.TryGetValue(FieldKey(candidate), out var filter)
+                ? filter
+                : new ReportDesignerFilter { Field = CloneField(candidate), Operator = "is equal to" })
+            .ToList();
+        _activeFilterKey = ActiveFilterKey is { } key && _filters.Any(filter => FieldKey(filter.Field) == key)
+            ? key
+            : _filters.FirstOrDefault() is { } first ? FieldKey(first.Field) : null;
+    }
+
+    private static ReportDesignerDataTable CloneTable(ReportDesignerDataTable table)
+    {
+        return new ReportDesignerDataTable
+        {
+            Name = table.Name,
+            Schema = table.Schema,
+            Fields = table.Fields.Select(CloneField).ToList()
+        };
+    }
+
+    private static ReportDesignerField CloneField(ReportDesignerField field)
+    {
+        return new ReportDesignerField
+        {
+            Name = field.Name,
+            Table = field.Table,
+            LongName = field.LongName,
+            Formula = field.Formula,
+            Type = field.Type,
+            IsFormula = field.IsFormula
+        };
+    }
+
+    private static string TableKey(ReportDesignerDataTable table) => string.IsNullOrWhiteSpace(table.Schema) ? table.Name : $"{table.Schema}.{table.Name}";
+    private static string TableKey(string? tableName) => tableName ?? "";
+    private static string TableLabel(ReportDesignerDataTable table) => table.DisplayName;
+    private static string FieldKey(ReportDesignerField field) => field.DisplayName;
+    private static string FieldLabel(ReportDesignerField field) => field.DisplayName;
+    private static string SummaryFieldLabel(ReportDesignerField field) => $"Sum of {field.DisplayName}";
+}

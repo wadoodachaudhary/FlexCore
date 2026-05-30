@@ -67,6 +67,13 @@ public class ReportDefinition
 
     /// <summary>Source .rpt file path if this definition was parsed from a Crystal Report.</summary>
     public string? SourceRptFile { get; set; }
+
+    /// <summary>
+    /// On-demand subreport links discovered in the Crystal XML's main report layout.
+    /// These are carried separately from <see cref="Columns"/> so renderers can expose
+    /// subreport targets without letting nested subreport tables leak into the main SQL.
+    /// </summary>
+    public List<ReportSubreportLink> SubreportLinks { get; set; } = new();
 }
 
 /// <summary>Defines a single column in a report.</summary>
@@ -107,6 +114,71 @@ public class ReportColumn
 
     /// <summary>CSS class applied to this column's cells.</summary>
     public string CssClass { get; set; } = "";
+
+    /// <summary>Original Crystal horizontal position in twips, used to merge non-field report objects.</summary>
+    public int LayoutLeft { get; set; }
+
+    /// <summary>True when this column is a synthetic viewer slot for a Crystal SubreportObject.</summary>
+    public bool IsSubreportObject { get; set; }
+
+    /// <summary>Optional on-demand subreport target associated with this column's header.</summary>
+    public ReportSubreportLink? SubreportLink { get; set; }
+}
+
+/// <summary>Metadata for a Crystal on-demand subreport object in the main report layout.</summary>
+public class ReportSubreportLink
+{
+    /// <summary>Crystal report-object name, e.g. <c>Subreport6</c>.</summary>
+    public string Name { get; set; } = "";
+
+    /// <summary>Crystal subreport name, e.g. <c>Cost to Date</c>.</summary>
+    public string SubreportName { get; set; } = "";
+
+    /// <summary>Crystal report area kind that owns the object, e.g. <c>Detail</c>.</summary>
+    public string AreaKind { get; set; } = "";
+
+    /// <summary>Crystal section name that owns the object, e.g. <c>DetailSection1</c>.</summary>
+    public string SectionName { get; set; } = "";
+
+    /// <summary>Original Crystal horizontal position in twips.</summary>
+    public int Left { get; set; }
+
+    /// <summary>Original Crystal width in twips.</summary>
+    public int Width { get; set; }
+
+    /// <summary>Physical XML sidecar path when one could be resolved.</summary>
+    public string XmlPath { get; set; } = "";
+
+    /// <summary>Browser URL for the XML sidecar when the file lives under the host's web root.</summary>
+    public string Url { get; set; } = "";
+
+    /// <summary>Whether the Crystal object was authored as an on-demand subreport link.</summary>
+    public bool EnableOnDemand { get; set; }
+
+    /// <summary>Crystal-linked parameter mappings used to filter the opened subreport by the clicked row.</summary>
+    public List<ReportSubreportParameterLink> ParameterLinks { get; set; } = new();
+}
+
+/// <summary>One Crystal SubReportLink mapping from a main-report row field to a subreport field.</summary>
+public class ReportSubreportParameterLink
+{
+    /// <summary>Crystal linked parameter name, e.g. <c>Pm-tblSalesSheetMaster.Worksheet</c>.</summary>
+    public string LinkedParameterName { get; set; } = "";
+
+    /// <summary>Main report field reference as exported by Crystal, e.g. <c>{tblSalesSheetMaster.Worksheet}</c>.</summary>
+    public string MainReportFieldName { get; set; } = "";
+
+    /// <summary>Main report SQL alias selected into the row, e.g. <c>tblSalesSheetMaster_Worksheet</c>.</summary>
+    public string MainReportAlias { get; set; } = "";
+
+    /// <summary>Subreport field reference as exported by Crystal, e.g. <c>{SalesSheetCostsViewNoCS.Worksheet}</c>.</summary>
+    public string SubreportFieldName { get; set; } = "";
+
+    /// <summary>Subreport table alias used in the generated SQL filter.</summary>
+    public string SubreportTable { get; set; } = "";
+
+    /// <summary>Subreport field used in the generated SQL filter.</summary>
+    public string SubreportField { get; set; } = "";
 }
 
 /// <summary>

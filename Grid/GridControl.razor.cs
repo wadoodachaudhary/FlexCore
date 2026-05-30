@@ -85,12 +85,16 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     // vertically by ~32 px, which reads as visual "shaking" mid-drag.
     [Parameter] public bool ShowSelectionInfoBar { get; set; } = true;
     /// <summary>
-    /// Field that receives the multi-row type-ahead preview and commit. When
-    /// empty, the grid falls back to the active editable cell's column.
-    /// Hosts such as FAssembly set this to their current mass-edit target so
-    /// the typed value appears in the same selected cells that Enter updates.
+    /// Field that receives multi-row type-ahead when no row-selection gesture
+    /// has captured an editable target column. Kept as the compatibility
+    /// fallback for hosts that explicitly want the older fixed-target behavior.
     /// </summary>
     [Parameter] public string? TypeAheadTargetField { get; set; }
+    /// <summary>
+    /// Optional alias for the same fallback role as <see cref="TypeAheadTargetField"/>.
+    /// <see cref="TypeAheadTargetField"/> wins when both are supplied.
+    /// </summary>
+    [Parameter] public string? TypeAheadFallbackField { get; set; }
     /// <summary>
     /// Controls how batch-mode editable cells behave. MultiRow keeps the
     /// legacy FlexKit behavior: single-click enters edit and can fan out to
@@ -595,6 +599,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     // Type-ahead buffer (multi-select numeric input)
     private string _typeAheadBuffer = "";
+    private bool _rowSelectionTypeAheadTargetCaptured;
+    private string? _rowSelectionTypeAheadTargetField;
 
     private readonly record struct DataSourceSelectionSignature(int Count, int Fingerprint);
 
@@ -1473,6 +1479,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         ClearCellDragState();
 
         _typeAheadBuffer = "";
+        ResetRowSelectionTypeAheadTarget();
         _batchEditItem = default;
         _batchEditRowIndex = -1;
         _batchEditField = null;
@@ -1786,6 +1793,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (args.Button == 0)
         {
             SetActiveCell(resolvedRowIndex, cellIndex);
+            CaptureRowSelectionTypeAheadTarget(cellIndex);
             if (CanStartSingleCellColumnDrag(cellIndex))
             {
                 _cellDragAnchor = (resolvedRowIndex, cellIndex);
@@ -1879,6 +1887,44 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         _cellDragAnchor = null;
         _isCellDragSelecting = false;
+    }
+
+    private void CaptureRowSelectionTypeAheadTarget(int cellIndex)
+    {
+        var col = VisibleColumns.ElementAtOrDefault(cellIndex);
+        var field = CanReceiveTypeAhead(col) ? col!.Field : null;
+
+        _rowSelectionTypeAheadTargetCaptured = true;
+        if (!string.Equals(_rowSelectionTypeAheadTargetField, field, StringComparison.OrdinalIgnoreCase))
+        {
+            _rowSelectionTypeAheadTargetField = field;
+            ClearTypeAheadBuffer();
+        }
+    }
+
+    private void ResetRowSelectionTypeAheadTarget()
+    {
+        _rowSelectionTypeAheadTargetCaptured = false;
+        _rowSelectionTypeAheadTargetField = null;
+    }
+
+    private bool CanReceiveTypeAhead(GridColumn? col)
+    {
+        return col != null
+            && !string.IsNullOrWhiteSpace(col.Field)
+            && col.AllowEditing
+            && !col.IsPrimaryKey
+            && col.Type != ColumnType.CheckBox
+            && EditSettingsRef?.AllowEditing != false;
+    }
+
+    private void ClearTypeAheadBuffer()
+    {
+        if (_typeAheadBuffer.Length == 0)
+            return;
+
+        _typeAheadBuffer = "";
+        _ = NotifyTypeAheadChangedAsync();
     }
 
     /// <summary>
@@ -2666,7 +2712,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         // try to re-propagate. Iteration runs against the captured `targets`
         // list, so the clear is safe.
         if (targets.Count > 1)
+        {
             _selectedItems.Clear();
+            ResetRowSelectionTypeAheadTarget();
+        }
 
         if (cellMassEditTargets is { Count: > 1 } && EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
@@ -2759,32 +2808,52 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private string? ResolveTypeAheadTargetField()
     {
+        return ResolveTypeAheadTargetColumn()?.Field;
+    }
+
+    private GridColumn? ResolveTypeAheadTargetColumn()
+    {
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell && _activeCell.HasValue)
         {
             var activeCol = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
-            if (activeCol != null
-                && activeCol.AllowEditing
-                && !activeCol.IsPrimaryKey
-                && !string.IsNullOrWhiteSpace(activeCol.Field))
-                return activeCol.Field;
+            if (CanReceiveTypeAhead(activeCol))
+                return activeCol;
         }
 
-        if (!string.IsNullOrWhiteSpace(TypeAheadTargetField))
+        if (_rowSelectionTypeAheadTargetCaptured)
+        {
+            if (string.IsNullOrWhiteSpace(_rowSelectionTypeAheadTargetField))
+                return null;
+
+            return FindTypeAheadColumnByField(_rowSelectionTypeAheadTargetField);
+        }
+
+        var fallbackField = !string.IsNullOrWhiteSpace(TypeAheadTargetField)
+            ? TypeAheadTargetField
+            : TypeAheadFallbackField;
+        if (!string.IsNullOrWhiteSpace(fallbackField))
         {
             var configured = VisibleColumns.FirstOrDefault(c =>
-                string.Equals(c.Field, TypeAheadTargetField, StringComparison.OrdinalIgnoreCase));
-            if (configured != null && configured.AllowEditing && !configured.IsPrimaryKey)
-                return configured.Field;
+                string.Equals(c.Field, fallbackField, StringComparison.OrdinalIgnoreCase));
+            if (CanReceiveTypeAhead(configured))
+                return configured;
         }
 
         if (_activeCell.HasValue)
         {
             var col = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
-            if (col != null && col.AllowEditing && !col.IsPrimaryKey && !string.IsNullOrWhiteSpace(col.Field))
-                return col.Field;
+            if (CanReceiveTypeAhead(col))
+                return col;
         }
 
         return null;
+    }
+
+    private GridColumn? FindTypeAheadColumnByField(string field)
+    {
+        var col = VisibleColumns.FirstOrDefault(c =>
+            string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        return CanReceiveTypeAhead(col) ? col : null;
     }
 
     private bool IsTypeAheadPreviewCell(TValue item, GridColumn col)
@@ -2889,17 +2958,21 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return;
 
         // Type-ahead: when multiple rows are selected and no batch edit is active,
-        // let user type digits and press Enter to apply the value.
+        // let user type a value and press Enter to apply it to the captured column.
         if (_selectedItems.Count > 1 && _batchEditItem == null)
         {
-            if (e.Key.Length == 1 && (char.IsDigit(e.Key[0]) || e.Key[0] == '.'))
+            var targetCol = ResolveTypeAheadTargetColumn();
+            if (e.Key.Length == 1)
             {
-                if (ResolveTypeAheadTargetField() == null)
+                if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol))
                     return;
 
                 // Prevent multiple decimal points
-                if (e.Key == "." && _typeAheadBuffer.Contains('.'))
+                if (targetCol.Type == ColumnType.Number
+                    && e.Key == "."
+                    && _typeAheadBuffer.Contains('.'))
                     return;
+
                 _typeAheadBuffer += e.Key;
                 await NotifyTypeAheadChangedAsync();
                 return;
@@ -2921,13 +2994,19 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
             if (e.Key == "Enter" && _typeAheadBuffer.Length > 0)
             {
+                if (targetCol == null)
+                {
+                    _typeAheadBuffer = "";
+                    await NotifyTypeAheadChangedAsync();
+                    return;
+                }
+
                 if (EventsRef?.OnTypeAheadCommit.HasDelegate == true)
                 {
-                    var targetField = ResolveTypeAheadTargetField() ?? "";
                     await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
                     {
                         SelectedItems = _selectedItems.ToList(),
-                        ColumnName = targetField,
+                        ColumnName = targetCol.Field,
                         Value = _typeAheadBuffer
                     });
                 }
@@ -5044,6 +5123,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     public void ClearSelection()
     {
         _selectedItems.Clear();
+        ResetRowSelectionTypeAheadTarget();
         _ = NotifySelectionChangedAsync();
     }
 
@@ -5051,6 +5131,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         _selectedItems.Clear();
         _selectedCells.Clear();
+        ResetRowSelectionTypeAheadTarget();
         await InvokeAsync(StateHasChanged);
         await NotifySelectionChangedAsync();
     }
@@ -5075,6 +5156,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     /// </summary>
     private async Task NotifySelectionChangedAsync()
     {
+        if (_selectedItems.Count <= 1)
+            ResetRowSelectionTypeAheadTarget();
+
         if (_selectedItems.Count <= 1 && _typeAheadBuffer.Length > 0)
         {
             _typeAheadBuffer = "";

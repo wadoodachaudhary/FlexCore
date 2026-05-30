@@ -1,0 +1,172 @@
+@namespace Fx.ControlKit.Mdi
+@using Microsoft.AspNetCore.Components
+
+@*
+   Fx.ControlKit.Mdi.MdiHost — tab-strip MDI shell that hosts a list of
+   child Blazor components (one per open "window") and renders only the
+   active one as visible. Inactive panes stay mounted with display:none
+   so each child preserves its in-memory state (form fields, grid scroll
+   position, edits-in-progress) across tab switches.
+
+   This is a "dumb" presentation control — it doesn't decide WHEN a
+   window opens or closes. The consumer (e.g. HomeFront's FMain) owns
+   the Windows list, raises OpenOrFocus calls itself, and reacts to the
+   OnActivate / OnCloseRequested events the host emits. MdiPane captures
+   each child component instance so the consumer can call optional close
+   guards before it removes a tab.
+
+   Per-window SetPageTitle: each pane is wrapped in a CascadingValue
+   exposing a Name="SetPageTitle" Action<string?>. A child component
+   that does `[CascadingParameter(Name="SetPageTitle")] Action<string?>?
+   SetPageTitle` and calls SetPageTitle("…") will update ITS own tab's
+   title — the closure captures the right MdiWindow instance per pane.
+
+   Why the visible-pane CSS toggle instead of @if:
+     @if would unmount inactive panes → kills grid state, edits, drafts.
+     display:none keeps the Blazor component instance alive; Blazor
+     doesn't re-render an inactive subtree because its parameters don't
+     change. Trade-off: a tab with a 500-row grid keeps consuming memory
+     while hidden. Acceptable for typical session sizes (~5-15 tabs);
+     LRU eviction is a Phase-4 concern.
+*@
+
+@{
+    // "Home" is active whenever no MdiWindow is. Used by both the home-tab
+    // highlight and the EmptyState fallback. Treats a stale ActiveWindowId
+    // (referring to a window that's no longer in the list) the same as null.
+    var homeActive = ActiveWindowId == null
+        || !Windows.Any(w => string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal));
+}
+
+<div class="fx-mdi">
+    <div class="fx-mdi-tabs">
+        @if (HomeTab != null)
+        {
+            @* Permanent leftmost "home" tab. No close button — it's the way
+               back to the workflow/welcome view (EmptyState below) without
+               having to close every open tab. Consumer supplies the visible
+               content via the HomeTab RenderFragment (typically a 🏠 icon
+               or "Home" label). *@
+            <div class="fx-mdi-tab fx-mdi-tab-home @(homeActive ? "active" : "")"
+                 @onclick="OnHomeClick"
+                 title="Home">
+                @HomeTab
+            </div>
+        }
+        @foreach (var w in Windows)
+        {
+            var win = w;  // capture per-iteration for the close-button closure
+            <div class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "")"
+                 @onclick="() => OnTabClick(win.Id)"
+                 title="@win.Title">
+                <span class="fx-mdi-tab-title">@win.Title</span>
+                <button class="fx-mdi-tab-close"
+                        type="button"
+                        title="Close"
+                        @onclick:stopPropagation="true"
+                        @onclick="() => OnCloseClick(win.Id)">×</button>
+            </div>
+        }
+    </div>
+    <div class="fx-mdi-panes">
+        @foreach (var w in Windows)
+        {
+            var win = w;  // capture for the per-tab SetPageTitle closure
+            var paneVisible = string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal);
+            @* IsFixed: the cascading value is bound to this specific window
+               instance for its lifetime. Setting IsFixed prevents Blazor
+               from re-subscribing every render, which would churn the
+               child's [CascadingParameter] receiver. *@
+            <CascadingValue Name="SetPageTitle"
+                            Value="@(BuildTitleSetter(win))"
+                            IsFixed="true">
+                <div class="fx-mdi-pane" style="@(paneVisible ? "" : "display:none;")">
+                    <MdiPane @key="win.Id" Window="win" />
+                </div>
+            </CascadingValue>
+        }
+        @* EmptyState renders whenever no window is active — either there are
+           zero tabs or the consumer set ActiveWindowId = null to "switch to
+           home" with tabs still open behind. *@
+        @if (homeActive && EmptyState != null)
+        {
+            <div class="fx-mdi-empty">@EmptyState</div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>Open windows, in left-to-right tab order. Consumer-owned —
+    /// mutate the list and call StateHasChanged on the parent to refresh.</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<MdiWindow> Windows { get; set; } = Array.Empty<MdiWindow>();
+
+    /// <summary>Id of the currently visible window, or null when no windows
+    /// are open. Setting this to a stale id renders nothing visible — keep
+    /// in sync with the Windows list on the consumer side.</summary>
+    [Parameter] public string? ActiveWindowId { get; set; }
+
+    /// <summary>Raised when the user clicks a tab. The consumer is expected
+    /// to update ActiveWindowId and re-render.</summary>
+    [Parameter] public EventCallback<string> OnActivate { get; set; }
+
+    /// <summary>Raised when the user clicks the × on a tab. The consumer
+    /// decides whether to actually close (dirty-check prompts, etc.) and
+    /// then removes the window from Windows and re-renders.</summary>
+    [Parameter] public EventCallback<string> OnCloseRequested { get; set; }
+
+    /// <summary>Optional content rendered in the pane area when no window
+    /// is active (either Windows is empty OR the consumer set ActiveWindowId
+    /// to null to switch to "home" while keeping tabs open behind it).
+    /// Typical content: a workflow dashboard or welcome message.</summary>
+    [Parameter] public RenderFragment? EmptyState { get; set; }
+
+    /// <summary>Optional content for the permanent leftmost "home" tab.
+    /// When non-null, MdiHost renders a no-close tab at position 0 — clicking
+    /// it raises <see cref="OnHomeRequested"/>. The consumer is expected to
+    /// react by setting ActiveWindowId to null (which makes EmptyState
+    /// render). Use this to give users a way back to a dashboard / welcome
+    /// view without forcing them to close every open tab.</summary>
+    [Parameter] public RenderFragment? HomeTab { get; set; }
+
+    /// <summary>Raised when the user clicks the home tab. The consumer is
+    /// expected to set ActiveWindowId = null (which makes EmptyState
+    /// render). MdiHost doesn't touch ActiveWindowId itself — the consumer
+    /// owns that state.</summary>
+    [Parameter] public EventCallback OnHomeRequested { get; set; }
+
+    private async Task OnTabClick(string id)
+    {
+        if (string.Equals(id, ActiveWindowId, StringComparison.Ordinal)) return;
+        if (OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(id);
+    }
+
+    private async Task OnCloseClick(string id)
+    {
+        if (OnCloseRequested.HasDelegate)
+            await OnCloseRequested.InvokeAsync(id);
+    }
+
+    private async Task OnHomeClick()
+    {
+        // Already on home? No-op — saves a needless StateHasChanged on the
+        // consumer side.
+        var alreadyHome = ActiveWindowId == null
+            || !Windows.Any(w => string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal));
+        if (alreadyHome) return;
+        if (OnHomeRequested.HasDelegate)
+            await OnHomeRequested.InvokeAsync();
+    }
+
+    // Each pane needs its OWN title-setter that mutates ONLY that window's
+    // Title. Building the closure here captures the right MdiWindow per
+    // iteration of the @foreach. StateHasChanged refreshes the tab bar to
+    // reflect the new caption.
+    private Action<string?> BuildTitleSetter(MdiWindow w) => title =>
+    {
+        var newTitle = title ?? "";
+        if (string.Equals(w.Title, newTitle, StringComparison.Ordinal)) return;
+        w.Title = newTitle;
+        InvokeAsync(StateHasChanged);
+    };
+}

@@ -3,8 +3,8 @@
    • Renders a ReportDefinition (built in code or loaded from a Crystal XML
      export) to paginated HTML pages with Crystal-Reports-style group
      headers, footers, drill-down tabs, and a clickable group tree.
-   • Renders raw Crystal Reports .rpt files via an optional IReportExporter
-     (host-provided PDF/Excel engine) — the iframe shows the engine output.
+   • Converts raw Crystal Reports .rpt files to Crystal XML with the native
+     C# converter, then renders them through the same SQL/HTML pipeline.
 
    Application-agnostic: every external dependency is an interface
    (IReportDataExecutor, IReportSessionContext, IReportExporter,
@@ -17,8 +17,8 @@
      // SQL/XML report:
      await reportWriter.ShowSqlReport(reportDefinition, parameterValues);
 
-     // Crystal Report (.rpt, requires IReportExporter):
-     await reportWriter.ShowCrystalReport("path/to/report.rpt", parameters);
+     // Crystal Report (.rpt, converted to XML first):
+     await reportWriter.ShowReportAsync("path/to/report.rpt", parameters);
 *@
 
 @namespace Fx.ControlKit.Reports
@@ -423,9 +423,50 @@ else
         }
     }
 
+    /// <summary>
+    /// Called from JavaScript when the user clicks a Crystal SubreportObject link in a row.
+    /// Opens the extracted subreport XML as another viewer tab, filtered by that row's
+    /// Crystal SubReportLink mappings.
+    /// </summary>
+    [JSInvokable]
+    public async Task OnSubreportClick(string payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson)) return;
+        try
+        {
+            var payload = JsonSerializer.Deserialize<SubreportClickPayload>(payloadJson);
+            if (payload == null || string.IsNullOrWhiteSpace(payload.xmlPath)) return;
+
+            var filters = (payload.filters ?? new List<SubreportClickFilter>())
+                .Where(f => !string.IsNullOrWhiteSpace(f.table) && !string.IsNullOrWhiteSpace(f.field))
+                .Select(f => new ReportFieldFilter(f.table ?? "", f.field ?? "", f.value ?? ""))
+                .ToList();
+
+            await OpenSubreport(payload.title ?? "Subreport", payload.xmlPath!, filters);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "OnSubreportClick failed for payload: {Payload}", payloadJson);
+        }
+    }
+
     /// <summary>JSON shape emitted in row <c>data-path</c> attributes.</summary>
     private sealed class CellPathEntry
     {
+        public string? field { get; set; }
+        public string? value { get; set; }
+    }
+
+    private sealed class SubreportClickPayload
+    {
+        public string? title { get; set; }
+        public string? xmlPath { get; set; }
+        public List<SubreportClickFilter>? filters { get; set; }
+    }
+
+    private sealed class SubreportClickFilter
+    {
+        public string? table { get; set; }
         public string? field { get; set; }
         public string? value { get; set; }
     }
@@ -597,8 +638,140 @@ else
         }
     }
 
+    /// <summary>
+    /// Opens an on-demand Crystal subreport as a normal ReportWriter tab. The sidecar XML
+    /// is parsed and executed just like the main report; Crystal SubReportLink mappings
+    /// from the clicked row become direct table-field filters on the subreport query.
+    /// </summary>
+    private async Task OpenSubreport(string title, string xmlPath, List<ReportFieldFilter> filters)
+    {
+        if (string.IsNullOrWhiteSpace(xmlPath))
+        {
+            Logger.LogWarning("Subreport requested but no XML path was supplied.");
+            return;
+        }
+
+        var fullXmlPath = Path.GetFullPath(xmlPath);
+        if (!File.Exists(fullXmlPath))
+        {
+            ErrorMessage = $"Subreport XML not found: {fullXmlPath}";
+            Logger.LogWarning("Subreport XML not found: {XmlPath}", fullXmlPath);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var existing = Tabs.FindIndex(t =>
+            string.Equals(t.SourceXmlPath, fullXmlPath, StringComparison.OrdinalIgnoreCase)
+            && FieldFiltersEqual(t.FieldFilters, filters));
+        if (existing >= 0)
+        {
+            SwitchTab(existing);
+            return;
+        }
+
+        IsLoading = true;
+        StatusMessage = $"Loading subreport: {title}";
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            var subDef = filters.Count > 0
+                ? XmlLoader.LoadWithFieldFilters(fullXmlPath, filters)
+                : XmlLoader.Load(fullXmlPath);
+
+            DefinitionPostProcessor?.Invoke(subDef);
+            Orientation_DoNotSet_UseTab(subDef.Orientation);
+
+            var sqlParams = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in subDef.Parameters)
+            {
+                if (_lastParameters?.TryGetValue(p.Name, out var val) == true)
+                    sqlParams[p.Name] = val;
+                else if (!string.IsNullOrEmpty(p.DefaultValue))
+                    sqlParams[p.Name] = p.DefaultValue;
+            }
+            if (_lastParameters != null)
+                foreach (var kv in _lastParameters)
+                    if (!sqlParams.ContainsKey(kv.Key)) sqlParams[kv.Key] = kv.Value;
+            AutoInjectSessionParameters(sqlParams, subDef.Sql);
+
+            var filterStr = string.Join(", ", filters.Select(f => $"{f.Table}.{f.Field}={f.Value}"));
+            Logger.LogInformation("Subreport {Title} filters: {Filters}", title, filterStr);
+            Logger.LogInformation("Subreport SQL:\n{Sql}", subDef.Sql);
+
+            var dt = db.Execute(subDef.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            GuardRowLimit(dt);
+            var visibleCols = subDef.Columns.Where(c => !c.Hidden).ToList();
+            var rowsPerPage = subDef.RowsPerPage > 0
+                ? subDef.RowsPerPage
+                : (subDef.Orientation == ReportOrientation.Landscape ? 49 : 70);
+
+            ComputeAdaptiveColumnWidths(subDef, visibleCols, dt);
+
+            var tabTitle = string.IsNullOrWhiteSpace(title)
+                ? Path.GetFileNameWithoutExtension(fullXmlPath)
+                : title;
+            var tab = new ReportTab
+            {
+                Title = tabTitle,
+                SourceXmlPath = fullXmlPath,
+                FieldFilters = filters.ToList(),
+                Pages = RenderHtmlPages(subDef, dt, visibleCols),
+                Tree = BuildGroupTree(dt, subDef, rowsPerPage),
+                CurrentPage = 1,
+                Orientation = subDef.Orientation
+            };
+
+            if (dt.Rows.Count == 0 || AllRowsAreEmpty(dt, visibleCols))
+            {
+                var reason = dt.Rows.Count == 0
+                    ? "No rows matched the subreport filters."
+                    : "No detail rows available for this subreport target.";
+                tab.Pages = new List<string> {
+                    $@"<div style='padding:24px; font-family:Arial,sans-serif;'>
+                       <h3 style='color:#666;'>{reason}</h3>
+                       <p><strong>Filters applied:</strong></p>
+                       <ul>{string.Join("", filters.Select(f => $"<li>{System.Web.HttpUtility.HtmlEncode(f.Table)}.{System.Web.HttpUtility.HtmlEncode(f.Field)} = '{System.Web.HttpUtility.HtmlEncode(string.IsNullOrEmpty(f.Value) ? "(empty)" : f.Value)}'</li>"))}</ul>
+                    </div>"
+                };
+            }
+
+            Tabs.Add(tab);
+            ActiveTabIndex = Tabs.Count - 1;
+            StatusMessage = $"Subreport: {tab.Title}";
+
+            Logger.LogInformation("Subreport tab opened: {Title} ({Rows} rows, {Pages} pages)",
+                tab.Title, dt.Rows.Count, tab.Pages.Count);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Subreport failed for {Title} at {XmlPath}", title, fullXmlPath);
+            ErrorMessage = $"Subreport error: {ex.Message}";
+            StatusMessage = $"Subreport error: {ex.Message}";
+        }
+        finally
+        {
+            IsLoading = false;
+            await InvokeAsync(StateHasChanged);
+            OnRenderComplete?.Invoke();
+        }
+    }
+
     // Historical name kept for back-compat with template parsing. Orientation is now per-tab.
     private void Orientation_DoNotSet_UseTab(ReportOrientation o) { /* no-op */ }
+
+    private static bool FieldFiltersEqual(List<ReportFieldFilter> a, List<ReportFieldFilter> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (var i = 0; i < a.Count; i++)
+        {
+            if (!string.Equals(a[i].Table, b[i].Table, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a[i].Field, b[i].Field, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a[i].Value, b[i].Value, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
 
     private static bool PathEquals(List<DrillDownFilter> a, List<DrillDownFilter> b)
     {
@@ -972,14 +1145,13 @@ else
     //  UNIFIED ENTRY POINT — ShowReportAsync
     //  ─────────────────────────────────────────────────────────────
     //  Single high-level call that:
-    //    1. Decides .rpt vs .xml (prefers XML for cross-platform render;
-    //       falls back to the SAP Crystal Reports Engine via IReportExporter
-    //       when only the .rpt is available).
+    //    1. Decides .rpt vs .xml. If only the .rpt exists, converts it to
+    //       XML with the native C# converter before rendering.
     //    2. Prompts the user (via the embedded ReportParamDialogControl)
     //       for any required parameters not pre-supplied.
     //    3. Runs MultiValueParameterRewriter so dual-list-box selections
     //       become IN-clause expansions.
-    //    4. Routes to ShowSqlReport / ShowCrystalReport and updates
+    //    4. Routes to ShowSqlReport and updates
     //       toolbar / status-bar state.
     //
     //  Replaces FRptViewer's old per-page ShowReport orchestration —
@@ -1020,10 +1192,9 @@ else
                 return;
             }
 
-            // Prefer the XML export — renders cross-platform via
-            // ShowSqlReport. Fall back to the SAP Crystal engine when
-            // only the .rpt is available.
-            var xmlPath = ResolveXmlPathLocal(file);
+            // Prefer an existing XML export. If only the .rpt is available,
+            // materialize the XML with the native C# converter and render that.
+            var xmlPath = await ResolveOrConvertXmlPathAsync(file);
             if (xmlPath != null)
             {
                 var definition = XmlLoader.Load(xmlPath);
@@ -1101,18 +1272,8 @@ else
                 ReportLoaded = true;
                 StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)";
             }
-            else if (file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
-            {
-                // No XML sibling — fall back to SAP engine via IReportExporter.
-                var rptParams = _seedParameters.ToDictionary(p => p.Key, p => p.Value);
-                await ShowCrystalReport(file, rptParams);
-                ReportLoaded = true;
-                StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(file)}";
-            }
             else
-            {
-                StatusMessage = $"No XML export found and no .rpt fallback: {file}";
-            }
+                StatusMessage = $"No XML report definition found: {file}";
         }
         catch (Exception ex)
         {
@@ -1149,6 +1310,41 @@ else
         var sibling = Path.Combine(dir, baseName + ".xml");
         if (File.Exists(sibling)) return sibling;
         return null;
+    }
+
+    private async Task<string?> ResolveOrConvertXmlPathAsync(string file)
+    {
+        var xmlPath = ResolveXmlPathLocal(file);
+        if (xmlPath != null || !file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
+            return xmlPath;
+
+        if (OperatingSystem.IsBrowser())
+            throw new NotSupportedException("Crystal .rpt conversion requires server-side .NET because it reads the report binary from disk.");
+
+        var outputPath = GetDefaultXmlOutputPath(file);
+        Logger.LogInformation("Converting Crystal RPT for viewer: {Rpt} -> {Xml}", file, outputPath);
+
+        var result = await CrystalRptToXml.ConvertAsync(
+            file,
+            outputPath,
+            new CrystalRptConversionOptions(
+                ExtractSubreports: true,
+                Progress: message => Logger.LogDebug("RptToXml: {Message}", message)));
+
+        return result.ReportXmlPath;
+    }
+
+    private static string GetDefaultXmlOutputPath(string rptFilePath)
+    {
+        var dir = Path.GetDirectoryName(rptFilePath) ?? "";
+        var baseName = Path.GetFileNameWithoutExtension(rptFilePath);
+        if (!string.IsNullOrEmpty(dir) &&
+            Path.GetFileName(dir).Equals("rpt", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.Combine(Path.GetDirectoryName(dir) ?? "", "xml", baseName + ".xml");
+        }
+
+        return Path.Combine(dir, baseName + ".xml");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1909,7 +2105,8 @@ else
             };
             var width = col.Width > 0 ? $"width:{col.Width}px;" : "";
             var typeCls = IsRigidColumnType(col.ColumnType) ? "fx-rpt-col-nowrap" : "fx-rpt-col-wrap";
-            html.AppendLine($"  <th class='{typeCls}' style='{align};{width}'>{Escape(col.HeaderText)}</th>");
+            var headerHtml = BuildColumnHeaderHtml(col);
+            html.AppendLine($"  <th class='{typeCls}' style='{align};{width}'>{headerHtml}</th>");
         }
         html.AppendLine("</tr></thead>");
 
@@ -1999,6 +2196,13 @@ else
                 };
                 var style = BuildCellStyle(row, col, align);
                 var typeCls = IsRigidColumnType(col.ColumnType) ? "fx-rpt-col-nowrap" : "fx-rpt-col-wrap";
+                var cellCls = col.IsSubreportObject ? $"{typeCls} fx-rpt-subreport-cell" : typeCls;
+                if (col.IsSubreportObject)
+                {
+                    html.Append($"<td class='{cellCls}'{style}>{BuildSubreportLinkHtml(col, row, useHeaderFallback: false)}</td>");
+                    continue;
+                }
+
                 var value = FormatCellValue(row, col);
                 var rendered = value;
                 if (col.SuppressRepeats)
@@ -2008,7 +2212,7 @@ else
                     else
                         lastCellValues[col.Field] = value;
                 }
-                html.Append($"<td class='{typeCls}'{style}>{Escape(rendered)}</td>");
+                html.Append($"<td class='{cellCls}'{style}>{Escape(rendered)}</td>");
             }
             html.AppendLine("</tr>");
         }
@@ -2434,6 +2638,66 @@ else
 
     private static string Escape(string? text)
         => System.Web.HttpUtility.HtmlEncode(text ?? "");
+
+    private static string BuildColumnHeaderHtml(ReportColumn col)
+    {
+        if (col.IsSubreportObject)
+            return Escape(col.HeaderText);
+
+        return BuildSubreportLinkHtml(col, row: null, useHeaderFallback: true);
+    }
+
+    private static string BuildSubreportLinkHtml(ReportColumn col, DataRow? row, bool useHeaderFallback)
+    {
+        var link = col.SubreportLink;
+        if (link == null || !link.EnableOnDemand || string.IsNullOrWhiteSpace(link.Url))
+            return useHeaderFallback ? Escape(col.HeaderText) : "";
+
+        var label = string.IsNullOrWhiteSpace(link.SubreportName)
+            ? col.HeaderText
+            : link.SubreportName;
+        if (string.IsNullOrWhiteSpace(label))
+            label = "Open";
+
+        var linkText = Escape(label);
+        var href = System.Web.HttpUtility.HtmlAttributeEncode(link.Url);
+        var title = System.Web.HttpUtility.HtmlAttributeEncode(
+            $"Open {label} subreport");
+        var payload = row == null ? "" : BuildSubreportPayloadAttribute(link, label, row);
+        var payloadAttr = string.IsNullOrEmpty(payload) ? "" : $" data-subreport='{payload}'";
+        return $"<a class='fx-rpt-subreport-link' href='{href}'{payloadAttr} title='{title}'>{linkText}</a>";
+    }
+
+    private static string BuildSubreportPayloadAttribute(ReportSubreportLink link, string label, DataRow row)
+    {
+        var filters = new List<object>();
+        foreach (var parameterLink in link.ParameterLinks)
+        {
+            if (string.IsNullOrWhiteSpace(parameterLink.MainReportAlias) ||
+                string.IsNullOrWhiteSpace(parameterLink.SubreportTable) ||
+                string.IsNullOrWhiteSpace(parameterLink.SubreportField) ||
+                !row.Table.Columns.Contains(parameterLink.MainReportAlias))
+            {
+                continue;
+            }
+
+            var value = row[parameterLink.MainReportAlias];
+            filters.Add(new
+            {
+                table = parameterLink.SubreportTable,
+                field = parameterLink.SubreportField,
+                value = value == null || value == DBNull.Value ? "" : value.ToString() ?? ""
+            });
+        }
+
+        var json = JsonSerializer.Serialize(new
+        {
+            title = label,
+            xmlPath = link.XmlPath,
+            filters
+        });
+        return System.Web.HttpUtility.HtmlAttributeEncode(json);
+    }
 
     /// <summary>Produces the inline <c>text-align</c> style for a <see cref="ReportAlignment"/>.</summary>
     private static string AlignmentStyle(ReportAlignment alignment) => alignment switch

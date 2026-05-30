@@ -1,0 +1,190 @@
+.fx-xmlv {
+    display: grid;
+    grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+    min-height: 0;
+    height: 100%;
+    background: #7ea7d1;
+    color: #111827;
+    font: 12px Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
+}
+
+.fx-xmlv-outline {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border-right: 1px solid #5d86ad;
+    background: #f7fbff;
+}
+
+.fx-xmlv-outline-title {
+    flex: 0 0 auto;
+    min-height: 25px;
+    padding: 5px 8px;
+    border-bottom: 1px solid #9fb9d3;
+    background: linear-gradient(#e8f2fc, #c5dcf2);
+    color: #173f66;
+    font-weight: 700;
+}
+
+.fx-xmlv-outline-empty {
+    padding: 10px;
+    color: #6b7280;
+}
+
+.fx-xmlv ::deep .fx-xmlv-tree {
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    border: 0;
+    border-radius: 0;
+    background: #ffffff;
+    font-size: 11px;
+}
+
+.fx-xmlv ::deep .fx-xmlv-tree .fx-treeview-node {
+    min-height: 18px;
+}
+
+.fx-xmlv ::deep .fx-xmlv-icon-element::before,
+.fx-xmlv ::deep .fx-xmlv-icon-element-open::before {
+    content: "<>";
+    color: #0f5f87;
+    font-size: 9px;
+    font-weight: 700;
+}
+
+.fx-xmlv-code-wrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    margin: 12px 16px 16px;
+    background: #f8fbff;
+    border: 1px solid #5d86ad;
+    box-shadow: inset 0 1px 0 #ffffff, 0 1px 3px rgba(15, 23, 42, 0.18);
+}
+
+.fx-xmlv-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 30px;
+    padding: 4px 8px;
+    border-bottom: 1px solid #9fb9d3;
+    background: linear-gradient(#e8f2fc, #c5dcf2);
+}
+
+.fx-xmlv-heading {
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.fx-xmlv-title {
+    color: #173f66;
+    font-weight: 700;
+}
+
+.fx-xmlv-path {
+    min-width: 0;
+    color: #4b5563;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-xmlv-clear {
+    flex: 0 0 auto;
+    padding: 3px 9px;
+    border: 1px solid #7b9fbd;
+    border-radius: 2px;
+    background: linear-gradient(#ffffff, #dcecff);
+    color: #173f66;
+    font: inherit;
+    cursor: pointer;
+}
+
+.fx-xmlv-clear:hover {
+    background: linear-gradient(#ffffff, #cce5ff);
+}
+
+.fx-xmlv-error {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+    border-bottom: 1px solid #fecaca;
+    background: #fef2f2;
+    color: #991b1b;
+}
+
+.fx-xmlv-empty {
+    padding: 12px;
+    color: #6b7280;
+}
+
+.fx-xmlv-code {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 0;
+    padding: 10px 12px;
+    overflow: auto;
+    background: #ffffff;
+    color: #111827;
+    font: 12px/1.42 Consolas, "Courier New", monospace;
+    tab-size: 4;
+    white-space: pre;
+    outline: none;
+}
+
+.fx-xmlv-code:focus {
+    box-shadow: inset 0 0 0 1px #2563eb;
+}
+
+.fx-xmlv-punc {
+    color: #64748b;
+}
+
+.fx-xmlv-name {
+    color: #1d4ed8;
+    font-weight: 700;
+}
+
+.fx-xmlv-attr {
+    color: #9a3412;
+}
+
+.fx-xmlv-value {
+    color: #166534;
+}
+
+.fx-xmlv-text {
+    color: #111827;
+}
+
+.fx-xmlv-comment {
+    color: #6b7280;
+    font-style: italic;
+}
+
+.fx-xmlv-cdata,
+.fx-xmlv-pi {
+    color: #7c3aed;
+}
+
+@media (max-width: 780px) {
+    .fx-xmlv {
+        grid-template-columns: 1fr;
+        grid-template-rows: 160px minmax(0, 1fr);
+    }
+
+    .fx-xmlv-outline {
+        border-right: 0;
+        border-bottom: 1px solid #5d86ad;
+    }
+
+    .fx-xmlv-code-wrap {
+        margin: 8px;
+    }
+}

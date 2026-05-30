@@ -45,6 +45,7 @@ public class CrystalXmlReportLoader
     /// and the default browser DPI is 96, so 1 pixel = 1440 / 96 = 15 twips.
     /// </summary>
     private const int TwipsPerPixel = 15;
+    private const string SubreportColumnPrefix = "__Subreport_";
 
     /// <summary>
     /// Converts a Crystal-XML width (twips, as stored in <c>FieldObject Width=</c>)
@@ -77,6 +78,15 @@ public class CrystalXmlReportLoader
     }
 
     /// <summary>
+    /// Loads a Crystal XML report with direct table-field filters. Used for Crystal
+    /// subreports whose parameters are supplied by the clicked main-report row.
+    /// </summary>
+    public ReportDefinition LoadWithFieldFilters(string xmlFilePath, IReadOnlyList<ReportFieldFilter> filters)
+    {
+        return LoadInternal(xmlFilePath, drillPath: null, fieldFilters: filters);
+    }
+
+    /// <summary>
     /// Loads and parses a Crystal Reports XML file into a renderable <see cref="ReportDefinition"/>.
     /// </summary>
     public ReportDefinition Load(string xmlFilePath)
@@ -84,13 +94,17 @@ public class CrystalXmlReportLoader
         return LoadInternal(xmlFilePath, drillPath: null);
     }
 
-    private ReportDefinition LoadInternal(string xmlFilePath, IReadOnlyList<DrillDownFilter>? drillPath)
+    private ReportDefinition LoadInternal(
+        string xmlFilePath,
+        IReadOnlyList<DrillDownFilter>? drillPath,
+        IReadOnlyList<ReportFieldFilter>? fieldFilters = null)
     {
         if (!File.Exists(xmlFilePath))
             throw new FileNotFoundException($"Crystal Reports XML not found: {xmlFilePath}", xmlFilePath);
 
         var doc = XDocument.Load(xmlFilePath);
         var report = doc.Root ?? throw new InvalidDataException("Invalid XML: missing root element.");
+        var subreportObjects = ExtractSubreportObjects(report, xmlFilePath);
 
         // Strip <SubReports> blocks from the tree before any parsing. Subreports
         // are rendered separately by Crystal at runtime — we don't render them in
@@ -106,7 +120,8 @@ public class CrystalXmlReportLoader
         {
             ReportId = Path.GetFileNameWithoutExtension(xmlFilePath),
             Title = Path.GetFileNameWithoutExtension(xmlFilePath).Replace("_", " "),
-            SourceRptFile = xmlFilePath
+            SourceRptFile = xmlFilePath,
+            SubreportLinks = subreportObjects.Select(ToReportSubreportLink).ToList()
         };
 
         // --- Title + subtitle from ReportHeader / PageHeader (centered + bold TextObjects) ---
@@ -206,7 +221,7 @@ public class CrystalXmlReportLoader
             var summaryFieldsFromHeader = visibleSection != null
                 ? ExtractSectionFields(visibleSection, formulaFields, detectFormulas: true)
                 : detailFields;
-            columns = BuildColumnsFromSection(summaryFieldsFromHeader, headerLabels, formulaFields);
+            columns = BuildColumnsFromSection(summaryFieldsFromHeader, headerLabels, formulaFields, subreportObjects);
             selectFields = BuildSelectFieldsForSummary(columns, groups, formulaFields, detailFields);
         }
         else if (mergeSummaryWithDetail)
@@ -218,7 +233,7 @@ public class CrystalXmlReportLoader
             // Use BuildColumnsFromSection so formula-field DataSources (@TaxinRate, @Total
             // Cost) become computed columns — without this, Selling Price and Cost would
             // be missing because BuildColumns skips formulas.
-            columns = BuildColumnsFromSection(detailFields, headerLabels, formulaFields);
+            columns = BuildColumnsFromSection(detailFields, headerLabels, formulaFields, subreportObjects);
             // For drill-down tabs, include ALL groups so the tree can descend further
             // (into Phase / POIndex) and the rendered output can show nested group headers.
             selectFields = BuildSelectFieldsForDrillDown(columns, groups, formulaFields);
@@ -226,9 +241,10 @@ public class CrystalXmlReportLoader
         else
         {
             // Non-drill-down report: show the Detail-section columns as before.
-            columns = BuildColumns(detailFields, headerLabels, tables, formulaFields);
+            columns = BuildColumns(detailFields, headerLabels, tables, formulaFields, subreportObjects);
             selectFields = BuildSelectFields(columns, groups, formulaFields);
         }
+        AppendSubreportLinkSelects(selectFields, subreportObjects);
         AppendConditionalStyleSelects(selectFields, columns);
 
         // SuppressRepeats inference — flag the LEFTMOST detail column that
@@ -261,6 +277,14 @@ public class CrystalXmlReportLoader
         if (isDrillTab)
         {
             var filterSql = BuildDrillDownWhere(drillPath!, groups, formulaFields);
+            if (!string.IsNullOrWhiteSpace(filterSql))
+                whereSql = string.IsNullOrWhiteSpace(whereSql)
+                    ? filterSql
+                    : $"({whereSql}) AND ({filterSql})";
+        }
+        if (fieldFilters != null && fieldFilters.Count > 0)
+        {
+            var filterSql = BuildFieldFilterWhere(fieldFilters);
             if (!string.IsNullOrWhiteSpace(filterSql))
                 whereSql = string.IsNullOrWhiteSpace(whereSql)
                     ? filterSql
@@ -376,7 +400,8 @@ public class CrystalXmlReportLoader
     private sealed record DetailFieldInfo(
         string Name, string Table, string Field, int Left, int Width, string Alignment,
         string DataSource, bool IsFormula, string TextColor = "", bool Bold = false,
-        ConditionalStyleInfo? ConditionalStyle = null);
+        ConditionalStyleInfo? ConditionalStyle = null,
+        string AreaKind = "", string SectionKind = "", string SectionName = "");
     private sealed record PageHeaderLabel(string Text, int Left, int Width, string? FieldObjectName);
     private sealed record ConditionalStyleInfo(
         string FieldAlias, string Operator, string Value,
@@ -403,6 +428,199 @@ public class CrystalXmlReportLoader
         string DescriptionTable = "", string DescriptionField = "");
     private sealed record SortFieldInfo(string Table, string Field, string? FormulaName, string Direction, string SortType);
     private sealed record SummaryFieldInfo(string Operation, string Field, string GroupField);
+    private sealed record SubreportParameterLinkInfo(
+        string LinkedParameterName,
+        string MainReportFieldName,
+        string MainReportAlias,
+        string SubreportFieldName,
+        string SubreportTable,
+        string SubreportField);
+    private sealed record SubreportObjectInfo(
+        string Name, string SubreportName,
+        string AreaKind, string SectionKind, string SectionName,
+        int Top, int Left, int Width, int Height,
+        bool EnableOnDemand, string XmlPath, string Url,
+        IReadOnlyList<SubreportParameterLinkInfo> ParameterLinks);
+
+    /// <summary>
+    /// Finds on-demand subreport objects in the main report layout. The nested
+    /// <c>&lt;SubReports&gt;</c> definitions are still stripped before SQL parsing, but
+    /// their exported XML sidecar locations are safe metadata for the renderer.
+    /// </summary>
+    private IReadOnlyList<SubreportObjectInfo> ExtractSubreportObjects(XElement report, string xmlFilePath)
+    {
+        var linkedParameters = ExtractSubreportParameterLinks(report);
+        var referenceMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var reference in report.Elements("SubreportReferences").Elements("SubreportReference"))
+        {
+            var name = ((string?)reference.Attribute("Name") ?? "").Trim();
+            var fileName = (string?)reference.Attribute("FileName") ?? "";
+            if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(fileName))
+                continue;
+
+            referenceMap.TryAdd(name, fileName);
+        }
+
+        var list = new List<SubreportObjectInfo>();
+        foreach (var obj in report.Descendants("SubreportObject")
+            .Where(o => !o.Ancestors("SubReports").Any()))
+        {
+            if (AttrIsTrue(obj.Element("ObjectFormat"), "EnableSuppress"))
+                continue;
+
+            var subreportName = ((string?)obj.Attribute("SubreportName") ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(subreportName))
+                continue;
+
+            var xmlHint = (string?)obj.Attribute("SubreportXmlPath") ?? "";
+            if (string.IsNullOrWhiteSpace(xmlHint) &&
+                referenceMap.TryGetValue(subreportName, out var referencedXml))
+            {
+                xmlHint = referencedXml;
+            }
+
+            var xmlPath = ResolveSubreportXmlPath(xmlFilePath, xmlHint, subreportName);
+            var url = ResolvePublicWebUrl(xmlPath);
+            var section = obj.Ancestors("Section").FirstOrDefault();
+            var area = obj.Ancestors("Area").FirstOrDefault();
+            list.Add(new SubreportObjectInfo(
+                Name: (string?)obj.Attribute("Name") ?? "",
+                SubreportName: subreportName,
+                AreaKind: (string?)area?.Attribute("Kind") ?? "",
+                SectionKind: (string?)section?.Attribute("Kind") ?? "",
+                SectionName: (string?)section?.Attribute("Name") ?? "",
+                Top: ParseInt(obj.Attribute("Top")),
+                Left: ParseInt(obj.Attribute("Left")),
+                Width: ParseInt(obj.Attribute("Width")),
+                Height: ParseInt(obj.Attribute("Height")),
+                EnableOnDemand: AttributeIsTrue(obj.Attribute("EnableOnDemand")),
+                XmlPath: xmlPath,
+                Url: url,
+                ParameterLinks: linkedParameters.TryGetValue(subreportName, out var links)
+                    ? links
+                    : Array.Empty<SubreportParameterLinkInfo>()));
+        }
+
+        return list;
+    }
+
+    private static Dictionary<string, List<SubreportParameterLinkInfo>> ExtractSubreportParameterLinks(XElement report)
+    {
+        var map = new Dictionary<string, List<SubreportParameterLinkInfo>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var subreport in report.Elements("SubReports").Elements("Report"))
+        {
+            var subreportName = ((string?)subreport.Attribute("Name") ?? "").Trim();
+            if (string.IsNullOrWhiteSpace(subreportName))
+                continue;
+
+            foreach (var link in subreport.Elements("SubReportLinks").Elements("SubReportLink"))
+            {
+                var mainFieldName = ((string?)link.Attribute("MainReportFieldName") ?? "").Trim();
+                var subreportFieldName = ((string?)link.Attribute("SubreportFieldName") ?? "").Trim();
+                var mainField = ParseCrystalFieldRef(mainFieldName);
+                var subreportField = ParseCrystalFieldRef(subreportFieldName);
+                if (!mainField.HasValue || !subreportField.HasValue)
+                    continue;
+
+                if (!map.TryGetValue(subreportName, out var links))
+                {
+                    links = new List<SubreportParameterLinkInfo>();
+                    map[subreportName] = links;
+                }
+
+                links.Add(new SubreportParameterLinkInfo(
+                    LinkedParameterName: ((string?)link.Attribute("LinkedParameterName") ?? "").Trim(),
+                    MainReportFieldName: mainFieldName,
+                    MainReportAlias: $"{mainField.Value.Table}_{mainField.Value.Field}",
+                    SubreportFieldName: subreportFieldName,
+                    SubreportTable: subreportField.Value.Table,
+                    SubreportField: subreportField.Value.Field));
+            }
+        }
+
+        return map;
+    }
+
+    private static ReportSubreportLink ToReportSubreportLink(SubreportObjectInfo info)
+        => new()
+        {
+            Name = info.Name,
+            SubreportName = info.SubreportName,
+            AreaKind = info.AreaKind,
+            SectionName = info.SectionName,
+            Left = info.Left,
+            Width = info.Width,
+            XmlPath = info.XmlPath,
+            Url = info.Url,
+            EnableOnDemand = info.EnableOnDemand,
+            ParameterLinks = info.ParameterLinks.Select(link => new ReportSubreportParameterLink
+            {
+                LinkedParameterName = link.LinkedParameterName,
+                MainReportFieldName = link.MainReportFieldName,
+                MainReportAlias = link.MainReportAlias,
+                SubreportFieldName = link.SubreportFieldName,
+                SubreportTable = link.SubreportTable,
+                SubreportField = link.SubreportField
+            }).ToList()
+        };
+
+    private static string ResolveSubreportXmlPath(string mainXmlPath, string xmlHint, string subreportName)
+    {
+        var baseDir = Path.GetDirectoryName(mainXmlPath) ?? ".";
+
+        if (!string.IsNullOrWhiteSpace(xmlHint))
+        {
+            var normalizedHint = xmlHint.Replace('/', Path.DirectorySeparatorChar);
+            return Path.GetFullPath(Path.IsPathRooted(normalizedHint)
+                ? normalizedHint
+                : Path.Combine(baseDir, normalizedHint));
+        }
+
+        var fallback = Path.Combine(
+            baseDir,
+            Path.GetFileNameWithoutExtension(mainXmlPath) + ".subreports",
+            SafeFileStem(subreportName) + ".xml");
+
+        return File.Exists(fallback) ? Path.GetFullPath(fallback) : "";
+    }
+
+    private static string ResolvePublicWebUrl(string physicalPath)
+    {
+        if (string.IsNullOrWhiteSpace(physicalPath)) return "";
+
+        var normalized = Path.GetFullPath(physicalPath).Replace('\\', '/');
+        const string marker = "/wwwroot/";
+        var markerIndex = normalized.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex < 0) return "";
+
+        var relative = normalized[(markerIndex + marker.Length)..];
+        return "/" + string.Join("/",
+            relative.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Select(Uri.EscapeDataString));
+    }
+
+    private static string SafeFileStem(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        foreach (var c in "\\/:*?\"<>|")
+            invalid.Add(c);
+
+        var sb = new StringBuilder(value.Length);
+        foreach (var c in value)
+            sb.Append(char.IsControl(c) || invalid.Contains(c) ? '_' : c);
+
+        var cleaned = Regex.Replace(sb.ToString().Trim(), @"\s+", " ");
+        while (cleaned.EndsWith('.') || cleaned.EndsWith(' '))
+            cleaned = cleaned[..^1];
+
+        if (string.IsNullOrWhiteSpace(cleaned))
+            cleaned = "Subreport";
+
+        return cleaned.Length > 100 ? cleaned[..100].Trim() : cleaned;
+    }
+
+    private static bool AttributeIsTrue(XAttribute? attribute)
+        => string.Equals((string?)attribute, "True", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Pulls the report's display <see cref="ReportDefinition.Title"/> and
@@ -973,6 +1191,10 @@ public class CrystalXmlReportLoader
         Dictionary<string, string> formulaFields, bool detectFormulas)
     {
         var list = new List<DetailFieldInfo>();
+        var area = section.Ancestors("Area").FirstOrDefault();
+        var areaKind = (string?)area?.Attribute("Kind") ?? "";
+        var sectionKind = (string?)section.Attribute("Kind") ?? "";
+        var sectionName = (string?)section.Attribute("Name") ?? "";
         foreach (var field in section.Descendants("FieldObject"))
         {
             if (IsSuppressedFieldObject(field)) continue;
@@ -1012,7 +1234,10 @@ public class CrystalXmlReportLoader
                         IsFormula: false,
                         TextColor: textColor,
                         Bold: bold,
-                        ConditionalStyle: conditionalStyle));
+                        ConditionalStyle: conditionalStyle,
+                        AreaKind: areaKind,
+                        SectionKind: sectionKind,
+                        SectionName: sectionName));
                 }
                 continue;
             }
@@ -1030,7 +1255,10 @@ public class CrystalXmlReportLoader
                     IsFormula: false,
                     TextColor: textColor,
                     Bold: bold,
-                    ConditionalStyle: conditionalStyle));
+                    ConditionalStyle: conditionalStyle,
+                    AreaKind: areaKind,
+                    SectionKind: sectionKind,
+                    SectionName: sectionName));
             }
             else if (isFormula && detectFormulas)
             {
@@ -1045,7 +1273,10 @@ public class CrystalXmlReportLoader
                     IsFormula: true,
                     TextColor: textColor,
                     Bold: bold,
-                    ConditionalStyle: conditionalStyle));
+                    ConditionalStyle: conditionalStyle,
+                    AreaKind: areaKind,
+                    SectionKind: sectionKind,
+                    SectionName: sectionName));
             }
         }
         return list.OrderBy(f => f.Left).ToList();
@@ -1057,7 +1288,8 @@ public class CrystalXmlReportLoader
     /// keeping the formula name as a display header otherwise.
     /// </summary>
     private List<ReportColumn> BuildColumnsFromSection(List<DetailFieldInfo> fields,
-        List<PageHeaderLabel> labels, Dictionary<string, string> formulaFields)
+        List<PageHeaderLabel> labels, Dictionary<string, string> formulaFields,
+        IReadOnlyList<SubreportObjectInfo> subreportObjects)
     {
         var cols = new List<ReportColumn>();
         // Pre-assign each label to the field whose horizontal CENTER is closest to the
@@ -1120,10 +1352,72 @@ public class CrystalXmlReportLoader
                 ColumnType = InferColumnType(formulaKey: df.IsFormula ? df.Field : null, headerText: header, fieldName: df.Field),
                 TextColor = df.TextColor,
                 Bold = df.Bold,
-                ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle)
+                ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle),
+                LayoutLeft = df.Left
             });
         }
-        return cols;
+        return AddSubreportObjectColumns(cols, fields, subreportObjects);
+    }
+
+    private static List<ReportColumn> AddSubreportObjectColumns(
+        List<ReportColumn> columns,
+        IReadOnlyList<DetailFieldInfo> fields,
+        IReadOnlyList<SubreportObjectInfo> subreportObjects)
+    {
+        if (subreportObjects.Count == 0 || fields.Count == 0)
+            return columns;
+
+        var sectionKeys = fields
+            .Select(f => SectionKey(f.AreaKind, f.SectionKind, f.SectionName))
+            .Where(k => !string.IsNullOrWhiteSpace(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (sectionKeys.Count == 0)
+            return columns;
+
+        var usedFields = columns
+            .Select(c => c.Field)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var subreport in subreportObjects
+            .Where(s => s.EnableOnDemand && sectionKeys.Contains(SectionKey(s.AreaKind, s.SectionKind, s.SectionName)))
+            .OrderBy(s => s.Left))
+        {
+            columns.Add(new ReportColumn
+            {
+                Field = BuildSubreportColumnField(subreport, usedFields),
+                HeaderText = "",
+                Width = TwipsToPx(subreport.Width),
+                Alignment = ReportAlignment.Left,
+                ColumnType = ReportColumnType.Text,
+                LayoutLeft = subreport.Left,
+                IsSubreportObject = true,
+                SubreportLink = ToReportSubreportLink(subreport)
+            });
+        }
+
+        return columns
+            .OrderBy(c => c.LayoutLeft)
+            .ThenBy(c => c.IsSubreportObject ? 1 : 0)
+            .ToList();
+    }
+
+    private static string SectionKey(string areaKind, string sectionKind, string sectionName)
+        => $"{areaKind}|{sectionKind}|{sectionName}";
+
+    private static string BuildSubreportColumnField(SubreportObjectInfo subreport, HashSet<string> usedFields)
+    {
+        var stem = Regex.Replace(
+            string.IsNullOrWhiteSpace(subreport.Name) ? subreport.SubreportName : subreport.Name,
+            @"[^\w]+",
+            "_").Trim('_');
+        if (string.IsNullOrWhiteSpace(stem))
+            stem = "Subreport";
+
+        var field = SubreportColumnPrefix + stem;
+        var suffix = 2;
+        while (!usedFields.Add(field))
+            field = $"{SubreportColumnPrefix}{stem}_{suffix++}";
+        return field;
     }
 
     /// <summary>Produces a SQL-safe alias for a formula-column (e.g. <c>@Profit</c> → <c>Formula_Profit</c>).</summary>
@@ -1257,6 +1551,9 @@ public class CrystalXmlReportLoader
 
         foreach (var col in columns)
         {
+            if (col.IsSubreportObject)
+                continue;
+
             if (col.Field.StartsWith("Formula_"))
             {
                 // Compound formula column (e.g. Formula_Profit or Formula_TotalCost). The alias
@@ -1314,6 +1611,9 @@ public class CrystalXmlReportLoader
 
         foreach (var col in columns)
         {
+            if (col.IsSubreportObject)
+                continue;
+
             if (col.Field.StartsWith("Formula_"))
             {
                 // col.Field is "Formula_TotalCost" (spaces stripped by FormulaColumnAlias) but
@@ -1390,6 +1690,9 @@ public class CrystalXmlReportLoader
                 .ToList();
             if (sections.Count == 0) continue;
             var primarySection = sections[0];
+            var areaKind = (string?)area.Attribute("Kind") ?? "";
+            var sectionKind = (string?)primarySection.Attribute("Kind") ?? "";
+            var sectionName = (string?)primarySection.Attribute("Name") ?? "";
 
             foreach (var field in primarySection.Descendants("FieldObject"))
             {
@@ -1423,7 +1726,10 @@ public class CrystalXmlReportLoader
                     IsFormula: isFormula,
                     TextColor: textColor,
                     Bold: bold,
-                    ConditionalStyle: conditionalStyle));
+                    ConditionalStyle: conditionalStyle,
+                    AreaKind: areaKind,
+                    SectionKind: sectionKind,
+                    SectionName: sectionName));
             }
         }
         return list.OrderBy(f => f.Left).ToList();
@@ -2175,7 +2481,8 @@ public class CrystalXmlReportLoader
         List<DetailFieldInfo> detailFields,
         List<PageHeaderLabel> headerLabels,
         List<TableInfo> tables,
-        Dictionary<string, string> formulaFields)
+        Dictionary<string, string> formulaFields,
+        IReadOnlyList<SubreportObjectInfo> subreportObjects)
     {
         var columns = new List<ReportColumn>();
         // Track heading texts already assigned so the same label isn't reused
@@ -2237,10 +2544,11 @@ public class CrystalXmlReportLoader
                        : "",
                 TextColor = df.TextColor,
                 Bold = df.Bold,
-                ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle)
+                ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle),
+                LayoutLeft = df.Left
             });
         }
-        return columns;
+        return AddSubreportObjectColumns(columns, detailFields, subreportObjects);
     }
 
     /// <summary>
@@ -2327,6 +2635,9 @@ public class CrystalXmlReportLoader
 
         foreach (var col in columns)
         {
+            if (col.IsSubreportObject)
+                continue;
+
             // Compound-formula columns (alias starts with "Formula_") need their
             // formula body translated to a SQL expression instead of being passed
             // through verbatim. The renderer reads the values via the alias.
@@ -2378,6 +2689,21 @@ public class CrystalXmlReportLoader
             if (string.IsNullOrWhiteSpace(field)) continue;
             if (seen.Add(field))
                 selectFields.Add(field);
+        }
+    }
+
+    private static void AppendSubreportLinkSelects(
+        List<string> selectFields,
+        IReadOnlyList<SubreportObjectInfo> subreportObjects)
+    {
+        var seen = new HashSet<string>(selectFields, StringComparer.OrdinalIgnoreCase);
+        foreach (var alias in subreportObjects
+            .SelectMany(s => s.ParameterLinks)
+            .Select(link => link.MainReportAlias)
+            .Where(alias => !string.IsNullOrWhiteSpace(alias)))
+        {
+            if (seen.Add(alias))
+                selectFields.Add(alias);
         }
     }
 
@@ -2507,6 +2833,23 @@ public class CrystalXmlReportLoader
                 parts.Add($"({lhs} IS NULL OR {lhs} = '')");
             else
                 parts.Add($"{lhs} = {FormatLiteral(f.Value)}");
+        }
+        return string.Join(" AND ", parts);
+    }
+
+    private static string BuildFieldFilterWhere(IReadOnlyList<ReportFieldFilter> filters)
+    {
+        var parts = new List<string>();
+        foreach (var filter in filters)
+        {
+            if (string.IsNullOrWhiteSpace(filter.Table) || string.IsNullOrWhiteSpace(filter.Field))
+                continue;
+
+            var lhs = $"[{filter.Table}].{filter.Field}";
+            if (string.IsNullOrEmpty(filter.Value))
+                parts.Add($"({lhs} IS NULL OR {lhs} = '')");
+            else
+                parts.Add($"{lhs} = {FormatLiteral(filter.Value)}");
         }
         return string.Join(" AND ", parts);
     }

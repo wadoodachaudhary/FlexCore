@@ -4,19 +4,39 @@
 
 @if (Multiline)
 {
-    <InputTextArea class="@ResolvedCssClass"
+    if (ValueExpression is not null)
+    {
+        <InputTextArea class="@ResolvedCssClass"
+                       Value="@Value"
+                       ValueChanged="@ValueChanged"
+                       ValueExpression="@ValueExpression"
+                       @attributes="MergedAttributes" />
+    }
+    else
+    {
+        <textarea class="@ResolvedCssClass"
+                  value="@Value"
+                  @onchange="OnNativeValueChanged"
+                  @attributes="MergedAttributes"></textarea>
+    }
+}
+else
+{
+    if (ValueExpression is not null)
+    {
+        <InputText class="@ResolvedCssClass"
                    Value="@Value"
                    ValueChanged="@ValueChanged"
                    ValueExpression="@ValueExpression"
                    @attributes="MergedAttributes" />
-}
-else
-{
-    <InputText class="@ResolvedCssClass"
-               Value="@Value"
-               ValueChanged="@ValueChanged"
-               ValueExpression="@ValueExpression"
+    }
+    else
+    {
+        <input class="@ResolvedCssClass"
+               value="@Value"
+               @onchange="OnNativeValueChanged"
                @attributes="MergedAttributes" />
+    }
 }
 
 @code {
@@ -86,5 +106,12 @@ else
 
             return merged;
         }
+    }
+
+    private async Task OnNativeValueChanged(ChangeEventArgs e)
+    {
+        Value = e.Value?.ToString();
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(Value);
     }
 }

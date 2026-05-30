@@ -219,6 +219,20 @@
     white-space: nowrap;
 }
 
+::deep .fx-rpt-subreport-link {
+    color: #0645ad;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+::deep .fx-rpt-subreport-link:hover {
+    color: #0b57d0;
+}
+
+::deep .fx-rpt-subreport-cell {
+    white-space: nowrap;
+}
+
 ::deep .fx-rpt-table tbody td {
     border-bottom: 1px solid #f0f0f0;
     padding: 1px 6px;            /* tighter rows — match VB6 line height */

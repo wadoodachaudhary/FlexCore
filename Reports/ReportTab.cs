@@ -13,6 +13,12 @@ public class ReportTab
     /// <summary>Drill-down path for this tab — empty for the main report.</summary>
     public List<DrillDownFilter> Path { get; set; } = new();
 
+    /// <summary>Source XML for a subreport tab. Empty for main/drill-down tabs.</summary>
+    public string SourceXmlPath { get; set; } = "";
+
+    /// <summary>Direct table-field filters applied to a subreport tab.</summary>
+    public List<ReportFieldFilter> FieldFilters { get; set; } = new();
+
     /// <summary>Rendered HTML pages for this tab.</summary>
     public List<string> Pages { get; set; } = new();
 

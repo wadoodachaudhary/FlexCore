@@ -1,0 +1,128 @@
+/* Fx.ControlKit.Mdi.MdiHost styles
+   Tabbed-MDI shell — left-to-right horizontal tab strip with a single
+   pane area below. Inactive panes are display:none (set inline by the
+   .razor), not removed from the DOM, so their child component state
+   survives switching. */
+
+.fx-mdi {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0; /* flex children with overflow need this */
+}
+
+.fx-mdi-tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    background: #e8e8e8;
+    border-bottom: 1px solid #b3b3b3;
+    padding: 2px 4px 0 4px;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.fx-mdi-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px 4px 10px;
+    background: #d4d4d4;
+    border: 1px solid #b3b3b3;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-size: 12px;
+    color: #333;
+    cursor: pointer;
+    user-select: none;
+    max-width: 220px;
+    white-space: nowrap;
+    transition: background 0.1s;
+}
+
+.fx-mdi-tab:hover {
+    background: #e0e0e0;
+}
+
+.fx-mdi-tab.active {
+    background: #ffffff;
+    color: #000;
+    font-weight: 500;
+    border-bottom: 1px solid #ffffff; /* "lift" into the pane */
+    margin-bottom: -1px;
+    position: relative;
+    z-index: 1;
+}
+
+.fx-mdi-tab-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}
+
+.fx-mdi-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: #777;
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.fx-mdi-tab-close:hover {
+    background: #c0392b;
+    color: #fff;
+}
+
+.fx-mdi-tab.active .fx-mdi-tab-close {
+    color: #555;
+}
+
+/* Permanent leftmost home tab. No close button, slightly tighter padding,
+   and a small right margin so it visually separates from the dynamic tabs. */
+.fx-mdi-tab-home {
+    padding: 4px 10px;
+    margin-right: 6px;
+    background: #d8e4f0;
+    border-color: #98b8d8;
+    font-weight: 500;
+}
+
+.fx-mdi-tab-home:hover {
+    background: #e6effa;
+}
+
+.fx-mdi-tab-home.active {
+    background: #ffffff;
+    border-color: #b3b3b3;
+}
+
+.fx-mdi-panes {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    background: #ffffff;
+    overflow: hidden;
+}
+
+.fx-mdi-pane {
+    height: 100%;
+    width: 100%;
+    overflow: auto;
+}
+
+.fx-mdi-empty {
+    height: 100%;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}

@@ -1,0 +1,147 @@
+@namespace Fx.ControlKit
+
+<DialogControl Visible="@Visible"
+               Header="@Header"
+               Width="@Width"
+               Height="@Height"
+               CssClass="@ResolvedCssClass"
+               CloseOnEscape="true"
+               OnClose="CancelAsync">
+    <div class="fx-wizard-control">
+        <section class="fx-wizard-header">
+            <div class="fx-wizard-heading">
+                <h2>@CurrentStep.Title</h2>
+                @if (!string.IsNullOrWhiteSpace(CurrentStep.Description))
+                {
+                    <p>@CurrentStep.Description</p>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(CurrentStep.IconCss))
+            {
+                <span class="fx-wizard-step-icon @CurrentStep.IconCss" aria-hidden="true"></span>
+            }
+        </section>
+
+        <section class="fx-wizard-body">
+            @if (StepContent is not null)
+            {
+                @StepContent(StepContext)
+            }
+        </section>
+
+        <section class="fx-wizard-footer">
+            <ButtonControl CssClass="fx-wizard-nav-btn"
+                           Disabled="@StepContext.IsFirst"
+                           OnClick="@(_ => MovePreviousAsync())">
+                &lt; Back
+            </ButtonControl>
+            <ButtonControl CssClass="fx-wizard-nav-btn primary"
+                           Disabled="@(StepContext.IsLast || !CanMoveNext)"
+                           OnClick="@(_ => MoveNextAsync())">
+                Next &gt;
+            </ButtonControl>
+            <ButtonControl CssClass="fx-wizard-nav-btn"
+                           Disabled="@(!CanFinish)"
+                           OnClick="@(_ => FinishAsync())">
+                Finish
+            </ButtonControl>
+            <ButtonControl CssClass="fx-wizard-nav-btn" OnClick="@(_ => CancelAsync())">
+                Cancel
+            </ButtonControl>
+            @if (ShowHelp)
+            {
+                <ButtonControl CssClass="fx-wizard-nav-btn"
+                               Disabled="@(!HelpRequested.HasDelegate)"
+                               OnClick="@(_ => HelpAsync())">
+                    Help
+                </ButtonControl>
+            }
+        </section>
+    </div>
+</DialogControl>
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Header { get; set; } = "Wizard";
+    [Parameter] public IReadOnlyList<WizardStepDescriptor> Steps { get; set; } = Array.Empty<WizardStepDescriptor>();
+    [Parameter] public int CurrentStepIndex { get; set; }
+    [Parameter] public EventCallback<int> CurrentStepIndexChanged { get; set; }
+    [Parameter] public bool CanMoveNext { get; set; } = true;
+    [Parameter] public bool CanFinish { get; set; } = true;
+    [Parameter] public string Width { get; set; } = "920px";
+    [Parameter] public string Height { get; set; } = "640px";
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public RenderFragment<WizardStepContext>? StepContent { get; set; }
+    [Parameter] public EventCallback FinishRequested { get; set; }
+    [Parameter] public EventCallback Cancelled { get; set; }
+    [Parameter] public EventCallback HelpRequested { get; set; }
+    [Parameter] public bool ShowHelp { get; set; } = true;
+
+    private static readonly WizardStepDescriptor EmptyStep = new() { Title = "Wizard" };
+
+    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-wizard-dialog"
+        : $"fx-wizard-dialog {CssClass}";
+
+    private int EffectiveStepIndex => Steps.Count == 0 ? 0 : Math.Clamp(CurrentStepIndex, 0, Steps.Count - 1);
+    private WizardStepDescriptor CurrentStep => Steps.Count == 0 ? EmptyStep : Steps[EffectiveStepIndex];
+
+    private WizardStepContext StepContext => new()
+    {
+        StepIndex = EffectiveStepIndex,
+        Step = CurrentStep,
+        IsFirst = EffectiveStepIndex == 0,
+        IsLast = Steps.Count == 0 || EffectiveStepIndex >= Steps.Count - 1
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (CurrentStepIndex != EffectiveStepIndex && CurrentStepIndexChanged.HasDelegate)
+            await CurrentStepIndexChanged.InvokeAsync(EffectiveStepIndex);
+    }
+
+    private async Task MovePreviousAsync()
+    {
+        if (StepContext.IsFirst)
+            return;
+
+        await SetStepIndexAsync(EffectiveStepIndex - 1);
+    }
+
+    private async Task MoveNextAsync()
+    {
+        if (StepContext.IsLast || !CanMoveNext)
+            return;
+
+        await SetStepIndexAsync(EffectiveStepIndex + 1);
+    }
+
+    private async Task SetStepIndexAsync(int index)
+    {
+        CurrentStepIndex = Math.Clamp(index, 0, Math.Max(0, Steps.Count - 1));
+        if (CurrentStepIndexChanged.HasDelegate)
+            await CurrentStepIndexChanged.InvokeAsync(CurrentStepIndex);
+    }
+
+    private async Task FinishAsync()
+    {
+        if (CanFinish && FinishRequested.HasDelegate)
+            await FinishRequested.InvokeAsync();
+    }
+
+    private async Task CancelAsync()
+    {
+        if (Cancelled.HasDelegate)
+            await Cancelled.InvokeAsync();
+
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task HelpAsync()
+    {
+        if (HelpRequested.HasDelegate)
+            await HelpRequested.InvokeAsync();
+    }
+}

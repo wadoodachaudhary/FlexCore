@@ -3,12 +3,17 @@
 @using Microsoft.AspNetCore.Components.Forms
 
 <div class="fx-rd">
-    <div class="fx-rd-toolbar">
+    <ToolbarControl CssClass="fx-rd-toolbar">
+        <ToolbarButtonControl CssClass="fx-rd-tool-button fx-rd-tool-new" OnClick="OpenNewWizardAsync">
+            <span class="fx-rd-tool-icon new"></span>
+            <span>New</span>
+        </ToolbarButtonControl>
+        <span class="fx-rd-separator"></span>
         @if (AllowFileOpen)
         {
-            <label class="fx-rd-file-button" title="Open a Crystal Reports XML export">
-                Open XML
-                <InputFile OnChange="OpenFileAsync" accept=".xml,text/xml,application/xml" />
+            <label class="fx-rd-file-button" title="Open a Crystal Reports XML export or convert a Crystal RPT file">
+                Open
+                <InputFile OnChange="OpenFileAsync" accept=".xml,.rpt,text/xml,application/xml" />
             </label>
         }
         <button type="button" @onclick="ReloadAsync" disabled="@(!CanReload)">Reload</button>
@@ -21,13 +26,14 @@
         <button type="button" @onclick="ExportXmlAsync">Apply XML</button>
         <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
         <span class="fx-rd-status @(_document.IsDirty ? "dirty" : "")">@StatusText</span>
-    </div>
+    </ToolbarControl>
 
     <div class="fx-rd-shell">
         <main class="fx-rd-stage-wrap">
             <div class="fx-rd-document-tabs">
-                <button type="button" class="active">Design</button>
+                <button type="button" class="@(IsDesignDocumentActive ? "active" : "")" @onclick="() => ShowDocumentTab(DesignDocumentTab)">Design</button>
                 <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
+                <button type="button" class="@(IsCodeDocumentActive ? "active" : "")" @onclick="() => ShowDocumentTab(CodeDocumentTab)">Code</button>
                 <div class="fx-rd-document-title">
                     <strong>@_document.Title</strong>
                     <span>@_document.SourceName</span>
@@ -35,12 +41,24 @@
             </div>
 
             <div class="fx-rd-workbench">
-                <ReportDesignerCanvasControl Document="@_document"
-                                             SelectedSection="@_selectedSection"
-                                             SelectedElement="@_selectedElement"
-                                             SectionSelected="SelectSection"
-                                             ElementSelected="SelectElement"
-                                             SectionResized="OnSectionResizedAsync" />
+                @if (IsCodeDocumentActive)
+                {
+                    <XmlViewerControl Xml="@CurrentXml"
+                                      Title="XML"
+                                      OutlineTitle="Report XML"
+                                      CssClass="fx-rd-xml-viewer"
+                                      Style="flex:1;min-height:0;"
+                                      AutoExpandDepth="2" />
+                }
+                else
+                {
+                    <ReportDesignerCanvasControl Document="@_document"
+                                                 SelectedSection="@_selectedSection"
+                                                 SelectedElement="@_selectedElement"
+                                                 SectionSelected="SelectSection"
+                                                 ElementSelected="SelectElement"
+                                                 SectionResized="OnSectionResizedAsync" />
+                }
             </div>
         </main>
 
@@ -75,6 +93,11 @@
             </ExplorerControl>
         </aside>
     </div>
+
+    <ReportCreationWizardControl Visible="@_showNewReportWizard"
+                                 VisibleChanged="OnNewReportWizardVisibleChanged"
+                                 DataSources="@WizardDataSources"
+                                 Finished="CreateReportFromWizardAsync" />
 </div>
 
 @code {
@@ -84,8 +107,10 @@
     [Parameter] public EventCallback<ReportDesignerDocument> DocumentChanged { get; set; }
     [Parameter] public EventCallback<string> XmlChanged { get; set; }
     [Parameter] public EventCallback<ReportDesignerDocument> PreviewRequested { get; set; }
+    [Parameter] public IReadOnlyList<ReportDesignerDataTable>? AvailableDataSources { get; set; }
     [Parameter] public bool AllowFileOpen { get; set; } = true;
     [Parameter] public long MaxXmlBytes { get; set; } = 20 * 1024 * 1024;
+    [Parameter] public long MaxRptBytes { get; set; } = 64L * 1024 * 1024;
 
     private ReportDesignerDocument _document = ReportDesignerDocument.CreateBlank();
     private ReportDesignerDocument? _lastDocument;
@@ -98,7 +123,11 @@
     private List<TreeNode> _fieldExplorerNodes = new();
     private List<TreeNode> _reportExplorerNodes = new();
     private TreeNode? _selectedExplorerNode;
+    private bool _showNewReportWizard;
+    private string _activeDocumentTab = DesignDocumentTab;
 
+    private const string DesignDocumentTab = "design";
+    private const string CodeDocumentTab = "code";
     private const string FieldExplorerTab = "fields";
     private const string ReportExplorerTab = "report";
     private const int SectionRailWidthPx = 126;
@@ -135,9 +164,13 @@
 
     private bool CanReload => !string.IsNullOrWhiteSpace(XmlPath) || !string.IsNullOrWhiteSpace(XmlContent) || Document is not null;
     private string StatusText => _document.IsDirty ? "Unsaved designer changes" : _status;
+    private bool IsDesignDocumentActive => string.Equals(_activeDocumentTab, DesignDocumentTab, StringComparison.Ordinal);
+    private bool IsCodeDocumentActive => string.Equals(_activeDocumentTab, CodeDocumentTab, StringComparison.Ordinal);
     private bool IsFieldExplorerActive => string.Equals(_activeExplorerTab, FieldExplorerTab, StringComparison.Ordinal);
     private string ActiveExplorerTitle => IsFieldExplorerActive ? "Field Explorer" : "Report Explorer";
     private List<TreeNode> ActiveExplorerNodes => IsFieldExplorerActive ? _fieldExplorerNodes : _reportExplorerNodes;
+    private IReadOnlyList<ReportDesignerDataTable> WizardDataSources => GetWizardDataSources();
+    private string CurrentXml => GetCurrentXml();
 
     protected override async Task OnParametersSetAsync()
     {
@@ -166,7 +199,15 @@
     {
         if (!File.Exists(xmlPath))
         {
-            _status = $"XML file not found: {xmlPath}";
+            _status = $"Report file not found: {xmlPath}";
+            return;
+        }
+
+        if (xmlPath.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
+        {
+            var convertedPath = await ConvertRptPathAsync(xmlPath);
+            if (!string.IsNullOrWhiteSpace(convertedPath))
+                await LoadPathAsync(convertedPath);
             return;
         }
 
@@ -231,13 +272,121 @@
             await LoadPathAsync(XmlPath!);
     }
 
+    private Task OpenNewWizardAsync()
+    {
+        _showNewReportWizard = true;
+        return Task.CompletedTask;
+    }
+
+    private Task OnNewReportWizardVisibleChanged(bool visible)
+    {
+        _showNewReportWizard = visible;
+        return Task.CompletedTask;
+    }
+
+    private async Task CreateReportFromWizardAsync(ReportCreationWizardResult wizard)
+    {
+        SetDocument(ReportDesignerDocument.CreateFromWizard(wizard));
+        _lastXmlPath = null;
+        _lastXmlContent = null;
+        _lastDocument = null;
+        _status = "New report created.";
+        _activeExplorerTab = FieldExplorerTab;
+        await NotifyDocumentChangedAsync(markDirty: true);
+    }
+
     private async Task OpenFileAsync(InputFileChangeEventArgs args)
     {
         var file = args.File;
+        if (file.Name.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
+        {
+            await OpenRptFileAsync(file);
+            return;
+        }
+
         await using var stream = file.OpenReadStream(MaxXmlBytes);
         using var reader = new StreamReader(stream);
         var xml = await reader.ReadToEndAsync();
         await LoadXmlAsync(xml, file.Name);
+    }
+
+    private async Task OpenRptFileAsync(IBrowserFile file)
+    {
+        if (OperatingSystem.IsBrowser())
+        {
+            _status = "Crystal RPT conversion requires server-side .NET.";
+            return;
+        }
+
+        var tempDirectory = Path.Combine(Path.GetTempPath(), $"fx-rpt-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDirectory);
+        try
+        {
+            var tempRptPath = Path.Combine(tempDirectory, Path.GetFileName(file.Name));
+            await using (var source = file.OpenReadStream(MaxRptBytes))
+            await using (var target = File.Create(tempRptPath))
+            {
+                await source.CopyToAsync(target);
+            }
+
+            var xmlPath = await ConvertRptPathAsync(tempRptPath);
+            if (string.IsNullOrWhiteSpace(xmlPath))
+                return;
+
+            var xml = await File.ReadAllTextAsync(xmlPath);
+            await LoadXmlAsync(xml, Path.ChangeExtension(file.Name, ".xml"), xmlPath);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(tempDirectory))
+                    Directory.Delete(tempDirectory, recursive: true);
+            }
+            catch
+            {
+                // Temporary upload cleanup should not replace the conversion result.
+            }
+        }
+    }
+
+    private async Task<string?> ConvertRptPathAsync(string rptPath)
+    {
+        if (OperatingSystem.IsBrowser())
+        {
+            _status = "Crystal RPT conversion requires server-side .NET.";
+            return null;
+        }
+
+        try
+        {
+            var outputPath = GetDefaultXmlOutputPath(rptPath);
+            var result = await CrystalRptToXml.ConvertAsync(
+                rptPath,
+                outputPath,
+                new CrystalRptConversionOptions(ExtractSubreports: true));
+
+            _status = $"Converted {Path.GetFileName(rptPath)}.";
+            return result.ReportXmlPath;
+        }
+        catch (Exception ex)
+        {
+            _status = $"Could not convert RPT: {ex.Message}";
+            return null;
+        }
+    }
+
+    private static string GetDefaultXmlOutputPath(string rptPath)
+    {
+        var dir = Path.GetDirectoryName(rptPath) ?? "";
+        var baseName = Path.GetFileNameWithoutExtension(rptPath);
+        if (!string.IsNullOrEmpty(dir) &&
+            Path.GetFileName(dir).Equals("rpt", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.Combine(Path.GetDirectoryName(dir) ?? "", "xml", baseName + ".xml");
+        }
+
+        return Path.Combine(dir, baseName + ".xml");
     }
 
     private void SetDocument(ReportDesignerDocument document)
@@ -247,6 +396,7 @@
         _selectedSection = _document.Sections.FirstOrDefault();
         _selectedElement = null;
         _status = _document.StatusMessage;
+        _activeDocumentTab = DesignDocumentTab;
         RebuildExplorerNodes();
     }
 
@@ -273,6 +423,25 @@
     {
         _activeExplorerTab = tab;
         UpdateExplorerSelection();
+    }
+
+    private void ShowDocumentTab(string tab)
+    {
+        _activeDocumentTab = string.Equals(tab, CodeDocumentTab, StringComparison.Ordinal)
+            ? CodeDocumentTab
+            : DesignDocumentTab;
+    }
+
+    private string GetCurrentXml()
+    {
+        try
+        {
+            return ReportDesignerXmlSerializer.ToXml(_document);
+        }
+        catch (Exception ex)
+        {
+            return $"<!-- Could not generate XML: {ex.Message} -->";
+        }
     }
 
     private async Task OnSectionResizedAsync(ReportDesignerSection section)
@@ -595,6 +764,34 @@
             .Where(field => !field.IsFormula && !string.IsNullOrWhiteSpace(field.Table))
             .GroupBy(field => field.Table)
             .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private IReadOnlyList<ReportDesignerDataTable> GetWizardDataSources()
+    {
+        if (AvailableDataSources is { Count: > 0 })
+            return AvailableDataSources;
+
+        if (_document.DataSources.Count > 0)
+            return _document.DataSources;
+
+        return _document.Fields
+            .Where(field => !field.IsFormula && !string.IsNullOrWhiteSpace(field.Table))
+            .GroupBy(field => field.Table)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new ReportDesignerDataTable
+            {
+                Name = group.Key,
+                Fields = group.Select(field => new ReportDesignerField
+                {
+                    Name = field.Name,
+                    Table = field.Table,
+                    LongName = field.LongName,
+                    Formula = field.Formula,
+                    Type = field.Type,
+                    IsFormula = field.IsFormula
+                }).ToList()
+            })
+            .ToList();
     }
 
     private static bool IsTableExpandedByDefault(IGrouping<string, ReportDesignerField> tableGroup)

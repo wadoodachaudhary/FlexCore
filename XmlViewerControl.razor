@@ -1,0 +1,409 @@
+@namespace Fx.ControlKit
+
+@using System.Net
+@using System.Text
+@using System.Xml
+@using System.Xml.Linq
+
+<div class="@RootCssClass" style="@Style">
+    @if (ShowOutline)
+    {
+        <aside class="fx-xmlv-outline">
+            <div class="fx-xmlv-outline-title">@OutlineTitle</div>
+            @if (_nodes.Count == 0)
+            {
+                <div class="fx-xmlv-outline-empty">No XML tree.</div>
+            }
+            else
+            {
+                <TreeViewControl Nodes="@_nodes"
+                                 SelectedNode="@_selectedNode"
+                                 SelectedNodeChanged="OnSelectedNodeChanged"
+                                 OnNodeClick="OnNodeClick"
+                                 ShowIcons="true"
+                                 UseVb6TreeStyle="@UseVb6TreeStyle"
+                                 FolderStyle="TreeFolderStyle.None"
+                                 TreeIndentPixels="14"
+                                 CssClass="fx-xmlv-tree"
+                                 Height="100%" />
+            }
+        </aside>
+    }
+
+    <section class="fx-xmlv-code-wrap">
+        <div class="fx-xmlv-header">
+            <div class="fx-xmlv-heading">
+                <span class="fx-xmlv-title">@Title</span>
+                <span class="fx-xmlv-path">@DisplayPath</span>
+            </div>
+            @if (_selectedInfo is not null)
+            {
+                <ButtonControl BareStyle="true" CssClass="fx-xmlv-clear" OnClick="ClearSelectionAsync">
+                    Full XML
+                </ButtonControl>
+            }
+        </div>
+
+        @if (!string.IsNullOrWhiteSpace(_parseError))
+        {
+            <div class="fx-xmlv-error">@_parseError</div>
+        }
+
+        @if (string.IsNullOrWhiteSpace(_displayXml))
+        {
+            <div class="fx-xmlv-empty">@EmptyText</div>
+        }
+        else
+        {
+            <pre class="fx-xmlv-code" tabindex="0"><code>@((MarkupString)_highlightedXml)</code></pre>
+        }
+    </section>
+</div>
+
+@code {
+    [Parameter] public string? Xml { get; set; }
+    [Parameter] public string Title { get; set; } = "XML";
+    [Parameter] public string OutlineTitle { get; set; } = "XML Tree";
+    [Parameter] public string EmptyText { get; set; } = "No XML to display.";
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+    [Parameter] public bool ShowOutline { get; set; } = true;
+    [Parameter] public bool UseVb6TreeStyle { get; set; } = true;
+    [Parameter] public int AutoExpandDepth { get; set; } = 2;
+
+    private readonly List<TreeNode> _nodes = new();
+    private TreeNode? _selectedNode;
+    private XmlViewerNodeInfo? _selectedInfo;
+    private string _sourceXml = "";
+    private string _displayXml = "";
+    private string _highlightedXml = "";
+    private string? _parseError;
+
+    private string RootCssClass => string.IsNullOrWhiteSpace(CssClass)
+        ? "fx-xmlv"
+        : $"fx-xmlv {CssClass.Trim()}";
+
+    private string DisplayPath => _selectedInfo is null
+        ? "Full document"
+        : _selectedInfo.LineNumber > 0
+            ? $"{_selectedInfo.Path}  line {_selectedInfo.LineNumber}"
+            : _selectedInfo.Path;
+
+    protected override void OnParametersSet()
+    {
+        var nextXml = Xml ?? "";
+        if (string.Equals(nextXml, _sourceXml, StringComparison.Ordinal))
+            return;
+
+        _sourceXml = nextXml;
+        _selectedNode = null;
+        _selectedInfo = null;
+        RebuildTree();
+        SetDisplayXml(_sourceXml);
+    }
+
+    private Task OnSelectedNodeChanged(TreeNode node)
+    {
+        _selectedNode = node;
+        return Task.CompletedTask;
+    }
+
+    private Task OnNodeClick(TreeNode node)
+    {
+        _selectedNode = node;
+        _selectedInfo = node.Tag as XmlViewerNodeInfo;
+        SetDisplayXml(_selectedInfo?.Element.ToString(SaveOptions.None) ?? _sourceXml);
+        return Task.CompletedTask;
+    }
+
+    private Task ClearSelectionAsync(MouseEventArgs args)
+    {
+        if (_selectedNode is not null)
+            _selectedNode.IsSelected = false;
+
+        _selectedNode = null;
+        _selectedInfo = null;
+        SetDisplayXml(_sourceXml);
+        return Task.CompletedTask;
+    }
+
+    private void RebuildTree()
+    {
+        _nodes.Clear();
+        _parseError = null;
+
+        if (string.IsNullOrWhiteSpace(_sourceXml))
+            return;
+
+        try
+        {
+            var document = XDocument.Parse(_sourceXml, LoadOptions.PreserveWhitespace | LoadOptions.SetLineInfo);
+            if (document.Root is not null)
+                _nodes.Add(BuildElementNode(document.Root, "/" + FormatName(document.Root.Name), depth: 0));
+        }
+        catch (Exception ex) when (ex is XmlException or InvalidOperationException)
+        {
+            _parseError = $"XML outline unavailable: {ex.Message}";
+        }
+    }
+
+    private TreeNode BuildElementNode(XElement element, string path, int depth)
+    {
+        var lineNumber = GetLineNumber(element);
+        var info = new XmlViewerNodeInfo(element, path, lineNumber);
+        var node = new TreeNode
+        {
+            Text = BuildElementLabel(element, lineNumber),
+            IconCss = "fx-xmlv-icon-element",
+            ExpandedIconCss = "fx-xmlv-icon-element-open",
+            IsExpanded = depth < Math.Max(0, AutoExpandDepth),
+            Tag = info
+        };
+
+        var siblingCounters = new Dictionary<XName, int>();
+        var siblingTotals = element.Elements()
+            .GroupBy(child => child.Name)
+            .ToDictionary(group => group.Key, group => group.Count());
+
+        foreach (var child in element.Elements())
+        {
+            siblingCounters.TryGetValue(child.Name, out var index);
+            index++;
+            siblingCounters[child.Name] = index;
+
+            var childName = FormatName(child.Name);
+            var segment = siblingTotals.TryGetValue(child.Name, out var total) && total > 1
+                ? $"{childName}[{index}]"
+                : childName;
+
+            node.Children.Add(BuildElementNode(child, $"{path}/{segment}", depth + 1));
+        }
+
+        return node;
+    }
+
+    private static string BuildElementLabel(XElement element, int lineNumber)
+    {
+        var label = FormatName(element.Name);
+        var descriptor = GetDescriptorAttribute(element);
+        if (descriptor is not null)
+            label += $"  {descriptor.Name.LocalName}=\"{Truncate(descriptor.Value, 32)}\"";
+        else if (!element.HasElements)
+        {
+            var text = NormalizeText(element.Value);
+            if (!string.IsNullOrWhiteSpace(text))
+                label += $"  {Truncate(text, 32)}";
+        }
+
+        if (lineNumber > 0)
+            label += $"  :{lineNumber}";
+
+        return label;
+    }
+
+    private static XAttribute? GetDescriptorAttribute(XElement element)
+    {
+        var preferred = new[] { "Name", "name", "Id", "ID", "id", "Kind", "Type", "FieldName" };
+        foreach (var name in preferred)
+        {
+            var attr = element.Attributes().FirstOrDefault(candidate =>
+                string.Equals(candidate.Name.LocalName, name, StringComparison.Ordinal));
+            if (attr is not null && !string.IsNullOrWhiteSpace(attr.Value))
+                return attr;
+        }
+
+        return element.Attributes().FirstOrDefault(attr => !string.IsNullOrWhiteSpace(attr.Value));
+    }
+
+    private static int GetLineNumber(XElement element)
+    {
+        return element is IXmlLineInfo lineInfo && lineInfo.HasLineInfo()
+            ? lineInfo.LineNumber
+            : 0;
+    }
+
+    private static string FormatName(XName name)
+    {
+        return string.IsNullOrWhiteSpace(name.NamespaceName)
+            ? name.LocalName
+            : name.LocalName;
+    }
+
+    private static string NormalizeText(string value)
+    {
+        return string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+            return value;
+
+        return value[..Math.Max(0, maxLength - 3)] + "...";
+    }
+
+    private void SetDisplayXml(string value)
+    {
+        _displayXml = value;
+        _highlightedXml = HighlightXml(value);
+    }
+
+    private static string HighlightXml(string xml)
+    {
+        if (string.IsNullOrEmpty(xml))
+            return "";
+
+        var sb = new StringBuilder(xml.Length * 2);
+        var index = 0;
+        while (index < xml.Length)
+        {
+            if (xml[index] == '<')
+            {
+                if (StartsWith(xml, index, "<!--"))
+                {
+                    var end = xml.IndexOf("-->", index + 4, StringComparison.Ordinal);
+                    var length = end >= 0 ? end - index + 3 : xml.Length - index;
+                    AppendSpan(sb, "fx-xmlv-comment", xml.Substring(index, length));
+                    index += length;
+                    continue;
+                }
+
+                if (StartsWith(xml, index, "<![CDATA["))
+                {
+                    var end = xml.IndexOf("]]>", index + 9, StringComparison.Ordinal);
+                    var length = end >= 0 ? end - index + 3 : xml.Length - index;
+                    AppendSpan(sb, "fx-xmlv-cdata", xml.Substring(index, length));
+                    index += length;
+                    continue;
+                }
+
+                if (StartsWith(xml, index, "<?"))
+                {
+                    var end = FindTagEnd(xml, index);
+                    AppendSpan(sb, "fx-xmlv-pi", xml.Substring(index, end - index + 1));
+                    index = end + 1;
+                    continue;
+                }
+
+                var tagEnd = FindTagEnd(xml, index);
+                AppendHighlightedTag(sb, xml.Substring(index, tagEnd - index + 1));
+                index = tagEnd + 1;
+            }
+            else
+            {
+                var nextTag = xml.IndexOf('<', index);
+                if (nextTag < 0)
+                    nextTag = xml.Length;
+
+                AppendSpan(sb, "fx-xmlv-text", xml.Substring(index, nextTag - index));
+                index = nextTag;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static void AppendHighlightedTag(StringBuilder sb, string tag)
+    {
+        var index = 0;
+        var afterName = false;
+
+        while (index < tag.Length)
+        {
+            var ch = tag[index];
+            if (char.IsWhiteSpace(ch))
+            {
+                sb.Append(ch);
+                index++;
+                continue;
+            }
+
+            if (ch == '"' || ch == '\'')
+            {
+                var end = FindQuotedValueEnd(tag, index);
+                AppendSpan(sb, "fx-xmlv-value", tag.Substring(index, end - index + 1));
+                index = end + 1;
+                continue;
+            }
+
+            if (IsXmlNameChar(ch))
+            {
+                var end = index + 1;
+                while (end < tag.Length && IsXmlNameChar(tag[end]))
+                    end++;
+
+                var css = afterName ? "fx-xmlv-attr" : "fx-xmlv-name";
+                AppendSpan(sb, css, tag.Substring(index, end - index));
+                afterName = true;
+                index = end;
+                continue;
+            }
+
+            AppendSpan(sb, "fx-xmlv-punc", ch.ToString());
+            index++;
+        }
+    }
+
+    private static int FindTagEnd(string xml, int start)
+    {
+        var quote = '\0';
+        for (var index = start + 1; index < xml.Length; index++)
+        {
+            var ch = xml[index];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+                continue;
+            }
+
+            if (ch == '"' || ch == '\'')
+            {
+                quote = ch;
+                continue;
+            }
+
+            if (ch == '>')
+                return index;
+        }
+
+        return xml.Length - 1;
+    }
+
+    private static int FindQuotedValueEnd(string value, int start)
+    {
+        var quote = value[start];
+        for (var index = start + 1; index < value.Length; index++)
+        {
+            if (value[index] == quote)
+                return index;
+        }
+
+        return value.Length - 1;
+    }
+
+    private static bool StartsWith(string value, int start, string match)
+    {
+        return start + match.Length <= value.Length
+            && string.CompareOrdinal(value, start, match, 0, match.Length) == 0;
+    }
+
+    private static bool IsXmlNameChar(char ch)
+    {
+        return char.IsLetterOrDigit(ch) || ch is '_' or '-' or ':' or '.';
+    }
+
+    private static void AppendSpan(StringBuilder sb, string cssClass, string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        sb.Append("<span class=\"");
+        sb.Append(cssClass);
+        sb.Append("\">");
+        sb.Append(WebUtility.HtmlEncode(text));
+        sb.Append("</span>");
+    }
+
+    private sealed record XmlViewerNodeInfo(XElement Element, string Path, int LineNumber);
+}

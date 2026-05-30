@@ -1,0 +1,18 @@
+@namespace Fx.ControlKit.Mdi
+@using Microsoft.AspNetCore.Components
+
+<DynamicComponent @key="Window.Id"
+                  @ref="_component"
+                  Type="Window.PageType"
+                  Parameters="Window.Parameters" />
+
+@code {
+    [Parameter, EditorRequired] public MdiWindow Window { get; set; } = default!;
+
+    private DynamicComponent? _component;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        Window.ComponentInstance = _component?.Instance;
+    }
+}
