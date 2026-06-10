@@ -59,3 +59,7 @@ coverlet.runsettings
 coverage*.json
 coverage*.xml
 coverage*.info
+
+## AI / editor tooling
+.claude/
+.codex-backups/
