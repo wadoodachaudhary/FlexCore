@@ -17,9 +17,9 @@ public static class HfGridIconStyles
     /// <summary>Style for an active "+" / "−" expand/collapse box.</summary>
     public const string PlusMinus =
         "display:inline-flex;align-items:center;justify-content:center;" +
-        "width:14px;height:14px;font-size:11px;line-height:1;" +
-        "border:1px solid #000;background:#fff;color:#000;" +
-        "font-weight:700;border-radius:2px;box-sizing:border-box;" +
+        "width:13px;height:13px;font-size:11px;line-height:1;" +
+        "border:1px solid #8a8a8a;background:#fff;color:#555;" +
+        "font-weight:400;border-radius:2px;box-sizing:border-box;" +
         "margin-right:6px;flex-shrink:0;user-select:none;cursor:pointer;";
 
     /// <summary>Invisible spacer of the same width — keeps leaf cells aligned with parent siblings.</summary>

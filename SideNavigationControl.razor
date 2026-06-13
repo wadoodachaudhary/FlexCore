@@ -1,0 +1,72 @@
+@namespace Fx.ControlKit
+
+@* VB6-style side navigation panel (the classic "Select a page" table-of-contents seen on
+   HomeFront's System Settings). A titled, bordered, scrollable list of selectable pages,
+   each with an optional icon. Docks Left (default) or Right — the accent border and inner
+   padding flip so the panel always faces the content area. General-purpose: the caller
+   supplies the items, icons and selection; the control owns only the look + behaviour. *@
+<div class="fx-sidenav @(Position == SideNavPosition.Right ? "fx-sidenav-right" : "")"
+     style="@WidthStyle">
+    @if (!string.IsNullOrEmpty(Title))
+    {
+        <div class="fx-sidenav-header">@Title</div>
+    }
+    <div class="fx-sidenav-container">
+        @if (!string.IsNullOrEmpty(SubHeader))
+        {
+            <div class="fx-sidenav-subheader">@SubHeader</div>
+        }
+        <div class="fx-sidenav-list">
+            @if (Items != null)
+            {
+                foreach (var item in Items)
+                {
+                    var selected = Equals(item.Key, SelectedKey);
+                    <div class="fx-sidenav-item @(selected ? "selected" : "")"
+                         title="@item.Title"
+                         @onclick="() => OnItemClick(item)">
+                        @if (!string.IsNullOrEmpty(item.IconUrl))
+                        {
+                            <img class="fx-sidenav-icon" src="@item.IconUrl" alt="" />
+                        }
+                        <span class="fx-sidenav-text">@item.Text</span>
+                    </div>
+                }
+            }
+            @ChildContent
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Caption shown above the bordered box (e.g. "System Settings").</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>Blue sub-header shown inside the box (e.g. "Select a page").</summary>
+    [Parameter] public string? SubHeader { get; set; }
+
+    /// <summary>The selectable pages.</summary>
+    [Parameter] public IEnumerable<SideNavigationItem>? Items { get; set; }
+
+    /// <summary>Key of the currently-selected item. Supports @bind-SelectedKey.</summary>
+    [Parameter] public object? SelectedKey { get; set; }
+    [Parameter] public EventCallback<object?> SelectedKeyChanged { get; set; }
+
+    /// <summary>Which side the panel docks to (Left default / Right).</summary>
+    [Parameter] public SideNavPosition Position { get; set; } = SideNavPosition.Left;
+
+    /// <summary>Panel width override (e.g. "250px"); defaults to the VB6 width.</summary>
+    [Parameter] public string? Width { get; set; }
+
+    /// <summary>Optional extra content appended below the items.</summary>
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string WidthStyle => string.IsNullOrWhiteSpace(Width) ? "" : $"width:{Width};min-width:{Width};";
+
+    private async Task OnItemClick(SideNavigationItem item)
+    {
+        SelectedKey = item.Key;
+        if (SelectedKeyChanged.HasDelegate)
+            await SelectedKeyChanged.InvokeAsync(item.Key);
+    }
+}

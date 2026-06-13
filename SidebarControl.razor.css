@@ -1,0 +1,212 @@
+/* Layout & Shell */
+.command-panel {
+    position: relative;
+    width: 214px;
+    min-width: 40px;
+    background: #B6B8CA;
+    border-right: 1px solid #787892;
+    display: flex;
+    flex-direction: column;
+    overflow: visible; /* Allow floating close button to overlap the border */
+    transition: width 0.2s;
+    box-sizing: border-box;
+}
+
+.command-panel.collapsed {
+    width: 40px;
+    min-width: 40px;
+    overflow: hidden;
+}
+
+.command-panel.collapsed .panel-toolbar {
+    flex-direction: column;
+    align-items: center;
+    padding: 4px 2px;
+}
+
+/* Panel Toolbar */
+.panel-toolbar {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    background: #ffffff;
+    border-bottom: 1px solid #787892;
+    gap: 2px;
+}
+
+.panel-toolbar button {
+    padding: 2px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.panel-toolbar button:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.panel-toolbar button img {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+/* Explorer Bar (Accordion Mode) */
+.explorer-bar {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 8px 6px;
+}
+
+.explorer-section {
+    margin-bottom: 12px; /* Gap with grey background between cards */
+    border: none;
+    border-radius: 0;
+    background: #ffffff;
+}
+
+.explorer-section-header {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start; /* Left-align the section headers */
+    padding: 3px 8px;
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-weight: bold;
+    font-size: 12.5px;
+    cursor: pointer;
+    border-radius: 0;
+    user-select: none;
+    text-align: left; /* Left-align the text */
+}
+
+/* Active/selected section: Grey background with white text */
+.explorer-section.active .explorer-section-header {
+    background: #787892;
+    color: #EAFEFE;
+    border-bottom: none; /* No divider line between header and contents */
+}
+
+.explorer-section.active .explorer-section-header:hover {
+    background: #6a6a82;
+}
+
+/* Inactive/unselected sections: White background with blue text */
+.explorer-section:not(.active) .explorer-section-header {
+    background: #FEFFFD;
+    color: #2874C0;
+    border-bottom: none; /* No divider line between header and contents */
+}
+
+.explorer-section:not(.active) .explorer-section-header:hover {
+    background: #f4f5f8;
+}
+
+.explorer-section-body {
+    padding: 2px 0;
+    background: #ffffff;
+    --fx-tree-bg: #ffffff;
+    --fx-tree-color: #2672C0;
+    --fx-tree-vb6-color: #2672C0;
+    --fx-tree-vb6-selected-bg: #316AC5;
+    --fx-tree-vb6-selected-color: #ffffff;
+    --fx-tree-connector-color: #B6B8CA;
+}
+
+.explorer-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    min-height: 20px;
+    cursor: pointer;
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
+    color: #2672C0;
+    background: transparent;
+    transition: none;
+    user-select: none;
+}
+
+.explorer-item:hover {
+    background: #316AC5;
+    color: #ffffff !important;
+}
+
+.explorer-item.bold-item {
+    font-weight: bold;
+}
+
+.explorer-item.red-item {
+    color: #ff0000;
+    font-weight: bold;
+}
+
+.explorer-item .item-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 12px;
+    font-size: 11px;
+    line-height: 1;
+    flex-shrink: 0;
+    text-align: center;
+}
+
+/* Tree Mode specific styling inside cards */
+.explorer-section-body ::deep .fx-treeview {
+    border: none;
+    background: transparent !important;
+    padding: 0;
+}
+
+.explorer-section-body ::deep .fx-treeview-node {
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
+    color: #2672C0 !important;
+    background: transparent !important;
+    min-height: 20px;
+    padding: 2px 8px;
+    margin: 0;
+}
+
+.explorer-section-body ::deep .fx-treeview-node:hover,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:hover {
+    background: #316AC5 !important;
+    color: #ffffff !important;
+}
+
+.explorer-section-body ::deep .fx-treeview-node:hover .fx-treeview-text,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:hover .fx-treeview-text {
+    color: #ffffff !important;
+}
+
+.explorer-section-body ::deep .fx-treeview-node-selected,
+.explorer-section-body ::deep .fx-treeview-node-selected:hover,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected:hover {
+    background: #316AC5 !important;
+    color: #ffffff !important;
+}
+
+.explorer-section-body ::deep .fx-treeview-node-selected .fx-treeview-text,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected .fx-treeview-text {
+    color: #ffffff !important;
+}
+
+/* Make parent/branch nodes look like section headers or custom text in the tree */
+.explorer-section-body ::deep .fx-treeview-branch {
+    font-weight: bold;
+    color: #111111;
+}
+
+/* Dotted lines for connectors in tree view on white background */
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::before,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::after {
+    border-color: #b6b8ca !important;
+}

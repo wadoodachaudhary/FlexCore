@@ -130,6 +130,13 @@ public enum GroupExpandIconStyle
     Triangle
 }
 
+public enum TreeGridHeaderIconKind
+{
+    None,
+    ExpandAll,
+    CollapseAll
+}
+
 public enum AggregateType
 {
     Sum,

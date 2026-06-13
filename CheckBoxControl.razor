@@ -4,6 +4,14 @@
     <input type="checkbox"
            checked="@Checked"
            disabled="@Disabled"
+           tabindex="@TabIndex"
+           @onmousedown="OnMouseDown"
+           @onfocus="OnFocus"
+           @onkeydown="OnKeyDown"
+           @onclick:stopPropagation="StopClickPropagation"
+           @onmousedown:stopPropagation="StopMouseDownPropagation"
+           @onkeydown:stopPropagation="StopKeyDownPropagation"
+           @onkeydown:preventDefault="PreventKeyDownDefault"
            @onchange="OnCheckedChanged" />
     @if (!string.IsNullOrEmpty(Label))
     {
@@ -17,6 +25,14 @@
     [Parameter] public string? Label { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public int? TabIndex { get; set; }
+    [Parameter] public EventCallback<MouseEventArgs> OnMouseDown { get; set; }
+    [Parameter] public EventCallback<FocusEventArgs> OnFocus { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
+    [Parameter] public bool StopClickPropagation { get; set; }
+    [Parameter] public bool StopMouseDownPropagation { get; set; }
+    [Parameter] public bool StopKeyDownPropagation { get; set; }
+    [Parameter] public bool PreventKeyDownDefault { get; set; }
 
     private async Task OnCheckedChanged(ChangeEventArgs e)
     {

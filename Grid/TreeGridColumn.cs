@@ -29,6 +29,13 @@ public class TreeGridColumn : ComponentBase
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public RenderFragment<object>? Template { get; set; }
     [Parameter] public RenderFragment? HeaderTemplate { get; set; }
+    [Parameter] public TreeGridHeaderIconKind HeaderIconKind { get; set; } = TreeGridHeaderIconKind.None;
+    [Parameter] public string? HeaderIconSrc { get; set; }
+    [Parameter] public string? HeaderIconAlt { get; set; }
+    [Parameter] public string? HeaderIconTitle { get; set; }
+    [Parameter] public string? HeaderIconCssClass { get; set; }
+    [Parameter] public bool HeaderIconVisible { get; set; } = true;
+    [Parameter] public EventCallback HeaderIconClicked { get; set; }
     [Parameter] public RenderFragment<object>? EditTemplate { get; set; }
 
     public string DisplayHeader => string.IsNullOrEmpty(HeaderText) ? Field : HeaderText;

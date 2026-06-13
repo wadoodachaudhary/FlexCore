@@ -3,13 +3,14 @@
 }
 
 .fx-menu-trigger {
-    height: 28px;
+    height: 22px;
     border: 1px solid transparent;
     border-radius: 4px;
     background: transparent;
     color: #0f172a;
     padding: 0 10px;
-    font-size: 0.84rem;
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
     cursor: pointer;
 }
 
@@ -27,8 +28,9 @@
     position: absolute;
     top: calc(100% + 2px);
     left: 0;
-    min-width: 220px;
-    padding: 6px;
+    width: max-content;
+    min-width: 120px;
+    padding: 4px 0;
     border: 1px solid #d7deea;
     border-radius: 8px;
     background: #ffffff;

@@ -1,19 +1,55 @@
 @namespace Fx.ControlKit
 
-<button class="@ResolvedCssClass"
-        type="@ButtonType"
-        disabled="@Disabled"
-        title="@Title"
-        style="@Style"
-        @onclick="OnClick"
-        @onclick:stopPropagation="StopPropagation"
-        @onmousedown:preventDefault="PreventMouseDownDefault">
-    @if (!string.IsNullOrWhiteSpace(IconCss))
-    {
-        <span class="@IconCss"></span>
-    }
-    @ChildContent
-</button>
+@if (DropDownContent is null)
+{
+    @* Default button — unchanged from before (existing consumers are unaffected). *@
+    <button class="@ResolvedCssClass"
+            type="@ButtonType"
+            disabled="@Disabled"
+            title="@Title"
+            style="@Style"
+            @onclick="OnClick"
+            @onclick:stopPropagation="StopPropagation"
+            @onmousedown:preventDefault="PreventMouseDownDefault">
+        @if (!string.IsNullOrWhiteSpace(IconCss))
+        {
+            <span class="@IconCss"></span>
+        }
+        @ChildContent
+    </button>
+}
+else
+{
+    @* Optional dropdown-popup mode: when DropDownContent is supplied, clicking the button
+       toggles a popup panel beneath it (same look/feel as the ColorPickerControl dropdown).
+       Closes on click-away via a full-screen backdrop button — no JavaScript. *@
+    <span class="fx-button-dd-host">
+        <button class="@ResolvedCssClass"
+                type="@ButtonType"
+                disabled="@Disabled"
+                title="@Title"
+                style="@Style"
+                aria-haspopup="true"
+                aria-expanded="@_ddOpen"
+                @onclick="HandleDropdownClick"
+                @onclick:stopPropagation="StopPropagation"
+                @onmousedown:preventDefault="PreventMouseDownDefault">
+            @if (!string.IsNullOrWhiteSpace(IconCss))
+            {
+                <span class="@IconCss"></span>
+            }
+            @ChildContent
+        </button>
+        @if (_ddOpen && !Disabled)
+        {
+            <button type="button" class="fx-button-dd-backdrop" tabindex="-1"
+                    aria-label="Close" @onclick="CloseDropDown"></button>
+            <div class="fx-button-dd-panel @DropDownCssClass" @onclick:stopPropagation="true">
+                @DropDownContent
+            </div>
+        }
+    </span>
+}
 
 @code {
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -49,6 +85,39 @@
     /// collapses before <c>execCommand</c> fires.
     /// </summary>
     [Parameter] public bool PreventMouseDownDefault { get; set; }
+
+    /// <summary>
+    /// Optional dropdown content. When set, the button becomes a dropdown trigger:
+    /// clicking it toggles a popup panel (positioned beneath the button) that renders
+    /// this fragment. When null, the button behaves exactly as a normal button.
+    /// </summary>
+    [Parameter] public RenderFragment? DropDownContent { get; set; }
+
+    /// <summary>Extra CSS class applied to the dropdown popup panel.</summary>
+    [Parameter] public string? DropDownCssClass { get; set; }
+
+    private bool _ddOpen;
+
+    private async Task HandleDropdownClick(MouseEventArgs e)
+    {
+        if (Disabled) return;
+        if (OnClick.HasDelegate)
+            await OnClick.InvokeAsync(e);   // still fire OnClick so hosts can react
+        _ddOpen = !_ddOpen;
+    }
+
+    /// <summary>
+    /// Closes the dropdown panel. Call via <c>@ref</c> from a DropDownContent item handler
+    /// (e.g. after the user picks an item) — click-away already closes it otherwise.
+    /// </summary>
+    public void CloseDropDown()
+    {
+        if (_ddOpen)
+        {
+            _ddOpen = false;
+            StateHasChanged();
+        }
+    }
 
     private string ResolvedCssClass
     {

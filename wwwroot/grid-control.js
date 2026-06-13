@@ -43,6 +43,8 @@ const headerDragPreviewBindings = new WeakMap();
 const dragPreviewElementByDocument = new WeakMap();
 const headerDropIndicatorByContent = new WeakMap();
 const rowDragAutoScrollBindings = new WeakMap();
+const gridKeyboardTrapBindings = new WeakMap();
+const horizontalBoundaryKeyState = new WeakMap();
 const defaultHeaderReorderPipeColor = "#2b2b2b";
 const headerAutoScrollEdgePx = 56;
 const headerAutoScrollMaxPx = 24;
@@ -336,6 +338,159 @@ function isInteractiveDragSource(target) {
     return !!target?.closest?.("input, button, select, textarea, a, [contenteditable='true'], [contenteditable='']");
 }
 
+function shouldTrapGridKeyboardNavigation(gridRoot, target) {
+    const active = gridRoot.ownerDocument?.activeElement ?? null;
+    if (active === gridRoot) return true;
+    if (active instanceof Element && gridRoot.contains(active)) return true;
+    if (!target || !gridRoot.contains(target)) return false;
+    if (target === gridRoot) return true;
+    return !!target.closest?.(".fx-cell, .hf-cell, .fx-batch-input, .fx-cell-edit-btn, .fx-grid-popup-btn");
+}
+
+function isTextCaretNavigationTarget(target) {
+    if (!(target instanceof Element)) return false;
+    if (target.matches?.("textarea, [contenteditable='true'], [contenteditable='']")) return true;
+    if (!target.matches?.("input")) return false;
+
+    const type = (target.getAttribute("type") || "text").toLowerCase();
+    return !["button", "checkbox", "radio", "submit", "reset", "file", "image", "range", "color"].includes(type);
+}
+
+function readTextSelection(target) {
+    if (!isTextCaretNavigationTarget(target)) return null;
+
+    if (target.matches?.("[contenteditable='true'], [contenteditable='']")) {
+        const doc = target.ownerDocument || document;
+        const sel = doc.getSelection ? doc.getSelection() : null;
+        if (!sel || sel.rangeCount === 0 || !target.contains(sel.anchorNode) || !target.contains(sel.focusNode)) {
+            return null;
+        }
+
+        // Contenteditable cells are not used by GridControl batch editing today.
+        // Treat them as native text editors unless/until a real editor needs edge
+        // navigation support.
+        return { start: 1, end: 0, length: 0 };
+    }
+
+    if (typeof target.selectionStart !== "number" || typeof target.selectionEnd !== "number") {
+        return null;
+    }
+
+    const value = "value" in target ? (target.value || "") : "";
+    return {
+        start: target.selectionStart,
+        end: target.selectionEnd,
+        length: value.length
+    };
+}
+
+function captureHorizontalBoundaryKeyState(target, key) {
+    const selection = readTextSelection(target);
+    if (!selection || selection.start !== selection.end) {
+        horizontalBoundaryKeyState.delete(target);
+        return null;
+    }
+
+    const state = {
+        key,
+        start: selection.start,
+        end: selection.end,
+        length: selection.length,
+        time: Date.now()
+    };
+    horizontalBoundaryKeyState.set(target, state);
+    return state;
+}
+
+export function isInputCaretAtHorizontalBoundary(target, key) {
+    const selection = readTextSelection(target);
+    if (!selection) {
+        horizontalBoundaryKeyState.delete(target);
+        return false;
+    }
+
+    // A selected range should first collapse normally with ArrowLeft/Right; it
+    // should not leave the cell until the caret is a single point at the edge.
+    if (selection.start !== selection.end) {
+        horizontalBoundaryKeyState.delete(target);
+        return false;
+    }
+
+    const atLeftBoundary = key === "ArrowLeft" && selection.start <= 0;
+    const atRightBoundary = key === "ArrowRight" && selection.end >= selection.length;
+
+    if (!atLeftBoundary && !atRightBoundary) {
+        horizontalBoundaryKeyState.delete(target);
+        return false;
+    }
+
+    const keyState = horizontalBoundaryKeyState.get(target);
+    horizontalBoundaryKeyState.delete(target);
+
+    if (keyState
+        && keyState.key === key
+        && keyState.length === selection.length
+        && Date.now() - keyState.time < 1500) {
+        if (key === "ArrowLeft") return keyState.start <= 0;
+        if (key === "ArrowRight") return keyState.end >= keyState.length;
+    }
+
+    return key === "ArrowRight" ? atRightBoundary : false;
+}
+
+/**
+ * Browser navigation keys must be suppressed while focus is inside a data cell/editor;
+ * otherwise native focus traversal races Blazor Server's grid navigation and
+ * jumps to the next real DOM button/checkbox or moves the input caret instead
+ * of the grid cursor. We only trap navigation keys, not typing.
+ */
+export function registerGridKeyboardTrap(gridRoot) {
+    if (!gridRoot || gridKeyboardTrapBindings.has(gridRoot)) return;
+    const doc = gridRoot.ownerDocument || document;
+
+    const onKeyDown = (event) => {
+        const isNavigationKey =
+            event.key === "Tab" ||
+            event.key === "ArrowLeft" ||
+            event.key === "ArrowRight" ||
+            event.key === "ArrowUp" ||
+            event.key === "ArrowDown";
+        if (!isNavigationKey) return;
+        if ((event.key !== "Tab" && event.shiftKey) || event.altKey || event.ctrlKey || event.metaKey) return;
+
+        const target = event.target instanceof Element ? event.target : null;
+        if ((event.key === "ArrowLeft" || event.key === "ArrowRight")
+            && isTextCaretNavigationTarget(target)) {
+            const keyState = captureHorizontalBoundaryKeyState(target, event.key);
+            const alreadyAtBoundary = event.key === "ArrowLeft"
+                ? keyState?.start <= 0
+                : keyState?.end >= keyState?.length;
+            if (alreadyAtBoundary) {
+                event.preventDefault();
+            }
+            return;
+        }
+
+        if (shouldTrapGridKeyboardNavigation(gridRoot, target)) {
+            event.preventDefault();
+        }
+    };
+
+    gridRoot.addEventListener("keydown", onKeyDown, true);
+    doc.addEventListener("keydown", onKeyDown, true);
+    gridKeyboardTrapBindings.set(gridRoot, { onKeyDown, doc });
+}
+
+export function unregisterGridKeyboardTrap(gridRoot) {
+    if (!gridRoot) return;
+    const handlers = gridKeyboardTrapBindings.get(gridRoot);
+    if (!handlers) return;
+
+    gridRoot.removeEventListener("keydown", handlers.onKeyDown, true);
+    handlers.doc?.removeEventListener?.("keydown", handlers.onKeyDown, true);
+    gridKeyboardTrapBindings.delete(gridRoot);
+}
+
 /**
  * Installs a tiny custom drag image for grid header reordering so the
  * default full-width browser ghost doesn't cover drop indicators.
@@ -553,6 +708,44 @@ export function unregisterRowDragSelectionAutoScroll(gridRoot) {
     doc.removeEventListener("mouseup", handlers.onMouseUp, true);
     stopRowAutoScroll(handlers.state);
     rowDragAutoScrollBindings.delete(gridRoot);
+}
+
+export function ensureActiveGridCellVisible(gridRoot) {
+    if (!gridRoot) return;
+
+    const contentEl = getGridContentElement(gridRoot);
+    const activeCell = gridRoot.querySelector(".fx-cell-active");
+    if (!contentEl || !activeCell) return;
+
+    const outerRect = contentEl.getBoundingClientRect();
+    const contentRect = {
+        left: outerRect.left,
+        top: outerRect.top,
+        right: outerRect.left + contentEl.clientWidth,
+        bottom: outerRect.top + contentEl.clientHeight
+    };
+    const cellRect = activeCell.getBoundingClientRect();
+    const padding = 4;
+
+    if (cellRect.left < contentRect.left + padding) {
+        contentEl.scrollLeft = Math.max(0, contentEl.scrollLeft - ((contentRect.left + padding) - cellRect.left));
+    } else if (cellRect.right > contentRect.right - padding) {
+        const maxScrollLeft = contentEl.scrollWidth - contentEl.clientWidth;
+        contentEl.scrollLeft = clamp(
+            contentEl.scrollLeft + (cellRect.right - (contentRect.right - padding)),
+            0,
+            maxScrollLeft);
+    }
+
+    if (cellRect.top < contentRect.top + padding) {
+        contentEl.scrollTop = Math.max(0, contentEl.scrollTop - ((contentRect.top + padding) - cellRect.top));
+    } else if (cellRect.bottom > contentRect.bottom - padding) {
+        const maxScrollTop = contentEl.scrollHeight - contentEl.clientHeight;
+        contentEl.scrollTop = clamp(
+            contentEl.scrollTop + (cellRect.bottom - (contentRect.bottom - padding)),
+            0,
+            maxScrollTop);
+    }
 }
 
 export function selectAllInputContents(el) {

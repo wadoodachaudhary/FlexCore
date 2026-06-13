@@ -20,8 +20,11 @@ public sealed class ReportDesignerDocument
     public List<ReportDesignerField> Fields { get; set; } = new();
     public List<ReportDesignerParameter> Parameters { get; set; } = new();
     public List<ReportDesignerGroup> Groups { get; set; } = new();
+    public List<ReportDesignerSort> Sorts { get; set; } = new();
+    public List<ReportDesignerSummary> Summaries { get; set; } = new();
     public List<ReportDesignerFilter> Filters { get; set; } = new();
     public List<ReportDesignerSubreport> Subreports { get; set; } = new();
+    public List<ReportDesignerDataLink> Links { get; set; } = new();
     public bool IsDirty { get; set; }
     public string StatusMessage { get; set; } = "";
 
@@ -71,6 +74,7 @@ public sealed class ReportDesignerDocument
                 SortDirection = "Ascending"
             })
             .ToList();
+        document.Summaries = wizard.Summaries.Select(CloneSummary).ToList();
         document.Filters = wizard.Filters.Select(CloneFilter).ToList();
 
         var displayFields = wizard.DisplayFields.Count > 0
@@ -311,6 +315,16 @@ public sealed class ReportDesignerDocument
             Value = filter.Value
         };
     }
+
+    private static ReportDesignerSummary CloneSummary(ReportDesignerSummary summary)
+    {
+        return new ReportDesignerSummary
+        {
+            Field = CloneField(summary.Field),
+            Operation = summary.Operation,
+            GroupName = summary.GroupName
+        };
+    }
 }
 
 public sealed class ReportDesignerPage
@@ -333,7 +347,16 @@ public sealed class ReportDesignerSection
     public string Kind { get; set; } = "Detail";
     public string AreaName { get; set; } = "";
     public int HeightTwips { get; set; } = 360;
+    public bool HideForDrillDown { get; set; }
     public bool IsSuppressed { get; set; }
+    public bool PrintAtBottomOfPage { get; set; }
+    public bool SuppressIfBlank { get; set; }
+    public bool UnderlayFollowingSections { get; set; }
+    public bool ReadOnly { get; set; }
+    public bool RelativePositions { get; set; }
+    public bool NewPageBefore { get; set; }
+    public bool NewPageAfter { get; set; }
+    public bool ResetPageNumberAfter { get; set; }
     public bool KeepTogether { get; set; } = true;
     public string BackgroundColor { get; set; } = "#ffffff";
     public List<ReportDesignerElement> Elements { get; set; } = new();
@@ -364,6 +387,11 @@ public sealed class ReportDesignerElement
     public string HorizontalAlignment { get; set; } = "Default";
     public bool IsSuppressed { get; set; }
     public bool CanGrow { get; set; }
+    public string FormatString { get; set; } = "";
+    public bool LockFormat { get; set; }
+    public bool LockSizePosition { get; set; }
+    public int IndentTwips { get; set; }
+    public ReportDesignerHighlightRule HighlightRule { get; set; } = new();
 
     public string DisplayText
     {
@@ -404,9 +432,38 @@ public sealed class ReportDesignerElement
             BackgroundColor = BackgroundColor,
             HorizontalAlignment = HorizontalAlignment,
             IsSuppressed = IsSuppressed,
-            CanGrow = CanGrow
+            CanGrow = CanGrow,
+            FormatString = FormatString,
+            LockFormat = LockFormat,
+            LockSizePosition = LockSizePosition,
+            IndentTwips = IndentTwips,
+            HighlightRule = HighlightRule.Clone()
         };
     }
+}
+
+public sealed class ReportDesignerHighlightRule
+{
+    public bool Enabled { get; set; }
+    public string FieldName { get; set; } = "";
+    public string Operator { get; set; } = "is equal to";
+    public string Value { get; set; } = "";
+    public string FontStyle { get; set; } = "Default";
+    public string TextColor { get; set; } = "#000000";
+    public string BackgroundColor { get; set; } = "transparent";
+    public string BorderStyle { get; set; } = "Default border style";
+
+    public ReportDesignerHighlightRule Clone() => new()
+    {
+        Enabled = Enabled,
+        FieldName = FieldName,
+        Operator = Operator,
+        Value = Value,
+        FontStyle = FontStyle,
+        TextColor = TextColor,
+        BackgroundColor = BackgroundColor,
+        BorderStyle = BorderStyle
+    };
 }
 
 public sealed class ReportDesignerField
@@ -432,6 +489,13 @@ public sealed class ReportDesignerSummary
 {
     public ReportDesignerField Field { get; set; } = new();
     public string Operation { get; set; } = "Sum";
+    public string GroupName { get; set; } = "";
+}
+
+public sealed class ReportDesignerSort
+{
+    public ReportDesignerField Field { get; set; } = new();
+    public string Direction { get; set; } = "Ascending";
 }
 
 public sealed class ReportDesignerFilter
@@ -472,6 +536,19 @@ public sealed class ReportDesignerSubreport
 {
     public string Name { get; set; } = "";
     public string FileName { get; set; } = "";
+}
+
+public sealed class ReportDesignerDataLink
+{
+    public string LeftTable { get; set; } = "";
+    public string LeftField { get; set; } = "";
+    public string RightTable { get; set; } = "";
+    public string RightField { get; set; } = "";
+    public string JoinType { get; set; } = "Inner";
+
+    public string DisplayName => string.IsNullOrWhiteSpace(LeftTable) && string.IsNullOrWhiteSpace(RightTable)
+        ? "New link"
+        : $"{LeftTable}.{LeftField} = {RightTable}.{RightField}";
 }
 
 public sealed class ReportDesignerElementSelection
@@ -529,8 +606,11 @@ public static class ReportDesignerXmlSerializer
         };
 
         ParseFields(root, document);
+        ParseLinks(root, document);
         ParseParameters(root, document);
         ParseGroups(root, document);
+        ParseSorts(root, document);
+        ParseSummaries(root, document);
         ParseFilters(root, document);
         ParseSubreports(root, document);
 
@@ -619,6 +699,7 @@ public static class ReportDesignerXmlSerializer
                 .ToList();
 
         return new XElement("Database",
+            BuildTableLinksElement(document),
             new XElement("Tables",
                 tables.Select(table =>
                     new XElement("Table",
@@ -632,6 +713,32 @@ public static class ReportDesignerXmlSerializer
                                     new XAttribute("ShortName", field.Name),
                                     new XAttribute("LongName", string.IsNullOrWhiteSpace(field.LongName) ? field.DisplayName : field.LongName),
                                     new XAttribute("Type", string.IsNullOrWhiteSpace(field.Type) ? "String" : field.Type))))))));
+    }
+
+    private static XElement BuildTableLinksElement(ReportDesignerDocument document)
+    {
+        return new XElement("TableLinks",
+            document.Links
+                .Where(link =>
+                    !string.IsNullOrWhiteSpace(link.LeftTable) &&
+                    !string.IsNullOrWhiteSpace(link.LeftField) &&
+                    !string.IsNullOrWhiteSpace(link.RightTable) &&
+                    !string.IsNullOrWhiteSpace(link.RightField))
+                .Select(link =>
+                    new XElement("TableLink",
+                        new XAttribute("JoinType", ToCrystalJoinType(link.JoinType)),
+                        new XElement("SourceFields", BuildLinkField(link.LeftTable, link.LeftField)),
+                        new XElement("DestinationFields", BuildLinkField(link.RightTable, link.RightField)))));
+    }
+
+    private static XElement BuildLinkField(string table, string field)
+    {
+        return new XElement("Field",
+            new XAttribute("FormulaName", $"{{{table}.{field}}}"),
+            new XAttribute("Kind", "DatabaseField"),
+            new XAttribute("Name", field),
+            new XAttribute("NumberOfBytes", 0),
+            new XAttribute("ValueType", "Xsd:stringField"));
     }
 
     private static XElement BuildDataDefinitionElement(ReportDesignerDocument document)
@@ -649,8 +756,31 @@ public static class ReportDesignerXmlSerializer
                         new XAttribute("Field", filter.Field.DisplayName),
                         new XAttribute("Operator", filter.Operator),
                         new XAttribute("Value", filter.Value)))),
-            new XElement("FormulaFieldDefinitions"),
-            new XElement("ParameterFieldDefinitions"));
+            new XElement("SortFields",
+                document.Sorts.Select(sort =>
+                    new XElement("SortField",
+                        new XAttribute("Field", sort.Field.DisplayName),
+                        new XAttribute("Direction", sort.Direction)))),
+            new XElement("SummaryFieldDefinitions",
+                document.Summaries.Select(summary =>
+                    new XElement("SummaryFieldDefinition",
+                        new XAttribute("Field", summary.Field.DisplayName),
+                        new XAttribute("Operation", summary.Operation),
+                        new XAttribute("GroupName", summary.GroupName)))),
+            new XElement("FormulaFieldDefinitions",
+                document.Fields.Where(field => field.IsFormula).Select(field =>
+                    new XElement("FormulaFieldDefinition",
+                        new XAttribute("Name", field.Name),
+                        new XAttribute("FormulaName", string.IsNullOrWhiteSpace(field.Formula) ? $"@{field.Name}" : field.Formula),
+                        new XAttribute("ValueType", string.IsNullOrWhiteSpace(field.Type) ? "Formula" : field.Type)))),
+            new XElement("ParameterFieldDefinitions",
+                document.Parameters.Select(parameter =>
+                    new XElement("ParameterFieldDefinition",
+                        new XAttribute("Name", parameter.Name),
+                        new XAttribute("PromptText", parameter.Prompt),
+                        new XAttribute("ValueType", parameter.Type),
+                        new XAttribute("OptionalPrompt", Lower(!parameter.Required)),
+                        new XAttribute("EnableAllowMultipleValue", Lower(parameter.AllowMultiple))))));
     }
 
     private static ReportDesignerField CloneField(ReportDesignerField field)
@@ -672,6 +802,8 @@ public static class ReportDesignerXmlSerializer
 
         root.SetAttributeValue("Name", string.IsNullOrWhiteSpace(document.Title) ? document.SourceName : document.Title);
         ApplyPrintOptions(root, document.Page);
+        ApplyDatabaseDefinition(root, document);
+        ApplyDataDefinition(root, document);
 
         foreach (var section in document.Sections)
         {
@@ -761,6 +893,28 @@ public static class ReportDesignerXmlSerializer
         margins.SetAttributeValue("topMargin", page.MarginTopTwips);
     }
 
+    private static void ApplyDatabaseDefinition(XElement root, ReportDesignerDocument document)
+    {
+        ReplaceRootChild(root, "Database", BuildDatabaseElement(document));
+    }
+
+    private static void ApplyDataDefinition(XElement root, ReportDesignerDocument document)
+    {
+        ReplaceRootChild(root, "DataDefinition", BuildDataDefinitionElement(document));
+    }
+
+    private static void ReplaceRootChild(XElement root, string name, XElement replacement)
+    {
+        var existing = Child(root, name);
+        if (existing != null)
+        {
+            existing.ReplaceWith(replacement);
+            return;
+        }
+
+        root.Add(replacement);
+    }
+
     private static void ApplySection(ReportDesignerSection section, XElement sectionElement)
     {
         sectionElement.SetAttributeValue("Name", section.Name);
@@ -768,8 +922,17 @@ public static class ReportDesignerXmlSerializer
         sectionElement.SetAttributeValue("Height", section.HeightTwips);
 
         var format = Child(sectionElement, "SectionFormat") ?? EnsureChild(sectionElement, "SectionFormat");
+        format.SetAttributeValue("EnableHideForDrillDown", Lower(section.HideForDrillDown));
+        format.SetAttributeValue("EnableNewPageAfter", Lower(section.NewPageAfter));
+        format.SetAttributeValue("EnableNewPageBefore", Lower(section.NewPageBefore));
+        format.SetAttributeValue("EnablePrintAtBottomOfPage", Lower(section.PrintAtBottomOfPage));
+        format.SetAttributeValue("EnableResetPageNumberAfter", Lower(section.ResetPageNumberAfter));
         format.SetAttributeValue("EnableSuppress", Lower(section.IsSuppressed));
+        format.SetAttributeValue("EnableSuppressIfBlank", Lower(section.SuppressIfBlank));
+        format.SetAttributeValue("EnableUnderlaySection", Lower(section.UnderlayFollowingSections));
         format.SetAttributeValue("EnableKeepTogether", Lower(section.KeepTogether));
+        format.SetAttributeValue("ReadOnly", Lower(section.ReadOnly));
+        format.SetAttributeValue("RelativePositions", Lower(section.RelativePositions));
 
         var background = Child(format, "BackgroundColor") ?? EnsureChild(format, "BackgroundColor");
         SetColorElement(background, section.BackgroundColor, alphaWhenTransparent: 0);
@@ -824,31 +987,70 @@ public static class ReportDesignerXmlSerializer
         objectFormat.SetAttributeValue("EnableCanGrow", Lower(element.CanGrow));
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
+        objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
+        objectFormat.SetAttributeValue("FlexKitLockFormat", Lower(element.LockFormat));
+        objectFormat.SetAttributeValue("FlexKitLockSizePosition", Lower(element.LockSizePosition));
+        objectFormat.SetAttributeValue("FlexKitIndentTwips", element.IndentTwips);
+
+        var border = Child(objectElement, "Border") ?? EnsureChild(objectElement, "Border");
+        var background = Child(border, "BackgroundColor") ?? EnsureChild(border, "BackgroundColor");
+        SetColorElement(background, element.BackgroundColor, alphaWhenTransparent: 0);
+
+        objectElement.Elements("FlexKitHighlightRule").Remove();
+        if (element.HighlightRule.Enabled)
+        {
+            objectElement.Add(new XElement("FlexKitHighlightRule",
+                new XAttribute("Enabled", Lower(element.HighlightRule.Enabled)),
+                new XAttribute("FieldName", element.HighlightRule.FieldName ?? ""),
+                new XAttribute("Operator", element.HighlightRule.Operator ?? ""),
+                new XAttribute("Value", element.HighlightRule.Value ?? ""),
+                new XAttribute("FontStyle", element.HighlightRule.FontStyle ?? ""),
+                new XAttribute("TextColor", element.HighlightRule.TextColor ?? ""),
+                new XAttribute("BackgroundColor", element.HighlightRule.BackgroundColor ?? ""),
+                new XAttribute("BorderStyle", element.HighlightRule.BorderStyle ?? "")));
+        }
     }
 
     private static void UpsertDesignerMetadata(XElement root, ReportDesignerDocument document)
     {
         root.Elements(MetadataElementName).Remove();
+
+        var sections = new XElement("Sections",
+            document.Sections.Select(section =>
+                new XElement("Section",
+                    new XAttribute("Id", section.Id),
+                    new XAttribute("Name", section.Name),
+                    new XAttribute("Kind", section.Kind),
+                    new XAttribute("HeightTwips", section.HeightTwips),
+                    new XAttribute("Suppressed", Lower(section.IsSuppressed)),
+                    section.Elements.Select(element =>
+                        new XElement("Object",
+                            new XAttribute("Id", element.Id),
+                            new XAttribute("Name", element.Name),
+                            new XAttribute("Kind", element.Kind),
+                            new XAttribute("LeftTwips", element.LeftTwips),
+                            new XAttribute("TopTwips", element.TopTwips),
+                            new XAttribute("WidthTwips", element.WidthTwips),
+                            new XAttribute("HeightTwips", element.HeightTwips),
+                            new XAttribute("FormatString", element.FormatString ?? ""),
+                            new XAttribute("LockFormat", Lower(element.LockFormat)),
+                            new XAttribute("LockSizePosition", Lower(element.LockSizePosition)),
+                            new XAttribute("IndentTwips", element.IndentTwips))))));
+
+        var links = new XElement("Links",
+            document.Links.Select(link =>
+                new XElement("Link",
+                    new XAttribute("LeftTable", link.LeftTable ?? ""),
+                    new XAttribute("LeftField", link.LeftField ?? ""),
+                    new XAttribute("RightTable", link.RightTable ?? ""),
+                    new XAttribute("RightField", link.RightField ?? ""),
+                    new XAttribute("JoinType", link.JoinType ?? ""))));
+
         root.Add(new XElement(MetadataElementName,
             new XAttribute("Version", "1"),
             new XAttribute("SavedUtc", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
-            new XElement("Sections",
-                document.Sections.Select(section =>
-                    new XElement("Section",
-                        new XAttribute("Id", section.Id),
-                        new XAttribute("Name", section.Name),
-                        new XAttribute("Kind", section.Kind),
-                        new XAttribute("HeightTwips", section.HeightTwips),
-                        new XAttribute("Suppressed", Lower(section.IsSuppressed)),
-                        section.Elements.Select(element =>
-                            new XElement("Object",
-                                new XAttribute("Id", element.Id),
-                                new XAttribute("Name", element.Name),
-                                new XAttribute("Kind", element.Kind),
-                                new XAttribute("LeftTwips", element.LeftTwips),
-                                new XAttribute("TopTwips", element.TopTwips),
-                                new XAttribute("WidthTwips", element.WidthTwips),
-                                new XAttribute("HeightTwips", element.HeightTwips))))))));
+            sections,
+            links));
     }
 
     private static XElement CreateAreaElement(ReportDesignerSection section)
@@ -876,13 +1078,16 @@ public static class ReportDesignerXmlSerializer
             new XElement("SectionFormat",
                 new XAttribute("CssClass", ""),
                 new XAttribute("EnableKeepTogether", Lower(section.KeepTogether)),
-                new XAttribute("EnableNewPageAfter", "false"),
-                new XAttribute("EnableNewPageBefore", "false"),
-                new XAttribute("EnablePrintAtBottomOfPage", "false"),
-                new XAttribute("EnableResetPageNumberAfter", "false"),
+                new XAttribute("EnableHideForDrillDown", Lower(section.HideForDrillDown)),
+                new XAttribute("EnableNewPageAfter", Lower(section.NewPageAfter)),
+                new XAttribute("EnableNewPageBefore", Lower(section.NewPageBefore)),
+                new XAttribute("EnablePrintAtBottomOfPage", Lower(section.PrintAtBottomOfPage)),
+                new XAttribute("EnableResetPageNumberAfter", Lower(section.ResetPageNumberAfter)),
                 new XAttribute("EnableSuppress", Lower(section.IsSuppressed)),
-                new XAttribute("EnableSuppressIfBlank", "false"),
-                new XAttribute("EnableUnderlaySection", "false"),
+                new XAttribute("EnableSuppressIfBlank", Lower(section.SuppressIfBlank)),
+                new XAttribute("EnableUnderlaySection", Lower(section.UnderlayFollowingSections)),
+                new XAttribute("ReadOnly", Lower(section.ReadOnly)),
+                new XAttribute("RelativePositions", Lower(section.RelativePositions)),
                 new XElement("SectionAreaConditionFormulas"),
                 CreateColorElement("BackgroundColor", section.BackgroundColor, 0)),
             new XElement("ReportObjects"));
@@ -956,7 +1161,16 @@ public static class ReportDesignerXmlSerializer
                     Kind = Attribute(sectionElement, "Kind") ?? Attribute(area, "Kind") ?? "Detail",
                     AreaName = areaName,
                     HeightTwips = ParseInt(Attribute(sectionElement, "Height"), 360),
+                    HideForDrillDown = ParseBool(Attribute(format, "EnableHideForDrillDown")),
                     IsSuppressed = ParseBool(Attribute(format, "EnableSuppress")),
+                    PrintAtBottomOfPage = ParseBool(Attribute(format, "EnablePrintAtBottomOfPage")),
+                    SuppressIfBlank = ParseBool(Attribute(format, "EnableSuppressIfBlank")),
+                    UnderlayFollowingSections = ParseBool(Attribute(format, "EnableUnderlaySection")),
+                    ReadOnly = ParseBool(Attribute(format, "ReadOnly")),
+                    RelativePositions = ParseBool(Attribute(format, "RelativePositions")),
+                    NewPageBefore = ParseBool(Attribute(format, "EnableNewPageBefore")),
+                    NewPageAfter = ParseBool(Attribute(format, "EnableNewPageAfter")),
+                    ResetPageNumberAfter = ParseBool(Attribute(format, "EnableResetPageNumberAfter")),
                     KeepTogether = ParseBool(Attribute(format, "EnableKeepTogether"), true),
                     BackgroundColor = ColorFromElement(Child(format, "BackgroundColor"), "#ffffff")
                 };
@@ -1005,7 +1219,12 @@ public static class ReportDesignerXmlSerializer
                 BackgroundColor = ColorFromElement(Child(Child(objectElement, "Border"), "BackgroundColor"), "transparent"),
                 HorizontalAlignment = Attribute(objectFormat, "HorizontalAlignment") ?? "Default",
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
-                CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow"))
+                CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
+                FormatString = Attribute(objectFormat, "FlexKitFormatString") ?? "",
+                LockFormat = ParseBool(Attribute(objectFormat, "FlexKitLockFormat")),
+                LockSizePosition = ParseBool(Attribute(objectFormat, "FlexKitLockSizePosition")),
+                IndentTwips = ParseInt(Attribute(objectFormat, "FlexKitIndentTwips")),
+                HighlightRule = ParseHighlightRule(Child(objectElement, "FlexKitHighlightRule"))
             };
 
             if (string.Equals(kind, "Subreport", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(element.Text))
@@ -1058,6 +1277,79 @@ public static class ReportDesignerXmlSerializer
         }
     }
 
+    private static void ParseLinks(XElement root, ReportDesignerDocument document)
+    {
+        foreach (var tableLink in Child(Child(root, "Database"), "TableLinks")?.Elements("TableLink") ?? Enumerable.Empty<XElement>())
+        {
+            var sourceFields = ParseLinkFields(Child(tableLink, "SourceFields"));
+            var destinationFields = ParseLinkFields(Child(tableLink, "DestinationFields"));
+            var count = Math.Min(sourceFields.Count, destinationFields.Count);
+            for (var index = 0; index < count; index++)
+            {
+                var source = sourceFields[index];
+                var destination = destinationFields[index];
+                document.Links.Add(new ReportDesignerDataLink
+                {
+                    LeftTable = source.Table,
+                    LeftField = source.Field,
+                    RightTable = destination.Table,
+                    RightField = destination.Field,
+                    JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType"))
+                });
+            }
+        }
+
+        foreach (var link in Child(root, MetadataElementName)?.Element("Links")?.Elements("Link") ?? Enumerable.Empty<XElement>())
+        {
+            var designerLink = new ReportDesignerDataLink
+            {
+                LeftTable = Attribute(link, "LeftTable") ?? "",
+                LeftField = Attribute(link, "LeftField") ?? "",
+                RightTable = Attribute(link, "RightTable") ?? "",
+                RightField = Attribute(link, "RightField") ?? "",
+                JoinType = Attribute(link, "JoinType") ?? "Inner"
+            };
+
+            if (!document.Links.Any(existing => SameLink(existing, designerLink)))
+                document.Links.Add(designerLink);
+        }
+    }
+
+    private static List<(string Table, string Field)> ParseLinkFields(XElement? container)
+    {
+        var fields = new List<(string Table, string Field)>();
+        foreach (var fieldElement in container?.Elements("Field") ?? Enumerable.Empty<XElement>())
+        {
+            var formulaName = Attribute(fieldElement, "FormulaName") ?? "";
+            var parsed = ParseCrystalFieldReference(formulaName);
+            if (parsed.HasValue)
+                fields.Add(parsed.Value);
+        }
+
+        return fields;
+    }
+
+    private static (string Table, string Field)? ParseCrystalFieldReference(string formulaName)
+    {
+        if (string.IsNullOrWhiteSpace(formulaName))
+            return null;
+
+        var match = Regex.Match(formulaName.Trim(), @"^\{([^.}]+)\.([^}]+)\}$");
+        if (!match.Success)
+            return null;
+
+        return (match.Groups[1].Value.Trim(), match.Groups[2].Value.Trim());
+    }
+
+    private static bool SameLink(ReportDesignerDataLink left, ReportDesignerDataLink right)
+    {
+        return string.Equals(left.LeftTable, right.LeftTable, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.LeftField, right.LeftField, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.RightTable, right.RightTable, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.RightField, right.RightField, StringComparison.OrdinalIgnoreCase) &&
+               string.Equals(left.JoinType, right.JoinType, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ParseSchemaName(string? qualifiedName)
     {
         if (string.IsNullOrWhiteSpace(qualifiedName))
@@ -1099,6 +1391,41 @@ public static class ReportDesignerXmlSerializer
         }
     }
 
+    private static void ParseSorts(XElement root, ReportDesignerDocument document)
+    {
+        foreach (var sort in Child(Child(root, "DataDefinition"), "SortFields")?.Elements("SortField") ?? Enumerable.Empty<XElement>())
+        {
+            var fieldName = Attribute(sort, "Field") ?? Attribute(sort, "DataSource") ?? Attribute(sort, "FormulaName") ?? "";
+            var field = ResolveDesignerField(document, fieldName);
+            if (string.IsNullOrWhiteSpace(field.DisplayName))
+                continue;
+
+            document.Sorts.Add(new ReportDesignerSort
+            {
+                Field = CloneField(field),
+                Direction = Attribute(sort, "Direction") ?? Attribute(sort, "SortDirection") ?? "Ascending"
+            });
+        }
+    }
+
+    private static void ParseSummaries(XElement root, ReportDesignerDocument document)
+    {
+        foreach (var summary in Child(Child(root, "DataDefinition"), "SummaryFieldDefinitions")?.Elements("SummaryFieldDefinition") ?? Enumerable.Empty<XElement>())
+        {
+            var fieldName = Attribute(summary, "Field") ?? Attribute(summary, "FieldName") ?? Attribute(summary, "DataSource") ?? "";
+            var field = ResolveDesignerField(document, fieldName);
+            if (string.IsNullOrWhiteSpace(field.DisplayName))
+                continue;
+
+            document.Summaries.Add(new ReportDesignerSummary
+            {
+                Field = CloneField(field),
+                Operation = Attribute(summary, "Operation") ?? Attribute(summary, "SummaryOperation") ?? "Sum",
+                GroupName = Attribute(summary, "GroupName") ?? Attribute(summary, "Group") ?? ""
+            });
+        }
+    }
+
     private static void ParseFilters(XElement root, ReportDesignerDocument document)
     {
         foreach (var filter in Child(Child(root, "DataDefinition"), "RecordSelection")?.Elements("Filter") ?? Enumerable.Empty<XElement>())
@@ -1107,9 +1434,7 @@ public static class ReportDesignerXmlSerializer
             if (string.IsNullOrWhiteSpace(fieldName))
                 continue;
 
-            var field = document.Fields.FirstOrDefault(candidate =>
-                string.Equals(candidate.DisplayName, fieldName, StringComparison.OrdinalIgnoreCase))
-                ?? new ReportDesignerField { Name = fieldName };
+            var field = ResolveDesignerField(document, fieldName);
 
             document.Filters.Add(new ReportDesignerFilter
             {
@@ -1118,6 +1443,22 @@ public static class ReportDesignerXmlSerializer
                 Value = Attribute(filter, "Value") ?? ""
             });
         }
+    }
+
+    private static ReportDesignerField ResolveDesignerField(ReportDesignerDocument document, string fieldName)
+    {
+        if (string.IsNullOrWhiteSpace(fieldName))
+            return new ReportDesignerField();
+
+        var cleaned = fieldName.Trim().Trim('{', '}');
+        if (cleaned.StartsWith("@", StringComparison.Ordinal))
+            cleaned = cleaned[1..];
+
+        return document.Fields.FirstOrDefault(candidate =>
+                   string.Equals(candidate.DisplayName, cleaned, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(candidate.Name, cleaned, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(candidate.Formula.Trim('{', '}').TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase))
+               ?? new ReportDesignerField { Name = cleaned };
     }
 
     private static void ParseSubreports(XElement root, ReportDesignerDocument document)
@@ -1226,6 +1567,46 @@ public static class ReportDesignerXmlSerializer
         return value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
                value.Equals("1", StringComparison.OrdinalIgnoreCase) ||
                value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ReportDesignerHighlightRule ParseHighlightRule(XElement? element)
+    {
+        if (element is null)
+            return new ReportDesignerHighlightRule();
+
+        return new ReportDesignerHighlightRule
+        {
+            Enabled = ParseBool(Attribute(element, "Enabled")),
+            FieldName = Attribute(element, "FieldName") ?? "",
+            Operator = Attribute(element, "Operator") ?? "is equal to",
+            Value = Attribute(element, "Value") ?? "",
+            FontStyle = Attribute(element, "FontStyle") ?? "Default",
+            TextColor = Attribute(element, "TextColor") ?? "#000000",
+            BackgroundColor = Attribute(element, "BackgroundColor") ?? "transparent",
+            BorderStyle = Attribute(element, "BorderStyle") ?? "Default border style"
+        };
+    }
+
+    private static string ToCrystalJoinType(string? joinType)
+    {
+        return joinType?.Trim().ToLowerInvariant() switch
+        {
+            "left outer" or "leftouter" => "LeftOuter",
+            "right outer" or "rightouter" => "RightOuter",
+            "full outer" or "fullouter" => "FullOuter",
+            _ => "Inner"
+        };
+    }
+
+    private static string FromCrystalJoinType(string? joinType)
+    {
+        return joinType?.Trim().ToLowerInvariant() switch
+        {
+            "leftouter" or "left outer" => "Left Outer",
+            "rightouter" or "right outer" => "Right Outer",
+            "fullouter" or "full outer" => "Full Outer",
+            _ => "Inner"
+        };
     }
 
     private static string MakeUniqueId(string stem, ISet<string> used)

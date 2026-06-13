@@ -1,31 +1,67 @@
 @namespace Fx.ControlKit.Reports
 
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
+
+@inject IJSRuntime JSRuntime
 
 <div class="fx-rd">
-    <ToolbarControl CssClass="fx-rd-toolbar">
-        <ToolbarButtonControl CssClass="fx-rd-tool-button fx-rd-tool-new" OnClick="OpenNewWizardAsync">
-            <span class="fx-rd-tool-icon new"></span>
-            <span>New</span>
-        </ToolbarButtonControl>
-        <span class="fx-rd-separator"></span>
-        @if (AllowFileOpen)
+    <ToolbarControl CssClass="fx-rd-toolbar crystal">
+        @foreach (var toolbarRow in DesignerToolbarRows)
         {
-            <label class="fx-rd-file-button" title="Open a Crystal Reports XML export or convert a Crystal RPT file">
-                Open
-                <InputFile OnChange="OpenFileAsync" accept=".xml,.rpt,text/xml,application/xml" />
-            </label>
+            <div class="@($"fx-rd-toolbar-row{(toolbarRow.Compact ? " compact" : string.Empty)}")">
+                @foreach (var item in toolbarRow.Items)
+                {
+                    @switch (item.Kind)
+                    {
+                        case ReportDesignerToolbarItemKind.Separator:
+                            <span class="fx-rd-separator"></span>
+                            break;
+                        case ReportDesignerToolbarItemKind.FontFamily:
+                            <span class="fx-rd-tool-host wide" title="@item.Tooltip" aria-label="@item.Tooltip">
+                                <DropDownListControl TValue="string" TItem="string" DataSource="@FontFamilies" Value="@SelectedFontFamily" ValueChanged="OnFontFamilyChanged" Width="150px" CssClass="fx-rd-toolbar-dd" />
+                            </span>
+                            break;
+                        case ReportDesignerToolbarItemKind.FontSize:
+                            <span class="fx-rd-tool-host wide" title="@item.Tooltip" aria-label="@item.Tooltip">
+                                <DropDownListControl TValue="decimal" TItem="decimal" DataSource="@FontSizes" Value="@SelectedFontSize" ValueChanged="OnFontSizeChanged" Width="62px" CssClass="fx-rd-toolbar-dd" />
+                            </span>
+                            break;
+                        case ReportDesignerToolbarItemKind.FileOpen:
+                            if (AllowFileOpen)
+                            {
+                                <label class="@ToolbarButtonCss(item)" title="@item.Tooltip" aria-label="@item.Tooltip">
+                                    <span class="@ToolbarIconCss(item)" title="@item.Tooltip" aria-hidden="true"></span>
+                                    @if (item.HasDropDown)
+                                    {
+                                        <span class="fx-rd-drop-cue" aria-hidden="true"></span>
+                                    }
+                                    <InputFile OnChange="OpenFileAsync" accept=".xml,.rpt,text/xml,application/xml" />
+                                </label>
+                            }
+                            break;
+                        default:
+                            <span class="fx-rd-tool-host" title="@item.Tooltip" aria-label="@item.Tooltip">
+                                <ToolbarButtonControl CssClass="@ToolbarButtonCss(item)"
+                                                      Title="@item.Tooltip"
+                                                      Disabled="@IsToolbarItemDisabled(item)"
+                                                      OnClick="@(() => ExecuteToolbarCommandAsync(item.Command))">
+                                    <span class="@ToolbarIconCss(item)" title="@item.Tooltip" aria-hidden="true"></span>
+                                    @if (item.HasDropDown)
+                                    {
+                                        <span class="fx-rd-drop-cue" aria-hidden="true"></span>
+                                    }
+                                </ToolbarButtonControl>
+                            </span>
+                            break;
+                    }
+                }
+                @if (toolbarRow.ShowStatus)
+                {
+                    <span class="fx-rd-status @(_document.IsDirty ? "dirty" : "")">@StatusText</span>
+                }
+            </div>
         }
-        <button type="button" @onclick="ReloadAsync" disabled="@(!CanReload)">Reload</button>
-        <span class="fx-rd-separator"></span>
-        <button type="button" @onclick="AddTextElement">Text</button>
-        <button type="button" @onclick="AddFieldElement" disabled="@(!_document.Fields.Any())">Field</button>
-        <button type="button" @onclick="DuplicateSelected" disabled="@(_selectedElement is null)">Duplicate</button>
-        <button type="button" @onclick="RemoveSelected" disabled="@(_selectedElement is null)">Remove</button>
-        <span class="fx-rd-separator"></span>
-        <button type="button" @onclick="ExportXmlAsync">Apply XML</button>
-        <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
-        <span class="fx-rd-status @(_document.IsDirty ? "dirty" : "")">@StatusText</span>
     </ToolbarControl>
 
     <div class="fx-rd-shell">
@@ -70,15 +106,15 @@
                              OnNodeClick="OnExplorerNodeClickAsync"
                              CssClass="fx-rd-explorer"
                              TreeCssClass="fx-rd-explorer-tree"
-                             UseVb6TreeStyle="false"
+                             UseVb6TreeStyle="true"
                              FolderStyle="TreeFolderStyle.None"
-                             TreeIndentPixels="18">
+                             TreeIndentPixels="20">
                 <ToolbarContent>
-                    <ToolbarButtonControl Label="+" OnClick="AddFieldElement" Disabled="@(!IsFieldExplorerActive || !_document.Fields.Any())" />
-                    <ToolbarButtonControl Label="R" OnClick="ReloadAsync" Disabled="@(!CanReload)" />
-                    <ToolbarButtonControl Label="fx" Disabled="true" />
-                    <ToolbarButtonControl Label="/" Disabled="@(_selectedElement is null)" />
-                    <ToolbarButtonControl Label="X" OnClick="RemoveSelected" Disabled="@(_selectedElement is null)" />
+                    <ToolbarButtonControl CssClass="fx-rd-explorer-tool fx-rd-explorer-tool-insert" Label="" OnClick="AddFieldElement" Disabled="@(!IsFieldExplorerActive || !_document.Fields.Any())" />
+                    <ToolbarButtonControl CssClass="fx-rd-explorer-tool fx-rd-explorer-tool-refresh" Label="" OnClick="ReloadAsync" Disabled="@(!CanReload)" />
+                    <ToolbarButtonControl CssClass="fx-rd-explorer-tool fx-rd-explorer-tool-formula" Label="" Disabled="true" />
+                    <ToolbarButtonControl CssClass="fx-rd-explorer-tool fx-rd-explorer-tool-line" Label="" Disabled="@(_selectedElement is null)" />
+                    <ToolbarButtonControl CssClass="fx-rd-explorer-tool fx-rd-explorer-tool-delete" Label="" OnClick="RemoveSelected" Disabled="@(_selectedElement is null)" />
                 </ToolbarContent>
                 <FooterContent>
                     <ReportDesignerPropertiesControl Document="@_document"
@@ -98,6 +134,25 @@
                                  VisibleChanged="OnNewReportWizardVisibleChanged"
                                  DataSources="@WizardDataSources"
                                  Finished="CreateReportFromWizardAsync" />
+
+    <DialogControl Visible="@IsExpertOpen"
+                   Header="@ActiveExpertTitle"
+                   Width="@ActiveExpertWidth"
+                   Height="@ActiveExpertHeight"
+                   CssClass="fx-rd-expert-dialog"
+                   CloseOnEscape="true"
+                   OnClose="CloseExpertAsync">
+        <ChildContent>
+            @RenderExpertContent()
+        </ChildContent>
+        <FooterContent>
+            <div class="fx-rd-expert-footer">
+                <ButtonControl CssClass="fx-rd-expert-primary" OnClick="@(_ => ApplyExpertAsync())">OK</ButtonControl>
+                <ButtonControl OnClick="@(_ => CloseExpertAsync())">Cancel</ButtonControl>
+                <ButtonControl Disabled="true">Help</ButtonControl>
+            </div>
+        </FooterContent>
+    </DialogControl>
 </div>
 
 @code {
@@ -125,12 +180,172 @@
     private TreeNode? _selectedExplorerNode;
     private bool _showNewReportWizard;
     private string _activeDocumentTab = DesignDocumentTab;
+    private string? _activeExpert;
+    private List<ReportDesignerDataTable> _expertSelectedTables = new();
+    private List<ReportDesignerFilter> _expertFilters = new();
+    private List<ReportDesignerField> _expertGroupFields = new();
+    private List<ReportDesignerGroup> _expertGroups = new();
+    private List<ReportDesignerSort> _expertSorts = new();
+    private List<ReportDesignerField> _expertSortFields = new();
+    private List<ReportDesignerSummary> _expertSummaries = new();
+    private List<ReportDesignerField> _expertSummaryFields = new();
+    private List<ReportDesignerField> _expertFormulaFields = new();
+    private List<ReportDesignerParameter> _expertParameters = new();
+    private List<ReportDesignerSection> _expertSections = new();
+    private List<ReportDesignerDataLink> _expertLinks = new();
+    private ReportDesignerPage _expertPage = new();
+    private ReportDesignerHighlightRule _expertHighlightRule = new();
+    private ReportDesignerElement? _clipboardElement;
+    private ReportDesignerElement? _formatPainterElement;
+    private readonly List<string> _undoStack = new();
+    private readonly List<string> _redoStack = new();
+    private string _expertTitle = "";
+    private string _findText = "";
+    private string _findResultText = "";
+    private bool _restoringHistory;
+    private int _activeExpertItemIndex;
 
     private const string DesignDocumentTab = "design";
     private const string CodeDocumentTab = "code";
     private const string FieldExplorerTab = "fields";
     private const string ReportExplorerTab = "report";
+    private const string DatabaseExpert = "database";
+    private const string RecordExpert = "record";
+    private const string GroupExpert = "group";
+    private const string GroupSortExpert = "groupSort";
+    private const string SectionExpert = "section";
+    private const string SortExpert = "sort";
+    private const string FormulaExpert = "formula";
+    private const string ParameterExpert = "parameter";
+    private const string SummaryExpert = "summary";
+    private const string PageExpert = "page";
+    private const string BrowseDataExpert = "browseData";
+    private const string FindExpert = "find";
+    private const string TextFormatExpert = "textFormat";
+    private const string HighlightingExpert = "highlighting";
+    private const string VisualLinkingExpert = "visualLinking";
+    private const string RunningTotalExpert = "runningTotal";
     private const int SectionRailWidthPx = 126;
+
+    private IReadOnlyList<ReportDesignerToolbarRow> DesignerToolbarRows =>
+    [
+        new(false,
+        [
+            Button("new", "rd-new", "New Report"),
+            new("open", "rd-open", "Open", ReportDesignerToolbarItemKind.FileOpen, HasDropDown: true),
+            Button("save", "rd-save", "Save"),
+            Button("print", "rd-print", "Print"),
+            Button("preview", "rd-print-preview", "Print Preview"),
+            Button("browseData", "rd-browse-data", "Browse Data"),
+            Button("reload", "rd-refresh", "Refresh Report Data"),
+            Button("export", "rd-export", "Export Report"),
+            Sep(),
+            Button("cut", "rd-cut", "Cut"),
+            Button("copy", "rd-copy", "Copy"),
+            Button("paste", "rd-paste", "Paste"),
+            Button("formatPainter", "rd-brush", "Format Painter"),
+            Button("undo", "rd-undo", "Undo"),
+            Button("redo", "rd-redo", "Redo"),
+            Sep(),
+            Button("togglePreviewPanel", "rd-toggle-preview-panel", "Toggle Preview Panel"),
+            Button("fieldExplorer", "rd-field-explorer", "Field Explorer"),
+            Button("reportExplorer", "rd-report-explorer", "Report Explorer"),
+            Button("repository", "rd-repository", "Repository Explorer"),
+            Button("dependencyChecker", "rd-dependency-checker", "Dependency Checker"),
+            Button("workbench", "rd-workbench", "Workbench"),
+            Button("find", "rd-find", "Find in Report"),
+        ]),
+        new(false,
+        [
+            new("fontFamily", "", "Font Name (Arial)", ReportDesignerToolbarItemKind.FontFamily),
+            new("fontSize", "", "Font Size (10)", ReportDesignerToolbarItemKind.FontSize, HasDropDown: true),
+            Button("fontGrow", "rd-font-grow", "Grow Font"),
+            Button("fontShrink", "rd-font-shrink", "Shrink Font"),
+            Sep(),
+            Button("bold", "rd-bold", "Bold"),
+            Button("italic", "rd-italic", "Italic"),
+            Button("underline", "rd-underline", "Underline"),
+            Sep(),
+            Button("align-left", "rd-align-left", "Align Left"),
+            Button("align-center", "rd-align-center", "Align Center"),
+            Button("align-right", "rd-align-right", "Align Right"),
+            Button("align-justified", "rd-align-justified", "Justify"),
+            Button("align-top", "rd-align-top", "Align Top"),
+            Button("align-middle", "rd-align-middle", "Align Middle Vertically"),
+            Button("align-bottom", "rd-align-bottom", "Align Bottom Vertically"),
+            Sep(),
+            Button("fontcolor", "rd-fontcolor", "Text Color"),
+            Button("fill", "rd-fill", "Highlight/Fill Color"),
+            Button("borders", "rd-border", "Borders"),
+            Button("indentDecrease", "rd-indent-decrease", "Decrease Indent"),
+            Button("indentIncrease", "rd-indent-increase", "Increase Indent"),
+            Button("textFormat", "rd-text-format", "Font/Text Format Dialog"),
+            Button("suppress", "rd-suppress", "Suppress"),
+            Button("lockFormat", "rd-lock-format", "Lock Format"),
+            Button("lockSize", "rd-lock-size", "Lock Size Position"),
+            Sep(),
+            Button("currency", "rd-currency", "Currency"),
+            Button("thousands", "rd-thousands", "Thousands Separator (,)"),
+            Button("percent", "rd-percent", "Percent (%)"),
+            Button("decimalIncrease", "rd-dec-plus", "Increase Decimals"),
+            Button("decimalDecrease", "rd-dec-minus", "Decrease Decimals")
+        ]),
+        new(true,
+        [
+            Button("text", "rd-text", "Insert Text Object (ab)"),
+            Button("group", "rd-group", "Insert Group"),
+            Button("summary", "rd-sigma", "Insert Summary (Sigma)"),
+            Button("crosstab", "rd-crosstab", "Insert Cross-Tab"),
+            Button("olapGrid", "rd-olap-grid", "Insert OLAP GRIDt"),
+            Button("subreport", "rd-subreport", "Insert Subreport"),
+            Button("line", "rd-line", "Insert Line"),
+            Button("box", "rd-box", "Insert Box"),
+            Button("image", "rd-image", "Insert Picture"),
+            Button("chart", "rd-chart", "Insert Chart"),
+            Button("map", "rd-map", "Insert Map (Globe)"),
+            Sep(),
+            Button("database", "rd-database", "Database Expert"),
+            Button("group", "rd-group-expert", "Group Expert"),
+            Button("groupsort", "rd-groupsort", "Group Sort Expert"),
+            Button("sort", "rd-sort", "Record Sort Expert"),
+            Button("record", "rd-record", "Select Expert"),
+            Button("section", "rd-section", "Section Expert"),
+            Button("formula", "rd-formula", "Formula Workshop (x+1)"),
+            Button("olapDesign", "rd-olap-design", "OLAP Design Expert"),
+            Button("visualLinking", "rd-linking", "Visual Linking Expert"),
+            Button("template", "rd-template", "Template Expert"),
+            Button("format", "rd-format", "Format"),
+            Button("hyperlink", "rd-hyperlink", "Insert Hyperlink"),
+            Button("highlightExpert", "rd-highlight-expert", "Highlighting Expert"),
+            Button("runningTotal", "rd-running-total", "Running Total Expert"),
+            Button("pageNavigation", "rd-page-navigation", "Page Navigation")
+        ])
+    ];
+
+    private static readonly string[] FontFamilies = ["Arial", "Times New Roman", "Tahoma", "MS Sans Serif", "Courier New", "Verdana"];
+    private static readonly decimal[] FontSizes = [8m, 9m, 10m, 11m, 12m, 14m, 16m, 18m, 20m, 24m, 28m, 36m];
+    private static readonly string[] SortDirections = ["Ascending", "Descending"];
+    private static readonly string[] GroupSortModes = ["No Sort", "Ascending", "Descending", "Top N", "Bottom N"];
+    private static readonly string[] PageOrientations = ["Portrait", "Landscape"];
+    private static readonly string[] PaperSizes = ["PaperLetter", "PaperLegal", "PaperA4", "PaperA3"];
+    private static readonly string[] SummaryOperations = ["Sum", "Average", "Count", "Minimum", "Maximum"];
+    private static readonly string[] FilterOperators =
+    [
+        "is equal to",
+        "is not equal to",
+        "is less than",
+        "is less than or equal to",
+        "is greater than",
+        "is greater than or equal to",
+        "contains",
+        "does not contain",
+        "begins with",
+        "ends with"
+    ];
+
+    private static readonly string[] FontStyleChoices = ["Default", "Regular", "Bold", "Italic", "Bold Italic"];
+    private static readonly string[] BorderStyleChoices = ["Default border style", "No border", "Single line", "Double line"];
+    private static readonly string[] JoinTypeChoices = ["Inner", "Left Outer", "Right Outer", "Full Outer"];
 
     private static readonly string[] SpecialFieldNames =
     [
@@ -167,10 +382,356 @@
     private bool IsDesignDocumentActive => string.Equals(_activeDocumentTab, DesignDocumentTab, StringComparison.Ordinal);
     private bool IsCodeDocumentActive => string.Equals(_activeDocumentTab, CodeDocumentTab, StringComparison.Ordinal);
     private bool IsFieldExplorerActive => string.Equals(_activeExplorerTab, FieldExplorerTab, StringComparison.Ordinal);
+    private bool IsExpertOpen => !string.IsNullOrWhiteSpace(_activeExpert);
     private string ActiveExplorerTitle => IsFieldExplorerActive ? "Field Explorer" : "Report Explorer";
     private List<TreeNode> ActiveExplorerNodes => IsFieldExplorerActive ? _fieldExplorerNodes : _reportExplorerNodes;
     private IReadOnlyList<ReportDesignerDataTable> WizardDataSources => GetWizardDataSources();
     private string CurrentXml => GetCurrentXml();
+    private string SelectedFontFamily => _selectedElement?.FontFamily ?? "Arial";
+    private decimal SelectedFontSize => _selectedElement?.FontSize > 0 ? _selectedElement.FontSize : 10m;
+    private List<ReportDesignerField> AllDesignerFields => _document.Fields.OrderBy(reportField => reportField.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+    private IReadOnlyList<string> HighlightValueSources => new[] { "this field" }.Concat(AllDesignerFields.Select(reportField => reportField.DisplayName)).ToList();
+    private IReadOnlyList<string> DesignerTableNames => GetWizardDataSources().Select(table => table.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+    private IReadOnlyList<string> DesignerFieldNames => AllDesignerFields.Select(reportField => reportField.Name).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+    private string ActiveExpertTitle => _activeExpert switch
+    {
+        DatabaseExpert => "Database Expert",
+        RecordExpert => "Select Expert -- Record",
+        GroupExpert => "Group Expert",
+        GroupSortExpert => "Group Sort Expert",
+        SectionExpert => "Section Expert",
+        SortExpert => "Record Sort Expert",
+        FormulaExpert => "Formula Expert",
+        ParameterExpert => "Parameter Expert",
+        SummaryExpert => "Summary Expert",
+        PageExpert => "Page Setup Expert",
+        BrowseDataExpert => "Browse Data",
+        FindExpert => "Find in Report",
+        TextFormatExpert => "Font/Text Format",
+        HighlightingExpert => "Highlighting Expert",
+        VisualLinkingExpert => "Visual Linking Expert",
+        RunningTotalExpert => "Running Total Expert",
+        _ => "Report Expert"
+    };
+    private string ActiveExpertWidth => _activeExpert switch
+    {
+        RecordExpert => "660px",
+        GroupSortExpert => "570px",
+        SectionExpert => "640px",
+        PageExpert => "520px",
+        BrowseDataExpert => "620px",
+        FindExpert => "520px",
+        TextFormatExpert => "520px",
+        HighlightingExpert => "585px",
+        VisualLinkingExpert => "640px",
+        RunningTotalExpert => "650px",
+        _ => "760px"
+    };
+    private string ActiveExpertHeight => _activeExpert switch
+    {
+        RecordExpert => "420px",
+        GroupSortExpert => "360px",
+        SectionExpert => "430px",
+        PageExpert => "360px",
+        BrowseDataExpert => "420px",
+        FindExpert => "270px",
+        TextFormatExpert => "370px",
+        HighlightingExpert => "430px",
+        VisualLinkingExpert => "430px",
+        RunningTotalExpert => "430px",
+        _ => "520px"
+    };
+
+    private static ReportDesignerToolbarItem Button(string command, string iconCss, string tooltip, bool hasDropDown = false) =>
+        new(command, iconCss, tooltip, HasDropDown: hasDropDown);
+
+    private static ReportDesignerToolbarItem Sep() =>
+        new("", "", "", ReportDesignerToolbarItemKind.Separator);
+
+    private string ToolbarButtonCss(ReportDesignerToolbarItem item)
+    {
+        var active = IsToolbarCommandActive(item.Command) ? " active" : "";
+        var pending = IsToolbarCommandImplemented(item.Command) ? "" : " fx-rd-tool-pending";
+        var filePicker = item.Kind == ReportDesignerToolbarItemKind.FileOpen ? " fx-rd-file-picker" : "";
+        return $"fx-rd-icon-btn{filePicker} {item.IconCss}{active}{pending}";
+    }
+
+    private static string ToolbarIconCss(ReportDesignerToolbarItem item) =>
+        $"fx-rd-icon {item.IconCss}";
+
+    private bool IsToolbarItemDisabled(ReportDesignerToolbarItem item)
+    {
+        if (item.Kind != ReportDesignerToolbarItemKind.Button)
+            return false;
+
+        if (!IsToolbarCommandImplemented(item.Command))
+            return true;
+
+        return item.Command switch
+        {
+            "preview" => !PreviewRequested.HasDelegate,
+            "reload" => !CanReload,
+            "copy" or "cut" or "delete" => _selectedElement is null,
+            "paste" => _clipboardElement is null,
+            "formatPainter" => _selectedElement is null && _formatPainterElement is null,
+            "undo" => _undoStack.Count <= 1,
+            "redo" => _redoStack.Count == 0,
+            "field" => !_document.Fields.Any(),
+            "fontGrow" or "fontShrink" => _selectedElement is null,
+            "bold" or "italic" or "underline" or
+            "align-left" or "align-center" or "align-right" or "align-justified" or
+            "fontcolor" or "fill" or "suppress" or
+            "indentIncrease" or "indentDecrease" or "textFormat" or "format" or
+            "lockFormat" or "lockSize" or
+            "currency" or "thousands" or "percent" or "decimalIncrease" or "decimalDecrease" or
+            "nudge-left" or "nudge-right" or "nudge-up" or "nudge-down" => _selectedElement is null,
+            _ => false
+        };
+    }
+
+    private bool IsToolbarCommandActive(string command)
+    {
+        return command switch
+        {
+            "bold" => _selectedElement?.Bold == true,
+            "italic" => _selectedElement?.Italic == true,
+            "underline" => _selectedElement?.Underline == true,
+            "align-left" => _selectedElement is not null && string.Equals(NormalizeAlignment(_selectedElement.HorizontalAlignment), "Left", StringComparison.OrdinalIgnoreCase),
+            "align-center" => _selectedElement is not null && string.Equals(NormalizeAlignment(_selectedElement.HorizontalAlignment), "Center", StringComparison.OrdinalIgnoreCase),
+            "align-right" => _selectedElement is not null && string.Equals(NormalizeAlignment(_selectedElement.HorizontalAlignment), "Right", StringComparison.OrdinalIgnoreCase),
+            "align-justified" => _selectedElement is not null && string.Equals(NormalizeAlignment(_selectedElement.HorizontalAlignment), "Justified", StringComparison.OrdinalIgnoreCase),
+            "suppress" => _selectedElement?.IsSuppressed == true,
+            "lockFormat" => _selectedElement?.LockFormat == true,
+            "lockSize" => _selectedElement?.LockSizePosition == true,
+            "formatPainter" => _formatPainterElement is not null,
+            "design" => IsDesignDocumentActive,
+            "code" => IsCodeDocumentActive,
+            "fieldExplorer" => IsFieldExplorerActive,
+            "reportExplorer" => !IsFieldExplorerActive,
+            _ => false
+        };
+    }
+
+    private static bool IsToolbarCommandImplemented(string command)
+    {
+        return command is
+            "new" or "save" or "export" or "preview" or "reload" or "code" or "design" or
+            "print" or "browseData" or "find" or
+            "copy" or "cut" or "paste" or "delete" or "formatPainter" or "undo" or "redo" or
+            "database" or "record" or "group" or "groupsort" or "section" or "sort" or
+            "formula" or "parameter" or "summary" or "page" or
+            "visualLinking" or "highlightExpert" or "runningTotal" or
+            "wizard" or "text" or "field" or "line" or "box" or "subreport" or
+            "bold" or "italic" or "underline" or
+            "fontGrow" or "fontShrink" or
+            "align-left" or "align-center" or "align-right" or "align-justified" or
+            "indentIncrease" or "indentDecrease" or "textFormat" or "format" or
+            "fontcolor" or "fill" or "suppress" or "lockFormat" or "lockSize" or
+            "currency" or "thousands" or "percent" or "decimalIncrease" or "decimalDecrease" or
+            "fieldExplorer" or "reportExplorer" or
+            "nudge-left" or "nudge-right" or "nudge-up" or "nudge-down";
+    }
+
+    private async Task ExecuteToolbarCommandAsync(string command)
+    {
+        switch (command)
+        {
+            case "new":
+            case "wizard":
+                await OpenNewWizardAsync();
+                break;
+            case "save":
+                await ExportXmlAsync();
+                break;
+            case "export":
+                await ExportXmlAsync();
+                break;
+            case "print":
+                await PrintAsync();
+                break;
+            case "preview":
+                await PreviewAsync();
+                break;
+            case "reload":
+                await ReloadAsync();
+                break;
+            case "code":
+                ShowDocumentTab(CodeDocumentTab);
+                break;
+            case "design":
+                ShowDocumentTab(DesignDocumentTab);
+                break;
+            case "copy":
+                CopySelected();
+                break;
+            case "cut":
+                await CutSelected();
+                break;
+            case "paste":
+                await PasteSelected();
+                break;
+            case "formatPainter":
+                await ApplyOrCaptureFormatPainterAsync();
+                break;
+            case "undo":
+                await UndoAsync();
+                break;
+            case "redo":
+                await RedoAsync();
+                break;
+            case "delete":
+                await RemoveSelected();
+                break;
+            case "browseData":
+                await OpenExpertAsync(BrowseDataExpert);
+                break;
+            case "find":
+                await OpenExpertAsync(FindExpert);
+                break;
+            case "database":
+                await OpenExpertAsync(DatabaseExpert);
+                break;
+            case "record":
+                await OpenExpertAsync(RecordExpert);
+                break;
+            case "group":
+                await OpenExpertAsync(GroupExpert);
+                break;
+            case "groupsort":
+                await OpenExpertAsync(GroupSortExpert);
+                break;
+            case "section":
+                await OpenExpertAsync(SectionExpert);
+                break;
+            case "sort":
+                await OpenExpertAsync(SortExpert);
+                break;
+            case "formula":
+                await OpenExpertAsync(FormulaExpert);
+                break;
+            case "parameter":
+                await OpenExpertAsync(ParameterExpert);
+                break;
+            case "summary":
+                await OpenExpertAsync(SummaryExpert);
+                break;
+            case "page":
+                await OpenExpertAsync(PageExpert);
+                break;
+            case "visualLinking":
+                await OpenExpertAsync(VisualLinkingExpert);
+                break;
+            case "highlightExpert":
+                await OpenExpertAsync(HighlightingExpert);
+                break;
+            case "runningTotal":
+                await OpenExpertAsync(RunningTotalExpert);
+                break;
+            case "text":
+                await AddTextElement();
+                break;
+            case "field":
+                await AddFieldElement();
+                break;
+            case "line":
+                await AddLineElement();
+                break;
+            case "box":
+                await AddBoxElement();
+                break;
+            case "subreport":
+                await AddSubreportElement();
+                break;
+            case "bold":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.Bold));
+                break;
+            case "italic":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.Italic));
+                break;
+            case "underline":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.Underline));
+                break;
+            case "fontGrow":
+                await AdjustSelectedFontSizeAsync(1m);
+                break;
+            case "fontShrink":
+                await AdjustSelectedFontSizeAsync(-1m);
+                break;
+            case "align-left":
+                await SetSelectedAlignmentAsync("Left");
+                break;
+            case "align-center":
+                await SetSelectedAlignmentAsync("Center");
+                break;
+            case "align-right":
+                await SetSelectedAlignmentAsync("Right");
+                break;
+            case "align-justified":
+                await SetSelectedAlignmentAsync("Justified");
+                break;
+            case "indentIncrease":
+                await AdjustSelectedIndentAsync(180);
+                break;
+            case "indentDecrease":
+                await AdjustSelectedIndentAsync(-180);
+                break;
+            case "textFormat":
+            case "format":
+                await OpenExpertAsync(TextFormatExpert);
+                break;
+            case "fontcolor":
+                await CycleSelectedTextColorAsync();
+                break;
+            case "fill":
+                await CycleSelectedFillColorAsync();
+                break;
+            case "suppress":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.IsSuppressed));
+                break;
+            case "lockFormat":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.LockFormat));
+                break;
+            case "lockSize":
+                await ToggleSelectedElementBool(nameof(ReportDesignerElement.LockSizePosition));
+                break;
+            case "currency":
+                await SetSelectedFormatAsync("C2");
+                break;
+            case "thousands":
+                await SetSelectedFormatAsync("N0");
+                break;
+            case "percent":
+                await SetSelectedFormatAsync("P2");
+                break;
+            case "decimalIncrease":
+                await AdjustSelectedDecimalsAsync(1);
+                break;
+            case "decimalDecrease":
+                await AdjustSelectedDecimalsAsync(-1);
+                break;
+            case "fieldExplorer":
+                ShowExplorerTab(FieldExplorerTab);
+                break;
+            case "reportExplorer":
+                ShowExplorerTab(ReportExplorerTab);
+                break;
+            case "nudge-left":
+                await NudgeSelected(-60, 0);
+                break;
+            case "nudge-right":
+                await NudgeSelected(60, 0);
+                break;
+            case "nudge-up":
+                await NudgeSelected(0, -60);
+                break;
+            case "nudge-down":
+                await NudgeSelected(0, 60);
+                break;
+            default:
+                _status = "This Crystal toolbar command is not implemented yet.";
+                break;
+        }
+    }
 
     protected override async Task OnParametersSetAsync()
     {
@@ -254,6 +815,19 @@
             await PreviewRequested.InvokeAsync(_document);
     }
 
+    private async Task PrintAsync()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("window.print");
+            _status = "Print requested.";
+        }
+        catch
+        {
+            _status = "Print is not available in this host.";
+        }
+    }
+
     private async Task ReloadAsync()
     {
         if (Document is not null)
@@ -270,6 +844,1039 @@
 
         if (!string.IsNullOrWhiteSpace(XmlPath))
             await LoadPathAsync(XmlPath!);
+    }
+
+    private Task OpenExpertAsync(string expert)
+    {
+        _activeExpert = expert;
+        _activeExpertItemIndex = 0;
+        _expertSelectedTables = _document.DataSources.Select(CloneTable).ToList();
+        _expertFilters = _document.Filters.Select(CloneFilter).ToList();
+        _expertGroups = _document.Groups.Select(CloneGroup).ToList();
+        _expertGroupFields = _document.Groups
+            .Select(group => ResolveDesignerField(group.Condition))
+            .Where(field => !string.IsNullOrWhiteSpace(field.DisplayName))
+            .Select(CloneField)
+            .ToList();
+        _expertSorts = _document.Sorts.Select(CloneSort).ToList();
+        _expertSortFields = _expertSorts.Select(sort => CloneField(sort.Field)).ToList();
+        _expertSummaries = _document.Summaries.Select(CloneSummary).ToList();
+        _expertSummaryFields = _expertSummaries.Select(summary => CloneField(summary.Field)).ToList();
+        _expertFormulaFields = _document.Fields.Where(field => field.IsFormula).Select(CloneField).ToList();
+        _expertParameters = _document.Parameters.Select(CloneParameter).ToList();
+        _expertSections = _document.Sections.Select(CloneSectionForExpert).ToList();
+        _expertLinks = _document.Links.Select(CloneLink).ToList();
+        _expertPage = ClonePage(_document.Page);
+        _expertHighlightRule = _selectedElement?.HighlightRule.Clone() ?? new ReportDesignerHighlightRule
+        {
+            FieldName = _selectedElement is null ? "" : CleanCrystalFormula(_selectedElement.Binding),
+            Operator = FilterOperators[0],
+            Value = "",
+            FontStyle = "Default",
+            TextColor = _selectedElement?.TextColor ?? "#000000",
+            BackgroundColor = _selectedElement?.BackgroundColor ?? "transparent",
+            BorderStyle = "Default border style"
+        };
+        _expertTitle = _document.Title;
+        _findResultText = "";
+        return Task.CompletedTask;
+    }
+
+    private Task CloseExpertAsync()
+    {
+        _activeExpert = null;
+        return Task.CompletedTask;
+    }
+
+    private async Task ApplyExpertAsync()
+    {
+        switch (_activeExpert)
+        {
+            case DatabaseExpert:
+                ApplyDatabaseExpert();
+                break;
+            case RecordExpert:
+                _document.Filters = _expertFilters.Select(CloneFilter).ToList();
+                break;
+            case GroupExpert:
+                ApplyGroupExpert();
+                break;
+            case GroupSortExpert:
+                _document.Groups = _expertGroups.Select(CloneGroup).ToList();
+                break;
+            case SectionExpert:
+                ApplySectionExpert();
+                break;
+            case SortExpert:
+                _document.Sorts = _expertSorts.Select(CloneSort).ToList();
+                break;
+            case FormulaExpert:
+                ApplyFormulaExpert();
+                break;
+            case ParameterExpert:
+                _document.Parameters = _expertParameters.Select(CloneParameter).ToList();
+                break;
+            case SummaryExpert:
+                _document.Summaries = _expertSummaries.Select(CloneSummary).ToList();
+                break;
+            case PageExpert:
+                _document.Page = ClonePage(_expertPage);
+                _document.Title = _expertTitle;
+                break;
+            case TextFormatExpert:
+                ApplyTextFormatExpert();
+                break;
+            case HighlightingExpert:
+                ApplyHighlightingExpert();
+                break;
+            case VisualLinkingExpert:
+                _document.Links = _expertLinks.Select(CloneLink).ToList();
+                break;
+            case RunningTotalExpert:
+                _document.Summaries = _expertSummaries.Select(CloneSummary).ToList();
+                break;
+        }
+
+        RebuildExplorerNodes();
+        _activeExpert = null;
+        await MarkDirtyAsync();
+    }
+
+    private RenderFragment RenderExpertContent() => _activeExpert switch
+    {
+        DatabaseExpert => RenderDatabaseExpert(),
+        RecordExpert => RenderRecordExpert(),
+        GroupExpert => RenderGroupExpert(),
+        GroupSortExpert => RenderGroupSortExpert(),
+        SectionExpert => RenderSectionExpert(),
+        SortExpert => RenderSortExpert(),
+        FormulaExpert => RenderFormulaExpert(),
+        ParameterExpert => RenderParameterExpert(),
+        SummaryExpert => RenderSummaryExpert(),
+        PageExpert => RenderPageExpert(),
+        BrowseDataExpert => RenderBrowseDataExpert(),
+        FindExpert => RenderFindExpert(),
+        TextFormatExpert => RenderTextFormatExpert(),
+        HighlightingExpert => RenderHighlightingExpert(),
+        VisualLinkingExpert => RenderVisualLinkingExpert(),
+        RunningTotalExpert => RenderRunningTotalExpert(),
+        _ => @<div class="fx-rd-expert-empty">No expert selected.</div>
+    };
+
+    private RenderFragment RenderDatabaseExpert() => @<div class="fx-rd-expert fx-rd-database-expert">
+        <div class="fx-rd-expert-tabs"><span class="active">Data</span><span>Links</span></div>
+        <p class="fx-rd-expert-note"><strong>Browse the data source for the tables you want to add.</strong><br />Select tables on the left and move them to Selected Tables.</p>
+        <MultiSelectDualListControl TItem="ReportDesignerDataTable"
+                                    Items="@ExpertDataSources"
+                                    SelectedItems="@_expertSelectedTables"
+                                    SelectedItemsChanged="OnExpertSelectedTablesChanged"
+                                    LeftHeader="Available Data Sources:"
+                                    RightHeader="Selected Tables:"
+                                    KeySelector="@TableKey"
+                                    LabelSelector="@TableLabel"
+                                    VisibleRows="14"
+                                    Height="300px"
+                                    CssClass="fx-rd-expert-dual" />
+    </div>;
+
+    private RenderFragment RenderRecordExpert() => @<div class="fx-rd-expert fx-rd-record-expert">
+        <div class="fx-rd-record-grid">
+            <div class="fx-rd-record-tabs">
+                @for (var i = 0; i < _expertFilters.Count; i++)
+                {
+                    var index = i;
+                    <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertFilters[index].Field.DisplayName</button>
+                }
+                <button type="button" @onclick="AddExpertFilter">&lt;New&gt;</button>
+            </div>
+            <div class="fx-rd-record-editor">
+                @if (ActiveExpertFilter is not null)
+                {
+                    var filter = ActiveExpertFilter;
+                    <DropDownListControl TValue="string" TItem="ReportDesignerField" DataSource="@AllDesignerFields" Value="@filter.Field.DisplayName" ValueChanged="value => filter.Field = ResolveDesignerField(value ?? string.Empty)" TextFieldName="DisplayName" ValueFieldName="DisplayName" Width="240px" CssClass="fx-rd-expert-dd" />
+                    <DropDownListControl TValue="string" TItem="string" DataSource="@FilterOperators" Value="@filter.Operator" ValueChanged="value => filter.Operator = value ?? FilterOperators[0]" Width="190px" CssClass="fx-rd-expert-dd" />
+                    <TextBoxControl Value="@filter.Value" ValueChanged="value => filter.Value = value ?? string.Empty" CssClass="fx-rd-expert-input" />
+                }
+            </div>
+            <div class="fx-rd-record-buttons">
+                <ButtonControl OnClick="@(_ => AddExpertFilter())">New...</ButtonControl>
+                <ButtonControl Disabled="@(ActiveExpertFilter is null)" OnClick="@(_ => DeleteActiveExpertFilter())">Delete</ButtonControl>
+                <ButtonControl Disabled="true">Browse...</ButtonControl>
+            </div>
+        </div>
+        <div class="fx-rd-formula-row">
+            <ButtonControl Disabled="true">Formula Editor...</ButtonControl>
+            <ButtonControl Disabled="true">Hide Formula &lt;&lt;&lt;</ButtonControl>
+        </div>
+        <textarea class="fx-rd-expert-formula" readonly>@BuildFilterFormulaPreview()</textarea>
+    </div>;
+
+    private RenderFragment RenderGroupExpert() => @<div class="fx-rd-expert">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@AllDesignerFields"
+                                    SelectedItems="@_expertGroupFields"
+                                    SelectedItemsChanged="OnExpertGroupFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Group By:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="14"
+                                    Height="330px"
+                                    CssClass="fx-rd-expert-dual" />
+        <div class="fx-rd-pane-actions">
+            <ButtonControl Disabled="true">Browse Data...</ButtonControl>
+            <ButtonControl Disabled="true">Find Field...</ButtonControl>
+            <ButtonControl Disabled="@(_expertGroupFields.Count == 0)">Options...</ButtonControl>
+        </div>
+    </div>;
+
+    private RenderFragment RenderGroupSortExpert() => @<div class="fx-rd-expert fx-rd-group-sort-expert">
+        <p>Analyze report or chart results by taking the Top N or Sort of totals.</p>
+        <div class="fx-rd-record-tabs">
+            @for (var i = 0; i < _expertGroups.Count; i++)
+            {
+                var index = i;
+                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@CleanCrystalFormula(_expertGroups[index].Condition)</button>
+            }
+        </div>
+        @if (ActiveExpertGroup is not null)
+        {
+            var group = ActiveExpertGroup;
+            <label class="fx-rd-expert-field">
+                <span>For this group sort</span>
+                <DropDownListControl TValue="string" TItem="string" DataSource="@GroupSortModes" Value="@group.SortDirection" ValueChanged="value => group.SortDirection = value ?? GroupSortModes[0]" Width="150px" CssClass="fx-rd-expert-dd" />
+            </label>
+        }
+    </div>;
+
+    private RenderFragment RenderSectionExpert() => @<div class="fx-rd-expert fx-rd-section-expert">
+        <div class="fx-rd-section-list">
+            <div class="fx-rd-expert-label">Sections:</div>
+            @for (var i = 0; i < _expertSections.Count; i++)
+            {
+                var index = i;
+                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@GetReportSectionExplorerLabel(_expertSections[index])</button>
+            }
+        </div>
+        <div class="fx-rd-section-options">
+            <div class="fx-rd-expert-tabs"><span class="active">Common</span><span>Paging</span><span>Color</span></div>
+            @if (ActiveExpertSection is not null)
+            {
+                var section = ActiveExpertSection;
+                <CheckBoxControl @bind-Checked="section.HideForDrillDown" Label="Hide (Drill-Down OK)" />
+                <CheckBoxControl @bind-Checked="section.IsSuppressed" Label="Suppress (No Drill-Down)" />
+                <CheckBoxControl @bind-Checked="section.PrintAtBottomOfPage" Label="Print at Bottom of Page" />
+                <CheckBoxControl @bind-Checked="section.KeepTogether" Label="Keep Together" />
+                <CheckBoxControl @bind-Checked="section.SuppressIfBlank" Label="Suppress Blank Section" />
+                <CheckBoxControl @bind-Checked="section.UnderlayFollowingSections" Label="Underlay Following Sections" />
+                <CheckBoxControl @bind-Checked="section.NewPageBefore" Label="New Page Before" />
+                <CheckBoxControl @bind-Checked="section.NewPageAfter" Label="New Page After" />
+                <CheckBoxControl @bind-Checked="section.ReadOnly" Label="Read-only" />
+                <CheckBoxControl @bind-Checked="section.RelativePositions" Label="Relative Positions" />
+                <label class="fx-rd-expert-field"><span>Background</span><ColorPickerControl Value="@(section.BackgroundColor)" ValueChanged="value => section.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+            }
+        </div>
+    </div>;
+
+    private RenderFragment RenderSortExpert() => @<div class="fx-rd-expert">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@AllDesignerFields"
+                                    SelectedItems="@_expertSortFields"
+                                    SelectedItemsChanged="OnExpertSortFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Sort Fields:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="14"
+                                    Height="330px"
+                                    CssClass="fx-rd-expert-dual" />
+        @if (ActiveExpertSort is not null)
+        {
+            var sort = ActiveExpertSort;
+            <div class="fx-rd-bottom-row">
+                <span>Sort direction:</span>
+                <DropDownListControl TValue="string" TItem="string" DataSource="@SortDirections" Value="@sort.Direction" ValueChanged="value => sort.Direction = value ?? SortDirections[0]" Width="150px" CssClass="fx-rd-expert-dd" />
+            </div>
+        }
+    </div>;
+
+    private RenderFragment RenderFormulaExpert() => @<div class="fx-rd-expert fx-rd-list-editor">
+        <div class="fx-rd-expert-list">
+            @for (var i = 0; i < _expertFormulaFields.Count; i++)
+            {
+                var index = i;
+                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertFormulaFields[index].Name</button>
+            }
+        </div>
+        <div class="fx-rd-expert-edit">
+            @if (ActiveExpertFormula is not null)
+            {
+                var formula = ActiveExpertFormula;
+                <label>Name <TextBoxControl Value="@formula.Name" ValueChanged="value => formula.Name = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+                <label>Formula <TextBoxControl Value="@formula.Formula" ValueChanged="value => formula.Formula = value ?? string.Empty" Multiline="true" Rows="8" CssClass="fx-rd-expert-input textarea" /></label>
+            }
+            <div class="fx-rd-pane-actions">
+                <ButtonControl OnClick="@(_ => AddExpertFormula())">New...</ButtonControl>
+                <ButtonControl Disabled="@(ActiveExpertFormula is null)" OnClick="@(_ => DeleteActiveExpertFormula())">Delete</ButtonControl>
+                <ButtonControl Disabled="true">Check</ButtonControl>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderParameterExpert() => @<div class="fx-rd-expert fx-rd-list-editor">
+        <div class="fx-rd-expert-list">
+            @for (var i = 0; i < _expertParameters.Count; i++)
+            {
+                var index = i;
+                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertParameters[index].Name</button>
+            }
+        </div>
+        <div class="fx-rd-expert-edit">
+            @if (ActiveExpertParameter is not null)
+            {
+                var parameter = ActiveExpertParameter;
+                <label>Name <TextBoxControl Value="@parameter.Name" ValueChanged="value => parameter.Name = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+                <label>Prompt <TextBoxControl Value="@parameter.Prompt" ValueChanged="value => parameter.Prompt = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+                <label>Type <TextBoxControl Value="@parameter.Type" ValueChanged="value => parameter.Type = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+                <CheckBoxControl @bind-Checked="parameter.Required" Label="Required" />
+                <CheckBoxControl @bind-Checked="parameter.AllowMultiple" Label="Allow multiple values" />
+            }
+            <div class="fx-rd-pane-actions">
+                <ButtonControl OnClick="@(_ => AddExpertParameter())">New...</ButtonControl>
+                <ButtonControl Disabled="@(ActiveExpertParameter is null)" OnClick="@(_ => DeleteActiveExpertParameter())">Delete</ButtonControl>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderSummaryExpert() => @<div class="fx-rd-expert">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@AllDesignerFields"
+                                    SelectedItems="@_expertSummaryFields"
+                                    SelectedItemsChanged="OnExpertSummaryFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Summarized Fields:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="14"
+                                    Height="330px"
+                                    CssClass="fx-rd-expert-dual" />
+        @if (ActiveExpertSummary is not null)
+        {
+            var summary = ActiveExpertSummary;
+            <div class="fx-rd-bottom-row">
+                <span>Summary operation:</span>
+                <DropDownListControl TValue="string" TItem="string" DataSource="@SummaryOperations" Value="@summary.Operation" ValueChanged="value => summary.Operation = value ?? SummaryOperations[0]" Width="150px" CssClass="fx-rd-expert-dd" />
+            </div>
+        }
+    </div>;
+
+    private RenderFragment RenderPageExpert() => @<div class="fx-rd-expert fx-rd-page-expert">
+        <label>Title <TextBoxControl Value="@_expertTitle" ValueChanged="value => _expertTitle = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+        <label>Orientation <DropDownListControl TValue="string" TItem="string" DataSource="@PageOrientations" Value="@_expertPage.Orientation" ValueChanged="value => _expertPage.Orientation = value ?? PageOrientations[0]" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+        <label>Paper size <DropDownListControl TValue="string" TItem="string" DataSource="@PaperSizes" Value="@_expertPage.PaperSize" ValueChanged="value => _expertPage.PaperSize = value ?? PaperSizes[0]" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+        <label>Content width <NumericTextBoxControl TValue="int" Value="@_expertPage.ContentWidthTwips" ValueChanged="value => _expertPage.ContentWidthTwips = value" CssClass="fx-rd-expert-input" /></label>
+        <label>Content height <NumericTextBoxControl TValue="int" Value="@_expertPage.ContentHeightTwips" ValueChanged="value => _expertPage.ContentHeightTwips = value" CssClass="fx-rd-expert-input" /></label>
+        <label>Left margin <NumericTextBoxControl TValue="int" Value="@_expertPage.MarginLeftTwips" ValueChanged="value => _expertPage.MarginLeftTwips = value" CssClass="fx-rd-expert-input" /></label>
+        <label>Top margin <NumericTextBoxControl TValue="int" Value="@_expertPage.MarginTopTwips" ValueChanged="value => _expertPage.MarginTopTwips = value" CssClass="fx-rd-expert-input" /></label>
+        <label>Right margin <NumericTextBoxControl TValue="int" Value="@_expertPage.MarginRightTwips" ValueChanged="value => _expertPage.MarginRightTwips = value" CssClass="fx-rd-expert-input" /></label>
+        <label>Bottom margin <NumericTextBoxControl TValue="int" Value="@_expertPage.MarginBottomTwips" ValueChanged="value => _expertPage.MarginBottomTwips = value" CssClass="fx-rd-expert-input" /></label>
+    </div>;
+
+    private RenderFragment RenderBrowseDataExpert() => @<div class="fx-rd-expert fx-rd-browse-expert">
+        <p class="fx-rd-expert-note"><strong>Browse Data</strong><br />This designer view lists the report's available tables and fields. Runtime row browsing is supplied by the host report data executor.</p>
+        <div class="fx-rd-browse-columns">
+            <div>
+                <div class="fx-rd-expert-label">Tables</div>
+                <div class="fx-rd-expert-list">
+                    @foreach (var table in GetWizardDataSources())
+                    {
+                        <button type="button">@table.DisplayName</button>
+                    }
+                </div>
+            </div>
+            <div>
+                <div class="fx-rd-expert-label">Fields</div>
+                <div class="fx-rd-expert-list">
+                    @foreach (var field in AllDesignerFields)
+                    {
+                        <button type="button">@field.DisplayName</button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderFindExpert() => @<div class="fx-rd-expert fx-rd-find-expert">
+        <label>Find what <TextBoxControl Value="@_findText" ValueChanged="value => _findText = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+        <div class="fx-rd-pane-actions">
+            <ButtonControl OnClick="@(_ => FindNextInReportAsync())">Find Next</ButtonControl>
+            <ButtonControl OnClick="@(_ => _findText = string.Empty)">Clear</ButtonControl>
+        </div>
+        <div class="fx-rd-find-result">@_findResultText</div>
+    </div>;
+
+    private RenderFragment RenderTextFormatExpert() => @<div class="fx-rd-expert fx-rd-text-format-expert">
+        @if (_selectedElement is null)
+        {
+            <div class="fx-rd-expert-empty">Select a report object before opening the format dialog.</div>
+        }
+        else
+        {
+            <label>Font <DropDownListControl TValue="string" TItem="string" DataSource="@FontFamilies" Value="@_selectedElement.FontFamily" ValueChanged="@(value => _selectedElement.FontFamily = value ?? "Arial")" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+            <label>Size <DropDownListControl TValue="decimal" TItem="decimal" DataSource="@FontSizes" Value="@_selectedElement.FontSize" ValueChanged="value => _selectedElement.FontSize = value" Width="90px" CssClass="fx-rd-expert-dd" /></label>
+            <div class="fx-rd-format-checks">
+                <CheckBoxControl @bind-Checked="_selectedElement.Bold" Label="Bold" />
+                <CheckBoxControl @bind-Checked="_selectedElement.Italic" Label="Italic" />
+                <CheckBoxControl @bind-Checked="_selectedElement.Underline" Label="Underline" />
+                <CheckBoxControl @bind-Checked="_selectedElement.LockFormat" Label="Lock Format" />
+            </div>
+            <label>Text color <ColorPickerControl Value="@_selectedElement.TextColor" ValueChanged="value => _selectedElement.TextColor = value" CssClass="fx-rd-section-color" /></label>
+            <label>Background <ColorPickerControl Value="@_selectedElement.BackgroundColor" ValueChanged="value => _selectedElement.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+            <label>Format string <TextBoxControl Value="@_selectedElement.FormatString" ValueChanged="value => _selectedElement.FormatString = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+            <label>Indent twips <NumericTextBoxControl TValue="int" Value="@_selectedElement.IndentTwips" ValueChanged="value => _selectedElement.IndentTwips = value" CssClass="fx-rd-expert-input" /></label>
+        }
+    </div>;
+
+    private RenderFragment RenderHighlightingExpert() => @<div class="fx-rd-expert fx-rd-highlighting-expert">
+        <fieldset class="fx-rd-highlight-list">
+            <legend>Item list</legend>
+            <div class="fx-rd-highlight-grid-head"><span>Sample</span><span>Condition</span></div>
+            <div class="fx-rd-highlight-listbox">
+                @if (_selectedElement?.HighlightRule.Enabled == true)
+                {
+                    <button type="button" class="active">
+                        <span style="@($"color:{_selectedElement.HighlightRule.TextColor};background:{CssColor(_selectedElement.HighlightRule.BackgroundColor, "transparent")};")">Sample</span>
+                        <span>@BuildHighlightCondition(_selectedElement.HighlightRule)</span>
+                    </button>
+                }
+            </div>
+            <div class="fx-rd-pane-actions">
+                <ButtonControl OnClick="@(_ => EnableHighlightRule())">New</ButtonControl>
+                <ButtonControl Disabled="@(!_expertHighlightRule.Enabled)" OnClick="@(_ => RemoveHighlightRule())">Remove</ButtonControl>
+            </div>
+        </fieldset>
+        <fieldset class="fx-rd-highlight-editor">
+            <legend>Item editor</legend>
+            <label>Value of, <DropDownListControl TValue="string" TItem="string" DataSource="@HighlightValueSources" Value="@_expertHighlightRule.FieldName" ValueChanged="value => _expertHighlightRule.FieldName = value ?? string.Empty" Width="170px" CssClass="fx-rd-expert-dd" /></label>
+            <label>Condition <DropDownListControl TValue="string" TItem="string" DataSource="@FilterOperators" Value="@_expertHighlightRule.Operator" ValueChanged="value => _expertHighlightRule.Operator = value ?? FilterOperators[0]" Width="170px" CssClass="fx-rd-expert-dd" /></label>
+            <label>Value <TextBoxControl Value="@_expertHighlightRule.Value" ValueChanged="value => _expertHighlightRule.Value = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
+            <label>Font style <DropDownListControl TValue="string" TItem="string" DataSource="@FontStyleChoices" Value="@_expertHighlightRule.FontStyle" ValueChanged="@(value => _expertHighlightRule.FontStyle = value ?? "Default")" Width="170px" CssClass="fx-rd-expert-dd" /></label>
+            <label>Font color <ColorPickerControl Value="@_expertHighlightRule.TextColor" ValueChanged="value => _expertHighlightRule.TextColor = value" CssClass="fx-rd-section-color" /></label>
+            <label>Background <ColorPickerControl Value="@_expertHighlightRule.BackgroundColor" ValueChanged="value => _expertHighlightRule.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+            <label>Border <DropDownListControl TValue="string" TItem="string" DataSource="@BorderStyleChoices" Value="@_expertHighlightRule.BorderStyle" ValueChanged="value => _expertHighlightRule.BorderStyle = value ?? BorderStyleChoices[0]" Width="170px" CssClass="fx-rd-expert-dd" /></label>
+            <div class="fx-rd-highlight-sample" style="@($"color:{_expertHighlightRule.TextColor};background:{CssColor(_expertHighlightRule.BackgroundColor, "#fff")};")">-$55,555.56</div>
+        </fieldset>
+    </div>;
+
+    private RenderFragment RenderVisualLinkingExpert() => @<div class="fx-rd-expert fx-rd-linking-expert">
+        <div class="fx-rd-link-list">
+            <div class="fx-rd-expert-label">Links</div>
+            @for (var i = 0; i < _expertLinks.Count; i++)
+            {
+                var index = i;
+                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertLinks[index].DisplayName</button>
+            }
+        </div>
+        <div class="fx-rd-link-editor">
+            @if (ActiveExpertLink is not null)
+            {
+                var link = ActiveExpertLink;
+                <label>Left table <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerTableNames" Value="@link.LeftTable" ValueChanged="value => link.LeftTable = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Left field <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerFieldNames" Value="@link.LeftField" ValueChanged="value => link.LeftField = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Right table <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerTableNames" Value="@link.RightTable" ValueChanged="value => link.RightTable = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Right field <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerFieldNames" Value="@link.RightField" ValueChanged="value => link.RightField = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Join type <DropDownListControl TValue="string" TItem="string" DataSource="@JoinTypeChoices" Value="@link.JoinType" ValueChanged="value => link.JoinType = value ?? JoinTypeChoices[0]" Width="180px" CssClass="fx-rd-expert-dd" /></label>
+            }
+            <div class="fx-rd-pane-actions">
+                <ButtonControl OnClick="@(_ => AddExpertLink())">New...</ButtonControl>
+                <ButtonControl Disabled="@(ActiveExpertLink is null)" OnClick="@(_ => DeleteActiveExpertLink())">Delete</ButtonControl>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderRunningTotalExpert() => @<div class="fx-rd-expert">
+        <MultiSelectDualListControl TItem="ReportDesignerField"
+                                    Items="@AllDesignerFields"
+                                    SelectedItems="@_expertSummaryFields"
+                                    SelectedItemsChanged="OnExpertSummaryFieldsChanged"
+                                    LeftHeader="Available Fields:"
+                                    RightHeader="Running Total Fields:"
+                                    KeySelector="@FieldKey"
+                                    LabelSelector="@FieldLabel"
+                                    VisibleRows="11"
+                                    Height="280px"
+                                    CssClass="fx-rd-expert-dual" />
+        @if (ActiveExpertSummary is not null)
+        {
+            var summary = ActiveExpertSummary;
+            <div class="fx-rd-bottom-row">
+                <span>Type of summary:</span>
+                <DropDownListControl TValue="string" TItem="string" DataSource="@SummaryOperations" Value="@summary.Operation" ValueChanged="value => summary.Operation = value ?? SummaryOperations[0]" Width="150px" CssClass="fx-rd-expert-dd" />
+                <span>Reset:</span>
+                <TextBoxControl Value="@summary.GroupName" ValueChanged="value => summary.GroupName = value ?? string.Empty" CssClass="fx-rd-expert-input" />
+            </div>
+        }
+    </div>;
+
+    private IReadOnlyList<ReportDesignerDataTable> ExpertDataSources => GetWizardDataSources();
+
+    private ReportDesignerFilter? ActiveExpertFilter => GetActiveExpertItem(_expertFilters);
+    private ReportDesignerGroup? ActiveExpertGroup => GetActiveExpertItem(_expertGroups);
+    private ReportDesignerSort? ActiveExpertSort => GetActiveExpertItem(_expertSorts);
+    private ReportDesignerField? ActiveExpertFormula => GetActiveExpertItem(_expertFormulaFields);
+    private ReportDesignerParameter? ActiveExpertParameter => GetActiveExpertItem(_expertParameters);
+    private ReportDesignerSummary? ActiveExpertSummary => GetActiveExpertItem(_expertSummaries);
+    private ReportDesignerSection? ActiveExpertSection => GetActiveExpertItem(_expertSections);
+    private ReportDesignerDataLink? ActiveExpertLink => GetActiveExpertItem(_expertLinks);
+
+    private T? GetActiveExpertItem<T>(IReadOnlyList<T> items) where T : class
+    {
+        if (items.Count == 0)
+            return null;
+
+        _activeExpertItemIndex = Math.Clamp(_activeExpertItemIndex, 0, items.Count - 1);
+        return items[_activeExpertItemIndex];
+    }
+
+    private Task OnExpertSelectedTablesChanged(IList<ReportDesignerDataTable> tables)
+    {
+        _expertSelectedTables = tables.Select(CloneTable).ToList();
+        return Task.CompletedTask;
+    }
+
+    private Task OnExpertGroupFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _expertGroupFields = fields.Select(CloneField).ToList();
+        _expertGroups = _expertGroupFields
+            .Select((field, index) =>
+            {
+                var existing = _expertGroups.FirstOrDefault(group =>
+                    string.Equals(CleanCrystalFormula(group.Condition), field.DisplayName, StringComparison.OrdinalIgnoreCase));
+                return new ReportDesignerGroup
+                {
+                    Name = $"Group #{index + 1}: {field.DisplayName}",
+                    Condition = $"{{{field.DisplayName}}}",
+                    SortDirection = existing?.SortDirection ?? "Ascending"
+                };
+            })
+            .ToList();
+        ClampActiveExpertIndex(_expertGroups.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task OnExpertSortFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _expertSortFields = fields.Select(CloneField).ToList();
+        _expertSorts = _expertSortFields
+            .Select(field =>
+            {
+                var existing = _expertSorts.FirstOrDefault(sort =>
+                    string.Equals(sort.Field.DisplayName, field.DisplayName, StringComparison.OrdinalIgnoreCase));
+                return new ReportDesignerSort
+                {
+                    Field = CloneField(field),
+                    Direction = existing?.Direction ?? "Ascending"
+                };
+            })
+            .ToList();
+        ClampActiveExpertIndex(_expertSorts.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task OnExpertSummaryFieldsChanged(IList<ReportDesignerField> fields)
+    {
+        _expertSummaryFields = fields.Select(CloneField).ToList();
+        _expertSummaries = _expertSummaryFields
+            .Select(field =>
+            {
+                var existing = _expertSummaries.FirstOrDefault(summary =>
+                    string.Equals(summary.Field.DisplayName, field.DisplayName, StringComparison.OrdinalIgnoreCase));
+                return new ReportDesignerSummary
+                {
+                    Field = CloneField(field),
+                    Operation = existing?.Operation ?? "Sum",
+                    GroupName = existing?.GroupName ?? ""
+                };
+            })
+            .ToList();
+        ClampActiveExpertIndex(_expertSummaries.Count);
+        return Task.CompletedTask;
+    }
+
+    private void ClampActiveExpertIndex(int count)
+    {
+        _activeExpertItemIndex = count == 0 ? 0 : Math.Clamp(_activeExpertItemIndex, 0, count - 1);
+    }
+
+    private Task AddExpertFilter()
+    {
+        var field = AllDesignerFields.FirstOrDefault() ?? new ReportDesignerField { Name = "Field" };
+        _expertFilters.Add(new ReportDesignerFilter
+        {
+            Field = CloneField(field),
+            Operator = FilterOperators[0],
+            Value = ""
+        });
+        _activeExpertItemIndex = _expertFilters.Count - 1;
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteActiveExpertFilter()
+    {
+        if (ActiveExpertFilter is null)
+            return Task.CompletedTask;
+
+        _expertFilters.RemoveAt(_activeExpertItemIndex);
+        ClampActiveExpertIndex(_expertFilters.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task AddExpertFormula()
+    {
+        var number = _expertFormulaFields.Count + 1;
+        _expertFormulaFields.Add(new ReportDesignerField
+        {
+            Name = $"Formula{number}",
+            Formula = $"@Formula{number}",
+            Type = "Formula",
+            IsFormula = true
+        });
+        _activeExpertItemIndex = _expertFormulaFields.Count - 1;
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteActiveExpertFormula()
+    {
+        if (ActiveExpertFormula is null)
+            return Task.CompletedTask;
+
+        _expertFormulaFields.RemoveAt(_activeExpertItemIndex);
+        ClampActiveExpertIndex(_expertFormulaFields.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task AddExpertParameter()
+    {
+        var number = _expertParameters.Count + 1;
+        _expertParameters.Add(new ReportDesignerParameter
+        {
+            Name = $"Parameter{number}",
+            Prompt = $"Parameter {number}",
+            Type = "String",
+            Required = true
+        });
+        _activeExpertItemIndex = _expertParameters.Count - 1;
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteActiveExpertParameter()
+    {
+        if (ActiveExpertParameter is null)
+            return Task.CompletedTask;
+
+        _expertParameters.RemoveAt(_activeExpertItemIndex);
+        ClampActiveExpertIndex(_expertParameters.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task AddExpertLink()
+    {
+        var tables = DesignerTableNames;
+        var fields = DesignerFieldNames;
+        _expertLinks.Add(new ReportDesignerDataLink
+        {
+            LeftTable = tables.FirstOrDefault() ?? "",
+            RightTable = tables.Skip(1).FirstOrDefault() ?? tables.FirstOrDefault() ?? "",
+            LeftField = fields.FirstOrDefault() ?? "",
+            RightField = fields.FirstOrDefault() ?? "",
+            JoinType = JoinTypeChoices[0]
+        });
+        _activeExpertItemIndex = _expertLinks.Count - 1;
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteActiveExpertLink()
+    {
+        if (ActiveExpertLink is null)
+            return Task.CompletedTask;
+
+        _expertLinks.RemoveAt(_activeExpertItemIndex);
+        ClampActiveExpertIndex(_expertLinks.Count);
+        return Task.CompletedTask;
+    }
+
+    private Task EnableHighlightRule()
+    {
+        _expertHighlightRule.Enabled = true;
+        if (string.IsNullOrWhiteSpace(_expertHighlightRule.FieldName))
+            _expertHighlightRule.FieldName = "this field";
+        return Task.CompletedTask;
+    }
+
+    private Task RemoveHighlightRule()
+    {
+        _expertHighlightRule = new ReportDesignerHighlightRule();
+        return Task.CompletedTask;
+    }
+
+    private void ApplyTextFormatExpert()
+    {
+        // Text-format controls bind directly to the selected object so users see
+        // Crystal-style live preview on the design canvas.
+    }
+
+    private void ApplyHighlightingExpert()
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.HighlightRule = _expertHighlightRule.Clone();
+        if (_expertHighlightRule.Enabled)
+        {
+            _selectedElement.TextColor = _expertHighlightRule.TextColor;
+            _selectedElement.BackgroundColor = _expertHighlightRule.BackgroundColor;
+            if (_expertHighlightRule.FontStyle.Contains("Bold", StringComparison.OrdinalIgnoreCase))
+                _selectedElement.Bold = true;
+            if (_expertHighlightRule.FontStyle.Contains("Italic", StringComparison.OrdinalIgnoreCase))
+                _selectedElement.Italic = true;
+        }
+    }
+
+    private async Task FindNextInReportAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_findText))
+        {
+            _findResultText = "Enter text to find.";
+            return;
+        }
+
+        var match = _document.Sections
+            .SelectMany(section => section.Elements.Select(element => new ReportDesignerElementSelection { Section = section, Element = element }))
+            .FirstOrDefault(selection =>
+                selection.Element.DisplayText.Contains(_findText, StringComparison.OrdinalIgnoreCase) ||
+                selection.Element.Name.Contains(_findText, StringComparison.OrdinalIgnoreCase) ||
+                selection.Element.Binding.Contains(_findText, StringComparison.OrdinalIgnoreCase));
+
+        if (match is null)
+        {
+            _findResultText = $"No report object contains '{_findText}'.";
+            return;
+        }
+
+        SelectElement(match.Section, match.Element);
+        ShowExplorerTab(ReportExplorerTab);
+        _findResultText = $"Found: {match.Element.Name} in {GetReportSectionExplorerLabel(match.Section)}.";
+        await Task.CompletedTask;
+    }
+
+    private static string BuildHighlightCondition(ReportDesignerHighlightRule rule)
+    {
+        if (!rule.Enabled)
+            return "";
+
+        var field = string.IsNullOrWhiteSpace(rule.FieldName) ? "this field" : rule.FieldName;
+        return $"{field} {rule.Operator} {rule.Value}";
+    }
+
+    private string BuildFilterFormulaPreview()
+    {
+        if (_expertFilters.Count == 0)
+            return "";
+
+        return string.Join(" and" + Environment.NewLine, _expertFilters.Select(filter =>
+            $"{CrystalFormulaName(filter.Field)} {FilterOperatorToFormula(filter.Operator)} {FormatFilterValue(filter.Value)}"));
+    }
+
+    private static string CrystalFormulaName(ReportDesignerField field)
+    {
+        return string.IsNullOrWhiteSpace(field.DisplayName) ? "{Field}" : $"{{{field.DisplayName}}}";
+    }
+
+    private static string FilterOperatorToFormula(string value)
+    {
+        return value switch
+        {
+            "is not equal to" => "<>",
+            "is less than" => "<",
+            "is less than or equal to" => "<=",
+            "is greater than" => ">",
+            "is greater than or equal to" => ">=",
+            "contains" => "contains",
+            "does not contain" => "does not contain",
+            "begins with" => "starts with",
+            "ends with" => "ends with",
+            _ => "="
+        };
+    }
+
+    private static string FormatFilterValue(string value)
+    {
+        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out _))
+            return value;
+
+        return $"'{value.Replace("'", "''", StringComparison.Ordinal)}'";
+    }
+
+    private void ApplyDatabaseExpert()
+    {
+        _document.DataSources = _expertSelectedTables.Select(CloneTable).ToList();
+        var formulaFields = _document.Fields.Where(field => field.IsFormula).Select(CloneField).ToList();
+        var tableFields = _document.DataSources.SelectMany(table => table.Fields).Select(CloneField);
+        _document.Fields = tableFields
+            .Concat(formulaFields)
+            .GroupBy(field => field.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private void ApplyGroupExpert()
+    {
+        _document.Groups = _expertGroupFields
+            .Select((field, index) =>
+            {
+                var existing = _expertGroups.FirstOrDefault(group =>
+                    string.Equals(CleanCrystalFormula(group.Condition), field.DisplayName, StringComparison.OrdinalIgnoreCase));
+                return new ReportDesignerGroup
+                {
+                    Name = $"Group #{index + 1}: {field.DisplayName}",
+                    Condition = $"{{{field.DisplayName}}}",
+                    SortDirection = existing?.SortDirection ?? "Ascending"
+                };
+            })
+            .ToList();
+    }
+
+    private void ApplySectionExpert()
+    {
+        foreach (var edited in _expertSections)
+        {
+            var section = _document.Sections.FirstOrDefault(candidate =>
+                string.Equals(candidate.Id, edited.Id, StringComparison.Ordinal) ||
+                string.Equals(candidate.Name, edited.Name, StringComparison.OrdinalIgnoreCase));
+            if (section is null)
+                continue;
+
+            section.HeightTwips = edited.HeightTwips;
+            section.HideForDrillDown = edited.HideForDrillDown;
+            section.IsSuppressed = edited.IsSuppressed;
+            section.PrintAtBottomOfPage = edited.PrintAtBottomOfPage;
+            section.SuppressIfBlank = edited.SuppressIfBlank;
+            section.UnderlayFollowingSections = edited.UnderlayFollowingSections;
+            section.ReadOnly = edited.ReadOnly;
+            section.RelativePositions = edited.RelativePositions;
+            section.NewPageBefore = edited.NewPageBefore;
+            section.NewPageAfter = edited.NewPageAfter;
+            section.ResetPageNumberAfter = edited.ResetPageNumberAfter;
+            section.KeepTogether = edited.KeepTogether;
+            section.BackgroundColor = edited.BackgroundColor;
+        }
+    }
+
+    private void ApplyFormulaExpert()
+    {
+        var nonFormulaFields = _document.Fields.Where(field => !field.IsFormula).Select(CloneField);
+        var formulaFields = _expertFormulaFields
+            .Where(field => !string.IsNullOrWhiteSpace(field.Name))
+            .Select(field =>
+            {
+                var clone = CloneField(field);
+                clone.IsFormula = true;
+                if (string.IsNullOrWhiteSpace(clone.Type))
+                    clone.Type = "Formula";
+                return clone;
+            });
+        _document.Fields = nonFormulaFields
+            .Concat(formulaFields)
+            .GroupBy(field => field.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private async Task AddLineElement()
+    {
+        var section = GetActiveSection();
+        var element = new ReportDesignerElement
+        {
+            SectionId = section.Id,
+            Name = NextObjectName("Line"),
+            Kind = "Line",
+            LeftTwips = 240,
+            TopTwips = Math.Max(0, section.Elements.Count * 220),
+            WidthTwips = 2400,
+            HeightTwips = 30,
+            TextColor = "#000000"
+        };
+
+        section.Elements.Add(element);
+        SelectElement(section, element);
+        await MarkDirtyAsync();
+    }
+
+    private async Task AddBoxElement()
+    {
+        var section = GetActiveSection();
+        var element = new ReportDesignerElement
+        {
+            SectionId = section.Id,
+            Name = NextObjectName("Box"),
+            Kind = "Box",
+            LeftTwips = 240,
+            TopTwips = Math.Max(0, section.Elements.Count * 240),
+            WidthTwips = 2400,
+            HeightTwips = 720,
+            TextColor = "#000000"
+        };
+
+        section.Elements.Add(element);
+        SelectElement(section, element);
+        await MarkDirtyAsync();
+    }
+
+    private async Task AddSubreportElement()
+    {
+        var section = GetActiveSection();
+        var subreport = _document.Subreports.FirstOrDefault();
+        var name = string.IsNullOrWhiteSpace(subreport?.Name) ? NextObjectName("Subreport") : subreport.Name;
+        var element = new ReportDesignerElement
+        {
+            SectionId = section.Id,
+            Name = NextObjectName("Subreport"),
+            Kind = "Subreport",
+            Text = name,
+            SubreportName = name,
+            SubreportXmlPath = subreport?.FileName ?? string.Empty,
+            LeftTwips = 240,
+            TopTwips = Math.Max(0, section.Elements.Count * 240),
+            WidthTwips = 2400,
+            HeightTwips = 360,
+            TextColor = "#0000ff",
+            Underline = true
+        };
+
+        section.Elements.Add(element);
+        SelectElement(section, element);
+        await MarkDirtyAsync();
+    }
+
+    private async Task OnFontFamilyChanged(string? value)
+    {
+        if (_selectedElement is null || string.IsNullOrWhiteSpace(value))
+            return;
+
+        _selectedElement.FontFamily = value;
+        await MarkDirtyAsync();
+    }
+
+    private async Task OnFontSizeChanged(decimal value)
+    {
+        if (_selectedElement is null || value <= 0)
+            return;
+
+        _selectedElement.FontSize = value;
+        await MarkDirtyAsync();
+    }
+
+    private async Task AdjustSelectedFontSizeAsync(decimal delta)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.FontSize = Math.Clamp((_selectedElement.FontSize <= 0 ? 10m : _selectedElement.FontSize) + delta, 4m, 144m);
+        await MarkDirtyAsync();
+    }
+
+    private string FormatButtonCss(string command)
+    {
+        var active = command switch
+        {
+            "bold" => _selectedElement?.Bold == true,
+            "italic" => _selectedElement?.Italic == true,
+            "underline" => _selectedElement?.Underline == true,
+            _ => false
+        };
+
+        return $"fx-rd-icon-btn icon-format-{command}{(active ? " active" : "")}";
+    }
+
+    private async Task ToggleSelectedElementBool(string propertyName)
+    {
+        if (_selectedElement is null)
+            return;
+
+        switch (propertyName)
+        {
+            case nameof(ReportDesignerElement.Bold):
+                _selectedElement.Bold = !_selectedElement.Bold;
+                break;
+            case nameof(ReportDesignerElement.Italic):
+                _selectedElement.Italic = !_selectedElement.Italic;
+                break;
+            case nameof(ReportDesignerElement.Underline):
+                _selectedElement.Underline = !_selectedElement.Underline;
+                break;
+            case nameof(ReportDesignerElement.IsSuppressed):
+                _selectedElement.IsSuppressed = !_selectedElement.IsSuppressed;
+                break;
+            case nameof(ReportDesignerElement.LockFormat):
+                _selectedElement.LockFormat = !_selectedElement.LockFormat;
+                break;
+            case nameof(ReportDesignerElement.LockSizePosition):
+                _selectedElement.LockSizePosition = !_selectedElement.LockSizePosition;
+                break;
+        }
+
+        await MarkDirtyAsync();
+    }
+
+    private string AlignmentButtonCss(string alignment)
+    {
+        var active = _selectedElement is not null &&
+            string.Equals(NormalizeAlignment(_selectedElement.HorizontalAlignment), alignment, StringComparison.OrdinalIgnoreCase);
+        return $"fx-rd-icon-btn icon-align-{alignment.ToLowerInvariant()}{(active ? " active" : "")}";
+    }
+
+    private async Task SetSelectedAlignmentAsync(string alignment)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.HorizontalAlignment = alignment;
+        await MarkDirtyAsync();
+    }
+
+    private static string NormalizeAlignment(string alignment)
+    {
+        return alignment switch
+        {
+            "HorizontalCenter" => "Center",
+            "Default" => "Left",
+            "" => "Left",
+            _ => alignment
+        };
+    }
+
+    private async Task CycleSelectedTextColorAsync()
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.TextColor = NextColor(_selectedElement.TextColor, ["#000000", "#007a7a", "#0033cc", "#800000", "#666666"]);
+        await MarkDirtyAsync();
+    }
+
+    private async Task CycleSelectedFillColorAsync()
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.BackgroundColor = NextColor(_selectedElement.BackgroundColor, ["transparent", "#ffffff", "#fff2cc", "#d9ead3", "#cfe2f3", "#d9d2e9"]);
+        await MarkDirtyAsync();
+    }
+
+    private static string NextColor(string current, IReadOnlyList<string> colors)
+    {
+        var index = colors.ToList().FindIndex(color => string.Equals(color, current, StringComparison.OrdinalIgnoreCase));
+        return colors[(index + 1 + colors.Count) % colors.Count];
     }
 
     private Task OpenNewWizardAsync()
@@ -389,7 +1996,7 @@
         return Path.Combine(dir, baseName + ".xml");
     }
 
-    private void SetDocument(ReportDesignerDocument document)
+    private void SetDocument(ReportDesignerDocument document, bool resetHistory = true)
     {
         _document = document;
         _document.IsDirty = false;
@@ -398,6 +2005,8 @@
         _status = _document.StatusMessage;
         _activeDocumentTab = DesignDocumentTab;
         RebuildExplorerNodes();
+        if (resetHistory)
+            ResetHistory();
     }
 
     private void SelectSection(ReportDesignerSection section)
@@ -466,6 +2075,9 @@
             case ReportDesignerSection section:
                 SelectSection(section);
                 break;
+            case ReportDesignerElementSelection selection:
+                SelectElement(selection);
+                break;
         }
     }
 
@@ -529,6 +2141,132 @@
         await MarkDirtyAsync();
     }
 
+    private void CopySelected()
+    {
+        if (_selectedElement is null)
+            return;
+
+        _clipboardElement = CloneElementForClipboard(_selectedElement);
+        _status = $"Copied {_selectedElement.Name}.";
+    }
+
+    private async Task CutSelected()
+    {
+        if (_selectedElement is null || _selectedSection is null)
+            return;
+
+        _clipboardElement = CloneElementForClipboard(_selectedElement);
+        await RemoveSelected();
+        _status = "Cut selected object.";
+    }
+
+    private async Task PasteSelected()
+    {
+        if (_clipboardElement is null)
+            return;
+
+        var section = GetActiveSection();
+        var clone = _clipboardElement.CloneFor(section.Id, NextObjectName(_clipboardElement.Name));
+        section.Elements.Add(clone);
+        SelectElement(section, clone);
+        await MarkDirtyAsync();
+        _status = $"Pasted {clone.Name}.";
+    }
+
+    private async Task ApplyOrCaptureFormatPainterAsync()
+    {
+        if (_selectedElement is null)
+            return;
+
+        if (_formatPainterElement is null || ReferenceEquals(_formatPainterElement, _selectedElement))
+        {
+            _formatPainterElement = CloneElementForClipboard(_selectedElement);
+            _status = $"Format Painter captured {_selectedElement.Name}. Select another object and click Format Painter again to apply.";
+            return;
+        }
+
+        ApplyElementFormat(_formatPainterElement, _selectedElement);
+        _formatPainterElement = null;
+        await MarkDirtyAsync();
+    }
+
+    private async Task UndoAsync()
+    {
+        if (_undoStack.Count <= 1)
+            return;
+
+        var current = _undoStack[^1];
+        _redoStack.Add(current);
+        _undoStack.RemoveAt(_undoStack.Count - 1);
+        await RestoreHistoryXmlAsync(_undoStack[^1], "Undo");
+    }
+
+    private async Task RedoAsync()
+    {
+        if (_redoStack.Count == 0)
+            return;
+
+        var xml = _redoStack[^1];
+        _redoStack.RemoveAt(_redoStack.Count - 1);
+        _undoStack.Add(xml);
+        await RestoreHistoryXmlAsync(xml, "Redo");
+    }
+
+    private async Task RestoreHistoryXmlAsync(string xml, string status)
+    {
+        _restoringHistory = true;
+        try
+        {
+            SetDocument(ReportDesignerXmlSerializer.FromXml(xml, _document.SourceName, _document.SourcePath), resetHistory: false);
+            _document.IsDirty = true;
+            _status = status;
+            if (DocumentChanged.HasDelegate)
+                await DocumentChanged.InvokeAsync(_document);
+        }
+        finally
+        {
+            _restoringHistory = false;
+        }
+    }
+
+    private async Task AdjustSelectedIndentAsync(int deltaTwips)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.IndentTwips = Math.Max(0, _selectedElement.IndentTwips + deltaTwips);
+        await MarkDirtyAsync();
+    }
+
+    private async Task SetSelectedFormatAsync(string format)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.FormatString = format;
+        await MarkDirtyAsync();
+    }
+
+    private async Task AdjustSelectedDecimalsAsync(int delta)
+    {
+        if (_selectedElement is null)
+            return;
+
+        _selectedElement.FormatString = AdjustFormatDecimals(_selectedElement.FormatString, delta);
+        await MarkDirtyAsync();
+    }
+
+    private static string AdjustFormatDecimals(string format, int delta)
+    {
+        if (string.IsNullOrWhiteSpace(format))
+            format = "N2";
+
+        var prefix = char.IsLetter(format[0]) ? format[0].ToString().ToUpperInvariant() : "N";
+        var digits = new string(format.Skip(1).Where(char.IsDigit).ToArray());
+        var decimals = int.TryParse(digits, out var parsed) ? parsed : 2;
+        return $"{prefix}{Math.Clamp(decimals + delta, 0, 8)}";
+    }
+
     private async Task RemoveSelected()
     {
         if (_selectedElement is null || _selectedSection is null)
@@ -537,6 +2275,31 @@
         _selectedSection.Elements.Remove(_selectedElement);
         _selectedElement = null;
         await MarkDirtyAsync();
+    }
+
+    private static ReportDesignerElement CloneElementForClipboard(ReportDesignerElement element)
+    {
+        var clone = element.CloneFor(element.SectionId, element.Name);
+        clone.LeftTwips = element.LeftTwips;
+        clone.TopTwips = element.TopTwips;
+        return clone;
+    }
+
+    private static void ApplyElementFormat(ReportDesignerElement source, ReportDesignerElement target)
+    {
+        target.FontFamily = source.FontFamily;
+        target.FontSize = source.FontSize;
+        target.Bold = source.Bold;
+        target.Italic = source.Italic;
+        target.Underline = source.Underline;
+        target.TextColor = source.TextColor;
+        target.BackgroundColor = source.BackgroundColor;
+        target.HorizontalAlignment = source.HorizontalAlignment;
+        target.CanGrow = source.CanGrow;
+        target.FormatString = source.FormatString;
+        target.LockFormat = source.LockFormat;
+        target.IndentTwips = source.IndentTwips;
+        target.HighlightRule = source.HighlightRule.Clone();
     }
 
     private async Task NudgeSelected(int dxTwips, int dyTwips)
@@ -587,10 +2350,34 @@
         {
             _document.IsDirty = true;
             _status = "Changed";
+            PushUndoSnapshot();
         }
 
         if (DocumentChanged.HasDelegate)
             await DocumentChanged.InvokeAsync(_document);
+    }
+
+    private void PushUndoSnapshot()
+    {
+        if (_restoringHistory)
+            return;
+
+        var xml = GetCurrentXml();
+        if (_undoStack.Count == 0 || !string.Equals(_undoStack[^1], xml, StringComparison.Ordinal))
+        {
+            _undoStack.Add(xml);
+            if (_undoStack.Count > 50)
+                _undoStack.RemoveAt(0);
+        }
+
+        _redoStack.Clear();
+    }
+
+    private void ResetHistory()
+    {
+        _undoStack.Clear();
+        _redoStack.Clear();
+        _undoStack.Add(GetCurrentXml());
     }
 
     private void RebuildExplorerNodes()
@@ -607,13 +2394,13 @@
         {
             var table = NewExplorerNode(tableGroup.Key, "fx-explorer-icon-table", isExpanded: IsTableExpandedByDefault(tableGroup));
             foreach (var field in tableGroup)
-                table.Children.Add(NewExplorerNode(field.Name, "fx-explorer-icon-field", tag: field));
+                table.Children.Add(NewExplorerNode(field.Name, GetFieldIconCss(field), tag: field));
             databaseFields.Children.Add(table);
         }
 
         var formulaFields = NewExplorerNode("Formula Fields", "fx-explorer-icon-formula", isExpanded: _document.Fields.Any(field => field.IsFormula));
         foreach (var formula in _document.Fields.Where(field => field.IsFormula))
-            formulaFields.Children.Add(NewExplorerNode(formula.Name, "fx-explorer-icon-field", tag: formula));
+            formulaFields.Children.Add(NewExplorerNode(formula.Name, GetFieldIconCss(formula), tag: formula));
 
         var parameterFields = NewExplorerNode("Parameter Fields", "fx-explorer-icon-parameter", isExpanded: true);
         foreach (var parameter in _document.Parameters)
@@ -622,8 +2409,8 @@
             parameterFields.Children.Add(NewExplorerNode("No parameter fields.", "fx-explorer-icon-field", isDisabled: true));
 
         var groupNameFields = NewExplorerNode("Group Name Fields", "fx-explorer-icon-group", isExpanded: true);
-        foreach (var group in _document.Groups)
-            groupNameFields.Children.Add(NewExplorerNode(group.Name, "fx-explorer-icon-field", tag: group, isDisabled: true));
+        foreach (var group in _document.Groups.Select((value, index) => new { value, index }))
+            groupNameFields.Children.Add(NewExplorerNode(GetGroupExplorerLabel(group.value, group.index + 1), "fx-explorer-icon-field used", tag: group.value, isDisabled: true));
 
         var specialFields = NewExplorerNode("Special Fields", "fx-explorer-icon-special");
         foreach (var fieldName in SpecialFieldNames)
@@ -646,11 +2433,21 @@
         var root = NewExplorerNode(GetReportFileName(), "fx-explorer-icon-report", isExpanded: true);
         foreach (var section in _document.Sections)
         {
-            var text = SectionDisplayName(section.Kind);
-            if (section.IsSuppressed)
-                text += "    suppressed";
+            var sectionNode = NewExplorerNode(
+                GetReportSectionExplorerLabel(section),
+                GetSectionIconCss(section),
+                tag: section,
+                isExpanded: true);
 
-            root.Children.Add(NewExplorerNode(text, "fx-explorer-icon-section", tag: section));
+            foreach (var element in section.Elements)
+            {
+                sectionNode.Children.Add(NewExplorerNode(
+                    GetElementExplorerLabel(element),
+                    GetElementIconCss(element),
+                    tag: new ReportDesignerElementSelection { Section = section, Element = element }));
+            }
+
+            root.Children.Add(sectionNode);
         }
 
         return [root];
@@ -678,7 +2475,26 @@
         foreach (var node in FlattenNodes(_fieldExplorerNodes.Concat(_reportExplorerNodes)))
             node.IsSelected = false;
 
-        if (!IsFieldExplorerActive || _selectedSection is null)
+        if (IsFieldExplorerActive)
+        {
+            _selectedExplorerNode = null;
+            return;
+        }
+
+        if (_selectedElement is not null)
+        {
+            _selectedExplorerNode = FlattenNodes(_reportExplorerNodes)
+                .FirstOrDefault(node => node.Tag is ReportDesignerElementSelection selection &&
+                                        ReferenceEquals(selection.Element, _selectedElement));
+
+            if (_selectedExplorerNode is not null)
+            {
+                _selectedExplorerNode.IsSelected = true;
+                return;
+            }
+        }
+
+        if (_selectedSection is null)
         {
             _selectedExplorerNode = null;
             return;
@@ -726,6 +2542,7 @@
         var width = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.WidthTwips));
         var height = Math.Max(12, ReportDesignerMetrics.TwipsToPixels(element.HeightTwips));
         var fontSize = element.FontSize <= 0 ? 10m : element.FontSize;
+        var indent = ReportDesignerMetrics.TwipsToPixels(element.IndentTwips);
         var align = element.HorizontalAlignment switch
         {
             "Right" => "right",
@@ -735,7 +2552,7 @@
             _ => "left"
         };
 
-        return $"left:{left}px;top:{top}px;width:{width}px;height:{height}px;color:{CssColor(element.TextColor, "#000")};font-family:'{element.FontFamily}',Arial,sans-serif;font-size:{fontSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}pt;font-weight:{(element.Bold ? "700" : "400")};font-style:{(element.Italic ? "italic" : "normal")};text-decoration:{(element.Underline ? "underline" : "none")};text-align:{align};";
+        return $"left:{left}px;top:{top}px;width:{width}px;height:{height}px;color:{CssColor(element.TextColor, "#000")};background:{CssColor(element.BackgroundColor, "transparent")};font-family:'{element.FontFamily}',Arial,sans-serif;font-size:{fontSize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}pt;font-weight:{(element.Bold ? "700" : "400")};font-style:{(element.Italic ? "italic" : "normal")};text-decoration:{(element.Underline ? "underline" : "none")};text-align:{align};padding-left:{indent}px;";
     }
 
     private string GetElementClass(ReportDesignerElement element)
@@ -799,6 +2616,299 @@
         return tableGroup.Count() <= 20;
     }
 
+    private string GetFieldIconCss(ReportDesignerField field)
+    {
+        return IsFieldUsed(field) ? "fx-explorer-icon-field used" : "fx-explorer-icon-field";
+    }
+
+    private bool IsFieldUsed(ReportDesignerField field)
+    {
+        var candidates = new[]
+        {
+            field.Formula,
+            field.DisplayName,
+            field.Name,
+            string.IsNullOrWhiteSpace(field.Table) ? "" : $"{{{field.Table}.{field.Name}}}",
+            string.IsNullOrWhiteSpace(field.Name) ? "" : $"{{{field.Name}}}"
+        }
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+        return _document.Elements.Any(element =>
+            candidates.Any(candidate =>
+                element.Binding.Contains(candidate, StringComparison.OrdinalIgnoreCase) ||
+                element.Text.Contains(candidate, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string GetGroupExplorerLabel(ReportDesignerGroup group, int index)
+    {
+        var condition = CleanCrystalFormula(group.Condition);
+        var suffix = group.SortDirection.StartsWith("Desc", StringComparison.OrdinalIgnoreCase) ? " - D" : " - A";
+        return string.IsNullOrWhiteSpace(condition)
+            ? $"Group #{index}{suffix}"
+            : $"Group #{index}: {condition}{suffix}";
+    }
+
+    private string GetReportSectionExplorerLabel(ReportDesignerSection section)
+    {
+        var label = SectionDisplayName(section.Kind);
+        if (section.Kind.Equals("GroupHeader", StringComparison.OrdinalIgnoreCase) ||
+            section.Kind.Equals("GroupFooter", StringComparison.OrdinalIgnoreCase))
+        {
+            var groupNumber = GetSectionGroupNumber(section);
+            var group = groupNumber > 0 && groupNumber <= _document.Groups.Count
+                ? _document.Groups[groupNumber - 1]
+                : null;
+            var condition = CleanCrystalFormula(group?.Condition ?? "");
+            var suffix = group is null || group.SortDirection.StartsWith("Asc", StringComparison.OrdinalIgnoreCase) ? " - A" : " - D";
+            label = string.IsNullOrWhiteSpace(condition)
+                ? $"{label} #{groupNumber}"
+                : $"{label} #{groupNumber}: {condition}{suffix}";
+        }
+
+        if (section.IsSuppressed)
+            label += "    suppressed";
+
+        return label;
+    }
+
+    private int GetSectionGroupNumber(ReportDesignerSection section)
+    {
+        var sameKind = _document.Sections
+            .Where(candidate => candidate.Kind.Equals(section.Kind, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var index = sameKind.FindIndex(candidate => ReferenceEquals(candidate, section));
+        return index < 0 ? 1 : index + 1;
+    }
+
+    private static string GetSectionIconCss(ReportDesignerSection section)
+    {
+        if (section.Kind.StartsWith("Group", StringComparison.OrdinalIgnoreCase))
+            return "fx-explorer-icon-group-section";
+
+        return "fx-explorer-icon-section";
+    }
+
+    private static string GetElementIconCss(ReportDesignerElement element)
+    {
+        if (element.Kind.Contains("Text", StringComparison.OrdinalIgnoreCase) ||
+            element.Kind.Contains("Heading", StringComparison.OrdinalIgnoreCase))
+            return "fx-explorer-icon-text-object";
+
+        if (element.Kind.Contains("Line", StringComparison.OrdinalIgnoreCase))
+            return "fx-explorer-icon-line-object";
+
+        if (element.Kind.Contains("Subreport", StringComparison.OrdinalIgnoreCase))
+            return "fx-explorer-icon-subreport";
+
+        return "fx-explorer-icon-field-object";
+    }
+
+    private static string GetElementExplorerLabel(ReportDesignerElement element)
+    {
+        var value = !string.IsNullOrWhiteSpace(element.Text)
+            ? element.Text
+            : !string.IsNullOrWhiteSpace(element.Binding)
+                ? CleanCrystalFormula(element.Binding)
+                : !string.IsNullOrWhiteSpace(element.SubreportName)
+                    ? element.SubreportName
+                    : element.DisplayText;
+
+        return string.IsNullOrWhiteSpace(value) || string.Equals(value, element.Name, StringComparison.OrdinalIgnoreCase)
+            ? element.Name
+            : $"{element.Name}: {value}";
+    }
+
+    private static string CleanCrystalFormula(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "";
+
+        var cleaned = value.Trim();
+        if (cleaned.StartsWith("{", StringComparison.Ordinal) &&
+            cleaned.EndsWith("}", StringComparison.Ordinal) &&
+            cleaned.Length > 2)
+        {
+            cleaned = cleaned[1..^1];
+        }
+
+        if (cleaned.StartsWith("@", StringComparison.Ordinal))
+            cleaned = cleaned[1..];
+
+        return cleaned;
+    }
+
+    private ReportDesignerField ResolveDesignerField(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return new ReportDesignerField();
+
+        var cleaned = CleanCrystalFormula(value);
+        return _document.Fields
+                   .Concat(_expertSelectedTables.SelectMany(table => table.Fields))
+                   .Concat(_expertFormulaFields)
+                   .FirstOrDefault(field =>
+                       string.Equals(field.DisplayName, cleaned, StringComparison.OrdinalIgnoreCase) ||
+                       string.Equals(field.Name, cleaned, StringComparison.OrdinalIgnoreCase)) is { } field
+            ? CloneField(field)
+            : SplitFieldName(cleaned);
+    }
+
+    private static ReportDesignerField SplitFieldName(string value)
+    {
+        var parts = value.Split('.', 2, StringSplitOptions.TrimEntries);
+        return parts.Length == 2
+            ? new ReportDesignerField { Table = parts[0], Name = parts[1] }
+            : new ReportDesignerField { Name = value };
+    }
+
+    private static string TableKey(ReportDesignerDataTable table)
+    {
+        return table.DisplayName;
+    }
+
+    private static string TableLabel(ReportDesignerDataTable table)
+    {
+        return table.DisplayName;
+    }
+
+    private static string FieldKey(ReportDesignerField field)
+    {
+        return field.DisplayName;
+    }
+
+    private static string FieldLabel(ReportDesignerField field)
+    {
+        return field.DisplayName;
+    }
+
+    private static ReportDesignerDataTable CloneTable(ReportDesignerDataTable table)
+    {
+        return new ReportDesignerDataTable
+        {
+            Name = table.Name,
+            Schema = table.Schema,
+            Fields = table.Fields.Select(CloneField).ToList()
+        };
+    }
+
+    private static ReportDesignerField CloneField(ReportDesignerField field)
+    {
+        return new ReportDesignerField
+        {
+            Name = field.Name,
+            Table = field.Table,
+            LongName = field.LongName,
+            Formula = field.Formula,
+            Type = field.Type,
+            IsFormula = field.IsFormula
+        };
+    }
+
+    private static ReportDesignerFilter CloneFilter(ReportDesignerFilter filter)
+    {
+        return new ReportDesignerFilter
+        {
+            Field = CloneField(filter.Field),
+            Operator = filter.Operator,
+            Value = filter.Value
+        };
+    }
+
+    private static ReportDesignerGroup CloneGroup(ReportDesignerGroup group)
+    {
+        return new ReportDesignerGroup
+        {
+            Name = group.Name,
+            Condition = group.Condition,
+            SortDirection = group.SortDirection
+        };
+    }
+
+    private static ReportDesignerSort CloneSort(ReportDesignerSort sort)
+    {
+        return new ReportDesignerSort
+        {
+            Field = CloneField(sort.Field),
+            Direction = sort.Direction
+        };
+    }
+
+    private static ReportDesignerSummary CloneSummary(ReportDesignerSummary summary)
+    {
+        return new ReportDesignerSummary
+        {
+            Field = CloneField(summary.Field),
+            Operation = summary.Operation,
+            GroupName = summary.GroupName
+        };
+    }
+
+    private static ReportDesignerParameter CloneParameter(ReportDesignerParameter parameter)
+    {
+        return new ReportDesignerParameter
+        {
+            Name = parameter.Name,
+            Prompt = parameter.Prompt,
+            Type = parameter.Type,
+            Required = parameter.Required,
+            AllowMultiple = parameter.AllowMultiple
+        };
+    }
+
+    private static ReportDesignerDataLink CloneLink(ReportDesignerDataLink link)
+    {
+        return new ReportDesignerDataLink
+        {
+            LeftTable = link.LeftTable,
+            LeftField = link.LeftField,
+            RightTable = link.RightTable,
+            RightField = link.RightField,
+            JoinType = link.JoinType
+        };
+    }
+
+    private static ReportDesignerPage ClonePage(ReportDesignerPage page)
+    {
+        return new ReportDesignerPage
+        {
+            Orientation = page.Orientation,
+            PaperSize = page.PaperSize,
+            ContentWidthTwips = page.ContentWidthTwips,
+            ContentHeightTwips = page.ContentHeightTwips,
+            MarginLeftTwips = page.MarginLeftTwips,
+            MarginTopTwips = page.MarginTopTwips,
+            MarginRightTwips = page.MarginRightTwips,
+            MarginBottomTwips = page.MarginBottomTwips
+        };
+    }
+
+    private static ReportDesignerSection CloneSectionForExpert(ReportDesignerSection section)
+    {
+        return new ReportDesignerSection
+        {
+            Id = section.Id,
+            SourceKey = section.SourceKey,
+            Name = section.Name,
+            Kind = section.Kind,
+            AreaName = section.AreaName,
+            HeightTwips = section.HeightTwips,
+            HideForDrillDown = section.HideForDrillDown,
+            IsSuppressed = section.IsSuppressed,
+            PrintAtBottomOfPage = section.PrintAtBottomOfPage,
+            SuppressIfBlank = section.SuppressIfBlank,
+            UnderlayFollowingSections = section.UnderlayFollowingSections,
+            ReadOnly = section.ReadOnly,
+            RelativePositions = section.RelativePositions,
+            NewPageBefore = section.NewPageBefore,
+            NewPageAfter = section.NewPageAfter,
+            ResetPageNumberAfter = section.ResetPageNumberAfter,
+            KeepTogether = section.KeepTogether,
+            BackgroundColor = section.BackgroundColor
+        };
+    }
+
     private string GetReportFileName()
     {
         if (!string.IsNullOrWhiteSpace(_document.SourceName))
@@ -839,4 +2949,25 @@
             _ => "S"
         };
     }
+
+    private enum ReportDesignerToolbarItemKind
+    {
+        Button,
+        Separator,
+        FileOpen,
+        FontFamily,
+        FontSize
+    }
+
+    private sealed record ReportDesignerToolbarRow(
+        bool Compact,
+        IReadOnlyList<ReportDesignerToolbarItem> Items,
+        bool ShowStatus = false);
+
+    private sealed record ReportDesignerToolbarItem(
+        string Command,
+        string IconCss,
+        string Tooltip,
+        ReportDesignerToolbarItemKind Kind = ReportDesignerToolbarItemKind.Button,
+        bool HasDropDown = false);
 }

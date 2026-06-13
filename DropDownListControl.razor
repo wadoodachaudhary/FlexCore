@@ -1,26 +1,53 @@
 @namespace Fx.ControlKit
 @typeparam TValue
 @typeparam TItem
+@using System.Globalization
 
-<select class="fx-dropdown @CssClass"
-        style="@(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
-        disabled="@(!Enabled)"
-        @onchange="OnSelectionChanged">
-    @if (!string.IsNullOrEmpty(Placeholder))
+<div class="@HostCssClass" style="@HostStyle">
+    <button type="button"
+            class="@ButtonCssClass"
+            disabled="@(!Enabled)"
+            tabindex="@TabIndex"
+            aria-haspopup="listbox"
+            aria-expanded="@_isOpen"
+            @onclick="ToggleOpen"
+            @onkeydown="HandleButtonKeyDown">
+        <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
+        <span class="fx-dropdown-arrow" aria-hidden="true"></span>
+    </button>
+
+    @if (_isOpen && Enabled)
     {
-        <option value="" disabled selected="@(Value == null || Value.Equals(default(TValue)))">@Placeholder</option>
+        <button type="button"
+                class="fx-dropdown-backdrop"
+                tabindex="-1"
+                aria-label="Close dropdown"
+                @onclick="CloseAsync"></button>
+
+        <div class="fx-dropdown-panel" role="listbox" @onclick:stopPropagation="true">
+            @if (DataSource != null)
+            {
+                foreach (var item in DataSource)
+                {
+                    var val = GetFieldValue(item, ValueFieldName);
+                    var txt = GetFieldValue(item, TextFieldName);
+                    var isSelected = IsSelectedValue(val);
+                    <button type="button"
+                            class="fx-dropdown-option @(isSelected ? "selected" : "")"
+                            role="option"
+                            aria-selected="@isSelected"
+                            @onclick="() => SelectItemAsync(val, item)">
+                        @txt
+                    </button>
+                }
+            }
+            else
+            {
+                <div class="fx-dropdown-empty">No values</div>
+            }
+        </div>
     }
-    @if (DataSource != null)
-    {
-        foreach (var item in DataSource)
-        {
-            var val = GetFieldValue(item, ValueFieldName);
-            var txt = GetFieldValue(item, TextFieldName);
-            var isSelected = Value != null && Value.ToString() == val;
-            <option value="@val" selected="@isSelected">@txt</option>
-        }
-    }
-</select>
+</div>
 
 @code {
     [Parameter] public IEnumerable<TItem>? DataSource { get; set; }
@@ -30,9 +57,12 @@
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    [Parameter] public bool OpenOnRender { get; set; }
+    [Parameter] public EventCallback Closed { get; set; }
 
-    /// <summary>Field settings — set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
+    /// <summary>Field settings - set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
     [Parameter] public string TextFieldName { get; set; } = "";
     [Parameter] public string ValueFieldName { get; set; } = "";
 
@@ -41,12 +71,147 @@
     /// <summary>Event fired when value changes. Provides the new value.</summary>
     [Parameter] public EventCallback<ChangeEventArgs<TValue, TItem>> ValueChange { get; set; }
 
+    private bool _isOpen;
+    private bool _openOnRenderInitialized;
+
+    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string HostStyle
+    {
+        get
+        {
+            var w = string.IsNullOrWhiteSpace(Width) ? CalculatedWidth() : Width;
+            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
+        }
+    }
+
+    // No explicit Width -> size to the longest option text, but keep the
+    // control bounded. Long option labels should ellipsize inside the dropdown
+    // instead of forcing toolbars/dialogs wider than the viewport.
+    private string CalculatedWidth()
+    {
+        int maxLen = (Placeholder ?? "").Length;
+        if (DataSource != null)
+            foreach (var item in DataSource)
+            {
+                var len = GetFieldValue(item, TextFieldName).Length;
+                if (len > maxLen) maxLen = len;
+            }
+        if (maxLen <= 0) return "";
+        var ch = Math.Clamp((int)Math.Ceiling(maxLen * 1.1), 8, 28);
+        return $"min(calc({ch}ch + 1.9em), calc(100vw - 24px))";
+    }
+    private bool HasSelectedValue
+    {
+        get
+        {
+            if (Value is null)
+                return false;
+
+            if (Value is string stringValue)
+                return !string.IsNullOrEmpty(stringValue);
+
+            return true;
+        }
+    }
+    private string PlaceholderCssClass => HasSelectedValue ? "" : "fx-dropdown-placeholder";
+    private string DisplayText => SelectedText ?? Placeholder ?? "";
+
+    private string? SelectedText
+    {
+        get
+        {
+            if (DataSource == null || !HasSelectedValue)
+                return null;
+
+            foreach (var item in DataSource)
+            {
+                var val = GetFieldValue(item, ValueFieldName);
+                if (IsSelectedValue(val))
+                    return GetFieldValue(item, TextFieldName);
+            }
+
+            return Value?.ToString();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!Enabled)
+        {
+            _isOpen = false;
+            return;
+        }
+
+        if (OpenOnRender && !_openOnRenderInitialized)
+        {
+            _isOpen = true;
+            _openOnRenderInitialized = true;
+        }
+    }
+
+    private async Task ToggleOpen()
+    {
+        if (Enabled)
+        {
+            if (_isOpen)
+                await CloseAsync();
+            else
+                _isOpen = true;
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        if (!_isOpen)
+            return;
+
+        _isOpen = false;
+        if (Closed.HasDelegate)
+            await Closed.InvokeAsync();
+    }
+
+    private Task HandleButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (!Enabled)
+            return Task.CompletedTask;
+
+        if (e.Key is "Enter" or " ")
+        {
+            _isOpen = true;
+        }
+        else if (e.Key == "Escape")
+        {
+            return CloseAsync();
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            _isOpen = true;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true)
+    {
+        var newValue = ConvertToValue(strVal);
+        Value = newValue;
+
+        if (closeAfterSelect)
+            _isOpen = false;
+
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(newValue);
+
+        if (ValueChange.HasDelegate)
+            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
+    }
+
     private string GetFieldValue(TItem item, string field)
     {
         if (item == null) return "";
         if (string.IsNullOrWhiteSpace(field))
         {
-            // If TItem is string, just return the string
             if (item is string s) return s;
             return item.ToString() ?? "";
         }
@@ -54,45 +219,32 @@
         return prop?.GetValue(item)?.ToString() ?? "";
     }
 
-    private async Task OnSelectionChanged(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    private bool IsSelectedValue(string strVal)
     {
-        var strVal = e.Value?.ToString() ?? "";
-        TValue? newValue = default;
+        return HasSelectedValue && string.Equals(Value?.ToString(), strVal, StringComparison.Ordinal);
+    }
+
+    private static TValue? ConvertToValue(string strVal)
+    {
         try
         {
-            if (typeof(TValue) == typeof(string))
-                newValue = (TValue)(object)strVal;
-            else if (typeof(TValue) == typeof(int))
-                newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : 0);
-            else if (typeof(TValue) == typeof(decimal))
-                newValue = (TValue)(object)(decimal.TryParse(strVal, out var d) ? d : 0m);
-            else
-                newValue = (TValue)Convert.ChangeType(strVal, typeof(TValue));
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+
+            if (targetType == typeof(string))
+                return (TValue?)(object)strVal;
+
+            if (string.IsNullOrEmpty(strVal) && Nullable.GetUnderlyingType(typeof(TValue)) != null)
+                return default;
+
+            if (targetType.IsEnum)
+                return (TValue?)Enum.Parse(targetType, strVal, ignoreCase: true);
+
+            var converted = Convert.ChangeType(strVal, targetType, CultureInfo.InvariantCulture);
+            return (TValue?)converted;
         }
         catch
         {
-            newValue = default;
-        }
-
-        Value = newValue;
-        if (ValueChanged.HasDelegate)
-            await ValueChanged.InvokeAsync(newValue);
-
-        if (ValueChange.HasDelegate)
-        {
-            TItem item = default!;
-            if (DataSource != null)
-            {
-                foreach (var x in DataSource)
-                {
-                    if (GetFieldValue(x, ValueFieldName) == strVal)
-                    {
-                        item = x;
-                        break;
-                    }
-                }
-            }
-            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
+            return default;
         }
     }
 

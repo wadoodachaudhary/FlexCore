@@ -152,6 +152,12 @@ public class ReportSubreportLink
     /// <summary>Browser URL for the XML sidecar when the file lives under the host's web root.</summary>
     public string Url { get; set; } = "";
 
+    /// <summary>
+    /// True when the target report is embedded inside the parent XML <c>&lt;SubReports&gt;</c>
+    /// block rather than exported as a separate XML file.
+    /// </summary>
+    public bool IsInline { get; set; }
+
     /// <summary>Whether the Crystal object was authored as an on-demand subreport link.</summary>
     public bool EnableOnDemand { get; set; }
 

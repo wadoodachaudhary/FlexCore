@@ -7,9 +7,55 @@
 }
 
 .fx-checkbox input[type="checkbox"] {
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    display: inline-block;
+    flex: 0 0 auto;
+    width: 13px;
+    height: 13px;
+    margin: 0;
+    border: 1px solid #808080;
+    border-radius: 0;
+    background: #fff;
+    vertical-align: middle;
+}
+
+.fx-checkbox input[type="checkbox"]:checked::after {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 0;
+    width: 4px;
+    height: 8px;
+    border: solid #000;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.fx-checkbox input[type="checkbox"]:focus-visible {
+    outline: 1px dotted #000;
+    outline-offset: 1px;
+}
+
+.fx-checkbox input[type="checkbox"]:disabled {
+    cursor: default;
+    opacity: 0.65;
+}
+
+.fx-checkbox.fx-checkbox-theme-blue input[type="checkbox"],
+.fx-checkbox-theme-blue .fx-checkbox input[type="checkbox"] {
+    appearance: auto;
+    -webkit-appearance: auto;
     width: 16px;
     height: 16px;
-    cursor: pointer;
+    accent-color: #0d6efd;
+}
+
+.fx-checkbox.fx-checkbox-theme-blue input[type="checkbox"]:checked::after,
+.fx-checkbox-theme-blue .fx-checkbox input[type="checkbox"]:checked::after {
+    content: none;
 }
 
 .fx-checkbox-label {

@@ -55,6 +55,17 @@ public partial class GridControl<TValue>
         TextFilterOperator.DoesNotContain,
         TextFilterOperator.ChooseOne
     ];
+    private static readonly AggregateType[] PivotAggregateTypes =
+    [
+        AggregateType.Sum,
+        AggregateType.Count,
+        AggregateType.Average,
+        AggregateType.Min,
+        AggregateType.Max
+    ];
+
+    private IEnumerable<TextFilterOperatorChoice> TextFilterOperatorChoices =>
+        TextFilterOperators.Select(op => new TextFilterOperatorChoice(op, GetTextFilterOperatorLabel(op)));
 
     private bool _pivotMode;
     private readonly List<string> _pivotRowFields = new();
@@ -99,6 +110,7 @@ public partial class GridControl<TValue>
             var classes = new List<string> { "fx-grid" };
             classes.Add(GridLines switch
             {
+                GridLines.Both => "fx-grid-lines-both",
                 GridLines.None => "fx-grid-lines-none",
                 GridLines.Horizontal => "fx-grid-lines-horizontal",
                 GridLines.Vertical => "fx-grid-lines-vertical",
@@ -114,6 +126,10 @@ public partial class GridControl<TValue>
             classes.Add(ActiveGridThemeCssClass);
             if (BatchEditBehavior == GridBatchEditBehavior.SingleCell)
                 classes.Add("fx-grid-single-cell-batch");
+            if (_isDragSelecting || _isCellDragSelecting)
+                classes.Add("fx-grid-drag-selecting");
+            if (IsPagingActive)
+                classes.Add("fx-grid-paged");
             if (WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
                 classes.Add("fx-grid-width-fit-columns");
             if (_pivotMode)
@@ -330,6 +346,13 @@ public partial class GridControl<TValue>
             parsed = TextFilterOperator.Contains;
 
         _filterOperatorDraft = parsed;
+        if (_filterPopupAutoApply && _filterPopupField != null)
+            await ApplyFilterPopupAsync(close: false);
+    }
+
+    private async Task OnTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
+    {
+        _filterOperatorDraft = filterOperator;
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -1125,12 +1148,20 @@ public partial class GridControl<TValue>
     private void ChangePivotAggregation(PivotValueConfig config, ChangeEventArgs e)
     {
         if (Enum.TryParse<AggregateType>(e.Value?.ToString(), out var aggregate))
+            ChangePivotAggregation(config, aggregate);
+    }
+
+    private void ChangePivotAggregation(PivotValueConfig config, AggregateType? aggregate)
+    {
+        if (aggregate.HasValue)
         {
-            config.Aggregation = aggregate;
+            config.Aggregation = aggregate.Value;
             var col = Columns.FirstOrDefault(c => string.Equals(c.Field, config.Field, StringComparison.OrdinalIgnoreCase));
-            config.Label = col == null ? null : $"{aggregate} of {HeaderColumnDisplay(col)}";
+            config.Label = col == null ? null : $"{aggregate.Value} of {HeaderColumnDisplay(col)}";
         }
     }
+
+    private sealed record TextFilterOperatorChoice(TextFilterOperator Value, string Text);
 
     private static void SetPivotValueFormat(PivotValueConfig config, ChangeEventArgs e)
     {

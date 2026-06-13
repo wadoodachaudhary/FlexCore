@@ -1,0 +1,38 @@
+.fx-context-menu-item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 20px;
+    gap: 6px;
+    padding: 2px 24px 2px 18px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #000;
+    font: inherit;
+    line-height: 16px;
+    text-align: left;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.fx-context-menu-item:hover:not(:disabled),
+.fx-context-menu-item:focus-visible:not(:disabled) {
+    outline: 0;
+    background: #0078d7;
+    color: #fff;
+}
+
+.fx-context-menu-item:disabled {
+    color: #808080;
+}
+
+.fx-context-menu-item-icon {
+    flex: 0 0 14px;
+    width: 14px;
+    text-align: center;
+}
+
+.fx-context-menu-item-text {
+    flex: 1 1 auto;
+}

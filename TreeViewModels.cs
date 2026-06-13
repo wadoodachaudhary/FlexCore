@@ -17,6 +17,7 @@ public class TreeNode
     public bool IsSelected { get; set; }
     public bool IsChecked { get; set; }
     public bool IsDisabled { get; set; }
+    public bool IsBold { get; set; }
     public List<TreeNode> Children { get; set; } = new();
     public bool HasChildren => Children.Count > 0;
     public object? Tag { get; set; }

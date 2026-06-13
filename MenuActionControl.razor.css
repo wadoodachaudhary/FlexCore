@@ -3,15 +3,17 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 30px;
+    min-height: 20px;
     border: 1px solid transparent;
     border-radius: 4px;
     background: transparent;
     color: #0f172a;
-    padding: 0 8px;
+    padding: 2px 16px 2px 8px;
     text-align: left;
-    font-size: 0.83rem;
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .fx-menu-action:hover {

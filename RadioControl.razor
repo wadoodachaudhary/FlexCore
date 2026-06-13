@@ -1,0 +1,38 @@
+@namespace Fx.ControlKit
+@typeparam TValue
+
+@* FlexKit radio button. Group buttons by a shared Name and bind every button in the
+   group to the same SelectedValue (@bind-SelectedValue); give each its own Value. The
+   button renders checked when Value == SelectedValue, and selects its Value on change. *@
+<label class="fx-radio @CssClass" style="@(Disabled ? "opacity:0.6;cursor:default;" : "")">
+    <input type="radio"
+           name="@Name"
+           checked="@IsChecked"
+           disabled="@Disabled"
+           @onchange="OnChange" />
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <span class="fx-radio-label">@Label</span>
+    }
+    @ChildContent
+</label>
+
+@code {
+    [Parameter] public TValue? Value { get; set; }
+    [Parameter] public TValue? SelectedValue { get; set; }
+    [Parameter] public EventCallback<TValue?> SelectedValueChanged { get; set; }
+    [Parameter] public string? Name { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool IsChecked => EqualityComparer<TValue>.Default.Equals(Value, SelectedValue);
+
+    private async Task OnChange(ChangeEventArgs e)
+    {
+        SelectedValue = Value;
+        if (SelectedValueChanged.HasDelegate)
+            await SelectedValueChanged.InvokeAsync(Value);
+    }
+}

@@ -1,0 +1,36 @@
+@namespace Fx.ControlKit
+@using System.Linq.Expressions
+
+@* FlexKit multi-line text input. Dedicated, lightweight TextArea (EditorControl is a
+   rich editor — overkill for plain multi-line text). Supports two-way binding via
+   @bind-Value. Renders a native <textarea> directly so the scoped .fx-textarea CSS
+   applies. *@
+<textarea class="@ResolvedCssClass"
+          value="@Value"
+          rows="@(Rows ?? 4)"
+          placeholder="@Placeholder"
+          maxlength="@MaxLength"
+          disabled="@(!Enabled)"
+          @onchange="OnNativeValueChanged"></textarea>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    // Accepted so @bind-Value compiles; not otherwise used (no EditForm dependency).
+    [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public int? MaxLength { get; set; }
+    [Parameter] public int? Rows { get; set; }
+
+    private string ResolvedCssClass =>
+        string.IsNullOrWhiteSpace(CssClass) ? "fx-textarea" : $"fx-textarea {CssClass}";
+
+    private async Task OnNativeValueChanged(ChangeEventArgs e)
+    {
+        Value = e.Value?.ToString();
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(Value);
+    }
+}

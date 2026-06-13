@@ -1,0 +1,99 @@
+.fx-splitter {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fx-splitter-vertical {
+    flex-direction: row;
+}
+
+.fx-splitter-horizontal {
+    flex-direction: column;
+}
+
+.fx-splitter-pane {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.fx-splitter-primary {
+    flex: 0 0 auto;
+}
+
+.fx-splitter-secondary {
+    flex: 1 1 auto;
+}
+
+.fx-splitter-bar {
+    position: relative;
+    flex: 0 0 var(--fx-splitter-size, 6px);
+    width: var(--fx-splitter-size, 6px);
+    min-width: var(--fx-splitter-size, 6px);
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid #f5f5f5;
+    border-right: 1px solid #9f9f9f;
+    border-radius: 0;
+    background: #d4d0c8;
+    cursor: col-resize;
+    box-sizing: border-box;
+}
+
+.fx-splitter-horizontal .fx-splitter-bar {
+    width: auto;
+    min-width: 0;
+    height: var(--fx-splitter-size, 6px);
+    min-height: var(--fx-splitter-size, 6px);
+    border-left: 0;
+    border-right: 0;
+    border-top: 1px solid #f5f5f5;
+    border-bottom: 1px solid #9f9f9f;
+    cursor: row-resize;
+}
+
+.fx-splitter-bar:hover,
+.fx-splitter-bar:focus-visible {
+    background: #c8c8c8;
+    outline: 1px dotted #000;
+    outline-offset: -2px;
+}
+
+.fx-splitter-grip {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 2px;
+    height: 24px;
+    margin-left: -1px;
+    margin-top: -12px;
+    border-left: 1px solid #808080;
+    border-right: 1px solid #fff;
+}
+
+.fx-splitter-horizontal .fx-splitter-grip {
+    width: 24px;
+    height: 2px;
+    margin-left: -12px;
+    margin-top: -1px;
+    border-left: 0;
+    border-right: 0;
+    border-top: 1px solid #808080;
+    border-bottom: 1px solid #fff;
+}
+
+.fx-splitter-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    cursor: col-resize;
+}
+
+.fx-splitter-overlay-horizontal {
+    cursor: row-resize;
+}

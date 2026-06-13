@@ -3,8 +3,14 @@
 
 @if (Visible)
 {
-    <div class="fx-dialog-overlay" @onclick="HandleOverlayClick" tabindex="0" @onkeydown="HandleKeyDown">
-        <div class="fx-dialog @CssClass" style="@DialogStyle" @onclick:stopPropagation="true">
+    <div class="@OverlayCssClass"
+         @onclick="HandleOverlayClick"
+         @onmousemove="HandleResizeMove"
+         @onmouseup="HandleResizeEnd"
+         @onmouseleave="HandleResizeEnd"
+         tabindex="0"
+         @onkeydown="HandleKeyDown">
+        <div class="@DialogCssClass" style="@DialogStyle" @onclick:stopPropagation="true">
             <div class="fx-dialog-header">
                 <span>@Header</span>
                 @if (ShowCloseIcon)
@@ -21,6 +27,17 @@
                     @FooterContent
                 </div>
             }
+            @if (Resizable)
+            {
+                <span class="fx-dialog-resize-handle fx-dialog-resize-n" @onmousedown='e => HandleResizeStart("n", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-e" @onmousedown='e => HandleResizeStart("e", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-s" @onmousedown='e => HandleResizeStart("s", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-w" @onmousedown='e => HandleResizeStart("w", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-ne" @onmousedown='e => HandleResizeStart("ne", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-se" @onmousedown='e => HandleResizeStart("se", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-sw" @onmousedown='e => HandleResizeStart("sw", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+                <span class="fx-dialog-resize-handle fx-dialog-resize-nw" @onmousedown='e => HandleResizeStart("nw", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
+            }
         </div>
     </div>
 }
@@ -33,6 +50,11 @@
     [Parameter] public bool IsModal { get; set; } = true;
     [Parameter] public bool ShowCloseIcon { get; set; } = true;
     [Parameter] public bool CloseOnEscape { get; set; }
+    [Parameter] public bool Resizable { get; set; }
+    [Parameter] public double MinResizeWidth { get; set; } = 320;
+    [Parameter] public double MinResizeHeight { get; set; } = 160;
+    [Parameter] public double MaxResizeWidth { get; set; }
+    [Parameter] public double MaxResizeHeight { get; set; }
     [Parameter] public string? CssClass { get; set; }
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -42,21 +64,57 @@
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
 
+    private bool _isResizing;
+    private string? _resizeEdge;
+    private double _resizeStartX;
+    private double _resizeStartY;
+    private double _resizeStartWidth;
+    private double _resizeStartHeight;
+    private double? _runtimeWidth;
+    private double? _runtimeHeight;
+
+    private string OverlayCssClass => _isResizing
+        ? "fx-dialog-overlay fx-dialog-overlay-resizing"
+        : "fx-dialog-overlay";
+
+    private string DialogCssClass
+    {
+        get
+        {
+            var parts = new List<string> { "fx-dialog" };
+            if (Resizable)
+                parts.Add("fx-dialog-resizable");
+            if (!string.IsNullOrWhiteSpace(CssClass))
+                parts.Add(CssClass);
+            return string.Join(" ", parts);
+        }
+    }
+
     private string DialogStyle
     {
         get
         {
             var parts = new List<string>();
-            if (!string.IsNullOrWhiteSpace(Width))
+
+            if (_runtimeWidth.HasValue)
+                parts.Add($"width:{_runtimeWidth.Value:0.##}px");
+            else if (!string.IsNullOrWhiteSpace(Width))
                 parts.Add($"width:{Width}");
-            if (!string.IsNullOrWhiteSpace(Height))
+
+            if (_runtimeHeight.HasValue)
+                parts.Add($"height:{_runtimeHeight.Value:0.##}px");
+            else if (!string.IsNullOrWhiteSpace(Height))
                 parts.Add($"height:{Height}");
+
             return string.Join(";", parts);
         }
     }
 
     private async Task HandleOverlayClick()
     {
+        if (_isResizing)
+            return;
+
         if (!IsModal)
             return;
         await RequestClose();
@@ -73,6 +131,81 @@
         {
             await RequestClose();
         }
+    }
+
+    private Task HandleResizeStart(string edge, MouseEventArgs e)
+    {
+        if (!Resizable)
+            return Task.CompletedTask;
+
+        _isResizing = true;
+        _resizeEdge = edge;
+        _resizeStartX = e.ClientX;
+        _resizeStartY = e.ClientY;
+        _resizeStartWidth = ResolveCurrentWidth();
+        _resizeStartHeight = ResolveCurrentHeight();
+        return Task.CompletedTask;
+    }
+
+    private Task HandleResizeMove(MouseEventArgs e)
+    {
+        if (!_isResizing || string.IsNullOrWhiteSpace(_resizeEdge))
+            return Task.CompletedTask;
+
+        var dx = e.ClientX - _resizeStartX;
+        var dy = e.ClientY - _resizeStartY;
+        var width = _resizeStartWidth;
+        var height = _resizeStartHeight;
+
+        if (_resizeEdge.Contains('e'))
+            width += dx;
+        if (_resizeEdge.Contains('w'))
+            width -= dx;
+        if (_resizeEdge.Contains('s'))
+            height += dy;
+        if (_resizeEdge.Contains('n'))
+            height -= dy;
+
+        _runtimeWidth = ClampResize(width, MinResizeWidth, MaxResizeWidth);
+        _runtimeHeight = ClampResize(height, MinResizeHeight, MaxResizeHeight);
+        return Task.CompletedTask;
+    }
+
+    private Task HandleResizeEnd(MouseEventArgs e)
+    {
+        _isResizing = false;
+        _resizeEdge = null;
+        return Task.CompletedTask;
+    }
+
+    private double ResolveCurrentWidth()
+    {
+        return _runtimeWidth ?? TryParsePixelValue(Width) ?? 640;
+    }
+
+    private double ResolveCurrentHeight()
+    {
+        return _runtimeHeight ?? TryParsePixelValue(Height) ?? 360;
+    }
+
+    private static double? TryParsePixelValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var trimmed = value.Trim();
+        if (!trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        return double.TryParse(trimmed[..^2], out var pixels) ? pixels : null;
+    }
+
+    private static double ClampResize(double value, double minimum, double maximum)
+    {
+        var clamped = Math.Max(minimum, value);
+        if (maximum > 0)
+            clamped = Math.Min(maximum, clamped);
+        return clamped;
     }
 
     private async Task RequestClose()

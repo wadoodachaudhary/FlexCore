@@ -1,0 +1,155 @@
+@namespace Fx.ControlKit
+
+@if (!Hidden)
+{
+    <div class="command-panel @(Collapsed ? "collapsed" : "") @CssClass" style="@Style">
+        <!-- Panel Toolbar -->
+        <div class="panel-toolbar">
+            <button @onclick="OnClose" title="Close panel">
+                <img src="_content/FlexKit/images/16/close.ico" alt="Close" />
+            </button>
+            @if (!Collapsed)
+            {
+                <button @onclick="OnToggleCollapse" title="Minimize">
+                    <img src="_content/FlexKit/images/16/Shrink.ico" alt="Minimize" />
+                </button>
+            }
+            else
+            {
+                <button @onclick="OnToggleCollapse" title="Expand">
+                    <img src="_content/FlexKit/images/16/expand.ico" alt="Expand" />
+                </button>
+            }
+        </div>
+
+        @if (!Collapsed)
+        {
+            @if (Type == SidebarType.Accordion)
+            {
+                <!-- Explorer Bar Sections -->
+                <div class="explorer-bar">
+                    @foreach (var section in Sections)
+                    {
+                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "")">
+                            <div class="explorer-section-header" @onclick="() => ToggleSection(section)">
+                                <span>@(section.Title)</span>
+                            </div>
+                            @if (!section.IsCollapsed)
+                            {
+                                <div class="explorer-section-body">
+                                    @foreach (var item in section.Items)
+                                    {
+                                        <div class="explorer-item @(item.IsBold ? "bold-item" : "") @(item.IsRed ? "red-item" : "")"
+                                             @onclick="() => HandleItemClick(section, item)">
+                                            @if (!string.IsNullOrEmpty(item.Icon))
+                                            {
+                                                <span class="item-icon">@((MarkupString)item.Icon)</span>
+                                            }
+                                            <span>@item.Text</span>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            else if (Type == SidebarType.Tree)
+            {
+                <!-- Tree View Sections (each section as a card containing a TreeViewControl) -->
+                <div class="explorer-bar">
+                    @foreach (var section in Sections)
+                    {
+                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "")">
+                            <div class="explorer-section-header" @onclick="() => ToggleSection(section)">
+                                <span>@(section.Title)</span>
+                            </div>
+                            @if (!section.IsCollapsed)
+                            {
+                                <div class="explorer-section-body">
+                                    <TreeViewControl Nodes="@GetTreeNodesForSection(section)"
+                                                     OnNodeClick="@((node) => HandleNodeClick(section, node))"
+                                                     UseVb6TreeStyle="true"
+                                                     FolderStyle="TreeFolderStyle.None"
+                                                     TreeIndentPixels="12" />
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public SidebarType Type { get; set; } = SidebarType.Accordion;
+    [Parameter] public List<SidebarSection> Sections { get; set; } = new();
+    [Parameter] public bool Collapsed { get; set; }
+    [Parameter] public EventCallback<bool> CollapsedChanged { get; set; }
+    [Parameter] public bool Hidden { get; set; }
+    [Parameter] public EventCallback<bool> HiddenChanged { get; set; }
+    [Parameter] public EventCallback<SidebarItem> OnItemClick { get; set; }
+    [Parameter] public string CssClass { get; set; } = "";
+    [Parameter] public string Style { get; set; } = "";
+
+    private SidebarSection? _activeSection;
+
+    protected override void OnParametersSet()
+    {
+        if (_activeSection == null && Sections != null && Sections.Count > 0)
+        {
+            _activeSection = Sections[0];
+        }
+    }
+
+    private async Task OnClose()
+    {
+        Hidden = true;
+        await HiddenChanged.InvokeAsync(Hidden);
+    }
+
+    private async Task OnToggleCollapse()
+    {
+        Collapsed = !Collapsed;
+        await CollapsedChanged.InvokeAsync(Collapsed);
+    }
+
+    private void ToggleSection(SidebarSection section)
+    {
+        section.IsCollapsed = !section.IsCollapsed;
+        _activeSection = section;
+    }
+
+    private List<TreeNode> GetTreeNodesForSection(SidebarSection section)
+    {
+        var nodes = new List<TreeNode>();
+        foreach (var item in section.Items)
+        {
+            var iconStr = !string.IsNullOrEmpty(item.Icon) ? item.Icon + " " : "";
+            var itemNode = new TreeNode
+            {
+                Text = iconStr + item.Text,
+                Tag = item,
+                IsBold = item.IsBold
+            };
+            nodes.Add(itemNode);
+        }
+        return nodes;
+    }
+
+    private async Task HandleItemClick(SidebarSection section, SidebarItem item)
+    {
+        _activeSection = section;
+        await OnItemClick.InvokeAsync(item);
+    }
+
+    private async Task HandleNodeClick(SidebarSection section, TreeNode node)
+    {
+        _activeSection = section;
+        if (node.Tag is SidebarItem item)
+        {
+            await OnItemClick.InvokeAsync(item);
+        }
+    }
+}

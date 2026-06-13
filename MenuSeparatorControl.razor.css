@@ -1,5 +1,6 @@
 .fx-menu-separator {
-    height: 1px;
-    margin: 5px 3px;
-    background: #e2e8f0;
+    height: 0;
+    border-top: 1px solid #555555;
+    border-bottom: 1px solid #ffffff;
+    margin: 3px 0;
 }

@@ -1,0 +1,51 @@
+@namespace Fx.ControlKit
+
+@if (Visible)
+{
+    <div class="fx-context-menu-backdrop"
+         style="z-index:@(ZIndex - 1);"
+         @onclick="CloseAsync"
+         @oncontextmenu="CloseAsync"
+         @oncontextmenu:preventDefault="true"></div>
+    <CascadingValue Value="this" IsFixed="true">
+        <div class="@RootCssClass"
+             style="@PositionStyle"
+             role="menu"
+             @onclick:stopPropagation="true"
+             @oncontextmenu:stopPropagation="true">
+            @ChildContent
+        </div>
+    </CascadingValue>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+    [Parameter] public double X { get; set; }
+    [Parameter] public double Y { get; set; }
+    [Parameter] public int ZIndex { get; set; } = 10000;
+    [Parameter] public int MinWidth { get; set; } = 160;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string RootCssClass =>
+        string.IsNullOrWhiteSpace(CssClass)
+            ? "fx-context-menu"
+            : $"fx-context-menu {CssClass.Trim()}";
+
+    private string PositionStyle =>
+        $"left:{X}px;top:{Y}px;min-width:{MinWidth}px;z-index:{ZIndex};{Style}";
+
+    public async Task CloseAsync()
+    {
+        if (VisibleChanged.HasDelegate)
+            await VisibleChanged.InvokeAsync(false);
+
+        if (OnClose.HasDelegate)
+            await OnClose.InvokeAsync();
+    }
+
+    internal Task RequestCloseAsync() => CloseAsync();
+}

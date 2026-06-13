@@ -437,12 +437,19 @@ else
             var payload = JsonSerializer.Deserialize<SubreportClickPayload>(payloadJson);
             if (payload == null || string.IsNullOrWhiteSpace(payload.xmlPath)) return;
 
-            var filters = (payload.filters ?? new List<SubreportClickFilter>())
+            var payloadFilters = payload.filters ?? new List<SubreportClickFilter>();
+            var filters = payloadFilters
                 .Where(f => !string.IsNullOrWhiteSpace(f.table) && !string.IsNullOrWhiteSpace(f.field))
                 .Select(f => new ReportFieldFilter(f.table ?? "", f.field ?? "", f.value ?? ""))
                 .ToList();
 
-            await OpenSubreport(payload.title ?? "Subreport", payload.xmlPath!, filters);
+            await OpenSubreport(
+                payload.title ?? "Subreport",
+                payload.xmlPath!,
+                filters,
+                payload.isInline,
+                payload.subreportName ?? payload.title ?? "",
+                payloadFilters);
         }
         catch (Exception ex)
         {
@@ -461,6 +468,8 @@ else
     {
         public string? title { get; set; }
         public string? xmlPath { get; set; }
+        public string? subreportName { get; set; }
+        public bool isInline { get; set; }
         public List<SubreportClickFilter>? filters { get; set; }
     }
 
@@ -468,6 +477,7 @@ else
     {
         public string? table { get; set; }
         public string? field { get; set; }
+        public string? parameter { get; set; }
         public string? value { get; set; }
     }
 
@@ -643,7 +653,13 @@ else
     /// is parsed and executed just like the main report; Crystal SubReportLink mappings
     /// from the clicked row become direct table-field filters on the subreport query.
     /// </summary>
-    private async Task OpenSubreport(string title, string xmlPath, List<ReportFieldFilter> filters)
+    private async Task OpenSubreport(
+        string title,
+        string xmlPath,
+        List<ReportFieldFilter> filters,
+        bool isInline = false,
+        string subreportName = "",
+        List<SubreportClickFilter>? linkedParameterValues = null)
     {
         if (string.IsNullOrWhiteSpace(xmlPath))
         {
@@ -660,8 +676,11 @@ else
             return;
         }
 
+        var sourceKey = isInline && !string.IsNullOrWhiteSpace(subreportName)
+            ? $"{fullXmlPath}#{subreportName}"
+            : fullXmlPath;
         var existing = Tabs.FindIndex(t =>
-            string.Equals(t.SourceXmlPath, fullXmlPath, StringComparison.OrdinalIgnoreCase)
+            string.Equals(t.SourceXmlPath, sourceKey, StringComparison.OrdinalIgnoreCase)
             && FieldFiltersEqual(t.FieldFilters, filters));
         if (existing >= 0)
         {
@@ -675,9 +694,11 @@ else
 
         try
         {
-            var subDef = filters.Count > 0
-                ? XmlLoader.LoadWithFieldFilters(fullXmlPath, filters)
-                : XmlLoader.Load(fullXmlPath);
+            var subDef = isInline
+                ? XmlLoader.LoadInlineSubreport(fullXmlPath, subreportName, filters)
+                : filters.Count > 0
+                    ? XmlLoader.LoadWithFieldFilters(fullXmlPath, filters)
+                    : XmlLoader.Load(fullXmlPath);
 
             DefinitionPostProcessor?.Invoke(subDef);
             Orientation_DoNotSet_UseTab(subDef.Orientation);
@@ -693,6 +714,7 @@ else
             if (_lastParameters != null)
                 foreach (var kv in _lastParameters)
                     if (!sqlParams.ContainsKey(kv.Key)) sqlParams[kv.Key] = kv.Value;
+            AddLinkedSubreportParameters(sqlParams, subDef, linkedParameterValues);
             AutoInjectSessionParameters(sqlParams, subDef.Sql);
 
             var filterStr = string.Join(", ", filters.Select(f => $"{f.Table}.{f.Field}={f.Value}"));
@@ -714,7 +736,7 @@ else
             var tab = new ReportTab
             {
                 Title = tabTitle,
-                SourceXmlPath = fullXmlPath,
+                SourceXmlPath = sourceKey,
                 FieldFilters = filters.ToList(),
                 Pages = RenderHtmlPages(subDef, dt, visibleCols),
                 Tree = BuildGroupTree(dt, subDef, rowsPerPage),
@@ -1273,7 +1295,15 @@ else
                 StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)";
             }
             else
-                StatusMessage = $"No XML report definition found: {file}";
+            {
+                // Report XML missing on disk — surface a clear, VISIBLE
+                // "<filename> not Found" message (the fx-report-error block,
+                // not just a status-bar line) so the user sees exactly which
+                // report definition is absent.
+                var missingName = Path.GetFileName(file);
+                ErrorMessage = $"{missingName} not Found";
+                StatusMessage = $"{missingName} not Found";
+            }
         }
         catch (Exception ex)
         {
@@ -2641,16 +2671,14 @@ else
 
     private static string BuildColumnHeaderHtml(ReportColumn col)
     {
-        if (col.IsSubreportObject)
-            return Escape(col.HeaderText);
-
-        return BuildSubreportLinkHtml(col, row: null, useHeaderFallback: true);
+        return Escape(col.HeaderText);
     }
 
     private static string BuildSubreportLinkHtml(ReportColumn col, DataRow? row, bool useHeaderFallback)
     {
         var link = col.SubreportLink;
-        if (link == null || !link.EnableOnDemand || string.IsNullOrWhiteSpace(link.Url))
+        if (link == null || !link.EnableOnDemand ||
+            (string.IsNullOrWhiteSpace(link.Url) && !link.IsInline))
             return useHeaderFallback ? Escape(col.HeaderText) : "";
 
         var label = string.IsNullOrWhiteSpace(link.SubreportName)
@@ -2660,7 +2688,8 @@ else
             label = "Open";
 
         var linkText = Escape(label);
-        var href = System.Web.HttpUtility.HtmlAttributeEncode(link.Url);
+        var href = System.Web.HttpUtility.HtmlAttributeEncode(
+            string.IsNullOrWhiteSpace(link.Url) ? "#" : link.Url);
         var title = System.Web.HttpUtility.HtmlAttributeEncode(
             $"Open {label} subreport");
         var payload = row == null ? "" : BuildSubreportPayloadAttribute(link, label, row);
@@ -2686,6 +2715,7 @@ else
             {
                 table = parameterLink.SubreportTable,
                 field = parameterLink.SubreportField,
+                parameter = parameterLink.LinkedParameterName,
                 value = value == null || value == DBNull.Value ? "" : value.ToString() ?? ""
             });
         }
@@ -2694,9 +2724,63 @@ else
         {
             title = label,
             xmlPath = link.XmlPath,
+            subreportName = link.SubreportName,
+            isInline = link.IsInline,
             filters
         });
         return System.Web.HttpUtility.HtmlAttributeEncode(json);
+    }
+
+    private static void AddLinkedSubreportParameters(
+        Dictionary<string, object> sqlParams,
+        ReportDefinition subDefinition,
+        List<SubreportClickFilter>? linkedParameterValues)
+    {
+        if (linkedParameterValues == null || linkedParameterValues.Count == 0)
+            return;
+
+        var parametersByName = new Dictionary<string, ReportParameter>(StringComparer.OrdinalIgnoreCase);
+        foreach (var parameter in subDefinition.Parameters)
+            parametersByName.TryAdd(parameter.Name, parameter);
+
+        foreach (var filter in linkedParameterValues)
+        {
+            var parameterName = SanitizeCrystalParameterName(filter.parameter);
+            if (string.IsNullOrWhiteSpace(parameterName))
+            {
+                continue;
+            }
+
+            if (parametersByName.TryGetValue(parameterName, out var parameter))
+                sqlParams[parameterName] = CoerceSubreportParameterValue(filter.value ?? "", parameter.ParameterType);
+            else if (subDefinition.Sql.Contains("@" + parameterName, StringComparison.OrdinalIgnoreCase))
+                sqlParams[parameterName] = filter.value ?? "";
+        }
+    }
+
+    private static object CoerceSubreportParameterValue(string value, ReportParameterType type)
+        => type switch
+        {
+            ReportParameterType.Integer => long.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) ? i : value,
+            ReportParameterType.Decimal => decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out var d) ? d : value,
+            ReportParameterType.Date => DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt) ? dt : value,
+            ReportParameterType.Boolean => bool.TryParse(value, out var b) ? b : value,
+            _ => value
+        };
+
+    private static string SanitizeCrystalParameterName(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "";
+        var text = raw.Trim();
+        if (text.StartsWith("{?", StringComparison.Ordinal) && text.EndsWith("}", StringComparison.Ordinal))
+            text = text[2..^1];
+        else if (text.StartsWith("?", StringComparison.Ordinal))
+            text = text[1..];
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (var c in text)
+            if (char.IsLetterOrDigit(c) || c == '_') sb.Append(c);
+        return sb.ToString();
     }
 
     /// <summary>Produces the inline <c>text-align</c> style for a <see cref="ReportAlignment"/>.</summary>

@@ -1,0 +1,125 @@
+@namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
+
+<div class="@RootCssClass" style="@RootStyle">
+    <div class="fx-splitter-pane fx-splitter-primary" style="@PrimaryPaneStyle">
+        @PrimaryContent
+    </div>
+    <button class="fx-splitter-bar"
+            type="button"
+            title="@Title"
+            aria-label="@Title"
+            @onmousedown="BeginDrag"
+            @onmousedown:preventDefault="true"
+            @onmousedown:stopPropagation="true">
+        <span class="fx-splitter-grip" aria-hidden="true"></span>
+    </button>
+    <div class="fx-splitter-pane fx-splitter-secondary">
+        @SecondaryContent
+    </div>
+    @if (_isDragging)
+    {
+        <div class="@OverlayCssClass"
+             @onmousemove="HandleDragMove"
+             @onmouseup="EndDrag"
+             @onmouseleave="EndDrag"></div>
+    }
+</div>
+
+@code {
+    [Parameter] public double PrimarySize { get; set; } = 240;
+    [Parameter] public EventCallback<double> PrimarySizeChanged { get; set; }
+    [Parameter] public double MinPrimarySize { get; set; } = 80;
+    [Parameter] public double MaxPrimarySize { get; set; } = 1200;
+    [Parameter] public double SplitterSize { get; set; } = 6;
+    [Parameter] public bool Vertical { get; set; } = true;
+    [Parameter] public string? Height { get; set; }
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public string Title { get; set; } = "Resize";
+    [Parameter] public RenderFragment? PrimaryContent { get; set; }
+    [Parameter] public RenderFragment? SecondaryContent { get; set; }
+
+    private bool _isDragging;
+    private double _dragStartPosition;
+    private double _dragStartSize;
+    private double _runtimePrimarySize = 240;
+
+    protected override void OnParametersSet()
+    {
+        if (!_isDragging)
+            _runtimePrimarySize = ClampSize(PrimarySize);
+    }
+
+    private string RootCssClass
+    {
+        get
+        {
+            var orientation = Vertical ? "fx-splitter-vertical" : "fx-splitter-horizontal";
+            return string.IsNullOrWhiteSpace(CssClass)
+                ? $"fx-splitter {orientation}"
+                : $"fx-splitter {orientation} {CssClass.Trim()}";
+        }
+    }
+
+    private string RootStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Height))
+                parts.Add($"height:{Height}");
+            if (!string.IsNullOrWhiteSpace(Width))
+                parts.Add($"width:{Width}");
+            parts.Add($"--fx-splitter-size:{Math.Max(1, SplitterSize)}px");
+            if (!string.IsNullOrWhiteSpace(Style))
+                parts.Add(Style!);
+            return string.Join(";", parts);
+        }
+    }
+
+    private string PrimaryPaneStyle =>
+        Vertical
+            ? $"flex-basis:{_runtimePrimarySize}px"
+            : $"flex-basis:{_runtimePrimarySize}px";
+
+    private string OverlayCssClass =>
+        Vertical ? "fx-splitter-overlay" : "fx-splitter-overlay fx-splitter-overlay-horizontal";
+
+    private Task BeginDrag(MouseEventArgs e)
+    {
+        _isDragging = true;
+        _dragStartPosition = Vertical ? e.ClientX : e.ClientY;
+        _dragStartSize = _runtimePrimarySize;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleDragMove(MouseEventArgs e)
+    {
+        if (!_isDragging)
+            return;
+
+        var position = Vertical ? e.ClientX : e.ClientY;
+        var nextSize = ClampSize(_dragStartSize + position - _dragStartPosition);
+        if (Math.Abs(nextSize - _runtimePrimarySize) < 0.5)
+            return;
+
+        _runtimePrimarySize = nextSize;
+        if (PrimarySizeChanged.HasDelegate)
+            await PrimarySizeChanged.InvokeAsync(nextSize);
+    }
+
+    private Task EndDrag(MouseEventArgs e)
+    {
+        _isDragging = false;
+        return Task.CompletedTask;
+    }
+
+    private double ClampSize(double value)
+    {
+        var min = Math.Max(0, MinPrimarySize);
+        var max = Math.Max(min, MaxPrimarySize);
+        return Math.Clamp(value > 0 ? value : min, min, max);
+    }
+}

@@ -31,6 +31,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public bool EnableHover { get; set; } = true;
+    [Parameter] public bool ToggleOnRowClick { get; set; } = true;
+    [Parameter] public int TabIndex { get; set; } = 0;
 
     /// <summary>
     /// Extra CSS class added to the root .fx-treegrid element. Use
@@ -82,6 +84,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// <summary>RenderFragment that fully overrides the leaf-node icon.</summary>
     [Parameter] public RenderFragment? LeafIconTemplate { get; set; }
 
+    /// <summary>Function delegate returning custom icon path based on node item and expanded state.</summary>
+    [Parameter] public Func<TValue, bool, string?>? GetNodeIcon { get; set; }
+
     // Resolved values used by TreeGridControl.razor markup.
     internal string ResolveCollapsedGlyph() =>
         CollapsedGlyph ?? (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus ? "+" : "▶");
@@ -98,6 +103,33 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         LeafIconStyle ?? (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus
             ? HfGridIconStyles.LeafSpacer
             : null);
+
+    internal string GetHeaderIconButtonCss(TreeGridColumn column) =>
+        string.IsNullOrWhiteSpace(column.HeaderIconCssClass)
+            ? "fx-treegrid-header-icon-button"
+            : $"fx-treegrid-header-icon-button {column.HeaderIconCssClass.Trim()}";
+
+    internal string? ResolveHeaderIconSrc(TreeGridColumn column)
+    {
+        if (!string.IsNullOrWhiteSpace(column.HeaderIconSrc))
+            return column.HeaderIconSrc;
+
+        return column.HeaderIconKind switch
+        {
+            TreeGridHeaderIconKind.ExpandAll => $"{StaticAssetRoot}/images/16/expand.ico",
+            TreeGridHeaderIconKind.CollapseAll => $"{StaticAssetRoot}/images/16/Shrink.ico",
+            _ => null
+        };
+    }
+
+    internal async Task HandleHeaderIconClickAsync(TreeGridColumn column)
+    {
+        if (column.HeaderIconClicked.HasDelegate)
+            await column.HeaderIconClicked.InvokeAsync();
+    }
+
+    private string StaticAssetRoot =>
+        _staticAssetRoot ??= $"_content/{GetType().Assembly.GetName().Name}";
 
     internal bool UseYellowFolderIcons =>
         CssClass?.Contains("fx-treegrid-yellow-folder", StringComparison.OrdinalIgnoreCase) == true;
@@ -116,6 +148,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     // Events
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
+    [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
+    [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Expanded { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Collapsed { get; set; }
 
@@ -128,6 +162,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private IEnumerable<TValue>? _previousDataSource;
     private bool _treeBuilt;
     private int _lastRenderedColumnCount;
+    private string? _staticAssetRoot;
 
     // ── Column Registration ─────────────────────────────────────────────
 
@@ -328,7 +363,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task ToggleNode(TreeNode<TValue> node)
     {
-        node.IsExpanded = !node.IsExpanded;
+        await SetNodeExpandedAsync(node, !node.IsExpanded);
+    }
+
+    private async Task SetNodeExpandedAsync(TreeNode<TValue> node, bool expanded)
+    {
+        if (!node.HasChildren || node.IsExpanded == expanded)
+            return;
+
+        node.IsExpanded = expanded;
 
         if (node.IsExpanded && Expanded.HasDelegate)
             await Expanded.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
@@ -341,9 +384,161 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
     {
         // Toggle expand/collapse when clicking anywhere on a parent node row
-        if (node.HasChildren)
+        if (ToggleOnRowClick && node.HasChildren)
             await ToggleNode(node);
 
+        await SelectNodeAsync(node, visibleIndex);
+    }
+
+    private async Task HandleRowDoubleClick(TreeNode<TValue> node, int visibleIndex)
+    {
+        await SelectNodeAsync(node, visibleIndex);
+
+        if (RowDoubleClicked.HasDelegate)
+            await RowDoubleClicked.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
+    }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+            case "Down":
+                await MoveSelectionAsync(1);
+                break;
+            case "ArrowUp":
+            case "Up":
+                await MoveSelectionAsync(-1);
+                break;
+            case "Home":
+                await SelectVisibleNodeAsync(0);
+                break;
+            case "End":
+                await SelectVisibleNodeAsync(VisibleNodes.ToList().Count - 1);
+                break;
+            case "Enter":
+                await ActivateSelectedNodeAsync();
+                break;
+            case "ArrowRight":
+            case "Right":
+                await ExpandOrMoveToChildAsync();
+                break;
+            case "ArrowLeft":
+            case "Left":
+                await CollapseOrMoveToParentAsync();
+                break;
+        }
+    }
+
+    private async Task MoveSelectionAsync(int delta)
+    {
+        var visible = VisibleNodes.ToList();
+        if (visible.Count == 0)
+            return;
+
+        var selectedIndex = GetSelectedVisibleIndex(visible);
+        var targetIndex = selectedIndex < 0
+            ? (delta >= 0 ? 0 : visible.Count - 1)
+            : Math.Clamp(selectedIndex + delta, 0, visible.Count - 1);
+
+        await SelectVisibleNodeAsync(targetIndex, visible);
+    }
+
+    private async Task SelectVisibleNodeAsync(int index, List<TreeNode<TValue>>? visible = null)
+    {
+        visible ??= VisibleNodes.ToList();
+        if (visible.Count == 0 || index < 0 || index >= visible.Count)
+            return;
+
+        await SelectNodeAsync(visible[index], index);
+    }
+
+    private async Task ActivateSelectedNodeAsync()
+    {
+        var visible = VisibleNodes.ToList();
+        if (visible.Count == 0)
+            return;
+
+        var selectedIndex = GetSelectedVisibleIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var node = visible[selectedIndex];
+        if (RowActivated.HasDelegate)
+            await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
+    }
+
+    private async Task ExpandOrMoveToChildAsync()
+    {
+        var visible = VisibleNodes.ToList();
+        var selectedIndex = GetSelectedVisibleIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var node = visible[selectedIndex];
+        if (!node.HasChildren)
+            return;
+
+        if (!node.IsExpanded)
+        {
+            await SetNodeExpandedAsync(node, true);
+            return;
+        }
+
+        var nextIndex = selectedIndex + 1;
+        if (nextIndex < visible.Count && visible[nextIndex].Level == node.Level + 1)
+            await SelectVisibleNodeAsync(nextIndex, visible);
+    }
+
+    private async Task CollapseOrMoveToParentAsync()
+    {
+        var visible = VisibleNodes.ToList();
+        var selectedIndex = GetSelectedVisibleIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var node = visible[selectedIndex];
+        if (node.HasChildren && node.IsExpanded)
+        {
+            await SetNodeExpandedAsync(node, false);
+            return;
+        }
+
+        for (var i = selectedIndex - 1; i >= 0; i--)
+        {
+            if (visible[i].Level < node.Level)
+            {
+                await SelectVisibleNodeAsync(i, visible);
+                return;
+            }
+        }
+    }
+
+    private int GetSelectedVisibleIndex(List<TreeNode<TValue>> visible)
+    {
+        if (_selectedItem == null)
+            return -1;
+
+        for (var i = 0; i < visible.Count; i++)
+        {
+            if (EqualityComparer<TValue>.Default.Equals(visible[i].Data, _selectedItem))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private async Task SelectNodeAsync(TreeNode<TValue> node, int visibleIndex)
+    {
         if (!AllowSelection) return;
 
         var prevSelected = _selectedItem;
@@ -354,7 +549,27 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await RowDeselected.InvokeAsync(new TreeRowSelectEventArgs<TValue> { Data = prevSelected });
 
         if (RowSelected.HasDelegate)
-            await RowSelected.InvokeAsync(new TreeRowSelectEventArgs<TValue> { Data = node.Data, RowIndex = visibleIndex });
+            await RowSelected.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
+    }
+
+    private static TreeRowSelectEventArgs<TValue> CreateRowEventArgs(TreeNode<TValue> node, int visibleIndex) =>
+        new()
+        {
+            Data = node.Data,
+            RowIndex = visibleIndex,
+            Level = node.Level,
+            HasChildren = node.HasChildren,
+            IsExpanded = node.IsExpanded
+        };
+
+    public async Task SetExpandedAsync(TValue? item, bool expanded)
+    {
+        if (item == null)
+            return;
+
+        var node = _flatNodes.FirstOrDefault(n => EqualityComparer<TValue>.Default.Equals(n.Data, item));
+        if (node != null)
+            await SetNodeExpandedAsync(node, expanded);
     }
 
     // ── Public API ──────────────────────────────────────────────────────
@@ -374,6 +589,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 node.IsExpanded = false;
         await InvokeAsync(StateHasChanged);
     }
+
+    public bool HasExpandableNodes => _flatNodes.Any(node => node.HasChildren);
+
+    public bool AreAllExpandableNodesExpanded =>
+        HasExpandableNodes && _flatNodes.Where(node => node.HasChildren).All(node => node.IsExpanded);
 
     public async Task ExpandAtLevelAsync(int level)
     {
@@ -431,6 +651,9 @@ public class TreeRowSelectEventArgs<TValue>
 {
     public TValue? Data { get; set; }
     public int RowIndex { get; set; }
+    public int Level { get; set; }
+    public bool HasChildren { get; set; }
+    public bool IsExpanded { get; set; }
 }
 
 public class TreeNodeEventArgs<TValue>

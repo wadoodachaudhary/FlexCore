@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
 using System.Collections.Concurrent;
@@ -38,6 +39,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public GridWidthMode WidthMode { get; set; } = GridWidthMode.FillAvailable;
+    [Parameter] public bool EnableViewportSafeSizing { get; set; } = true;
+    [Parameter] public string ViewportSafeMaxWidth { get; set; } = "";
+    [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public int RowHeight { get; set; }
     /// <summary>
@@ -45,13 +49,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     /// existing application grids keep their current behavior unless they opt in.
     /// </summary>
     [Parameter] public bool AllowRowResizing { get; set; }
-    [Parameter] public double MinRowHeight { get; set; } = 18;
+    [Parameter] public double MinRowHeight { get; set; } = 16;
     [Parameter] public Func<TValue, int, double?>? RowHeightSelector { get; set; }
+    [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
 
     // Feature flags
     [Parameter] public bool AllowSorting { get; set; }
     [Parameter] public bool AllowMultiSorting { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    [Parameter] public int PageSize { get; set; } = 50;
+    [Parameter] public int[] PageSizes { get; set; } = [25, 50, 100, 200];
+    [Parameter] public int PageButtonCount { get; set; } = 5;
+    [Parameter] public int AutoPageRowThreshold { get; set; } = 10000;
     /// <summary>
     /// Clears transient filters when the grid receives a different data source
     /// instance. This prevents one context's filter (for example one FAssembly
@@ -83,7 +92,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     // grid so its top edge stays at a fixed offset; otherwise the
     // banner pops in/out on first selection and the grid body shifts
     // vertically by ~32 px, which reads as visual "shaking" mid-drag.
-    [Parameter] public bool ShowSelectionInfoBar { get; set; } = true;
+    [Parameter] public bool ShowSelectionInfoBar { get; set; }
     /// <summary>
     /// Field that receives multi-row type-ahead when no row-selection gesture
     /// has captured an editable target column. Kept as the compatibility
@@ -223,6 +232,16 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     /// list them with unchecked boxes. When null the dialog falls back to the
     /// rendered <c>&lt;GridColumn&gt;</c> children.</summary>
     [Parameter] public IEnumerable<ChooseColumnDescriptor>? AvailableColumns { get; set; }
+
+    /// <summary>Optional "factory default" layout for the Choose Columns dialog's
+    /// <em>Restore Default Layout</em> button. When supplied, clicking that button
+    /// resets each listed column's checked state and order to match this schema
+    /// (columns absent from it keep their current state). When null, Restore
+    /// Default falls back to the in-memory snapshot taken when the dialog first
+    /// opened. The grid is general-purpose: it neither knows nor cares where the
+    /// host sourced these from (a service, a config, hardcoded) — it just applies
+    /// them. Hosts populate this exactly like <see cref="AvailableColumns"/>.</summary>
+    [Parameter] public IEnumerable<ChooseColumnDescriptor>? DefaultColumns { get; set; }
 
     /// <summary>Fires when the user clicks OK in the Choose Columns dialog.
     /// When subscribed, the host is fully responsible for applying the new
@@ -422,6 +441,21 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private bool SingleCellColumnMassEditEnabled =>
         BatchEditBehavior == GridBatchEditBehavior.SingleCell && AllowSingleCellColumnMassEdit;
 
+    private string GetRowCssClass(TValue item, int rowIndex)
+    {
+        if (RowCssClassSelector == null)
+            return string.Empty;
+
+        try
+        {
+            return RowCssClassSelector.Invoke(item, rowIndex) ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     // Inline style for the host div. Only emits the GroupedColumnColor CSS
     // variables when the caller actually supplied a color — empty-string
     // assignments (e.g. "--fx-grid-group-color: ;") suppress the var() fallback
@@ -442,10 +476,73 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             {
                 sb.Append("--fx-grid-group-total-text-color:").Append(ResolvedGroupTotalTextColor).Append("; ");
             }
-            if (!string.IsNullOrEmpty(Height)) sb.Append("height:").Append(Height).Append("; ");
-            if (!string.IsNullOrEmpty(Width))  sb.Append("width:").Append(Width).Append("; ");
+            sb.Append("box-sizing:border-box; min-width:0; min-height:0; max-width:100%; max-height:100%; ");
+            var height = ResolveViewportSafeSize(Height, ViewportSafeMaxHeight);
+            var width = ResolveViewportSafeSize(Width, ViewportSafeMaxWidth);
+            if (!string.IsNullOrEmpty(height))
+            {
+                sb.Append("height:").Append(height).Append("; ");
+                if (IsPercentageOnlySize(height))
+                    sb.Append("flex:1 1 0; ");
+            }
+            if (!string.IsNullOrEmpty(width))  sb.Append("width:").Append(width).Append("; ");
             return sb.ToString();
         }
+    }
+
+    private string? ResolveViewportSafeSize(string? size, string maxSize)
+    {
+        if (string.IsNullOrWhiteSpace(size))
+            return null;
+
+        var trimmed = size.Trim();
+        if (!EnableViewportSafeSizing || string.IsNullOrWhiteSpace(maxSize))
+            return trimmed;
+
+        // Percentage-only sizes fill the parent. The CSS min-width/min-height
+        // reset above lets the parent shrink instead of forcing page scroll.
+        if (IsPercentageOnlySize(trimmed))
+            return trimmed;
+
+        if (TryParsePixelSize(trimmed, out var sizePx) &&
+            TryParsePixelSize(maxSize, out var maxPx) &&
+            sizePx <= maxPx)
+        {
+            return trimmed;
+        }
+
+        if (TryParsePixelSize(trimmed, out _) || IsViewportOrCalculatedSize(trimmed))
+            return $"min({trimmed}, {maxSize})";
+
+        return trimmed;
+    }
+
+    private static bool IsPercentageOnlySize(string value)
+    {
+        return value.EndsWith("%", StringComparison.Ordinal) &&
+               !value.Contains("calc", StringComparison.OrdinalIgnoreCase) &&
+               !value.Contains("vh", StringComparison.OrdinalIgnoreCase) &&
+               !value.Contains("vw", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsViewportOrCalculatedSize(string value)
+    {
+        return value.Contains("calc", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("vh", StringComparison.OrdinalIgnoreCase) ||
+               value.Contains("vw", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryParsePixelSize(string value, out double pixels)
+    {
+        pixels = 0;
+        if (!value.EndsWith("px", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return double.TryParse(
+            value[..^2].Trim(),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out pixels);
     }
 
     private static string CombineStyles(params string?[] styles)
@@ -503,6 +600,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public EventCallback<RowResizeEventArgs<TValue>> RowResized { get; set; }
     /// <summary>Factory used to create a new row item when adding rows.</summary>
     [Parameter] public Func<TValue>? NewItemFactory { get; set; }
+    /// <summary>When enabled, keeps one real blank new row at the end of the grid.</summary>
+    [Parameter] public bool EnsureTrailingNewRow { get; set; }
+    /// <summary>Optional predicate that tells the grid whether its tracked trailing new row is still blank.</summary>
+    [Parameter] public Func<TValue, bool>? IsTrailingNewRow { get; set; }
+    /// <summary>When enabled, moving forward from the last cell appends a new row and focuses its first editable cell.</summary>
+    [Parameter] public bool AddNewRowOnLastCellExit { get; set; }
+    /// <summary>Optional guard for <see cref="AddNewRowOnLastCellExit"/>; return false to leave focus at the grid edge.</summary>
+    [Parameter] public Func<TValue, bool>? CanAddNewRowOnLastCellExit { get; set; }
     /// <summary>Factory used to clone an existing row before editing.</summary>
     [Parameter] public Func<TValue, TValue>? CloneFactory { get; set; }
 
@@ -516,6 +621,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private (int RowIndex, int CellIndex)? _activeCell;
     private bool _expandAllGroups;
     private bool _allGroupsCollapsed;
+    private TValue? _trailingNewRowItem;
+    private bool _hasTrailingNewRowItem;
+    private bool _ensuringTrailingNewRow;
     private readonly HashSet<string> _collapsedGroupPaths = new(StringComparer.OrdinalIgnoreCase);
     private (int RowIndex, int CellIndex)? _lastSelectedCell;
     private int? _lastSelectedRowIndex;
@@ -553,6 +661,24 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     // cascade, focus round-trips) at click time can't blast the cell's
     // pre-edit value across the rest of the selection.
     private bool _batchEditDirty;
+    // Mouse single-click opens the editor without visibly selecting the text,
+    // but the first typed character should still replace the selected cell's
+    // full value. Double-click/editor-in-text starts leave this false.
+    private bool _batchEditReplaceOnFirstInput;
+
+    // Browser Tab can blur the input before Blazor Server processes the
+    // keydown. Keep the just-committed cell so the Tab handler can still move
+    // to the next displayed editable cell after blur has cleared live edit
+    // state.
+    private TValue? _lastCommittedBatchEditItem;
+    private int _lastCommittedBatchEditRowIndex = -1;
+    private string? _lastCommittedBatchEditField;
+    private TValue? _lastKeyboardNavigationItem;
+    private int _lastKeyboardNavigationRowIndex = -1;
+    private int _lastKeyboardNavigationCellIndex = -1;
+    private bool _hasLastKeyboardNavigationSource;
+    private TValue? _keyboardRangeAnchorItem;
+    private int _keyboardRangeAnchorCellIndex = -1;
 
     // Set by StartBatchEdit. Consumed by OnAfterRenderAsync after the
     // batch input exists in the DOM so a single-click edit immediately
@@ -565,6 +691,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     // while the user is typing.
     private bool _pendingBatchEditSelectAll;
     private double? _pendingBatchEditClientX;
+
+    // Set by BeginEditCellAsync (programmatic edit, e.g. host "New row"): when
+    // true the post-render focus is allowed to scroll the cell into view
+    // (FocusAsync preventScroll:false) instead of the default preventScroll:true
+    // used for mouse-click edits. This is how a newly-added off-screen row is
+    // brought into view — pure Blazor focus, NO JavaScript scrollIntoView.
+    private bool _pendingBatchEditScrollIntoView;
+    private bool _pendingActiveCellScrollIntoView;
 
     // Element ref for the active batch-edit <input>. Captured in both
     // render paths (grouped + flat) so the post-render focus/select action
@@ -579,6 +713,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private DotNetObjectReference<GridControl<TValue>>? _gridDotNetRef;
     private bool _headerDragPreviewRegistered;
     private bool _rowDragSelectionAutoScrollRegistered;
+    private bool _gridKeyboardTrapRegistered;
+    private int? _lastHostResolvedPageSize;
 
     // Filtering popup
     private string? _filterPopupField;
@@ -644,8 +780,25 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private string ResolvedHeaderFilterIcon => HeaderFilterIcon;
 
+    private int ResolvedPageSize =>
+        PageSettingsRef != null
+            ? Math.Max(0, PageSettingsRef.PageSize)
+            : Math.Max(0, PageSize);
+
     private int[] ResolvedPageSizes =>
-        PageSettingsRef?.PageSizes ?? [5, 10, 20, 50];
+        PageSettingsRef?.PageSizes is { Length: > 0 }
+            ? PageSettingsRef.PageSizes
+            : (PageSizes is { Length: > 0 } ? PageSizes : [25, 50, 100, 200]);
+
+    private int ResolvedPageButtonCount =>
+        PageSettingsRef?.PageCount is > 0
+            ? PageSettingsRef.PageCount
+            : (PageButtonCount > 0 ? PageButtonCount : 5);
+
+    private bool IsPagingActive =>
+        _pageState.PageSize > 0
+        && _pageState.TotalRecords > _pageState.PageSize
+        && (AllowPaging || (AutoPageRowThreshold > 0 && _pageState.TotalRecords > AutoPageRowThreshold));
 
     private IEnumerable<GridColumn> VisibleColumns
     {
@@ -666,6 +819,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private bool AllRowsSelected =>
         PagedData.Any() && PagedData.All(item => _selectedItems.Contains(item));
+
+    private EventCallback<bool> SelectAllCheckedChanged =>
+        EventCallback.Factory.Create<bool>(this, (bool value) => ToggleSelectAll(value));
 
     private int GroupedPlaceholderCount =>
         (AllowGrouping && HideGroupedColumns) ? _groupDescriptors.Count : 0;
@@ -787,8 +943,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             var data = SortedData;
             _pageState.TotalRecords = data.Count();
+            EnsureCurrentPageInRange();
 
-            if (!AllowPaging)
+            if (!IsPagingActive)
                 return data;
 
             return data
@@ -995,7 +1152,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     protected override void OnInitialized()
     {
-        _pageState.PageSize = PageSettingsRef?.PageSize ?? 10;
+        _pageState.PageSize = ResolvedPageSize;
+        _lastHostResolvedPageSize = ResolvedPageSize;
 
         // Apply initial group columns
         if (GroupColumns is { Count: > 0 })
@@ -1083,6 +1241,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
 
         // Hook once per component instance; JS side is idempotent as well.
+        await EnsureGridKeyboardTrapRegisteredAsync();
         await EnsureHeaderDragPreviewRegisteredAsync();
         await EnsureRowDragSelectionAutoScrollRegisteredAsync();
 
@@ -1113,6 +1272,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 StateHasChanged();
         }
 
+        await EnsureTrailingNewRowIfNeededAsync();
+
         // Batch-edit focus handling — fires once per batch-edit start after
         // the input has actually been laid into the DOM. Without this,
         // single-click editing can show an input while focus remains on the
@@ -1121,9 +1282,26 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             var selectAll = _pendingBatchEditSelectAll;
             var clientX = _pendingBatchEditClientX;
+            var scrollIntoView = _pendingBatchEditScrollIntoView;
             _pendingBatchEditFocus = false;
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
+            _pendingBatchEditScrollIntoView = false;
+
+            // Programmatic edit (host "New row" / BeginEditCellAsync): focus the
+            // input and LET the browser scroll it into view. FocusAsync with
+            // preventScroll:false is the pure-Blazor way to bring an off-screen
+            // row on screen — no JS scrollIntoView. The sticky header (CSS
+            // position:sticky on .fx-grid-header) stays visible through the
+            // scroll. Done here (not via the JS module) so it works even when
+            // grid-control.js can't be imported.
+            if (scrollIntoView)
+            {
+                try { await _batchEditInputRef.FocusAsync(preventScroll: false); }
+                catch { /* best-effort: cell may have re-rendered away */ }
+                return;
+            }
+
             try
             {
                 _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
@@ -1147,6 +1325,27 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 // mid-request, etc.) the user still gets a normal caret.
                 // Not worth surfacing; the user can still click into the input.
             }
+        }
+
+        if (_pendingActiveCellScrollIntoView)
+        {
+            _pendingActiveCellScrollIntoView = false;
+            await EnsureActiveCellVisibleAsync();
+        }
+    }
+
+    private async Task EnsureActiveCellVisibleAsync()
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("ensureActiveGridCellVisible", _gridHostElement);
+        }
+        catch (Exception)
+        {
+            // Best-effort viewport correction. Keyboard selection still moves
+            // even if static assets are unavailable during circuit teardown.
         }
     }
 
@@ -1233,6 +1432,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 });
             }
         }
+
     }
 
     private string ComputeColumnSignature() => string.Join("|", Columns.Select(c => c.Field));
@@ -1342,7 +1542,13 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     protected override void OnParametersSet()
     {
-        _pageState.PageSize = PageSettingsRef?.PageSize ?? _pageState.PageSize;
+        var resolvedPageSize = ResolvedPageSize;
+        if (_lastHostResolvedPageSize != resolvedPageSize)
+        {
+            _pageState.PageSize = resolvedPageSize;
+            _lastHostResolvedPageSize = resolvedPageSize;
+            _pageState.CurrentPage = 1;
+        }
         _autoWidthPending = true;
         EnsureThemeInitialized();
         EnsureAdvancedViewInitialized();
@@ -1485,9 +1691,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditField = null;
         _batchEditValue = null;
         _batchEditDirty = false;
+        _batchEditReplaceOnFirstInput = false;
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
         _pendingBatchEditClientX = null;
+        _pendingBatchEditScrollIntoView = false;
+        ClearKeyboardNavigationSource();
     }
 
     // ── Sorting ──────────────────────────────────────────────────────────
@@ -1672,8 +1881,22 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     // ── Paging ───────────────────────────────────────────────────────────
 
+    private void EnsureCurrentPageInRange()
+    {
+        if (_pageState.CurrentPage < 1)
+        {
+            _pageState.CurrentPage = 1;
+            return;
+        }
+
+        var totalPages = _pageState.TotalPages;
+        if (_pageState.CurrentPage > totalPages)
+            _pageState.CurrentPage = totalPages;
+    }
+
     private async Task GoToPage(int page)
     {
+        EnsureCurrentPageInRange();
         if (page < 1 || page > _pageState.TotalPages || page == _pageState.CurrentPage)
             return;
 
@@ -1700,11 +1923,24 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
+    private IEnumerable<PageSizeChoice> PageSizeChoices =>
+        ResolvedPageSizes.Select(size => new PageSizeChoice(size, size <= 0 ? "All" : $"{size} / page"));
+
+    private Task HandlePageSizeValueChanged(int size)
+    {
+        _pageState.PageSize = size;
+        _pageState.CurrentPage = 1;
+
+        return Task.CompletedTask;
+    }
+
+    private sealed record PageSizeChoice(int Value, string Text);
+
     private IEnumerable<int> GetPageNumbers()
     {
         var total = _pageState.TotalPages;
         var current = _pageState.CurrentPage;
-        var count = PageSettingsRef?.PageCount ?? 5;
+        var count = ResolvedPageButtonCount;
 
         var start = Math.Max(1, current - count / 2);
         var end = Math.Min(total, start + count - 1);
@@ -1719,6 +1955,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         // Commit any in-progress batch cell edit when clicking away
         await CommitBatchEdit();
+        ClearKeyboardNavigationSource();
+        if (mouseArgs?.ShiftKey != true)
+            ClearKeyboardRangeSelectionAnchor();
 
         // If the mouseup that just preceded this click came at the end of
         // a drag-select, the selection was already established by
@@ -1786,13 +2025,27 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _ = ClearGridTextSelectionAsync();
     }
 
-    private void HandleCellMouseDown(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
+    private async Task HandleCellMouseDown(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
 
         if (args.Button == 0)
         {
+            var previousActiveCell = _activeCell;
+            var activeCellChanged = previousActiveCell?.RowIndex != resolvedRowIndex
+                || previousActiveCell?.CellIndex != cellIndex;
+
+            if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+                && activeCellChanged
+                && _typeAheadBuffer.Length > 0)
+            {
+                await CommitPendingSingleCellTypeAheadAsync();
+            }
+
             SetActiveCell(resolvedRowIndex, cellIndex);
+            ClearKeyboardNavigationSource();
+            if (!args.ShiftKey)
+                ClearKeyboardRangeSelectionAnchor();
             CaptureRowSelectionTypeAheadTarget(cellIndex);
             if (CanStartSingleCellColumnDrag(cellIndex))
             {
@@ -1826,15 +2079,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (!_cellDragAnchor.HasValue)
         {
-            // During row drag-selection, keep the current-cell cue under the
-            // cursor instead of leaving it on the original mouse-down cell.
-            // Otherwise users see two dotted rectangles: the anchor cell plus
-            // the hovered end cell.
-            if (_dragAnchorItem != null && (args.Buttons & 1) != 0)
-            {
-                SetActiveCell(resolvedRowIndex, cellIndex);
-                await InvokeAsync(StateHasChanged);
-            }
             return;
         }
 
@@ -1852,9 +2096,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return;
 
         _isCellDragSelecting = true;
-        SetActiveCell(resolvedRowIndex, anchor.CellIndex);
         SelectSingleCellColumnDragRange(anchor.RowIndex, resolvedRowIndex, anchor.CellIndex);
-        _lastSelectedCell = (resolvedRowIndex, anchor.CellIndex);
+        _lastSelectedCell = anchor;
         await InvokeAsync(StateHasChanged);
     }
 
@@ -1867,7 +2110,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
         return col != null
-            && col.AllowEditing
+            && (col.AllowEditing || col.AllowCellDragSelection)
             && !col.IsPrimaryKey
             && col.Type != ColumnType.CheckBox
             && !string.IsNullOrWhiteSpace(col.Field);
@@ -1887,6 +2130,28 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         _cellDragAnchor = null;
         _isCellDragSelecting = false;
+    }
+
+    private void RememberKeyboardNavigationSource(TValue item, int rowIndex, int cellIndex)
+    {
+        _lastKeyboardNavigationItem = item;
+        _lastKeyboardNavigationRowIndex = ResolveRowIndex(item, rowIndex);
+        _lastKeyboardNavigationCellIndex = cellIndex;
+        _hasLastKeyboardNavigationSource = true;
+    }
+
+    private void ClearKeyboardNavigationSource()
+    {
+        _lastKeyboardNavigationItem = default;
+        _lastKeyboardNavigationRowIndex = -1;
+        _lastKeyboardNavigationCellIndex = -1;
+        _hasLastKeyboardNavigationSource = false;
+    }
+
+    private void ClearKeyboardRangeSelectionAnchor()
+    {
+        _keyboardRangeAnchorItem = default;
+        _keyboardRangeAnchorCellIndex = -1;
     }
 
     private void CaptureRowSelectionTypeAheadTarget(int cellIndex)
@@ -1947,6 +2212,28 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             // Best-effort — if interop fails the worst case is the user
             // sees a stray selection until their next click; not worth
             // surfacing.
+        }
+    }
+
+    /// <summary>
+    /// Prevents browser-native Tab from racing ahead of Blazor's grid
+    /// navigation while focus is inside a data cell/editor. Text entry stays
+    /// native; only Tab is trapped client-side.
+    /// </summary>
+    private async Task EnsureGridKeyboardTrapRegisteredAsync()
+    {
+        if (_gridKeyboardTrapRegistered) return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerGridKeyboardTrap", _gridHostElement);
+            _gridKeyboardTrapRegistered = true;
+        }
+        catch (Exception)
+        {
+            // Best-effort — without this, Blazor navigation still runs but the
+            // browser may also move focus to the next tabbable element.
         }
     }
 
@@ -2070,7 +2357,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         // cadence so it's safe.
 
         await InvokeAsync(StateHasChanged);
-        await NotifySelectionChangedAsync();
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
     }
 
     private async Task HandleRowDblClick(TValue item, int rowIndex)
@@ -2181,22 +2468,23 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (EventsRef?.RowSelected.HasDelegate == true)
             await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex });
-        await NotifySelectionChangedAsync();
+        var source = mouseArgs != null
+            ? GridSelectionChangeSource.Pointer
+            : GridSelectionChangeSource.Programmatic;
+        await NotifySelectionChangedAsync(source);
     }
 
     private async Task HandleCellClick(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
-        var previousActiveCell = _activeCell;
-        SetActiveCell(resolvedRowIndex, cellIndex);
 
         if (_isCellDragSelecting)
         {
             ClearCellDragState();
             await FocusGridHostAsync();
+            await InvokeAsync(StateHasChanged);
             return;
         }
-        _cellDragAnchor = null;
 
         if (_isDragSelecting)
         {
@@ -2204,18 +2492,25 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _dragAnchorRowIndex = null;
             _dragAnchorItem = default;
             await FocusGridHostAsync();
+            await InvokeAsync(StateHasChanged);
             return;
         }
-        _dragAnchorRowIndex = null;
-        _dragAnchorItem = default;
+
+        var previousActiveCell = _activeCell;
+        var activeCellChanged = previousActiveCell?.RowIndex != resolvedRowIndex
+            || previousActiveCell?.CellIndex != cellIndex;
 
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
-            && previousActiveCell != _activeCell
+            && activeCellChanged
             && _typeAheadBuffer.Length > 0)
         {
-            _typeAheadBuffer = "";
-            await NotifyTypeAheadChangedAsync();
+            await CommitPendingSingleCellTypeAheadAsync();
         }
+
+        SetActiveCell(resolvedRowIndex, cellIndex);
+        _cellDragAnchor = null;
+        _dragAnchorRowIndex = null;
+        _dragAnchorItem = default;
 
         if (!AllowSelection)
             return;
@@ -2227,6 +2522,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         // Determine if the clicked cell is editable (batch mode)
         var clickedCol = VisibleColumns.ElementAtOrDefault(cellIndex);
+        if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
+        {
+            // Row-selection grids use _activeCell for the dotted edit cue.
+            // Leaving a previous programmatic cell selection behind makes
+            // popup/template cells look "stuck" after focus moves elsewhere.
+            _selectedCells.Clear();
+        }
+
         var isEditableCell = EditSettingsRef?.AllowEditing == true
             && EditSettingsRef.Mode == EditMode.Batch
             && clickedCol != null
@@ -2268,10 +2571,13 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
         }
 
-        // Start batch edit on single click so the cursor appears immediately.
-        if (isEditableCell && !useSingleCellBatchBehavior)
+        // Text/numeric cells do not enter edit mode on single click; the click
+        // only selects the cell. A typed printable key starts editing and
+        // replaces the full value, while double-click opens an in-cell editor at
+        // the clicked character. Checkbox cells keep their click-to-toggle path.
+        if (isEditableCell && !useSingleCellBatchBehavior && clickedCol?.Type == ColumnType.CheckBox)
         {
-            await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX);
+            await StartBatchEdit(item, resolvedRowIndex, clickedCol!);
             return;
         }
 
@@ -2333,7 +2639,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (EventsRef?.CellSelected.HasDelegate == true)
         {
-            var value = GetPropertyValue(item, Columns.Count > cellIndex ? Columns[cellIndex].Field : "");
+            var selectedField = VisibleColumns.ElementAtOrDefault(cellIndex)?.Field ?? "";
+            var value = GetPropertyValue(item, selectedField);
             await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
             {
                 Data = item,
@@ -2411,10 +2718,101 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Restores keyboard focus to the grid host without changing the current
+    /// row/cell selection. Consumers should call this after an external popup,
+    /// dialog, or picker closes so Tab/Shift+Tab continues grid navigation
+    /// instead of falling back to the browser's page-level tab order.
+    /// </summary>
+    public Task FocusGridAsync() => FocusGridHostAsync();
+
+    /// <summary>
+    /// Alias for <see cref="FocusGridAsync"/> that reads naturally at popup
+    /// close sites.
+    /// </summary>
+    public Task ResumeKeyboardNavigationAsync() => FocusGridHostAsync();
+
     private void SetActiveCell(int rowIndex, int cellIndex)
     {
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
         _activeCell = col != null ? (rowIndex, cellIndex) : null;
+    }
+
+    private async Task ActivateCheckboxCellAsync(TValue item, int rowIndex, int cellIndex, bool focusGridHost)
+    {
+        await CommitBatchEdit();
+
+        var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        SetActiveCell(resolvedRowIndex, cellIndex);
+        RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
+        _lastSelectedCell = (resolvedRowIndex, cellIndex);
+
+        _selectedCells.Clear();
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            _selectedCells.Add((resolvedRowIndex, cellIndex));
+
+        if (EventsRef?.CellSelected.HasDelegate == true)
+        {
+            var field = VisibleColumns.ElementAtOrDefault(cellIndex)?.Field ?? string.Empty;
+            var value = string.IsNullOrWhiteSpace(field) ? null : GetPropertyValue(item, field);
+            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+            {
+                Data = item,
+                RowIndex = resolvedRowIndex,
+                CellIndex = cellIndex,
+                CurrentValue = value
+            });
+        }
+
+        await TryAppendTrailingNewRowFromLastCellAsync(item, resolvedRowIndex, cellIndex, beginEdit: false);
+
+        if (focusGridHost)
+            await FocusGridHostAsync();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleCheckboxKeyDown(TValue item, int rowIndex, int cellIndex, GridColumn col, KeyboardEventArgs e)
+    {
+        var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+
+        if (TryGetHorizontalKeyboardNavigation(e, out var backwards))
+        {
+            SetActiveCell(resolvedRowIndex, cellIndex);
+            RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
+            _lastSelectedCell = (resolvedRowIndex, cellIndex);
+            _selectedCells.Clear();
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+                _selectedCells.Add((resolvedRowIndex, cellIndex));
+
+            await NavigateToAdjacentEditTargetAsync(item, resolvedRowIndex, cellIndex, backwards);
+            return;
+        }
+
+        if (TryGetVerticalKeyboardNavigation(e, out var rowDelta))
+        {
+            SetActiveCell(resolvedRowIndex, cellIndex);
+            RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
+            _lastSelectedCell = (resolvedRowIndex, cellIndex);
+            _selectedCells.Clear();
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+                _selectedCells.Add((resolvedRowIndex, cellIndex));
+
+            await NavigateToVerticalEditTargetAsync(item, resolvedRowIndex, cellIndex, rowDelta);
+            return;
+        }
+
+        if (e.Key is " " or "Spacebar" or "Enter" or "NumpadEnter")
+        {
+            SetActiveCell(resolvedRowIndex, cellIndex);
+            RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
+            _lastSelectedCell = (resolvedRowIndex, cellIndex);
+            _selectedCells.Clear();
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+                _selectedCells.Add((resolvedRowIndex, cellIndex));
+
+            await HandleCheckboxToggle(item, col);
+        }
     }
 
     private int ResolveRowIndex(TValue item, int fallbackIndex)
@@ -2474,6 +2872,13 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return result;
     }
 
+    private List<TValue> GetKeyboardNavigationRowItems()
+    {
+        return _groupDescriptors.Count == 0
+            ? SortedData.ToList()
+            : GetVisibleRowItems();
+    }
+
     private async Task ToggleRowSelection(TValue item, int rowIndex)
     {
         await SelectRow(item, rowIndex);
@@ -2481,12 +2886,22 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void ToggleSelectAll(ChangeEventArgs e)
     {
+        ToggleSelectAll();
+    }
+
+    private void ToggleSelectAll(bool _)
+    {
+        ToggleSelectAll();
+    }
+
+    private void ToggleSelectAll()
+    {
         if (AllRowsSelected)
             _selectedItems.Clear();
         else
             foreach (var item in PagedData)
                 _selectedItems.Add(item);
-        _ = NotifySelectionChangedAsync();
+        _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
     // ── Editing ──────────────────────────────────────────────────────────
@@ -2530,7 +2945,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (list != null)
             {
                 var pagedList = SortedData.ToList();
-                var actualIdx = AllowPaging
+                var actualIdx = IsPagingActive
                     ? (_pageState.CurrentPage - 1) * _pageState.PageSize + _editingRowIndex
                     : _editingRowIndex;
 
@@ -2624,18 +3039,31 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     // ── Batch Cell Editing ─────────────────────────────────────────────
 
-    private async Task StartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null)
+    private async Task StartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false)
     {
-        if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return;
-        if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return;
+        await TryStartBatchEdit(item, rowIndex, col, clientX, replaceOnFirstInput);
+    }
+
+    private async Task<bool> TryStartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false)
+    {
+        if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return false;
+        if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return false;
 
         // Save previous edit if any
         await CommitBatchEdit();
+
+        if (col.Type == ColumnType.CheckBox)
+        {
+            await HandleCheckboxToggle(item, col);
+            return false;
+        }
 
         if (EventsRef?.OnCellEdit.HasDelegate == true)
         {
             var args = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
             await EventsRef.OnCellEdit.InvokeAsync(args);
+            // Per-row / per-column edit veto (VB6 gData_BeforeEdit parity).
+            if (args.Cancel) return false;
         }
 
         _batchEditItem = item;
@@ -2643,12 +3071,266 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditField = col.Field;
         _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
-
+        _batchEditReplaceOnFirstInput = replaceOnFirstInput;
         // Focus every batch input after render so single-click editing is
-        // immediately typeable. SelectAllOnEdit remains a per-column opt-in.
+        // immediately typeable. SelectAllOnEdit is reserved for keyboard /
+        // programmatic starts; a mouse click should place the caret at the
+        // clicked character instead of selecting the whole cell.
         _pendingBatchEditFocus = true;
-        _pendingBatchEditSelectAll = col.SelectAllOnEdit;
+        _pendingBatchEditSelectAll = col.SelectAllOnEdit && clientX == null;
         _pendingBatchEditClientX = clientX;
+        return true;
+    }
+
+    private bool CanToggleCheckboxColumn(GridColumn col)
+    {
+        return col.Type == ColumnType.CheckBox
+            && col.AllowEditing
+            && !col.IsPrimaryKey
+            && !string.IsNullOrWhiteSpace(col.Field)
+            && EditSettingsRef?.AllowEditing == true;
+    }
+
+    private Task HandleCheckboxToggle(TValue item, GridColumn col, bool newValue)
+    {
+        return HandleCheckboxToggle(item, col, new ChangeEventArgs { Value = newValue });
+    }
+
+    private async Task HandleCheckboxToggle(TValue item, GridColumn col, ChangeEventArgs? e = null)
+    {
+        if (!CanToggleCheckboxColumn(col))
+            return;
+
+        await CommitBatchEdit();
+
+        if (EventsRef?.OnCellEdit.HasDelegate == true)
+        {
+            var args = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
+            await EventsRef.OnCellEdit.InvokeAsync(args);
+            if (args.Cancel)
+            {
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
+
+        var newValue = e?.Value is bool changedValue
+            ? changedValue
+            : !GetBoolValue(item, col.Field);
+
+        if (!SetPropertyObjectValue(item, col.Field, newValue))
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (EventsRef?.OnCellSave.HasDelegate == true)
+        {
+            await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
+            {
+                Data = item,
+                ColumnName = col.Field,
+                Value = newValue
+            });
+        }
+
+        var rowIndex = ResolveRowIndex(item, -1);
+        var cellIndex = ResolveVisibleColumnIndex(col.Field);
+        if (rowIndex >= 0 && cellIndex >= 0)
+            await TryAppendTrailingNewRowFromLastCellAsync(item, rowIndex, cellIndex, beginEdit: false);
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task HandleEditButtonClick(TValue item, GridColumn col)
+    {
+        if (string.IsNullOrWhiteSpace(col.Field))
+            return;
+
+        if (EventsRef?.OnEditButtonClick.HasDelegate == true)
+        {
+            await EventsRef.OnEditButtonClick.InvokeAsync(new CellEditButtonArgs<TValue>
+            {
+                Data = item,
+                ColumnName = col.Field,
+                Column = col
+            });
+        }
+    }
+
+    private bool ShouldShowAlwaysEditButton(GridColumn col, TValue item)
+    {
+        if (!col.ShowEditButton || !col.AlwaysShowEditButton || string.IsNullOrWhiteSpace(col.Field))
+            return false;
+
+        if (col.ShowEditButtonPredicate == null)
+            return true;
+
+        try
+        {
+            return col.ShowEditButtonPredicate.Invoke(item!);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void RenderDisplayCellContent(RenderTreeBuilder builder, int sequence, TValue item, GridColumn col)
+    {
+        var text = GetCellDisplayValue(item, col);
+
+        if (!ShouldShowAlwaysEditButton(col, item))
+        {
+            builder.AddContent(sequence, text);
+            return;
+        }
+
+        var buttonItem = item;
+        var buttonCol = col;
+        builder.OpenElement(sequence, "button");
+        builder.AddAttribute(sequence + 1, "type", "button");
+        builder.AddAttribute(sequence + 2, "class", "fx-cell-action-btn");
+        builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+        builder.AddEventStopPropagationAttribute(sequence + 4, "onclick", true);
+        builder.AddAttribute(sequence + 5, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
+        builder.AddEventStopPropagationAttribute(sequence + 6, "onmousedown", true);
+        builder.AddEventPreventDefaultAttribute(sequence + 7, "onmousedown", true);
+        builder.OpenElement(sequence + 8, "span");
+        builder.AddAttribute(sequence + 9, "class", "fx-cell-action-text");
+        builder.AddContent(sequence + 10, text);
+        builder.CloseElement();
+        builder.OpenElement(sequence + 11, "span");
+        builder.AddAttribute(sequence + 12, "class", "fx-cell-action-ellipsis");
+        builder.AddContent(sequence + 13, "...");
+        builder.CloseElement();
+        builder.CloseElement();
+    }
+
+    private bool TryGetCheckboxDisplayValue(TValue item, string field, out bool value)
+    {
+        var raw = GetPropertyValue(item, field);
+        switch (raw)
+        {
+            case bool b:
+                value = b;
+                return true;
+            case byte b:
+                value = b != 0;
+                return true;
+            case short s:
+                value = s != 0;
+                return true;
+            case int i:
+                value = i != 0;
+                return true;
+            case long l:
+                value = l != 0;
+                return true;
+            case decimal d:
+                value = d != 0;
+                return true;
+            case double d:
+                value = Math.Abs(d) > double.Epsilon;
+                return true;
+            case float f:
+                value = Math.Abs(f) > float.Epsilon;
+                return true;
+            case string s when bool.TryParse(s, out var parsedBool):
+                value = parsedBool;
+                return true;
+            case string s when int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedInt):
+                value = parsedInt != 0;
+                return true;
+            default:
+                value = false;
+                return false;
+        }
+    }
+
+    private IEnumerable<string> GetEditOptions(GridColumn col)
+    {
+        if (col.EditOptions == null)
+            yield break;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in col.EditOptions)
+        {
+            var value = option ?? string.Empty;
+            if (seen.Add(value))
+                yield return value;
+        }
+    }
+
+    private void RenderBatchEditor(RenderTreeBuilder builder, int sequence, TValue item, int rowIndex, GridColumn col)
+    {
+        var editItem = item;
+        var editField = col.Field;
+        var options = col.EditOptions?.ToList();
+        if (options is { Count: > 0 })
+        {
+            builder.OpenElement(sequence, "select");
+            builder.AddAttribute(sequence + 1, "class", "fx-batch-input fx-batch-select");
+            builder.AddAttribute(sequence + 2, "value", _batchEditValue);
+            builder.AddAttribute(sequence + 3, "style", GetEditorInputStyle(col));
+            builder.AddAttribute(sequence + 4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
+            builder.AddAttribute(sequence + 5, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
+            builder.AddAttribute(sequence + 6, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
+            builder.AddEventStopPropagationAttribute(sequence + 7, "onclick", true);
+            builder.AddEventStopPropagationAttribute(sequence + 8, "onkeydown", true);
+            builder.AddEventStopPropagationAttribute(sequence + 9, "onmousedown", true);
+            builder.AddElementReferenceCapture(sequence + 10, er => _batchEditInputRef = er);
+
+            var seq = sequence + 20;
+            foreach (var option in GetEditOptions(col))
+            {
+                builder.OpenElement(seq++, "option");
+                builder.AddAttribute(seq++, "value", option);
+                if (string.Equals(option, _batchEditValue, StringComparison.Ordinal))
+                    builder.AddAttribute(seq++, "selected", true);
+                builder.AddContent(seq++, option);
+                builder.CloseElement();
+            }
+
+            builder.CloseElement();
+        }
+        else
+        {
+            var inputType = GetEditorInputType(col);
+            builder.OpenElement(sequence, "input");
+            builder.AddAttribute(sequence + 1, "type", inputType);
+            builder.AddAttribute(sequence + 2, "class", "fx-batch-input");
+            builder.AddAttribute(sequence + 3, "value", _batchEditValue);
+            builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
+            if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
+                builder.AddAttribute(sequence + 5, "inputmode", "decimal");
+            builder.AddAttribute(sequence + 6, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
+            builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
+            builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
+            builder.AddAttribute(sequence + 13, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
+            builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
+            builder.AddEventStopPropagationAttribute(sequence + 10, "onkeydown", true);
+            builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
+            builder.AddElementReferenceCapture(sequence + 12, er => _batchEditInputRef = er);
+            builder.CloseElement();
+        }
+
+        if (col.ShowEditButton && !col.AlwaysShowEditButton)
+        {
+            var ebItem = item;
+            var ebCol = col;
+            builder.OpenElement(sequence + 40, "button");
+            builder.AddAttribute(sequence + 41, "type", "button");
+            builder.AddAttribute(sequence + 42, "class", "fx-cell-edit-btn");
+            builder.AddAttribute(sequence + 43, "tabindex", "-1");
+            builder.AddAttribute(sequence + 44, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
+            builder.AddEventPreventDefaultAttribute(sequence + 45, "onmousedown", true);
+            builder.AddEventStopPropagationAttribute(sequence + 46, "onmousedown", true);
+            builder.AddAttribute(sequence + 47, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(ebItem, ebCol)));
+            builder.AddEventStopPropagationAttribute(sequence + 48, "onclick", true);
+            builder.AddContent(sequence + 49, "...");
+            builder.CloseElement();
+        }
     }
 
     private async Task CommitBatchEdit()
@@ -2672,7 +3354,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         // Two-stage protection against stale references when we do fan out:
         // (1) Collect "live" selected items — those that are BOTH in the
         //     current DataSource AND in _selectedItems. Drop stale refs.
-        // (2) Guarantee `primary` is in the targets list.
+        // (2) Only fan out when the edited row itself is selected. A single
+        //     selected row that differs from the editor row is a navigation
+        //     race/stale selection, not a mass-edit request.
         var live = new HashSet<TValue>();
         if (_batchEditDirty && DataSource != null)
         {
@@ -2695,7 +3379,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             targets = cellMassEditTargets;
         }
-        else if (_batchEditDirty && (live.Count > 1 || (live.Count == 1 && !live.Contains(primary))))
+        else if (_batchEditDirty && live.Count > 1 && live.Contains(primary))
         {
             targets = new List<TValue> { primary };
             foreach (var sel in live)
@@ -2736,15 +3420,17 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 var oldValueObj = GetPropertyValue(item, field);
                 var oldValueStr = oldValueObj?.ToString() ?? "";
                 var changed = !string.Equals(oldValueStr, newValue, StringComparison.Ordinal);
+                var shouldRaiseCellSave = changed || _batchEditDirty;
 
                 if (changed)
                     SetPropertyValue(item, field, newValue);
 
-                // Always fire OnCellSave when the user explicitly committed.
-                // The host handler decides whether the change is worth marking
-                // dirty — not us. Without this, a "no-op" string match silently
-                // suppresses the event and the user thinks the edit was lost.
-                if (EventsRef?.OnCellSave.HasDelegate == true)
+                // Fire OnCellSave for a real value change, or for an editor the
+                // user actually touched. Do not fire a no-dirty/no-change blur:
+                // hosts such as FDBGrid write the supplied Value into dynamic
+                // dictionary rows, so a stale blank editor value can otherwise
+                // overwrite a cell while focus is merely moving.
+                if (shouldRaiseCellSave && EventsRef?.OnCellSave.HasDelegate == true)
                 {
                     await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
                     {
@@ -2756,22 +3442,50 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
         }
 
-        Console.WriteLine(
-            $"[GridControl.CommitBatchEdit] field='{field}' value='{newValue}'  " +
-            $"dirty={_batchEditDirty}  targets={targets.Count}");
+        _lastCommittedBatchEditItem = primary;
+        _lastCommittedBatchEditRowIndex = _batchEditRowIndex;
+        _lastCommittedBatchEditField = field;
 
         _batchEditItem = default;
         _batchEditRowIndex = -1;
         _batchEditField = null;
         _batchEditValue = null;
         _batchEditDirty = false;
+        _batchEditReplaceOnFirstInput = false;
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
+        _pendingBatchEditScrollIntoView = false;
     }
 
-    private void UpdateBatchEditValue(ChangeEventArgs e)
+    private bool IsActiveBatchEditSource(TValue item, string? field)
     {
-        _batchEditValue = e.Value?.ToString() ?? "";
+        return _batchEditItem != null
+            && !string.IsNullOrWhiteSpace(_batchEditField)
+            && !string.IsNullOrWhiteSpace(field)
+            && EqualityComparer<TValue>.Default.Equals(_batchEditItem, item)
+            && string.Equals(_batchEditField, field, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Task CommitBatchEdit(TValue item, string? field)
+    {
+        return IsActiveBatchEditSource(item, field)
+            ? CommitBatchEdit()
+            : Task.CompletedTask;
+    }
+
+    private void UpdateBatchEditValue(TValue item, string? field, ChangeEventArgs e)
+    {
+        if (!IsActiveBatchEditSource(item, field))
+            return;
+
+        var incomingValue = e.Value?.ToString() ?? "";
+        if (_batchEditReplaceOnFirstInput)
+        {
+            incomingValue = ResolveFirstInputReplacement(_batchEditValue ?? "", incomingValue);
+            _batchEditReplaceOnFirstInput = false;
+        }
+
+        _batchEditValue = incomingValue;
         // Only typed input flips the dirty flag — auto-fired commits that
         // happen before the user actually changes anything (Blazor blur
         // cascade, focus-shift round-trips, etc.) must NOT propagate the
@@ -2779,11 +3493,103 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditDirty = true;
     }
 
-    private async Task HandleBatchEditKeyDown(KeyboardEventArgs e)
+    private static string ResolveFirstInputReplacement(string previousValue, string incomingValue)
     {
-        if (e.Key == "Enter" || e.Key == "Tab" || e.Key == "NumpadEnter")
+        if (string.IsNullOrEmpty(previousValue) || string.Equals(previousValue, incomingValue, StringComparison.Ordinal))
+            return incomingValue;
+
+        var prefixLength = 0;
+        while (prefixLength < previousValue.Length
+            && prefixLength < incomingValue.Length
+            && previousValue[prefixLength] == incomingValue[prefixLength])
         {
+            prefixLength++;
+        }
+
+        var suffixLength = 0;
+        while (suffixLength < previousValue.Length - prefixLength
+            && suffixLength < incomingValue.Length - prefixLength
+            && previousValue[previousValue.Length - 1 - suffixLength] == incomingValue[incomingValue.Length - 1 - suffixLength])
+        {
+            suffixLength++;
+        }
+
+        var insertedLength = incomingValue.Length - prefixLength - suffixLength;
+        if (insertedLength > 0)
+            return incomingValue.Substring(prefixLength, insertedLength);
+
+        return incomingValue.Length < previousValue.Length ? string.Empty : incomingValue;
+    }
+
+    private async Task HandleBatchEditKeyDown(TValue sourceItem, string? sourceField, KeyboardEventArgs e)
+    {
+        if (!IsActiveBatchEditSource(sourceItem, sourceField))
+            return;
+
+        if (await TryCommitBatchEditAndExtendSelectionWithShiftArrowAsync(e))
+            return;
+
+        if (_batchEditItem != null
+            && !string.IsNullOrWhiteSpace(_batchEditField)
+            && IsNativeEditorCaretNavigationKey(e))
+        {
+            var shouldLeaveEditor = await ShouldNavigateOutOfBatchEditorOnHorizontalArrowAsync(e);
+            if (!shouldLeaveEditor)
+                return;
+        }
+
+        var isHorizontalNavigation = TryGetHorizontalKeyboardNavigation(e, out var backwards);
+        var isVerticalNavigation = TryGetVerticalKeyboardNavigation(e, out var rowDelta);
+
+        if (isHorizontalNavigation || isVerticalNavigation)
+        {
+            var hasLiveEdit = _batchEditItem != null && !string.IsNullOrWhiteSpace(_batchEditField);
+            var item = hasLiveEdit ? _batchEditItem : default;
+            var rowIndex = hasLiveEdit ? _batchEditRowIndex : -1;
+            var colIndex = hasLiveEdit ? ResolveVisibleColumnIndex(_batchEditField) : -1;
+
+            if (hasLiveEdit)
+            {
+                await CommitBatchEdit();
+            }
+            else if (!TryResolveActiveCellNavigationSource(ref item, ref rowIndex, ref colIndex)
+                && !TryResolveLastCommittedNavigationSource(ref item, ref rowIndex, ref colIndex))
+            {
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            if (item != null && colIndex >= 0)
+            {
+                RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+                if (isVerticalNavigation)
+                    await NavigateToVerticalEditTargetAsync(item, rowIndex, colIndex, rowDelta);
+                else
+                    await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards);
+
+                await FocusGridHostAsync();
+            }
+            else
+            {
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        else if (e.Key == "Enter" || e.Key == "NumpadEnter")
+        {
+            var item = _batchEditItem;
+            var rowIndex = _batchEditRowIndex;
+            var colIndex = ResolveVisibleColumnIndex(_batchEditField);
             await CommitBatchEdit();
+            if (item != null && colIndex >= 0)
+            {
+                SetActiveCell(rowIndex, colIndex);
+                RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+                _lastSelectedCell = (rowIndex, colIndex);
+                _lastSelectedItem = item;
+                _lastSelectedRowIndex = rowIndex;
+                _pendingActiveCellScrollIntoView = true;
+                await FocusGridHostAsync();
+            }
             await InvokeAsync(StateHasChanged);
         }
         else if (e.Key == "Escape")
@@ -2793,11 +3599,643 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _batchEditRowIndex = -1;
             _batchEditField = null;
             _batchEditValue = null;
+            _batchEditReplaceOnFirstInput = false;
             _pendingBatchEditFocus = false;
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
+            _pendingBatchEditScrollIntoView = false;
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private async Task<bool> TryCommitBatchEditAndExtendSelectionWithShiftArrowAsync(KeyboardEventArgs e)
+    {
+        if (!TryGetShiftArrowSelection(e, out _, out _))
+            return false;
+
+        var item = _batchEditItem;
+        var rowIndex = _batchEditRowIndex;
+        var colIndex = ResolveVisibleColumnIndex(_batchEditField);
+        if (item == null || rowIndex < 0 || colIndex < 0)
+            return false;
+
+        await CommitBatchEdit();
+
+        SetActiveCell(rowIndex, colIndex);
+        RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+        _lastSelectedCell = (rowIndex, colIndex);
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = rowIndex;
+        _keyboardRangeAnchorItem = item;
+        _keyboardRangeAnchorCellIndex = colIndex;
+
+        return await TryExtendSelectionWithShiftArrowAsync(e);
+    }
+
+    private bool TryResolveActiveCellNavigationSource(ref TValue? item, ref int rowIndex, ref int cellIndex)
+    {
+        if (!_activeCell.HasValue)
+            return false;
+
+        var activeRowIndex = _activeCell.Value.RowIndex;
+        var activeCellIndex = _activeCell.Value.CellIndex;
+        var activeItem = GetItemAtResolvedRowIndex(activeRowIndex);
+        if (activeItem == null || activeCellIndex < 0)
+            return false;
+
+        item = activeItem;
+        rowIndex = activeRowIndex;
+        cellIndex = activeCellIndex;
+        return true;
+    }
+
+    private bool TryResolveLastCommittedNavigationSource(ref TValue? item, ref int rowIndex, ref int cellIndex)
+    {
+        if (_lastCommittedBatchEditItem == null)
+            return false;
+
+        var committedCellIndex = ResolveVisibleColumnIndex(_lastCommittedBatchEditField);
+        if (committedCellIndex < 0)
+            return false;
+
+        item = _lastCommittedBatchEditItem;
+        rowIndex = _lastCommittedBatchEditRowIndex;
+        cellIndex = committedCellIndex;
+        return true;
+    }
+
+    private async Task<bool> NavigateFromActiveCellAsync(bool backwards)
+    {
+        if (_hasLastKeyboardNavigationSource
+            && _lastKeyboardNavigationItem != null
+            && _lastKeyboardNavigationCellIndex >= 0)
+        {
+            await NavigateToAdjacentEditTargetAsync(
+                _lastKeyboardNavigationItem,
+                _lastKeyboardNavigationRowIndex,
+                _lastKeyboardNavigationCellIndex,
+                backwards);
+            return true;
+        }
+
+        if (!_activeCell.HasValue)
+        {
+            if (!TryResolveSelectedRowNavigationSource(backwards, out var selectedItem, out var selectedRowIndex, out var selectedCellIndex))
+                return false;
+
+            await NavigateToAdjacentEditTargetAsync(selectedItem, selectedRowIndex, selectedCellIndex, backwards);
+            return true;
+        }
+
+        var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (item == null)
+            return false;
+
+        await NavigateToAdjacentEditTargetAsync(
+            item,
+            _activeCell.Value.RowIndex,
+            _activeCell.Value.CellIndex,
+            backwards);
+        return true;
+    }
+
+    private async Task<bool> NavigateVerticallyFromActiveCellAsync(int rowDelta)
+    {
+        if (_hasLastKeyboardNavigationSource
+            && _lastKeyboardNavigationItem != null
+            && _lastKeyboardNavigationCellIndex >= 0)
+        {
+            await NavigateToVerticalEditTargetAsync(
+                _lastKeyboardNavigationItem,
+                _lastKeyboardNavigationRowIndex,
+                _lastKeyboardNavigationCellIndex,
+                rowDelta);
+            return true;
+        }
+
+        if (!_activeCell.HasValue)
+        {
+            if (!TryResolveSelectedRowNavigationSource(rowDelta < 0, out var selectedItem, out var selectedRowIndex, out var selectedCellIndex))
+                return false;
+
+            await NavigateToVerticalEditTargetAsync(selectedItem, selectedRowIndex, selectedCellIndex, rowDelta);
+            return true;
+        }
+
+        var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (item == null)
+            return false;
+
+        await NavigateToVerticalEditTargetAsync(
+            item,
+            _activeCell.Value.RowIndex,
+            _activeCell.Value.CellIndex,
+            rowDelta);
+        return true;
+    }
+
+    private bool TryResolveSelectedRowNavigationSource(bool backwards, out TValue item, out int rowIndex, out int cellIndex)
+    {
+        item = default!;
+        rowIndex = -1;
+        cellIndex = backwards ? VisibleColumns.Count() : -1;
+
+        var selected = _lastSelectedItem ?? _selectedItems.LastOrDefault();
+        if (selected == null)
+            return false;
+
+        rowIndex = ResolveRowIndex(selected, _lastSelectedRowIndex ?? -1);
+        if (rowIndex < 0)
+            return false;
+
+        item = selected;
+        return true;
+    }
+
+    private async Task<bool> TryToggleActiveCheckboxAsync()
+    {
+        if (!_activeCell.HasValue)
+            return false;
+
+        var column = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
+        if (column == null || !CanToggleCheckboxColumn(column))
+            return false;
+
+        var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (item == null)
+            return false;
+
+        await HandleCheckboxToggle(item, column);
+        return true;
+    }
+
+    private async Task NavigateToAdjacentEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, bool backwards)
+    {
+        var cursorItem = currentItem;
+        var cursorRowIndex = currentRowIndex;
+        var cursorCellIndex = currentCellIndex;
+
+        // A candidate can be vetoed by OnCellEdit. If so, keep walking in
+        // displayed order instead of dropping focus out of the grid.
+        while (TryFindAdjacentEditTarget(cursorItem, cursorRowIndex, cursorCellIndex, backwards,
+                   out var targetItem, out var targetRowIndex, out var targetCellIndex, out var targetColumn))
+        {
+            if (await TryActivateKeyboardEditTargetAsync(
+                    targetItem,
+                    targetRowIndex,
+                    targetCellIndex,
+                    targetColumn,
+                    allowSelectionOnly: true))
+                return;
+
+            cursorItem = targetItem;
+            cursorRowIndex = targetRowIndex;
+            cursorCellIndex = targetCellIndex;
+        }
+
+        if (!backwards && await TryAddNewRowOnLastCellExitAsync(currentItem, currentRowIndex, currentCellIndex))
+            return;
+
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task NavigateToVerticalEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, int rowDelta)
+    {
+        if (rowDelta == 0)
+            return;
+
+        var cursorItem = currentItem;
+        var cursorRowIndex = currentRowIndex;
+        var cursorCellIndex = currentCellIndex;
+
+        while (TryFindVerticalEditTarget(cursorItem, cursorRowIndex, cursorCellIndex, rowDelta,
+                   out var targetItem, out var targetRowIndex, out var targetCellIndex, out var targetColumn))
+        {
+            if (await TryActivateKeyboardEditTargetAsync(
+                    targetItem,
+                    targetRowIndex,
+                    targetCellIndex,
+                    targetColumn,
+                    allowSelectionOnly: true))
+                return;
+
+            cursorItem = targetItem;
+            cursorRowIndex = targetRowIndex;
+            cursorCellIndex = targetCellIndex;
+        }
+
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool TryFindVerticalEditTarget(
+        TValue currentItem,
+        int currentRowIndex,
+        int currentCellIndex,
+        int rowDelta,
+        out TValue targetItem,
+        out int targetRowIndex,
+        out int targetCellIndex,
+        out GridColumn targetColumn)
+    {
+        targetItem = default!;
+        targetRowIndex = -1;
+        targetCellIndex = -1;
+        targetColumn = default!;
+
+        var columns = VisibleColumns.ToList();
+        var rows = GetKeyboardNavigationRowItems();
+        if (columns.Count == 0 || rows.Count == 0)
+            return false;
+
+        var displayRowIndex = rows.FindIndex(item =>
+            EqualityComparer<TValue>.Default.Equals(item, currentItem));
+        if (displayRowIndex < 0)
+        {
+            var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
+            displayRowIndex = rows.FindIndex(item =>
+                EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
+        }
+        if (displayRowIndex < 0)
+            return false;
+
+        var preferredCellIndex = currentCellIndex >= 0
+            && currentCellIndex < columns.Count
+            && IsKeyboardNavigationTargetColumn(columns[currentCellIndex])
+            ? currentCellIndex
+            : columns.FindIndex(IsKeyboardNavigationTargetColumn);
+        if (preferredCellIndex < 0)
+            return false;
+
+        var row = displayRowIndex + rowDelta;
+        if (row < 0 || row >= rows.Count)
+            return false;
+
+        var candidate = columns[preferredCellIndex];
+        if (!IsKeyboardNavigationTargetColumn(candidate))
+            return false;
+
+        targetItem = rows[row];
+        targetRowIndex = ResolveRowIndex(targetItem, row);
+        targetCellIndex = preferredCellIndex;
+        targetColumn = candidate;
+        return true;
+    }
+
+    private bool TryFindAdjacentEditTarget(
+        TValue currentItem,
+        int currentRowIndex,
+        int currentCellIndex,
+        bool backwards,
+        out TValue targetItem,
+        out int targetRowIndex,
+        out int targetCellIndex,
+        out GridColumn targetColumn)
+    {
+        targetItem = default!;
+        targetRowIndex = -1;
+        targetCellIndex = -1;
+        targetColumn = default!;
+
+        var columns = VisibleColumns.ToList();
+        var rows = GetKeyboardNavigationRowItems();
+        if (columns.Count == 0 || rows.Count == 0)
+            return false;
+
+        var displayRowIndex = rows.FindIndex(item =>
+            EqualityComparer<TValue>.Default.Equals(item, currentItem));
+        if (displayRowIndex < 0)
+        {
+            var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
+            displayRowIndex = rows.FindIndex(item =>
+                EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
+        }
+        if (displayRowIndex < 0)
+            return false;
+
+        var row = displayRowIndex;
+        var col = Math.Clamp(currentCellIndex, -1, columns.Count);
+        var guard = rows.Count * columns.Count;
+
+        for (var i = 0; i < guard; i++)
+        {
+            col += backwards ? -1 : 1;
+
+            if (col < 0)
+            {
+                row--;
+                col = columns.Count - 1;
+            }
+            else if (col >= columns.Count)
+            {
+                row++;
+                col = 0;
+            }
+
+            if (row < 0 || row >= rows.Count)
+                return false;
+
+            var candidate = columns[col];
+            if (!IsKeyboardNavigationTargetColumn(candidate))
+                continue;
+
+            targetItem = rows[row];
+            targetRowIndex = ResolveRowIndex(targetItem, row);
+            targetCellIndex = col;
+            targetColumn = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> TryAddNewRowOnLastCellExitAsync(TValue currentItem, int currentRowIndex, int currentCellIndex)
+    {
+        return await TryAppendTrailingNewRowFromLastCellAsync(currentItem, currentRowIndex, currentCellIndex, beginEdit: true);
+    }
+
+    private async Task<bool> TryAppendTrailingNewRowFromLastCellAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, bool beginEdit)
+    {
+        if (!AddNewRowOnLastCellExit
+            || EditSettingsRef?.AllowAdding != true
+            || DataSource is not IList<TValue>)
+            return false;
+
+        if (!IsLastKeyboardNavigationCell(currentItem, currentRowIndex, currentCellIndex))
+            return false;
+
+        if (CanAddNewRowOnLastCellExit?.Invoke(currentItem) == false)
+            return false;
+
+        var row = CreateNewItem();
+        if (row is null)
+            return false;
+
+        ClearTrailingNewRowMarker();
+        await AppendRowAsync(row, beginEdit: beginEdit);
+        TrackTrailingNewRow(row);
+        SyncDataSourceChangeTrackers();
+        return true;
+    }
+
+    private bool IsLastKeyboardNavigationCell(TValue currentItem, int currentRowIndex, int currentCellIndex)
+    {
+        var columns = VisibleColumns.ToList();
+        var rows = GetKeyboardNavigationRowItems();
+        if (columns.Count == 0 || rows.Count == 0)
+            return false;
+
+        var displayRowIndex = rows.FindIndex(item =>
+            EqualityComparer<TValue>.Default.Equals(item, currentItem));
+        if (displayRowIndex < 0)
+        {
+            var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
+            displayRowIndex = rows.FindIndex(item =>
+                EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
+        }
+
+        if (displayRowIndex != rows.Count - 1)
+            return false;
+
+        var cellIndex = Math.Clamp(currentCellIndex, 0, columns.Count - 1);
+        if (!IsKeyboardNavigationTargetColumn(columns[cellIndex]))
+            return false;
+
+        for (var i = cellIndex + 1; i < columns.Count; i++)
+        {
+            if (IsKeyboardNavigationTargetColumn(columns[i]))
+                return false;
+        }
+
+        return true;
+    }
+
+    private async Task<bool> TryActivateKeyboardEditTargetAsync(
+        TValue item,
+        int rowIndex,
+        int cellIndex,
+        GridColumn column,
+        bool scrollIntoView = false,
+        bool allowSelectionOnly = false)
+    {
+        if (string.IsNullOrWhiteSpace(column.Field))
+            return false;
+
+        // A keyboard move must save the current editor against its original
+        // row before selecting the destination row. If selection changes first,
+        // CommitBatchEdit can mistake the destination row for a multi-edit
+        // target and copy the old cell value into it.
+        if (_batchEditItem != null)
+            await CommitBatchEdit();
+
+        if (IsPagingActive && _pageState.PageSize > 0)
+        {
+            var displayRowIndex = SortedData.ToList().FindIndex(candidate =>
+                EqualityComparer<TValue>.Default.Equals(candidate, item));
+            if (displayRowIndex >= 0)
+            {
+                var targetPage = (displayRowIndex / _pageState.PageSize) + 1;
+                if (targetPage != _pageState.CurrentPage)
+                    await GoToPage(targetPage);
+            }
+        }
+
+        await SelectProgrammaticCellAsync(item, column.Field);
+        RememberKeyboardNavigationSource(item, rowIndex, cellIndex);
+        await TryAppendTrailingNewRowFromLastCellAsync(item, rowIndex, cellIndex, beginEdit: false);
+        _pendingActiveCellScrollIntoView = scrollIntoView || allowSelectionOnly;
+
+        if (allowSelectionOnly)
+        {
+            await FocusGridHostAsync();
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
+        if (!IsKeyboardEditTargetColumn(column))
+        {
+            return false;
+        }
+
+        if (CanStartKeyboardBatchEdit(column))
+        {
+            var started = await TryStartBatchEdit(item, rowIndex, column);
+            if (!started)
+            {
+                if (!allowSelectionOnly)
+                    return false;
+
+                await FocusGridHostAsync();
+                await InvokeAsync(StateHasChanged);
+                return true;
+            }
+
+            _pendingBatchEditScrollIntoView = scrollIntoView;
+            SyncDataSourceChangeTrackers();
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private bool IsKeyboardNavigationTargetColumn(GridColumn column)
+    {
+        return column.Visible
+            && !column.IsPrimaryKey
+            && !string.IsNullOrWhiteSpace(column.Field);
+    }
+
+    private bool IsKeyboardEditTargetColumn(GridColumn column)
+    {
+        return column.Visible
+            && !column.IsPrimaryKey
+            && !string.IsNullOrWhiteSpace(column.Field)
+            && (CanStartKeyboardBatchEdit(column)
+                || CanToggleCheckboxColumn(column)
+                || column.ShowEditButton
+                || column.AllowCellDragSelection
+                || column.EffectiveTemplate != null
+                || column.Commands is { Count: > 0 });
+    }
+
+    private bool CanStartKeyboardBatchEdit(GridColumn column)
+    {
+        return EditSettingsRef?.AllowEditing == true
+            && EditSettingsRef.Mode == EditMode.Batch
+            && column.AllowEditing
+            && !column.IsPrimaryKey
+            && column.Type != ColumnType.CheckBox
+            && column.EffectiveTemplate == null
+            && column.Commands == null
+            && !string.IsNullOrWhiteSpace(column.Field);
+    }
+
+    private bool CanShowEditableCellCue(GridColumn column)
+    {
+        return EditSettingsRef?.AllowEditing == true
+            && column.AllowEditing
+            && !column.IsPrimaryKey
+            && !string.IsNullOrWhiteSpace(column.Field);
+    }
+
+    private static bool TryGetHorizontalKeyboardNavigation(KeyboardEventArgs e, out bool backwards)
+    {
+        backwards = false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey)
+            return false;
+
+        if (e.Key == "Tab")
+        {
+            backwards = e.ShiftKey;
+            return true;
+        }
+
+        if (e.ShiftKey)
+            return false;
+
+        if (e.Key == "ArrowLeft")
+        {
+            backwards = true;
+            return true;
+        }
+
+        if (e.Key == "ArrowRight")
+        {
+            backwards = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsNativeEditorCaretNavigationKey(KeyboardEventArgs e)
+    {
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+
+        return e.Key is "ArrowLeft" or "ArrowRight";
+    }
+
+    private async Task<bool> ShouldNavigateOutOfBatchEditorOnHorizontalArrowAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("ArrowLeft" or "ArrowRight"))
+            return false;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            return await _gridJsModule.InvokeAsync<bool>(
+                "isInputCaretAtHorizontalBoundary",
+                _batchEditInputRef,
+                e.Key);
+        }
+        catch
+        {
+            // Without caret-position support, keep native text-editor behavior.
+            return false;
+        }
+    }
+
+    private static bool TryGetVerticalKeyboardNavigation(KeyboardEventArgs e, out int rowDelta)
+    {
+        rowDelta = 0;
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+
+        if (e.Key == "ArrowUp")
+        {
+            rowDelta = -1;
+            return true;
+        }
+
+        if (e.Key == "ArrowDown")
+        {
+            rowDelta = 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetShiftArrowSelection(KeyboardEventArgs e, out int rowDelta, out int cellDelta)
+    {
+        rowDelta = 0;
+        cellDelta = 0;
+        if (!e.ShiftKey || e.AltKey || e.CtrlKey || e.MetaKey)
+            return false;
+
+        switch (e.Key)
+        {
+            case "ArrowUp":
+                rowDelta = -1;
+                return true;
+            case "ArrowDown":
+                rowDelta = 1;
+                return true;
+            case "ArrowLeft":
+                cellDelta = -1;
+                return true;
+            case "ArrowRight":
+                cellDelta = 1;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private int ResolveVisibleColumnIndex(string? field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+            return -1;
+
+        var columns = VisibleColumns.ToList();
+        return columns.FindIndex(column =>
+            string.Equals(column.Field, field, StringComparison.OrdinalIgnoreCase));
     }
 
     private bool IsBatchEditing(TValue item, string field)
@@ -2949,8 +4387,75 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return;
         }
 
+        if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+            && _batchEditItem == null
+            && _typeAheadBuffer.Length > 0
+            && e.Key == "Escape")
+        {
+            _typeAheadBuffer = "";
+            await NotifyTypeAheadChangedAsync();
+            return;
+        }
+
+        if ((e.Key is " " or "Spacebar" or "Enter" or "NumpadEnter")
+            && await TryToggleActiveCheckboxAsync())
+        {
+            return;
+        }
+
+        if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+            && _batchEditItem == null
+            && _typeAheadBuffer.Length > 0
+            && (e.Key == "Enter" || e.Key == "NumpadEnter"))
+        {
+            await CommitPendingSingleCellTypeAheadAsync();
+            return;
+        }
+
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryCommitSelectedRowOnEnterAsync(e))
             return;
+
+        if (_batchEditItem == null
+            && _typeAheadBuffer.Length > 0
+            && _selectedItems.Count > 1
+            && IsRowSelectionTypeAheadCommitKey(e, out var commitAndStop))
+        {
+            var committed = await CommitPendingRowSelectionTypeAheadAsync();
+            if (committed && commitAndStop)
+                return;
+        }
+
+        if (_batchEditItem == null && await TryExtendSelectionWithShiftArrowAsync(e))
+            return;
+
+        if ((!e.ShiftKey || e.Key == "Tab") && !ShouldPreserveKeyboardRangeAnchorForRowTypeAhead(e))
+            ClearKeyboardRangeSelectionAnchor();
+
+        if (TryGetHorizontalKeyboardNavigation(e, out var backwards))
+        {
+            if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+                && _batchEditItem == null
+                && _typeAheadBuffer.Length > 0)
+            {
+                await CommitPendingSingleCellTypeAheadAsync();
+            }
+
+            if (await NavigateFromActiveCellAsync(backwards))
+                return;
+        }
+
+        if (TryGetVerticalKeyboardNavigation(e, out var rowDelta))
+        {
+            if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+                && _batchEditItem == null
+                && _typeAheadBuffer.Length > 0)
+            {
+                await CommitPendingSingleCellTypeAheadAsync();
+            }
+
+            if (await NavigateVerticallyFromActiveCellAsync(rowDelta))
+                return;
+        }
 
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
             && _batchEditItem == null
@@ -3015,6 +4520,359 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 return;
             }
         }
+
+        if (_batchEditItem == null && await TryStartActiveBatchEditFromTypedKeyAsync(e))
+            return;
+    }
+
+    private bool ShouldPreserveKeyboardRangeAnchorForRowTypeAhead(KeyboardEventArgs e)
+    {
+        if (_batchEditItem != null || _selectedItems.Count <= 1)
+            return false;
+
+        return e.Key.Length == 1
+            || e.Key == "Backspace"
+            || (e.Key is "Enter" or "NumpadEnter" && _typeAheadBuffer.Length > 0)
+            || (_typeAheadBuffer.Length > 0 && IsRowSelectionTypeAheadCommitKey(e, out _));
+    }
+
+    private static bool IsRowSelectionTypeAheadCommitKey(KeyboardEventArgs e, out bool stopAfterCommit)
+    {
+        stopAfterCommit = false;
+
+        if (e.Key is "Enter" or "NumpadEnter")
+        {
+            stopAfterCommit = true;
+            return true;
+        }
+
+        if (TryGetHorizontalKeyboardNavigation(e, out _)
+            || TryGetVerticalKeyboardNavigation(e, out _)
+            || TryGetShiftArrowSelection(e, out _, out _))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> CommitPendingRowSelectionTypeAheadAsync()
+    {
+        if (_typeAheadBuffer.Length == 0 || _selectedItems.Count <= 1)
+            return false;
+
+        var targetCol = ResolveTypeAheadTargetColumn();
+        if (targetCol == null)
+        {
+            ClearTypeAheadBuffer();
+            return false;
+        }
+
+        var anchor = CaptureTypeAheadRestoreAnchor(targetCol);
+        var value = _typeAheadBuffer;
+        var selectedItems = _selectedItems.ToList();
+
+        if (EventsRef?.OnTypeAheadCommit.HasDelegate == true)
+        {
+            await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
+            {
+                SelectedItems = selectedItems,
+                ColumnName = targetCol.Field,
+                Value = value
+            });
+        }
+
+        var selectionChanged = RestoreTypeAheadAnchor(anchor, collapseSelection: true);
+        _typeAheadBuffer = "";
+        await NotifyTypeAheadChangedAsync();
+
+        await FocusGridHostAsync();
+        if (selectionChanged)
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private TypeAheadRestoreAnchor CaptureTypeAheadRestoreAnchor(GridColumn targetCol)
+    {
+        var targetCellIndex = ResolveVisibleColumnIndex(targetCol.Field);
+        if (targetCellIndex < 0 && _activeCell.HasValue)
+            targetCellIndex = _activeCell.Value.CellIndex;
+        if (targetCellIndex < 0)
+            targetCellIndex = 0;
+
+        if (_keyboardRangeAnchorItem != null)
+        {
+            var rowIndex = ResolveRowIndex(_keyboardRangeAnchorItem, -1);
+            if (rowIndex >= 0)
+                return new TypeAheadRestoreAnchor(_keyboardRangeAnchorItem, rowIndex, targetCellIndex);
+        }
+
+        if (_activeCell.HasValue)
+        {
+            var activeItem = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+            if (activeItem != null)
+                return new TypeAheadRestoreAnchor(activeItem, ResolveRowIndex(activeItem, _activeCell.Value.RowIndex), targetCellIndex);
+        }
+
+        var selected = _lastSelectedItem != null && _selectedItems.Contains(_lastSelectedItem)
+            ? _lastSelectedItem
+            : _selectedItems.FirstOrDefault();
+        if (selected != null)
+            return new TypeAheadRestoreAnchor(selected, ResolveRowIndex(selected, _lastSelectedRowIndex ?? 0), targetCellIndex);
+
+        return default;
+    }
+
+    private bool RestoreTypeAheadAnchor(TypeAheadRestoreAnchor anchor, bool collapseSelection = false)
+    {
+        if (anchor.Item == null || anchor.RowIndex < 0 || anchor.CellIndex < 0)
+            return false;
+
+        var selectionChanged = false;
+
+        if (collapseSelection)
+        {
+            _isDragSelecting = false;
+            _dragAnchorRowIndex = null;
+            _dragAnchorItem = default;
+            ClearCellDragState();
+
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            {
+                var target = (anchor.RowIndex, anchor.CellIndex);
+                selectionChanged = _selectedCells.Count != 1 || !_selectedCells.Contains(target);
+                _selectedCells.Clear();
+                _selectedCells.Add(target);
+                _selectedItems.Clear();
+            }
+            else
+            {
+                selectionChanged = _selectedItems.Count != 1 || !_selectedItems.Contains(anchor.Item);
+                _selectedItems.Clear();
+                _selectedItems.Add(anchor.Item);
+                _selectedCells.Clear();
+            }
+
+            ResetRowSelectionTypeAheadTarget();
+        }
+
+        SetActiveCell(anchor.RowIndex, anchor.CellIndex);
+        RememberKeyboardNavigationSource(anchor.Item, anchor.RowIndex, anchor.CellIndex);
+        _lastSelectedCell = (anchor.RowIndex, anchor.CellIndex);
+        _lastSelectedItem = anchor.Item;
+        _lastSelectedRowIndex = anchor.RowIndex;
+        _pendingActiveCellScrollIntoView = true;
+
+        return selectionChanged;
+    }
+
+    private readonly record struct TypeAheadRestoreAnchor(TValue? Item, int RowIndex, int CellIndex);
+
+    private async Task<bool> TryStartActiveBatchEditFromTypedKeyAsync(KeyboardEventArgs e)
+    {
+        if (_isEditing || _batchEditItem != null)
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey)
+            return false;
+        if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var col))
+            return false;
+        if (col.EditOptions?.Any() == true)
+            return false;
+        if (!IsEditableTypeAheadKey(e, col))
+            return false;
+
+        ClearKeyboardRangeSelectionAnchor();
+        var started = await TryStartBatchEdit(item, rowIndex, col);
+        if (!started || !IsActiveBatchEditSource(item, col.Field))
+            return false;
+
+        _batchEditValue = e.Key;
+        _batchEditDirty = true;
+        _batchEditReplaceOnFirstInput = false;
+        _pendingBatchEditSelectAll = false;
+        _pendingBatchEditClientX = null;
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private bool TryGetActiveKeyboardBatchEditCell(out TValue item, out int rowIndex, out GridColumn col)
+    {
+        item = default!;
+        rowIndex = -1;
+        col = default!;
+
+        if (!_activeCell.HasValue)
+            return false;
+
+        var candidateCol = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
+        if (candidateCol == null || !CanStartKeyboardBatchEdit(candidateCol))
+            return false;
+
+        var candidateItem = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (candidateItem == null)
+            return false;
+
+        item = candidateItem;
+        rowIndex = ResolveRowIndex(candidateItem, _activeCell.Value.RowIndex);
+        col = candidateCol;
+        return true;
+    }
+
+    private async Task<bool> TryExtendSelectionWithShiftArrowAsync(KeyboardEventArgs e)
+    {
+        if (!TryGetShiftArrowSelection(e, out var rowDelta, out var cellDelta))
+            return false;
+        if (!AllowSelection || _isEditing || _batchEditItem != null)
+            return false;
+
+        var rows = GetKeyboardNavigationRowItems();
+        var columns = VisibleColumns.ToList();
+        if (rows.Count == 0 || columns.Count == 0)
+            return false;
+
+        if (!TryResolveActiveSelectionCell(rows, columns, out var currentItem, out var currentVisibleRowIndex, out var currentCellIndex))
+            return false;
+
+        if (_keyboardRangeAnchorItem == null)
+        {
+            _keyboardRangeAnchorItem = currentItem;
+            _keyboardRangeAnchorCellIndex = currentCellIndex;
+        }
+
+        var targetVisibleRowIndex = Math.Clamp(currentVisibleRowIndex + rowDelta, 0, rows.Count - 1);
+        var targetCellIndex = Math.Clamp(currentCellIndex + cellDelta, 0, columns.Count - 1);
+        var targetItem = rows[targetVisibleRowIndex];
+        var targetResolvedRowIndex = ResolveRowIndex(targetItem, targetVisibleRowIndex);
+        var anchorVisibleRowIndex = rows.IndexOf(_keyboardRangeAnchorItem);
+        if (anchorVisibleRowIndex < 0)
+        {
+            _keyboardRangeAnchorItem = currentItem;
+            _keyboardRangeAnchorCellIndex = currentCellIndex;
+            anchorVisibleRowIndex = currentVisibleRowIndex;
+        }
+
+        var anchorCellIndex = Math.Clamp(_keyboardRangeAnchorCellIndex, 0, columns.Count - 1);
+
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+        {
+            var startRow = Math.Min(anchorVisibleRowIndex, targetVisibleRowIndex);
+            var endRow = Math.Max(anchorVisibleRowIndex, targetVisibleRowIndex);
+            var startCell = SingleCellColumnMassEditEnabled
+                ? anchorCellIndex
+                : Math.Min(anchorCellIndex, targetCellIndex);
+            var endCell = SingleCellColumnMassEditEnabled
+                ? anchorCellIndex
+                : Math.Max(anchorCellIndex, targetCellIndex);
+
+            _selectedCells.Clear();
+            for (var r = startRow; r <= endRow; r++)
+            {
+                var resolvedRow = ResolveRowIndex(rows[r], r);
+                for (var c = startCell; c <= endCell; c++)
+                    _selectedCells.Add((resolvedRow, c));
+            }
+        }
+        else
+        {
+            var start = Math.Min(anchorVisibleRowIndex, targetVisibleRowIndex);
+            var end = Math.Max(anchorVisibleRowIndex, targetVisibleRowIndex);
+            _selectedItems.Clear();
+            for (var i = start; i <= end; i++)
+                _selectedItems.Add(rows[i]);
+            ResetRowSelectionTypeAheadTarget();
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        }
+
+        SetActiveCell(targetResolvedRowIndex, targetCellIndex);
+        RememberKeyboardNavigationSource(targetItem, targetResolvedRowIndex, targetCellIndex);
+        if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
+            CaptureRowSelectionTypeAheadTarget(targetCellIndex);
+        _lastSelectedCell = (targetResolvedRowIndex, targetCellIndex);
+        _lastSelectedItem = targetItem;
+        _lastSelectedRowIndex = targetResolvedRowIndex;
+        _pendingActiveCellScrollIntoView = true;
+
+        if (EventsRef?.CellSelected.HasDelegate == true)
+        {
+            var targetField = columns[targetCellIndex].Field;
+            var value = string.IsNullOrWhiteSpace(targetField) ? null : GetPropertyValue(targetItem, targetField);
+            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+            {
+                Data = targetItem,
+                RowIndex = targetResolvedRowIndex,
+                CellIndex = targetCellIndex,
+                CurrentValue = value,
+                IsShiftPressed = true
+            });
+        }
+
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private bool TryResolveActiveSelectionCell(
+        List<TValue> rows,
+        List<GridColumn> columns,
+        out TValue item,
+        out int visibleRowIndex,
+        out int cellIndex)
+    {
+        item = default!;
+        visibleRowIndex = -1;
+        cellIndex = -1;
+
+        if (_activeCell.HasValue)
+        {
+            var activeItem = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+            if (activeItem != null)
+            {
+                var activeVisibleIndex = rows.IndexOf(activeItem);
+                if (activeVisibleIndex >= 0)
+                {
+                    item = activeItem;
+                    visibleRowIndex = activeVisibleIndex;
+                    cellIndex = Math.Clamp(_activeCell.Value.CellIndex, 0, columns.Count - 1);
+                    return true;
+                }
+            }
+        }
+
+        var selectedItem = _lastSelectedItem != null && _selectedItems.Contains(_lastSelectedItem)
+            ? _lastSelectedItem
+            : _selectedItems.LastOrDefault();
+        if (selectedItem != null)
+        {
+            var selectedVisibleIndex = rows.IndexOf(selectedItem);
+            if (selectedVisibleIndex >= 0)
+            {
+                item = selectedItem;
+                visibleRowIndex = selectedVisibleIndex;
+                cellIndex = _lastSelectedCell?.CellIndex >= 0
+                    ? Math.Clamp(_lastSelectedCell.Value.CellIndex, 0, columns.Count - 1)
+                    : 0;
+                return true;
+            }
+        }
+
+        if (_lastSelectedCell.HasValue)
+        {
+            var selectedCellItem = GetItemAtResolvedRowIndex(_lastSelectedCell.Value.RowIndex);
+            if (selectedCellItem != null)
+            {
+                var selectedCellVisibleIndex = rows.IndexOf(selectedCellItem);
+                if (selectedCellVisibleIndex >= 0)
+                {
+                    item = selectedCellItem;
+                    visibleRowIndex = selectedCellVisibleIndex;
+                    cellIndex = Math.Clamp(_lastSelectedCell.Value.CellIndex, 0, columns.Count - 1);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private async Task<bool> HandleSingleCellTypeAheadKeyAsync(KeyboardEventArgs e)
@@ -3024,6 +4882,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (!TryGetActiveEditableCell(out var item, out var col))
             return false;
+
+        if (!HasSingleCellBulkEditSelection())
+            return await TryStartActiveBatchEditFromTypedKeyAsync(e);
 
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && _typeAheadBuffer.Length > 0)
         {
@@ -3050,6 +4911,29 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         _typeAheadBuffer += e.Key;
         await NotifyTypeAheadChangedAsync();
+        return true;
+    }
+
+    private bool HasSingleCellBulkEditSelection()
+    {
+        return _selectedItems.Count > 1
+            || (SingleCellColumnMassEditEnabled && _selectedCells.Count > 1);
+    }
+
+    private async Task<bool> CommitPendingSingleCellTypeAheadAsync()
+    {
+        if (_typeAheadBuffer.Length == 0)
+            return false;
+
+        if (!TryGetActiveEditableCell(out var item, out var col))
+        {
+            _typeAheadBuffer = "";
+            await NotifyTypeAheadChangedAsync();
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
+
+        await CommitSingleCellTypeAheadAsync(item, col);
         return true;
     }
 
@@ -3559,6 +5443,37 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void ChooseColumnsRestoreDefault()
     {
+        // Preferred path: host supplied a factory-default schema (e.g. from a
+        // layout service). Reset each listed column's checked state + order to
+        // match it; columns the default doesn't mention are left as-is. The grid
+        // stays general-purpose — it just applies whatever the host handed in.
+        if (DefaultColumns != null)
+        {
+            var defaults = DefaultColumns.Where(d => !string.IsNullOrEmpty(d.Field)).ToList();
+            var defVisByField = new Dictionary<string, bool>(StringComparer.Ordinal);
+            var defOrderByField = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < defaults.Count; i++)
+            {
+                defVisByField[defaults[i].Field] = defaults[i].Visible;
+                if (!defOrderByField.ContainsKey(defaults[i].Field))
+                    defOrderByField[defaults[i].Field] = i;
+            }
+
+            foreach (var row in _chooseColumnsRows)
+                if (defVisByField.TryGetValue(row.Field, out var vis))
+                    row.Visible = vis;
+
+            _chooseColumnsRows = _chooseColumnsRows
+                .Select((r, idx) => (r, idx))
+                .OrderBy(t => defOrderByField.TryGetValue(t.r.Field, out var o) ? o : int.MaxValue)
+                .ThenBy(t => t.idx)
+                .Select(t => t.r)
+                .ToList();
+
+            _chooseColumnsSelectedField = _chooseColumnsRows.FirstOrDefault()?.Field ?? "";
+            return;
+        }
+
         if (_originalColumnOrder == null || _originalVisibility == null) return;
         var byField = Columns
             .Where(c => !string.IsNullOrEmpty(c.Field))
@@ -4005,10 +5920,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                         var currentIdx = rowIdx;
                         var resolvedRowIdx = ResolveRowIndex(item, currentIdx);
                         var isSelected = _selectedItems.Contains(item);
+                        var rowCssClass = GetRowCssClass(item, resolvedRowIdx);
 
                         builder.OpenElement(70, "tr");
                         builder.AddAttribute(71, "class",
-                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected ? "fx-selected" : "")} {(EnableHover ? "fx-hover" : "")}");
+                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected ? "fx-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
                         builder.AddAttribute(72, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, currentIdx, e)));
                         // Drag-select wiring — see HandleRowMouseDown /
                         // HandleRowMouseEnter for the protocol. Keep
@@ -4040,10 +5956,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.OpenElement(90, "td");
                             builder.AddAttribute(91, "class", "fx-cell fx-checkbox-cell");
                             builder.AddAttribute(92, "style", "width:50px;");
-                            builder.OpenElement(93, "input");
-                            builder.AddAttribute(94, "type", "checkbox");
-                            builder.AddAttribute(95, "checked", isSelected);
-                            builder.CloseElement();
+                            builder.OpenComponent<CheckBoxControl>(93);
+                            builder.AddAttribute(94, "Checked", isSelected);
+                            builder.AddAttribute(95, "CheckedChanged",
+                                EventCallback.Factory.Create<bool>(this,
+                                    _ => ToggleRowSelection(item, currentIdx)));
+                            builder.AddAttribute(96, "TabIndex", -1);
+                            builder.AddAttribute(97, "StopClickPropagation", true);
+                            builder.AddAttribute(98, "StopMouseDownPropagation", true);
+                            builder.CloseComponent();
                             builder.CloseElement();
                         }
 
@@ -4060,9 +5981,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             var isActiveCell = _activeCell.HasValue
                                 && _activeCell.Value.RowIndex == resolvedRowIdx
                                 && _activeCell.Value.CellIndex == capturedColIdx;
-                            var editableClass = capturedCol.AllowEditing ? " fx-cell-editable" : string.Empty;
+                            var showsEditableCue = CanShowEditableCellCue(capturedCol);
+                            var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
                             var activeClass = isActiveCell
-                                ? capturedCol.AllowEditing ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
+                                ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
                                 : string.Empty;
                             var typeAheadClass = isTypeAheadPreview ? " fx-typeahead-preview-cell" : string.Empty;
                             var cellClass = "fx-cell"
@@ -4084,7 +6006,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.AddAttribute(109, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIdx, capturedColIdx, e)));
 
                             // Batch edit on double-click
-                            if (EditSettingsRef?.Mode == EditMode.Batch && col.AllowEditing && !col.IsPrimaryKey && !string.IsNullOrEmpty(col.Field))
+                            if (EditSettingsRef?.Mode == EditMode.Batch
+                                && EditSettingsRef.AllowEditOnDblClick
+                                && col.AllowEditing
+                                && !col.IsPrimaryKey
+                                && !string.IsNullOrEmpty(col.Field))
                             {
                                 builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(capturedItemForEdit, resolvedRowIdx, capturedCol, e.ClientX)));
                             }
@@ -4093,25 +6019,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
                             if (isBatchEditing)
                             {
-                                var inputType = GetEditorInputType(col);
-                                builder.OpenElement(145, "input");
-                                builder.AddAttribute(146, "type", inputType);
-                                builder.AddAttribute(147, "class", "fx-batch-input");
-                                builder.AddAttribute(148, "value", _batchEditValue);
-                                builder.AddAttribute(157, "style", GetEditorInputStyle(col));
-                                if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
-                                    builder.AddAttribute(149, "inputmode", "decimal");
-                                builder.AddAttribute(150, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, UpdateBatchEditValue));
-                                builder.AddAttribute(151, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, HandleBatchEditKeyDown));
-                                builder.AddAttribute(152, "onblur", EventCallback.Factory.Create(this, CommitBatchEdit));
-                                builder.AddEventStopPropagationAttribute(153, "onclick", true);
-                                builder.AddEventStopPropagationAttribute(154, "onkeydown", true);
-                                builder.AddEventStopPropagationAttribute(156, "onmousedown", true);
-                                // Same capture as the flat path — see the
-                                // SelectAllOnEdit invocation in
-                                // OnAfterRenderAsync for why we need this.
-                                builder.AddElementReferenceCapture(155, er => _batchEditInputRef = er);
-                                builder.CloseElement();
+                                RenderBatchEditor(builder, 145, capturedItemForEdit, resolvedRowIdx, capturedCol);
                             }
                             else if (isTypeAheadPreview)
                             {
@@ -4142,15 +6050,45 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             }
                             else if (col.Type == ColumnType.CheckBox)
                             {
-                                builder.OpenElement(130, "input");
-                                builder.AddAttribute(131, "type", "checkbox");
-                                builder.AddAttribute(132, "disabled", true);
-                                builder.AddAttribute(133, "checked", GetBoolValue(item, col.Field));
-                                builder.CloseElement();
+                                if (!TryGetCheckboxDisplayValue(item, col.Field, out var checkedValue))
+                                {
+                                    RenderDisplayCellContent(builder, 130, item, col);
+                                    builder.CloseElement();
+                                    colIdx++;
+                                    continue;
+                                }
+
+                                // VB6 flexDTBoolean cell: a togglable checkbox when the
+                                // column is editable (disabled only for read-only columns).
+                                // Toggling writes the bound bool and raises OnCellSave so
+                                // the host persists + marks dirty (VB6 AfterEdit).
+                                var cbItem = item;
+                                var cbCol = capturedCol;
+                                builder.OpenComponent<CheckBoxControl>(130);
+                                builder.AddAttribute(131, "Disabled", !CanToggleCheckboxColumn(cbCol));
+                                builder.AddAttribute(132, "Checked", checkedValue);
+                                builder.AddAttribute(133, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
+                                if (CanToggleCheckboxColumn(cbCol))
+                                {
+                                    builder.AddAttribute(134, "CheckedChanged",
+                                        EventCallback.Factory.Create<bool>(this,
+                                            value => HandleCheckboxToggle(cbItem, cbCol, value)));
+                                    builder.AddAttribute(136, "OnFocus",
+                                        EventCallback.Factory.Create<FocusEventArgs>(this,
+                                            _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIdx, capturedColIdx, false)));
+                                    builder.AddAttribute(137, "OnKeyDown",
+                                        EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                                            e => HandleCheckboxKeyDown(cbItem, resolvedRowIdx, capturedColIdx, cbCol, e)));
+                                    builder.AddAttribute(138, "StopClickPropagation", true);
+                                    builder.AddAttribute(139, "StopMouseDownPropagation", true);
+                                    builder.AddAttribute(140, "StopKeyDownPropagation", true);
+                                    builder.AddAttribute(141, "PreventKeyDownDefault", true);
+                                }
+                                builder.CloseComponent();
                             }
                             else
                             {
-                                builder.AddContent(140, GetCellDisplayValue(item, col));
+                                RenderDisplayCellContent(builder, 140, item, col);
                             }
 
                             builder.CloseElement(); // td
@@ -4228,9 +6166,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             var isActiveCell = _activeCell.HasValue
                 && _activeCell.Value.RowIndex == resolvedRowIndex
                 && _activeCell.Value.CellIndex == colIdx;
-            var editableClass = capturedCol.AllowEditing ? " fx-cell-editable" : string.Empty;
+            var showsEditableCue = CanShowEditableCellCue(capturedCol);
+            var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
             var activeClass = isActiveCell
-                ? capturedCol.AllowEditing ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
+                ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
                 : string.Empty;
             var typeAheadClass = isTypeAheadPreview ? " fx-typeahead-preview-cell" : string.Empty;
             var cellClass = "fx-cell"
@@ -4249,7 +6188,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 builder.AddAttribute(3, "title", GetCellDisplayValue(item, col));
 
             // For batch mode, double-click also opens edit (fallback)
-            if (EditSettingsRef?.Mode == EditMode.Batch && col.AllowEditing && !col.IsPrimaryKey && !string.IsNullOrEmpty(col.Field))
+            if (EditSettingsRef?.Mode == EditMode.Batch
+                && EditSettingsRef.AllowEditOnDblClick
+                && col.AllowEditing
+                && !col.IsPrimaryKey
+                && !string.IsNullOrEmpty(col.Field))
             {
                 builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(item, resolvedRowIndex, capturedCol, e.ClientX)));
             }
@@ -4258,26 +6201,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
             if (isBatchEditing)
             {
-                // Render inline edit input
-                var inputType = GetEditorInputType(col);
-                builder.OpenElement(45, "input");
-                builder.AddAttribute(46, "type", inputType);
-                builder.AddAttribute(47, "class", "fx-batch-input");
-                builder.AddAttribute(48, "value", _batchEditValue);
-                builder.AddAttribute(57, "style", GetEditorInputStyle(col));
-                if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
-                    builder.AddAttribute(49, "inputmode", "decimal");
-                builder.AddAttribute(50, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, UpdateBatchEditValue));
-                builder.AddAttribute(51, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, HandleBatchEditKeyDown));
-                builder.AddAttribute(52, "onblur", EventCallback.Factory.Create(this, CommitBatchEdit));
-                builder.AddEventStopPropagationAttribute(53, "onclick", true);
-                builder.AddEventStopPropagationAttribute(54, "onkeydown", true);
-                builder.AddEventStopPropagationAttribute(56, "onmousedown", true);
-                // Capture the input's DOM reference so OnAfterRenderAsync
-                // can focus it, and optionally select its contents when the
-                // column opts in via SelectAllOnEdit.
-                builder.AddElementReferenceCapture(55, er => _batchEditInputRef = er);
-                builder.CloseElement();
+                RenderBatchEditor(builder, 45, item, resolvedRowIndex, capturedCol);
             }
             else if (isTypeAheadPreview)
             {
@@ -4307,15 +6231,43 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
             else if (col.Type == ColumnType.CheckBox)
             {
-                builder.OpenElement(30, "input");
-                builder.AddAttribute(31, "type", "checkbox");
-                builder.AddAttribute(32, "disabled", true);
-                builder.AddAttribute(33, "checked", GetBoolValue(item, col.Field));
-                builder.CloseElement();
+                if (!TryGetCheckboxDisplayValue(item, col.Field, out var checkedValue))
+                {
+                    RenderDisplayCellContent(builder, 30, item, col);
+                    builder.CloseElement();
+                    colIdx++;
+                    continue;
+                }
+
+                // VB6 flexDTBoolean cell: togglable when editable, disabled when
+                // read-only. Toggle writes the bound bool + raises OnCellSave.
+                var cbItem = item;
+                var cbCol = col;
+                builder.OpenComponent<CheckBoxControl>(30);
+                builder.AddAttribute(31, "Disabled", !CanToggleCheckboxColumn(cbCol));
+                builder.AddAttribute(32, "Checked", checkedValue);
+                builder.AddAttribute(33, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
+                if (CanToggleCheckboxColumn(cbCol))
+                {
+                    builder.AddAttribute(34, "CheckedChanged",
+                        EventCallback.Factory.Create<bool>(this,
+                            value => HandleCheckboxToggle(cbItem, cbCol, value)));
+                    builder.AddAttribute(36, "OnFocus",
+                        EventCallback.Factory.Create<FocusEventArgs>(this,
+                            _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIndex, capturedColIdx, false)));
+                    builder.AddAttribute(37, "OnKeyDown",
+                        EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                            e => HandleCheckboxKeyDown(cbItem, resolvedRowIndex, capturedColIdx, cbCol, e)));
+                    builder.AddAttribute(38, "StopClickPropagation", true);
+                    builder.AddAttribute(39, "StopMouseDownPropagation", true);
+                    builder.AddAttribute(40, "StopKeyDownPropagation", true);
+                    builder.AddAttribute(41, "PreventKeyDownDefault", true);
+                }
+                builder.CloseComponent();
             }
             else
             {
-                builder.AddContent(40, GetCellDisplayValue(item, col));
+                RenderDisplayCellContent(builder, 40, item, col);
             }
 
             if (AllowRowResizing && isLastDataCell)
@@ -4670,7 +6622,20 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private static bool GetBoolValue(object? item, string field)
     {
         var val = GetPropertyValue(item, field);
-        return val is true;
+        return val switch
+        {
+            bool b => b,
+            byte b => b != 0,
+            short s => s != 0,
+            int i => i != 0,
+            long l => l != 0,
+            decimal d => d != 0,
+            double d => Math.Abs(d) > double.Epsilon,
+            float f => Math.Abs(f) > float.Epsilon,
+            string s when bool.TryParse(s, out var b) => b,
+            string s when int.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var i) => i != 0,
+            _ => false
+        };
     }
 
     private static bool TryGetDictionaryValue(object item, string field, out object? value)
@@ -4818,10 +6783,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (totalWidth <= 0)
             return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
 
-        var width = $"width:{totalWidth}px;";
+        var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
         return WidthMode == GridWidthMode.FitColumns
-            ? $"{width}min-width:0;"
-            : $"{width}min-width:100%;";
+            ? $"width:{widthPx}px;min-width:{widthPx}px;max-width:none;"
+            : $"width:100%;min-width:{widthPx}px;max-width:none;";
     }
 
     private string GetGroupedPlaceholderStyle(GridColumn col)
@@ -5124,7 +7089,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         _selectedItems.Clear();
         ResetRowSelectionTypeAheadTarget();
-        _ = NotifySelectionChangedAsync();
+        _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
     public async Task ClearSelectionAsync()
@@ -5133,7 +7098,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _selectedCells.Clear();
         ResetRowSelectionTypeAheadTarget();
         await InvokeAsync(StateHasChanged);
-        await NotifySelectionChangedAsync();
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
     public void SelectRow(int rowIndex)
@@ -5142,7 +7107,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (rowIndex >= 0 && rowIndex < list.Count)
         {
             _selectedItems.Add(list[rowIndex]);
-            _ = NotifySelectionChangedAsync();
+            _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
         }
     }
 
@@ -5154,7 +7119,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     /// intentionally suppressed). Call after every mutation of
     /// <c>_selectedItems</c>; the event is no-op when no consumer subscribes.
     /// </summary>
-    private async Task NotifySelectionChangedAsync()
+    private async Task NotifySelectionChangedAsync(GridSelectionChangeSource source = GridSelectionChangeSource.Unknown)
     {
         if (_selectedItems.Count <= 1)
             ResetRowSelectionTypeAheadTarget();
@@ -5165,8 +7130,17 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             await NotifyTypeAheadChangedAsync();
         }
 
+        var count = _selectedItems.Count;
+
         if (EventsRef?.SelectionChanged.HasDelegate == true)
-            await EventsRef.SelectionChanged.InvokeAsync(_selectedItems.Count);
+            await EventsRef.SelectionChanged.InvokeAsync(count);
+
+        if (EventsRef?.SelectionChangedDetailed.HasDelegate == true)
+            await EventsRef.SelectionChangedDetailed.InvokeAsync(new GridSelectionChangedArgs
+            {
+                Count = count,
+                Source = source
+            });
     }
 
     public Task SelectCellAsync((int RowIndex, int CellIndex) cell, bool isCtrlPressed = false)
@@ -5226,13 +7200,59 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await InvokeAsync(StateHasChanged);
     }
 
+    public Task<TValue> AppendRow(string? editField = null, bool beginEdit = true) =>
+        AppendRowAsync(editField, beginEdit);
+
+    public Task<TValue> AppendRow(TValue record, string? editField = null, bool beginEdit = true) =>
+        AppendRowAsync(record, editField, beginEdit);
+
+    public Task<TValue> InsertRow(int rowIndex, string? editField = null, bool beginEdit = true) =>
+        InsertRowAsync(rowIndex, editField, beginEdit);
+
+    public Task<TValue> InsertRow(int rowIndex, TValue record, string? editField = null, bool beginEdit = true) =>
+        InsertRowAsync(rowIndex, record, editField, beginEdit);
+
+    public Task<TValue> AppendRowAsync(string? editField = null, bool beginEdit = true) =>
+        AppendRowAsync(CreateNewItem(), editField, beginEdit);
+
+    public Task<TValue> AppendRowAsync(TValue record, string? editField = null, bool beginEdit = true)
+    {
+        var list = GetMutableDataSource();
+        return InsertRowAsync(list.Count, record, editField, beginEdit);
+    }
+
+    public Task<TValue> InsertRowAsync(int rowIndex, string? editField = null, bool beginEdit = true) =>
+        InsertRowAsync(rowIndex, CreateNewItem(), editField, beginEdit);
+
+    public async Task<TValue> InsertRowAsync(int rowIndex, TValue record, string? editField = null, bool beginEdit = true)
+    {
+        var list = GetMutableDataSource();
+        var insertIndex = Math.Clamp(rowIndex, 0, list.Count);
+        list.Insert(insertIndex, record);
+
+        if (beginEdit && !string.IsNullOrWhiteSpace(editField))
+        {
+            await BeginEditCellAsync(record, editField);
+        }
+        else if (beginEdit)
+        {
+            await BeginEditFirstProgrammaticCellAsync(record);
+        }
+        else
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+
+        return record;
+    }
+
     public async Task DeleteRecordAsync(TValue record)
     {
         var list = DataSource as IList<TValue>;
         list?.Remove(record);
         var wasSelected = _selectedItems.Remove(record);
         await InvokeAsync(StateHasChanged);
-        if (wasSelected) await NotifySelectionChangedAsync();
+        if (wasSelected) await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
     public async Task GroupByColumnAsync(string field)
@@ -5333,12 +7353,209 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return field;
     }
 
-    public Task EndEditAsync()
+    private async Task EnsureTrailingNewRowIfNeededAsync()
     {
+        if (!EnsureTrailingNewRow
+            || _ensuringTrailingNewRow
+            || EditSettingsRef?.AllowAdding != true
+            || DataSource is not IList<TValue> list
+            || Columns.Count == 0)
+            return;
+
+        if (_hasTrailingNewRowItem)
+        {
+            var markerIndex = FindTrailingNewRowIndex(list);
+            if (markerIndex >= 0)
+            {
+                if (!IsTrackedTrailingNewRowStillBlank(list[markerIndex]))
+                {
+                    ClearTrailingNewRowMarker();
+                }
+                else
+                {
+                    if (markerIndex != list.Count - 1)
+                    {
+                        var marker = list[markerIndex];
+                        list.RemoveAt(markerIndex);
+                        list.Add(marker);
+                        SyncDataSourceChangeTrackers();
+                        await InvokeAsync(StateHasChanged);
+                    }
+
+                    return;
+                }
+            }
+
+            ClearTrailingNewRowMarker();
+        }
+
+        var row = CreateNewItem();
+        if (row is null)
+            return;
+
+        _ensuringTrailingNewRow = true;
+        try
+        {
+            await AppendRowAsync(row, beginEdit: false);
+            TrackTrailingNewRow(row);
+        }
+        finally
+        {
+            _ensuringTrailingNewRow = false;
+        }
+    }
+
+    private bool IsTrackedTrailingNewRowStillBlank(TValue row)
+    {
+        if (IsTrailingNewRow == null)
+            return true;
+
+        try
+        {
+            return IsTrailingNewRow(row);
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private int FindTrailingNewRowIndex(IList<TValue> list)
+    {
+        if (!_hasTrailingNewRowItem)
+            return -1;
+
+        for (var i = 0; i < list.Count; i++)
+        {
+            if (EqualityComparer<TValue>.Default.Equals(list[i], _trailingNewRowItem!))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private void TrackTrailingNewRow(TValue row)
+    {
+        _trailingNewRowItem = row;
+        _hasTrailingNewRowItem = true;
+    }
+
+    private void ClearTrailingNewRowMarker()
+    {
+        _trailingNewRowItem = default;
+        _hasTrailingNewRowItem = false;
+    }
+
+    private IList<TValue> GetMutableDataSource()
+    {
+        if (DataSource is IList<TValue> list)
+            return list;
+
+        throw new InvalidOperationException(
+            $"{GetType().Name} row insertion requires a mutable DataSource that implements IList<{typeof(TValue).Name}>.");
+    }
+
+    private async Task BeginEditFirstProgrammaticCellAsync(TValue row)
+    {
+        var rowIndex = ResolveRowIndex(row, -1);
+        if (rowIndex < 0)
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        if (IsPagingActive && _pageState.PageSize > 0)
+        {
+            var targetPage = (rowIndex / _pageState.PageSize) + 1;
+            if (targetPage != _pageState.CurrentPage)
+                await GoToPage(targetPage);
+        }
+
+        var columns = VisibleColumns.ToList();
+        for (var cellIndex = 0; cellIndex < columns.Count; cellIndex++)
+        {
+            var column = columns[cellIndex];
+            if (!IsKeyboardEditTargetColumn(column))
+                continue;
+
+            if (!await TryActivateKeyboardEditTargetAsync(row, rowIndex, cellIndex, column, scrollIntoView: true))
+                continue;
+
+            if (_batchEditItem != null
+                && string.Equals(_batchEditField, column.Field, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (CanToggleCheckboxColumn(column)
+                || column.ShowEditButton
+                || column.EffectiveTemplate != null
+                || column.Commands is { Count: > 0 })
+            {
+                SyncDataSourceChangeTrackers();
+                return;
+            }
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SelectProgrammaticCellAsync(TValue item, string field)
+    {
+        var rowIndex = ResolveRowIndex(item, -1);
+        if (rowIndex < 0)
+            return;
+
+        var visibleColumns = VisibleColumns.ToList();
+        var cellIndex = visibleColumns.FindIndex(column =>
+            string.Equals(column.Field, field, StringComparison.OrdinalIgnoreCase));
+        if (cellIndex < 0)
+            return;
+
+        _selectedItems.Clear();
+        if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
+            _selectedItems.Add(item);
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = rowIndex;
+
+        _selectedCells.Clear();
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            _selectedCells.Add((rowIndex, cellIndex));
+        _activeCell = (rowIndex, cellIndex);
+        _lastSelectedCell = (rowIndex, cellIndex);
+
+        if (EventsRef?.CellSelected.HasDelegate == true)
+        {
+            var value = GetPropertyValue(item, field);
+            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+            {
+                Data = item,
+                RowIndex = rowIndex,
+                CellIndex = cellIndex,
+                CurrentValue = value
+            });
+        }
+
+        if (SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && EventsRef?.RowSelected.HasDelegate == true)
+        {
+            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue>
+            {
+                Data = item,
+                RowIndex = rowIndex
+            });
+        }
+
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
+    }
+
+    public async Task EndEditAsync()
+    {
+        await CommitBatchEdit();
         _isEditing = false;
         _editingRowIndex = -1;
         _editItem = default;
-        return InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged);
     }
 
     public Task ExpandAllGroupAsync()
@@ -5349,9 +7566,108 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return InvokeAsync(StateHasChanged);
     }
 
-    public Task ScrollIntoViewAsync(int columnIndex, int rowIndex)
+    /// <summary>
+    /// Bring a row into view AND open one of its cells in edit mode — the
+    /// programmatic equivalent of a single click on that cell. Used by hosts
+    /// after adding a "New" row so the new (often off-screen, bottom-of-list)
+    /// row scrolls into view with the cursor already in the given column.
+    ///
+    /// Pure Blazor: the row is paged to if needed, the cell enters batch edit
+    /// via the same path as a mouse click, and the post-render focus uses
+    /// <c>FocusAsync(preventScroll:false)</c> so the browser scrolls it into
+    /// view natively — NO JavaScript scrollIntoView. The sticky column header
+    /// (CSS) stays visible through the scroll.
+    ///
+    /// Requires Batch edit mode (EditSettingsRef.Mode = EditMode.Batch) and an
+    /// editable, non-primary-key column. Honors the same per-row/column veto as
+    /// a click (OnCellEdit Cancel). No-op if the row/field can't be resolved or
+    /// the column isn't editable.
+    /// </summary>
+    public async Task BeginEditCellAsync(TValue row, string field)
     {
-        return Task.CompletedTask;
+        if (row == null || string.IsNullOrEmpty(field)) return;
+
+        var col = VisibleColumns.FirstOrDefault(
+            c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        if (col == null || !col.AllowEditing || col.IsPrimaryKey) return;
+
+        var rowIndex = ResolveRowIndex(row, -1);
+        if (rowIndex < 0) return;
+
+        // Page the row onto the visible page when paging is on, so the edit
+        // cell actually renders (PagedData only emits the current page).
+        if (IsPagingActive && _pageState.PageSize > 0)
+        {
+            var targetPage = (rowIndex / _pageState.PageSize) + 1;
+            if (targetPage != _pageState.CurrentPage)
+                await GoToPage(targetPage);
+        }
+
+        await SelectProgrammaticCellAsync(row, col.Field);
+        if (CanToggleCheckboxColumn(col))
+        {
+            await FocusGridHostAsync();
+            SyncDataSourceChangeTrackers();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        await StartBatchEdit(row, rowIndex, col);
+
+        // StartBatchEdit arms the post-render focus; upgrade it to scroll the
+        // freshly-shown row into view (a new bottom row is usually off-screen).
+        // If StartBatchEdit vetoed (e.g. OnCellEdit Cancel), _batchEditField is
+        // null and we must not force a stale focus/scroll.
+        if (_pendingBatchEditFocus && _batchEditField == col.Field)
+            _pendingBatchEditScrollIntoView = true;
+
+        // Re-baseline the data-source change trackers to the CURRENT DataSource.
+        // Programmatic edit typically follows a host "add new row" (DataSource
+        // count just grew). Without this, the next OnParametersSet sees a changed
+        // signature and runs ClearSelectionIfDataSourceChanged →
+        // ClearTransientSelectionState, which would wipe the edit/scroll just
+        // armed — a render-order race. Capturing the new signature here makes the
+        // begin-edit deterministic regardless of when the host called
+        // StateHasChanged relative to adding the row.
+        SyncDataSourceChangeTrackers();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Snapshot the current DataSource into the filter/selection change-trackers
+    /// so a pending add/remove the host just made won't be re-detected as a
+    /// "data source changed" on the next OnParametersSet (which would clear
+    /// transient selection / batch-edit state). Used by BeginEditCellAsync after
+    /// a host adds a row and immediately starts editing it.
+    /// </summary>
+    private void SyncDataSourceChangeTrackers()
+    {
+        _lastSelectionDataSource = DataSource;
+        _lastSelectionDataSourceSignature = ComputeSelectionDataSourceSignature();
+        _selectionDataSourceCaptured = true;
+        _lastFilterDataSource = DataSource;
+        _filterDataSourceCaptured = true;
+    }
+
+    /// <summary>
+    /// Scroll a cell into view by (column, row) index — pure Blazor, no JS.
+    /// Implemented by entering edit on the cell (which focuses its input with
+    /// preventScroll:false, scrolling it on screen). For the common "new row"
+    /// case prefer <see cref="BeginEditCellAsync"/>, which is field-based and
+    /// doesn't depend on the caller knowing the rendered column index.
+    /// rowIndex is the index into the underlying data source; columnIndex is
+    /// into the VISIBLE columns in display order.
+    /// </summary>
+    public async Task ScrollIntoViewAsync(int columnIndex, int rowIndex)
+    {
+        var visibleCols = VisibleColumns.ToList();
+        if (columnIndex < 0 || columnIndex >= visibleCols.Count) return;
+
+        var item = GetItemAtResolvedRowIndex(rowIndex);
+        if (item == null) return;
+
+        await BeginEditCellAsync(item, visibleCols[columnIndex].Field);
     }
 
     public Task<object?> GetCellValueByIndexAsync(int rowIndex, int columnIndex)
@@ -5411,6 +7727,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterRowDragSelectionAutoScroll", _gridHostElement);
             }
+            if (_gridKeyboardTrapRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterGridKeyboardTrap", _gridHostElement);
+            }
         }
         catch (Exception)
         {
@@ -5419,6 +7739,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         _headerDragPreviewRegistered = false;
         _rowDragSelectionAutoScrollRegistered = false;
+        _gridKeyboardTrapRegistered = false;
 
         if (_gridJsModule != null)
         {

@@ -2,7 +2,9 @@
 @typeparam TValue
 
 <div class="fx-treegrid @CssClass"
-     style="@(string.IsNullOrEmpty(Height) ? "" : $"height:{Height};") @(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")">
+     style="@(string.IsNullOrEmpty(Height) ? "" : $"height:{Height};") @(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
+     tabindex="@TabIndex"
+     @onkeydown="HandleKeyDown">
 
     @* ── Collect column definitions ─────────────────────────────── *@
     <CascadingValue Value="@((ITreeGridControlOwner)this)" IsFixed="true">
@@ -18,9 +20,32 @@
                 <tr>
                     @foreach (var col in VisibleColumns)
                     {
+                        var headerIconSrc = ResolveHeaderIconSrc(col);
                         <th class="fx-treegrid-header-cell"
                             style="@col.GetHeaderStyle()">
-                            @col.DisplayHeader
+                            <span class="fx-treegrid-header-content">
+                                <span class="fx-treegrid-header-text">
+                                    @if (col.HeaderTemplate is not null)
+                                    {
+                                        @col.HeaderTemplate
+                                    }
+                                    else
+                                    {
+                                        @col.DisplayHeader
+                                    }
+                                </span>
+                                @if (col.HeaderIconVisible && !string.IsNullOrWhiteSpace(headerIconSrc))
+                                {
+                                    <button class="@GetHeaderIconButtonCss(col)"
+                                            type="button"
+                                            title="@col.HeaderIconTitle"
+                                            aria-label="@(!string.IsNullOrWhiteSpace(col.HeaderIconAlt) ? col.HeaderIconAlt : col.HeaderIconTitle)"
+                                            @onclick="() => HandleHeaderIconClickAsync(col)"
+                                            @onclick:stopPropagation="true">
+                                        <img class="fx-treegrid-header-icon" src="@headerIconSrc" alt="@col.HeaderIconAlt" />
+                                    </button>
+                                }
+                            </span>
                         </th>
                     }
                 </tr>
@@ -33,7 +58,8 @@
                     var isSelected = AllowSelection && _selectedItem != null && EqualityComparer<TValue>.Default.Equals(node.Data, _selectedItem);
 
                     <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "")"
-                        @onclick="() => HandleRowClick(node, currentIdx)">
+                        @onclick="() => HandleRowClick(node, currentIdx)"
+                        @ondblclick="() => HandleRowDoubleClick(node, currentIdx)">
 
                         @{ var colIdx = 0; }
                         @foreach (var col in VisibleColumns)
@@ -91,7 +117,17 @@
                                                 @(node.IsExpanded ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
                                             </span>
 
-                                            @if (UseTreeFolderIcons)
+                                            @if (GetNodeIcon != null)
+                                            {
+                                                var customIcon = GetNodeIcon(node.Data, node.IsExpanded);
+                                                if (!string.IsNullOrEmpty(customIcon))
+                                                {
+                                                    <span class="fx-treegrid-node-folder" aria-hidden="true">
+                                                        <img class="fx-treegrid-icon" src="@customIcon" alt="" />
+                                                    </span>
+                                                }
+                                            }
+                                            else if (UseTreeFolderIcons)
                                             {
                                                 <span class="fx-treegrid-node-folder" aria-hidden="true">
                                                     <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @(node.IsExpanded ? "open" : "closed")"></span>
@@ -104,7 +140,15 @@
                                             <span class="fx-treegrid-expand-icon @(node.IsExpanded ? "expanded" : "collapsed")"
                                                   @onclick="() => ToggleNode(node)"
                                                   @onclick:stopPropagation="true">
-                                                @if (UseYellowFolderIcons)
+                                                @if (GetNodeIcon != null)
+                                                {
+                                                    var customIcon = GetNodeIcon(node.Data, node.IsExpanded);
+                                                    if (!string.IsNullOrEmpty(customIcon))
+                                                    {
+                                                        <img class="fx-treegrid-icon" src="@customIcon" alt="" />
+                                                    }
+                                                }
+                                                else if (UseYellowFolderIcons)
                                                 {
                                                     <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @(node.IsExpanded ? "open" : "closed")" aria-hidden="true"></span>
                                                 }
@@ -135,7 +179,17 @@
                                             <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon fx-treegrid-leaf-plusminus"
                                                   style="@ResolveLeafIconStyle()"></span>
 
-                                            @if (UseTreeFolderIcons)
+                                            @if (GetNodeIcon != null)
+                                            {
+                                                var customIcon = GetNodeIcon(node.Data, false);
+                                                if (!string.IsNullOrEmpty(customIcon))
+                                                {
+                                                    <span class="fx-treegrid-node-folder" aria-hidden="true">
+                                                        <img class="fx-treegrid-icon" src="@customIcon" alt="" />
+                                                    </span>
+                                                }
+                                            }
+                                            else if (UseTreeFolderIcons)
                                             {
                                                 <span class="fx-treegrid-node-folder" aria-hidden="true">
                                                     <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-leaf closed"></span>
@@ -145,7 +199,15 @@
                                         else
                                         {
                                             <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon">
-                                                @if (UseYellowFolderIcons)
+                                                @if (GetNodeIcon != null)
+                                                {
+                                                    var customIcon = GetNodeIcon(node.Data, false);
+                                                    if (!string.IsNullOrEmpty(customIcon))
+                                                    {
+                                                        <img class="fx-treegrid-icon" src="@customIcon" alt="" />
+                                                    }
+                                                }
+                                                else if (UseYellowFolderIcons)
                                                 {
                                                     <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-leaf closed" aria-hidden="true"></span>
                                                 }

@@ -1,0 +1,17 @@
+.fx-radio {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: inherit;
+}
+
+.fx-radio input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+}
+
+.fx-radio-label {
+    user-select: none;
+}

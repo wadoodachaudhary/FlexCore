@@ -1,5 +1,6 @@
 @namespace Fx.ControlKit.Grid
 @typeparam TValue
+@using Fx.ControlKit
 @using System.Reflection
 @using System.Globalization
 
@@ -327,14 +328,11 @@
                             {
                                 <span class="fx-grid-pivot-chip fx-grid-pivot-value-chip">
                                     @valueField.DisplayLabel
-                                    <select value="@valueField.Aggregation"
-                                            @onchange="e => ChangePivotAggregation(valueField, e)">
-                                        <option value="Sum">Sum</option>
-                                        <option value="Count">Count</option>
-                                        <option value="Average">Average</option>
-                                        <option value="Min">Min</option>
-                                        <option value="Max">Max</option>
-                                    </select>
+                                    <DropDownListControl TValue="AggregateType" TItem="AggregateType"
+                                                         DataSource="@PivotAggregateTypes"
+                                                         Value="@valueField.Aggregation"
+                                                         ValueChanged="aggregate => ChangePivotAggregation(valueField, aggregate)"
+                                                         CssClass="fx-pivot-agg-select" />
                                     <input class="fx-grid-pivot-format-input"
                                            value="@valueField.Format"
                                            placeholder="Format"
@@ -437,7 +435,7 @@
     {
 
     @* ── Grid Table ───────────────────────────────────────────── *@
-    <div class="fx-grid-content" style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
+    <div class="fx-grid-content" style="@(string.IsNullOrEmpty(Height) ? "" : (IsPagingActive ? "overflow-x:auto; overflow-y:hidden; flex:1;" : "overflow:auto; flex:1;"))">
         <table class="fx-grid-table" style="@GetTableStyle()">
 
             @* Header *@
@@ -446,8 +444,11 @@
                     @if (ShowCheckboxColumn)
                     {
                         <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
-                            <input type="checkbox" checked="@AllRowsSelected"
-                                   @onchange="ToggleSelectAll" />
+                            <CheckBoxControl Checked="@AllRowsSelected"
+                                             CheckedChanged="@SelectAllCheckedChanged"
+                                             TabIndex="-1"
+                                             StopClickPropagation="true"
+                                             StopMouseDownPropagation="true" />
                         </th>
                     }
                     @if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
@@ -579,6 +580,7 @@
                         // fights inside isolated batch-edit cells; an
                         // inline style wins every battle by spec.
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
+                        var rowCssClass = GetRowCssClass(item, currentIdx);
 
                         @if (isEditingThis)
                         {
@@ -586,7 +588,7 @@
                         }
                         else
                         {
-                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "")"
+                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
                                 @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
@@ -622,6 +624,7 @@
                         </td>
                     </tr>
                 }
+
             </tbody>
 
             @* ── Grid Footer (aggregates across all data) ──────── *@
@@ -669,33 +672,36 @@
     }   @* /else (table render — closes ShowAsChart branch above) *@
 
     @* ── Pager ────────────────────────────────────────────────── *@
-    @if (AllowPaging)
+    @if (IsPagingActive)
     {
         <div class="fx-grid-pager">
             <div class="fx-pager-info">
                 @(_pageState.TotalRecords) items
             </div>
             <div class="fx-pager-nav">
-                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(1)">⟨⟨</button>
-                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(_pageState.CurrentPage - 1)">⟨</button>
+                <button class="fx-pager-btn" tabindex="-1" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(1)">⟨⟨</button>
+                <button class="fx-pager-btn" tabindex="-1" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(_pageState.CurrentPage - 1)">⟨</button>
 
                 @foreach (var p in GetPageNumbers())
                 {
                     var page = p;
                     <button class="fx-pager-btn @(page == _pageState.CurrentPage ? "fx-pager-active" : "")"
+                            tabindex="-1"
                             @onclick="() => GoToPage(page)">@(page)</button>
                 }
 
-                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.CurrentPage + 1)">⟩</button>
-                <button class="fx-pager-btn" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.TotalPages)">⟩⟩</button>
+                <button class="fx-pager-btn" tabindex="-1" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.CurrentPage + 1)">⟩</button>
+                <button class="fx-pager-btn" tabindex="-1" disabled="@(_pageState.CurrentPage >= _pageState.TotalPages)" @onclick="() => GoToPage(_pageState.TotalPages)">⟩⟩</button>
             </div>
             <div class="fx-pager-size">
-                <select @onchange="HandlePageSizeChange">
-                    @foreach (var size in ResolvedPageSizes)
-                    {
-                        <option value="@size" selected="@(size == _pageState.PageSize)">@size / page</option>
-                    }
-                </select>
+                <DropDownListControl TValue="int" TItem="PageSizeChoice"
+                                     DataSource="@PageSizeChoices"
+                                     TextFieldName="Text"
+                                     ValueFieldName="Value"
+                                     Value="@_pageState.PageSize"
+                                     ValueChanged="HandlePageSizeValueChanged"
+                                     TabIndex="-1"
+                                     CssClass="fx-pager-size-select" />
             </div>
         </div>
     }
@@ -778,14 +784,13 @@
                     var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
 
                     <div class="fx-filter-condition">
-                        <select class="fx-filter-operator-select"
-                                value="@_filterOperatorDraft"
-                                @onchange="OnTextFilterOperatorChanged">
-                            @foreach (var op in TextFilterOperators)
-                            {
-                                <option value="@op">@GetTextFilterOperatorLabel(op)</option>
-                            }
-                        </select>
+                        <DropDownListControl TValue="TextFilterOperator" TItem="TextFilterOperatorChoice"
+                                             DataSource="@TextFilterOperatorChoices"
+                                             TextFieldName="Text"
+                                             ValueFieldName="Value"
+                                             Value="@_filterOperatorDraft"
+                                             ValueChanged="OnTextFilterOperatorValueChanged"
+                                             CssClass="fx-filter-operator-select" />
                         <input type="text"
                                class="fx-filter-popup-input fx-filter-condition-input"
                                placeholder="Filter value..."

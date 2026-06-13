@@ -1,0 +1,53 @@
+@namespace Fx.ControlKit
+
+<button class="@RootCssClass"
+        type="button"
+        role="menuitem"
+        disabled="@Disabled"
+        title="@Title"
+        @onclick="HandleClick">
+    @if (!string.IsNullOrWhiteSpace(Icon))
+    {
+        <span class="fx-context-menu-item-icon">@Icon</span>
+    }
+    <span class="fx-context-menu-item-text">
+        @if (ChildContent is not null)
+        {
+            @ChildContent
+        }
+        else
+        {
+            @Text
+        }
+    </span>
+</button>
+
+@code {
+    [CascadingParameter] public ContextMenuControl? ParentMenu { get; set; }
+
+    [Parameter] public string Text { get; set; } = string.Empty;
+    [Parameter] public string? Icon { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool CloseOnClick { get; set; } = true;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string RootCssClass =>
+        string.IsNullOrWhiteSpace(CssClass)
+            ? "fx-context-menu-item"
+            : $"fx-context-menu-item {CssClass.Trim()}";
+
+    private async Task HandleClick()
+    {
+        if (Disabled)
+            return;
+
+        if (OnClick.HasDelegate)
+            await OnClick.InvokeAsync();
+
+        if (CloseOnClick && ParentMenu is not null)
+            await ParentMenu.RequestCloseAsync();
+    }
+}

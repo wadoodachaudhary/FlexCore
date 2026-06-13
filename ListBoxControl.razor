@@ -12,6 +12,7 @@
             var inputType = SelectionMode == ListBoxSelectionMode.Single && !ShowCheckbox ? "radio" : "checkbox";
             <label class="fx-listbox-item">
                 <input type="@inputType"
+                       name="@(inputType == "radio" ? _radioGroupName : null)"
                        checked="@isSelected"
                        @onchange="e => ToggleSelection(value, e)" />
                 <span>@text</span>
@@ -33,6 +34,10 @@
 
     private HashSet<string> SelectedValues { get; set; } = new();
 
+    // Per-instance radio group: without a shared name attribute every radio is
+    // its own browser group, so the native single-selection behavior breaks.
+    private readonly string _radioGroupName = $"fx-listbox-{Guid.NewGuid():N}";
+
     protected override void OnParametersSet()
     {
         SelectedValues = new HashSet<string>(Value ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
@@ -51,7 +56,15 @@
     private async Task ToggleSelection(string value, ChangeEventArgs e)
     {
         var isChecked = false;
-        if (e.Value is bool b)
+        if (SelectionMode == ListBoxSelectionMode.Single && !ShowCheckbox)
+        {
+            // Radio rendering: the change event only fires when an input BECOMES
+            // checked, and its payload is the input's value attribute ("on"), not
+            // a bool — bool-parsing it yielded false and CLEARED the selection on
+            // every click (the picked item could never register).
+            isChecked = true;
+        }
+        else if (e.Value is bool b)
             isChecked = b;
         else if (bool.TryParse(e.Value?.ToString(), out var parsed))
             isChecked = parsed;

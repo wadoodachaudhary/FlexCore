@@ -87,6 +87,39 @@ public class CrystalXmlReportLoader
     }
 
     /// <summary>
+    /// Loads a subreport embedded inside the main Crystal XML <c>&lt;SubReports&gt;</c>
+    /// block. Native C# conversion keeps subreports inline, so on-demand drilldown
+    /// links use this path instead of requiring a separate sidecar XML file.
+    /// </summary>
+    public ReportDefinition LoadInlineSubreport(
+        string xmlFilePath,
+        string subreportName,
+        IReadOnlyList<ReportFieldFilter>? filters = null)
+    {
+        if (!File.Exists(xmlFilePath))
+            throw new FileNotFoundException($"Crystal Reports XML not found: {xmlFilePath}", xmlFilePath);
+
+        var doc = XDocument.Load(xmlFilePath);
+        var report = doc.Root ?? throw new InvalidDataException("Invalid XML: missing root element.");
+        var subreport = report.Elements("SubReports")
+            .Elements("Report")
+            .FirstOrDefault(r => string.Equals(
+                ((string?)r.Attribute("Name") ?? "").Trim(),
+                subreportName,
+                StringComparison.OrdinalIgnoreCase));
+
+        if (subreport == null)
+            throw new InvalidDataException($"Inline Crystal subreport not found: {subreportName}");
+
+        return LoadInternalFromReport(
+            new XElement(subreport),
+            xmlFilePath,
+            drillPath: null,
+            fieldFilters: filters,
+            reportIdOverride: subreportName);
+    }
+
+    /// <summary>
     /// Loads and parses a Crystal Reports XML file into a renderable <see cref="ReportDefinition"/>.
     /// </summary>
     public ReportDefinition Load(string xmlFilePath)
@@ -104,6 +137,16 @@ public class CrystalXmlReportLoader
 
         var doc = XDocument.Load(xmlFilePath);
         var report = doc.Root ?? throw new InvalidDataException("Invalid XML: missing root element.");
+        return LoadInternalFromReport(new XElement(report), xmlFilePath, drillPath, fieldFilters);
+    }
+
+    private ReportDefinition LoadInternalFromReport(
+        XElement report,
+        string xmlFilePath,
+        IReadOnlyList<DrillDownFilter>? drillPath,
+        IReadOnlyList<ReportFieldFilter>? fieldFilters = null,
+        string? reportIdOverride = null)
+    {
         var subreportObjects = ExtractSubreportObjects(report, xmlFilePath);
 
         // Strip <SubReports> blocks from the tree before any parsing. Subreports
@@ -118,9 +161,15 @@ public class CrystalXmlReportLoader
 
         var definition = new ReportDefinition
         {
-            ReportId = Path.GetFileNameWithoutExtension(xmlFilePath),
-            Title = Path.GetFileNameWithoutExtension(xmlFilePath).Replace("_", " "),
-            SourceRptFile = xmlFilePath,
+            ReportId = string.IsNullOrWhiteSpace(reportIdOverride)
+                ? Path.GetFileNameWithoutExtension(xmlFilePath)
+                : reportIdOverride,
+            Title = string.IsNullOrWhiteSpace(reportIdOverride)
+                ? Path.GetFileNameWithoutExtension(xmlFilePath).Replace("_", " ")
+                : reportIdOverride,
+            SourceRptFile = string.IsNullOrWhiteSpace(reportIdOverride)
+                ? xmlFilePath
+                : $"{xmlFilePath}#{reportIdOverride}",
             SubreportLinks = subreportObjects.Select(ToReportSubreportLink).ToList()
         };
 
@@ -439,7 +488,7 @@ public class CrystalXmlReportLoader
         string Name, string SubreportName,
         string AreaKind, string SectionKind, string SectionName,
         int Top, int Left, int Width, int Height,
-        bool EnableOnDemand, string XmlPath, string Url,
+        bool EnableOnDemand, bool IsInline, string XmlPath, string Url,
         IReadOnlyList<SubreportParameterLinkInfo> ParameterLinks);
 
     /// <summary>
@@ -460,6 +509,11 @@ public class CrystalXmlReportLoader
 
             referenceMap.TryAdd(name, fileName);
         }
+        var inlineSubreportNames = report.Elements("SubReports")
+            .Elements("Report")
+            .Select(r => ((string?)r.Attribute("Name") ?? "").Trim())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var list = new List<SubreportObjectInfo>();
         foreach (var obj in report.Descendants("SubreportObject")
@@ -480,7 +534,14 @@ public class CrystalXmlReportLoader
             }
 
             var xmlPath = ResolveSubreportXmlPath(xmlFilePath, xmlHint, subreportName);
-            var url = ResolvePublicWebUrl(xmlPath);
+            var isInline = false;
+            if (inlineSubreportNames.Contains(subreportName) &&
+                (string.IsNullOrWhiteSpace(xmlPath) || !File.Exists(xmlPath)))
+            {
+                xmlPath = Path.GetFullPath(xmlFilePath);
+                isInline = true;
+            }
+            var url = isInline ? "#" : ResolvePublicWebUrl(xmlPath);
             var section = obj.Ancestors("Section").FirstOrDefault();
             var area = obj.Ancestors("Area").FirstOrDefault();
             list.Add(new SubreportObjectInfo(
@@ -494,6 +555,7 @@ public class CrystalXmlReportLoader
                 Width: ParseInt(obj.Attribute("Width")),
                 Height: ParseInt(obj.Attribute("Height")),
                 EnableOnDemand: AttributeIsTrue(obj.Attribute("EnableOnDemand")),
+                IsInline: isInline,
                 XmlPath: xmlPath,
                 Url: url,
                 ParameterLinks: linkedParameters.TryGetValue(subreportName, out var links)
@@ -528,17 +590,43 @@ public class CrystalXmlReportLoader
                     map[subreportName] = links;
                 }
 
+                var resolvedSubreportField = ResolveSubreportLinkField(subreport, subreportField.Value);
+
                 links.Add(new SubreportParameterLinkInfo(
                     LinkedParameterName: ((string?)link.Attribute("LinkedParameterName") ?? "").Trim(),
                     MainReportFieldName: mainFieldName,
                     MainReportAlias: $"{mainField.Value.Table}_{mainField.Value.Field}",
                     SubreportFieldName: subreportFieldName,
-                    SubreportTable: subreportField.Value.Table,
-                    SubreportField: subreportField.Value.Field));
+                    SubreportTable: resolvedSubreportField.Table,
+                    SubreportField: resolvedSubreportField.Field));
             }
         }
 
         return map;
+    }
+
+    private static (string Table, string Field) ResolveSubreportLinkField(
+        XElement subreport,
+        (string Table, string Field) parsedField)
+    {
+        var tableFields = ExtractTableFieldIndex(subreport);
+        if (tableFields.TryGetValue(parsedField.Table, out var exactFields) &&
+            exactFields.Contains(parsedField.Field))
+        {
+            return parsedField;
+        }
+
+        // Native conversion can preserve the main-report table alias in
+        // SubreportFieldName even though the field is bound to a different table
+        // inside the embedded subreport. Match by field name so the generated
+        // subreport WHERE clause targets a table that actually exists there.
+        foreach (var kv in tableFields)
+        {
+            if (kv.Value.Contains(parsedField.Field))
+                return (kv.Key, parsedField.Field);
+        }
+
+        return parsedField;
     }
 
     private static ReportSubreportLink ToReportSubreportLink(SubreportObjectInfo info)
@@ -553,6 +641,7 @@ public class CrystalXmlReportLoader
             XmlPath = info.XmlPath,
             Url = info.Url,
             EnableOnDemand = info.EnableOnDemand,
+            IsInline = info.IsInline,
             ParameterLinks = info.ParameterLinks.Select(link => new ReportSubreportParameterLink
             {
                 LinkedParameterName = link.LinkedParameterName,
@@ -1004,7 +1093,7 @@ public class CrystalXmlReportLoader
     /// blocks. Drives picklist description-column discovery and
     /// DivisionID-injection decisions.
     /// </summary>
-    private Dictionary<string, HashSet<string>> ExtractTableFieldIndex(XElement report)
+    private static Dictionary<string, HashSet<string>> ExtractTableFieldIndex(XElement report)
     {
         var idx = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var tbl in report.Descendants("Table"))

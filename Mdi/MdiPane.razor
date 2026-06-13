@@ -1,10 +1,12 @@
 @namespace Fx.ControlKit.Mdi
 @using Microsoft.AspNetCore.Components
 
-<DynamicComponent @key="Window.Id"
-                  @ref="_component"
-                  Type="Window.PageType"
-                  Parameters="Window.Parameters" />
+<div class="fx-mdi-component">
+    <DynamicComponent @key="Window.Id"
+                      @ref="_component"
+                      Type="Window.PageType"
+                      Parameters="Window.Parameters" />
+</div>
 
 @code {
     [Parameter, EditorRequired] public MdiWindow Window { get; set; } = default!;

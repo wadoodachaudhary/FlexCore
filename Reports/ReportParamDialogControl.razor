@@ -154,9 +154,8 @@
                             }
                             else if (p.ParameterType == ReportParameterType.Date)
                             {
-                                <input type="date"
-                                       value="@_values.GetValueOrDefault(p.Name)"
-                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                                <DatePickerControl Value="@ParseDateValue(_values.GetValueOrDefault(p.Name))"
+                                                   ValueChanged="@(v => SetValue(p.Name, v.HasValue ? v.Value.ToString("yyyy-MM-dd") : ""))" />
                             }
                             else if (p.ParameterType == ReportParameterType.Boolean)
                             {
@@ -340,8 +339,8 @@
                 else
                 {
                     // Scalar — stringify so the underlying typed input shows
-                    // the prior value. Date is formatted as ISO so the
-                    // <input type="date"> recognizes it.
+                    // the prior value. Date is formatted as ISO so DatePickerControl
+                    // parses it back via ParseDateValue.
                     _values[p.Name] = raw switch
                     {
                         DateTime dt => dt.ToString("yyyy-MM-dd"),
@@ -468,6 +467,11 @@
         _tcs?.TrySetResult(null);
         StateHasChanged();
     }
+
+    // Parse the ISO date string held in _values back to DateTime? for the
+    // DatePickerControl (it binds DateTime?, not the raw <input type=date> string).
+    private static DateTime? ParseDateValue(string? raw)
+        => DateTime.TryParse(raw, out var dt) ? dt : (DateTime?)null;
 
     private static object ConvertValue(string raw, ReportParameterType type) => type switch
     {

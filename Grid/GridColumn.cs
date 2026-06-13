@@ -36,6 +36,13 @@ public class GridColumn : ComponentBase
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
     [Parameter] public bool AllowEditing { get; set; } = true;
+    /// <summary>
+    /// Allows this column to participate in single-cell column drag selection
+    /// even when <see cref="AllowEditing"/> is false. Use for lookup/picker
+    /// template cells that support bulk picklist updates but must not accept
+    /// typed text edits.
+    /// </summary>
+    [Parameter] public bool AllowCellDragSelection { get; set; }
     [Parameter] public bool AllowGrouping { get; set; } = true;
     [Parameter] public bool AllowResizing { get; set; } = true;
     [Parameter] public ClipMode ClipMode { get; set; } = ClipMode.Clip;
@@ -59,6 +66,35 @@ public class GridColumn : ComponentBase
     /// without spinner arrows.
     /// </summary>
     [Parameter] public bool ShowNumericSpinner { get; set; }
+
+    /// <summary>
+    /// When true, this column's batch-edit cell renders a trailing "…" picker
+    /// button beside the editor input (VB6 VSFlexGrid <c>ShowComboButton</c> +
+    /// <c>.ComboList</c> set in <c>BeforeEdit</c>). Clicking it raises
+    /// <see cref="GridControlEvents{T}.OnEditButtonClick"/> so the host can open
+    /// a picklist and write the chosen value back. The button appears ONLY while
+    /// the cell is in edit mode — matching VB6, which attaches the button to the
+    /// active edit cell rather than painting one on every row. Default false.
+    /// </summary>
+    [Parameter] public bool ShowEditButton { get; set; }
+
+    /// <summary>
+    /// Paints the edit button in the display cell instead of only while the
+    /// cell is in edit mode. Useful for VB6-style button cells that launch a
+    /// picklist rather than accepting typed text.
+    /// </summary>
+    [Parameter] public bool AlwaysShowEditButton { get; set; }
+
+    /// <summary>
+    /// Optional predicate for <see cref="AlwaysShowEditButton"/>. Return false
+    /// for synthetic/header rows where a picker button should not be shown.
+    /// </summary>
+    [Parameter] public Func<object, bool>? ShowEditButtonPredicate { get; set; }
+
+    /// <summary>
+    /// Optional string choices for batch-mode in-cell dropdown editing.
+    /// </summary>
+    [Parameter] public IEnumerable<string>? EditOptions { get; set; }
 
     /// <summary>Custom cell template. Context is the row data item (TValue).</summary>
     [Parameter] public RenderFragment<object>? Template { get; set; }
@@ -102,7 +138,7 @@ public class GridColumn : ComponentBase
         if (!string.IsNullOrEmpty(MinWidth)) parts.Add($"min-width:{MinWidth}");
         if (!string.IsNullOrEmpty(MaxWidth)) parts.Add($"max-width:{MaxWidth}");
         parts.Add($"text-align:{TextAlign.ToString().ToLower()}");
-        parts.Add("padding:1px 4px");
+        parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");
         parts.Add("white-space:nowrap");
         if (ClipMode == ClipMode.Ellipsis || ClipMode == ClipMode.EllipsisWithTooltip)

@@ -1,11 +1,23 @@
 .fx-treeview {
     font-family: inherit;
     font-size: 0.875rem;
+    -webkit-user-select: none;
     user-select: none;
-    border: 1px solid #dee2e6;
+    border: 1px solid var(--fx-tree-border, #dee2e6);
     border-radius: 4px;
     padding: 4px 0;
-    background: #fff;
+    background: var(--fx-tree-bg, #fff);
+    color: var(--fx-tree-color, #212529);
+}
+
+.fx-treeview * {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.fx-treeview:focus {
+    outline: 1px dotted #000;
+    outline-offset: -2px;
 }
 
 .fx-treeview-node {
@@ -17,24 +29,31 @@
     border-radius: 3px;
     margin: 1px 4px;
     min-height: 28px;
+    color: var(--fx-tree-color, #212529);
 }
 
 .fx-treeview-node:hover {
-    background-color: #f0f4f8;
+    background-color: var(--fx-tree-hover-bg, #f0f4f8);
+    color: var(--fx-tree-hover-color, inherit);
 }
 
 .fx-treeview-node-selected {
-    background-color: #e2ecf7;
+    background-color: var(--fx-tree-selected-bg, #e2ecf7);
+    color: var(--fx-tree-selected-color, inherit);
     font-weight: 500;
 }
 
 .fx-treeview-node-selected:hover {
-    background-color: #d4e3f5;
+    background-color: var(--fx-tree-selected-hover-bg, #d4e3f5);
+    color: var(--fx-tree-selected-color, inherit);
 }
 
 .fx-treeview-node-disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+.fx-treeview-node-bold {
+    font-weight: bold;
 }
 
 .fx-treeview-arrow {
@@ -85,7 +104,8 @@
 .fx-treeview-vb6 {
     padding: 2px 0 4px 2px;
     border-radius: 0;
-    background: #fff;
+    background: var(--fx-tree-bg, #fff);
+    color: var(--fx-tree-vb6-color, #111);
     font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
     font-size: 11px;
     line-height: 1.15;
@@ -98,9 +118,11 @@
     gap: 0;
     min-height: 17px;
     margin: 0;
-    padding: 1px 4px 1px var(--tree-node-left);
+    padding-top: 1px;
+    padding-right: 4px;
+    padding-bottom: 1px;
     border-radius: 0;
-    color: #111;
+    color: var(--fx-tree-vb6-color, #111);
     cursor: default;
     font-size: 11px;
     white-space: nowrap;
@@ -113,8 +135,8 @@
 
 .fx-treeview-vb6 .fx-treeview-node-selected,
 .fx-treeview-vb6 .fx-treeview-node-selected:hover {
-    background: #316ac5;
-    color: #fff;
+    background: var(--fx-tree-vb6-selected-bg, #316ac5);
+    color: var(--fx-tree-vb6-selected-color, #fff);
     font-weight: 400;
 }
 
@@ -124,7 +146,7 @@
     left: calc(var(--tree-node-left) - 8px);
     top: 8px;
     width: 9px;
-    border-top: 1px dotted #777;
+    border-top: 1px dotted var(--fx-tree-connector-color, #777);
 }
 
 .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::after {
@@ -133,7 +155,7 @@
     left: calc(var(--tree-node-left) - 8px);
     top: -8px;
     height: 17px;
-    border-left: 1px dotted #777;
+    border-left: 1px dotted var(--fx-tree-connector-color, #777);
 }
 
 .fx-treeview-vb6 .fx-treeview-arrow {
@@ -143,9 +165,9 @@
     width: 11px;
     height: 11px;
     margin-right: 3px;
-    border: 1px solid #666;
-    background: #fff;
-    color: #000;
+    border: 1px solid var(--fx-tree-arrow-border, #666);
+    background: var(--fx-tree-arrow-bg, #fff);
+    color: var(--fx-tree-arrow-color, #000);
     font-size: 0;
     font-weight: 700;
     line-height: 9px;

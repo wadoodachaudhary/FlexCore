@@ -1,62 +1,107 @@
 .fx-colorpicker {
-    display: inline-flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-    background: #fff;
-    border: 1px solid #e5e7eb;
-    border-radius: 8px;
+    position: relative;
+    display: inline-block;
 }
 
-.fx-colorpicker-preview {
-    width: 100%;
-    height: 32px;
-    border-radius: 4px;
-    border: 1px solid #d1d5db;
+/* Closed state: a plain colour swatch button — no text, no arrow (VB6 Color-dialog style). */
+.fx-colorpicker-button {
+    width: 30px;
+    height: 16px;
+    padding: 0;
+    border: 1px solid #808080;
+    border-radius: 0;
+    cursor: pointer;
+    box-sizing: border-box;
+    vertical-align: middle;
+}
+
+.fx-colorpicker-button:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+/* Click-away catcher so the dropdown closes without JS. */
+.fx-colorpicker-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: default;
+}
+
+/* The dropdown popup (the colour grid). Defaults to below + left-aligned. */
+.fx-colorpicker-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 1001;
+    margin-top: 2px;
+    padding: 6px;
+    background: #f0f0f0;
+    border: 1px solid #8a8a8a;
+    box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Open above the swatch (keeps bottom on-screen for hosts near a scroll-area bottom). */
+.fx-colorpicker-panel.drop-up {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 2px;
+}
+
+/* Right-align to the swatch (keeps right edge on-screen for hosts near the right edge). */
+.fx-colorpicker-panel.align-right {
+    left: auto;
+    right: 0;
 }
 
 .fx-colorpicker-palette {
     display: grid;
-    grid-template-columns: repeat(10, 1fr);
-    gap: 3px;
+    grid-template-columns: repeat(8, 18px);
+    gap: 2px;
 }
 
-.fx-colorpicker-swatch {
-    width: 22px;
-    height: 22px;
-    border-radius: 3px;
+.fx-colorpicker-cell {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #aaaaaa;
     cursor: pointer;
-    border: 2px solid transparent;
-    transition: border-color 0.1s, transform 0.1s;
 }
 
-.fx-colorpicker-swatch:hover {
-    transform: scale(1.2);
-    z-index: 1;
+.fx-colorpicker-cell:hover {
+    outline: 1px solid #000000;
+    outline-offset: -1px;
 }
 
-.fx-colorpicker-swatch-selected {
-    border-color: #1f2937;
-    box-shadow: 0 0 0 1px #fff, 0 0 0 3px #2563eb;
+.fx-colorpicker-cell.selected {
+    outline: 2px solid #000000;
+    outline-offset: -1px;
 }
 
 .fx-colorpicker-custom {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+    margin-top: 6px;
 }
 
 .fx-colorpicker-label {
-    font-size: 12px;
-    color: #6b7280;
-    font-weight: 500;
+    font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font-size: 11px;
+    color: #000000;
 }
 
 .fx-colorpicker-input {
-    flex: 1;
-    padding: 4px 8px;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    font-size: 12px;
-    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    width: 80px;
+    padding: 2px 4px;
+    border: 1px solid #7f9db9;
+    border-radius: 0;
+    box-sizing: border-box;
+    font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font-size: 11px;
 }

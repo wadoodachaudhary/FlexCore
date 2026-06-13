@@ -25,6 +25,14 @@ public class GridControlEvents<TValue> : ComponentBase
     /// </summary>
     [Parameter] public EventCallback<int> SelectionChanged { get; set; }
 
+    /// <summary>
+    /// Same timing as <see cref="SelectionChanged"/>, with the current selected
+    /// row count plus the interaction source. Consumers can keep mouse-only
+    /// adorners (for example cursor-position tooltips) out of keyboard range
+    /// selection without losing the normal selected-row count updates.
+    /// </summary>
+    [Parameter] public EventCallback<GridSelectionChangedArgs> SelectionChangedDetailed { get; set; }
+
     // Sorting
     [Parameter] public EventCallback<SortEventArgs> Sorting { get; set; }
     [Parameter] public EventCallback<SortEventArgs> Sorted { get; set; }
@@ -55,6 +63,11 @@ public class GridControlEvents<TValue> : ComponentBase
     [Parameter] public EventCallback<CellSelectingEventArgs<TValue>> CellSelecting { get; set; }
     [Parameter] public EventCallback<CellEditArgs<TValue>> OnCellEdit { get; set; }
     [Parameter] public EventCallback<CellSaveArgs<TValue>> OnCellSave { get; set; }
+    /// <summary>Raised when the user clicks the trailing "…" picker button on a
+    /// cell whose column has <see cref="GridColumn.ShowEditButton"/> = true (VB6
+    /// VSFlexGrid ComboButton). The host opens a picklist and writes the value
+    /// back to the row. Mirrors VB6 gData_CellButtonClick.</summary>
+    [Parameter] public EventCallback<CellEditButtonArgs<TValue>> OnEditButtonClick { get; set; }
     [Parameter] public EventCallback<CellSavedArgs<TValue>> CellSaved { get; set; }
     [Parameter] public EventCallback<ActionEventArgs<TValue>> OnActionComplete { get; set; }
     [Parameter] public EventCallback<QueryCellInfoEventArgs<TValue>> QueryCellInfo { get; set; }

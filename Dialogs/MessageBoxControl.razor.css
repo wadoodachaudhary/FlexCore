@@ -1,23 +1,211 @@
 .fx-msgbox-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
     z-index: 10000;
+    font-family: Arial, "MS Sans Serif", Tahoma, sans-serif;
+}
+
+.fx-msgbox-overlay-vb6 {
+    background: transparent;
+}
+
+.fx-msgbox-overlay-dotnet {
+    background: rgba(0, 0, 0, 0.4);
 }
 
 .fx-msgbox {
-    background: #fff;
-    border-radius: 8px;
-    min-width: 320px;
-    max-width: 480px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
     overflow: hidden;
 }
 
-.fx-msgbox-header {
+.fx-msgbox-vb6 {
+    min-width: 286px;
+    max-width: 520px;
+    background: #f0f0f0;
+    border: 1px solid #7f7f7f;
+    border-radius: 0;
+    box-shadow: 0 2px 7px rgba(0, 0, 0, 0.28);
+    color: #000;
+    font-family: "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font-size: 12px;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 27px;
+    padding: 0 5px 0 8px;
+    background: #f0f0f0;
+    color: #000;
+    font-size: 12px;
+    font-weight: 400;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-close {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #000;
+    cursor: default;
+    font-family: Arial, sans-serif;
+    font-size: 20px;
+    line-height: 20px;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-close:hover {
+    background: #e5e5e5;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-body {
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    min-height: 68px;
+    padding: 13px 16px 9px 22px;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-icon {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    flex: 0 0 32px;
+    font-size: 0;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-message {
+    color: #000;
+    font-size: 12px;
+    line-height: 1.75;
+    white-space: pre-line;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 5px 14px 10px;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-btn {
+    min-width: 75px;
+    height: 24px;
+    padding: 1px 12px 2px;
+    border: 2px outset #f0f0f0;
+    border-radius: 0;
+    background: #f0f0f0;
+    color: #000;
+    cursor: default;
+    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font-weight: 400;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-btn:active {
+    border-style: inset;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-btn-primary {
+    color: #000;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-btn-primary:focus,
+.fx-msgbox-vb6 .fx-msgbox-btn:focus {
+    outline: 1px dotted #000;
+    outline-offset: -5px;
+}
+
+.fx-msgbox-icon-warning::before,
+.fx-msgbox-icon-info::before,
+.fx-msgbox-icon-error::before,
+.fx-msgbox-icon-question::before,
+.fx-msgbox-icon-warning::after,
+.fx-msgbox-icon-info::after,
+.fx-msgbox-icon-error::after,
+.fx-msgbox-icon-question::after {
+    position: absolute;
+    box-sizing: border-box;
+}
+
+.fx-msgbox-icon-warning::before {
+    content: "";
+    left: 1px;
+    top: 2px;
+    width: 30px;
+    height: 27px;
+    background: #ffd84c;
+    clip-path: polygon(50% 0, 100% 100%, 0 100%);
+    filter: drop-shadow(0 0 0 #8a7a00) drop-shadow(0 1px 0 #8a7a00);
+}
+
+.fx-msgbox-icon-warning::after {
+    content: "!";
+    left: 0;
+    top: 8px;
+    width: 32px;
+    color: #27364a;
+    font: 700 21px Arial, sans-serif;
+    line-height: 20px;
+    text-align: center;
+}
+
+.fx-msgbox-icon-info::before,
+.fx-msgbox-icon-question::before,
+.fx-msgbox-icon-error::before {
+    content: "";
+    inset: 2px;
+    border-radius: 50%;
+}
+
+.fx-msgbox-icon-info::before {
+    background: #2f7fe0;
+}
+
+.fx-msgbox-icon-question::before {
+    background: #2f7fe0;
+}
+
+.fx-msgbox-icon-error::before {
+    background: #cf1f1f;
+}
+
+.fx-msgbox-icon-info::after,
+.fx-msgbox-icon-question::after,
+.fx-msgbox-icon-error::after {
+    left: 0;
+    top: 6px;
+    width: 32px;
+    color: #fff;
+    font: 700 22px Arial, sans-serif;
+    line-height: 22px;
+    text-align: center;
+}
+
+.fx-msgbox-icon-info::after {
+    content: "i";
+}
+
+.fx-msgbox-icon-question::after {
+    content: "?";
+}
+
+.fx-msgbox-icon-error::after {
+    content: "x";
+}
+
+.fx-msgbox-dotnet {
+    min-width: 320px;
+    max-width: 480px;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.fx-msgbox-dotnet .fx-msgbox-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -28,35 +216,35 @@
     font-size: 14px;
 }
 
-.fx-msgbox-close {
-    background: transparent;
-    border: none;
-    color: #fff;
-    font-size: 20px;
-    cursor: pointer;
-    line-height: 1;
+.fx-msgbox-dotnet .fx-msgbox-close {
     padding: 0 4px;
+    border: none;
+    background: transparent;
+    color: #fff;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
 }
 
-.fx-msgbox-body {
+.fx-msgbox-dotnet .fx-msgbox-body {
     display: flex;
     align-items: flex-start;
     gap: 12px;
     padding: 20px 16px;
 }
 
-.fx-msgbox-icon {
-    font-size: 24px;
+.fx-msgbox-dotnet .fx-msgbox-icon {
     flex-shrink: 0;
+    font-size: 24px;
 }
 
-.fx-msgbox-message {
-    font-size: 14px;
+.fx-msgbox-dotnet .fx-msgbox-message {
     color: #374151;
+    font-size: 14px;
     line-height: 1.5;
 }
 
-.fx-msgbox-footer {
+.fx-msgbox-dotnet .fx-msgbox-footer {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
@@ -64,27 +252,27 @@
     border-top: 1px solid #e5e7eb;
 }
 
-.fx-msgbox-btn {
+.fx-msgbox-dotnet .fx-msgbox-btn {
     padding: 6px 16px;
-    border-radius: 4px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
     border: 1px solid #d1d5db;
+    border-radius: 4px;
     background: #fff;
     color: #374151;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
 }
 
-.fx-msgbox-btn:hover {
+.fx-msgbox-dotnet .fx-msgbox-btn:hover {
     background: #f3f4f6;
 }
 
-.fx-msgbox-btn-primary {
+.fx-msgbox-dotnet .fx-msgbox-btn-primary {
     background: #1b6ec2;
     color: #fff;
     border-color: #1861ac;
 }
 
-.fx-msgbox-btn-primary:hover {
+.fx-msgbox-dotnet .fx-msgbox-btn-primary:hover {
     background: #1a65b3;
 }

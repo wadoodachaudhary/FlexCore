@@ -1,0 +1,543 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Globalization
+@using System.Linq.Expressions
+
+@if (Visible)
+{
+    <div class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes">
+        <div class="fx-datepicker-input-group">
+            <input type="text"
+                   class="fx-datepicker-input"
+                   value="@_inputText"
+                   @oninput="OnInputTextChange"
+                   @onblur="OnInputBlur"
+                   @onkeydown="OnInputKeyDown"
+                   placeholder="@ResolvedPlaceholder"
+                   disabled="@(!Enabled)" />
+            <button type="button"
+                    class="fx-datepicker-trigger"
+                    @onclick="ToggleDropdown"
+                    disabled="@(!Enabled)"
+                    aria-label="Toggle calendar">
+                📅
+            </button>
+        </div>
+
+        @if (_isOpen && Enabled)
+        {
+            <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
+            
+            <div class="fx-datepicker-dropdown @(_expanded ? "expanded" : "minimal")">
+                <!-- Left Section: Main Calendar -->
+                <div class="fx-calendar-main">
+                    <!-- Nav Header -->
+                    <div class="fx-calendar-header">
+                        <button type="button" class="fx-nav-btn" @onclick="PrevMonth" title="Previous Month">◀</button>
+                        
+                        <div class="fx-header-selectors">
+                            <select value="@_viewMonth" @onchange="OnViewMonthChanged" class="fx-nav-select">
+                                @for (int m = 1; m <= 12; m++)
+                                {
+                                    <option value="@m">@CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(m)</option>
+                                }
+                            </select>
+                            
+                            <select value="@_viewYear" @onchange="OnViewYearChanged" class="fx-nav-select">
+                                @for (int y = DateTime.Today.Year - 100; y <= DateTime.Today.Year + 30; y++)
+                                {
+                                    <option value="@y">@y</option>
+                                }
+                            </select>
+                        </div>
+                        
+                        <button type="button" class="fx-nav-btn" @onclick="NextMonth" title="Next Month">▶</button>
+                        
+                        <button type="button" class="fx-expand-btn" @onclick="ToggleExpand" title="Toggle Sidebar">
+                            @(_expanded ? "◀" : "▶")
+                        </button>
+                    </div>
+
+                    <!-- Weekdays Header -->
+                    <div class="fx-weekdays">
+                        @foreach (var dayName in GetWeekdayNames())
+                        {
+                            <span class="fx-weekday">@dayName</span>
+                        }
+                    </div>
+
+                    <!-- Days Grid -->
+                    <div class="fx-days-grid">
+                        @foreach (var date in GetDaysInGrid())
+                        {
+                            var isCurrentMonth = date.Month == _viewMonth && date.Year == _viewYear;
+                            var isSelected = Value.HasValue && date.Date == Value.Value.Date;
+                            var isToday = date.Date == DateTime.Today;
+                            var isDisabled = IsDateDisabled(date);
+                            var cellClass = string.Join(" ", new[]
+                            {
+                                "fx-day-cell",
+                                isCurrentMonth ? "in-month" : "out-month",
+                                isSelected ? "selected" : "",
+                                isToday ? "today" : "",
+                                isDisabled ? "disabled" : ""
+                            }.Where(c => !string.IsNullOrEmpty(c)));
+
+                            <button type="button"
+                                    class="@cellClass"
+                                    disabled="@isDisabled"
+                                    @onclick="() => SelectDay(date)">
+                                @date.Day
+                            </button>
+                        }
+                    </div>
+
+                    <!-- Optional Time Picker -->
+                    @if (ShowTime)
+                    {
+                        <div class="fx-time-picker">
+                            <span class="fx-time-label">Time:</span>
+                            <div class="fx-time-inputs">
+                                <select value="@_hour" @onchange="OnHourChanged" class="fx-time-select">
+                                    @for (int h = 1; h <= 12; h++)
+                                    {
+                                        <option value="@h">@h.ToString("D2")</option>
+                                    }
+                                </select>
+                                <span class="fx-time-sep">:</span>
+                                <select value="@_minute" @onchange="OnMinuteChanged" class="fx-time-select">
+                                    @for (int m = 0; m < 60; m++)
+                                    {
+                                        <option value="@m">@m.ToString("D2")</option>
+                                    }
+                                </select>
+                                <select value="@_ampm" @onchange="OnAmPmChanged" class="fx-time-select">
+                                    <option value="AM">AM</option>
+                                    <option value="PM">PM</option>
+                                </select>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <!-- Right Section: Sidebar (Expanded Mode) -->
+                @if (_expanded)
+                {
+                    <div class="fx-calendar-sidebar">
+                        <div class="fx-sidebar-section">
+                            <span class="fx-section-title">Shortcuts</span>
+                            <div class="fx-shortcuts-grid">
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today)">Today</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(-1))">Yesterday</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(1))">Tomorrow</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetStartOfWeek())">Start of Week</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetEndOfWeek())">End of Week</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(7))">Next Week</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1))">Start of Month</button>
+                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1).AddDays(-1))">End of Month</button>
+                                <button type="button" class="fx-shortcut-btn fx-clear-btn" @onclick="ClearValue">Clear Date</button>
+                            </div>
+                        </div>
+
+                        <!-- Quick Month Grid -->
+                        <div class="fx-sidebar-section">
+                            <span class="fx-section-title">Months</span>
+                            <div class="fx-months-grid">
+                                @for (int m = 1; m <= 12; m++)
+                                {
+                                    var monthIdx = m;
+                                    var isCurrent = _viewMonth == monthIdx;
+                                    <button type="button"
+                                            class="fx-month-btn @(isCurrent ? "active" : "")"
+                                            @onclick="() => SelectMonthShortcut(monthIdx)">
+                                        @CultureInfo.CurrentCulture.DateTimeFormat.GetAbbreviatedMonthName(monthIdx)
+                                    </button>
+                                }
+                            </div>
+                        </div>
+
+                        <!-- Quick Decade Year Selector -->
+                        <div class="fx-sidebar-section">
+                            <span class="fx-section-title">Years (@_decadeStart - @(_decadeStart + 11))</span>
+                            <div class="fx-decade-header">
+                                <button type="button" class="fx-decade-nav" @onclick="PrevDecade">◀</button>
+                                <button type="button" class="fx-decade-nav" @onclick="NextDecade">▶</button>
+                            </div>
+                            <div class="fx-years-grid">
+                                @for (int y = _decadeStart; y < _decadeStart + 12; y++)
+                                {
+                                    var yearVal = y;
+                                    var isCurrent = _viewYear == yearVal;
+                                    <button type="button"
+                                            class="fx-year-btn @(isCurrent ? "active" : "")"
+                                            @onclick="() => SelectYearShortcut(yearVal)">
+                                        @yearVal
+                                    </button>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public DateTime? Value { get; set; }
+    [Parameter] public EventCallback<DateTime?> ValueChanged { get; set; }
+    [Parameter] public Expression<Func<DateTime?>>? ValueExpression { get; set; }
+
+    [Parameter] public string? Format { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public bool ShowTime { get; set; }
+    [Parameter] public DateTime? MinDate { get; set; }
+    [Parameter] public DateTime? MaxDate { get; set; }
+
+    private string ResolvedFormat => Format ?? (ShowTime ? "MM/dd/yyyy hh:mm tt" : "MM/dd/yyyy");
+    private string ResolvedPlaceholder => Placeholder ?? ResolvedFormat;
+
+    private string _inputText = "";
+    private bool _isOpen = false;
+    private bool _expanded = false;
+
+    // View State (what month/year the popup calendar is currently focused on)
+    private int _viewMonth = DateTime.Today.Month;
+    private int _viewYear = DateTime.Today.Year;
+
+    // Time Selection fields
+    private int _hour = 12;
+    private int _minute = 0;
+    private string _ampm = "AM";
+
+    // Decade state for quick year selector
+    private int _decadeStart;
+
+    protected override void OnParametersSet()
+    {
+        base.OnParametersSet();
+        if (Value.HasValue)
+        {
+            _inputText = FormatDate(Value.Value);
+        }
+        else
+        {
+            _inputText = "";
+        }
+        _decadeStart = (_viewYear / 12) * 12;
+    }
+
+    private string FormatDate(DateTime date)
+    {
+        return date.ToString(ResolvedFormat, CultureInfo.InvariantCulture);
+    }
+
+    private void ToggleDropdown()
+    {
+        if (_isOpen)
+        {
+            CloseDropdown();
+        }
+        else
+        {
+            OpenDropdown();
+        }
+    }
+
+    private void OpenDropdown()
+    {
+        _isOpen = true;
+        var focusDate = Value ?? DateTime.Today;
+        _viewMonth = focusDate.Month;
+        _viewYear = focusDate.Year;
+        _decadeStart = (_viewYear / 12) * 12;
+
+        if (ShowTime)
+        {
+            InitializeTime(focusDate);
+        }
+    }
+
+    private void CloseDropdown()
+    {
+        _isOpen = false;
+    }
+
+    private void ToggleExpand()
+    {
+        _expanded = !_expanded;
+    }
+
+    private void OnInputTextChange(ChangeEventArgs e)
+    {
+        _inputText = e.Value?.ToString() ?? "";
+    }
+
+    private async Task OnInputBlur()
+    {
+        await ParseInputText(true);
+    }
+
+    private async Task OnInputKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await ParseInputText(true);
+        }
+        else if (e.Key == "Escape")
+        {
+            CloseDropdown();
+        }
+    }
+
+    private async Task ParseInputText(bool formatIfValid)
+    {
+        if (string.IsNullOrWhiteSpace(_inputText))
+        {
+            await UpdateValue(null);
+            return;
+        }
+
+        string[] formats = ShowTime 
+            ? new[] { "MM/dd/yyyy hh:mm tt", "MM/dd/yyyy HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy", "yyyy-MM-dd" }
+            : new[] { "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "MM-dd-yyyy", "MMM d, yyyy" };
+
+        if (DateTime.TryParseExact(_inputText.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        {
+            await UpdateValue(parsed);
+            if (formatIfValid)
+            {
+                _inputText = FormatDate(parsed);
+            }
+        }
+        else if (DateTime.TryParse(_inputText.Trim(), out var parsedFallback))
+        {
+            await UpdateValue(parsedFallback);
+            if (formatIfValid)
+            {
+                _inputText = FormatDate(parsedFallback);
+            }
+        }
+        else
+        {
+            // Revert on invalid typing
+            _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
+        }
+    }
+
+    private async Task UpdateValue(DateTime? newValue)
+    {
+        if (newValue.HasValue)
+        {
+            if (MinDate.HasValue && newValue < MinDate.Value)
+                newValue = MinDate.Value;
+            if (MaxDate.HasValue && newValue > MaxDate.Value)
+                newValue = MaxDate.Value;
+        }
+
+        Value = newValue;
+        _inputText = newValue.HasValue ? FormatDate(newValue.Value) : "";
+
+        if (ValueChanged.HasDelegate)
+        {
+            await ValueChanged.InvokeAsync(Value);
+        }
+    }
+
+    // --- Calendar Nav ---
+    private void PrevMonth()
+    {
+        if (_viewMonth == 1)
+        {
+            _viewMonth = 12;
+            _viewYear--;
+        }
+        else
+        {
+            _viewMonth--;
+        }
+        _decadeStart = (_viewYear / 12) * 12;
+    }
+
+    private void NextMonth()
+    {
+        if (_viewMonth == 12)
+        {
+            _viewMonth = 1;
+            _viewYear++;
+        }
+        else
+        {
+            _viewMonth++;
+        }
+        _decadeStart = (_viewYear / 12) * 12;
+    }
+
+    private void OnViewMonthChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var m))
+        {
+            _viewMonth = m;
+        }
+    }
+
+    private void OnViewYearChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var y))
+        {
+            _viewYear = y;
+            _decadeStart = (_viewYear / 12) * 12;
+        }
+    }
+
+    // --- Days Generation ---
+    private string[] GetWeekdayNames()
+    {
+        return new[] { "Su", "Mo", "Tu", "We", "Th", "Fr", "Sa" };
+    }
+
+    private List<DateTime> GetDaysInGrid()
+    {
+        var firstDayOfMonth = new DateTime(_viewYear, _viewMonth, 1);
+        int offset = (int)firstDayOfMonth.DayOfWeek;
+        var startDate = firstDayOfMonth.AddDays(-offset);
+        var days = new List<DateTime>();
+        for (int i = 0; i < 42; i++)
+        {
+            days.Add(startDate.AddDays(i));
+        }
+        return days;
+    }
+
+    private bool IsDateDisabled(DateTime date)
+    {
+        if (MinDate.HasValue && date.Date < MinDate.Value.Date) return true;
+        if (MaxDate.HasValue && date.Date > MaxDate.Value.Date) return true;
+        return false;
+    }
+
+    private async Task SelectDay(DateTime date)
+    {
+        if (ShowTime)
+        {
+            int h = _hour % 12;
+            if (_ampm == "PM") h += 12;
+            date = new DateTime(date.Year, date.Month, date.Day, h, _minute, 0);
+        }
+        else
+        {
+            date = date.Date;
+        }
+
+        await UpdateValue(date);
+        CloseDropdown();
+    }
+
+    private async Task ClearValue()
+    {
+        await UpdateValue(null);
+        CloseDropdown();
+    }
+
+    // --- Time Picker Handlers ---
+    private void InitializeTime(DateTime dt)
+    {
+        _hour = dt.Hour % 12;
+        if (_hour == 0) _hour = 12;
+        _minute = dt.Minute;
+        _ampm = dt.Hour >= 12 ? "PM" : "AM";
+    }
+
+    private async Task OnHourChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var h))
+        {
+            _hour = h;
+            await UpdateTimeOnValue();
+        }
+    }
+
+    private async Task OnMinuteChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var m))
+        {
+            _minute = m;
+            await UpdateTimeOnValue();
+        }
+    }
+
+    private async Task OnAmPmChanged(ChangeEventArgs e)
+    {
+        _ampm = e.Value?.ToString() ?? "AM";
+        await UpdateTimeOnValue();
+    }
+
+    private async Task UpdateTimeOnValue()
+    {
+        if (Value.HasValue)
+        {
+            var date = Value.Value;
+            int h = _hour % 12;
+            if (_ampm == "PM") h += 12;
+            var updated = new DateTime(date.Year, date.Month, date.Day, h, _minute, 0);
+            await UpdateValue(updated);
+        }
+    }
+
+    // --- Sidebar Shortcuts ---
+    private async Task SelectShortcut(DateTime? date)
+    {
+        if (date.HasValue)
+        {
+            var d = date.Value;
+            if (ShowTime)
+            {
+                int h = _hour % 12;
+                if (_ampm == "PM") h += 12;
+                d = new DateTime(d.Year, d.Month, d.Day, h, _minute, 0);
+            }
+            await UpdateValue(d);
+            _viewMonth = d.Month;
+            _viewYear = d.Year;
+            _decadeStart = (_viewYear / 12) * 12;
+        }
+        else
+        {
+            await UpdateValue(null);
+        }
+        CloseDropdown();
+    }
+
+    private void SelectMonthShortcut(int month)
+    {
+        _viewMonth = month;
+    }
+
+    private void SelectYearShortcut(int year)
+    {
+        _viewYear = year;
+        _decadeStart = (_viewYear / 12) * 12;
+    }
+
+    private void PrevDecade()
+    {
+        _decadeStart -= 12;
+    }
+
+    private void NextDecade()
+    {
+        _decadeStart += 12;
+    }
+
+    private DateTime GetStartOfWeek()
+    {
+        var today = DateTime.Today;
+        return today.AddDays(-(int)today.DayOfWeek);
+    }
+
+    private DateTime GetEndOfWeek()
+    {
+        var today = DateTime.Today;
+        return today.AddDays(6 - (int)today.DayOfWeek);
+    }
+}

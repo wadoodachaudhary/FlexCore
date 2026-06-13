@@ -1,6 +1,7 @@
 @namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
 
-<div class="@RootCssClass" style="@RootStyle">
+<div class="@RootCssClass" style="@RootStyle" tabindex="@TabIndex" @onkeydown="HandleKeyDown">
     @if (Nodes != null)
     {
         @RenderNodes(Nodes, 0)
@@ -13,15 +14,18 @@
     [Parameter] public EventCallback<TreeNode> SelectedNodeChanged { get; set; }
     [Parameter] public EventCallback<TreeNode> OnNodeClick { get; set; }
     [Parameter] public EventCallback<TreeNode> OnNodeDoubleClick { get; set; }
+    [Parameter] public EventCallback<TreeNode> OnNodeActivated { get; set; }
     [Parameter] public EventCallback<TreeNode> OnNodeExpand { get; set; }
     [Parameter] public bool ShowCheckboxes { get; set; }
     [Parameter] public bool ShowIcons { get; set; } = true;
     [Parameter] public bool AllowMultiSelect { get; set; }
+    [Parameter] public bool ToggleOnNodeClick { get; set; } = true;
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool UseVb6TreeStyle { get; set; }
     [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.Yellow;
     [Parameter] public int TreeIndentPixels { get; set; } = 16;
+    [Parameter] public int TabIndex { get; set; } = 0;
 
     private bool IsVb6TreeStyle => UseVb6TreeStyle || HasCssClass("fx-treeview-vb6");
     private string? RootStyle => Height != null ? $"height:{Height};overflow:auto;" : null;
@@ -123,6 +127,8 @@
             css += " fx-treeview-node-selected";
         if (node.IsDisabled)
             css += " fx-treeview-node-disabled";
+        if (node.IsBold)
+            css += " fx-treeview-node-bold";
         return css;
     }
 
@@ -132,7 +138,8 @@
             return $"padding-left:{level * 20}px;";
 
         var indent = Math.Max(0, TreeIndentPixels);
-        return $"--tree-depth:{level};--tree-indent:{indent}px;--tree-node-left:{level * indent}px;";
+        var nodeLeft = level * indent;
+        return $"padding-left:{nodeLeft}px;--tree-depth:{level};--tree-indent:{indent}px;--tree-node-left:{nodeLeft}px;";
     }
 
     private string GetArrowCss(TreeNode node)
@@ -194,12 +201,19 @@
     {
         if (node.IsDisabled) return;
 
-        if (node.HasChildren)
+        if (ToggleOnNodeClick && node.HasChildren)
         {
             node.IsExpanded = !node.IsExpanded;
             if (node.IsExpanded && OnNodeExpand.HasDelegate)
                 await OnNodeExpand.InvokeAsync(node);
         }
+
+        await SelectNodeAsync(node, invokeClick: true);
+    }
+
+    private async Task SelectNodeAsync(TreeNode node, bool invokeClick)
+    {
+        if (node.IsDisabled) return;
 
         if (!AllowMultiSelect)
         {
@@ -215,7 +229,7 @@
             node.IsSelected = !node.IsSelected;
         }
 
-        if (OnNodeClick.HasDelegate)
+        if (invokeClick && OnNodeClick.HasDelegate)
             await OnNodeClick.InvokeAsync(node);
     }
 
@@ -226,6 +240,166 @@
         if (OnNodeDoubleClick.HasDelegate)
             await OnNodeDoubleClick.InvokeAsync(node);
     }
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case "ArrowDown":
+            case "Down":
+                await MoveSelectionAsync(1);
+                break;
+            case "ArrowUp":
+            case "Up":
+                await MoveSelectionAsync(-1);
+                break;
+            case "Home":
+                await SelectVisibleNodeAsync(0);
+                break;
+            case "End":
+                await SelectVisibleNodeAsync(GetVisibleNodes().Count - 1);
+                break;
+            case "Enter":
+                await ActivateSelectedNodeAsync();
+                break;
+            case "ArrowRight":
+            case "Right":
+                await ExpandOrMoveToChildAsync();
+                break;
+            case "ArrowLeft":
+            case "Left":
+                await CollapseOrMoveToParentAsync();
+                break;
+        }
+    }
+
+    private async Task MoveSelectionAsync(int delta)
+    {
+        var visible = GetVisibleNodes();
+        if (visible.Count == 0)
+            return;
+
+        var selectedIndex = GetSelectedIndex(visible);
+        var targetIndex = selectedIndex < 0
+            ? (delta >= 0 ? 0 : visible.Count - 1)
+            : Math.Clamp(selectedIndex + delta, 0, visible.Count - 1);
+
+        await SelectVisibleNodeAsync(targetIndex, visible);
+    }
+
+    private async Task SelectVisibleNodeAsync(int index, List<VisibleTreeNode>? visible = null)
+    {
+        visible ??= GetVisibleNodes();
+        if (visible.Count == 0 || index < 0 || index >= visible.Count)
+            return;
+
+        await SelectNodeAsync(visible[index].Node, invokeClick: false);
+    }
+
+    private async Task ActivateSelectedNodeAsync()
+    {
+        var visible = GetVisibleNodes();
+        if (visible.Count == 0)
+            return;
+
+        var selectedIndex = GetSelectedIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var node = visible[selectedIndex].Node;
+        if (OnNodeActivated.HasDelegate)
+            await OnNodeActivated.InvokeAsync(node);
+        else if (OnNodeDoubleClick.HasDelegate)
+            await OnNodeDoubleClick.InvokeAsync(node);
+    }
+
+    private async Task ExpandOrMoveToChildAsync()
+    {
+        var visible = GetVisibleNodes();
+        var selectedIndex = GetSelectedIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var current = visible[selectedIndex].Node;
+        if (!current.HasChildren)
+            return;
+
+        if (!current.IsExpanded)
+        {
+            current.IsExpanded = true;
+            if (OnNodeExpand.HasDelegate)
+                await OnNodeExpand.InvokeAsync(current);
+            return;
+        }
+
+        var nextIndex = selectedIndex + 1;
+        if (nextIndex < visible.Count && visible[nextIndex].Parent == current)
+            await SelectVisibleNodeAsync(nextIndex, visible);
+    }
+
+    private async Task CollapseOrMoveToParentAsync()
+    {
+        var visible = GetVisibleNodes();
+        var selectedIndex = GetSelectedIndex(visible);
+        if (selectedIndex < 0)
+        {
+            await SelectVisibleNodeAsync(0, visible);
+            return;
+        }
+
+        var current = visible[selectedIndex].Node;
+        if (current.HasChildren && current.IsExpanded)
+        {
+            current.IsExpanded = false;
+            return;
+        }
+
+        var parent = visible[selectedIndex].Parent;
+        if (parent != null)
+            await SelectNodeAsync(parent, invokeClick: false);
+    }
+
+    private int GetSelectedIndex(List<VisibleTreeNode> visible)
+    {
+        for (var i = 0; i < visible.Count; i++)
+        {
+            if (visible[i].Node == SelectedNode || visible[i].Node.IsSelected)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private List<VisibleTreeNode> GetVisibleNodes()
+    {
+        var result = new List<VisibleTreeNode>();
+
+        void AddVisible(List<TreeNode>? nodes, int level, TreeNode? parent)
+        {
+            if (nodes == null)
+                return;
+
+            foreach (var node in nodes)
+            {
+                if (!node.IsDisabled)
+                    result.Add(new VisibleTreeNode(node, level, parent));
+
+                if (node.HasChildren && node.IsExpanded)
+                    AddVisible(node.Children, level + 1, node);
+            }
+        }
+
+        AddVisible(Nodes, 0, null);
+        return result;
+    }
+
+    private sealed record VisibleTreeNode(TreeNode Node, int Level, TreeNode? Parent);
 
     private async Task HandleCheckChanged(TreeNode node, ChangeEventArgs e)
     {

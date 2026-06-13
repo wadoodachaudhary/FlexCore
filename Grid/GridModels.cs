@@ -31,7 +31,9 @@ public class PageState
     public int CurrentPage { get; set; } = 1;
     public int PageSize { get; set; } = 10;
     public int TotalRecords { get; set; }
-    public int TotalPages => (int)Math.Ceiling((double)TotalRecords / PageSize);
+    public int TotalPages => PageSize > 0
+        ? Math.Max(1, (int)Math.Ceiling((double)TotalRecords / PageSize))
+        : 1;
 }
 
 /// <summary>
@@ -129,12 +131,18 @@ public class CellSelectingEventArgs<TValue>
 }
 
 /// <summary>
-/// Event args for cell edit events.
+/// Event args for cell edit events. Raised by the grid just before a cell
+/// enters edit mode; set <see cref="Cancel"/> to <c>true</c> to veto the
+/// edit (e.g. per-row, per-column gating like VB6 gData_BeforeEdit).
 /// </summary>
 public class CellEditArgs<TValue>
 {
     public TValue Data { get; set; } = default!;
     public string ColumnName { get; set; } = "";
+
+    /// <summary>When set to <c>true</c> by a handler, the grid aborts the
+    /// edit and the cell stays read-only. Defaults to <c>false</c>.</summary>
+    public bool Cancel { get; set; }
 }
 
 /// <summary>
@@ -145,6 +153,16 @@ public class CellSaveArgs<TValue>
     public TValue Data { get; set; } = default!;
     public string ColumnName { get; set; } = "";
     public object? Value { get; set; }
+}
+
+/// <summary>
+/// Event args for the in-cell edit/picklist button.
+/// </summary>
+public class CellEditButtonArgs<TValue>
+{
+    public TValue Data { get; set; } = default!;
+    public string ColumnName { get; set; } = "";
+    public GridColumn Column { get; set; } = default!;
 }
 
 /// <summary>
@@ -302,4 +320,19 @@ public class TypeAheadCommitArgs<TValue>
     public List<TValue> SelectedItems { get; set; } = new();
     public string ColumnName { get; set; } = "";
     public string Value { get; set; } = "";
+}
+
+public enum GridSelectionChangeSource
+{
+    Unknown,
+    Pointer,
+    MouseDrag,
+    Keyboard,
+    Programmatic
+}
+
+public class GridSelectionChangedArgs
+{
+    public int Count { get; set; }
+    public GridSelectionChangeSource Source { get; set; } = GridSelectionChangeSource.Unknown;
 }

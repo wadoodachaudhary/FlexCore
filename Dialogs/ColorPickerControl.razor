@@ -2,46 +2,73 @@
 @using System.Globalization
 
 @*
-    ColorPickerControl — color selection dialog with palette grid and custom hex input.
+    ColorPickerControl — a plain colour swatch button (no text, no arrow). Clicking it opens
+    a dropdown palette (Windows basic colours) + a hex box for a custom colour. No JS.
+    DropUp / DropAlignRight let a host near a screen edge keep the popup on-screen — the
+    panel is absolutely positioned, so a scrollable container would otherwise clip it.
+    API (Value / ValueChanged / CssClass) is unchanged.
 *@
 
 <div class="fx-colorpicker @CssClass">
-    <div class="fx-colorpicker-preview" style="background:@Value;" title="@Value"></div>
-    <div class="fx-colorpicker-palette">
-        @foreach (var color in _palette)
-        {
-            <div class="fx-colorpicker-swatch @(color == Value ? "fx-colorpicker-swatch-selected" : "")"
-                 style="background:@color;"
-                 title="@color"
-                 @onclick="() => SelectColor(color)"></div>
-        }
-    </div>
-    <div class="fx-colorpicker-custom">
-        <label class="fx-colorpicker-label">Hex:</label>
-        <input type="text" class="fx-colorpicker-input" value="@Value" maxlength="7"
-               @onchange="HandleInputChange" />
-    </div>
+    <button type="button" class="fx-colorpicker-button" disabled="@(!Enabled)"
+            style="background:@Value;" title="@Value" @onclick="ToggleOpen"></button>
+
+    @if (_isOpen && Enabled)
+    {
+        <button type="button" class="fx-colorpicker-backdrop" tabindex="-1"
+                aria-label="Close colour picker" @onclick="Close"></button>
+        <div class="fx-colorpicker-panel @(DropUp ? "drop-up" : "") @(DropAlignRight ? "align-right" : "")"
+             @onclick:stopPropagation="true">
+            <div class="fx-colorpicker-palette">
+                @foreach (var color in _palette)
+                {
+                    <button type="button"
+                            class="fx-colorpicker-cell @(string.Equals(color, Value, StringComparison.OrdinalIgnoreCase) ? "selected" : "")"
+                            style="background:@color;"
+                            title="@color"
+                            @onclick="() => SelectColor(color)"></button>
+                }
+            </div>
+            <div class="fx-colorpicker-custom">
+                <label class="fx-colorpicker-label">Hex:</label>
+                <input type="text" class="fx-colorpicker-input" value="@Value" maxlength="7"
+                       @onchange="HandleInputChange" />
+            </div>
+        </div>
+    }
 </div>
 
 @code {
     [Parameter] public string Value { get; set; } = "#2563eb";
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
 
+    /// <summary>Open the popup above the swatch (for hosts near the bottom of a scroll area).</summary>
+    [Parameter] public bool DropUp { get; set; }
+    /// <summary>Right-align the popup to the swatch (for hosts near the right edge).</summary>
+    [Parameter] public bool DropAlignRight { get; set; }
+
+    private bool _isOpen;
+
+    private void ToggleOpen() { if (Enabled) _isOpen = !_isOpen; }
+    private void Close() => _isOpen = false;
+
+    // Windows "Basic colors" palette (8 × 6), matching the VB6 Color dialog.
     private static readonly string[] _palette =
     {
-        "#000000", "#434343", "#666666", "#999999", "#b7b7b7", "#cccccc", "#d9d9d9", "#efefef", "#f3f3f3", "#ffffff",
-        "#980000", "#ff0000", "#ff9900", "#ffff00", "#00ff00", "#00ffff", "#4a86e8", "#0000ff", "#9900ff", "#ff00ff",
-        "#e6b8af", "#f4cccc", "#fce5cd", "#fff2cc", "#d9ead3", "#d0e0e3", "#c9daf8", "#cfe2f3", "#d9d2e9", "#ead1dc",
-        "#dd7e6b", "#ea9999", "#f9cb9c", "#ffe599", "#b6d7a8", "#a2c4c9", "#a4c2f4", "#9fc5e8", "#b4a7d6", "#d5a6bd",
-        "#cc4125", "#e06666", "#f6b26b", "#ffd966", "#93c47d", "#76a5af", "#6d9eeb", "#6fa8dc", "#8e7cc3", "#c27ba0",
-        "#a61c00", "#cc0000", "#e69138", "#f1c232", "#6aa84f", "#45818e", "#3c78d8", "#3d85c6", "#674ea7", "#a64d79",
-        "#85200c", "#990000", "#b45f06", "#bf9000", "#38761d", "#134f5c", "#1155cc", "#0b5394", "#351c75", "#741b47",
+        "#FF8080", "#FFFF80", "#80FF80", "#00FF80", "#80FFFF", "#0080FF", "#FF80C0", "#FF80FF",
+        "#FF0000", "#FFFF00", "#80FF00", "#00FF40", "#00FFFF", "#0080C0", "#8080C0", "#FF00FF",
+        "#804040", "#FF8040", "#00FF00", "#008080", "#004080", "#8080FF", "#800040", "#FF0080",
+        "#800000", "#FF8000", "#008000", "#008040", "#0000FF", "#0000A0", "#800080", "#8000FF",
+        "#400000", "#804000", "#004000", "#004040", "#000080", "#000040", "#400040", "#400080",
+        "#000000", "#808000", "#808040", "#808080", "#408080", "#C0C0C0", "#A0A0A4", "#FFFFFF",
     };
 
     private async Task SelectColor(string color)
     {
         Value = color;
+        _isOpen = false;
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(color);
     }

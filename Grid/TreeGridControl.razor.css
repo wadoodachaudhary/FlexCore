@@ -13,6 +13,18 @@
     font-size: 13px;
     color: #212529;
     overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.fx-treegrid:focus {
+    outline: 1px dotted #000;
+    outline-offset: -2px;
+}
+
+.fx-treegrid * {
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 /* ── Content / Scroll Area ───────────────────────────────────────── */
@@ -47,6 +59,45 @@
 }
 .fx-treegrid-header-cell:last-child {
     border-right: none;
+}
+.fx-treegrid-header-content {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    width: 100%;
+}
+.fx-treegrid-header-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fx-treegrid-header-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin-left: auto;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    cursor: pointer;
+}
+.fx-treegrid-header-icon-button:hover {
+    background: #d8e4f8;
+}
+.fx-treegrid-header-icon-button:focus-visible {
+    outline: 1px dotted #000;
+    outline-offset: -1px;
+}
+.fx-treegrid-header-icon {
+    display: block;
+    width: 16px;
+    height: 16px;
 }
 
 /* ── Body Rows ───────────────────────────────────────────────────── */
@@ -246,19 +297,20 @@
    PLUS/MINUS NODE ICON — project-default node expand/collapse glyph.
    Identical box style to .fx-group-expand-icon-plusminus on GridControl,
    so tree nodes and grid group rows look like the same control family.
-   Black border so it's clearly visible against any row background.
+   Light grey border + grey normal-weight glyph (VB6 VSFlexGrid look) — a
+   black bold box reads as "double painted" against light rows.
    ═══════════════════════════════════════════════════════════════════ */
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus,
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.collapsed,
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.expanded {
-    width: 12px;
-    height: 12px;
-    font-size: 10px;
+    width: 13px;
+    height: 13px;
+    font-size: 11px;
     line-height: 1;
-    border: 1px solid #000;
+    border: 1px solid #8a8a8a;
     background: #fff;
-    color: #000;
-    font-weight: 700;
+    color: #555;
+    font-weight: 400;
     border-radius: 1px;
     box-sizing: border-box;
     display: inline-flex;
@@ -269,6 +321,18 @@
     user-select: none;
     flex-shrink: 0;
     vertical-align: middle;
+    position: relative;
+    overflow: visible;
+}
+.fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus::after {
+    content: "";
+    position: absolute;
+    left: 100%;
+    width: 5px; /* 4px margin + 1px overlap */
+    top: 50%;
+    margin-top: -0.5px;
+    border-top: 1px dotted #9c9c9c;
+    pointer-events: none;
 }
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus:hover {
     background: #e3f2fd;
@@ -284,6 +348,17 @@
     display: inline-block;
     vertical-align: middle;
     flex-shrink: 0;
+    position: relative;
+}
+.fx-treegrid-leaf-plusminus::after {
+    content: "";
+    position: absolute;
+    left: -2px;
+    width: 19px; /* 2px left overlap + 12px width + 4px margin + 1px right overlap */
+    top: 50%;
+    margin-top: -0.5px;
+    border-top: 1px dotted #9c9c9c;
+    pointer-events: none;
 }
 
 /* ═══════════════════════════════════════════════════════════════════

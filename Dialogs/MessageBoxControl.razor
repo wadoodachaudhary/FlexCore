@@ -7,16 +7,16 @@
 
 @if (Visible)
 {
-    <div class="fx-msgbox-overlay" @onclick="HandleOverlayClick">
-        <div class="fx-msgbox @CssClass" @onclick:stopPropagation="true">
+    <div class="@OverlayClass" @onclick="HandleOverlayClick">
+        <div class="@MessageBoxClass" role="dialog" aria-modal="true" aria-labelledby="@TitleId" @onclick:stopPropagation="true">
             <div class="fx-msgbox-header">
-                <span>@Title</span>
-                <button class="fx-msgbox-close" @onclick="Close">&times;</button>
+                <span id="@TitleId">@Title</span>
+                <button type="button" class="fx-msgbox-close" aria-label="Close" @onclick="Close">&times;</button>
             </div>
             <div class="fx-msgbox-body">
-                @if (!string.IsNullOrEmpty(IconCss))
+                @if (!string.IsNullOrEmpty(EffectiveIconCss))
                 {
-                    <span class="fx-msgbox-icon @IconCss"></span>
+                    <span class="@IconClass" aria-hidden="true"></span>
                 }
                 <div class="fx-msgbox-message">@Message</div>
             </div>
@@ -24,20 +24,20 @@
                 @switch (Buttons)
                 {
                     case MessageBoxButtons.Ok:
-                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
+                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
                         break;
                     case MessageBoxButtons.OkCancel:
-                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
-                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
+                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
                         break;
                     case MessageBoxButtons.YesNo:
-                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
-                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
+                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
+                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
                         break;
                     case MessageBoxButtons.YesNoCancel:
-                        <button class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
-                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
-                        <button class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
+                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
+                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
                         break;
                 }
             </div>
@@ -52,18 +52,30 @@
     [Parameter] public string? Message { get; set; }
     [Parameter] public string? IconCss { get; set; }
     [Parameter] public MessageBoxButtons Buttons { get; set; } = MessageBoxButtons.Ok;
+    [Parameter] public MessageBoxLook Look { get; set; } = MessageBoxLook.VB6;
     [Parameter] public EventCallback<MessageBoxResult> OnResult { get; set; }
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<MessageBoxResult>? _tcs;
+    private MessageBoxLook? _activeLook;
+    private readonly string TitleId = $"fx-msgbox-title-{Guid.NewGuid():N}";
+    private MessageBoxLook EffectiveLook => _activeLook ?? Look;
+    private string LookCssSuffix => EffectiveLook == MessageBoxLook.DotNet ? "dotnet" : "vb6";
+    private string OverlayClass => $"fx-msgbox-overlay fx-msgbox-overlay-{LookCssSuffix}";
+    private string MessageBoxClass => $"fx-msgbox fx-msgbox-{LookCssSuffix}{(string.IsNullOrWhiteSpace(CssClass) ? "" : $" {CssClass}")}";
+    private string? EffectiveIconCss => ResolveEffectiveIconCss();
+    private string IconClass => string.IsNullOrWhiteSpace(EffectiveIconCss)
+        ? "fx-msgbox-icon"
+        : $"fx-msgbox-icon {ResolveIconCss(EffectiveIconCss)}";
 
     public Task<MessageBoxResult> ShowAsync(string message, string title = "Message",
-        MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null)
+        MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null, MessageBoxLook? look = null)
     {
         Message = message;
         Title = title;
         Buttons = buttons;
         IconCss = icon;
+        _activeLook = look;
         Visible = true;
         _tcs = new TaskCompletionSource<MessageBoxResult>();
         StateHasChanged();
@@ -73,6 +85,7 @@
     private async Task CloseWith(MessageBoxResult result)
     {
         Visible = false;
+        _activeLook = null;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
@@ -82,4 +95,30 @@
 
     private Task Close() => CloseWith(MessageBoxResult.Cancel);
     private Task HandleOverlayClick() => Close();
+
+    private string? ResolveEffectiveIconCss()
+    {
+        if (string.Equals(IconCss?.Trim(), "none", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(IconCss))
+            return IconCss;
+
+        return EffectiveLook == MessageBoxLook.VB6 && Buttons != MessageBoxButtons.Ok
+            ? "warning"
+            : null;
+    }
+
+    private static string ResolveIconCss(string icon)
+    {
+        var value = icon.Trim();
+        return value.ToLowerInvariant() switch
+        {
+            "warning" or "exclamation" or "vbexclamation" => "fx-msgbox-icon-warning",
+            "info" or "information" or "vbinformation" => "fx-msgbox-icon-info",
+            "error" or "critical" or "vbcritical" => "fx-msgbox-icon-error",
+            "question" or "vbquestion" => "fx-msgbox-icon-question",
+            _ => value
+        };
+    }
 }
