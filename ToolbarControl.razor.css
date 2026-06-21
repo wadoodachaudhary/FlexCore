@@ -11,11 +11,7 @@
     border: 1px solid #dee2e6;
     border-radius: 4px;
     background: #f8f9fa;
-    /* Single-row by default. overflow:visible lets absolutely-positioned
-       descendants (e.g. an Export dropdown) escape the toolbar's bounding
-       box — overflow:hidden / auto would clip them invisibly below the
-       toolbar's bottom edge. Toolbars that legitimately need horizontal
-       scroll can opt in via .fx-toolbar--scroll. */
+    
     flex-wrap: nowrap;
     overflow: visible;
     box-sizing: border-box;
@@ -30,4 +26,14 @@
 .fx-toolbar.fx-toolbar--scroll {
     overflow-x: auto;
     overflow-y: hidden;
+}
+
+.fx-toolbar.fx-toolbar--large-tools {
+    gap: 24px;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 0;
+    background: #fff;
+    min-height: 128px;
+    margin-bottom: 0;
 }

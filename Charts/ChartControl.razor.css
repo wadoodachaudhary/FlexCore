@@ -1,7 +1,6 @@
 /* ChartControl — comprehensive chart styles.
    Supports both legacy CSS-bar rendering and new SVG chart modes. */
 
-/* === Root container === */
 .fx-chart {
     position: relative;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -29,7 +28,6 @@
     text-align: center;
 }
 
-/* === Legend === */
 .fx-chart-legend {
     display: flex;
     flex-wrap: wrap;
@@ -52,7 +50,6 @@
     border-radius: 2px;
 }
 
-/* === KPI Card === */
 .fx-chart-kpi {
     text-align: center;
     padding: 24px;
@@ -83,7 +80,6 @@
     color: #dc2626;
 }
 
-/* === Legacy: Single-series horizontal bars === */
 .fx-chart-rows {
     display: flex;
     flex-direction: column;
@@ -131,7 +127,6 @@
     flex-shrink: 0;
 }
 
-/* === Legacy: Multi-row grouped vertical bars === */
 .fx-chart-multi {
     display: flex;
     flex-direction: column;
@@ -194,7 +189,6 @@
     line-height: 1;
 }
 
-/* === Legacy: Bottom axis (multi-row) === */
 .fx-chart-axis {
     display: flex;
     align-items: flex-start;

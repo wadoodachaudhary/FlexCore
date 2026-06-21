@@ -1,0 +1,58 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+@* FilePickerControl — a clean "open file" button. A fully transparent native
+   <input type="file"> is overlaid on the button content, so a REAL user click opens
+   the OS file dialog with NO JavaScript (no JS-eval click, no programmatic trigger).
+
+   The overlay is styled INLINE rather than via scoped CSS on purpose: the <input> is
+   rendered by the framework <InputFile> child component, so a host's (or this control's)
+   *.razor.css scope attribute never lands on it — the rule silently doesn't match and the
+   browser's default "Choose File / No file chosen" chrome shows at full opacity. Inline
+   styles bypass CSS isolation entirely, so the input is reliably invisible.
+
+   Supply ChildContent to use any visual (e.g. a ToolbarButtonControl) as the button;
+   when null a default ButtonControl shows Label. Read the picked file(s) via OnChange —
+   the payload is the standard InputFileChangeEventArgs, identical to a raw <InputFile>. *@
+@if (Visible)
+{
+    <div class="fx-filepicker @CssClass" style="@Style" id="@Id">
+        @if (ChildContent != null)
+        {
+            @ChildContent
+        }
+        else
+        {
+            <ButtonControl Disabled="@(!Enabled)">@(Label ?? "Browse…")</ButtonControl>
+        }
+
+        @if (Enabled)
+        {
+            <InputFile OnChange="HandleChange"
+                       accept="@Accept"
+                       multiple="@Multiple"
+                       title="@Title"
+                       style="position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; font-size:0;" />
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Accept { get; set; }
+
+    [Parameter] public bool Multiple { get; set; }
+
+    [Parameter] public string? Label { get; set; }
+
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter] public EventCallback<InputFileChangeEventArgs> OnChange { get; set; }
+
+    private async Task HandleChange(InputFileChangeEventArgs e)
+    {
+        if (OnChange.HasDelegate)
+            await OnChange.InvokeAsync(e);
+    }
+}

@@ -8,48 +8,15 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Fx.ControlKit.Data;
 
-/// <summary>
-/// Database-agnostic data access wrapper.
-///
-/// Works with any ADO.NET provider (SQL Server, PostgreSQL, SQLite, MySQL,
-/// Oracle, etc.) — the host supplies a <see cref="DbProviderFactory"/> or
-/// a connection-factory delegate.
-///
-/// <para><b>Registration (SQL Server example):</b></para>
-/// <code>
-/// builder.Services.AddScoped(_ =>
-///     new DbControl(Microsoft.Data.SqlClient.SqlClientFactory.Instance,
-///                   builder.Configuration.GetConnectionString("Default")!));
-/// </code>
-///
-/// <para><b>Registration (SQLite example):</b></para>
-/// <code>
-/// builder.Services.AddScoped(_ =>
-///     new DbControl(Microsoft.Data.Sqlite.SqliteFactory.Instance,
-///                   "Data Source=app.db"));
-/// </code>
-///
-/// <para><b>Registration (PostgreSQL example):</b></para>
-/// <code>
-/// builder.Services.AddScoped(_ =>
-///     new DbControl(Npgsql.NpgsqlFactory.Instance,
-///                   builder.Configuration.GetConnectionString("Default")!));
-/// </code>
-/// </summary>
 public class DbControl
 {
     private readonly Func<DbConnection> _connectionFactory;
     private readonly ILogger<DbControl> _logger;
 
-    /// <summary>Logging options for this instance (slow-query threshold, SQL text logging).</summary>
     public DbLoggingOptions LoggingOptions { get; set; } = new();
 
     #region Constructors
 
-    /// <summary>
-    /// Create a DbControl using a <see cref="DbProviderFactory"/> and connection string.
-    /// This is the primary constructor — works with any ADO.NET provider.
-    /// </summary>
     public DbControl(DbProviderFactory providerFactory, string connectionString,
                      ILoggerFactory? loggerFactory = null)
     {
@@ -68,10 +35,6 @@ public class DbControl
         _logger = (loggerFactory ?? NullLoggerFactory.Instance).CreateLogger<DbControl>();
     }
 
-    /// <summary>
-    /// Create a DbControl using a custom connection-factory delegate.
-    /// Use when you need full control over connection creation (pooling, multi-tenant, etc.).
-    /// </summary>
     public DbControl(Func<DbConnection> connectionFactory, ILoggerFactory? loggerFactory = null)
     {
         _connectionFactory = connectionFactory ?? throw new ArgumentNullException(nameof(connectionFactory));
@@ -82,11 +45,6 @@ public class DbControl
 
     #region Query — DataTable (sync)
 
-    /// <summary>
-    /// Execute a SQL query and return results as a <see cref="DataTable"/>.
-    /// Parameters can be an anonymous object, a Dictionary&lt;string, object&gt;,
-    /// or an IDictionary&lt;string, object?&gt;.
-    /// </summary>
     public DataTable SqlExec(string sql, object? parameters = null)
     {
         var sw = Stopwatch.StartNew();
@@ -116,10 +74,6 @@ public class DbControl
 
     #region Query — Dictionary rows (async)
 
-    /// <summary>
-    /// Execute a SQL query and return rows as a list of dictionaries
-    /// (case-insensitive column keys).
-    /// </summary>
     public async Task<List<Dictionary<string, object>>> QueryAsync(
         string sql, object? parameters = null)
     {
@@ -157,10 +111,6 @@ public class DbControl
 
     #region Query — ExpandoObject rows (async)
 
-    /// <summary>
-    /// Execute a SQL query and return rows as a list of <see cref="ExpandoObject"/>,
-    /// enabling dynamic member access (e.g. <c>row.FirstName</c>).
-    /// </summary>
     public async Task<List<ExpandoObject>> QueryDynamicAsync(
         string sql, object? parameters = null)
     {
@@ -201,10 +151,6 @@ public class DbControl
 
     #region Query — Typed rows (async)
 
-    /// <summary>
-    /// Execute a SQL query and map rows to <typeparamref name="T"/> using a
-    /// caller-supplied mapping function.
-    /// </summary>
     public async Task<List<T>> QueryAsync<T>(
         string sql, Func<DbDataReader, T> map, object? parameters = null)
     {
@@ -235,7 +181,6 @@ public class DbControl
 
     #region Execute — non-query (async + sync)
 
-    /// <summary>Execute a non-query command (INSERT/UPDATE/DELETE) and return the affected row count.</summary>
     public async Task<int> ExecuteAsync(string sql, object? parameters = null)
     {
         var sw = Stopwatch.StartNew();
@@ -258,7 +203,6 @@ public class DbControl
         }
     }
 
-    /// <summary>Synchronous non-query execution.</summary>
     public int ExecuteNonQuery(string sql, object? parameters = null)
     {
         var sw = Stopwatch.StartNew();
@@ -285,7 +229,6 @@ public class DbControl
 
     #region Scalar (async + sync)
 
-    /// <summary>Execute a query and return the first column of the first row, cast to <typeparamref name="T"/>.</summary>
     public async Task<T?> ExecuteScalarAsync<T>(string sql, object? parameters = null)
     {
         var sw = Stopwatch.StartNew();
@@ -308,7 +251,6 @@ public class DbControl
         }
     }
 
-    /// <summary>Synchronous scalar execution.</summary>
     public T? ExecuteScalar<T>(string sql, object? parameters = null)
     {
         var sw = Stopwatch.StartNew();
@@ -335,11 +277,6 @@ public class DbControl
 
     #region Transaction support
 
-    /// <summary>
-    /// Execute multiple operations inside a single transaction.
-    /// The transaction is committed if the action completes without exceptions;
-    /// rolled back otherwise.
-    /// </summary>
     public async Task ExecuteInTransactionAsync(Func<DbConnection, DbTransaction, Task> action)
     {
         await using var connection = _connectionFactory();
@@ -357,9 +294,6 @@ public class DbControl
         }
     }
 
-    /// <summary>
-    /// Execute multiple operations inside a single transaction with a return value.
-    /// </summary>
     public async Task<T> ExecuteInTransactionAsync<T>(Func<DbConnection, DbTransaction, Task<T>> action)
     {
         await using var connection = _connectionFactory();
@@ -382,16 +316,10 @@ public class DbControl
 
     #region Parameter binding
 
-    /// <summary>
-    /// Add parameters to a <see cref="DbCommand"/> from an anonymous object,
-    /// IDictionary&lt;string, object&gt;, or IDictionary&lt;string, object?&gt;.
-    /// Uses the provider-agnostic <see cref="DbCommand.CreateParameter()"/> method.
-    /// </summary>
     public static void AddParameters(DbCommand command, object? parameters)
     {
         if (parameters is null) return;
 
-        // Dictionary<string, object?> — used by report loaders and dynamic parameter bags
         if (parameters is IDictionary<string, object?> dictNullable)
         {
             foreach (var kv in dictNullable)
@@ -399,7 +327,6 @@ public class DbControl
             return;
         }
 
-        // Dictionary<string, object>
         if (parameters is IDictionary<string, object> dict)
         {
             foreach (var kv in dict)
@@ -407,7 +334,6 @@ public class DbControl
             return;
         }
 
-        // Anonymous object / POCO — reflect public properties
         foreach (var prop in parameters.GetType().GetProperties())
         {
             AddSingleParameter(command, prop.Name, prop.GetValue(parameters));

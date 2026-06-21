@@ -1,7 +1,7 @@
 /* Scoped styles for EditorControl.
  *
  * The contenteditable's children (<p>, <h2>, <h3>) are created imperatively
- * by JS (editor-control.js → hfEditor.init), which means they don't get
+ * by JS (editor-control.js → fxEditor.init), which means they don't get
  * Blazor's `b-xxxxx` scope attribute. `::deep` re-enables the cascade so the
  * block styles still hit those JS-inserted elements.
  */
@@ -9,7 +9,7 @@
 .fx-editor {
     min-height: 100%;
     outline: none;
-    padding-bottom: 60vh;     /* extra scroll space below the last block */
+    padding-bottom: 60vh;     
     position: relative;
     color: var(--ink, #1b1a16);
 }
@@ -18,13 +18,10 @@
     outline: none;
 }
 
-/* Page-width presets rendered as a CSS class on the editor container. */
 .fx-pw-narrow { max-width: 640px;  margin: 0 auto; width: 100%; }
 .fx-pw-normal { max-width: 820px;  margin: 0 auto; width: 100%; }
 .fx-pw-wide   { max-width: 1040px; margin: 0 auto; width: 100%; }
 .fx-pw-full   { max-width: none;   margin: 0;      width: 100%; }
-
-/* Block styles — reach through ::deep because JS owns these children. */
 
 .fx-editor ::deep .doc-heading {
     font-size: 1.6em;
@@ -53,11 +50,6 @@
 .fx-editor ::deep [data-align="right"]   { text-align: right; }
 .fx-editor ::deep [data-align="justify"] { text-align: justify; }
 
-/* Image block — rendered by editor-control.js as
-   <figure class="doc-image"><img ...></figure>. The figure is non-editable
-   so the caret can't enter the image DOM; Backspace from the block after it
-   removes the whole figure. The picture is centered by default and capped
-   at the editor's width so it never overflows narrow page-width presets. */
 .fx-editor ::deep .doc-image {
     margin: 1.5rem 0;
     text-align: center;
@@ -71,14 +63,6 @@
     box-shadow: 0 2px 10px rgba(36, 28, 20, 0.15);
 }
 
-/* ── Page break marker ──
-   A user-inserted forced page boundary. Web view shows it as a thin
-   labelled divider so the user can spot where their breaks live. Paged
-   views hide the visual (the page boundary itself is the visual cue) so
-   the cards don't carry awkward dividers up against their inside margin.
-   The element is contenteditable=false so the caret skips over it; users
-   delete by selecting and pressing Backspace, or by inserting another
-   block before/after. */
 .fx-editor ::deep .doc-page-break {
     display: flex;
     align-items: center;
@@ -107,10 +91,6 @@
     flex: 0 0 auto;
 }
 
-/* Inside paged cards the boundary itself communicates the break — keep the
-   marker in the DOM (for round-trip integrity) but render it as a tiny
-   "page-break" badge so it doesn't dominate the page and so the user can
-   still see it was a forced break vs. an organic overflow. */
 .fx-editor.fx-paged ::deep .doc-page-break {
     margin: 0.4rem 0;
     font-size: 0.65em;
@@ -121,18 +101,6 @@
     background: rgba(140, 120, 90, 0.25);
 }
 
-/* ── Paged mode ──
-   When EditorControl's Pages parameter is set, JS adds .fx-paged to the
-   editor and wraps each page's blocks in <div class="fx-page">. The editor
-   becomes a CSS Grid of fixed-size page cards that wrap to a new row when
-   the viewport runs out of horizontal room; the editor is still a single
-   contenteditable so cursor/selection/find/format/LLM all keep working
-   without any per-page bookkeeping.
-
-   Per-format page width / height comes from custom properties
-   (--fx-page-w, --fx-page-h, --fx-page-pad, --fx-page-bg) the host sets via
-   its own paged-* class (e.g. paged-paperback). Falls back to A5 trim if
-   the host forgets to set them. */
 .fx-editor.fx-paged {
     display: grid;
     grid-template-columns: repeat(auto-fill, var(--fx-page-w, 5.5in));
@@ -140,8 +108,7 @@
     justify-content: center;
     align-content: start;
     padding: 1.5rem clamp(0.75rem, 3vw, 2rem) 2rem;
-    /* Override the page-width preset margins from .fx-pw-* — paged mode owns
-       its own width via the grid container. */
+    
     max-width: none;
     width: 100%;
     margin: 0;
@@ -157,13 +124,10 @@
     border-radius: 3px;
     padding: var(--fx-page-pad, 0.65in 0.6in);
     overflow: hidden;
-    /* Allow the host to drop a page-number footer / running-head via
-       additional ::before / ::after content if desired. */
+    
     position: relative;
 }
 
-/* Tighter paragraph rhythm inside paged mode — a card holds a comfortable
-   amount of prose without one short paragraph crowding the page. */
 .fx-editor.fx-paged ::deep .fx-page p,
 .fx-editor.fx-paged ::deep .fx-page h2,
 .fx-editor.fx-paged ::deep .fx-page h3 {
@@ -175,8 +139,6 @@
     margin-top: 0.2em;
 }
 
-/* Page boundary read clearly during selection — a thin focus-within ring
-   on the active card helps the user spot which page their cursor is in. */
 .fx-editor.fx-paged ::deep .fx-page:focus-within {
     box-shadow:
         0 2px 6px rgba(0, 0, 0, 0.22),
@@ -184,13 +146,6 @@
         0 0 0 2px rgba(31, 111, 95, 0.55) inset;
 }
 
-/* ── Trailing blank page ──
-   Always appended after the last content page so the user has a place to
-   type new prose past end-of-chapter. Same dimensions as a content card,
-   but with a dashed border + lighter shadow to read as "scratchpad". A
-   ::before pseudo-element shows a faint placeholder when truly empty;
-   typing into the page replaces it (the :empty-trim selector hides the
-   hint as soon as any child appears). */
 .fx-editor.fx-paged ::deep .fx-page.fx-page-blank {
     border: 1px dashed rgba(140, 120, 90, 0.45);
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.10);
@@ -210,18 +165,11 @@
     user-select: none;
 }
 
-/* Once the user starts typing OR focuses the page, drop the placeholder so
-   their caret blinks against a clean background. */
 .fx-editor.fx-paged ::deep .fx-page.fx-page-blank:focus-within::before {
     content: "";
     display: none;
 }
 
-/* ── "+ New page" affordance ──
-   Sits in the next grid cell after the trailing blank page; same width as
-   a real card but shorter so it reads as a button rather than a page.
-   contenteditable=false on the markup means clicks don't insert text and
-   the element doesn't get serialized as document content on read(). */
 .fx-editor.fx-paged ::deep .fx-page-add {
     width: var(--fx-page-w, 5.5in);
     min-height: 2.2in;

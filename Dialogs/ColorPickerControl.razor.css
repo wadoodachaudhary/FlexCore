@@ -20,7 +20,6 @@
     opacity: 0.6;
 }
 
-/* Click-away catcher so the dropdown closes without JS. */
 .fx-colorpicker-backdrop {
     position: fixed;
     inset: 0;
@@ -32,7 +31,6 @@
     cursor: default;
 }
 
-/* The dropdown popup (the colour grid). Defaults to below + left-aligned. */
 .fx-colorpicker-panel {
     position: absolute;
     top: 100%;
@@ -45,7 +43,6 @@
     box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
 }
 
-/* Open above the swatch (keeps bottom on-screen for hosts near a scroll-area bottom). */
 .fx-colorpicker-panel.drop-up {
     top: auto;
     bottom: 100%;
@@ -53,7 +50,6 @@
     margin-bottom: 2px;
 }
 
-/* Right-align to the swatch (keeps right edge on-screen for hosts near the right edge). */
 .fx-colorpicker-panel.align-right {
     left: auto;
     right: 0;

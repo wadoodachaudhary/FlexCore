@@ -3,7 +3,10 @@
 @typeparam TItem
 @using System.Globalization
 
-<div class="@HostCssClass" style="@HostStyle">
+<div class="@HostCssClass" style="@HostStyle"
+     @onclick:stopPropagation="true"
+     @onmousedown:stopPropagation="true"
+     @onkeydown:stopPropagation="true">
     <button type="button"
             class="@ButtonCssClass"
             disabled="@(!Enabled)"
@@ -55,6 +58,7 @@
     [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? Width { get; set; }
+    [Parameter] public string? PopupWidth { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
@@ -62,13 +66,11 @@
     [Parameter] public bool OpenOnRender { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
-    /// <summary>Field settings - set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
     [Parameter] public string TextFieldName { get; set; } = "";
     [Parameter] public string ValueFieldName { get; set; } = "";
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    /// <summary>Event fired when value changes. Provides the new value.</summary>
     [Parameter] public EventCallback<ChangeEventArgs<TValue, TItem>> ValueChange { get; set; }
 
     private bool _isOpen;
@@ -81,13 +83,13 @@
         get
         {
             var w = string.IsNullOrWhiteSpace(Width) ? CalculatedWidth() : Width;
-            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
+            var style = string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
+            if (!string.IsNullOrWhiteSpace(PopupWidth))
+                style += $" --fx-dropdown-popup-width:{PopupWidth};";
+            return style;
         }
     }
 
-    // No explicit Width -> size to the longest option text, but keep the
-    // control bounded. Long option labels should ellipsize inside the dropdown
-    // instead of forcing toolbars/dialogs wider than the viewport.
     private string CalculatedWidth()
     {
         int maxLen = (Placeholder ?? "").Length;
@@ -248,9 +250,6 @@
         }
     }
 
-    /// <summary>
-    /// Event args for dropdown value change events.
-    /// </summary>
     public class ChangeEventArgs<TVal, TItm>
     {
         public TVal? Value { get; set; }

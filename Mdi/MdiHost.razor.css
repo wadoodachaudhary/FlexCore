@@ -12,7 +12,7 @@
     max-width: 100%;
     height: 100%;
     min-width: 0;
-    min-height: 0; /* flex children with overflow need this */
+    min-height: 0; 
     overflow: hidden;
     box-sizing: border-box;
 }
@@ -55,7 +55,7 @@
     background: #ffffff;
     color: #000;
     font-weight: 500;
-    border-bottom: 1px solid #ffffff; /* "lift" into the pane */
+    border-bottom: 1px solid #ffffff; 
     margin-bottom: -1px;
     position: relative;
     z-index: 1;
@@ -92,8 +92,6 @@
     color: #555;
 }
 
-/* Permanent leftmost home tab. No close button, slightly tighter padding,
-   and a small right margin so it visually separates from the dynamic tabs. */
 .fx-mdi-tab-home {
     padding: 4px 10px;
     margin-right: 6px;
@@ -137,7 +135,6 @@
     flex-direction: column;
     box-sizing: border-box;
 }
-
 
 .fx-mdi-empty {
     flex: 1 1 auto;

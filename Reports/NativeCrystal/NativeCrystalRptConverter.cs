@@ -367,9 +367,6 @@ public static class CrystalRptBinaryReader
 
     private static bool LooksLikeCompressedTslv(byte[] bytes)
     {
-        // Crystal TSLV streams begin with an uncompressed stream header record,
-        // then deflate-compressed record data. Header byte 0x34 is the common
-        // flag pattern for the v9+ reports in this project.
         return bytes.Length > 16 &&
                bytes[0] == 0x34 &&
                bytes[1] == 0xFF &&

@@ -2,7 +2,7 @@
  *
  * Loaded on demand by GridControl via Blazor's dynamic-import interop:
  *   _gridJsModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
- *       "import", "./_content/FlexKit/grid-control.js");
+ *       "import", GridJsModulePath);
  *
  * One function per concern, exported as ES module bindings so the host
  * page doesn't get a global namespace dumped into it. Keep this file tiny
@@ -84,7 +84,11 @@ function ensureHeaderDragPreviewElement(doc) {
 }
 
 function getGridContentElement(gridRoot) {
-    return gridRoot.querySelector(".fx-grid-content, .hf-grid-content");
+    return gridRoot.querySelector(".fx-grid-content");
+}
+
+function getGridBodyViewportElement(gridRoot) {
+    return gridRoot.querySelector(".fx-grid-body-viewport") || getGridContentElement(gridRoot);
 }
 
 function getHeaderReorderPipeColor(gridRoot) {
@@ -260,7 +264,7 @@ function getDataRowAtPointer(contentEl, clientX, clientY) {
     const y = clamp(clientY, rect.top + 1, rect.bottom - 1);
     const doc = contentEl.ownerDocument || document;
     const target = doc.elementFromPoint(x, y);
-    const row = target?.closest?.(".fx-grid-body .fx-row, .hf-grid-body .hf-row, .fx-row, .hf-row");
+    const row = target?.closest?.(".fx-grid-body .fx-row, .fx-row");
     return row && contentEl.contains(row) ? row : null;
 }
 
@@ -268,7 +272,7 @@ function notifyRowDragSelection(row, state, contentEl) {
     if (!row || (state.lastRow === row && row.isConnected)) return;
 
     state.lastRow = row;
-    const rows = Array.from(contentEl.querySelectorAll(".fx-grid-body .fx-row, .hf-grid-body .hf-row"));
+    const rows = Array.from(contentEl.querySelectorAll(".fx-grid-body .fx-row"));
     const rowIndex = rows.indexOf(row);
     if (rowIndex < 0 || rowIndex === state.lastRowIndex) return;
 
@@ -311,7 +315,7 @@ function scheduleRowAutoScroll(gridRoot, state) {
         state.autoScrollFrame = 0;
         if (!state.activeRowDrag || !state.hasMoved) return;
 
-        const contentEl = getGridContentElement(gridRoot);
+        const contentEl = getGridBodyViewportElement(gridRoot);
         if (!contentEl) return;
 
         const delta = getRowAutoScrollDelta(contentEl, state.lastClientY);
@@ -344,7 +348,7 @@ function shouldTrapGridKeyboardNavigation(gridRoot, target) {
     if (active instanceof Element && gridRoot.contains(active)) return true;
     if (!target || !gridRoot.contains(target)) return false;
     if (target === gridRoot) return true;
-    return !!target.closest?.(".fx-cell, .hf-cell, .fx-batch-input, .fx-cell-edit-btn, .fx-grid-popup-btn");
+    return !!target.closest?.(".fx-cell, .fx-batch-input, .fx-cell-edit-btn, .fx-grid-popup-btn");
 }
 
 function isTextCaretNavigationTarget(target) {
@@ -449,13 +453,28 @@ export function registerGridKeyboardTrap(gridRoot) {
     const doc = gridRoot.ownerDocument || document;
 
     const onKeyDown = (event) => {
+        const isGridScrollKey =
+            event.key === "PageUp" ||
+            event.key === "PageDown" ||
+            ((event.ctrlKey || event.metaKey) && (event.key === "Home" || event.key === "End"));
         const isNavigationKey =
             event.key === "Tab" ||
             event.key === "ArrowLeft" ||
             event.key === "ArrowRight" ||
             event.key === "ArrowUp" ||
-            event.key === "ArrowDown";
+            event.key === "ArrowDown" ||
+            isGridScrollKey;
         if (!isNavigationKey) return;
+
+        if (isGridScrollKey) {
+            if (event.altKey || event.shiftKey) return;
+            const target = event.target instanceof Element ? event.target : null;
+            if (shouldTrapGridKeyboardNavigation(gridRoot, target)) {
+                event.preventDefault();
+            }
+            return;
+        }
+
         if ((event.key !== "Tab" && event.shiftKey) || event.altKey || event.ctrlKey || event.metaKey) return;
 
         const target = event.target instanceof Element ? event.target : null;
@@ -510,7 +529,7 @@ export function registerHeaderDragPreview(gridRoot) {
         const target = event.target instanceof Element ? event.target : null;
         if (!target) return;
 
-        const header = target.closest(".fx-header-cell, .hf-header-cell");
+        const header = target.closest(".fx-header-cell");
         if (!header) return;
         if (!gridRoot.contains(header)) return;
         if (header.getAttribute("draggable") !== "true") return;
@@ -544,7 +563,7 @@ export function registerHeaderDragPreview(gridRoot) {
             return;
         }
 
-        const header = target.closest(".fx-header-cell, .hf-header-cell");
+        const header = target.closest(".fx-header-cell");
         if (!header || !gridRoot.contains(header) || header.getAttribute("draggable") !== "true") {
             hideHeaderDropIndicator(gridRoot);
             return;
@@ -650,7 +669,7 @@ export function registerRowDragSelectionAutoScroll(gridRoot, dotNetRef) {
         const target = event.target instanceof Element ? event.target : null;
         if (!target || isInteractiveDragSource(target)) return;
 
-        const row = target.closest(".fx-grid-body .fx-row, .hf-grid-body .hf-row, .fx-row, .hf-row");
+        const row = target.closest(".fx-grid-body .fx-row, .fx-row");
         if (!row || !gridRoot.contains(row)) return;
 
         state.activeRowDrag = true;
@@ -714,8 +733,9 @@ export function ensureActiveGridCellVisible(gridRoot) {
     if (!gridRoot) return;
 
     const contentEl = getGridContentElement(gridRoot);
+    const bodyViewportEl = getGridBodyViewportElement(gridRoot);
     const activeCell = gridRoot.querySelector(".fx-cell-active");
-    if (!contentEl || !activeCell) return;
+    if (!contentEl || !bodyViewportEl || !activeCell) return;
 
     const outerRect = contentEl.getBoundingClientRect();
     const contentRect = {
@@ -723,6 +743,13 @@ export function ensureActiveGridCellVisible(gridRoot) {
         top: outerRect.top,
         right: outerRect.left + contentEl.clientWidth,
         bottom: outerRect.top + contentEl.clientHeight
+    };
+    const outerBodyRect = bodyViewportEl.getBoundingClientRect();
+    const bodyRect = {
+        left: outerBodyRect.left,
+        top: outerBodyRect.top,
+        right: outerBodyRect.left + bodyViewportEl.clientWidth,
+        bottom: outerBodyRect.top + bodyViewportEl.clientHeight
     };
     const cellRect = activeCell.getBoundingClientRect();
     const padding = 4;
@@ -737,12 +764,12 @@ export function ensureActiveGridCellVisible(gridRoot) {
             maxScrollLeft);
     }
 
-    if (cellRect.top < contentRect.top + padding) {
-        contentEl.scrollTop = Math.max(0, contentEl.scrollTop - ((contentRect.top + padding) - cellRect.top));
-    } else if (cellRect.bottom > contentRect.bottom - padding) {
-        const maxScrollTop = contentEl.scrollHeight - contentEl.clientHeight;
-        contentEl.scrollTop = clamp(
-            contentEl.scrollTop + (cellRect.bottom - (contentRect.bottom - padding)),
+    if (cellRect.top < bodyRect.top + padding) {
+        bodyViewportEl.scrollTop = Math.max(0, bodyViewportEl.scrollTop - ((bodyRect.top + padding) - cellRect.top));
+    } else if (cellRect.bottom > bodyRect.bottom - padding) {
+        const maxScrollTop = bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight;
+        bodyViewportEl.scrollTop = clamp(
+            bodyViewportEl.scrollTop + (cellRect.bottom - (bodyRect.bottom - padding)),
             0,
             maxScrollTop);
     }
@@ -839,4 +866,69 @@ function measureInputText(font, text) {
     if (!ctx) return text.length * 7;
     ctx.font = font || "11px sans-serif";
     return ctx.measureText(text).width;
+}
+
+export function downloadFile(fileName, base64Content, mimeType) {
+    const byteCharacters = atob(base64Content);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+
+    const blob = new Blob([new Uint8Array(byteNumbers)], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+}
+
+export async function saveFile(fileName, base64Content, mimeType) {
+    const byteCharacters = atob(base64Content);
+    const bytes = new Uint8Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        bytes[i] = byteCharacters.charCodeAt(i);
+    }
+
+    if (window.showSaveFilePicker) {
+        try {
+            const extension = (String(fileName).match(/\.[^.]+$/) || [".bin"])[0];
+            const handle = await window.showSaveFilePicker({
+                suggestedName: fileName,
+                types: [{ description: "File", accept: { [mimeType || "application/octet-stream"]: [extension] } }]
+            });
+            const writable = await handle.createWritable();
+            await writable.write(bytes);
+            await writable.close();
+            return "saved";
+        } catch (err) {
+            if (err && err.name === "AbortError") {
+                return "cancelled";
+            }
+        }
+    }
+
+    const blob = new Blob([bytes], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(url);
+    return "downloaded";
+}
+
+export function openPrintableHtml(base64HtmlContent) {
+    const htmlContent = atob(base64HtmlContent);
+    const printWindow = window.open("", "_blank");
+    if (!printWindow) return;
+
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
+    printWindow.onload = () => printWindow.print();
 }

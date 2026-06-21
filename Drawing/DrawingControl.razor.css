@@ -1,0 +1,188 @@
+/* DrawingControl chrome + bubbles (all rendered by DrawingControl directly, so scoped CSS
+   reaches them — no ::deep needed). VB6-classic 3D look. */
+
+.fx-drawing {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: Tahoma, "MS Sans Serif", "Segoe UI", sans-serif;
+    font-size: 12px;
+    color: #000;
+}
+
+.fx-drawing-toolbar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;                 
+    gap: 4px 6px;
+    background: #d4d0c8;
+    padding: 5px 8px;
+    border: 2px solid;
+    border-color: #ffffff #808080 #808080 #ffffff;
+}
+
+.fx-draw-group { display: flex; align-items: center; gap: 4px; }
+
+.fx-draw-lbl { font-weight: bold; color: #000; margin: 0 2px; }
+.fx-draw-sep { width: 1px; align-self: stretch; min-height: 22px; background: #808080; margin: 0 3px; }
+.fx-draw-zoom { min-width: 40px; text-align: center; font-weight: bold; }
+
+.fx-draw-tool, .fx-draw-btn {
+    min-width: 26px;
+    height: 26px;
+    padding: 0 7px;
+    font-size: 12px;
+    background: #d4d0c8;
+    border: 2px solid;
+    border-color: #ffffff #808080 #808080 #ffffff;   
+    color: #000;
+    cursor: pointer;
+    border-radius: 0;
+    line-height: 1;
+    white-space: nowrap;
+}
+.fx-draw-tool:hover, .fx-draw-btn:hover { background: #e0ddd5; }
+.fx-draw-tool.active { border-color: #808080 #ffffff #ffffff #808080; background: #c8c4bc; }
+.fx-draw-btn:disabled { color: #808080; cursor: default; }
+
+.fx-draw-color {
+    width: 20px; height: 20px; padding: 0;
+    border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff;
+    cursor: pointer; border-radius: 0;
+}
+.fx-draw-color.active { border-color: #808080 #ffffff #ffffff #808080; outline: 1px solid #000080; }
+
+.fx-draw-tool { display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
+.fx-draw-tool svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.fx-draw-tbadge { font-size: 9px; font-weight: bold; margin-left: 1px; line-height: 1; }
+
+.fx-draw-colorwrap { position: relative; }
+.fx-draw-colorbtn {
+    display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 5px;
+    background: #d4d0c8; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff; cursor: pointer;
+}
+.fx-draw-colorswatch { width: 16px; height: 16px; border: 1px solid #808080; display: inline-block; }
+.fx-draw-caret { font-size: 9px; }
+.fx-draw-colorpop {
+    position: absolute; top: 28px; left: 0; z-index: 30;
+    display: grid; grid-template-columns: repeat(4, 22px); gap: 3px; padding: 5px;
+    background: #d4d0c8; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff;
+    box-shadow: 0 4px 10px rgba(0,0,0,.3);
+}
+.fx-draw-backdrop { position: fixed; inset: 0; z-index: 29; background: transparent; }
+
+.fx-drawing-toolbar input[type="range"] { width: 96px; height: 6px; }
+
+.fx-drawing-scroll {
+    border: 2px solid; border-color: #808080 #ffffff #ffffff #808080;
+    background: #808080; overflow: auto; outline: none;
+}
+.fx-drawing-sizer { position: relative; }
+.fx-drawing-surface { position: relative; display: inline-block; line-height: 0; }
+
+.fx-drawing-bg { display: block; max-width: none; user-select: none; -webkit-user-drag: none; }
+
+.fx-drawing-capture { position: absolute; inset: 0; background: transparent; }
+
+.fx-draw-bubble {
+    background: #ffffe0;
+    border: 1.5px solid;
+    border-radius: 5px;
+    padding: 2px 6px;
+    font: 600 13px "Segoe UI", Tahoma, sans-serif;
+    white-space: pre;
+    max-width: 340px;
+}
+
+.fx-draw-editor {
+    z-index: 5;
+    background: #ffffe0;
+    border: 2px solid #316ac5;
+    border-radius: 5px;
+    padding: 3px 6px;
+    resize: none;
+    overflow: hidden;
+    min-width: 120px;
+    min-height: 26px;
+    font: 600 14px "Segoe UI", Tahoma, sans-serif;
+    color: #222;
+    pointer-events: auto;
+}
+
+.fx-drawing-toolbar {
+    background: #ffffff;
+    border: 0;
+    border-bottom: 1px solid #e2e4e8;
+    padding: 4px 6px;
+    gap: 1px;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    align-items: stretch;
+}
+.fx-tb-group { display: flex; align-items: stretch; gap: 1px; }
+.fx-tb-sep { width: 1px; align-self: stretch; margin: 4px 5px; background: #e6e8ec; }
+.fx-tb-spring { flex: 1 1 auto; }
+
+.fx-tb-tool {
+    display: inline-flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 3px;
+    min-width: 52px; padding: 5px 9px 4px;
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    color: #1f2430; cursor: pointer; font: inherit;
+}
+.fx-tb-tool:hover { background: #f1f2f5; }
+.fx-tb-tool.active { background: #e9ecf5; border-color: #d3d8ea; }
+.fx-tb-tool:disabled { opacity: .4; cursor: default; }
+.fx-tb-ico { display: flex; align-items: center; justify-content: center; height: 24px; }
+.fx-tb-ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fx-tb-glyph { font-size: 20px; line-height: 24px; }
+.fx-tb-lbl { font-size: 11px; color: #3a4150; white-space: nowrap; }
+.fx-tb-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid #c0c4cc; display: inline-block; }
+
+.fx-tb-split { position: relative; display: inline-flex; align-items: stretch; }
+.fx-tb-caretbtn {
+    display: inline-flex; align-items: center; padding: 0 4px; font-size: 11px; color: #667085;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+.fx-tb-caretbtn:hover { background: #f1f2f5; }
+
+.fx-tb-menu {
+    position: absolute; top: calc(100% + 2px); left: 0; z-index: 40; min-width: 184px;
+    background: #fff; border: 1px solid #dcdfe6; border-radius: 10px; padding: 6px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.16);
+}
+.fx-tb-menu-item {
+    display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px;
+    background: transparent; border: 0; border-radius: 7px; cursor: pointer;
+    color: #1f2430; font: inherit; font-size: 14px; text-align: left;
+}
+.fx-tb-menu-item:hover { background: #f1f2f5; }
+.fx-tb-menu-item.active { background: #e9ecf5; }
+.fx-tb-menu-ico { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; color: #1f2430; }
+.fx-tb-menu-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.fx-tb-tbadge { position: absolute; right: -4px; bottom: -3px; font-size: 9px; font-weight: bold; color: #1f2430; }
+
+.fx-tb-colormenu { display: grid; grid-template-columns: repeat(4, 26px); gap: 4px; min-width: 0; }
+.fx-tb-stylemenu { min-width: 0; }
+.fx-tb-widthrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: #3a4150; }
+.fx-tb-widthrow input[type="range"] { width: 90px; }
+.fx-tb-backdrop { position: fixed; inset: 0; z-index: 39; background: transparent; }
+
+.fx-tb-width { min-width: 86px; }
+.fx-tb-width input[type="range"] { width: 72px; }
+
+.fx-tb-zoom { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; }
+.fx-tb-zbtn { width: 24px; height: 24px; border: 1px solid #dcdfe6; background: #fff; border-radius: 6px; cursor: pointer; font-size: 15px; line-height: 1; color: #333; }
+.fx-tb-zbtn:hover { background: #f1f2f5; }
+.fx-tb-fit { font-size: 13px; }
+.fx-tb-zval { min-width: 38px; text-align: center; font-size: 12px; }
+.fx-tb-dims { font-size: 11px; color: #667085; margin-left: 8px; white-space: nowrap; }
+
+.fx-crop-rect {
+    position: absolute; z-index: 4; pointer-events: none;
+    border: 1.5px dashed #fff;
+    outline: 1.5px dashed #000;            
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+}
+.fx-crop-dims {
+    position: absolute; top: -18px; left: 0; padding: 0 4px;
+    background: #1c5fc4; color: #fff; font: 600 11px Tahoma, sans-serif; white-space: nowrap;
+}

@@ -1313,7 +1313,8 @@
 .fx-rd-expert-footer ::deep .fx-button,
 .fx-rd-pane-actions ::deep .fx-button,
 .fx-rd-record-buttons ::deep .fx-button,
-.fx-rd-formula-row ::deep .fx-button {
+.fx-rd-formula-row ::deep .fx-button,
+.fx-rd-sql-toolbar ::deep .fx-button {
     min-width: 78px;
     min-height: 23px;
     padding: 2px 12px;
@@ -1678,8 +1679,6 @@
     }
 }
 
-/* Crystal-style designer toolbar: render real icon glyphs inside the button
-   instead of relying on cross-component ::before rules on ToolbarButtonControl. */
 .fx-rd-toolbar.crystal {
     min-height: 88px;
     padding: 2px 6px;
@@ -1939,7 +1938,6 @@
     filter: grayscale(0.65);
 }
 
-/* Exact Crystal Reports toolbar icons extracted from CrystalReports2016_Toolbar_Labels.xlsx. */
 .fx-rd-toolbar.crystal .fx-rd-icon,
 .fx-rd-toolbar.crystal ::deep .fx-rd-icon {
     background-repeat: no-repeat;
@@ -2025,7 +2023,6 @@
 .fx-rd-icon.rd-highlight-expert { background-image: url("reports/crystal-toolbar-icons/highlighting-expert.png"); }
 .fx-rd-icon.rd-page-navigation { background-image: url("reports/crystal-toolbar-icons/page-navigation.png"); }
 
-/* The workbook labels include Borders but do not contain an embedded borders icon. */
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-border::before,
 .fx-rd-toolbar.crystal ::deep .fx-rd-icon.rd-border::before {
     content: "□" !important;
@@ -2038,7 +2035,6 @@
     font: 700 18px/16px Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
-/* Fallback glyphs for Crystal commands whose extracted PNG is not present yet. */
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-indent-decrease::before,
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-indent-increase::before,
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-text-format::before,
@@ -2069,8 +2065,7 @@
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-running-total::before,
 .fx-rd-toolbar.crystal ::deep .fx-rd-icon.rd-running-total::before { content: "Σ+" !important; font-size: 11px; }
 
-.fx-rd-browse-columns,
-.fx-rd-linking-expert {
+.fx-rd-browse-columns {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
@@ -2173,6 +2168,99 @@
     font: 700 12px Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
+.fx-rd-linking-expert {
+    display: grid;
+    grid-template-columns: minmax(0, 1.5fr) minmax(290px, 0.75fr);
+    grid-template-rows: minmax(0, 1fr) 190px;
+    gap: 10px;
+    min-height: 0;
+    flex: 1 1 auto;
+}
+
+.fx-rd-link-workspace,
+.fx-rd-link-editor-panel,
+.fx-rd-sql-panel {
+    min-height: 0;
+    border: 1px solid #9ca3af;
+    background: #fff;
+}
+
+.fx-rd-link-workspace {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) 68px;
+}
+
+.fx-rd-link-tables {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+    align-content: start;
+    gap: 10px;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+    background: #f7f7f7;
+}
+
+.fx-rd-link-table {
+    min-width: 0;
+    border: 1px solid #7d97b5;
+    background: #fff;
+    box-shadow: 1px 1px 0 #d0d0d0;
+}
+
+.fx-rd-link-table-title {
+    padding: 4px 6px;
+    border-bottom: 1px solid #7d97b5;
+    background: linear-gradient(#eaf4ff, #bdd7f0);
+    color: #1d3f66;
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-rd-link-table span,
+.fx-rd-link-table em {
+    display: block;
+    min-height: 17px;
+    padding: 1px 6px;
+    border-top: 1px solid #f0f0f0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: normal;
+}
+
+.fx-rd-link-table em {
+    color: #6a6a6a;
+}
+
+.fx-rd-link-empty {
+    align-self: start;
+    padding: 8px;
+    color: #555;
+}
+
+.fx-rd-link-lines {
+    overflow: auto;
+    padding: 6px 8px;
+    border-top: 1px solid #c7c7c7;
+    background: #fbfbfb;
+}
+
+.fx-rd-link-lines span {
+    display: block;
+    min-height: 17px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-rd-link-editor-panel {
+    display: grid;
+    grid-template-rows: minmax(95px, 0.7fr) minmax(210px, 1.3fr);
+}
+
 .fx-rd-link-list,
 .fx-rd-link-editor {
     min-height: 0;
@@ -2182,9 +2270,8 @@
 
 .fx-rd-link-list {
     overflow: auto;
-    border: 1px solid #9ca3af;
-    background: #fff;
     padding: 4px;
+    border-bottom: 1px solid #c7c7c7;
 }
 
 .fx-rd-link-list button {
@@ -2202,4 +2289,50 @@
 
 .fx-rd-link-editor {
     gap: 8px;
+    overflow: auto;
+    padding: 8px;
+}
+
+.fx-rd-sql-panel {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+.fx-rd-sql-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 5px 7px;
+    border-bottom: 1px solid #c7c7c7;
+    background: #f3f3f3;
+}
+
+.fx-rd-sql-status {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #555;
+}
+
+.fx-rd-sql-status.ok {
+    color: #0b6f38;
+}
+
+.fx-rd-sql-status.error {
+    color: #a1261f;
+}
+
+.fx-rd-sql-editor {
+    width: 100%;
+    min-height: 0;
+    resize: none;
+    border: 0;
+    padding: 8px;
+    background: #fff;
+    color: #111;
+    font: 12px Consolas, "Courier New", monospace;
+    box-sizing: border-box;
 }

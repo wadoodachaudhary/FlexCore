@@ -3,11 +3,11 @@
     position: relative;
     width: 214px;
     min-width: 40px;
-    background: #B6B8CA;
-    border-right: 1px solid #787892;
+    background: var(--fx-sidebar-bg, #B6B8CA);
+    border-right: 1px solid var(--fx-border-color, #787892);
     display: flex;
     flex-direction: column;
-    overflow: visible; /* Allow floating close button to overlap the border */
+    overflow: visible; 
     transition: width 0.2s;
     box-sizing: border-box;
 }
@@ -24,13 +24,12 @@
     padding: 4px 2px;
 }
 
-/* Panel Toolbar */
 .panel-toolbar {
     display: flex;
     align-items: center;
     padding: 2px 4px;
-    background: #ffffff;
-    border-bottom: 1px solid #787892;
+    background: var(--fx-surface-color, #ffffff);
+    border-bottom: 1px solid var(--fx-border-color, #787892);
     gap: 2px;
 }
 
@@ -54,7 +53,6 @@
     display: block;
 }
 
-/* Explorer Bar (Accordion Mode) */
 .explorer-bar {
     flex: 1;
     overflow-y: auto;
@@ -63,58 +61,51 @@
 }
 
 .explorer-section {
-    margin-bottom: 12px; /* Gap with grey background between cards */
-    border: none;
-    border-radius: 0;
-    background: #ffffff;
+    margin-bottom: 12px; 
+    border: 1px solid var(--fx-border-color, transparent);
+    border-radius: var(--fx-border-radius, 0px);
+    background: var(--fx-surface-color, #ffffff);
 }
 
 .explorer-section-header {
     position: relative;
     display: flex;
     align-items: center;
-    justify-content: flex-start; /* Left-align the section headers */
+    justify-content: flex-start; 
     padding: 3px 8px;
-    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-family: inherit;
     font-weight: bold;
-    font-size: 12.5px;
+    font-size: var(--fx-font-size, 12.5px);
     cursor: pointer;
-    border-radius: 0;
+    border-radius: var(--fx-border-radius, 0px);
     user-select: none;
-    text-align: left; /* Left-align the text */
+    text-align: left; 
 }
 
-/* Active/selected section: Grey background with white text */
 .explorer-section.active .explorer-section-header {
-    background: #787892;
-    color: #EAFEFE;
-    border-bottom: none; /* No divider line between header and contents */
+    background: var(--fx-sidebar-item-active-bg, #787892);
+    color: var(--fx-sidebar-item-active-color, #EAFEFE);
+    border-bottom: none; 
 }
 
 .explorer-section.active .explorer-section-header:hover {
-    background: #6a6a82;
+    background: var(--fx-sidebar-item-active-bg, #6a6a82);
+    opacity: 0.9;
 }
 
-/* Inactive/unselected sections: White background with blue text */
 .explorer-section:not(.active) .explorer-section-header {
-    background: #FEFFFD;
-    color: #2874C0;
-    border-bottom: none; /* No divider line between header and contents */
+    background: var(--fx-sidebar-header-bg, #FEFFFD);
+    color: var(--fx-sidebar-header-color, #2874C0);
+    border-bottom: none; 
 }
 
 .explorer-section:not(.active) .explorer-section-header:hover {
-    background: #f4f5f8;
+    background: var(--fx-sidebar-item-hover-bg, #f4f5f8);
 }
 
 .explorer-section-body {
     padding: 2px 0;
-    background: #ffffff;
-    --fx-tree-bg: #ffffff;
-    --fx-tree-color: #2672C0;
-    --fx-tree-vb6-color: #2672C0;
-    --fx-tree-vb6-selected-bg: #316AC5;
-    --fx-tree-vb6-selected-color: #ffffff;
-    --fx-tree-connector-color: #B6B8CA;
+    background: var(--fx-surface-color, #ffffff);
 }
 
 .explorer-item {
@@ -124,17 +115,17 @@
     padding: 2px 8px;
     min-height: 20px;
     cursor: pointer;
-    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
-    font-size: 11px;
-    color: #2672C0;
+    font-family: inherit;
+    font-size: var(--fx-font-size, 11px);
+    color: var(--fx-sidebar-header-color, #2672C0);
     background: transparent;
     transition: none;
     user-select: none;
 }
 
 .explorer-item:hover {
-    background: #316AC5;
-    color: #ffffff !important;
+    background: var(--fx-sidebar-item-hover-bg, #316AC5);
+    color: var(--fx-sidebar-item-active-color, #ffffff) !important;
 }
 
 .explorer-item.bold-item {
@@ -158,7 +149,6 @@
     text-align: center;
 }
 
-/* Tree Mode specific styling inside cards */
 .explorer-section-body ::deep .fx-treeview {
     border: none;
     background: transparent !important;
@@ -166,9 +156,9 @@
 }
 
 .explorer-section-body ::deep .fx-treeview-node {
-    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
-    font-size: 11px;
-    color: #2672C0 !important;
+    font-family: inherit;
+    font-size: var(--fx-font-size, 11px);
+    color: var(--fx-sidebar-header-color, #2672C0) !important;
     background: transparent !important;
     min-height: 20px;
     padding: 2px 8px;
@@ -177,36 +167,68 @@
 
 .explorer-section-body ::deep .fx-treeview-node:hover,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:hover {
-    background: #316AC5 !important;
-    color: #ffffff !important;
+    background: var(--fx-sidebar-item-hover-bg, #316AC5) !important;
+    color: var(--fx-sidebar-item-active-color, #ffffff) !important;
 }
 
 .explorer-section-body ::deep .fx-treeview-node:hover .fx-treeview-text,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:hover .fx-treeview-text {
-    color: #ffffff !important;
+    color: var(--fx-sidebar-item-active-color, #ffffff) !important;
 }
 
 .explorer-section-body ::deep .fx-treeview-node-selected,
 .explorer-section-body ::deep .fx-treeview-node-selected:hover,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected:hover {
-    background: #316AC5 !important;
-    color: #ffffff !important;
+    background: var(--fx-sidebar-item-active-bg, #316AC5) !important;
+    color: var(--fx-sidebar-item-active-color, #ffffff) !important;
 }
 
 .explorer-section-body ::deep .fx-treeview-node-selected .fx-treeview-text,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-selected .fx-treeview-text {
-    color: #ffffff !important;
+    color: var(--fx-sidebar-item-active-color, #ffffff) !important;
 }
 
-/* Make parent/branch nodes look like section headers or custom text in the tree */
 .explorer-section-body ::deep .fx-treeview-branch {
     font-weight: bold;
-    color: #111111;
+    color: var(--fx-text-color, #111111) !important;
 }
 
-/* Dotted lines for connectors in tree view on white background */
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::before,
 .explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::after {
-    border-color: #b6b8ca !important;
+    border-color: var(--fx-border-color, #b6b8ca) !important;
+}
+
+.explorer-section.disabled {
+    pointer-events: none;
+}
+
+.explorer-section.disabled .explorer-section-header {
+    cursor: default;
+}
+
+.explorer-item.disabled {
+    opacity: 0.5 !important;
+    pointer-events: none !important;
+    cursor: default !important;
+}
+
+.explorer-item.disabled:hover {
+    background: transparent !important;
+    color: inherit !important;
+}
+
+.explorer-section-body ::deep .fx-treeview-node-disabled,
+.explorer-section-body ::deep .fx-treeview-node-disabled:hover,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-disabled,
+.explorer-section-body ::deep .fx-treeview-vb6 .fx-treeview-node-disabled:hover {
+    background: transparent !important;
+    color: var(--fx-disabled-color, #888) !important;
+    cursor: default !important;
+    opacity: 0.5 !important;
+    pointer-events: none !important;
+}
+
+.explorer-section-body ::deep .fx-treeview-node-disabled .fx-treeview-text {
+    color: var(--fx-disabled-color, #888) !important;
 }

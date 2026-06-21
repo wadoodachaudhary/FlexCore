@@ -2,11 +2,16 @@
         class="@ResolvedCssClass"
         title="@Title"
         aria-label="@ResolvedAriaLabel"
+        aria-pressed="@AriaPressed"
         disabled="@Disabled"
         @onclick="OnClick">
     @if (!string.IsNullOrWhiteSpace(IconSrc))
     {
         <img class="fx-toolbar-btn-icon" src="@IconSrc" alt="@IconAlt" />
+    }
+    else if (!string.IsNullOrWhiteSpace(IconCss))
+    {
+        <span class="fx-toolbar-btn-icon @IconCss" aria-hidden="true"></span>
     }
 
     @if (ChildContent is not null)
@@ -24,9 +29,12 @@
     [Parameter] public string CssClass { get; set; } = string.Empty;
     [Parameter] public string Title { get; set; } = string.Empty;
     [Parameter] public string IconSrc { get; set; } = string.Empty;
+    [Parameter] public string IconCss { get; set; } = string.Empty;
     [Parameter] public string IconAlt { get; set; } = string.Empty;
     [Parameter] public string Label { get; set; } = string.Empty;
     [Parameter] public bool Vertical { get; set; }
+    [Parameter] public bool Large { get; set; }
+    [Parameter] public bool Selected { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public EventCallback OnClick { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -36,11 +44,15 @@
         get
         {
             var orientationClass = Vertical ? " fx-toolbar-btn--vertical" : string.Empty;
+            var largeClass = Large ? " fx-toolbar-btn--large" : string.Empty;
+            var selectedClass = Selected ? " fx-toolbar-btn--selected" : string.Empty;
             return string.IsNullOrWhiteSpace(CssClass)
-                ? $"fx-toolbar-btn{orientationClass}"
-                : $"fx-toolbar-btn{orientationClass} {CssClass}";
+                ? $"fx-toolbar-btn{orientationClass}{largeClass}{selectedClass}"
+                : $"fx-toolbar-btn{orientationClass}{largeClass}{selectedClass} {CssClass}";
         }
     }
+
+    private string? AriaPressed => Selected ? "true" : null;
 
     private string? ResolvedAriaLabel =>
         !string.IsNullOrWhiteSpace(Title) ? Title :

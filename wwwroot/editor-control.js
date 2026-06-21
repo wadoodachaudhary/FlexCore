@@ -1,9 +1,9 @@
-/* HFControlKit — browser-side helpers for EditorControl.
+/* FlexKit/FlexCore — browser-side helpers for EditorControl.
  *
  * Loaded by consumer apps via
- *   <script src="_content/HFControlKit/editor-control.js"></script>
+ *   <script src="_content/{FlexKit-or-FlexCore}/editor-control.js"></script>
  *
- * Exposes a single namespace `hfEditor` with the primitives EditorControl's
+ * Exposes a single namespace `fxEditor` with the primitives EditorControl's
  * C# side calls. All helpers take the editor's DOM id as the first argument
  * so multiple EditorControls can coexist on one page.
  *
@@ -498,7 +498,7 @@
 
             clearTimeout(editor._hfRepagTimer);
             editor._hfRepagTimer = setTimeout(function () {
-                hfEditor.repaginate(editor.id);
+                fxEditor.repaginate(editor.id);
             }, 250);
         });
     }
@@ -529,7 +529,7 @@
         setTimeout(function () {
             editor._hfRepagPending = false;
             if (editor.classList.contains("fx-paged")) {
-                hfEditor.repaginate(editor.id);
+                fxEditor.repaginate(editor.id);
             }
         }, 80);
     }
@@ -659,7 +659,7 @@
         sel.addRange(range);
     }
 
-    var hfEditor = {
+    var fxEditor = {
 
         /** Replaces editor contents with a block array produced by EditorControl.
          *  pageOpts (optional): { paged, pagedCssClass }
@@ -778,7 +778,7 @@
 
             // Read current blocks (split-cont chunks merged into their parent
             // paragraphs so the paginator gets paragraph-shaped input).
-            var raw = hfEditor.read(editorId);
+            var raw = fxEditor.read(editorId);
             var dtos = raw.map(function (b) {
                 return {
                     id:         b.id || "",
@@ -794,7 +794,7 @@
                 };
             });
 
-            hfEditor.init(editorId, dtos,
+            fxEditor.init(editorId, dtos,
                 { paged: true, pagedCssClass: pagedCssClass });
 
             restoreCaret(editor, caret);
@@ -1205,7 +1205,8 @@
         }
     };
 
-    window.hfEditor = hfEditor;
+    window.fxEditor = fxEditor;
+    window.hfEditor = fxEditor;
 
     // ── Clipboard helpers — plain-text copy from result cards ──
     //
@@ -1227,7 +1228,7 @@
     //
     // Idempotent: repeated calls to installCopyInterceptor do nothing past
     // the first one. Safe to call from every card's OnAfterRenderAsync.
-    var hfClipboard = {
+    var fxClipboard = {
         _copyInterceptorInstalled: false,
 
         installCopyInterceptor: function () {
@@ -1330,5 +1331,6 @@
         }
     };
 
-    window.hfClipboard = hfClipboard;
+    window.fxClipboard = fxClipboard;
+    window.hfClipboard = fxClipboard;
 })();

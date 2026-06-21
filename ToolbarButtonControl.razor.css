@@ -12,7 +12,7 @@
     justify-content: center;
     gap: 6px;
     padding: 4px 10px;
-    border: 1px solid transparent;        /* no black browser border */
+    border: 1px solid transparent;        
     border-radius: 4px;
     background: transparent;
     cursor: pointer;
@@ -41,12 +41,33 @@
     cursor: not-allowed;
 }
 
-/* Vertical layout — used by report toolbar (icon on top, label under) */
 .fx-toolbar-btn.fx-toolbar-btn--vertical {
     flex-direction: column;
     gap: 2px;
     min-width: 56px;
     padding: 4px 8px;
+}
+
+.fx-toolbar-btn.fx-toolbar-btn--large {
+    min-width: 110px;
+    min-height: 108px;
+    padding: 10px 14px;
+    gap: 8px;
+    border: 1px solid transparent;
+    border-radius: 9px;
+    background: transparent;
+    color: #111;
+}
+
+.fx-toolbar-btn.fx-toolbar-btn--large:hover:not(:disabled) {
+    background: #f1f1f5;
+    border-color: transparent;
+}
+
+.fx-toolbar-btn.fx-toolbar-btn--large.fx-toolbar-btn--selected,
+.fx-toolbar-btn.fx-toolbar-btn--large.fx-toolbar-btn--selected:hover:not(:disabled) {
+    background: #f0f0f5;
+    border-color: transparent;
 }
 
 .fx-toolbar-btn-icon {
@@ -59,4 +80,60 @@
 .fx-toolbar-btn-label {
     font-size: 11px;
     line-height: 1.1;
+}
+
+.fx-toolbar-btn--large .fx-toolbar-btn-icon {
+    width: 56px;
+    height: 56px;
+}
+
+.fx-toolbar-btn--large .fx-toolbar-btn-label {
+    font-size: 24px;
+    line-height: 1.1;
+}
+
+.fx-toolbar-icon-pointer {
+    position: relative;
+}
+
+.fx-toolbar-icon-pointer::before {
+    content: "";
+    position: absolute;
+    left: 17px;
+    top: 2px;
+    width: 0;
+    height: 0;
+    border-left: 28px solid #000;
+    border-top: 17px solid transparent;
+    border-bottom: 17px solid transparent;
+    transform: rotate(63deg);
+    transform-origin: 10px 18px;
+}
+
+.fx-toolbar-icon-pointer::after {
+    content: "";
+    position: absolute;
+    left: 29px;
+    top: 30px;
+    width: 9px;
+    height: 24px;
+    background: #000;
+    transform: rotate(-18deg);
+    transform-origin: top center;
+}
+
+.fx-toolbar-icon-text {
+    position: relative;
+}
+
+.fx-toolbar-icon-text::before {
+    content: "T";
+    position: absolute;
+    inset: -8px 0 0 0;
+    font-family: "Times New Roman", Times, serif;
+    font-size: 68px;
+    font-weight: 700;
+    line-height: 1;
+    color: #000;
+    text-align: center;
 }

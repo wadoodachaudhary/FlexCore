@@ -26,7 +26,7 @@
 }
 
 .fx-save-button--saving {
-    /* Subtle pulse while a save is in flight */
+    
     animation: fx-save-pulse 1s ease-in-out infinite;
 }
 

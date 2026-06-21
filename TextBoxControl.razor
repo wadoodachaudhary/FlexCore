@@ -16,7 +16,12 @@
     {
         <textarea class="@ResolvedCssClass"
                   value="@Value"
-                  @onchange="OnNativeValueChanged"
+                  @oninput="OnNativeInput"
+                  @onchange="OnNativeChange"
+                  @ref="_inputElement"
+                  @onclick:stopPropagation="true"
+                  @onmousedown:stopPropagation="true"
+                  @onkeydown:stopPropagation="true"
                   @attributes="MergedAttributes"></textarea>
     }
 }
@@ -34,7 +39,12 @@ else
     {
         <input class="@ResolvedCssClass"
                value="@Value"
-               @onchange="OnNativeValueChanged"
+               @oninput="OnNativeInput"
+               @onchange="OnNativeChange"
+               @ref="_inputElement"
+               @onclick:stopPropagation="true"
+               @onmousedown:stopPropagation="true"
+               @onkeydown:stopPropagation="true"
                @attributes="MergedAttributes" />
     }
 }
@@ -52,9 +62,18 @@ else
     [Parameter] public string InputType { get; set; } = "text";
     [Parameter] public int? Rows { get; set; }
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
+    [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
+    [Parameter] public bool UpdateOnInput { get; set; }
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private ElementReference _inputElement;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        ElementReferenceCaptured?.Invoke(_inputElement);
+    }
 
     private string ResolvedCssClass
     {
@@ -107,6 +126,12 @@ else
             return merged;
         }
     }
+
+    private Task OnNativeInput(ChangeEventArgs e) =>
+        UpdateOnInput ? OnNativeValueChanged(e) : Task.CompletedTask;
+
+    private Task OnNativeChange(ChangeEventArgs e) =>
+        UpdateOnInput ? Task.CompletedTask : OnNativeValueChanged(e);
 
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {

@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Arrow — line + arrowhead (an SVG marker, id scoped per-shape so multiple arrows don't clash). *@
+<svg class="fx-draw-svg" style="@BoxStyle overflow:visible;@SelStyle"
+     width="@Num(Shape.AbsWidth)" height="@Num(Shape.AbsHeight)" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <marker id="fxah-@Shape.Id" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L10,4 L0,8 Z" fill="@Shape.Color" />
+        </marker>
+    </defs>
+    <line x1="@Num(Shape.LocalX1)" y1="@Num(Shape.LocalY1)" x2="@Num(Shape.LocalX2)" y2="@Num(Shape.LocalY2)"
+          stroke="@Shape.Color" stroke-width="@Num(Shape.StrokeWidth)" stroke-linecap="round"
+          marker-end="url(#fxah-@Shape.Id)" />
+</svg>

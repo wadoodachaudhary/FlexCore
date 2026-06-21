@@ -546,7 +546,6 @@ public partial class GridControl<TValue>
             }
             catch
             {
-                // Fall through to string parsing.
             }
         }
 

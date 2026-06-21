@@ -60,7 +60,6 @@
 </aside>
 
 @code {
-    /// <summary>An entry in the outline — a chapter, section, heading, etc.</summary>
     public sealed record OutlineItem(
         string Id,
         string Title,
@@ -68,10 +67,6 @@
         bool IsCurrent = false,
         IReadOnlyList<OutlineItemAction>? Actions = null);
 
-    /// <summary>
-    /// A row-level action button (rename, delete, insert-after, etc.). The
-    /// icon is raw SVG markup so the host can supply its own styled icons.
-    /// </summary>
     public sealed record OutlineItemAction(
         string Title,
         string IconSvg,
@@ -82,10 +77,6 @@
     [Parameter] public IReadOnlyList<OutlineItem>? Items { get; set; }
     [Parameter] public EventCallback<string> OnItemClick { get; set; }
 
-    /// <summary>
-    /// The id of the item currently in "rename" mode. When set, that row
-    /// yields its markup to <see cref="RenameTemplate"/>.
-    /// </summary>
     [Parameter] public string? RenamingItemId { get; set; }
     [Parameter] public RenderFragment<OutlineItem>? RenameTemplate { get; set; }
 

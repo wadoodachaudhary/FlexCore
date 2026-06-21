@@ -1,0 +1,9 @@
+/* The wrapper must be a positioned, shrink-to-content box so the absolutely-positioned
+   transparent <input type=file> (styled inline in the .razor) fills exactly the button
+   visual it overlays. The overlay's own styling is inline — NOT here — because it targets
+   the framework <InputFile>'s child-rendered <input>, which this component's scope
+   attribute never reaches (Blazor CSS isolation). */
+.fx-filepicker {
+    position: relative;
+    display: inline-block;
+}

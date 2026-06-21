@@ -12,7 +12,7 @@
      @onmouseup="HandleGridMouseUp">
 
     @* ── Toolbar ──────────────────────────────────────────────── *@
-    @* Built-in grid toolbar. Honors custom Toolbar items / ShowSearchBar. *@
+    
     @if (ShouldRenderToolbar)
     {
         <div class="fx-grid-toolbar">
@@ -34,7 +34,7 @@
         </div>
     }
 
-    @* ── Group Drop Area (drag-and-drop grouping) ────────────── *@
+    
     @if (AllowGrouping)
     {
         <div class="fx-group-drop-area @(_dragOverGroupArea ? "fx-group-drop-hover" : "")"
@@ -80,9 +80,7 @@
                     }
                     @foreach (var gd in _groupDescriptors)
                     {
-                        @* Capture per-iteration field locally — without this the @onclick /
-                           @oncontextmenu lambdas would all close over the same `gd` and
-                           fire with the LAST descriptor's field after the loop. *@
+                        
                         var capturedField = gd.Field;
                         <span class="fx-group-chip" draggable="true"
                               @ondragstart="() => StartGroupChipDrag(capturedField)"
@@ -151,7 +149,7 @@
         </div>
     }
 
-    @* ── Selection Info Bar ─────────────────────────────────── *@
+    
     @if (AllowSelection && ShowSelectionInfoBar && (_selectedItems.Count > 1 || _selectedCells.Count > 0))
     {
         <div class="fx-selection-info-bar">
@@ -171,14 +169,14 @@
         </div>
     }
 
-    @* ── Collect column definitions ───────────────────────────── *@
+    
     <CascadingValue Value="@((IGridOwner)this)" IsFixed="true">
         <div style="display:none">
             @ChildContent
         </div>
     </CascadingValue>
 
-    @* ── Grid Options Rail / Side Panels ───────────────────────── *@
+    
     @if (ShouldRenderGridOptionsRail)
     {
         <div class="fx-grid-options-rail" @onclick:stopPropagation="true">
@@ -398,7 +396,7 @@
         </aside>
     }
 
-    @* ── Chart View ──────────────────────────────────────────── *@
+    
     @if (_pivotMode)
     {
         <div class="fx-grid-content fx-grid-pivot-shell"
@@ -434,13 +432,23 @@
     else
     {
 
-    @* ── Grid Table ───────────────────────────────────────────── *@
-    <div class="fx-grid-content" style="@(string.IsNullOrEmpty(Height) ? "" : (IsPagingActive ? "overflow-x:auto; overflow-y:hidden; flex:1;" : "overflow:auto; flex:1;"))">
-        <table class="fx-grid-table" style="@GetTableStyle()">
+    
+    <div class="fx-grid-content fx-grid-table-content" style="@GridContentStyle">
+        <div class="fx-grid-scroll-surface" style="@GetTableStyle()">
+        <div class="fx-grid-header-viewport">
+        <table class="fx-grid-table fx-grid-header-table" style="@GetTableStyle()">
 
-            @* Header *@
+            
             <thead class="fx-grid-header">
                 <tr>
+                    @if (ShowRowReorderColumn)
+                    {
+                        <th class="fx-header-cell fx-row-reorder-header-cell" style="@RowReorderColumnStyle"></th>
+                    }
+                    @if (ShowRowSelectorHandleColumn)
+                    {
+                        <th class="fx-header-cell fx-row-selector-header-cell" style="@RowSelectorHandleColumnStyle"></th>
+                    }
                     @if (ShowCheckboxColumn)
                     {
                         <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
@@ -455,9 +463,7 @@
                     {
                         @foreach (var gcol in GroupedLayoutColumns)
                         {
-                            @* Capture per-iteration so the @oncontextmenu lambda
-                               binds the right field instead of closing over the
-                               loop variable. *@
+                            
                             var capturedGroupField = gcol.Field;
                             <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
@@ -474,9 +480,7 @@
                         var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
                         var capturedField = col.Field;
                         var headerLabel = HeaderColumnDisplay(col);
-                        @* data-field CSS hook (header) — matches the data-cell hook so a
-                           single rule like `[data-field="Total"]` paints both the column
-                           header AND every cell underneath. *@
+                        
                         <th class="fx-header-cell @(state.SortDirection.HasValue ? "fx-sorted" : "") @(state.FilterActive ? "fx-filtered" : "") @(AllowResizing && col.AllowResizing ? "fx-resizable" : "")"
                             style="@col.GetHeaderStyle(); position:relative;"
                             data-field="@capturedField"
@@ -522,7 +526,7 @@
                                 </span>
                             }
 
-                            @* ── Resize Handle ────────────────────────── *@
+                            
                             @if (AllowResizing && col.AllowResizing)
                             {
                                 <span class="fx-resize-handle"
@@ -554,14 +558,20 @@
 
             </thead>
 
-            @* Body *@
+        </table>
+        </div>
+
+        <div class="fx-grid-body-viewport">
+        <table class="fx-grid-table fx-grid-body-table" style="@GetTableStyle()">
+
+            
             <tbody class="fx-grid-body">
                 @if (_isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == -1 && EditSettingsRef.NewRowPosition == NewRowPosition.Top)
                 {
                     @RenderEditRow()
                 }
 
-                @* ── Grouped or flat rendering ─────────────────── *@
+                
                 @if (AllowGrouping && _groupDescriptors.Count > 0)
                 {
                     @RenderGroupedRows(GroupedData, 0)
@@ -574,11 +584,6 @@
                         var currentIdx = rowIdx;
                         var isSelected = _selectedItems.Contains(item);
                         var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
-                        // Inline background for selected rows as a
-                        // belt-and-suspenders backstop. The scoped
-                        // .fx-row.fx-selected CSS can lose specificity
-                        // fights inside isolated batch-edit cells; an
-                        // inline style wins every battle by spec.
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         var rowCssClass = GetRowCssClass(item, currentIdx);
 
@@ -588,12 +593,36 @@
                         }
                         else
                         {
-                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "") @rowCssClass"
+                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
                                 @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
                                 @onmouseenter="(MouseEventArgs e) => HandleRowMouseEnter(item, currentIdx, e)"
+                                @ondragover="(DragEventArgs e) => HandleRowReorderDragOver(item, currentIdx, e)"
+                                @ondragover:preventDefault="true"
+                                @ondrop="(DragEventArgs e) => HandleRowReorderDrop(item, currentIdx, e)"
+                                @ondrop:preventDefault="true"
+                                @ondragend="EndRowReorderDrag"
                                 style="@rowStyle">
+
+                                @if (ShowRowReorderColumn)
+                                {
+                                    <td class="fx-cell fx-row-reorder-cell @(CanStartRowReorder(item) ? "" : "disabled")"
+                                        style="@RowReorderColumnStyle"
+                                        draggable="@(CanStartRowReorder(item) ? "true" : "false")"
+                                        title="Drag to move row"
+                                        @onclick:stopPropagation="true"
+                                        @onmousedown:stopPropagation="true"
+                                        @ondragstart="(DragEventArgs e) => StartRowReorderDrag(item, currentIdx, e)"
+                                        @ondragend="EndRowReorderDrag">
+                                        <span class="fx-row-reorder-grip" aria-hidden="true"></span>
+                                    </td>
+                                }
+
+                                @if (ShowRowSelectorHandleColumn)
+                                {
+                                    @RenderRowSelectorHandleCell(item, currentIdx)
+                                }
 
                                 @if (ShowCheckboxColumn)
                                 {
@@ -627,7 +656,7 @@
 
             </tbody>
 
-            @* ── Grid Footer (aggregates across all data) ──────── *@
+            
             @if (AggregateRows is { Count: > 0 })
             {
                 var footerRows = AggregateRows.Where(r => r.ShowInFooter).ToList();
@@ -639,6 +668,14 @@
                         @foreach (var aggRow in footerRows)
                         {
                             <tr class="fx-aggregate-footer-row">
+                                @if (ShowRowReorderColumn)
+                                {
+                                    <td class="fx-cell fx-aggregate-cell fx-row-reorder-cell disabled" style="@RowReorderColumnStyle"></td>
+                                }
+                                @if (ShowRowSelectorHandleColumn)
+                                {
+                                    <td class="fx-cell fx-aggregate-cell fx-row-selector-cell" style="@RowSelectorHandleColumnStyle"></td>
+                                }
                                 @if (ShowCheckboxColumn)
                                 {
                                     <td class="fx-cell fx-aggregate-cell"></td>
@@ -668,10 +705,12 @@
                 }
             }
         </table>
+        </div>
+        </div>
     </div>
-    }   @* /else (table render — closes ShowAsChart branch above) *@
+    }   
 
-    @* ── Pager ────────────────────────────────────────────────── *@
+    
     @if (IsPagingActive)
     {
         <div class="fx-grid-pager">
@@ -706,7 +745,7 @@
         </div>
     }
 
-    @* ── Column Filter Popup ───────────────────────────────────── *@
+    
     @if (_filterPopupField != null)
     {
         var col = VisibleColumns.FirstOrDefault(c => c.Field == _filterPopupField);
@@ -851,7 +890,7 @@
         </div>
     }
 
-    @* ── Edit Dialog ──────────────────────────────────────────── *@
+    
     @if (_isEditing && EditSettingsRef?.Mode == EditMode.Dialog)
     {
         <div class="fx-dialog-overlay" @onclick="CancelEdit">
@@ -887,7 +926,7 @@
         </div>
     }
 
-    @* ── Resize Overlay (captures mousemove/mouseup during resize) ─ *@
+    
     @if (_resizingCol != null || _resizingRowIndex >= 0)
     {
         <div class="fx-resize-overlay @(_resizingRowIndex >= 0 ? "fx-row-resize-overlay" : "")"
@@ -896,9 +935,8 @@
              @onmouseleave="EndGridResize"></div>
     }
 
-    @* ── Header Context Menu (right-click on a column header) ────── *@
-    @* Generic across all grids — see GridControl.razor.cs for handlers.
-       Backdrop catches clicks/right-clicks anywhere outside and dismisses. *@
+    
+    
     @if (_showHeaderContextMenu)
     {
         <div style="position:fixed;inset:0;z-index:999;background:transparent;"
@@ -977,11 +1015,8 @@
         </div>
     }
 
-    @* ── Choose Columns Dialog (modal) ─────────────────────────── *@
-    @* Mirrors the legacy VB6 "Choose Columns" dialog — checkbox list of
-       every column with Move Up / Move Down / Show / Hide / Show All /
-       Hide All / Restore Default Layout actions. OK commits to
-       _visibilityOverrides and reorders the underlying column list. *@
+    
+    
     @if (_showChooseColumnsDialog)
     {
         <div class="fx-choose-columns-overlay"

@@ -92,66 +92,43 @@
 </div>
 
 @code {
-    // --- Parameters ---
 
-    /// <summary>The full pool of items the user can choose from.</summary>
     [Parameter] public IEnumerable<TItem>? Items { get; set; }
 
-    /// <summary>Items currently in the right-hand "Selected" pane (two-way bound).</summary>
     [Parameter] public IList<TItem> SelectedItems { get; set; } = new List<TItem>();
 
-    /// <summary>Fires whenever the selected list changes (after every move).</summary>
     [Parameter] public EventCallback<IList<TItem>> SelectedItemsChanged { get; set; }
 
-    /// <summary>Property name on TItem used for the visible label (or use LabelSelector).</summary>
     [Parameter] public string? TextField { get; set; }
 
-    /// <summary>Property name on TItem used as the unique key (or use KeySelector).</summary>
     [Parameter] public string? ValueField { get; set; }
 
-    /// <summary>Function returning the visible label.  Wins over TextField if both are set.</summary>
     [Parameter] public Func<TItem, string>? LabelSelector { get; set; }
 
-    /// <summary>Function returning the unique key.  Wins over ValueField if both are set.</summary>
     [Parameter] public Func<TItem, string>? KeySelector { get; set; }
 
-    /// <summary>Header text shown above the left (Available) pane.</summary>
     [Parameter] public string? LeftHeader { get; set; } = "Available";
 
-    /// <summary>Header text shown above the right (Selected) pane.</summary>
     [Parameter] public string? RightHeader { get; set; } = "Selected";
 
-    /// <summary>Number of rows visible in each pane (HTML "size" attribute).</summary>
     [Parameter] public int VisibleRows { get; set; } = 10;
 
-    /// <summary>Optional fixed pane width (CSS value).  Default = flex.</summary>
     [Parameter] public string? PaneWidth { get; set; }
 
-    /// <summary>Optional fixed control height (CSS value).</summary>
     [Parameter] public string? Height { get; set; }
 
-    /// <summary>Extra CSS class applied to the root.</summary>
     [Parameter] public string? CssClass { get; set; }
-
-    // --- State ---
 
     private List<TItem> _availableItems = new();
     private List<TItem> _selectedItems = new();
-    /// <summary>Keys of items currently highlighted in the LEFT pane.</summary>
     private HashSet<string> _leftHighlighted = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Keys of items currently highlighted in the RIGHT pane.</summary>
     private HashSet<string> _rightHighlighted = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Tracks the last (Items, SelectedItems) reference pair we synced from.</summary>
     private object? _lastItemsRef;
     private object? _lastSelectedRef;
 
-    // --- Lifecycle ---
-
     protected override void OnParametersSet()
     {
-        // Re-sync only when the parent passes a different reference; avoid
-        // clobbering local moves on every render.
         var itemsChanged = !ReferenceEquals(Items, _lastItemsRef);
         var selectedChanged = !ReferenceEquals(SelectedItems, _lastSelectedRef);
 
@@ -160,7 +137,6 @@
             var allItems = (Items ?? Enumerable.Empty<TItem>()).ToList();
             var selected = (SelectedItems ?? new List<TItem>()).ToList();
 
-            // Build a fast key lookup of currently selected items
             var selectedKeys = new HashSet<string>(selected.Select(ResolveKey),
                 StringComparer.OrdinalIgnoreCase);
 
@@ -173,8 +149,6 @@
             _lastSelectedRef = SelectedItems;
         }
     }
-
-    // --- Helpers ---
 
     private string ResolveKey(TItem item)
     {
@@ -211,8 +185,6 @@
     private string PaneStyle =>
         string.IsNullOrEmpty(PaneWidth) ? string.Empty : $"width:{PaneWidth};";
 
-    // --- Selection-change handlers (track which options the user highlighted) ---
-
     private void OnLeftSelectionChanged(ChangeEventArgs e)
     {
         _leftHighlighted = ExtractKeys(e.Value);
@@ -240,8 +212,6 @@
         }
         return set;
     }
-
-    // --- Move actions ---
 
     private async Task MoveSelectedRight()
     {
@@ -293,8 +263,6 @@
 
     private async Task NotifyChanged()
     {
-        // Hand the parent a fresh List so [Parameter] change-detection fires
-        // (Blazor compares references for IList).
         var snapshot = _selectedItems.ToList();
         SelectedItems = snapshot;
         _lastSelectedRef = snapshot;
@@ -303,22 +271,9 @@
         StateHasChanged();
     }
 
-    // --- Public API ---
-
-    /// <summary>
-    /// Returns the items in the "Selected" pane.  Useful for scenarios where
-    /// the caller doesn't bind two-way and wants to read the value on demand
-    /// (e.g. a "Run Report" button click handler).
-    /// </summary>
     public IReadOnlyList<TItem> GetSelected() => _selectedItems.ToList();
 
-    /// <summary>
-    /// Returns the items in the "Available" pane (i.e. NOT chosen).
-    /// </summary>
     public IReadOnlyList<TItem> GetAvailable() => _availableItems.ToList();
 
-    /// <summary>
-    /// Convenience helper returning the resolved keys of the selected items.
-    /// </summary>
     public IReadOnlyList<string> GetSelectedKeys() => _selectedItems.Select(ResolveKey).ToList();
 }

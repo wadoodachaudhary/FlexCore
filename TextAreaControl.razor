@@ -16,7 +16,6 @@
 @code {
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
-    // Accepted so @bind-Value compiles; not otherwise used (no EditForm dependency).
     [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? CssClass { get; set; }

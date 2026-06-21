@@ -1,20 +1,53 @@
 @namespace Fx.ControlKit.Mdi
 @using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Web
 
 <div class="fx-mdi-component">
-    <DynamicComponent @key="Window.Id"
-                      @ref="_component"
-                      Type="Window.PageType"
-                      Parameters="Window.Parameters" />
+    @* Each hosted form is wrapped in its own error boundary so an exception in
+       one screen is contained to that pane — the circuit stays alive and every
+       other tab / the menu keep working. On error we show a friendly
+       contact-support panel (with a Close button) and notify the host so it can
+       stop re-opening the failing screen on the next login. *@
+    <MdiErrorBoundary @ref="_boundary" OnError="HandleError">
+        <ChildContent>
+            <DynamicComponent @key="Window.Id"
+                              @ref="_component"
+                              Type="Window.PageType"
+                              Parameters="Window.Parameters" />
+        </ChildContent>
+        <ErrorContent>
+            <div class="fx-mdi-error" role="alert">
+                <div class="fx-mdi-error-icon">⚠</div>
+                <div class="fx-mdi-error-title">This screen ran into a problem</div>
+                <div class="fx-mdi-error-text">
+                    An unexpected error stopped this screen from working. You can close it
+                    and keep using the rest of the application. If the problem keeps
+                    happening, please contact support.
+                </div>
+                <button type="button" class="fx-mdi-error-btn" @onclick="CloseSelf">Close</button>
+            </div>
+        </ErrorContent>
+    </MdiErrorBoundary>
 </div>
 
 @code {
     [Parameter, EditorRequired] public MdiWindow Window { get; set; } = default!;
 
+    [Parameter] public EventCallback<MdiWindow> OnError { get; set; }
+
+    [Parameter] public EventCallback<MdiWindow> OnCloseRequested { get; set; }
+
     private DynamicComponent? _component;
+    private MdiErrorBoundary? _boundary;
 
     protected override void OnAfterRender(bool firstRender)
     {
         Window.ComponentInstance = _component?.Instance;
     }
+
+    private Task HandleError(Exception _)
+        => OnError.HasDelegate ? OnError.InvokeAsync(Window) : Task.CompletedTask;
+
+    private Task CloseSelf()
+        => OnCloseRequested.HasDelegate ? OnCloseRequested.InvokeAsync(Window) : Task.CompletedTask;
 }

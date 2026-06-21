@@ -1,13 +1,8 @@
-using Microsoft.AspNetCore.Components;
-
 namespace Fx.ControlKit.Grid;
 
-/// <summary>
-/// Configures filtering behavior for GridControl. Equivalent to SyncFusion's GridFilterSettings.
-/// </summary>
-public class FilterSettings : ComponentBase
+public class FilterSettings
 {
-    [Parameter] public FilterType Type { get; set; } = FilterType.FilterBar;
-    [Parameter] public bool EnableCaseSensitivity { get; set; }
-    [Parameter] public int ImmediateModeDelay { get; set; } = 300;
+    public FilterType Type { get; set; } = FilterType.FilterBar;
+    public bool EnableCaseSensitivity { get; set; }
+    public int ImmediateModeDelay { get; set; } = 300;
 }

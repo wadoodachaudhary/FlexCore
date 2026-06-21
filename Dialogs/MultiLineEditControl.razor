@@ -68,19 +68,11 @@
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string InputValue { get; set; } = "";
     [Parameter] public EventCallback<string?> OnResult { get; set; }
-    /// <summary>Maximum string length. Zero disables the limit (and hides the counter).</summary>
     [Parameter] public int MaxLength { get; set; } = 4000;
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<string?>? _tcs;
 
-    /// <summary>Open the dialog and await a result. Returns the new string
-    /// when the user presses OK / Ctrl+Enter, or <c>null</c> when they
-    /// Cancel / press Esc / click the backdrop.</summary>
-    /// <param name="initial">Current value of the field being edited.</param>
-    /// <param name="title">Title bar text. Defaults to "Edit".</param>
-    /// <param name="maxLength">Optional character cap. Zero disables.</param>
-    /// <param name="prompt">Optional helper line shown above the textarea.</param>
     public Task<string?> ShowAsync(string initial, string title = "Edit", int maxLength = 4000, string? prompt = null)
     {
         Title = title;
@@ -115,9 +107,6 @@
 
     private async Task HandleKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
-        // Enter alone inserts a newline (default textarea behavior). Ctrl+Enter
-        // commits — same gesture as Word's accept-comment shortcut. Escape
-        // cancels regardless of focus inside the textarea.
         if (e.Key == "Escape") await Cancel();
         else if (e.Key == "Enter" && e.CtrlKey) await Confirm();
     }

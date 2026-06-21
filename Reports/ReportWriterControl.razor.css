@@ -7,8 +7,6 @@
     background: #e8e8e8;
 }
 
-/* Drill-down tab bar (Crystal-Reports-style tabs above the report).
-   Only shown when there are 2+ tabs (i.e. at least one drill-down is open). */
 .fx-report-tab-bar {
     display: flex;
     gap: 2px;
@@ -66,8 +64,6 @@
     }
 }
 
-/* Clickable rows — every rendered row is a drill-down target. The row's data-path
-   attribute carries the group-field values used as the drill filter. */
 ::deep tr.fx-drill-row {
     cursor: pointer;
 }
@@ -108,7 +104,6 @@
     color: #999;
 }
 
-/* Crystal Report PDF iframe */
 .fx-report-pdf-frame {
     width: 100%;
     height: 100%;
@@ -116,7 +111,6 @@
     border: none;
 }
 
-/* SQL Report HTML pages */
 .fx-report-pages {
     display: flex;
     flex-direction: column;
@@ -128,8 +122,7 @@
 .fx-report-page {
     background: white;
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    /* Reduced top/bottom padding (was 40 px) so the title sits closer to
-       the top edge — matches Crystal Reports' tighter page chrome. */
+    
     padding: 28px 50px;
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 11px;
@@ -147,9 +140,6 @@
     min-height: 8.5in;
 }
 
-/* Report header — title + subtitle + date band. Reduced by ~30 % from
-   the previous values so the table starts closer to the top edge.
-   `.fx-rpt-date` overlaps the title row at the right edge. */
 ::deep .fx-rpt-header {
     margin-bottom: 11px;
     border-bottom: 2px solid #333;
@@ -160,30 +150,24 @@
     font-size: 14px;
     font-weight: bold;
     color: #111;
-    text-align: center;  /* default — inline style overrides per XML */
+    text-align: center;  
 }
 
 ::deep .fx-rpt-subtitle {
     font-size: 11px;
     color: #555;
     margin-top: 1px;
-    text-align: center;  /* default — inline style overrides per XML */
+    text-align: center;  
 }
 
 ::deep .fx-rpt-date {
     font-size: 10px;
     color: #888;
     text-align: right;
-    /* Pulls the date up to share the title's row. -19px fits the smaller
-       title (was -24px when the title was 16px). */
+    
     margin-top: -19px;
 }
 
-/* Report table.
-   table-layout: fixed lets the per-column widths computed by
-   ComputeAdaptiveColumnWidths be honored exactly, so numeric columns can keep
-   nowrap and text columns wrap inside their slot rather than the browser
-   distributing space proportionally. */
 ::deep .fx-rpt-table {
     width: 100%;
     border-collapse: collapse;
@@ -191,9 +175,6 @@
     table-layout: fixed;
 }
 
-/* Numeric / date / boolean cells must show on one line — header included.
-   The width sizer guarantees enough space; nowrap keeps the layout safe even
-   if data exceeds the prediction (browser will overflow horizontally). */
 ::deep .fx-rpt-table th.fx-rpt-col-nowrap,
 ::deep .fx-rpt-table td.fx-rpt-col-nowrap {
     white-space: nowrap;
@@ -201,8 +182,6 @@
     text-overflow: ellipsis;
 }
 
-/* Text cells fit on one line when possible; wrap on word boundaries when
-   the cell has more text than the computed column width. */
 ::deep .fx-rpt-table th.fx-rpt-col-wrap,
 ::deep .fx-rpt-table td.fx-rpt-col-wrap {
     white-space: normal;
@@ -235,7 +214,7 @@
 
 ::deep .fx-rpt-table tbody td {
     border-bottom: 1px solid #f0f0f0;
-    padding: 1px 6px;            /* tighter rows — match VB6 line height */
+    padding: 1px 6px;            
     line-height: 1.15;
     vertical-align: top;
 }
@@ -244,12 +223,6 @@
     background: #f8f8f8;
 }
 
-/* Group header rows.
-   Levels (l0 = outermost) are progressively less prominent so the visual
-   hierarchy mirrors VB6 Crystal Reports' nested group display.
-   Indent is ~2 character widths per level (12px) — much tighter than the
-   previous 16/32/48 px steps so the report reads as one column rather than
-   a staircase. */
 ::deep .fx-rpt-group-header td {
     font-weight: bold;
     font-size: 11px;
@@ -262,7 +235,7 @@
     background: #ffffff;
     font-size: 12px;
     padding-top: 6px;
-    /* l0 = outermost — sits flush against the left edge */
+    
 }
 
 ::deep .fx-rpt-group-header.fx-rpt-group-l1 td {
@@ -300,10 +273,6 @@
     border-bottom: none;
 }
 
-/* Footer indentation matches the header indentation per-level so the
-   subtotal label sits directly under its header. (Only applied to the
-   FIRST cell — the label cell — since the numeric cells live in their
-   own column slots already.) */
 ::deep .fx-rpt-group-footer.fx-rpt-group-l0 td:first-child {
     padding-left: 0;
 }
@@ -327,20 +296,15 @@
     padding-top: 4px;
 }
 
-/* Active-group highlight — applied by hfHighlightGroup() when the host
-   page's tree is in TreeNavigationMode.Group (vs DrillDown). The user
-   clicks any node, the matching group-header row gets this red background
-   until another node is clicked. */
 ::deep .fx-rpt-group-header.fx-rpt-group-active td,
 ::deep tr.fx-rpt-group-active td,
 ::deep td.fx-rpt-group-active {
-    background: #ffcdd2 !important;        /* light red */
-    color: #b71c1c !important;             /* deep red text */
+    background: #ffcdd2 !important;        
+    color: #b71c1c !important;             
     border-top: 1px solid #b71c1c !important;
     border-bottom: 1px solid #b71c1c !important;
 }
 
-/* Grand total */
 ::deep .fx-rpt-grand-total td {
     background: #e0e0e0;
     border-top: 2px solid #333;
@@ -349,7 +313,6 @@
     font-size: 11px;
 }
 
-/* Page footer — reduced by ~30 % from previous values. */
 ::deep .fx-rpt-footer {
     display: flex;
     justify-content: space-between;
@@ -360,7 +323,6 @@
     color: #888;
 }
 
-/* ═══ Print styles ═══ */
 @media print {
     .fx-report-container {
         background: white;
@@ -404,15 +366,6 @@
     }
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   VIEWER CHROME — toolbar / group tree / status bar / param dialog
-   ──────────────────────────────────────────────────────────────────
-   Rendered when [Parameter] ShowChrome="true" (default). Hosts that
-   embed the bare renderer inside their own UI set ShowChrome=false
-   and these rules don't reach the page. All class names use the
-   "fx-rpt-" prefix to keep them clear of host-side ".rpt-" classes
-   that may exist in legacy pages.
-   ══════════════════════════════════════════════════════════════════ */
 .fx-rpt-viewer-container {
     display: flex;
     flex-direction: column;
@@ -509,9 +462,7 @@
     padding: 2px 6px;
     border-radius: 3px;
 }
-/* Persistent "this is the node you last clicked" indicator. Stronger
-   than the :hover rule so the user can still see it after the mouse
-   moves away. Updated in OnGroupNodeClicked → _selectedTreeNode. */
+
 .fx-rpt-tree-label.selected {
     background-color: #cce5ff;
     color: #084298;
@@ -533,10 +484,6 @@
 .fx-rpt-tree-mode-radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .fx-rpt-tree-mode-radio input[type=radio] { margin: 0; cursor: pointer; }
 
-/* flex-direction:column so the inner .fx-report-tab-bar (drill-down
-   tabs) stacks ABOVE .fx-report-pages instead of squeezing both into
-   side-by-side vertical pillars. align-items:center keeps the page
-   horizontally centered as before. */
 .fx-rpt-viewer-panel {
     flex: 1;
     overflow: auto;
@@ -578,9 +525,6 @@
     color: #333;
 }
 
-/* Export dropdown — hidden until the Export toolbar button toggles
-   .open. Without this rule the PDF/Excel/Word/CSV buttons sit
-   permanently exposed in the toolbar. */
 .fx-rpt-export-menu { position: relative; display: inline-block; }
 .fx-rpt-export-menu .fx-rpt-export-items {
     display: none;

@@ -34,8 +34,6 @@
 
     private HashSet<string> SelectedValues { get; set; } = new();
 
-    // Per-instance radio group: without a shared name attribute every radio is
-    // its own browser group, so the native single-selection behavior breaks.
     private readonly string _radioGroupName = $"fx-listbox-{Guid.NewGuid():N}";
 
     protected override void OnParametersSet()
@@ -58,10 +56,6 @@
         var isChecked = false;
         if (SelectionMode == ListBoxSelectionMode.Single && !ShowCheckbox)
         {
-            // Radio rendering: the change event only fires when an input BECOMES
-            // checked, and its payload is the input's value attribute ("on"), not
-            // a bool — bool-parsing it yielded false and CLEARED the selection on
-            // every click (the picked item could never register).
             isChecked = true;
         }
         else if (e.Value is bool b)

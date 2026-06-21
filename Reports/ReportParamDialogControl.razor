@@ -66,17 +66,7 @@
                         <div class="fx-param-panel-body">
                             @if (p.AllowMultiple)
                             {
-                                @* ── Dual-list-box ─────────────────────────
-                                   Crystal renders multi-value parameters as an
-                                   Available/Selected pair. The Available pool
-                                   comes from <ParameterDefaultValues> (the
-                                   common case for the DT-style reports),
-                                   falling back to the host-provided pick-list
-                                   if present. When neither source has items,
-                                   the dual-list still renders empty so the
-                                   "Enter a Value" input below can populate
-                                   it for AllowCustomCurrentValues=True
-                                   parameters. *@
+                                
                                 <MultiSelectDualListControl TItem="ListItem"
                                                             Items="@GetMultiAvailable(p.Name)"
                                                             SelectedItems="@GetMultiSelected(p.Name)"
@@ -90,10 +80,7 @@
 
                                 @if (p.AllowCustomCurrentValues || !hasMultiSource)
                                 {
-                                    @* "Enter a Value" custom-entry row — mirrors
-                                       the Crystal dialog's inline text input +
-                                       > button for adding ad-hoc values to the
-                                       Selected pane. *@
+                                    
                                     <div class="fx-param-custom-row">
                                         <label class="fx-param-value-label">Enter a Value:</label>
                                         <input type="text"
@@ -112,8 +99,7 @@
                             }
                             else if (hasDefaults && defaults.Count >= 2)
                             {
-                                @* Crystal default-values dropdown — shows description,
-                                   sets value behind it. Same as before. *@
+                                
                                 <select class="fx-param-defaults-dropdown"
                                         @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
                                     @foreach (var choice in defaults)
@@ -187,12 +173,6 @@
 }
 
 @code {
-    /// <summary>
-    /// Optional pick-list source. When null (no implementation registered in DI)
-    /// every parameter falls back to a free-text / typed input or — for
-    /// multi-value parameters with default values — the dual-list-box sourced
-    /// from those defaults.
-    /// </summary>
     [Inject] private IReportPickListProvider? PickLists { get; set; }
 
     private bool _visible;
@@ -201,51 +181,25 @@
     private Dictionary<string, string> _values = new();
     private Dictionary<string, IReadOnlyList<PickListItem>> _pickLists = new();
 
-    // Per-parameter dual-list state. Each multi-value parameter gets its
-    // own Available pool (seeded from DefaultValues or PickListSql) and
-    // Selected list. Keeping these as IList<ListItem> matches what
-    // MultiSelectDualListControl binds to.
     private readonly Dictionary<string, List<ListItem>> _multiAvailable =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, IList<ListItem>> _multiSelected =
         new(StringComparer.OrdinalIgnoreCase);
 
-    // Per-parameter "Enter a Value:" draft state for AllowCustomCurrentValues
-    // / no-source multi-value parameters. The custom value is committed to
-    // the Selected list when the user clicks the > button or presses Enter.
     private readonly Dictionary<string, string> _customDrafts =
         new(StringComparer.OrdinalIgnoreCase);
 
     private string? _error;
     private TaskCompletionSource<Dictionary<string, object>?>? _tcs;
 
-    /// <summary>Internal record used as the TItem for the dual-list-box.
-    /// Stable key + display label.</summary>
     public sealed record ListItem(string Key, string Label);
 
-    /// <summary>
-    /// Shows the dialog, waits for user input, and returns a parameter-value
-    /// dictionary suitable for <see cref="ReportWriterControl.ShowSqlReport"/>.
-    /// Multi-value parameters come back as <c>string[]</c>; everything else
-    /// comes back as a typed scalar. Returns null if the user cancelled.
-    ///
-    /// <para>
-    /// <paramref name="initialValues"/> lets a caller re-open the dialog with
-    /// the user's previous selections preserved (the "Return to Parameters"
-    /// toolbar action in FRptViewer). Multi-value entries are recognized as
-    /// <c>string[]</c> or <see cref="IEnumerable{T}"/> of strings; everything
-    /// else is treated as a scalar and round-tripped through ToString() into
-    /// the underlying input. Values for parameter names that aren't in the
-    /// current prompt set are ignored.
-    /// </para>
-    /// </summary>
     public async Task<Dictionary<string, object>?> PromptAsync(
         string title,
         List<ReportParameter> parameters,
         IReadOnlyDictionary<string, object>? initialValues = null)
     {
         _title = title;
-        // Only prompt for parameters that are both "Required" and don't already have a default value.
         _parameters = parameters.Where(p => p.Required).ToList();
         if (_parameters.Count == 0)
             return new Dictionary<string, object>();
@@ -256,24 +210,12 @@
         {
             foreach (var p in _parameters)
             {
-                // Prefer the ReportParameter overload — the provider can
-                // run the loader's auto-derived PickListSql (sourced from
-                // the Crystal XML's RecordSelectionFormula binding) so
-                // picklists work for any parameter that filters on a
-                // table.field, with no host-side per-parameter mapping.
                 var list = PickLists.GetPickList(p);
                 if (list != null && list.Count > 0)
                     _pickLists[p.Name] = list;
             }
         }
 
-        // Seed dual-list state for every multi-value parameter. The
-        // Available pool comes from <ParameterDefaultValues> if any are
-        // present, otherwise from the host pick-list (if registered).
-        // When neither source contributes items the dual-list still
-        // renders empty — the "Enter a Value" custom-entry row below it
-        // (visible when AllowCustomCurrentValues=true) lets the user
-        // populate the Selected pane by typing.
         _multiAvailable.Clear();
         _multiSelected.Clear();
         _customDrafts.Clear();
@@ -303,9 +245,6 @@
             _customDrafts[p.Name] = "";
         }
 
-        // Overlay caller-supplied initial values onto the seeded state.
-        // Done LAST so it wins over picklist/default seeding — this is how
-        // the "Return to Parameters" action restores the user's prior picks.
         if (initialValues != null)
         {
             foreach (var p in _parameters)
@@ -314,10 +253,6 @@
 
                 if (p.AllowMultiple)
                 {
-                    // Accept string[] or IEnumerable<string>. Build the
-                    // Selected list by looking each value up in Available;
-                    // entries not found in Available become ad-hoc Selected
-                    // items (covers AllowCustomCurrentValues-typed values).
                     IEnumerable<string>? values = raw switch
                     {
                         string[] arr => arr,
@@ -338,9 +273,6 @@
                 }
                 else
                 {
-                    // Scalar — stringify so the underlying typed input shows
-                    // the prior value. Date is formatted as ISO so DatePickerControl
-                    // parses it back via ParseDateValue.
                     _values[p.Name] = raw switch
                     {
                         DateTime dt => dt.ToString("yyyy-MM-dd"),
@@ -359,8 +291,6 @@
         return await _tcs.Task;
     }
 
-    // ── Multi-select helpers ─────────────────────────────────────────
-
     private List<ListItem> GetMultiAvailable(string name) =>
         _multiAvailable.TryGetValue(name, out var v) ? v : new List<ListItem>();
 
@@ -370,9 +300,6 @@
     private void SetMultiSelected(string name, IList<ListItem> items)
     {
         _multiSelected[name] = items;
-        // No StateHasChanged needed — the dual-list-box already drives a
-        // render when it mutates the bound list, and the only other
-        // observer (the OK-button enabled state) doesn't yet exist.
     }
 
     private void AddCustomValue(string name)
@@ -382,19 +309,12 @@
         if (string.IsNullOrEmpty(trimmed)) return;
 
         var current = GetMultiSelected(name);
-        // Don't add duplicates — if the value is already selected, just
-        // clear the draft. Case-insensitive match mirrors how Crystal
-        // dedupes values internally.
         if (current.Any(i => string.Equals(i.Key, trimmed, StringComparison.OrdinalIgnoreCase)))
         {
             _customDrafts[name] = "";
             StateHasChanged();
             return;
         }
-        // Replace the bound list with a NEW reference so MultiSelectDualListControl's
-        // OnParametersSet ReferenceEquals check fires and the Selected pane re-syncs.
-        // Mutating the existing IList in place leaves _lastSelectedRef pointing at
-        // the same object, and the dual-list silently ignores the addition.
         var updated = new List<ListItem>(current) { new ListItem(trimmed, trimmed) };
         _multiSelected[name] = updated;
         _customDrafts[name] = "";
@@ -411,11 +331,8 @@
         _values[name] = value;
     }
 
-    // ── Accept / Cancel ──────────────────────────────────────────────
-
     private void Accept()
     {
-        // Validate — required (non-optional) params must be filled in.
         var missing = new List<ReportParameter>();
         foreach (var p in _parameters)
         {
@@ -442,9 +359,6 @@
         {
             if (p.AllowMultiple)
             {
-                // Multi-value → string[]. Callers route these through
-                // MultiValueParameterRewriter so each value becomes its own
-                // @Name_0 / @Name_1 / … placeholder in the SQL.
                 result[p.Name] = GetMultiSelected(p.Name)
                     .Select(i => i.Key)
                     .ToArray();
@@ -468,8 +382,6 @@
         StateHasChanged();
     }
 
-    // Parse the ISO date string held in _values back to DateTime? for the
-    // DatePickerControl (it binds DateTime?, not the raw <input type=date> string).
     private static DateTime? ParseDateValue(string? raw)
         => DateTime.TryParse(raw, out var dt) ? dt : (DateTime?)null;
 

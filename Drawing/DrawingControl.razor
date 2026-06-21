@@ -1,0 +1,578 @@
+@namespace Fx.ControlKit.Drawing
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@using System.Globalization
+@using System.Text
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+@* ── DrawingControl ───────────────────────────────────────────────────────────
+   A reusable annotation surface: a background image with shape objects drawn over it. Every
+   geometry (Rectangle / Ellipse / Circle / Line / Arrow / Polygon / Text) has a "+Text" variant
+   that adds a clickable, editable bubble — the bubble + inline edit are owned here so the text
+   counterpart is uniform for all shapes. Interaction (create / select / move / edit / undo /
+   zoom) is pure Blazor/C#; the only JavaScript is the lazily-imported drawing-control.js
+   (natural-size probe + save-time SVG→PNG rasterise). ──────────────────────────────────────── *@
+<div class="fx-drawing @ResolvedCssClass" style="@ResolvedStyle" id="@Id">
+
+    <div class="fx-drawing-toolbar">
+        
+        @if (ToolbarExtra is not null)
+        {
+            <div class="fx-tb-group">@ToolbarExtra</div>
+            <span class="fx-tb-sep"></span>
+        }
+
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Select ? " active" : "")" title="Select / move (double-click a bubble to edit)" @onclick="@(() => SetTool(DrawingTool.Select))">
+            <span class="fx-tb-ico">@((MarkupString)IcSelect)</span><span class="fx-tb-lbl">Pointer</span>
+        </button>
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Crop ? " active" : "")" title="Crop — drag a region to keep; the rest of the screenshot is discarded" @onclick="@(() => SetTool(DrawingTool.Crop))">
+            <span class="fx-tb-ico">@((MarkupString)IcCrop)</span><span class="fx-tb-lbl">Crop</span>
+        </button>
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Text ? " active" : "")" title="Text label" @onclick="@(() => SetTool(DrawingTool.Text))">
+            <span class="fx-tb-ico">@((MarkupString)IcText)</span><span class="fx-tb-lbl">Text</span>
+        </button>
+
+        
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool@(IsShapeTool(_tool) ? " active" : "")" title="@ShapeName(_activeShapeTool)" @onclick="@(() => SetTool(_activeShapeTool))">
+                <span class="fx-tb-ico">@((MarkupString)ShapeIcon(_activeShapeTool))</span><span class="fx-tb-lbl">@ShapeName(_activeShapeTool)</span>
+            </button>
+            <button type="button" class="fx-tb-caretbtn" title="More shapes" @onclick="@(() => { _shapesMenuOpen = !_shapesMenuOpen; _styleOpen = false; _editOpen = false; })">▾</button>
+            @if (_shapesMenuOpen)
+            {
+                <div class="fx-tb-menu">
+                    @foreach (var t in _shapeButtons)
+                    {
+                        <button type="button" class="fx-tb-menu-item@(_tool == t.Tool ? " active" : "")" @onclick="@(() => PickShape(t.Tool))">
+                            <span class="fx-tb-menu-ico">@((MarkupString)t.Icon)@if (t.IsText){<span class="fx-tb-tbadge">T</span>}</span>
+                            <span>@t.Name</span>
+                        </button>
+                    }
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _shapesMenuOpen = false)"></div>
+            }
+        </div>
+
+        
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool" title="Colour &amp; width" @onclick="@(() => { _styleOpen = !_styleOpen; _editOpen = false; _shapesMenuOpen = false; })">
+                <span class="fx-tb-ico"><span class="fx-tb-swatch" style="background:@_color;"></span></span><span class="fx-tb-lbl">Style ▾</span>
+            </button>
+            @if (_styleOpen)
+            {
+                <div class="fx-tb-menu fx-tb-stylemenu">
+                    <div class="fx-tb-colormenu">
+                        @foreach (var c in _palette)
+                        {
+                            <button type="button" class="fx-draw-color@(_color == c ? " active" : "")" style="background:@c;" title="@c"
+                                    @onclick="@(() => { _color = c; if (_selected is not null) _selected.Color = c; })"></button>
+                        }
+                    </div>
+                    <div class="fx-tb-widthrow">
+                        <span>Width</span>
+                        <input type="range" min="1" max="20" step="1" value="@_size"
+                               @oninput="@(e => _size = double.TryParse(e.Value?.ToString(), out var v) ? v : _size)" />
+                        <span>@(_size)px</span>
+                    </div>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _styleOpen = false)"></div>
+            }
+        </div>
+
+        
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool" title="Edit actions" @onclick="@(() => { _editOpen = !_editOpen; _styleOpen = false; _shapesMenuOpen = false; })">
+                <span class="fx-tb-ico fx-tb-glyph">⋯</span><span class="fx-tb-lbl">Edit ▾</span>
+            </button>
+            @if (_editOpen)
+            {
+                <div class="fx-tb-menu">
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_shapes.Count == 0)" @onclick="@(() => { Undo(); _editOpen = false; })"><span class="fx-tb-menu-ico fx-tb-glyph">↶</span><span>Undo (Ctrl+Z)</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_selected is null)" @onclick="@(() => { DeleteSelected(); _editOpen = false; })"><span class="fx-tb-menu-ico">@((MarkupString)IcTrash)</span><span>Delete selected</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_shapes.Count == 0)" @onclick="@(() => { ClearAll(); _editOpen = false; })"><span class="fx-tb-menu-ico fx-tb-glyph">⌫</span><span>Clear all</span></button>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _editOpen = false)"></div>
+            }
+        </div>
+
+        <span class="fx-tb-sep"></span>
+        
+        <div class="fx-tb-zoom">
+            <button type="button" class="fx-tb-zbtn" title="Zoom out" @onclick="ZoomOut">−</button>
+            <span class="fx-tb-zval">@($"{_zoom * 100:0}%")</span>
+            <button type="button" class="fx-tb-zbtn" title="Zoom in" @onclick="ZoomIn">+</button>
+            <button type="button" class="fx-tb-zbtn fx-tb-fit" title="Fit image to window" @onclick="FitToWindow">⤢</button>
+            @if (_imgW > 0)
+            {
+                <span class="fx-tb-dims" title="Image size in pixels">@($"{_imgW:0}×{_imgH:0} px")</span>
+            }
+        </div>
+        <span class="fx-tb-spring"></span>
+    </div>
+
+    <div class="fx-drawing-scroll" style="@(Height is null ? null : $"max-height:{Height};")"
+         tabindex="0" @onkeydown="OnKeyDown" @ref="_scrollRef">
+        <div class="fx-drawing-sizer" style="@SizerStyle">
+            <div class="fx-drawing-surface" style="@SurfaceStyle">
+                @if (!string.IsNullOrEmpty(_imageUrl))
+                {
+                    <img @ref="_imgRef" src="@_imageUrl" class="fx-drawing-bg" alt="annotation background" />
+                }
+
+                
+                @if (_showRulers && _imgW > 0)
+                {
+                    @((MarkupString)RulerTopHtml())
+                    @((MarkupString)RulerLeftHtml())
+                }
+
+                @foreach (var s in EnumerateShapes())
+                {
+                    var sel = ReferenceEquals(s, _selected);
+                    switch (s.BaseKind)
+                    {
+                        case DrawingTool.Rectangle: <RectangleControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Ellipse: <EllipseControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Circle: <CircleControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Line: <LineControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Arrow: <ArrowControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Polygon: <PolygonControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Text: <TextControl Shape="@s" Selected="@sel" /> break;
+                    }
+                    
+                    if (s.HasBubble && !ReferenceEquals(s, _editing))
+                    {
+                        <div class="fx-draw-bubble" style="@BubbleStyle(s)">
+                            @(string.IsNullOrWhiteSpace(s.Text) ? "✎ click to edit" : s.Text)
+                        </div>
+                    }
+                }
+
+                @if (_editing is not null)
+                {
+                    <textarea class="fx-draw-editor"
+                              style="position:absolute; left:@Px(EditLeft); top:@Px(EditTop); border-color:@_editing.Color;"
+                              @bind="_editing.Text" @bind:event="oninput" @onblur="StopEditing"
+                              @ref="_editorRef"></textarea>
+                }
+
+                
+                @if (_cropping && (System.Math.Abs(_cropW) > 1 || System.Math.Abs(_cropH) > 1))
+                {
+                    <div class="fx-crop-rect" style="left:@Px(CropLeft); top:@Px(CropTop); width:@Px(CropAbsW); height:@Px(CropAbsH);">
+                        <span class="fx-crop-dims">@($"{CropAbsW:0}×{CropAbsH:0}")</span>
+                    </div>
+                }
+
+                <div class="fx-drawing-capture" style="cursor:@(_tool == DrawingTool.Select ? "default" : "crosshair");"
+                     @onpointerdown="OnPointerDown" @onpointermove="OnPointerMove" @onpointerup="OnPointerUp"
+                     @ondblclick="OnDoubleClick"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? ImageDataUrl { get; set; }
+
+    [Parameter] public string? Height { get; set; }
+
+    [Parameter] public double InitialZoom { get; set; } = 0.8;
+
+    [Parameter] public RenderFragment? ToolbarExtra { get; set; }
+
+    protected override string? BaseCssClass => "fx-drawing-root";
+
+    private readonly List<DrawingShape> _shapes = new();
+    private DrawingTool _tool = DrawingTool.Crop;   // Crop is the default tool (trim to area of interest first)
+    private string _color = "#ff0000";
+    private double _size = 3;
+    private double _zoom = 0.8;
+    private bool _styleOpen;   // colour + width dropdown
+    private bool _editOpen;    // undo/delete/clear dropdown
+
+    private DrawingShape? _draft, _selected, _editing;
+    private bool _moving;
+    private double _lastX, _lastY;
+
+    private bool _cropping;
+    private double _cropX, _cropY, _cropW, _cropH;
+    private double CropLeft => _cropW >= 0 ? _cropX : _cropX + _cropW;
+    private double CropTop => _cropH >= 0 ? _cropY : _cropY + _cropH;
+    private double CropAbsW => System.Math.Abs(_cropW);
+    private double CropAbsH => System.Math.Abs(_cropH);
+
+    private string? _imageUrl;
+    private string? _paramUrlSeen;
+
+    private ElementReference _imgRef, _editorRef, _scrollRef;
+    private bool _focusEditor;
+    private double _imgW, _imgH;
+    private string? _measuredUrl;
+    private bool _fitPending;   // request an auto-fit after the next natural-size probe
+
+    private IJSObjectReference? _module;
+
+    private static readonly string[] _palette =
+        { "#ff0000", "#0055ff", "#00aa44", "#ffcc00", "#ff6600", "#000000", "#ffffff" };
+
+    private const string IcSelect = "<svg viewBox='0 0 16 16'><path d='M3 2 L3 13 L6 10 L8.2 14 L10 13 L7.8 9 L12 9 Z' fill='currentColor' stroke='none'/></svg>";
+    private const string IcRect = "<svg viewBox='0 0 16 16'><rect x='2.5' y='4' width='11' height='8'/></svg>";
+    private const string IcEllipse = "<svg viewBox='0 0 16 16'><ellipse cx='8' cy='8' rx='6' ry='4'/></svg>";
+    private const string IcCircle = "<svg viewBox='0 0 16 16'><circle cx='8' cy='8' r='5.5'/></svg>";
+    private const string IcLine = "<svg viewBox='0 0 16 16'><line x1='3' y1='13' x2='13' y2='3'/></svg>";
+    private const string IcArrow = "<svg viewBox='0 0 16 16'><line x1='3' y1='13' x2='12' y2='4'/><path d='M8.5 4 L12 4 L12 7.5'/></svg>";
+    private const string IcPoly = "<svg viewBox='0 0 16 16'><polygon points='8,2 14,6.5 11.5,14 4.5,14 2,6.5'/></svg>";
+    private const string IcText = "<svg viewBox='0 0 16 16'><path d='M3 4 L13 4 M8 4 L8 13'/></svg>";
+    private const string IcCrop = "<svg viewBox='0 0 16 16'><path d='M4.5 1 V11.5 H15 M1 4.5 H11.5 V15'/></svg>";
+    private const string IcTrash = "<svg viewBox='0 0 16 16'><path d='M3 4 H13 M6 4 V2.5 H10 V4 M4.5 4 L5 14 H11 L11.5 4'/></svg>";
+
+    private record ToolButton(DrawingTool Tool, string Icon, bool IsText, string Name, string Title);
+    private static readonly ToolButton[] _toolButtons =
+    {
+        new(DrawingTool.Select,        IcSelect,  false, "Pointer",   "Select / move (double-click a bubble to edit)"),
+        new(DrawingTool.Rectangle,     IcRect,    false, "Rectangle", "Rectangle"),
+        new(DrawingTool.RectangleText, IcRect,    true,  "Rect Text", "Rectangle with text bubble"),
+        new(DrawingTool.Ellipse,       IcEllipse, false, "Ellipse",   "Ellipse"),
+        new(DrawingTool.EllipseText,   IcEllipse, true,  "Ellipse Text", "Ellipse with text bubble"),
+        new(DrawingTool.Circle,        IcCircle,  false, "Circle",    "Circle"),
+        new(DrawingTool.CircleText,    IcCircle,  true,  "Circle Text", "Circle with text bubble"),
+        new(DrawingTool.Line,          IcLine,    false, "Line",      "Line"),
+        new(DrawingTool.LineText,      IcLine,    true,  "Line Text", "Line with text bubble"),
+        new(DrawingTool.Arrow,         IcArrow,   false, "Arrow",     "Arrow"),
+        new(DrawingTool.ArrowText,     IcArrow,   true,  "Arrow Text", "Arrow with text bubble"),
+        new(DrawingTool.Polygon,       IcPoly,    false, "Polygon",   "Irregular outline (click vertices, double-click to finish)"),
+        new(DrawingTool.PolygonText,   IcPoly,    true,  "Poly Text", "Irregular outline with text bubble"),
+        new(DrawingTool.Text,          IcText,    false, "Text",      "Text label"),
+    };
+
+    private static readonly ToolButton[] _shapeButtons =
+        _toolButtons.Where(t => t.Tool != DrawingTool.Select && t.Tool != DrawingTool.Text).ToArray();
+
+    private bool _shapesMenuOpen;
+    private bool _showRulers = true;
+    private DrawingTool _activeShapeTool = DrawingTool.Rectangle;   // reflected on the Shapes button
+
+    private static bool IsShapeTool(DrawingTool t) => t != DrawingTool.Select && t != DrawingTool.Text;
+    private string ShapeName(DrawingTool t) => _shapeButtons.FirstOrDefault(b => b.Tool == t)?.Name ?? "Shape";
+    private string ShapeIcon(DrawingTool t) => _shapeButtons.FirstOrDefault(b => b.Tool == t)?.Icon ?? IcRect;
+    private void PickShape(DrawingTool t) { _activeShapeTool = t; _shapesMenuOpen = false; SetTool(t); }
+
+    private string RulerTopHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg class='fx-ruler' width='{Num(_imgW)}' height='16' style='position:absolute;left:0;top:0;pointer-events:none;z-index:1;'>");
+        sb.Append($"<rect width='{Num(_imgW)}' height='16' fill='rgba(245,245,245,0.72)'/>");
+        for (int x = 0; x <= (int)_imgW; x += 50)
+        {
+            bool major = x % 100 == 0;
+            sb.Append($"<line x1='{x}' y1='{(major ? 5 : 9)}' x2='{x}' y2='16' stroke='#999' stroke-width='1'/>");
+            if (major && x > 0) sb.Append($"<text x='{x + 2}' y='8' font-size='8' fill='#555' font-family='sans-serif'>{x}</text>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+    private string RulerLeftHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg class='fx-ruler' width='16' height='{Num(_imgH)}' style='position:absolute;left:0;top:0;pointer-events:none;z-index:1;'>");
+        sb.Append($"<rect width='16' height='{Num(_imgH)}' fill='rgba(245,245,245,0.72)'/>");
+        for (int y = 0; y <= (int)_imgH; y += 50)
+        {
+            bool major = y % 100 == 0;
+            sb.Append($"<line x1='{(major ? 5 : 9)}' y1='{y}' x2='16' y2='{y}' stroke='#999' stroke-width='1'/>");
+            if (major && y > 0) sb.Append($"<text x='1' y='{y + 8}' font-size='8' fill='#555' font-family='sans-serif'>{y}</text>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    protected override void OnInitialized() => _zoom = InitialZoom;
+
+    protected override void OnParametersSet()
+    {
+        if (_paramUrlSeen != ImageDataUrl)
+        {
+            _paramUrlSeen = ImageDataUrl;
+            _imageUrl = ImageDataUrl;
+        }
+    }
+
+    private IEnumerable<DrawingShape> EnumerateShapes()
+    {
+        foreach (var s in _shapes) yield return s;
+        if (_draft is not null) yield return _draft;
+    }
+
+    private string SurfaceStyle => _imgW > 0
+        ? $"transform:scale({Num(_zoom)}); transform-origin:top left; width:{Px(_imgW)}; height:{Px(_imgH)};"
+        : "";
+    private string SizerStyle => _imgW > 0 ? $"width:{Px(_imgW * _zoom)}; height:{Px(_imgH * _zoom)};" : "";
+    private void ZoomIn() => _zoom = System.Math.Min(3.0, System.Math.Round(_zoom + 0.1, 2));
+    private void ZoomOut() => _zoom = System.Math.Max(0.1, System.Math.Round(_zoom - 0.1, 2));
+
+    private async Task FitToWindow() => await ApplyFitAsync();
+
+    private async Task ApplyFitAsync()
+    {
+        if (_imgW <= 0 || _imgH <= 0) { _fitPending = true; return; }
+        try
+        {
+            var cs = await (await ModuleAsync()).InvokeAsync<double[]>("clientSize", _scrollRef);
+            if (cs is { Length: 2 } && cs[0] > 4 && cs[1] > 4)
+            {
+                const double pad = 22;   // ruler strip (16) + breathing room
+                double fit = System.Math.Min((cs[0] - pad) / _imgW, (cs[1] - pad) / _imgH);
+                _zoom = System.Math.Round(System.Math.Clamp(fit, 0.1, 1.0), 3);
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    private void SetTool(DrawingTool t) { CommitPolygonIfAny(); _cropping = false; _tool = t; _selected = null; StopEditing(); }
+    private void DeleteSelected() { if (_selected is null) return; _shapes.Remove(_selected); _selected = null; }
+    private void ClearAll() { _shapes.Clear(); _draft = null; _selected = null; _editing = null; }
+    private void Undo() { CommitPolygonIfAny(); if (_shapes.Count > 0) { _shapes.RemoveAt(_shapes.Count - 1); _selected = null; } }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.CtrlKey && (e.Key == "z" || e.Key == "Z")) Undo();
+        else if (e.Key == "Delete" || e.Key == "Backspace") DeleteSelected();
+    }
+
+    private void OnPointerDown(PointerEventArgs e)
+    {
+        double x = e.OffsetX, y = e.OffsetY;
+        if (_tool == DrawingTool.Select)
+        {
+            var hit = HitTest(x, y);
+            _selected = hit; _moving = hit is not null; _lastX = x; _lastY = y;
+            return;
+        }
+        if (_tool == DrawingTool.Crop)
+        {
+            _cropping = true; _cropX = x; _cropY = y; _cropW = 0; _cropH = 0;
+            return;
+        }
+        if (_tool == DrawingTool.Text)
+        {
+            var o = new DrawingShape { Id = NewId(), Kind = DrawingTool.Text, X = x, Y = y, Color = _color, StrokeWidth = _size };
+            _shapes.Add(o); _selected = o; BeginEditing(o); return;
+        }
+        if (_tool is DrawingTool.Polygon or DrawingTool.PolygonText)
+        {
+            _draft ??= new DrawingShape { Id = NewId(), Kind = _tool, Color = _color, StrokeWidth = _size };
+            _draft.Points.Add(new[] { x, y });
+            RecomputePolygonBounds(_draft);
+            return;
+        }
+        _draft = new DrawingShape { Id = NewId(), Kind = _tool, X = x, Y = y, Width = 0, Height = 0, Color = _color, StrokeWidth = _size };
+    }
+
+    private void OnPointerMove(PointerEventArgs e)
+    {
+        double x = e.OffsetX, y = e.OffsetY;
+        if (_cropping) { _cropW = x - _cropX; _cropH = y - _cropY; return; }
+        if (_draft is not null && _draft.BaseKind != DrawingTool.Polygon) { _draft.Width = x - _draft.X; _draft.Height = y - _draft.Y; return; }
+        if (_moving && _selected is not null) { Translate(_selected, x - _lastX, y - _lastY); _lastX = x; _lastY = y; }
+    }
+
+    private async Task OnPointerUp(PointerEventArgs e)
+    {
+        _moving = false;
+        if (_cropping)
+        {
+            _cropping = false;
+            double l = CropLeft, t = CropTop, w = CropAbsW, h = CropAbsH;
+            await DoCrop(l, t, w, h);
+            return;
+        }
+        if (_draft is null || _draft.BaseKind == DrawingTool.Polygon) return;
+        var d = _draft; _draft = null;
+        if (System.Math.Abs(d.Width) < 4 && System.Math.Abs(d.Height) < 4) return;
+        _shapes.Add(d); _selected = d;
+        if (d.HasBubble) BeginEditing(d);
+    }
+
+    private async Task DoCrop(double left, double top, double w, double h)
+    {
+        if (string.IsNullOrEmpty(_imageUrl) || w < 5 || h < 5) return;
+        try
+        {
+            var cropped = await (await ModuleAsync()).InvokeAsync<string>("cropImage", _imageUrl, left, top, w, h);
+            if (!string.IsNullOrEmpty(cropped))
+            {
+                _imageUrl = cropped;
+                _shapes.Clear(); _draft = null; _selected = null; _editing = null;
+                _measuredUrl = null; _imgW = 0; _imgH = 0; _fitPending = true;
+                _tool = DrawingTool.Select;   // crop done → ready to annotate
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    private void OnDoubleClick(MouseEventArgs e)
+    {
+        if (_tool is DrawingTool.Polygon or DrawingTool.PolygonText) { CommitPolygonIfAny(); return; }
+        var hit = HitTest(e.OffsetX, e.OffsetY);
+        if (hit is not null && hit.HasText) { _selected = hit; BeginEditing(hit); }
+    }
+
+    private void CommitPolygonIfAny()
+    {
+        if (_draft is { } p && p.BaseKind == DrawingTool.Polygon)
+        {
+            _draft = null;
+            if (p.Points.Count >= 2) { _shapes.Add(p); _selected = p; if (p.HasBubble) BeginEditing(p); }
+        }
+    }
+
+    private DrawingShape? HitTest(double x, double y)
+    {
+        for (int i = _shapes.Count - 1; i >= 0; i--)
+        {
+            var s = _shapes[i];
+            double bx = s.Left - 6, by = (s.HasBubble ? s.Top - 28 : s.Top) - 6;
+            double bw = s.AbsWidth + 12, bh = (s.HasBubble ? s.AbsHeight + 28 : s.AbsHeight) + 12;
+            if (s.Kind == DrawingTool.Text) { bx = s.X - 6; by = s.Y - 6; bw = 140; bh = 30; }
+            if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) return s;
+        }
+        return null;
+    }
+    private void Translate(DrawingShape s, double dx, double dy)
+    {
+        s.X += dx; s.Y += dy;
+        foreach (var p in s.Points) { p[0] += dx; p[1] += dy; }
+    }
+    private void RecomputePolygonBounds(DrawingShape s)
+    {
+        if (s.Points.Count == 0) return;
+        double minX = s.Points.Min(p => p[0]), minY = s.Points.Min(p => p[1]);
+        double maxX = s.Points.Max(p => p[0]), maxY = s.Points.Max(p => p[1]);
+        s.X = minX; s.Y = minY; s.Width = maxX - minX; s.Height = maxY - minY;
+    }
+
+    private string BubbleStyle(DrawingShape s)
+    {
+        double left = s.BubbleAtStart ? s.X : s.Left;
+        double top = (s.BubbleAtStart ? s.Y : s.Top) - 26;
+        return $"position:absolute; left:{Px(left)}; top:{Px(top)}; pointer-events:none; " +
+               $"border-color:{s.Color}; color:{(string.IsNullOrWhiteSpace(s.Text) ? "#999" : "#222")};";
+    }
+    private void BeginEditing(DrawingShape s) { _editing = s; _focusEditor = true; }
+    private void StopEditing() { _editing = null; }
+    private double EditLeft => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.X : (_editing.BubbleAtStart ? _editing.X : _editing.Left));
+    private double EditTop => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.Y : (_editing.BubbleAtStart ? _editing.Y : _editing.Top) - 26);
+
+    public async Task<string> GetImageAsync()
+    {
+        if (string.IsNullOrEmpty(_imageUrl)) return "";
+        var mod = await ModuleAsync();
+        var size = await mod.InvokeAsync<double[]>("naturalSize", _imgRef);
+        double w = size is { Length: 2 } && size[0] > 0 ? size[0] : 1024;
+        double h = size is { Length: 2 } && size[1] > 0 ? size[1] : 768;
+        return await mod.InvokeAsync<string>("rasterize", BuildSvg(w, h), w, h);
+    }
+    public Task<string> GetShapesJsonAsync() => Task.FromResult(JsonSerializer.Serialize(_shapes));
+    public void LoadShapes(IEnumerable<DrawingShape>? shapes)
+    {
+        _shapes.Clear();
+        if (shapes is not null) _shapes.AddRange(shapes);
+        _selected = null; _draft = null; _editing = null;
+        StateHasChanged();
+    }
+
+    private string BuildSvg(double w, double h)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='{N(w)}' height='{N(h)}' viewBox='0 0 {N(w)} {N(h)}'>");
+        sb.Append($"<image x='0' y='0' width='{N(w)}' height='{N(h)}' xlink:href=\"{_imageUrl}\" href=\"{_imageUrl}\" />");
+        int i = 0;
+        foreach (var s in _shapes)
+        {
+            var c = s.Color; var sw = N(s.StrokeWidth); var mid = $"m{i++}";
+            switch (s.BaseKind)
+            {
+                case DrawingTool.Rectangle:
+                    sb.Append($"<rect x='{N(s.Left)}' y='{N(s.Top)}' width='{N(s.AbsWidth)}' height='{N(s.AbsHeight)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Ellipse:
+                    sb.Append($"<ellipse cx='{N(s.Cx)}' cy='{N(s.Cy)}' rx='{N(s.AbsWidth / 2)}' ry='{N(s.AbsHeight / 2)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Circle:
+                    sb.Append($"<circle cx='{N(s.Cx)}' cy='{N(s.Cy)}' r='{N(s.Radius)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Line:
+                    sb.Append($"<line x1='{N(s.X)}' y1='{N(s.Y)}' x2='{N(s.X + s.Width)}' y2='{N(s.Y + s.Height)}' stroke='{c}' stroke-width='{sw}' stroke-linecap='round'/>");
+                    break;
+                case DrawingTool.Arrow:
+                    sb.Append($"<defs><marker id='{mid}' markerWidth='12' markerHeight='12' refX='9' refY='4' orient='auto' markerUnits='userSpaceOnUse'><path d='M0,0 L10,4 L0,8 Z' fill='{c}'/></marker></defs>");
+                    sb.Append($"<line x1='{N(s.X)}' y1='{N(s.Y)}' x2='{N(s.X + s.Width)}' y2='{N(s.Y + s.Height)}' stroke='{c}' stroke-width='{sw}' stroke-linecap='round' marker-end='url(#{mid})'/>");
+                    break;
+                case DrawingTool.Polygon:
+                    var pts = string.Join(" ", s.Points.Select(p => $"{N(p[0])},{N(p[1])}"));
+                    sb.Append($"<polyline points='{pts}' fill='none' stroke='{c}' stroke-width='{sw}' stroke-linecap='round' stroke-linejoin='round'/>");
+                    break;
+                case DrawingTool.Text:
+                    sb.Append($"<text x='{N(s.X)}' y='{N(s.Y + 16)}' fill='{c}' font-family='Segoe UI, Tahoma, sans-serif' font-size='18' font-weight='600'>{Xml(s.Text)}</text>");
+                    break;
+            }
+            if (s.HasBubble)
+            {
+                double bx = s.BubbleAtStart ? s.X : s.Left;
+                double by = (s.BubbleAtStart ? s.Y : s.Top) - 26;
+                var t = string.IsNullOrWhiteSpace(s.Text) ? "" : s.Text;
+                var bw = System.Math.Max(40, t.Length * 9 + 16);
+                sb.Append($"<rect x='{N(bx)}' y='{N(by)}' width='{N(bw)}' height='24' rx='5' fill='#ffffe0' stroke='{c}' stroke-width='1.5'/>");
+                sb.Append($"<text x='{N(bx + 8)}' y='{N(by + 16)}' fill='#222' font-family='Segoe UI, Tahoma, sans-serif' font-size='14'>{Xml(t)}</text>");
+            }
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    private static string N(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string Xml(string? s) => System.Security.SecurityElement.Escape(s ?? "") ?? "";
+    private static string Px(double v) => v.ToString(CultureInfo.InvariantCulture) + "px";
+    private static string Num(double v) => v.ToString(CultureInfo.InvariantCulture);
+    private static string NewId() => System.Guid.NewGuid().ToString("N").Substring(0, 8);
+
+    private async Task<IJSObjectReference> ModuleAsync() =>
+        _module ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", $"./_content/{typeof(DrawingControl).Assembly.GetName().Name}/drawing-control.js");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!string.IsNullOrEmpty(_imageUrl) && _measuredUrl != _imageUrl)
+        {
+            _measuredUrl = _imageUrl;
+            try
+            {
+                var size = await (await ModuleAsync()).InvokeAsync<double[]>("naturalSize", _imgRef);
+                if (size is { Length: 2 } && size[0] > 0) { _imgW = size[0]; _imgH = size[1]; _fitPending = true; }
+            }
+            catch { }
+        }
+        if (_fitPending && _imgW > 0)
+        {
+            _fitPending = false;
+            await ApplyFitAsync();
+        }
+        if (_focusEditor && _editing is not null)
+        {
+            _focusEditor = false;
+            try { await _editorRef.FocusAsync(); } catch { }
+            try { await (await ModuleAsync()).InvokeVoidAsync("attachEditorEnter", _editorRef); } catch { }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null) { try { await _module.DisposeAsync(); } catch { } }
+    }
+}

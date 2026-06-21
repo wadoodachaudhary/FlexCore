@@ -1,12 +1,24 @@
 .fx-button {
     padding: 4px 16px;
     min-width: 75px;
-    font-size: 13px;
-    border: 1px solid #c9c9c9;
-    background: #f7f7f7;
-    border-radius: 4px;
+    font-size: var(--fx-font-size, 13px);
+    border: var(--fx-btn-border, 1px solid #c9c9c9);
+    border-color: var(--fx-btn-border-color);
+    background: var(--fx-btn-bg, #f7f7f7);
+    border-radius: var(--fx-btn-radius, 4px);
     cursor: pointer;
-    color: #333;
+    color: var(--fx-btn-color, #333);
+    box-shadow: var(--fx-btn-shadow, none);
+}
+
+.fx-button:hover:not(:disabled) {
+    background: var(--fx-btn-hover-bg, #e6e6e6);
+    border: var(--fx-btn-hover-border);
+    border-color: var(--fx-btn-hover-border-color);
+}
+
+.fx-button:active:not(:disabled) {
+    background: var(--fx-btn-active-bg, #d4d0c8);
 }
 
 .fx-button:disabled {
@@ -21,7 +33,7 @@
 .fx-button.mini-btn {
     padding: 2px 6px;
     font-size: 12px;
-    background: #fff;
+    background: var(--fx-surface-color, #fff);
 }
 
 /* Optional dropdown-popup mode (only when DropDownContent is supplied). */
@@ -47,7 +59,7 @@
     left: 0;
     z-index: 1001;
     margin-top: 2px;
-    background: #ffffff;
-    border: 1px solid #8a8a8a;
-    box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+    background: var(--fx-surface-color, #ffffff);
+    border: 1px solid var(--fx-border-color, #8a8a8a);
+    box-shadow: var(--fx-dialog-shadow, 2px 2px 6px rgba(0, 0, 0, 0.3));
 }

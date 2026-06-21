@@ -65,7 +65,6 @@
             builder.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, () => HandleNodeClick(capturedNode)));
             builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create(this, () => HandleNodeDoubleClick(capturedNode)));
 
-            // Expand/collapse arrow
             builder.OpenElement(5, "span");
             builder.AddAttribute(6, "class", GetArrowCss(capturedNode));
             if (capturedNode.HasChildren)
@@ -75,7 +74,6 @@
             }
             builder.CloseElement();
 
-            // Checkbox
             if (ShowCheckboxes)
             {
                 builder.OpenElement(9, "input");
@@ -88,7 +86,6 @@
                 builder.CloseElement();
             }
 
-            // Icon
             var iconCss = GetRenderedIconCss(capturedNode);
             if (ShowIcons && !string.IsNullOrEmpty(iconCss))
             {
@@ -97,15 +94,13 @@
                 builder.CloseElement();
             }
 
-            // Text
             builder.OpenElement(18, "span");
             builder.AddAttribute(19, "class", "fx-treeview-text");
-            builder.AddContent(20, capturedNode.Text);
+            builder.AddContent(20, (MarkupString)capturedNode.Text);
             builder.CloseElement();
 
             builder.CloseElement(); // close node div
 
-            // Render children if expanded
             if (capturedNode.HasChildren && capturedNode.IsExpanded)
             {
                 builder.AddContent(21, RenderNodes(capturedNode.Children, capturedLevel + 1));

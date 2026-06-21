@@ -39,26 +39,19 @@
 </div>
 
 @code {
-    /// <summary>Caption shown above the bordered box (e.g. "System Settings").</summary>
     [Parameter] public string? Title { get; set; }
 
-    /// <summary>Blue sub-header shown inside the box (e.g. "Select a page").</summary>
     [Parameter] public string? SubHeader { get; set; }
 
-    /// <summary>The selectable pages.</summary>
     [Parameter] public IEnumerable<SideNavigationItem>? Items { get; set; }
 
-    /// <summary>Key of the currently-selected item. Supports @bind-SelectedKey.</summary>
     [Parameter] public object? SelectedKey { get; set; }
     [Parameter] public EventCallback<object?> SelectedKeyChanged { get; set; }
 
-    /// <summary>Which side the panel docks to (Left default / Right).</summary>
     [Parameter] public SideNavPosition Position { get; set; } = SideNavPosition.Left;
 
-    /// <summary>Panel width override (e.g. "250px"); defaults to the VB6 width.</summary>
     [Parameter] public string? Width { get; set; }
 
-    /// <summary>Optional extra content appended below the items.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
     private string WidthStyle => string.IsNullOrWhiteSpace(Width) ? "" : $"width:{Width};min-width:{Width};";

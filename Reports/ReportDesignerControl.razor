@@ -1,8 +1,10 @@
 @namespace Fx.ControlKit.Reports
 
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.Extensions.DependencyInjection
 @using Microsoft.JSInterop
 
+@inject IServiceProvider Services
 @inject IJSRuntime JSRuntime
 
 <div class="fx-rd">
@@ -193,6 +195,10 @@
     private List<ReportDesignerParameter> _expertParameters = new();
     private List<ReportDesignerSection> _expertSections = new();
     private List<ReportDesignerDataLink> _expertLinks = new();
+    private string _expertSql = "";
+    private string _expertSqlValidationMessage = "";
+    private bool? _expertSqlValidationSucceeded;
+    private bool _expertSqlEditedByUser;
     private ReportDesignerPage _expertPage = new();
     private ReportDesignerHighlightRule _expertHighlightRule = new();
     private ReportDesignerElement? _clipboardElement;
@@ -391,8 +397,15 @@
     private decimal SelectedFontSize => _selectedElement?.FontSize > 0 ? _selectedElement.FontSize : 10m;
     private List<ReportDesignerField> AllDesignerFields => _document.Fields.OrderBy(reportField => reportField.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
     private IReadOnlyList<string> HighlightValueSources => new[] { "this field" }.Concat(AllDesignerFields.Select(reportField => reportField.DisplayName)).ToList();
-    private IReadOnlyList<string> DesignerTableNames => GetWizardDataSources().Select(table => table.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+    private IReadOnlyList<string> DesignerTableNames => GetWizardDataSources().Select(table => table.Name).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
     private IReadOnlyList<string> DesignerFieldNames => AllDesignerFields.Select(reportField => reportField.Name).Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(value => value, StringComparer.OrdinalIgnoreCase).ToList();
+    private IReadOnlyList<ReportDesignerDataTable> ExpertLinkTables => _expertSelectedTables;
+    private IReadOnlyList<string> ExpertTableNames => ExpertLinkTables
+        .Select(table => table.Name)
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+        .ToList();
     private string ActiveExpertTitle => _activeExpert switch
     {
         DatabaseExpert => "Database Expert",
@@ -423,7 +436,7 @@
         FindExpert => "520px",
         TextFormatExpert => "520px",
         HighlightingExpert => "585px",
-        VisualLinkingExpert => "640px",
+        VisualLinkingExpert => "980px",
         RunningTotalExpert => "650px",
         _ => "760px"
     };
@@ -437,7 +450,7 @@
         FindExpert => "270px",
         TextFormatExpert => "370px",
         HighlightingExpert => "430px",
-        VisualLinkingExpert => "430px",
+        VisualLinkingExpert => "640px",
         RunningTotalExpert => "430px",
         _ => "520px"
     };
@@ -866,6 +879,10 @@
         _expertParameters = _document.Parameters.Select(CloneParameter).ToList();
         _expertSections = _document.Sections.Select(CloneSectionForExpert).ToList();
         _expertLinks = _document.Links.Select(CloneLink).ToList();
+        _expertSql = string.IsNullOrWhiteSpace(_document.CustomSql) ? BuildExpertSql() : _document.CustomSql;
+        _expertSqlEditedByUser = !string.IsNullOrWhiteSpace(_document.CustomSql);
+        _expertSqlValidationMessage = "";
+        _expertSqlValidationSucceeded = null;
         _expertPage = ClonePage(_document.Page);
         _expertHighlightRule = _selectedElement?.HighlightRule.Clone() ?? new ReportDesignerHighlightRule
         {
@@ -931,6 +948,7 @@
                 break;
             case VisualLinkingExpert:
                 _document.Links = _expertLinks.Select(CloneLink).ToList();
+                _document.CustomSql = string.IsNullOrWhiteSpace(_expertSql) ? BuildExpertSql() : _expertSql;
                 break;
             case RunningTotalExpert:
                 _document.Summaries = _expertSummaries.Select(CloneSummary).ToList();
@@ -1269,28 +1287,75 @@
     </div>;
 
     private RenderFragment RenderVisualLinkingExpert() => @<div class="fx-rd-expert fx-rd-linking-expert">
-        <div class="fx-rd-link-list">
-            <div class="fx-rd-expert-label">Links</div>
-            @for (var i = 0; i < _expertLinks.Count; i++)
-            {
-                var index = i;
-                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertLinks[index].DisplayName</button>
-            }
-        </div>
-        <div class="fx-rd-link-editor">
-            @if (ActiveExpertLink is not null)
-            {
-                var link = ActiveExpertLink;
-                <label>Left table <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerTableNames" Value="@link.LeftTable" ValueChanged="value => link.LeftTable = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
-                <label>Left field <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerFieldNames" Value="@link.LeftField" ValueChanged="value => link.LeftField = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
-                <label>Right table <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerTableNames" Value="@link.RightTable" ValueChanged="value => link.RightTable = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
-                <label>Right field <DropDownListControl TValue="string" TItem="string" DataSource="@DesignerFieldNames" Value="@link.RightField" ValueChanged="value => link.RightField = value ?? string.Empty" Width="180px" CssClass="fx-rd-expert-dd" /></label>
-                <label>Join type <DropDownListControl TValue="string" TItem="string" DataSource="@JoinTypeChoices" Value="@link.JoinType" ValueChanged="value => link.JoinType = value ?? JoinTypeChoices[0]" Width="180px" CssClass="fx-rd-expert-dd" /></label>
-            }
-            <div class="fx-rd-pane-actions">
-                <ButtonControl OnClick="@(_ => AddExpertLink())">New...</ButtonControl>
-                <ButtonControl Disabled="@(ActiveExpertLink is null)" OnClick="@(_ => DeleteActiveExpertLink())">Delete</ButtonControl>
+        <div class="fx-rd-link-workspace">
+            <div class="fx-rd-link-tables">
+                @if (ExpertLinkTables.Count == 0)
+                {
+                    <div class="fx-rd-link-empty">No tables selected.</div>
+                }
+                @foreach (var table in ExpertLinkTables)
+                {
+                    <div class="fx-rd-link-table">
+                        <div class="fx-rd-link-table-title">@table.DisplayName</div>
+                        @foreach (var field in table.Fields.Take(12))
+                        {
+                            <span>@field.Name</span>
+                        }
+                        @if (table.Fields.Count > 12)
+                        {
+                            <em>@($"{table.Fields.Count - 12} more fields")</em>
+                        }
+                    </div>
+                }
             </div>
+            <div class="fx-rd-link-lines">
+                <div class="fx-rd-expert-label">Links</div>
+                @if (_expertLinks.Count == 0)
+                {
+                    <span>No links.</span>
+                }
+                @foreach (var link in _expertLinks)
+                {
+                    <span>@link.DisplayName</span>
+                }
+            </div>
+        </div>
+        <div class="fx-rd-link-editor-panel">
+            <div class="fx-rd-link-list">
+                <div class="fx-rd-expert-label">Links</div>
+                @for (var i = 0; i < _expertLinks.Count; i++)
+                {
+                    var index = i;
+                    <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertLinks[index].DisplayName</button>
+                }
+            </div>
+            <div class="fx-rd-link-editor">
+                @if (ActiveExpertLink is not null)
+                {
+                    var link = ActiveExpertLink;
+                    <label>Left table <DropDownListControl TValue="string" TItem="string" DataSource="@ExpertTableNames" Value="@link.LeftTable" ValueChanged="value => OnExpertLinkTableChanged(link, leftSide: true, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <label>Left field <DropDownListControl TValue="string" TItem="string" DataSource="@GetExpertFieldNames(link.LeftTable)" Value="@link.LeftField" ValueChanged="value => OnExpertLinkFieldChanged(link, leftSide: true, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <label>Right table <DropDownListControl TValue="string" TItem="string" DataSource="@ExpertTableNames" Value="@link.RightTable" ValueChanged="value => OnExpertLinkTableChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <label>Right field <DropDownListControl TValue="string" TItem="string" DataSource="@GetExpertFieldNames(link.RightTable)" Value="@link.RightField" ValueChanged="value => OnExpertLinkFieldChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <label>Join type <DropDownListControl TValue="string" TItem="string" DataSource="@JoinTypeChoices" Value="@link.JoinType" ValueChanged="value => OnExpertLinkJoinTypeChanged(link, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                }
+                <div class="fx-rd-pane-actions">
+                    <ButtonControl OnClick="@(_ => AddExpertLink())" Disabled="@(ExpertTableNames.Count < 2)">New Join</ButtonControl>
+                    <ButtonControl Disabled="@(ActiveExpertLink is null)" OnClick="@(_ => DeleteActiveExpertLink())">Delete</ButtonControl>
+                    <ButtonControl OnClick="@(_ => AutoLinkExpertTables())" Disabled="@(ExpertTableNames.Count < 2)">Auto Link</ButtonControl>
+                </div>
+            </div>
+        </div>
+        <div class="fx-rd-sql-panel">
+            <div class="fx-rd-sql-toolbar">
+                <ButtonControl OnClick="@(_ => RegenerateExpertSql())">Generate SQL</ButtonControl>
+                <ButtonControl OnClick="@(_ => ValidateExpertSqlAsync())" Disabled="@(string.IsNullOrWhiteSpace(_expertSql))">Validate SQL</ButtonControl>
+                @if (!string.IsNullOrWhiteSpace(_expertSqlValidationMessage))
+                {
+                    <span class="@($"fx-rd-sql-status {(_expertSqlValidationSucceeded == true ? "ok" : _expertSqlValidationSucceeded == false ? "error" : "")}")">@_expertSqlValidationMessage</span>
+                }
+            </div>
+            <textarea class="fx-rd-sql-editor" spellcheck="false" @bind="_expertSql" @bind:event="oninput" @bind:after="OnExpertSqlEdited"></textarea>
         </div>
     </div>;
 
@@ -1341,6 +1406,8 @@
     private Task OnExpertSelectedTablesChanged(IList<ReportDesignerDataTable> tables)
     {
         _expertSelectedTables = tables.Select(CloneTable).ToList();
+        TrimExpertLinksToSelectedTables();
+        UpdateExpertSqlFromDesigner();
         return Task.CompletedTask;
     }
 
@@ -1481,17 +1548,21 @@
 
     private Task AddExpertLink()
     {
-        var tables = DesignerTableNames;
-        var fields = DesignerFieldNames;
+        var first = ExpertLinkTables.FirstOrDefault();
+        var second = ExpertLinkTables.Skip(1).FirstOrDefault() ?? first;
+        if (first == null || second == null)
+            return Task.CompletedTask;
+
         _expertLinks.Add(new ReportDesignerDataLink
         {
-            LeftTable = tables.FirstOrDefault() ?? "",
-            RightTable = tables.Skip(1).FirstOrDefault() ?? tables.FirstOrDefault() ?? "",
-            LeftField = fields.FirstOrDefault() ?? "",
-            RightField = fields.FirstOrDefault() ?? "",
+            LeftTable = first.Name,
+            LeftField = GetExpertFieldNames(first.Name).FirstOrDefault() ?? "",
+            RightTable = second.Name,
+            RightField = GetExpertFieldNames(second.Name).FirstOrDefault() ?? "",
             JoinType = JoinTypeChoices[0]
         });
         _activeExpertItemIndex = _expertLinks.Count - 1;
+        UpdateExpertSqlFromDesigner();
         return Task.CompletedTask;
     }
 
@@ -1502,7 +1573,183 @@
 
         _expertLinks.RemoveAt(_activeExpertItemIndex);
         ClampActiveExpertIndex(_expertLinks.Count);
+        UpdateExpertSqlFromDesigner();
         return Task.CompletedTask;
+    }
+
+    private Task AutoLinkExpertTables()
+    {
+        _expertLinks.Clear();
+        if (ExpertLinkTables.Count < 2)
+            return Task.CompletedTask;
+
+        var joined = ExpertLinkTables[0];
+        foreach (var table in ExpertLinkTables.Skip(1))
+        {
+            var match = FindLikelyExpertJoin(joined, table)
+                ?? (joined.Fields.FirstOrDefault(), table.Fields.FirstOrDefault());
+            if (match.Item1 == null || match.Item2 == null)
+                continue;
+
+            _expertLinks.Add(new ReportDesignerDataLink
+            {
+                LeftTable = joined.Name,
+                LeftField = match.Item1.Name,
+                RightTable = table.Name,
+                RightField = match.Item2.Name,
+                JoinType = JoinTypeChoices[0]
+            });
+        }
+
+        _activeExpertItemIndex = _expertLinks.Count == 0 ? 0 : _expertLinks.Count - 1;
+        UpdateExpertSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private (ReportDesignerField?, ReportDesignerField?)? FindLikelyExpertJoin(ReportDesignerDataTable left, ReportDesignerDataTable right)
+    {
+        foreach (var leftField in left.Fields)
+        {
+            var rightField = right.Fields.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, leftField.Name, StringComparison.OrdinalIgnoreCase));
+            if (rightField != null)
+                return (leftField, rightField);
+        }
+
+        var leftId = left.Fields.FirstOrDefault(field => field.Name.EndsWith("ID", StringComparison.OrdinalIgnoreCase));
+        if (leftId != null)
+        {
+            var rightId = right.Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, leftId.Name, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(field.Name, $"{left.Name}ID", StringComparison.OrdinalIgnoreCase));
+            if (rightId != null)
+                return (leftId, rightId);
+        }
+
+        return null;
+    }
+
+    private Task OnExpertLinkTableChanged(ReportDesignerDataLink link, bool leftSide, string? value)
+    {
+        var tableName = value ?? "";
+        if (leftSide)
+        {
+            link.LeftTable = tableName;
+            link.LeftField = GetExpertFieldNames(tableName).FirstOrDefault() ?? "";
+        }
+        else
+        {
+            link.RightTable = tableName;
+            link.RightField = GetExpertFieldNames(tableName).FirstOrDefault() ?? "";
+        }
+
+        UpdateExpertSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task OnExpertLinkFieldChanged(ReportDesignerDataLink link, bool leftSide, string? value)
+    {
+        if (leftSide)
+            link.LeftField = value ?? "";
+        else
+            link.RightField = value ?? "";
+
+        UpdateExpertSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task OnExpertLinkJoinTypeChanged(ReportDesignerDataLink link, string? value)
+    {
+        link.JoinType = value ?? JoinTypeChoices[0];
+        UpdateExpertSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<string> GetExpertFieldNames(string tableName)
+    {
+        return ReportDesignerSqlBuilder.GetFieldNamesForTable(tableName, ExpertLinkTables, AllDesignerFields);
+    }
+
+    private Task RegenerateExpertSql()
+    {
+        _expertSql = BuildExpertSql();
+        _expertSqlEditedByUser = false;
+        _expertSqlValidationMessage = "";
+        _expertSqlValidationSucceeded = null;
+        return Task.CompletedTask;
+    }
+
+    private void OnExpertSqlEdited()
+    {
+        _expertSqlEditedByUser = true;
+        _expertSqlValidationMessage = "";
+        _expertSqlValidationSucceeded = null;
+    }
+
+    private async Task ValidateExpertSqlAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_expertSql))
+        {
+            _expertSqlValidationMessage = "No SQL to validate.";
+            _expertSqlValidationSucceeded = false;
+            return;
+        }
+
+        var executor = Services.GetService<IReportDataExecutor>();
+        if (executor == null)
+        {
+            _expertSqlValidationMessage = "No SQL validator is registered.";
+            _expertSqlValidationSucceeded = false;
+            return;
+        }
+
+        try
+        {
+            var table = executor.Execute(_expertSql, null);
+            _expertSqlValidationMessage = $"SQL valid. Returned {table.Rows.Count} rows and {table.Columns.Count} columns.";
+            _expertSqlValidationSucceeded = true;
+        }
+        catch (Exception ex)
+        {
+            _expertSqlValidationMessage = $"SQL validation failed: {ex.Message}";
+            _expertSqlValidationSucceeded = false;
+        }
+
+        await Task.CompletedTask;
+    }
+
+    private void UpdateExpertSqlFromDesigner()
+    {
+        if (_expertSqlEditedByUser)
+            return;
+
+        _expertSql = BuildExpertSql();
+        _expertSqlValidationMessage = "";
+        _expertSqlValidationSucceeded = null;
+    }
+
+    private string BuildExpertSql()
+    {
+        return ReportDesignerSqlBuilder.BuildSql(ExpertLinkTables, AllDesignerFields, _expertLinks, _expertFilters);
+    }
+
+    private void TrimExpertLinksToSelectedTables()
+    {
+        var tableNames = _expertSelectedTables
+            .Select(table => table.Name)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (tableNames.Count == 0)
+        {
+            _expertLinks.Clear();
+            _activeExpertItemIndex = 0;
+            return;
+        }
+
+        _expertLinks = _expertLinks
+            .Where(link => tableNames.Contains(link.LeftTable) && tableNames.Contains(link.RightTable))
+            .ToList();
+        ClampActiveExpertIndex(_expertLinks.Count);
     }
 
     private Task EnableHighlightRule()
@@ -1521,8 +1768,6 @@
 
     private void ApplyTextFormatExpert()
     {
-        // Text-format controls bind directly to the selected object so users see
-        // Crystal-style live preview on the design canvas.
     }
 
     private void ApplyHighlightingExpert()
@@ -1952,7 +2197,6 @@
             }
             catch
             {
-                // Temporary upload cleanup should not replace the conversion result.
             }
         }
     }
@@ -2049,7 +2293,7 @@
         }
         catch (Exception ex)
         {
-            return $"<!-- Could not generate XML: {ex.Message} -->";
+            return $"";
         }
     }
 

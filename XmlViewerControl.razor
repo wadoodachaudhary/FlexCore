@@ -259,9 +259,7 @@
         {
             if (xml[index] == '<')
             {
-                if (StartsWith(xml, index, "<!--"))
-                {
-                    var end = xml.IndexOf("-->", index + 4, StringComparison.Ordinal);
+                if (StartsWith(xml, index, "", index + 4, StringComparison.Ordinal);
                     var length = end >= 0 ? end - index + 3 : xml.Length - index;
                     AppendSpan(sb, "fx-xmlv-comment", xml.Substring(index, length));
                     index += length;

@@ -1,7 +1,7 @@
 .fx-tabstrip {
     display: flex;
-    border-bottom: 1px solid #e5e7eb;
-    background: #f9fafb;
+    border-bottom: 1px solid var(--fx-border-color, #e5e7eb);
+    background: var(--fx-tab-bg, #f9fafb);
     overflow-x: auto;
     gap: 0;
 }
@@ -11,9 +11,9 @@
     align-items: center;
     gap: 6px;
     padding: 8px 16px;
-    font-size: 13px;
+    font-size: var(--fx-font-size, 13px);
     font-weight: 500;
-    color: #6b7280;
+    color: var(--fx-tab-color, #6b7280);
     cursor: pointer;
     border-bottom: 2px solid transparent;
     white-space: nowrap;
@@ -22,19 +22,21 @@
 }
 
 .fx-tabstrip-tab:hover:not(.fx-tabstrip-tab-disabled) {
-    color: #1f2937;
-    background: #f3f4f6;
+    color: var(--fx-text-color, #1f2937);
+    background: var(--fx-sidebar-item-hover-bg, #f3f4f6);
 }
 
 .fx-tabstrip-tab-active {
-    color: #1b6ec2;
-    border-bottom-color: #1b6ec2;
+    color: var(--fx-tab-active-color, #1b6ec2);
+    border-bottom-color: var(--fx-tab-active-border-color, #1b6ec2);
+    background: var(--fx-tab-active-bg, transparent);
     font-weight: 600;
 }
 
 .fx-tabstrip-tab-disabled {
-    color: #d1d5db;
+    color: var(--fx-text-muted, #d1d5db);
     cursor: not-allowed;
+    opacity: 0.5;
 }
 
 .fx-tabstrip-icon {

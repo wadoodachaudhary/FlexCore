@@ -29,7 +29,7 @@
 
     @if (UseLegacyMode)
     {
-        @* === LEGACY: Single-series horizontal bars === *@
+        
         @if (Bars is { Count: > 0 })
         {
             <div class="fx-chart-rows">
@@ -101,7 +101,7 @@
     }
     else
     {
-        @* === NEW SVG CHART MODE === *@
+        
         @if (_effectiveSeries.Count == 0 && Type != ChartType.Gauge && Type != ChartType.KpiCard)
         {
             <div class="fx-chart-empty">No data</div>
@@ -185,98 +185,68 @@
 @code {
     #region Parameters — Legacy (backwards compatible)
 
-    /// <summary>Type of each row in DataSource (multi-row mode).</summary>
     [Parameter] public Type? RowType { get; set; }
 
-    /// <summary>Optional title shown above the chart.</summary>
     [Parameter] public string? Title { get; set; }
 
-    /// <summary>CSS width (e.g. "100%", "400px"). Default: full width.</summary>
     [Parameter] public string? Width { get; set; }
 
-    /// <summary>Extra CSS class on the root container.</summary>
     [Parameter] public string? CssClass { get; set; }
 
-    /// <summary>Single-series bars — used when no DataSource is supplied.</summary>
     [Parameter] public IList<ChartBar>? Bars { get; set; }
 
-    /// <summary>Multi-row data source. Each row is rendered as its own grouped-bar chart.</summary>
     [Parameter] public System.Collections.IEnumerable? DataSource { get; set; }
 
-    /// <summary>Property name on each row to use as the row label (multi-row mode).</summary>
     [Parameter] public string? LabelField { get; set; }
 
-    /// <summary>Property names on each row to use as bar values (multi-row mode).</summary>
     [Parameter] public IList<string>? ValueFields { get; set; }
 
-    /// <summary>Optional human-readable labels for each value field (axis ticks).</summary>
     [Parameter] public IList<string>? ValueLabels { get; set; }
 
-    /// <summary>Show the row label column. Default true.</summary>
     [Parameter] public bool ShowLabels { get; set; } = true;
 
-    /// <summary>Show numeric value next to each bar / above each bar. Default false.</summary>
     [Parameter] public bool ShowValues { get; set; } = false;
 
-    /// <summary>Format string for value labels (default "N2").</summary>
     [Parameter] public string ValueFormat { get; set; } = "N2";
 
-    /// <summary>Render the bottom axis labels in multi-row mode. Default true.</summary>
     [Parameter] public bool ShowAxisLabels { get; set; } = true;
 
-    /// <summary>Default bar color. Override per-bar via ChartBar.Color.</summary>
     [Parameter] public string? BarColor { get; set; } = "#2563eb";
 
-    /// <summary>Inline style applied to the row label cell.</summary>
     [Parameter] public string? LabelStyle { get; set; } = "min-width:160px;";
 
     #endregion
 
     #region Parameters — New
 
-    /// <summary>Chart visualization type.</summary>
     [Parameter] public ChartType Type { get; set; } = ChartType.Bar;
 
-    /// <summary>Multi-series data for new SVG chart modes.</summary>
     [Parameter] public List<ChartSeries>? Series { get; set; }
 
-    /// <summary>X-axis configuration.</summary>
     [Parameter] public ChartAxis? XAxis { get; set; }
 
-    /// <summary>Y-axis configuration.</summary>
     [Parameter] public ChartAxis? YAxis { get; set; }
 
-    /// <summary>Legend configuration.</summary>
     [Parameter] public ChartLegend? Legend { get; set; }
 
-    /// <summary>Chart height CSS value.</summary>
     [Parameter] public string? Height { get; set; } = "300px";
 
-    /// <summary>Enable CSS animation on chart elements.</summary>
     [Parameter] public bool Animate { get; set; } = false;
 
-    /// <summary>Custom color palette for series.</summary>
     [Parameter] public string[]? ColorPalette { get; set; }
 
-    /// <summary>Donut inner radius as proportion of outer radius (0-1).</summary>
     [Parameter] public double? InnerRadius { get; set; }
 
-    /// <summary>Gauge current value.</summary>
     [Parameter] public double? GaugeValue { get; set; }
 
-    /// <summary>Gauge minimum value.</summary>
     [Parameter] public double? GaugeMin { get; set; }
 
-    /// <summary>Gauge maximum value.</summary>
     [Parameter] public double? GaugeMax { get; set; }
 
-    /// <summary>KPI display value.</summary>
     [Parameter] public string? KpiValue { get; set; }
 
-    /// <summary>KPI descriptive label.</summary>
     [Parameter] public string? KpiLabel { get; set; }
 
-    /// <summary>KPI trend indicator (e.g. "+12%", "-5%", "up", "down").</summary>
     [Parameter] public string? KpiTrend { get; set; }
 
     #endregion
@@ -435,10 +405,6 @@
         return ticks;
     }
 
-    /// <summary>
-    /// Helper to emit SVG text elements. Razor treats &lt;text&gt; as a directive,
-    /// so we build the markup as a raw MarkupString instead.
-    /// </summary>
     private static MarkupString SvgText(string x, string y, string content,
         string? anchor = null, string? fontSize = null, string? fill = null,
         string? fontWeight = null, string? transform = null)
@@ -1519,7 +1485,6 @@
 
     #region ChartBar class (backwards compat)
 
-    /// <summary>Single-series bar entry — kept for backwards compatibility.</summary>
     public class ChartBar
     {
         public string Label { get; set; } = "";

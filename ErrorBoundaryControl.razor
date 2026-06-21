@@ -22,7 +22,6 @@
 @code {
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    /// <summary>Optional label for logging which component/area failed.</summary>
     [Parameter] public string Area { get; set; } = "Component";
 
     private ErrorBoundary? _errorBoundary;
@@ -30,7 +29,6 @@
 
     private void LogError(Exception ex)
     {
-        // Avoid logging the same exception on re-render
         if (ex != _lastLogged)
         {
             _lastLogged = ex;

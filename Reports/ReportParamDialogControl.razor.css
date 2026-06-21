@@ -60,7 +60,6 @@
     border-bottom: 1px dashed #ddd;
 }
 
-/* Each parameter occupies a panel matching Crystal's "Enter Parameter Values" dialog. */
 .fx-param-panel {
     background: #e8eaef;
     border: 1px solid #c0c4cc;
@@ -109,8 +108,6 @@
     box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
 }
 
-/* Crystal default-values dropdown (e.g. "Show PO Items?" Yes/No) shows the
-   description selector + an editable value box below it. */
 .fx-param-defaults-dropdown {
     margin-bottom: 6px;
 }
@@ -122,11 +119,6 @@
     margin: 2px 0 2px 2px;
 }
 
-/* AllowCustomCurrentValues — "Enter a Value:" inline-add row that sits
-   below the dual-list-box. The label + input + > button line up
-   horizontally so the layout reads like Crystal's native dialog.
-   margin-top is deliberately roomy: without it the row hugs the
-   dual-list and visually appears to overlap the Selected pane. */
 .fx-param-custom-row {
     display: flex;
     align-items: center;

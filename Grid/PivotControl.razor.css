@@ -10,13 +10,11 @@
     overflow: hidden;
 }
 
-/* ── Interactive Layout ── */
 .fx-pivot-interactive {
     display: flex;
     gap: 0;
 }
 
-/* ── Field Builder Panel ── */
 .fx-pivot-builder {
     width: 260px;
     min-width: 260px;
@@ -55,7 +53,6 @@
     padding: 4px 0;
 }
 
-/* ── Field Chips ── */
 .fx-pivot-field-chip {
     display: inline-flex;
     align-items: center;
@@ -132,7 +129,6 @@
     color: #dc2626;
 }
 
-/* ── Drop Zones ── */
 .fx-pivot-zones {
     flex: 1;
     padding: 6px 10px;
@@ -200,7 +196,6 @@
     cursor: text;
 }
 
-/* ── Pivot Content Area ── */
 .fx-pivot-content {
     flex: 1;
     min-width: 0;
@@ -213,7 +208,6 @@
     flex: 1;
 }
 
-/* ── Filter Bar ── */
 .fx-pivot-filter-bar {
     display: flex;
     gap: 16px;
@@ -246,7 +240,6 @@
     min-width: 120px;
 }
 
-/* ── Empty State ── */
 .fx-pivot-empty {
     display: flex;
     flex-direction: column;
@@ -263,14 +256,12 @@
     opacity: 0.3;
 }
 
-/* ── Table ── */
 .fx-pivot-table {
     border-collapse: collapse;
     width: 100%;
     min-width: max-content;
 }
 
-/* ── Headers ── */
 .fx-pivot-table thead th {
     padding: 8px 12px;
     font-weight: 600;
@@ -328,7 +319,6 @@
     font-size: 9px;
 }
 
-/* ── Data Rows ── */
 .fx-pivot-table tbody td {
     padding: 6px 12px;
     border: 1px solid #d3d6db;
@@ -372,7 +362,6 @@
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Subtotal Rows ── */
 .fx-pivot-subtotal-row {
     background: #f0f5fb;
     border-top: 1px solid #93b8e8;
@@ -402,7 +391,6 @@
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Grand Total Row ── */
 .fx-pivot-grand-total-row {
     background: #4b5563;
 }

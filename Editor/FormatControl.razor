@@ -12,7 +12,7 @@
 
 <div class="fx-format-control @(CssClass ?? string.Empty)">
 
-    @* Inline text formatting *@
+    
     <div class="fx-format-group" role="group" aria-label="Text formatting">
         <EditorButtonControl CssClass="fx-format-btn"
                              PreventMouseDownDefault="true"
@@ -59,7 +59,7 @@
         </div>
     }
 
-    @* Font / Size / Width / Line dropdowns *@
+    
     @if (FontFamilyOptions is not null)
     {
         <label class="fx-format-field" title="Font family — applies to the current selection">
@@ -107,7 +107,7 @@
 
     <span class="fx-format-divider"></span>
 
-    @* Paragraph alignment *@
+    
     <div class="fx-format-group" role="group" aria-label="Paragraph alignment">
         <EditorButtonControl CssClass="fx-format-btn"
                              PreventMouseDownDefault="true"
@@ -137,25 +137,21 @@
 </div>
 
 @code {
-    // ─── Current state (bound values) ────────────────────────────────────
     [Parameter] public string? FontFamily { get; set; }
     [Parameter] public int FontSizePx { get; set; }
     [Parameter] public string? PageWidth { get; set; }
     [Parameter] public string? LineHeight { get; set; }
 
-    // ─── Option tables — omit any to hide that dropdown ──────────────────
     [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? FontFamilyOptions { get; set; }
     [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? FontSizeOptions { get; set; }
     [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? PageWidthOptions { get; set; }
     [Parameter] public IEnumerable<EditorDropDownControl.EditorDropDownOption>? LineHeightOptions { get; set; }
 
-    // ─── Change handlers ────────────────────────────────────────────────
     [Parameter] public EventCallback<string> OnFontFamilyChanged { get; set; }
     [Parameter] public EventCallback<string> OnFontSizeChanged { get; set; }
     [Parameter] public EventCallback<string> OnPageWidthChanged { get; set; }
     [Parameter] public EventCallback<string> OnLineHeightChanged { get; set; }
 
-    // ─── Inline formatting (selection-scoped) ───────────────────────────
     [Parameter] public EventCallback OnBoldClicked { get; set; }
     [Parameter] public EventCallback OnItalicClicked { get; set; }
     [Parameter] public EventCallback OnUnderlineClicked { get; set; }
@@ -163,7 +159,6 @@
     [Parameter] public EventCallback OnHeading1Clicked { get; set; }
     [Parameter] public EventCallback OnHeading2Clicked { get; set; }
 
-    // ─── Paragraph alignment ────────────────────────────────────────────
     [Parameter] public EventCallback OnAlignLeftClicked { get; set; }
     [Parameter] public EventCallback OnAlignCenterClicked { get; set; }
     [Parameter] public EventCallback OnAlignRightClicked { get; set; }

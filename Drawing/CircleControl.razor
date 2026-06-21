@@ -1,0 +1,10 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Circle annotation — a circle inscribed in the (normalised) bounding box. Self-contained SVG. *@
+<svg class="fx-draw-svg" style="@(BoxStyle + SelStyle)"
+     width="@Num(Shape.AbsWidth)" height="@Num(Shape.AbsHeight)" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="@Num(Shape.AbsWidth / 2)" cy="@Num(Shape.AbsHeight / 2)"
+            r="@Num(System.Math.Max(0, Shape.Radius - Shape.StrokeWidth))"
+            fill="none" stroke="@Shape.Color" stroke-width="@Num(Shape.StrokeWidth)" />
+</svg>

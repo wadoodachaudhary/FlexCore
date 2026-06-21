@@ -3,12 +3,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Fx.ControlKit.Reports;
 
-/// <summary>
-/// Converts Crystal .rpt files into the XML shape consumed by Fx ControlKit Reports.
-///
-/// This path performs native C# conversion from the .rpt binary. It does not
-/// validate against, search for, or copy an already generated XML file.
-/// </summary>
 [UnsupportedOSPlatform("browser")]
 public sealed class RptToXmlConverter
 {
@@ -22,9 +16,6 @@ public sealed class RptToXmlConverter
         _logger = logger;
     }
 
-    /// <summary>
-    /// Converts one .rpt file and overwrites <paramref name="xmlPath"/>.
-    /// </summary>
     public async Task ConvertAsync(string rptPath, string xmlPath, CancellationToken cancellationToken = default)
     {
         ValidateJob(rptPath, xmlPath);
@@ -40,11 +31,6 @@ public sealed class RptToXmlConverter
         }
     }
 
-    /// <summary>
-    /// Batch counterpart to <see cref="ConvertAsync"/>.
-    /// </summary>
-    /// <param name="jobs">Pairs of (rpt source path, xml destination path).</param>
-    /// <param name="cancellationToken">Cancellation token for the queued conversion work.</param>
     public async Task ConvertBatchAsync(
         IReadOnlyList<(string RptPath, string XmlPath)> jobs,
         CancellationToken cancellationToken = default)

@@ -135,7 +135,6 @@ public static class CrystalRptToXml
         }
         catch
         {
-            // Subreport discovery should not make a successful conversion fail.
         }
     }
 

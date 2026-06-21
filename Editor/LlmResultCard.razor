@@ -18,10 +18,7 @@
         {
             <span class="fx-pill fx-pill-small fx-model-pill">@ModelDisplayName</span>
         }
-        @* Copy button — copies the currently-selected text from this card
-           if any, otherwise the whole output body. Always as plain text so
-           the destination (usually GhostWriter's contenteditable) inherits
-           the document's own font / size / color instead of the card's. *@
+        
         <button class="fx-copy-btn"
                 type="button"
                 @onclick="CopyAsync"
@@ -77,9 +74,7 @@
     }
     else if (Variants != null && Variants.Count > 0)
     {
-        @* Tab strip — one per rewrite variant. The active tab's text is the
-           body. Switching a tab just updates ActiveVariantIndex so the host
-           can resolve the right text when an action fires. *@
+        
         <div class="fx-result-tabs" role="tablist">
             @for (var vi = 0; vi < Variants.Count; vi++)
             {
@@ -115,13 +110,6 @@
     }
     else if (!string.IsNullOrWhiteSpace(OutputText))
     {
-        // Echo banner — when the model's output starts with a long
-        // verbatim slice of its input (DeepSeek R1 total-echo, Qwen
-        // partial echo, Gemini occasional truncate-echo), surface that
-        // fact above the body so the user sees what actually changed.
-        // We don't strip the prefix from OutputText itself — the host's
-        // Replace/Insert actions need the full text — we just split it
-        // visually with the banner.
         var echoLen = ComputeEchoLen(EchoCompareTo, OutputText);
         var echoPct = OutputText.Length == 0 ? 0
             : (int)Math.Round(100.0 * echoLen / OutputText.Length);
@@ -153,8 +141,7 @@
             }
             else
             {
-                @* Fallback to the original Apply / Dismiss pair when the host
-                   doesn't supply its own action set. *@
+                
                 @if (OnApply.HasDelegate)
                 {
                     <button class="fx-button fx-primary fx-small" @onclick="OnApply">
@@ -180,11 +167,6 @@
 </div>
 
 @code {
-    /// <summary>
-    /// One of the buttons rendered in the card's action row. The host supplies
-    /// a list of these to get arbitrary verbs (Replace, Insert, Merge, Retry)
-    /// without the control needing to know about each one.
-    /// </summary>
     public sealed record ResultAction(
         string Label,
         EventCallback OnClick,
@@ -204,17 +186,10 @@
     [Parameter] public string? OriginalText { get; set; }
     [Parameter] public string? OriginalLabel { get; set; }
 
-    /// <summary>
-    /// Label + body for one tab. When the host supplies a non-empty list
-    /// the card renders a tab strip above the output body; the active
-    /// tab's <see cref="Text"/> becomes the body. Plain-text slots (with
-    /// <see cref="OutputText"/> only) keep the single-body layout.
-    /// </summary>
     public sealed record Variant(string Label, string Text);
 
     [Parameter] public IReadOnlyList<Variant>? Variants { get; set; }
 
-    /// <summary>Index of the currently-visible tab. Two-way bound so the host can react.</summary>
     [Parameter] public int ActiveVariantIndex { get; set; }
 
     [Parameter] public EventCallback<int> ActiveVariantIndexChanged { get; set; }
@@ -230,10 +205,6 @@
         }
     }
 
-    // ── Clipboard integration ──────────────────────────────────────────────
-    // Unique DOM id per card instance so the JS-side copyFromCard helper can
-    // locate the right body via document.getElementById, regardless of how
-    // many cards are on screen at once.
     private readonly string _cardId = "fx-result-" + Guid.NewGuid().ToString("N");
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -242,15 +213,10 @@
         {
             try
             {
-                // Install the global plain-text copy interceptor on first
-                // render. It's idempotent — every card calls it, only the
-                // first one actually attaches the listener.
-                await JS.InvokeVoidAsync("hfClipboard.installCopyInterceptor");
+                await JS.InvokeVoidAsync("fxClipboard.installCopyInterceptor");
             }
             catch
             {
-                // JS not ready yet (server pre-render, hot reload) — the
-                // Copy button itself still works via the async call below.
             }
         }
     }
@@ -259,16 +225,13 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("hfClipboard.copyFromCard", _cardId);
+            await JS.InvokeVoidAsync("fxClipboard.copyFromCard", _cardId);
         }
         catch
         {
-            // Best-effort — if the clipboard API is unavailable the card
-            // still shows the text, the user can always select + ⌘C.
         }
     }
 
-    /// <summary>Body text for whichever variant tab is active, with a bounds-safe fallback.</summary>
     private string ActiveVariantText
     {
         get
@@ -280,21 +243,10 @@
         }
     }
 
-    /// <summary>
-    /// Base64-encoded image bytes (no data: prefix). When set, the card
-    /// renders the picture in place of <see cref="OutputText"/>. Host supplies
-    /// image-specific <see cref="Actions"/> (Download / Copy / Insert) since
-    /// Replace/Merge don't apply to pictures.
-    /// </summary>
     [Parameter] public string? ImageBase64 { get; set; }
 
-    /// <summary>MIME type for <see cref="ImageBase64"/> — defaults to <c>image/png</c>.</summary>
     [Parameter] public string? ImageMime { get; set; }
 
-    /// <summary>
-    /// Host-defined action buttons. When non-empty, they replace the default
-    /// Apply / Dismiss pair entirely.
-    /// </summary>
     [Parameter] public IReadOnlyList<ResultAction>? Actions { get; set; }
 
     [Parameter] public EventCallback OnApply { get; set; }
@@ -302,30 +254,14 @@
     [Parameter] public string? ApplyLabel { get; set; }
     [Parameter] public string? DismissLabel { get; set; }
 
-    /// <summary>
-    /// Render a close (×) button in the card header — typically true only on
-    /// the first card of a multi-model strip so the user has one place to
-    /// dismiss the whole panel.
-    /// </summary>
     [Parameter] public bool ShowCloseButton { get; set; }
 
     [Parameter] public string? CssClass { get; set; }
 
-    /// <summary>
-    /// Optional input the host wants compared against <see cref="OutputText"/>
-    /// for echo detection. For an Expand+ chain card this is the previous
-    /// step's output (i.e. THIS card's input). When set and the longest
-    /// common prefix is ≥ <see cref="EchoMinChars"/> chars, an "↪ N chars
-    /// repeated" banner appears above the output body.
-    /// </summary>
     [Parameter] public string? EchoCompareTo { get; set; }
 
-    /// <summary>Minimum prefix overlap (chars) before the echo banner appears.</summary>
     [Parameter] public int EchoMinChars { get; set; } = 100;
 
-    /// <summary>Length (chars) of the longest common leading prefix of
-    /// <paramref name="input"/> and <paramref name="output"/>. Used by the
-    /// echo banner; the percentage is computed inline at the call site.</summary>
     private static int ComputeEchoLen(string? input, string? output)
     {
         if (string.IsNullOrEmpty(input) || string.IsNullOrEmpty(output)) return 0;

@@ -41,8 +41,6 @@
     transition: width 0.25s ease-out;
 }
 
-/* Indeterminate state — looping shimmer when total is unknown
-   (verifying, writing manifest, …). 30 % wide block sweeps L→R. */
 .fx-progress-indeterminate {
     width: 30% !important;
     animation: fx-progress-loop 1.4s linear infinite;
@@ -60,7 +58,6 @@
     color: #52606d;
 }
 
-/* Error variant — pink background, red bar, no animation. */
 .fx-progress-error {
     background: #fff3f3;
     border-color: #f0a8a8;

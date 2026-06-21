@@ -30,15 +30,11 @@
 </div>
 
 @code {
-    /// <summary>Optional title displayed at the top of the panel.</summary>
     [Parameter] public string? Title { get; set; }
 
-    /// <summary>The editor rows (use <c>EditorPanelRow</c> children).</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    /// <summary>Optional footer (buttons, etc).</summary>
     [Parameter] public RenderFragment? FooterContent { get; set; }
 
-    /// <summary>Optional CSS class for the outer container.</summary>
     [Parameter] public string CssClass { get; set; } = "";
 }

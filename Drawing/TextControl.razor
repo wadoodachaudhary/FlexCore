@@ -1,0 +1,8 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Free text label. The host DrawingControl renders an editable textarea over it during editing. *@
+<div class="fx-draw-text"
+     style="position:absolute; left:@Px(Shape.X); top:@Px(Shape.Y); color:@Shape.Color; pointer-events:none; font:600 18px 'Segoe UI',Tahoma,sans-serif; white-space:pre;@SelStyle">
+    @(string.IsNullOrWhiteSpace(Shape.Text) ? "✎ text" : Shape.Text)
+</div>

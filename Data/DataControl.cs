@@ -9,11 +9,6 @@ using Fx.ControlKit.Reports;
 
 namespace Fx.ControlKit.Data;
 
-/// <summary>
-/// Data-aware table component inspired by pandas DataFrame and PowerBuilder DataWindow.
-/// It wraps a <see cref="DataTable"/> and exposes data shaping, row/item access,
-/// selection, export, and adapter methods for GridControl, ChartControl, and ReportWriterControl.
-/// </summary>
 public class DataControl
 {
     private DataTable _table;
@@ -31,11 +26,6 @@ public class DataControl
         ApplyView();
     }
 
-    /// <summary>
-    /// Create a DataControl with a pandas DataFrame-style constructor signature.
-    /// Accepts DataControl, DataTable, dictionaries, row objects, list-like values,
-    /// rectangular arrays, or scalar constants.
-    /// </summary>
     public DataControl(
         object? data,
         IEnumerable? index = null,
@@ -47,7 +37,6 @@ public class DataControl
         ApplyView();
     }
 
-    /// <summary>The underlying table. Assigning a new table clears selection and reapplies Filter/Sort.</summary>
     public DataTable Table
     {
         get => _table;
@@ -71,7 +60,6 @@ public class DataControl
     public object? Tag { get; set; }
     public IReadOnlyList<object?> Index => CurrentRows().Select(GetRowLabel).ToList();
 
-    /// <summary>DataView row filter expression, similar to DataWindow SetFilter/Filter.</summary>
     public string? Filter
     {
         get => Table.DefaultView.RowFilter;
@@ -83,7 +71,6 @@ public class DataControl
         }
     }
 
-    /// <summary>DataView sort expression, similar to DataWindow SetSort/Sort.</summary>
     public string? Sort
     {
         get => Table.DefaultView.Sort;

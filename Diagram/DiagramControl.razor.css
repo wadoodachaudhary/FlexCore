@@ -45,13 +45,9 @@
     pointer-events: none;
 }
 
-/* ---------- Background Images ---------- */
-
 ::deep .fx-node-bg-image {
     pointer-events: none;
 }
-
-/* ---------- Connectors ---------- */
 
 .fx-diagram-connector {
     pointer-events: none;

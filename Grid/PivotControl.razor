@@ -11,7 +11,7 @@
         <div class="fx-pivot-builder">
             <div class="fx-pivot-builder-header">PivotTable Fields</div>
 
-            @* Available Fields *@
+            
             <div class="fx-pivot-field-list">
                 @foreach (var field in _unplacedFields)
                 {
@@ -30,7 +30,7 @@
             </div>
 
             <div class="fx-pivot-zones">
-                @* Filters Zone *@
+                
                 <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Filter ? "fx-pivot-zone-hover" : "")"
                      @ondragover="() => OnDragOverZone(PivotArea.Filter)"
                      @ondragover:preventDefault="true"
@@ -56,7 +56,7 @@
                 </div>
 
                 <div class="fx-pivot-zones-grid">
-                    @* Rows Zone *@
+                    
                     <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Row ? "fx-pivot-zone-hover" : "")"
                          @ondragover="() => OnDragOverZone(PivotArea.Row)"
                          @ondragover:preventDefault="true"
@@ -81,7 +81,7 @@
                         </div>
                     </div>
 
-                    @* Columns Zone *@
+                    
                     <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Column ? "fx-pivot-zone-hover" : "")"
                          @ondragover="() => OnDragOverZone(PivotArea.Column)"
                          @ondragover:preventDefault="true"
@@ -107,7 +107,7 @@
                     </div>
                 </div>
 
-                @* Values Zone *@
+                
                 <div class="fx-pivot-zone @(_dragOverArea == PivotArea.Value ? "fx-pivot-zone-hover" : "")"
                      @ondragover="() => OnDragOverZone(PivotArea.Value)"
                      @ondragover:preventDefault="true"
@@ -146,10 +146,10 @@
         </div>
     }
 
-    @* ── Pivot Table ─────────────────────────────────────────────── *@
+    
     <div class="fx-pivot-content">
 
-        @* Filter Dropdowns *@
+        
         @if (_activeFilters.Count > 0)
         {
             <div class="fx-pivot-filter-bar">
@@ -180,7 +180,7 @@
         {
             <div class="fx-pivot-scroll" style="overflow:auto; max-height:@Height; @(string.IsNullOrEmpty(Width) ? "" : $"max-width:{Width};")">
                 <table class="fx-pivot-table">
-                    @* ── Multi-level Column Headers ── *@
+                    
                     @if (_headerLevels.Count > 0)
                     {
                         <thead>
@@ -205,7 +205,7 @@
                         </thead>
                     }
 
-                    @* ── Data Rows ── *@
+                    
                     <tbody>
                         @foreach (var row in _displayRows)
                         {

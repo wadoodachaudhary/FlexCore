@@ -73,45 +73,31 @@
     }
 </div>
 
-
 @code {
-    /// <summary>Percent complete, 0–100. Ignored when <see cref="Indeterminate"/> is true.</summary>
     [Parameter] public double Value { get; set; }
 
-    /// <summary>Optional bold lead-in label (e.g. "Pulling llama3.1:8b").</summary>
     [Parameter] public string? Title { get; set; }
 
-    /// <summary>Lighter status word/phrase shown after the title (e.g. "downloading", "verifying").</summary>
     [Parameter] public string? Status { get; set; }
 
-    /// <summary>Mono-formatted detail line under the bar (e.g. "2.2 GB / 4.6 GB · 40 MB/s").</summary>
     [Parameter] public string? Detail { get; set; }
 
-    /// <summary>If true, the bar shows a looping animation instead of a fill width.</summary>
     [Parameter] public bool Indeterminate { get; set; }
 
-    /// <summary>Renders the bar in red. Pair with <see cref="ErrorMessage"/>.</summary>
     [Parameter] public bool IsError { get; set; }
 
-    /// <summary>Error text shown above the track when <see cref="IsError"/> is true.</summary>
     [Parameter] public string? ErrorMessage { get; set; }
 
-    /// <summary>If non-null, a Cancel button is rendered in the header.</summary>
     [Parameter] public EventCallback OnCancel { get; set; }
 
-    /// <summary>When true, the cancel button shows "cancelling…" and is disabled.</summary>
     [Parameter] public bool CancelDisabled { get; set; }
 
-    /// <summary>Custom label for the cancel button (default: "Cancel").</summary>
     [Parameter] public string? CancelText { get; set; }
 
-    /// <summary>Whether to show the numeric percentage in the detail line. Default true.</summary>
     [Parameter] public bool ShowPercent { get; set; } = true;
 
-    /// <summary>Extra CSS class on the wrapper.</summary>
     [Parameter] public string? CssClass { get; set; }
 
-    /// <summary>Inline style on the wrapper.</summary>
     [Parameter] public string? Style { get; set; }
 
     private double _displayValue => Math.Max(0, Math.Min(100, Value));

@@ -30,33 +30,20 @@
 </select>
 
 @code {
-    /// <summary>
-    /// A single entry in the dropdown. <see cref="Value"/> is what's written
-    /// to the &lt;option value=""&gt; attribute (and flowed back through
-    /// <see cref="ValueChanged"/>); <see cref="Label"/> is the visible text.
-    /// </summary>
     public sealed record EditorDropDownOption(string Value, string Label);
 
     [Parameter] public IEnumerable<EditorDropDownOption>? Options { get; set; }
 
-    /// <summary>Currently-selected option's value (as a string).</summary>
     [Parameter] public string? Value { get; set; }
 
-    /// <summary>Fires with the new option's value every time the user picks one.</summary>
     [Parameter] public EventCallback<string> ValueChanged { get; set; }
 
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public string? Style { get; set; }
 
-    /// <summary>When false, the &lt;select&gt; is rendered disabled.</summary>
     [Parameter] public bool Enabled { get; set; } = true;
 
-    /// <summary>
-    /// Suppresses the library's <c>.fx-dropdown</c> base class so the host
-    /// owns every visual detail through <see cref="CssClass"/> (e.g.
-    /// GhostWriter's <c>.fmt-select</c>, <c>.chapter-select</c>).
-    /// </summary>
     [Parameter] public bool BareStyle { get; set; }
 
     private string ResolvedCssClass

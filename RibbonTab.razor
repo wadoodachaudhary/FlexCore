@@ -10,10 +10,8 @@
 }
 
 @code {
-    /// <summary>Title shown on the tab strip.</summary>
     [Parameter] public string Title { get; set; } = "";
 
-    /// <summary>Tab content — typically RibbonGroups.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
     [CascadingParameter] public RibbonControl? Parent { get; set; }

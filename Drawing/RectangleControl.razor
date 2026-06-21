@@ -1,0 +1,8 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Rectangle annotation — a pointer-transparent CSS border box positioned over the surface.
+   Pure HTML/CSS, no JS. RectangleTextObject extends this with a clickable label bubble. *@
+<div class="fx-draw-rect"
+     style="@BoxStyle border:@(Num(Shape.StrokeWidth))px solid @Shape.Color;@SelStyle">
+</div>

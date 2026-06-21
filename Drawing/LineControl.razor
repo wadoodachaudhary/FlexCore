@@ -1,0 +1,10 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Straight line — self-contained SVG covering the bounding box (overflow visible so a thick
+   stroke isn't clipped). Endpoints are the box-local segment coordinates. *@
+<svg class="fx-draw-svg" style="@BoxStyle overflow:visible;@SelStyle"
+     width="@Num(Shape.AbsWidth)" height="@Num(Shape.AbsHeight)" xmlns="http://www.w3.org/2000/svg">
+    <line x1="@Num(Shape.LocalX1)" y1="@Num(Shape.LocalY1)" x2="@Num(Shape.LocalX2)" y2="@Num(Shape.LocalY2)"
+          stroke="@Shape.Color" stroke-width="@Num(Shape.StrokeWidth)" stroke-linecap="round" />
+</svg>

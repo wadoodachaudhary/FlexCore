@@ -78,6 +78,11 @@
     font-size: 0;
 }
 
+.fx-msgbox-icon-image {
+    display: block;
+    object-fit: contain;
+}
+
 .fx-msgbox-vb6 .fx-msgbox-message {
     color: #000;
     font-size: 12px;

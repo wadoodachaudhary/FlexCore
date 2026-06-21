@@ -34,16 +34,12 @@
 </div>
 
 @code {
-    /// <summary>Model whose public properties are edited.</summary>
     [Parameter] public TModel? Value { get; set; }
 
-    /// <summary>Fires after any property is edited.</summary>
     [Parameter] public EventCallback<TModel?> ValueChanged { get; set; }
 
-    /// <summary>Optional CSS class applied to the outer container.</summary>
     [Parameter] public string CssClass { get; set; } = "";
 
-    /// <summary>Optional override: render a custom editor for a specific property.</summary>
     [Parameter] public RenderFragment<(TModel? Model, System.Reflection.PropertyInfo Prop)>? CustomEditor { get; set; }
 
     private System.Reflection.PropertyInfo[] _properties = Array.Empty<System.Reflection.PropertyInfo>();
@@ -58,7 +54,6 @@
 
     private static string DisplayName(System.Reflection.PropertyInfo prop)
     {
-        // Split PascalCase: "CustomerName" → "Customer Name"
         return System.Text.RegularExpressions.Regex
             .Replace(prop.Name, "(\\B[A-Z])", " $1");
     }

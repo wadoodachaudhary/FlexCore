@@ -39,13 +39,8 @@
 </button>
 
 @code {
-    /// <summary>Label shown next to the icon. Defaults to "Cancel". Pass "" for icon-only.</summary>
     [Parameter] public string? Label { get; set; }
 
-    /// <summary>
-    /// Whether to render the built-in X icon. Defaults to true. Set false
-    /// for text-only Cancel buttons (e.g. <c>btn ghost small</c>).
-    /// </summary>
     [Parameter] public bool ShowIcon { get; set; } = true;
 
     private string ResolvedLabel => Label ?? "Cancel";

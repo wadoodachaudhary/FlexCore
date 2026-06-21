@@ -2,17 +2,11 @@ using Microsoft.AspNetCore.Components;
 
 namespace Fx.ControlKit.Grid;
 
-/// <summary>
-/// Non-generic interface for column registration from TreeGridColumn.
-/// </summary>
 public interface ITreeGridControlOwner
 {
     void AddColumn(TreeGridColumn column);
 }
 
-/// <summary>
-/// Defines a column in the TreeGridControl. Equivalent to SyncFusion's TreeGridColumn.
-/// </summary>
 public class TreeGridColumn : ComponentBase
 {
     [CascadingParameter] internal ITreeGridControlOwner? Owner { get; set; }
@@ -27,6 +21,9 @@ public class TreeGridColumn : ComponentBase
     [Parameter] public bool Visible { get; set; } = true;
     [Parameter] public bool IsPrimaryKey { get; set; }
     [Parameter] public bool AllowEditing { get; set; } = true;
+    [Parameter] public bool AllowSorting { get; set; } = true;
+    [Parameter] public bool AllowFiltering { get; set; } = true;
+    [Parameter] public bool AllowResizing { get; set; } = true;
     [Parameter] public RenderFragment<object>? Template { get; set; }
     [Parameter] public RenderFragment? HeaderTemplate { get; set; }
     [Parameter] public TreeGridHeaderIconKind HeaderIconKind { get; set; } = TreeGridHeaderIconKind.None;
@@ -36,6 +33,8 @@ public class TreeGridColumn : ComponentBase
     [Parameter] public string? HeaderIconCssClass { get; set; }
     [Parameter] public bool HeaderIconVisible { get; set; } = true;
     [Parameter] public EventCallback HeaderIconClicked { get; set; }
+    [Parameter] public IReadOnlyList<GridToolbarItem>? HeaderToolbarItems { get; set; }
+    [Parameter] public EventCallback<GridToolbarClickEventArgs> HeaderToolbarItemClicked { get; set; }
     [Parameter] public RenderFragment<object>? EditTemplate { get; set; }
 
     public string DisplayHeader => string.IsNullOrEmpty(HeaderText) ? Field : HeaderText;

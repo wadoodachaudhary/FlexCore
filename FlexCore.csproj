@@ -40,6 +40,8 @@
     <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="TorchSharp-cpu" Version="0.106.0" />
+    <PackageReference Include="libtorch-cpu-osx-arm64" Version="2.10.0" />
   </ItemGroup>
 
 </Project>

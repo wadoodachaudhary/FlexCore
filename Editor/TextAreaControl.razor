@@ -33,26 +33,17 @@
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public string? Style { get; set; }
 
-    /// <summary>Visible row count (maps to the <c>rows</c> HTML attribute).</summary>
     [Parameter] public int? Rows { get; set; }
 
-    /// <summary>Visible column count.</summary>
     [Parameter] public int? Cols { get; set; }
 
     [Parameter] public int? MaxLength { get; set; }
 
-    /// <summary>When false, the textarea is rendered as disabled.</summary>
     [Parameter] public bool Enabled { get; set; } = true;
 
     [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public bool Spellcheck { get; set; } = true;
 
-    /// <summary>
-    /// When true, the control fires <see cref="ValueChanged"/> only on blur
-    /// (matching native <c>onchange</c>). Default is <c>false</c> — binding
-    /// updates every keystroke via <c>oninput</c>, which is what most hosts
-    /// expect for live "dirty" tracking.
-    /// </summary>
     [Parameter] public bool BindOnChange { get; set; }
 
     private string ResolvedCssClass

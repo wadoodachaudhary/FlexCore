@@ -1,0 +1,17 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Irregular outline drawn as a click-to-add-vertices polyline (the pen replacement). Points are
+   stored in absolute image coordinates; rendered relative to the bounding box. Self-contained SVG. *@
+<svg class="fx-draw-svg" style="@BoxStyle overflow:visible;@SelStyle"
+     width="@Num(System.Math.Max(1, Shape.AbsWidth))" height="@Num(System.Math.Max(1, Shape.AbsHeight))"
+     xmlns="http://www.w3.org/2000/svg">
+    <polyline points="@LocalPoints" fill="none" stroke="@Shape.Color"
+              stroke-width="@Num(Shape.StrokeWidth)" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
+
+@code {
+    private string LocalPoints =>
+        string.Join(" ", Shape.Points.Select(p =>
+            $"{Num(p[0] - Shape.Left)},{Num(p[1] - Shape.Top)}"));
+}

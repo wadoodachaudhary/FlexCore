@@ -3,21 +3,21 @@
 @if (!Hidden)
 {
     <div class="command-panel @(Collapsed ? "collapsed" : "") @CssClass" style="@Style">
-        <!-- Panel Toolbar -->
+        
         <div class="panel-toolbar">
             <button @onclick="OnClose" title="Close panel">
-                <img src="_content/FlexKit/images/16/close.ico" alt="Close" />
+                <img src="@CloseIconSrc" alt="Close" />
             </button>
             @if (!Collapsed)
             {
                 <button @onclick="OnToggleCollapse" title="Minimize">
-                    <img src="_content/FlexKit/images/16/Shrink.ico" alt="Minimize" />
+                    <img src="@ShrinkIconSrc" alt="Minimize" />
                 </button>
             }
             else
             {
                 <button @onclick="OnToggleCollapse" title="Expand">
-                    <img src="_content/FlexKit/images/16/expand.ico" alt="Expand" />
+                    <img src="@ExpandIconSrc" alt="Expand" />
                 </button>
             }
         </div>
@@ -26,11 +26,11 @@
         {
             @if (Type == SidebarType.Accordion)
             {
-                <!-- Explorer Bar Sections -->
+                
                 <div class="explorer-bar">
                     @foreach (var section in Sections)
                     {
-                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "")">
+                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "") @(section.Disabled ? "disabled" : "")">
                             <div class="explorer-section-header" @onclick="() => ToggleSection(section)">
                                 <span>@(section.Title)</span>
                             </div>
@@ -39,7 +39,7 @@
                                 <div class="explorer-section-body">
                                     @foreach (var item in section.Items)
                                     {
-                                        <div class="explorer-item @(item.IsBold ? "bold-item" : "") @(item.IsRed ? "red-item" : "")"
+                                        <div class="explorer-item @(item.IsBold ? "bold-item" : "") @(item.IsRed ? "red-item" : "") @(item.Disabled ? "disabled" : "")"
                                              @onclick="() => HandleItemClick(section, item)">
                                             @if (!string.IsNullOrEmpty(item.Icon))
                                             {
@@ -56,11 +56,11 @@
             }
             else if (Type == SidebarType.Tree)
             {
-                <!-- Tree View Sections (each section as a card containing a TreeViewControl) -->
+                
                 <div class="explorer-bar">
                     @foreach (var section in Sections)
                     {
-                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "")">
+                        <div class="explorer-section @(section == _activeSection ? "active" : "") @(section.IsCollapsed ? "collapsed" : "") @(section.Disabled ? "disabled" : "")">
                             <div class="explorer-section-header" @onclick="() => ToggleSection(section)">
                                 <span>@(section.Title)</span>
                             </div>
@@ -94,12 +94,16 @@
     [Parameter] public string Style { get; set; } = "";
 
     private SidebarSection? _activeSection;
+    private static string AssetBasePath => $"_content/{typeof(SidebarControl).Assembly.GetName().Name}";
+    private static string CloseIconSrc => $"{AssetBasePath}/images/16/close.ico";
+    private static string ShrinkIconSrc => $"{AssetBasePath}/images/16/Shrink.ico";
+    private static string ExpandIconSrc => $"{AssetBasePath}/images/16/expand.ico";
 
     protected override void OnParametersSet()
     {
         if (_activeSection == null && Sections != null && Sections.Count > 0)
         {
-            _activeSection = Sections[0];
+            _activeSection = Sections.FirstOrDefault(s => !s.Disabled) ?? Sections[0];
         }
     }
 
@@ -117,6 +121,7 @@
 
     private void ToggleSection(SidebarSection section)
     {
+        if (section.Disabled) return;
         section.IsCollapsed = !section.IsCollapsed;
         _activeSection = section;
     }
@@ -131,7 +136,8 @@
             {
                 Text = iconStr + item.Text,
                 Tag = item,
-                IsBold = item.IsBold
+                IsBold = item.IsBold,
+                IsDisabled = item.Disabled
             };
             nodes.Add(itemNode);
         }
@@ -140,15 +146,18 @@
 
     private async Task HandleItemClick(SidebarSection section, SidebarItem item)
     {
+        if (section.Disabled || item.Disabled) return;
         _activeSection = section;
         await OnItemClick.InvokeAsync(item);
     }
 
     private async Task HandleNodeClick(SidebarSection section, TreeNode node)
     {
+        if (section.Disabled || node.IsDisabled) return;
         _activeSection = section;
         if (node.Tag is SidebarItem item)
         {
+            if (item.Disabled) return;
             await OnItemClick.InvokeAsync(item);
         }
     }

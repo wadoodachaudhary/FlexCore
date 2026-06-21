@@ -14,9 +14,16 @@
                 <button type="button" class="fx-msgbox-close" aria-label="Close" @onclick="Close">&times;</button>
             </div>
             <div class="fx-msgbox-body">
-                @if (!string.IsNullOrEmpty(EffectiveIconCss))
+                @if (HasIcon)
                 {
-                    <span class="@IconClass" aria-hidden="true"></span>
+                    @if (!string.IsNullOrWhiteSpace(IconImageSrc))
+                    {
+                        <img class="@IconClass" src="@IconImageSrc" alt="" aria-hidden="true" />
+                    }
+                    else
+                    {
+                        <span class="@IconClass" aria-hidden="true"></span>
+                    }
                 }
                 <div class="fx-msgbox-message">@Message</div>
             </div>
@@ -64,9 +71,12 @@
     private string OverlayClass => $"fx-msgbox-overlay fx-msgbox-overlay-{LookCssSuffix}";
     private string MessageBoxClass => $"fx-msgbox fx-msgbox-{LookCssSuffix}{(string.IsNullOrWhiteSpace(CssClass) ? "" : $" {CssClass}")}";
     private string? EffectiveIconCss => ResolveEffectiveIconCss();
+    private bool HasIcon => !string.IsNullOrWhiteSpace(EffectiveIconCss);
+    private string StaticAssetRoot => $"_content/{typeof(MessageBoxControl).Assembly.GetName().Name}";
+    private string? IconImageSrc => ResolveIconImageSrc(EffectiveIconCss);
     private string IconClass => string.IsNullOrWhiteSpace(EffectiveIconCss)
         ? "fx-msgbox-icon"
-        : $"fx-msgbox-icon {ResolveIconCss(EffectiveIconCss)}";
+        : $"fx-msgbox-icon {ResolveIconCss(EffectiveIconCss)}{(string.IsNullOrWhiteSpace(IconImageSrc) ? "" : " fx-msgbox-icon-image")}";
 
     public Task<MessageBoxResult> ShowAsync(string message, string title = "Message",
         MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null, MessageBoxLook? look = null)
@@ -105,7 +115,17 @@
             return IconCss;
 
         return EffectiveLook == MessageBoxLook.VB6 && Buttons != MessageBoxButtons.Ok
-            ? "warning"
+            ? "question"
+            : null;
+    }
+
+    private string? ResolveIconImageSrc(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon))
+            return null;
+
+        return ResolveIconCss(icon) == "fx-msgbox-icon-question"
+            ? $"{StaticAssetRoot}/images/32/question.ico"
             : null;
     }
 

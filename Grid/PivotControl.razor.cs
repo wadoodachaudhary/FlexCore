@@ -6,7 +6,6 @@ namespace Fx.ControlKit.Grid;
 
 public partial class PivotControl<TValue>
 {
-    // ── Parameters ──────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue> DataSource { get; set; } = Enumerable.Empty<TValue>();
     [Parameter] public IReadOnlyList<string> RowFields { get; set; } = Array.Empty<string>();
@@ -15,11 +14,6 @@ public partial class PivotControl<TValue>
     [Parameter] public AggregateType Aggregation { get; set; } = AggregateType.Sum;
     [Parameter] public bool ShowGrandTotals { get; set; } = true;
     [Parameter] public bool ShowSubTotals { get; set; } = true;
-    /// <summary>
-    /// Optional .NET format string for value cells. Blank means plain numeric
-    /// output with no comma grouping; use values such as N0, N2, or C2 when
-    /// formatting is wanted.
-    /// </summary>
     [Parameter] public string ValueFormat { get; set; } = "";
     [Parameter] public string Height { get; set; } = "420px";
     [Parameter] public string Width { get; set; } = "";
@@ -27,21 +21,13 @@ public partial class PivotControl<TValue>
     [Parameter] public string CssClass { get; set; } = "";
     [Parameter] public string Style { get; set; } = "";
 
-    /// <summary>Show the interactive field-builder panel with drag-and-drop zones.</summary>
     [Parameter] public bool Interactive { get; set; }
 
-    /// <summary>
-    /// Multiple value fields (overrides single ValueField / Aggregation when set).
-    /// Each entry specifies a field, aggregation, label, and format.
-    /// </summary>
     [Parameter] public IReadOnlyList<PivotValueConfig>? ValueFields { get; set; }
 
-    /// <summary>Optional field labels: key = field name, value = display label.</summary>
     [Parameter] public Dictionary<string, string>? FieldLabels { get; set; }
 
     private string ResolvedStyle => Style;
-
-    // ── Internal state ──────────────────────────────────────────────
 
     private readonly List<HeaderLevel> _headerLevels = new();
     private readonly List<PivotDisplayRow> _displayRows = new();
@@ -49,7 +35,6 @@ public partial class PivotControl<TValue>
     private string? _sortField;
     private bool _sortAscending = true;
 
-    // Interactive state
     private List<string> _allDiscoveredFields = new();
     private readonly List<string> _rowFieldsActive = new();
     private readonly List<string> _columnFieldsActive = new();
@@ -57,12 +42,10 @@ public partial class PivotControl<TValue>
     private readonly List<string> _filterFieldsActive = new();
     private readonly List<PivotFilterState> _activeFilters = new();
 
-    // Drag-and-drop state
     private string? _dragField;
     private PivotArea _dragSourceArea;
     private PivotArea? _dragOverArea;
 
-    // Effective configuration (interactive overrides parameters)
     private IReadOnlyList<string> _effectiveRowFields => Interactive ? _rowFieldsActive : RowFields;
     private IReadOnlyList<string> _effectiveColumnFields => Interactive ? _columnFieldsActive : ColumnFields;
 
@@ -88,8 +71,6 @@ public partial class PivotControl<TValue>
 
     private bool _initialized;
 
-    // ── Lifecycle ───────────────────────────────────────────────────
-
     protected override void OnParametersSet()
     {
         if (Interactive && !_initialized)
@@ -101,8 +82,6 @@ public partial class PivotControl<TValue>
 
         BuildPivot();
     }
-
-    // ── Field discovery ─────────────────────────────────────────────
 
     private void DiscoverFields()
     {
@@ -152,8 +131,6 @@ public partial class PivotControl<TValue>
         RebuildFilters();
     }
 
-    // ── Drag-and-drop ───────────────────────────────────────────────
-
     private void OnDragStart(string field, PivotArea source)
     {
         _dragField = field;
@@ -183,11 +160,9 @@ public partial class PivotControl<TValue>
         _dragField = null;
         _dragOverArea = null;
 
-        // Remove from source
         if (_dragSourceArea != PivotArea.None)
             RemoveFieldSilent(field, _dragSourceArea);
 
-        // Add to target
         switch (area)
         {
             case PivotArea.Row:
@@ -252,8 +227,6 @@ public partial class PivotControl<TValue>
         BuildPivot();
     }
 
-    // ── Filters ─────────────────────────────────────────────────────
-
     private void RebuildFilters()
     {
         var rows = DataSource.ToList();
@@ -305,8 +278,6 @@ public partial class PivotControl<TValue>
         return data;
     }
 
-    // ── Core pivot build ────────────────────────────────────────────
-
     private void BuildPivot()
     {
         _headerLevels.Clear();
@@ -321,7 +292,6 @@ public partial class PivotControl<TValue>
         if (rows.Count == 0 || effectiveRows.Count == 0 || effectiveValues.Count == 0)
             return;
 
-        // Build distinct column keys
         var columnKeys = effectiveCols.Count == 0
             ? new List<PivotKey> { new("Value", new[] { "Value" }) }
             : rows.Select(item => BuildKey(item, effectiveCols))
@@ -329,7 +299,6 @@ public partial class PivotControl<TValue>
                   .OrderBy(key => key.Display)
                   .ToList();
 
-        // Build value columns: colKey × valueConfig
         foreach (var key in columnKeys)
         {
             foreach (var vc in effectiveValues)
@@ -364,8 +333,6 @@ public partial class PivotControl<TValue>
             BuildFlatRows(rows, rowGroups);
     }
 
-    // ── Multi-level header construction ─────────────────────────────
-
     private void BuildHeaders()
     {
         var rowFieldCount = _effectiveRowFields.Count;
@@ -377,22 +344,18 @@ public partial class PivotControl<TValue>
 
         if (effectiveCols.Count > 1 && hasMultiValueFields)
         {
-            // 3 header rows: top col field, second col field, value fields
             BuildThreeLevelHeaders(rowFieldCount);
         }
         else if (effectiveCols.Count > 1)
         {
-            // 2 header rows: top col groups + leaf col headers
             BuildTwoLevelHeaders(rowFieldCount);
         }
         else if (hasMultiValueFields && effectiveCols.Count == 1)
         {
-            // 2 header rows: column groups + value fields underneath
             BuildColValueHeaders(rowFieldCount);
         }
         else
         {
-            // Single header row
             BuildSingleLevelHeaders(rowFieldCount);
         }
     }
@@ -450,7 +413,6 @@ public partial class PivotControl<TValue>
 
     private void BuildColValueHeaders(int rowFieldCount)
     {
-        // Column field groups in top row, value field names in bottom row
         var topLevel = new HeaderLevel();
         var bottomLevel = new HeaderLevel();
 
@@ -496,7 +458,6 @@ public partial class PivotControl<TValue>
             top.Add(new HeaderCell(GetFieldLabel(_effectiveRowFields[i]),
                 rowspan: 3, cssClass: "fx-pivot-hdr-row"));
 
-        // Group by first column field
         var topGroups = _valueColumns.Where(c => !c.IsTotal)
             .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
             .OrderBy(g => g.Key).ToList();
@@ -534,8 +495,6 @@ public partial class PivotControl<TValue>
         if (mid.Count > 0) _headerLevels.Add(mid);
         _headerLevels.Add(bot);
     }
-
-    // ── Grouped rows (multiple row fields) ──────────────────────────
 
     private void BuildGroupedRows(List<TValue> allRows, List<IGrouping<PivotKey, TValue>> rowGroups)
     {
@@ -666,8 +625,6 @@ public partial class PivotControl<TValue>
         _displayRows.Add(totalRow);
     }
 
-    // ── Sorting ─────────────────────────────────────────────────────
-
     private void HandleHeaderClick(HeaderCell cell)
     {
         if (!AllowSorting || !cell.IsSortable || string.IsNullOrEmpty(cell.SortField)) return;
@@ -675,8 +632,6 @@ public partial class PivotControl<TValue>
         _sortField = cell.SortField;
         BuildPivot();
     }
-
-    // ── Value helpers ───────────────────────────────────────────────
 
     private object Aggregate(IEnumerable<TValue> items, PivotValueConfig cfg)
     {
@@ -769,8 +724,6 @@ public partial class PivotControl<TValue>
         return string.IsNullOrWhiteSpace(text) ? "Value" : $"P_{text}";
     }
 
-    // ── Internal models ─────────────────────────────────────────────
-
     internal enum PivotArea { None, Row, Column, Value, Filter }
 
     private sealed record PivotValueColumn(string Field, string Header, PivotKey Key,
@@ -837,7 +790,6 @@ public partial class PivotControl<TValue>
     }
 }
 
-/// <summary>Configuration for a single value field in the pivot.</summary>
 public class PivotValueConfig
 {
     public string Field { get; set; } = "";

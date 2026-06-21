@@ -20,9 +20,7 @@
 }
 else
 {
-    @* Optional dropdown-popup mode: when DropDownContent is supplied, clicking the button
-       toggles a popup panel beneath it (same look/feel as the ColorPickerControl dropdown).
-       Closes on click-away via a full-screen backdrop button — no JavaScript. *@
+    
     <span class="fx-button-dd-host">
         <button class="@ResolvedCssClass"
                 type="@ButtonType"
@@ -61,39 +59,14 @@ else
     [Parameter] public string? Title { get; set; }
     [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
 
-    /// <summary>
-    /// When true, the default <c>.fx-button</c> base styling is suppressed so
-    /// the host can fully drive appearance through <see cref="CssClass"/>
-    /// (e.g. GhostWriter's <c>.toolbar-btn</c>, <c>.floating-btn</c>,
-    /// <c>.btn.primary</c>). Functionality — click wiring, disabled gating,
-    /// optional icon slot — stays identical.
-    /// </summary>
     [Parameter] public bool BareStyle { get; set; }
 
-    /// <summary>
-    /// Stops click-event propagation past the button. Needed for hosts whose
-    /// button sits inside a parent that also handles <c>click</c> / <c>mouseup</c>
-    /// (e.g. GhostWriter's floating toolbar swallows clicks so the editor's
-    /// selection capture doesn't fire on every button press).
-    /// </summary>
     [Parameter] public bool StopPropagation { get; set; }
 
-    /// <summary>
-    /// Prevents the default browser action on <c>mousedown</c>. In GhostWriter
-    /// the formatting buttons (Bold, Italic, …) use this so clicking the
-    /// button doesn't steal focus from the editor — otherwise the selection
-    /// collapses before <c>execCommand</c> fires.
-    /// </summary>
     [Parameter] public bool PreventMouseDownDefault { get; set; }
 
-    /// <summary>
-    /// Optional dropdown content. When set, the button becomes a dropdown trigger:
-    /// clicking it toggles a popup panel (positioned beneath the button) that renders
-    /// this fragment. When null, the button behaves exactly as a normal button.
-    /// </summary>
     [Parameter] public RenderFragment? DropDownContent { get; set; }
 
-    /// <summary>Extra CSS class applied to the dropdown popup panel.</summary>
     [Parameter] public string? DropDownCssClass { get; set; }
 
     private bool _ddOpen;
@@ -106,10 +79,6 @@ else
         _ddOpen = !_ddOpen;
     }
 
-    /// <summary>
-    /// Closes the dropdown panel. Call via <c>@ref</c> from a DropDownContent item handler
-    /// (e.g. after the user picks an item) — click-away already closes it otherwise.
-    /// </summary>
     public void CloseDropDown()
     {
         if (_ddOpen)

@@ -22,7 +22,7 @@ public partial class GridControl<TValue>
 
     private GridOptionsPanel _activeOptionsPanel = GridOptionsPanel.None;
     private bool _themeInitialized;
-    private GridTheme _activeGridTheme = GridTheme.HomeFront;
+    private GridTheme _activeGridTheme = GridTheme.Default;
     private bool _advancedViewInitialized;
     private bool _advancedViewEnabled;
 
@@ -34,7 +34,7 @@ public partial class GridControl<TValue>
     private readonly Dictionary<string, string> _numericFilterMaxText = new(StringComparer.Ordinal);
     private static readonly GridThemeGalleryItem[] GridThemeGallery =
     [
-        new(GridTheme.HomeFront, "HomeFront", "Light", "#f1f3f5", "#ffffff", "#f8f9fa", "#6b8fd6"),
+        new(GridTheme.Default, "Default", "Light", "#e9e9e9", "#ffffff", "#ffffff", "#9a9a9a"),
         new(GridTheme.Vb6Windows, "VB6 Windows", "Light", "#d4d0c8", "#ffffff", "#ffffff", "#808080"),
         new(GridTheme.ExcelLightBlue, "Light Blue", "Light", "#d9eaf7", "#ffffff", "#edf7fd", "#5aa7d8"),
         new(GridTheme.ExcelLightGreen, "Light Green", "Light", "#e2f0d9", "#ffffff", "#f1f8eb", "#70ad47"),
@@ -110,6 +110,7 @@ public partial class GridControl<TValue>
             var classes = new List<string> { "fx-grid" };
             classes.Add(GridLines switch
             {
+                GridLines.Default => "fx-grid-lines-both",
                 GridLines.Both => "fx-grid-lines-both",
                 GridLines.None => "fx-grid-lines-none",
                 GridLines.Horizontal => "fx-grid-lines-horizontal",
@@ -161,7 +162,7 @@ public partial class GridControl<TValue>
         GridTheme.ExcelMediumBlue => "fx-grid-theme-excel-medium-blue",
         GridTheme.ExcelMediumGreen => "fx-grid-theme-excel-medium-green",
         GridTheme.ExcelDarkSlate => "fx-grid-theme-excel-dark-slate",
-        _ => "fx-grid-theme-homefront"
+        _ => "fx-grid-theme-default"
     };
 
     private static IEnumerable<IGrouping<string, GridThemeGalleryItem>> ThemeGalleryGroups =>

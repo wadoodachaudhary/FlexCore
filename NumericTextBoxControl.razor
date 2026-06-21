@@ -24,7 +24,6 @@
     [Parameter] public decimal? Max { get; set; }
     [Parameter] public decimal Step { get; set; } = 1;
 
-    /// <summary>Event fired when value changes.</summary>
     [Parameter] public EventCallback<NumericChangeEventArgs<TValue>> ValueChange { get; set; }
 
     private string StepValue => Step == 1 ? "any" : Step.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -36,7 +35,6 @@
             if (Value == null) return "";
             if (Value is IFormattable formattable && !string.IsNullOrEmpty(Format))
             {
-                // For numeric input, strip currency/percent symbols — just show the raw number
                 var fmt = Format.Replace("C", "F").Replace("N", "F");
                 return formattable.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture);
             }
@@ -66,7 +64,6 @@
             newValue = default;
         }
 
-        // Clamp to min/max
         if (newValue != null && Min.HasValue)
         {
             var decVal = Convert.ToDecimal(newValue);

@@ -43,19 +43,10 @@
 </button>
 
 @code {
-    /// <summary>Label shown next to the icon. Defaults to "Save" / "Saving…". Pass "" for icon-only.</summary>
     [Parameter] public string? Label { get; set; }
 
-    /// <summary>
-    /// True while a save is in flight — disables the button and swaps the
-    /// label to "Saving…" unless the host supplied a custom Label.
-    /// </summary>
     [Parameter] public bool IsSaving { get; set; }
 
-    /// <summary>
-    /// Whether to render the built-in disk icon. Defaults to true. Set false
-    /// for text-only Save buttons (e.g. <c>btn primary small</c>).
-    /// </summary>
     [Parameter] public bool ShowIcon { get; set; } = true;
 
     private string ResolvedLabel

@@ -44,9 +44,7 @@
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
 
-    /// <summary>Open the popup above the swatch (for hosts near the bottom of a scroll area).</summary>
     [Parameter] public bool DropUp { get; set; }
-    /// <summary>Right-align the popup to the swatch (for hosts near the right edge).</summary>
     [Parameter] public bool DropAlignRight { get; set; }
 
     private bool _isOpen;
@@ -54,7 +52,6 @@
     private void ToggleOpen() { if (Enabled) _isOpen = !_isOpen; }
     private void Close() => _isOpen = false;
 
-    // Windows "Basic colors" palette (8 × 6), matching the VB6 Color dialog.
     private static readonly string[] _palette =
     {
         "#FF8080", "#FFFF80", "#80FF80", "#00FF80", "#80FFFF", "#0080FF", "#FF80C0", "#FF80FF",

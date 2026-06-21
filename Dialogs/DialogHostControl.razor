@@ -1,0 +1,29 @@
+@namespace Fx.ControlKit.Dialogs
+@inject DialogService Svc
+
+@*
+    Single host for the app-wide modal dialog service. Render this ONCE near the
+    root (e.g. in MainLayout). It owns the actual MessageBoxControl +
+    InputDialogControl and registers their ShowAsync entry points with the scoped
+    DialogService, so any component can `@inject IDialogService` and await
+    ConfirmAsync / AlertAsync / PromptAsync. This is the FlexKit replacement for
+    the browser's native confirm/alert/prompt (JS interop).
+*@
+
+<MessageBoxControl @ref="_msgBox" />
+<InputDialogControl @ref="_input" />
+
+@code {
+    private MessageBoxControl? _msgBox;
+    private InputDialogControl? _input;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender && _msgBox is not null && _input is not null)
+        {
+            Svc.RegisterHost(
+                (message, title, buttons) => _msgBox.ShowAsync(message, title, buttons),
+                (prompt, title, def) => _input.ShowAsync(prompt, title, def));
+        }
+    }
+}

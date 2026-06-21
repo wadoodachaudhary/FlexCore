@@ -1,6 +1,9 @@
 @namespace Fx.ControlKit.Reports
 
 @using Fx.ControlKit
+@using Microsoft.Extensions.DependencyInjection
+
+@inject IServiceProvider Services
 
 <WizardControl Visible="@Visible"
                VisibleChanged="VisibleChanged"
@@ -38,6 +41,8 @@
     private readonly List<WizardStepDescriptor> _steps =
     [
         new() { Title = "Data", Description = "Choose the data you want to report on.", IconCss = "fx-rw-step-data" },
+        new() { Title = "Links", Description = "Define how selected tables join together.", IconCss = "fx-rw-step-links" },
+        new() { Title = "SQL", Description = "Review, edit, and validate the report SQL.", IconCss = "fx-rw-step-sql" },
         new() { Title = "Fields", Description = "Choose the information to display on the report.", IconCss = "fx-rw-step-fields" },
         new() { Title = "Grouping", Description = "(Optional) Group the information on the report.", IconCss = "fx-rw-step-grouping" },
         new() { Title = "Summaries", Description = "(Optional) Add summary information to the report.", IconCss = "fx-rw-step-summaries" },
@@ -62,6 +67,7 @@
     ];
 
     private readonly string[] _summaryOperations = ["Sum", "Average", "Count", "Minimum", "Maximum"];
+    private readonly string[] _joinTypes = ["Inner", "Left Outer", "Right Outer", "Full Outer"];
     private readonly string[] _filterOperators =
     [
         "is equal to",
@@ -81,8 +87,14 @@
     private string _reportTitle = "Untitled Report";
     private string? _activeFilterKey;
     private string? _activeSummaryKey;
+    private int _activeLinkIndex;
+    private string _customSql = "";
+    private string _sqlValidationMessage = "";
+    private bool? _sqlValidationSucceeded;
+    private bool _sqlEditedByUser;
 
     private List<ReportDesignerDataTable> _selectedTables = new();
+    private List<ReportDesignerDataLink> _links = new();
     private List<ReportDesignerField> _displayFields = new();
     private List<ReportDesignerField> _groupFields = new();
     private List<ReportDesignerField> _summaryFields = new();
@@ -106,11 +118,13 @@
     private RenderFragment RenderStepContent(int stepIndex) => stepIndex switch
     {
         0 => RenderDataStep(),
-        1 => RenderFieldsStep(),
-        2 => RenderGroupingStep(),
-        3 => RenderSummariesStep(),
-        4 => RenderRecordSelectionStep(),
-        5 => RenderTemplateStep(),
+        1 => RenderLinksStep(),
+        2 => RenderSqlStep(),
+        3 => RenderFieldsStep(),
+        4 => RenderGroupingStep(),
+        5 => RenderSummariesStep(),
+        6 => RenderRecordSelectionStep(),
+        7 => RenderTemplateStep(),
         _ => builder => { }
     };
 
@@ -144,6 +158,79 @@
             <ButtonControl CssClass="fx-rw-small-btn" Disabled="true">Browse Data...</ButtonControl>
             <ButtonControl CssClass="fx-rw-small-btn" Disabled="true">Find Field...</ButtonControl>
         </div>
+    </div>;
+
+    private RenderFragment RenderLinksStep() => @<div class="fx-rw-step fx-rw-link-step">
+        <div class="fx-rw-link-canvas">
+            <div class="fx-rw-link-tables">
+                @foreach (var table in _selectedTables)
+                {
+                    <section class="fx-rw-link-table">
+                        <header>@table.DisplayName</header>
+                        <div>
+                            @foreach (var field in table.Fields.Take(12))
+                            {
+                                <span>@field.Name</span>
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+            <div class="fx-rw-link-lines">
+                @if (_links.Count == 0)
+                {
+                    <span>No table joins defined.</span>
+                }
+                else
+                {
+                    @foreach (var link in _links)
+                    {
+                        <span>@link.DisplayName (@link.JoinType)</span>
+                    }
+                }
+            </div>
+        </div>
+        <div class="fx-rw-link-editor">
+            <div class="fx-rw-link-list">
+                @for (var i = 0; i < _links.Count; i++)
+                {
+                    var index = i;
+                    <button type="button" class="@(index == _activeLinkIndex ? "active" : "")" @onclick="() => _activeLinkIndex = index">@_links[index].DisplayName</button>
+                }
+                @if (_links.Count == 0)
+                {
+                    <span>No links.</span>
+                }
+            </div>
+            <div class="fx-rw-link-fields">
+                @if (ActiveLink is not null)
+                {
+                    var link = ActiveLink;
+                    <label>Left table <DropDownListControl TValue="string" TItem="string" DataSource="@SelectedTableNames" Value="@link.LeftTable" ValueChanged="value => OnLinkTableChanged(link, leftSide: true, value)" Width="190px" CssClass="fx-rw-select" /></label>
+                    <label>Left field <DropDownListControl TValue="string" TItem="string" DataSource="@GetWizardFieldNames(link.LeftTable)" Value="@link.LeftField" ValueChanged="value => OnLinkFieldChanged(link, leftSide: true, value)" Width="190px" CssClass="fx-rw-select" /></label>
+                    <label>Right table <DropDownListControl TValue="string" TItem="string" DataSource="@SelectedTableNames" Value="@link.RightTable" ValueChanged="value => OnLinkTableChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rw-select" /></label>
+                    <label>Right field <DropDownListControl TValue="string" TItem="string" DataSource="@GetWizardFieldNames(link.RightTable)" Value="@link.RightField" ValueChanged="value => OnLinkFieldChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rw-select" /></label>
+                    <label>Join type <DropDownListControl TValue="string" TItem="string" DataSource="@_joinTypes" Value="@link.JoinType" ValueChanged="value => OnLinkJoinTypeChanged(link, value)" Width="190px" CssClass="fx-rw-select" /></label>
+                }
+                <div class="fx-rw-pane-actions">
+                    <ButtonControl CssClass="fx-rw-small-btn" OnClick="@(_ => AddLink())" Disabled="@(_selectedTables.Count < 2)">New Join</ButtonControl>
+                    <ButtonControl CssClass="fx-rw-small-btn" OnClick="@(_ => DeleteActiveLink())" Disabled="@(ActiveLink is null)">Delete</ButtonControl>
+                    <ButtonControl CssClass="fx-rw-small-btn" OnClick="@(_ => AutoLinkTables())" Disabled="@(_selectedTables.Count < 2)">Auto Link</ButtonControl>
+                </div>
+            </div>
+        </div>
+    </div>;
+
+    private RenderFragment RenderSqlStep() => @<div class="fx-rw-step fx-rw-sql-step">
+        <div class="fx-rw-sql-toolbar">
+            <ButtonControl CssClass="fx-rw-small-btn" OnClick="@(_ => RegenerateSql())">Generate SQL</ButtonControl>
+            <ButtonControl CssClass="fx-rw-small-btn" OnClick="@(_ => ValidateSqlAsync())" Disabled="@(string.IsNullOrWhiteSpace(_customSql))">Validate SQL</ButtonControl>
+            @if (!string.IsNullOrWhiteSpace(_sqlValidationMessage))
+            {
+                <span class="@($"fx-rw-sql-status {(_sqlValidationSucceeded == true ? "ok" : _sqlValidationSucceeded == false ? "error" : "")}")">@_sqlValidationMessage</span>
+            }
+        </div>
+        <textarea class="fx-rw-sql-editor" spellcheck="false" @bind="_customSql" @bind:event="oninput" @bind:after="OnSqlEdited"></textarea>
     </div>;
 
     private RenderFragment RenderGroupingStep() => @<div class="fx-rw-step">
@@ -258,6 +345,8 @@
     private string? ActiveFilterKey => _activeFilterKey ?? (_filters.FirstOrDefault() is { } first ? FieldKey(first.Field) : null);
     private ReportDesignerFilter? ActiveFilter => ActiveFilterKey is { } key ? _filters.FirstOrDefault(filter => FieldKey(filter.Field) == key) : null;
     private ReportDesignerSummary? ActiveSummary => _activeSummaryKey is { } key ? _summaries.FirstOrDefault(summary => FieldKey(summary.Field) == key) : _summaries.FirstOrDefault();
+    private ReportDesignerDataLink? ActiveLink => _links.Count == 0 ? null : _links[Math.Clamp(_activeLinkIndex, 0, _links.Count - 1)];
+    private IReadOnlyList<string> SelectedTableNames => _selectedTables.Select(table => table.Name).Where(name => !string.IsNullOrWhiteSpace(name)).ToList();
 
     private List<ListViewItem> TemplateItems => _templates.Select(template => new ListViewItem
     {
@@ -275,13 +364,16 @@
     private void OnSelectedTablesChanged(IList<ReportDesignerDataTable> tables)
     {
         _selectedTables = tables.Select(CloneTable).ToList();
+        TrimLinksToSelectedTables();
         TrimDependentFieldsToSelectedTables();
+        UpdateSqlFromDesigner();
     }
 
     private void OnDisplayFieldsChanged(IList<ReportDesignerField> fields)
     {
         _displayFields = fields.Select(CloneField).ToList();
         TrimDependentFieldsToSelectedTables();
+        UpdateSqlFromDesigner();
     }
 
     private void OnGroupFieldsChanged(IList<ReportDesignerField> fields)
@@ -299,6 +391,7 @@
     {
         _filterFields = fields.Select(CloneField).ToList();
         RebuildFiltersFromFields();
+        UpdateSqlFromDesigner();
     }
 
     private Task OnTemplateClick(ListViewItem item)
@@ -336,14 +429,20 @@
     private Task OnSelectedFilterOperatorChanged(string? value)
     {
         if (ActiveFilter is not null && !string.IsNullOrWhiteSpace(value))
+        {
             ActiveFilter.Operator = value;
+            UpdateSqlFromDesigner();
+        }
         return Task.CompletedTask;
     }
 
     private Task OnSelectedFilterValueChanged(string? value)
     {
         if (ActiveFilter is not null)
+        {
             ActiveFilter.Value = value ?? "";
+            UpdateSqlFromDesigner();
+        }
         return Task.CompletedTask;
     }
 
@@ -360,6 +459,8 @@
             GroupFields = _groupFields.Select(CloneField).ToList(),
             Summaries = _summaries.Select(summary => new ReportDesignerSummary { Field = CloneField(summary.Field), Operation = summary.Operation }).ToList(),
             Filters = _filters.Select(filter => new ReportDesignerFilter { Field = CloneField(filter.Field), Operator = filter.Operator, Value = filter.Value }).ToList(),
+            Links = _links.Select(CloneLink).ToList(),
+            CustomSql = string.IsNullOrWhiteSpace(_customSql) ? BuildCurrentSql() : _customSql,
             TemplateName = _selectedTemplate
         };
 
@@ -384,6 +485,7 @@
     private void TrimDependentFieldsToSelectedTables()
     {
         var tableKeys = _selectedTables.Select(TableKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var tableNames = _selectedTables.Select(table => table.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var fieldKeys = AvailableSelectedTableFields.Select(FieldKey).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _displayFields = _displayFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
         _groupFields = _groupFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
@@ -391,8 +493,17 @@
         _filterFields = _filterFields.Where(candidate => fieldKeys.Contains(FieldKey(candidate))).ToList();
         _summaries.RemoveAll(summary => !tableKeys.Contains(TableKey(summary.Field.Table)) || !fieldKeys.Contains(FieldKey(summary.Field)));
         _filters.RemoveAll(filter => !tableKeys.Contains(TableKey(filter.Field.Table)) || !fieldKeys.Contains(FieldKey(filter.Field)));
+        _links.RemoveAll(link => !tableNames.Contains(link.LeftTable) || !tableNames.Contains(link.RightTable));
+        _activeLinkIndex = _links.Count == 0 ? 0 : Math.Clamp(_activeLinkIndex, 0, _links.Count - 1);
         RebuildSummariesFromFields();
         RebuildFiltersFromFields();
+    }
+
+    private void TrimLinksToSelectedTables()
+    {
+        var tableNames = _selectedTables.Select(table => table.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _links.RemoveAll(link => !tableNames.Contains(link.LeftTable) || !tableNames.Contains(link.RightTable));
+        _activeLinkIndex = _links.Count == 0 ? 0 : Math.Clamp(_activeLinkIndex, 0, _links.Count - 1);
     }
 
     private void RebuildSummariesFromFields()
@@ -419,6 +530,191 @@
             : _filters.FirstOrDefault() is { } first ? FieldKey(first.Field) : null;
     }
 
+    private Task AddLink()
+    {
+        var first = _selectedTables.FirstOrDefault();
+        var second = _selectedTables.Skip(1).FirstOrDefault() ?? first;
+        if (first == null || second == null)
+            return Task.CompletedTask;
+
+        _links.Add(new ReportDesignerDataLink
+        {
+            LeftTable = first.Name,
+            LeftField = first.Fields.FirstOrDefault()?.Name ?? "",
+            RightTable = second.Name,
+            RightField = second.Fields.FirstOrDefault()?.Name ?? "",
+            JoinType = _joinTypes[0]
+        });
+        _activeLinkIndex = _links.Count - 1;
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task DeleteActiveLink()
+    {
+        if (ActiveLink == null)
+            return Task.CompletedTask;
+
+        _links.RemoveAt(Math.Clamp(_activeLinkIndex, 0, _links.Count - 1));
+        _activeLinkIndex = _links.Count == 0 ? 0 : Math.Clamp(_activeLinkIndex, 0, _links.Count - 1);
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task AutoLinkTables()
+    {
+        _links.Clear();
+        if (_selectedTables.Count < 2)
+            return Task.CompletedTask;
+
+        var joined = _selectedTables[0];
+        foreach (var table in _selectedTables.Skip(1))
+        {
+            var match = FindLikelyJoin(joined, table)
+                ?? (joined.Fields.FirstOrDefault(), table.Fields.FirstOrDefault());
+            if (match.Item1 == null || match.Item2 == null)
+                continue;
+
+            _links.Add(new ReportDesignerDataLink
+            {
+                LeftTable = joined.Name,
+                LeftField = match.Item1.Name,
+                RightTable = table.Name,
+                RightField = match.Item2.Name,
+                JoinType = _joinTypes[0]
+            });
+        }
+
+        _activeLinkIndex = _links.Count == 0 ? 0 : _links.Count - 1;
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private (ReportDesignerField?, ReportDesignerField?)? FindLikelyJoin(ReportDesignerDataTable left, ReportDesignerDataTable right)
+    {
+        foreach (var leftField in left.Fields)
+        {
+            var rightField = right.Fields.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, leftField.Name, StringComparison.OrdinalIgnoreCase));
+            if (rightField != null)
+                return (leftField, rightField);
+        }
+
+        var leftId = left.Fields.FirstOrDefault(field => field.Name.EndsWith("ID", StringComparison.OrdinalIgnoreCase));
+        if (leftId != null)
+        {
+            var rightId = right.Fields.FirstOrDefault(field =>
+                string.Equals(field.Name, leftId.Name, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(field.Name, $"{left.Name}ID", StringComparison.OrdinalIgnoreCase));
+            if (rightId != null)
+                return (leftId, rightId);
+        }
+
+        return null;
+    }
+
+    private Task OnLinkTableChanged(ReportDesignerDataLink link, bool leftSide, string? value)
+    {
+        var tableName = value ?? "";
+        if (leftSide)
+        {
+            link.LeftTable = tableName;
+            link.LeftField = GetWizardFieldNames(tableName).FirstOrDefault() ?? "";
+        }
+        else
+        {
+            link.RightTable = tableName;
+            link.RightField = GetWizardFieldNames(tableName).FirstOrDefault() ?? "";
+        }
+
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task OnLinkFieldChanged(ReportDesignerDataLink link, bool leftSide, string? value)
+    {
+        if (leftSide)
+            link.LeftField = value ?? "";
+        else
+            link.RightField = value ?? "";
+
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private Task OnLinkJoinTypeChanged(ReportDesignerDataLink link, string? value)
+    {
+        link.JoinType = value ?? _joinTypes[0];
+        UpdateSqlFromDesigner();
+        return Task.CompletedTask;
+    }
+
+    private IReadOnlyList<string> GetWizardFieldNames(string tableName)
+    {
+        return ReportDesignerSqlBuilder.GetFieldNamesForTable(tableName, _selectedTables, AvailableSelectedTableFields);
+    }
+
+    private Task RegenerateSql()
+    {
+        _customSql = BuildCurrentSql();
+        _sqlEditedByUser = false;
+        _sqlValidationMessage = "";
+        _sqlValidationSucceeded = null;
+        return Task.CompletedTask;
+    }
+
+    private void OnSqlEdited()
+    {
+        _sqlEditedByUser = true;
+        _sqlValidationMessage = "";
+        _sqlValidationSucceeded = null;
+    }
+
+    private async Task ValidateSqlAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_customSql))
+        {
+            _sqlValidationMessage = "No SQL to validate.";
+            _sqlValidationSucceeded = false;
+            return;
+        }
+
+        var executor = Services.GetService<IReportDataExecutor>();
+        if (executor == null)
+        {
+            _sqlValidationMessage = "No SQL validator is registered.";
+            _sqlValidationSucceeded = false;
+            return;
+        }
+
+        try
+        {
+            var table = executor.Execute(_customSql, null);
+            _sqlValidationMessage = $"SQL valid. Returned {table.Rows.Count} rows and {table.Columns.Count} columns.";
+            _sqlValidationSucceeded = true;
+        }
+        catch (Exception ex)
+        {
+            _sqlValidationMessage = $"SQL validation failed: {ex.Message}";
+            _sqlValidationSucceeded = false;
+        }
+    }
+
+    private void UpdateSqlFromDesigner()
+    {
+        if (_sqlEditedByUser)
+            return;
+
+        _customSql = BuildCurrentSql();
+        _sqlValidationMessage = "";
+        _sqlValidationSucceeded = null;
+    }
+
+    private string BuildCurrentSql()
+    {
+        return ReportDesignerSqlBuilder.BuildSql(_selectedTables, ReportFields, _links, _filters);
+    }
+
     private static ReportDesignerDataTable CloneTable(ReportDesignerDataTable table)
     {
         return new ReportDesignerDataTable
@@ -439,6 +735,18 @@
             Formula = field.Formula,
             Type = field.Type,
             IsFormula = field.IsFormula
+        };
+    }
+
+    private static ReportDesignerDataLink CloneLink(ReportDesignerDataLink link)
+    {
+        return new ReportDesignerDataLink
+        {
+            LeftTable = link.LeftTable,
+            LeftField = link.LeftField,
+            RightTable = link.RightTable,
+            RightField = link.RightField,
+            JoinType = link.JoinType
         };
     }
 

@@ -52,8 +52,6 @@
 
 .fx-overlay-close:hover { color: var(--ink, #1b1a16); }
 
-/* Copy button in the card header — mirrors .fx-overlay-close sizing so the
-   header row balances visually, with a distinct hover tint. */
 .fx-copy-btn {
     margin-left: auto;
     display: inline-flex;
@@ -76,9 +74,6 @@
 
 .fx-copy-btn:active { transform: scale(0.95); }
 
-/* When the copy button AND the close × both exist, the close uses
-   margin-left:auto to push itself to the edge. Reset that here since copy
-   already claims the auto-margin. */
 .fx-copy-btn + .fx-overlay-close { margin-left: 0; }
 
 .fx-result-loading {
@@ -120,15 +115,9 @@
     line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
-    /* No max-height — long Expand+ outputs (multi-thousand chars) should
-       render in full. Page-level scroll handles overflow. */
+    
 }
 
-/* Echo detector banner — appears above the output body on chain steps
-   where the model echoed a long verbatim slice of its input (DeepSeek R1
-   total-echo, Qwen partial echo). Lets the user see how much was actually
-   new at a glance so cards that LOOK identical are recognizable as
-   failures. */
 .fx-result-echo-banner {
     margin-bottom: 0.5rem;
     padding: 6px 10px;
@@ -143,7 +132,6 @@
 
 .fx-result-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
-/* Tab strip for RewriteVariants — one tab per parsed rewrite. */
 .fx-result-tabs {
     display: flex;
     gap: 0;

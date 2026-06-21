@@ -2,21 +2,6 @@ using System.Text.Json;
 
 namespace Fx.ControlKit.Grid;
 
-/// <summary>
-/// Generic file-backed implementation of <see cref="IGridSettingsStore"/> —
-/// stores every grid's settings in a single JSON file as a flat dictionary
-/// keyed by the grid's <see cref="GridControl{T}.PersistenceKey"/>.
-///
-/// <para>Default for any FlexCore consumer that doesn't have a database
-/// to persist into. Apps with their own grid-layout table (HomeFront /
-/// HomeFrontPOC use <c>dbo.AppGridLayout</c>) should register a project-
-/// specific implementation instead.</para>
-///
-/// <para>Pass the file path via the constructor — the file is created on
-/// first save and read on every load. Concurrent writes are guarded with
-/// a per-instance lock; cross-process safety isn't a concern for the
-/// per-circuit lifetime this store typically registers under.</para>
-/// </summary>
 public sealed class JsonFileGridSettingsStore : IGridSettingsStore
 {
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -68,8 +53,6 @@ public sealed class JsonFileGridSettingsStore : IGridSettingsStore
         }
         catch (Exception)
         {
-            // Corrupt file? Don't crash — start fresh, the next save will
-            // rewrite a valid one.
             return new Dictionary<string, GridSettings>(StringComparer.Ordinal);
         }
     }

@@ -30,17 +30,15 @@
             }
         </div>
         <div class="fx-ribbon-body">
-            @* Children render all tabs; CSS hides non-active ones *@
+            
             @ChildContent
         </div>
     </div>
 </CascadingValue>
 
 @code {
-    /// <summary>Ribbon tab children.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
-    /// <summary>Optional CSS class for the outer container.</summary>
     [Parameter] public string CssClass { get; set; } = "";
 
     internal List<RibbonTab> _tabs = new();

@@ -29,10 +29,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _ = InvokeAsync(StateHasChanged);
     }
 
-    // ── Injectables ─────────────────────────────────────────────────────
     [Inject] private IJSRuntime JsRuntime { get; set; } = default!;
-
-    // ── Parameters ───────────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
@@ -44,16 +41,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public int RowHeight { get; set; }
-    /// <summary>
-    /// Allows end users to resize rows with a row-edge handle. Defaults off so
-    /// existing application grids keep their current behavior unless they opt in.
-    /// </summary>
     [Parameter] public bool AllowRowResizing { get; set; }
+    [Parameter] public bool AllowRowReorder { get; set; }
+    [Parameter] public Func<TValue, bool>? RowReorderPredicate { get; set; }
+    [Parameter] public bool ShowRowSelectorHandle { get; set; }
+    [Parameter] public GridRowSelectorHandleShape RowSelectorHandleShape { get; set; } = GridRowSelectorHandleShape.HalfButton;
+    [Parameter] public int RowSelectorHandleWidth { get; set; } = 18;
+    [Parameter] public Func<TValue, bool>? RowSelectorHandlePredicate { get; set; }
+    [Parameter] public Func<TValue, bool>? RowSelectorHandleEmphasisPredicate { get; set; }
     [Parameter] public double MinRowHeight { get; set; } = 16;
     [Parameter] public Func<TValue, int, double?>? RowHeightSelector { get; set; }
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
 
-    // Feature flags
     [Parameter] public bool AllowSorting { get; set; }
     [Parameter] public bool AllowMultiSorting { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
@@ -61,351 +60,123 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public int[] PageSizes { get; set; } = [25, 50, 100, 200];
     [Parameter] public int PageButtonCount { get; set; } = 5;
     [Parameter] public int AutoPageRowThreshold { get; set; } = 10000;
-    /// <summary>
-    /// Clears transient filters when the grid receives a different data source
-    /// instance. This prevents one context's filter (for example one FAssembly
-    /// community) from hiding rows after the host reloads for another context.
-    /// </summary>
     [Parameter] public bool ClearFiltersOnDataSourceChange { get; set; } = true;
-    /// <summary>
-    /// Shows the clickable header filter icon that opens the filter popup.
-    /// Disable this when the grid already renders explicit filter-bar inputs.
-    /// </summary>
     [Parameter] public bool ShowHeaderFilterIcon { get; set; } = true;
-    /// <summary>
-    /// Optional glyph/text used for the clickable header filter icon. When
-    /// blank, the grid renders a compact built-in filter glyph.
-    /// </summary>
     [Parameter] public string HeaderFilterIcon { get; set; } = string.Empty;
     [Parameter] public bool AllowPaging { get; set; }
     [Parameter] public bool AllowSelection { get; set; } = true;
-    /// <summary>
-    /// When true, pressing Enter on the focused grid invokes
-    /// <see cref="GridControlEvents{TValue}.OnRecordDoubleClick"/> for the
-    /// current single selected row. This gives picker-style grids desktop
-    /// behavior: click once to select, Enter to accept.
-    /// </summary>
+    [Parameter] public bool HighlightSelectedRows { get; set; } = true;
     [Parameter] public bool CommitSelectedRowOnEnter { get; set; }
-    // Suppress the built-in "X rows selected … Clear Selection" banner
-    // that appears above the grid header on multi-row selection. When
-    // false, hosts can render their own selection toolbar above the
-    // grid so its top edge stays at a fixed offset; otherwise the
-    // banner pops in/out on first selection and the grid body shifts
-    // vertically by ~32 px, which reads as visual "shaking" mid-drag.
     [Parameter] public bool ShowSelectionInfoBar { get; set; }
-    /// <summary>
-    /// Field that receives multi-row type-ahead when no row-selection gesture
-    /// has captured an editable target column. Kept as the compatibility
-    /// fallback for hosts that explicitly want the older fixed-target behavior.
-    /// </summary>
     [Parameter] public string? TypeAheadTargetField { get; set; }
-    /// <summary>
-    /// Optional alias for the same fallback role as <see cref="TypeAheadTargetField"/>.
-    /// <see cref="TypeAheadTargetField"/> wins when both are supplied.
-    /// </summary>
     [Parameter] public string? TypeAheadFallbackField { get; set; }
-    /// <summary>
-    /// Controls how batch-mode editable cells behave. MultiRow keeps the
-    /// legacy FlexKit behavior: single-click enters edit and can fan out to
-    /// multiple selected rows. SingleCell gives desktop-grid behavior:
-    /// click selects a cell, double-click edits, and typed keys commit to
-    /// that one cell on Enter.
-    /// </summary>
     [Parameter] public GridBatchEditBehavior BatchEditBehavior { get; set; } = GridBatchEditBehavior.MultiRow;
-    /// <summary>
-    /// In <see cref="GridBatchEditBehavior.SingleCell"/> mode, allow Ctrl/Cmd
-    /// and Shift selection across cells in one column, then commit typed
-    /// type-ahead values to all selected cells in that column.
-    /// </summary>
+    [Parameter] public bool EditOnSingleClick { get; set; }
     [Parameter] public bool AllowSingleCellColumnMassEdit { get; set; }
     [Parameter] public bool AllowGrouping { get; set; }
     [Parameter] public bool AllowResizing { get; set; }
-    /// <summary>
-    /// When true, text cell values that start with '=' are evaluated as
-    /// row-scoped arithmetic formulas. Column formulas configured on
-    /// <see cref="GridColumn.Formula"/> are always evaluated.
-    /// </summary>
     [Parameter] public bool AllowCellFormulas { get; set; }
     [Parameter] public bool EnableHover { get; set; } = true;
     [Parameter] public bool EnableAltRow { get; set; } = true;
     [Parameter] public bool ShowSearchBar { get; set; }
+    [Parameter] public bool EnableTypeSearch { get; set; }
+    [Parameter] public int TypeSearchDelaySeconds { get; set; } = 3;
     [Parameter] public GridLines GridLines { get; set; } = GridLines.Default;
     [Parameter] public List<string>? Toolbar { get; set; }
 
-    /// <summary>
-    /// Show the built-in grid toolbar for custom <see cref="Toolbar"/> items
-    /// and the search bar. Defaults to <c>null</c> meaning auto-show whenever
-    /// the caller supplied custom <see cref="Toolbar"/> items / <see cref="ShowSearchBar"/>.
-    /// Set to <c>true</c> to force-show or <c>false</c> to force-hide.
-    /// </summary>
     [Parameter] public bool? ShowGridToolbar { get; set; }
 
-    /// <summary>
-    /// Show the built-in Expand All icon button in the group drop area.
-    /// Defaults to true when AllowGrouping is enabled.
-    /// </summary>
     [Parameter] public bool ShowExpandAllButton { get; set; } = true;
 
-    /// <summary>
-    /// Show the built-in Collapse All icon button in the group drop area.
-    /// Defaults to true when AllowGrouping is enabled.
-    /// </summary>
     [Parameter] public bool ShowCollapseAllButton { get; set; } = true;
 
-    /// <summary>
-    /// Show a compact group-strip icon that toggles normal grid view versus
-    /// the advanced view exposing filters, pivot, columns, and theme tools.
-    /// Defaults off so grids only show the advanced surface when a host opts in.
-    /// </summary>
     [Parameter] public bool ShowAdvancedViewToggleButton { get; set; }
 
-    /// <summary>
-    /// Initial advanced-view state when <see cref="ShowAdvancedViewToggleButton"/>
-    /// is enabled. Defaults to false so opt-in grids still start in normal view
-    /// unless the host explicitly asks for the advanced tools to be visible.
-    /// </summary>
     [Parameter] public bool DefaultAdvancedView { get; set; }
 
-    // Resolved visibility. The advanced toggle lives in the group drop area so
-    // enabling it does not create a separate toolbar row above the grid.
     internal bool ShouldRenderToolbar =>
         ShowGridToolbar ?? ((Toolbar is { Count: > 0 }) || ShowSearchBar);
 
-    /// <summary>Initial group columns (field names).</summary>
     [Parameter] public List<string>? GroupColumns { get; set; }
 
-    /// <summary>Aggregate row definitions for group footers and grid footer.</summary>
     [Parameter] public List<AggregateRow>? AggregateRows { get; set; }
 
-    /// <summary>Show an Expand All / Collapse All toggle button in the group drop area.</summary>
     [Parameter] public bool ShowGroupExpandCollapse { get; set; } = true;
 
-    /// <summary>Show the expression-filter search button in the group drop area.</summary>
     [Parameter] public bool ShowExpressionFilterButton { get; set; }
 
-    /// <summary>Show the grid option rail for columns, pivot, and theme actions.</summary>
     [Parameter] public bool ShowGridOptionsRail { get; set; }
 
-    /// <summary>Show the column-options button on the grid option rail.</summary>
     [Parameter] public bool ShowColumnOptionsButton { get; set; }
 
-    /// <summary>
-    /// Deprecated. Column filtering now lives in each column header popup, so
-    /// the standalone filter-panel rail button is ignored.
-    /// </summary>
     [Parameter] public bool ShowFilterPanelButton { get; set; }
 
-    /// <summary>Allow this grid to switch into the embedded pivot view.</summary>
     [Parameter] public bool AllowPivoting { get; set; }
 
-    /// <summary>Show the pivot-mode button on the grid option rail.</summary>
     [Parameter] public bool ShowPivotPanelButton { get; set; }
 
-    /// <summary>Show the local dark/light theme toggle on the grid option rail.</summary>
     [Parameter] public bool ShowGridThemeToggle { get; set; }
-    /// <summary>
-    /// Initial grid color scheme. Users can change it at runtime from the Theme
-    /// panel when <see cref="ShowGridThemeToggle"/> is enabled.
-    /// </summary>
-    [Parameter] public GridTheme Theme { get; set; } = GridTheme.HomeFront;
+    [Parameter] public GridTheme Theme { get; set; } = GridTheme.Default;
 
-    /// <summary>Show the back-to-grid button on the grid option rail.</summary>
     [Parameter] public bool ShowGridBackButton { get; set; }
 
-    /// <summary>When true, columns currently used for grouping are hidden from the data grid.</summary>
     [Parameter] public bool HideGroupedColumns { get; set; } = true;
 
-    /// <summary>When true, the user can drag a column header onto another to
-    /// reorder columns. Default true. (Drag-to-group is always wired separately
-    /// through the group drop area when <see cref="AllowGrouping"/> is on.)</summary>
     [Parameter] public bool AllowColumnReorder { get; set; } = true;
 
-    /// <summary>
-    /// Color used for the vertical column-reorder insertion pipe. Defaults to a
-    /// dark grey-black; callers can set any valid CSS color.
-    /// </summary>
     [Parameter] public string ColumnReorderPipeColor { get; set; } = "#2b2b2b";
 
-    /// <summary>Optional schema for the Choose Columns dialog. Hosts that
-    /// have a saved layout with columns the grid isn't currently rendering
-    /// (e.g. legacy "Hidden=true" entries) pass them here so the dialog can
-    /// list them with unchecked boxes. When null the dialog falls back to the
-    /// rendered <c>&lt;GridColumn&gt;</c> children.</summary>
     [Parameter] public IEnumerable<ChooseColumnDescriptor>? AvailableColumns { get; set; }
 
-    /// <summary>Optional "factory default" layout for the Choose Columns dialog's
-    /// <em>Restore Default Layout</em> button. When supplied, clicking that button
-    /// resets each listed column's checked state and order to match this schema
-    /// (columns absent from it keep their current state). When null, Restore
-    /// Default falls back to the in-memory snapshot taken when the dialog first
-    /// opened. The grid is general-purpose: it neither knows nor cares where the
-    /// host sourced these from (a service, a config, hardcoded) — it just applies
-    /// them. Hosts populate this exactly like <see cref="AvailableColumns"/>.</summary>
     [Parameter] public IEnumerable<ChooseColumnDescriptor>? DefaultColumns { get; set; }
 
-    /// <summary>Fires when the user clicks OK in the Choose Columns dialog.
-    /// When subscribed, the host is fully responsible for applying the new
-    /// visibility/order to its layout system (and re-rendering the grid).
-    /// When NOT subscribed, the grid falls back to its built-in behaviour:
-    /// applies visibility overrides locally and reorders the underlying
-    /// <c>GridColumnsBase._columns</c> list.</summary>
     [Parameter] public EventCallback<ChooseColumnsResult> OnColumnsChosen { get; set; }
 
-    /// <summary>Fires whenever the user mutates a persistable aspect of the
-    /// grid (column reorder, resize, group/ungroup, hide via header menu,
-    /// rename via header menu). The argument is a snapshot of the grid's
-    /// current state — column order, visibility, widths, header overrides,
-    /// group columns. Hosts that own their layout via a service like
-    /// <c>GridLayoutService</c> subscribe to this and persist on each event.
-    ///
-    /// <para>Distinct from <see cref="OnColumnsChosen"/>, which is specific
-    /// to the Choose Columns dialog. <c>OnLayoutChanged</c> covers all
-    /// other user mutations.</para></summary>
     [Parameter] public EventCallback<GridSettings> OnLayoutChanged { get; set; }
 
-    /// <summary>Opt-in persistence key for this grid's user-modifiable state
-    /// (column order, visibility, widths, header renames, group columns).
-    /// When non-empty AND an <see cref="IGridSettingsStore"/> is registered
-    /// in DI, the grid auto-loads on first render and auto-saves on every
-    /// user manipulation.
-    ///
-    /// <para>Format: <c>{FormName}.{gridName}</c> with optional
-    /// <c>.{instanceKey}</c> suffix — same convention as the legacy
-    /// <c>AppGridLayout</c> table used by HomeFront's existing
-    /// <c>GridLayoutService</c>. Examples: <c>"FAssembly.gComponents"</c>,
-    /// <c>"FAssembly.gItems.(0)"</c>.</para></summary>
     [Parameter] public string? PersistenceKey { get; set; }
 
-    // Resolved lazily from the service provider so the grid still works in
-    // apps that haven't registered an IGridSettingsStore. A direct
-    // `[Inject] IGridSettingsStore?` would force every consumer to register
-    // one, throwing InvalidOperationException at render time when missing —
-    // which is exactly the bug we hit after disabling the cache layer.
     [Inject] private IServiceProvider Services { get; set; } = default!;
     private IGridSettingsStore? GridSettingsStore =>
         Services?.GetService(typeof(IGridSettingsStore)) as IGridSettingsStore;
 
-    /// <summary>True after the persisted settings (if any) have been loaded
-    /// and applied for the current <see cref="PersistenceKey"/>. Suppressed
-    /// to prevent firing a save during the initial apply.</summary>
     private bool _gridSettingsLoaded;
     private string? _gridSettingsLoadedKey;
-    /// <summary>The most-recently loaded-or-saved settings. Re-applied to
-    /// new column instances when the host rebuilds the grid mid-session
-    /// (e.g. FAssembly bumping ItemsGridLayoutVersion after a Pricing
-    /// Community change reloads the column dict from the database).</summary>
     private GridSettings? _lastAppliedSettings;
-    /// <summary>Hash of the live column-Field sequence at the moment we last
-    /// applied <see cref="_lastAppliedSettings"/>. When the actual sequence
-    /// drifts from this — only happens when the host swaps in a new column
-    /// list — we re-run the apply so the user's saved order/widths land on
-    /// the new instances.</summary>
     private string? _lastAppliedColumnSignature;
 
-    /// <summary>Show item count on group header rows.</summary>
     [Parameter] public bool ShowGroupCount { get; set; }
 
-    // ── Chart View ────────────────────────────────────────────────────────
-    // When ShowAsChart is true the grid replaces its normal table rendering
-    // with a stack of mini bar-charts, one per data row. Each row's
-    // ChartValueFields property values become its bars; ChartLabelField is
-    // the row's label. The rest of the grid (toolbar, grouping bar, etc.)
-    // stays untouched so consumers can still toggle sort / search / save.
-
-    /// <summary>When true, render data rows as bar charts instead of a table.</summary>
     [Parameter] public bool ShowAsChart { get; set; }
 
-    /// <summary>Property names whose numeric values become bars (one bar per field) in chart mode.</summary>
     [Parameter] public IList<string>? ChartValueFields { get; set; }
 
-    /// <summary>Property name to use as each row's chart label. Falls back to the first visible column's field.</summary>
     [Parameter] public string? ChartLabelField { get; set; }
 
-    /// <summary>Optional human-readable axis labels for each value field.</summary>
     [Parameter] public IList<string>? ChartValueLabels { get; set; }
 
-    /// <summary>Bar color in chart mode. Defaults to brand blue.</summary>
     [Parameter] public string ChartBarColor { get; set; } = "#2563eb";
 
-    /// <summary>Show numeric values above each bar in chart mode.</summary>
     [Parameter] public bool ChartShowValues { get; set; } = false;
 
-    /// <summary>
-    /// When true, all groups start collapsed on first render. Default is
-    /// <c>false</c> — groups start expanded so the user immediately sees the
-    /// detail rows under each grouping. Callers that prefer the collapsed-on-
-    /// load summary view can set this to <c>true</c>.
-    /// </summary>
     [Parameter] public bool DefaultGroupsCollapsed { get; set; } = false;
 
-    /// <summary>
-    /// Optional color applied to the *values* of the grouped column (the
-    /// group-header row text and the chips in the grouping bar). Default is
-    /// empty — the toolkit applies no color, so the value inherits whatever
-    /// the surrounding row text uses. Consumers wire their brand color
-    /// explicitly (FlexCore is a toolbox; brand colors are app concerns).
-    /// </summary>
     [Parameter] public string GroupedColumnColor { get; set; } = "";
 
-    /// <summary>
-    /// Optional text color for the grouped value displayed on group-header
-    /// rows. When empty, falls back to <see cref="GroupedColumnColor"/> for
-    /// backward compatibility.
-    /// </summary>
     [Parameter] public string GroupItemTextColor { get; set; } = "";
 
-    /// <summary>
-    /// Optional text color for aggregate totals rendered for a group: inline
-    /// group-header totals, group-caption totals, and group-footer totals.
-    /// Empty means the toolkit's default aggregate colors are used.
-    /// </summary>
     [Parameter] public string GroupTotalTextColor { get; set; } = "";
 
-    /// <summary>
-    /// Built-in preset for the group expand/collapse indicator on group-header
-    /// rows. Pick one of <see cref="GroupExpandIconStyle.PlusMinus"/> or
-    /// <see cref="GroupExpandIconStyle.Triangle"/>. To go beyond the presets,
-    /// use the <see cref="ExpandIconTemplate"/> / glyph / style parameters
-    /// below — those override this preset.
-    /// </summary>
     [Parameter] public GroupExpandIconStyle GroupExpandIconStyle { get; set; } = GroupExpandIconStyle.PlusMinus;
 
-    // ── Caller-supplied glyph/icon overrides ─────────────────────────────
-    // These let consumers swap in any glyph or markup without changing the
-    // toolkit. Resolution order (highest to lowest):
-    //   1. ExpandIconTemplate    — full RenderFragment(bool isExpanded)
-    //   2. CollapsedGlyph / ExpandedGlyph + ExpandIconStyle (string knobs)
-    //   3. GroupExpandIconStyle preset (built-in default)
-
-    /// <summary>
-    /// Glyph rendered when a group is collapsed. Null falls back to the
-    /// <see cref="GroupExpandIconStyle"/> preset ("+" or "▶").
-    /// </summary>
     [Parameter] public string? CollapsedGlyph { get; set; }
 
-    /// <summary>
-    /// Glyph rendered when a group is expanded. Null falls back to the
-    /// <see cref="GroupExpandIconStyle"/> preset ("−" or "▼").
-    /// </summary>
     [Parameter] public string? ExpandedGlyph { get; set; }
 
-    /// <summary>
-    /// Inline CSS style applied to the expand/collapse glyph span. Null falls
-    /// back to a sensible toolkit default for the chosen
-    /// <see cref="GroupExpandIconStyle"/>.
-    /// </summary>
     [Parameter] public string? ExpandIconStyle { get; set; }
 
-    /// <summary>
-    /// Optional RenderFragment that completely overrides the expand/collapse
-    /// icon. Receives a bool indicating whether the group is currently
-    /// expanded (true) or collapsed (false). The fragment is responsible for
-    /// its own markup and click handling — typical use: render an &lt;i&gt;
-    /// font-icon, an &lt;img&gt;, or any custom glyph.
-    /// </summary>
     [Parameter] public RenderFragment<bool>? ExpandIconTemplate { get; set; }
 
-    // Resolved values used by RenderGroupedRows.
     internal string ResolveCollapsedGlyph() =>
         CollapsedGlyph ?? (GroupExpandIconStyle == GroupExpandIconStyle.PlusMinus ? "+" : "▶");
 
@@ -414,7 +185,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     internal string? ResolveExpandIconStyle() =>
         ExpandIconStyle ?? (GroupExpandIconStyle == GroupExpandIconStyle.PlusMinus
-            ? HfGridIconStyles.PlusMinus
+            ? FxGridIconStyles.PlusMinus
             : null);   // Triangle → no inline style; CSS class drives it
 
     private string ResolvedGroupItemTextColor =>
@@ -425,9 +196,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private string ResolvedGroupTotalTextColor =>
         string.IsNullOrWhiteSpace(GroupTotalTextColor) ? "" : GroupTotalTextColor.Trim();
 
-    // A lighter tint of the resolved group item color used for the chip background.
-    // Uses color-mix() so any caller-supplied colour produces a sensible soft
-    // tint without needing colour-space math in C#.
     private string GroupedColumnColorSoft => $"color-mix(in srgb, {ResolvedGroupItemTextColor} 12%, white)";
     private string ResolvedColumnReorderPipeColor =>
         string.IsNullOrWhiteSpace(ColumnReorderPipeColor) ? "#2b2b2b" : ColumnReorderPipeColor.Trim();
@@ -440,6 +208,17 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private bool SingleCellColumnMassEditEnabled =>
         BatchEditBehavior == GridBatchEditBehavior.SingleCell && AllowSingleCellColumnMassEdit;
+
+    private string GridContentStyle
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(Height))
+                return string.Empty;
+
+            return "overflow-x:auto; overflow-y:hidden; flex:1;";
+        }
+    }
 
     private string GetRowCssClass(TValue item, int rowIndex)
     {
@@ -456,10 +235,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // Inline style for the host div. Only emits the GroupedColumnColor CSS
-    // variables when the caller actually supplied a color — empty-string
-    // assignments (e.g. "--fx-grid-group-color: ;") suppress the var() fallback
-    // in the stylesheet, leaving the chip background unset and invisible.
     private string HostStyle
     {
         get
@@ -499,8 +274,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (!EnableViewportSafeSizing || string.IsNullOrWhiteSpace(maxSize))
             return trimmed;
 
-        // Percentage-only sizes fill the parent. The CSS min-width/min-height
-        // reset above lets the parent shrink instead of forcing page scroll.
         if (IsPercentageOnlySize(trimmed))
             return trimmed;
 
@@ -558,7 +331,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private string GetRowStyle(TValue item, int rowIndex, bool isSelected)
     {
         var sb = new StringBuilder();
-        if (isSelected)
+        if (isSelected && HighlightSelectedRows)
             sb.Append("background:var(--fx-grid-selected-row-bg,#b6c8dd);");
 
         var height = GetEffectiveRowHeight(item, rowIndex);
@@ -583,35 +356,25 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return RowHeight > 0 ? Math.Max(MinRowHeight, RowHeight) : null;
     }
 
-    // Track whether we've already applied DefaultGroupsCollapsed so it only
-    // fires once (first render) — after that the user controls collapse state.
     private bool _appliedDefaultCollapsed;
 
-    // Child settings components
     [Parameter] public FilterSettings? FilterSettingsRef { get; set; }
     [Parameter] public PageSettings? PageSettingsRef { get; set; }
     [Parameter] public EditSettings? EditSettingsRef { get; set; }
     [Parameter] public SelectionSettings? SelectionSettingsRef { get; set; }
     [Parameter] public GridControlEvents<TValue>? EventsRef { get; set; }
 
-    // Direct event callbacks (shorthand without EventsRef)
     [Parameter] public EventCallback<string> OnToolbarItemClick { get; set; }
     [Parameter] public EventCallback<RowResizeEventArgs<TValue>> RowResizing { get; set; }
     [Parameter] public EventCallback<RowResizeEventArgs<TValue>> RowResized { get; set; }
-    /// <summary>Factory used to create a new row item when adding rows.</summary>
+    [Parameter] public EventCallback<RowReorderEventArgs<TValue>> RowReordering { get; set; }
+    [Parameter] public EventCallback<RowReorderEventArgs<TValue>> RowReordered { get; set; }
     [Parameter] public Func<TValue>? NewItemFactory { get; set; }
-    /// <summary>When enabled, keeps one real blank new row at the end of the grid.</summary>
     [Parameter] public bool EnsureTrailingNewRow { get; set; }
-    /// <summary>Optional predicate that tells the grid whether its tracked trailing new row is still blank.</summary>
     [Parameter] public Func<TValue, bool>? IsTrailingNewRow { get; set; }
-    /// <summary>When enabled, moving forward from the last cell appends a new row and focuses its first editable cell.</summary>
     [Parameter] public bool AddNewRowOnLastCellExit { get; set; }
-    /// <summary>Optional guard for <see cref="AddNewRowOnLastCellExit"/>; return false to leave focus at the grid edge.</summary>
     [Parameter] public Func<TValue, bool>? CanAddNewRowOnLastCellExit { get; set; }
-    /// <summary>Factory used to clone an existing row before editing.</summary>
     [Parameter] public Func<TValue, TValue>? CloneFactory { get; set; }
-
-    // ── Internal State ───────────────────────────────────────────────────
 
     internal GridColumnsBase? _columnsContainer;
     private readonly Dictionary<string, ColumnState> _columnStates = new();
@@ -628,48 +391,24 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private (int RowIndex, int CellIndex)? _lastSelectedCell;
     private int? _lastSelectedRowIndex;
 
-    // Drag-select state. Mousedown on a row in SelectionType.Multiple
-    // captures the anchor; mouseenter on a different row while the left
-    // button is still held extends the selection range and flips
-    // _isDragSelecting=true so the trailing click event (browser fires
-    // mousedown→mouseup→click) can swallow itself rather than collapsing
-    // back to a single-row selection.
     private int? _dragAnchorRowIndex;
-    // Drag/Shift-range selection works in VISIBLE row-index space, not raw
-    // DataSource indices — see GetVisibleRowItems for why. We track the
-    // anchor / last-selected items themselves so the index is recomputed
-    // against the current visible list each time the user extends the
-    // selection (the visible list shifts whenever a group collapses).
     private TValue? _dragAnchorItem;
     private TValue? _lastSelectedItem;
     private bool _isDragSelecting;
     private (int RowIndex, int CellIndex)? _cellDragAnchor;
     private bool _isCellDragSelecting;
 
-    // Editing
     private bool _isEditing;
     private int _editingRowIndex = -1;
     private TValue? _editItem;
 
-    // Batch editing (cell-level inline editing)
     private TValue? _batchEditItem;
     private int _batchEditRowIndex = -1;
     private string? _batchEditField;
     private string? _batchEditValue;
-    // True only after the user actually mutated the input value via oninput.
-    // Gates the multi-row fan-out so that auto-fired commits (Blazor blur
-    // cascade, focus round-trips) at click time can't blast the cell's
-    // pre-edit value across the rest of the selection.
     private bool _batchEditDirty;
-    // Mouse single-click opens the editor without visibly selecting the text,
-    // but the first typed character should still replace the selected cell's
-    // full value. Double-click/editor-in-text starts leave this false.
     private bool _batchEditReplaceOnFirstInput;
 
-    // Browser Tab can blur the input before Blazor Server processes the
-    // keydown. Keep the just-committed cell so the Tab handler can still move
-    // to the next displayed editable cell after blur has cleared live edit
-    // state.
     private TValue? _lastCommittedBatchEditItem;
     private int _lastCommittedBatchEditRowIndex = -1;
     private string? _lastCommittedBatchEditField;
@@ -679,35 +418,23 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private bool _hasLastKeyboardNavigationSource;
     private TValue? _keyboardRangeAnchorItem;
     private int _keyboardRangeAnchorCellIndex = -1;
+    private string _typeSearchBuffer = "";
+    private DateTime _typeSearchLastInputUtc = DateTime.MinValue;
+    private TValue? _typeSearchMatchItem;
+    private string? _typeSearchMatchField;
+    private bool _hasTypeSearchMatch;
 
-    // Set by StartBatchEdit. Consumed by OnAfterRenderAsync after the
-    // batch input exists in the DOM so a single-click edit immediately
-    // accepts typing instead of leaving focus on the grid host/cell.
     private bool _pendingBatchEditFocus;
 
-    // Set by StartBatchEdit when the column has SelectAllOnEdit=true.
-    // Consumed alongside _pendingBatchEditFocus to optionally select the
-    // current value. Reset immediately so later renders do not re-select
-    // while the user is typing.
     private bool _pendingBatchEditSelectAll;
     private double? _pendingBatchEditClientX;
 
-    // Set by BeginEditCellAsync (programmatic edit, e.g. host "New row"): when
-    // true the post-render focus is allowed to scroll the cell into view
-    // (FocusAsync preventScroll:false) instead of the default preventScroll:true
-    // used for mouse-click edits. This is how a newly-added off-screen row is
-    // brought into view — pure Blazor focus, NO JavaScript scrollIntoView.
     private bool _pendingBatchEditScrollIntoView;
     private bool _pendingActiveCellScrollIntoView;
 
-    // Element ref for the active batch-edit <input>. Captured in both
-    // render paths (grouped + flat) so the post-render focus/select action
-    // has something to target.
     private ElementReference _batchEditInputRef;
+    private int _pendingBatchEditFocusRetries;
 
-    // Lazy-imported ES module from wwwroot/grid-control.js. We only
-    // pay the import round-trip the first time SelectAllOnEdit fires;
-    // subsequent edits reuse the module reference.
     private IJSObjectReference? _gridJsModule;
     private ElementReference _gridHostElement;
     private DotNetObjectReference<GridControl<TValue>>? _gridDotNetRef;
@@ -716,7 +443,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private bool _gridKeyboardTrapRegistered;
     private int? _lastHostResolvedPageSize;
 
-    // Filtering popup
+    private enum GridScrollNavigationKey
+    {
+        PageUp,
+        PageDown,
+        Home,
+        End
+    }
+
     private string? _filterPopupField;
     private double _filterPopupX;
     private double _filterPopupY;
@@ -733,18 +467,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         string.Create(CultureInfo.InvariantCulture,
             $"left:clamp(8px,{_filterPopupX - 280}px,calc(100vw - 360px));top:clamp(8px,{_filterPopupY + 10}px,calc(100vh - 440px));");
 
-    // Type-ahead buffer (multi-select numeric input)
     private string _typeAheadBuffer = "";
     private bool _rowSelectionTypeAheadTargetCaptured;
     private string? _rowSelectionTypeAheadTargetField;
 
     private readonly record struct DataSourceSelectionSignature(int Count, int Fingerprint);
 
-    // Search
     private string? SearchText;
     private CancellationTokenSource? _searchCts;
 
-    // ── Grouping State ───────────────────────────────────────────────────
     private readonly List<GroupDescriptor> _groupDescriptors = new();
     private string? _draggingColumnField;
     private string? _draggingGroupChipField;
@@ -755,7 +486,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private DateTime _lastHeaderDragStartedUtc;
     private int _headerDragGeneration;
 
-    // ── Resize State ─────────────────────────────────────────────────────
     private GridColumn? _resizingCol;
     private double _resizeStartX;
     private double _resizeStartWidth;
@@ -765,12 +495,31 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private double _rowResizeStartHeight;
     private readonly Dictionary<int, double> _runtimeRowHeights = new();
     private bool _autoWidthPending = true;
-
-    // ── Computed Properties ──────────────────────────────────────────────
+    private TValue? _rowReorderDragItem;
+    private int _rowReorderDragSourceIndex = -1;
+    private int _rowReorderDragTargetIndex = -1;
+    private bool _isRowReorderDragging;
 
     private bool ShowCheckboxColumn =>
         SelectionSettingsRef?.CheckboxOnly == true ||
         VisibleColumns.Any(c => c.Type == ColumnType.CheckBox && string.IsNullOrEmpty(c.Field));
+
+    private bool ShowRowReorderColumn =>
+        AllowRowReorder && !(AllowGrouping && _groupDescriptors.Count > 0);
+
+    private bool ShowRowSelectorHandleColumn =>
+        ShowRowSelectorHandle && !(AllowGrouping && _groupDescriptors.Count > 0);
+
+    private const int RowReorderColumnWidth = 22;
+
+    private string RowReorderColumnStyle =>
+        $"width:{RowReorderColumnWidth}px;min-width:{RowReorderColumnWidth}px;max-width:{RowReorderColumnWidth}px;";
+
+    private int ResolvedRowSelectorHandleWidth =>
+        Math.Clamp(RowSelectorHandleWidth, 12, 40);
+
+    private string RowSelectorHandleColumnStyle =>
+        $"width:{ResolvedRowSelectorHandleWidth}px;min-width:{ResolvedRowSelectorHandleWidth}px;max-width:{ResolvedRowSelectorHandleWidth}px;";
 
     private FilterType ResolvedFilterType =>
         FilterSettingsRef?.Type ?? FilterType.FilterBar;
@@ -829,6 +578,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private int TotalColumnCount =>
         VisibleColumns.Count()
         + (ShowCheckboxColumn ? 1 : 0)
+        + (ShowRowReorderColumn ? 1 : 0)
+        + (ShowRowSelectorHandleColumn ? 1 : 0)
         + GroupedPlaceholderCount;
 
     private IReadOnlyList<GridColumn> GroupedLayoutColumns
@@ -854,15 +605,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             ? GroupedData.Any()
             : PagedData.Any();
 
-    // ── Data Pipeline: DataSource → Filter → Search → Sort → Page ────────
-
     private IEnumerable<TValue> FilteredData
     {
         get
         {
             var data = DataSource ?? Enumerable.Empty<TValue>();
 
-            // Apply column filters
             foreach (var kvp in _columnStates)
             {
                 var colField = kvp.Key;
@@ -897,13 +645,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 }
             }
 
-            // Apply expression filter from the group-drop search button.
             if (_expressionFilterRoot != null)
             {
                 data = data.Where(PassesExpressionFilter);
             }
 
-            // Apply global search
             if (!string.IsNullOrEmpty(SearchText))
             {
                 var searchLower = SearchText.ToLower();
@@ -954,8 +700,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // ── Grouped Data ─────────────────────────────────────────────────────
-
     private IEnumerable<GroupResult<TValue>> GroupedData
     {
         get
@@ -996,7 +740,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                         : Enumerable.Empty<GroupResult<TValue>>()
                 };
 
-                // Compute aggregates for this group across all its items (including sub-groups)
                 if (AggregateRows is { Count: > 0 })
                 {
                     group.Aggregates = ComputeAggregates(allItems);
@@ -1021,30 +764,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 group.IsCollapsed = _collapsedGroupPaths.Contains(group.GroupPath);
         }
 
-        // NOTE: We deliberately do NOT reset _expandAllGroups / _allGroupsCollapsed
-        // here. Doing so caused two bugs:
-        //
-        //  1. DefaultGroupsCollapsed appeared to do nothing — OnParametersSet sets
-        //     _allGroupsCollapsed=true, but the FIRST BuildGroups runs against the
-        //     not-yet-loaded data (empty), so ApplyGroupCollapseState has no groups
-        //     to mark, _collapsedGroupPaths stays empty, and the reset then wipes
-        //     the flag. When data finally arrived, both the flag and the path set
-        //     were empty → groups rendered expanded.
-        //
-        //  2. The toggle button in the group drop area read _allGroupsCollapsed to
-        //     decide its icon and toggle branch. With the flag wiped every render,
-        //     it always saw "false" and always took the "collapse" branch — so the
-        //     toolbar Collapse All click stuck and expand-all became unreachable.
-        //
-        // Individual toggles (ToggleGroupCollapse) clear the bulk flags themselves
-        // when the user expands/collapses a single group, so the flags are now
-        // managed exclusively by the explicit user actions and the lifecycle.
         return groups;
     }
 
-    /// <summary>
-    /// Compute aggregate values for a list of items based on AggregateRows config.
-    /// </summary>
     private Dictionary<string, object?> ComputeAggregates(IEnumerable<TValue> items)
     {
         var result = new Dictionary<string, object?>();
@@ -1100,9 +822,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return result;
     }
 
-    /// <summary>
-    /// Format an aggregate value using the column's format and template.
-    /// </summary>
     internal string FormatAggregateValue(AggregateColumn aggCol, object? value, string? templateOverride = null)
     {
         if (value == null) return "";
@@ -1122,9 +841,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return text;
     }
 
-    /// <summary>
-    /// Toggle expand/collapse all groups.
-    /// </summary>
     public void ToggleExpandCollapseAll()
     {
         if (_allGroupsCollapsed)
@@ -1148,14 +864,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return InvokeAsync(StateHasChanged);
     }
 
-    // ── Lifecycle ────────────────────────────────────────────────────────
-
     protected override void OnInitialized()
     {
         _pageState.PageSize = ResolvedPageSize;
         _lastHostResolvedPageSize = ResolvedPageSize;
 
-        // Apply initial group columns
         if (GroupColumns is { Count: > 0 })
         {
             foreach (var colField in GroupColumns)
@@ -1174,24 +887,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // Tracks the GroupColumns reference we last synced into _groupDescriptors
-    // so the existing OnParametersSet can detect a fresh list (host reloaded
-    // its layout) without confusing it with the stable reference held during
-    // a session.
     private List<string>? _lastSyncedGroupColumns;
 
     private void SyncGroupDescriptorsFromParameter()
     {
-        // Re-sync _groupDescriptors when the host swaps in a new GroupColumns
-        // list (e.g. FAssembly's LoadItemsGridLayoutAsync rebuilds it from the
-        // freshly-loaded dict after a Pricing Community / Show Pricing change).
-        // Without this, _groupDescriptors keeps its stale state from before the
-        // reload and the saved grouping silently disappears even though the
-        // database had it persisted correctly. Reference-equality check skips
-        // the sync during a normal session — drag-to-group mutates
-        // _groupDescriptors locally and the host doesn't reassign GroupColumns
-        // until the next reload, so the reference stays the same and we don't
-        // clobber the user's in-progress changes.
         if (ReferenceEquals(GroupColumns, _lastSyncedGroupColumns)) return;
         _lastSyncedGroupColumns = GroupColumns;
 
@@ -1218,10 +917,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // Capture the columns container from child content
         if (firstRender)
         {
-            // Re-apply initial group columns now that columns are loaded
             if (GroupColumns is { Count: > 0 } && _groupDescriptors.Count == 0)
             {
                 foreach (var colField in GroupColumns)
@@ -1240,13 +937,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             StateHasChanged();
         }
 
-        // Hook once per component instance; JS side is idempotent as well.
         await EnsureGridKeyboardTrapRegisteredAsync();
         await EnsureHeaderDragPreviewRegisteredAsync();
         await EnsureRowDragSelectionAutoScrollRegisteredAsync();
 
-        // Once columns have rendered for the first time after a new
-        // PersistenceKey is supplied, pull the saved settings.
         if (!string.IsNullOrEmpty(PersistenceKey)
             && PersistenceKey != _gridSettingsLoadedKey
             && _columnsContainer != null
@@ -1256,10 +950,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _gridSettingsLoadedKey = PersistenceKey;
             await LoadGridSettingsAsync();
         }
-        // After every render: if the host swapped in a new column list (e.g.
-        // FAssembly bumped ItemsGridLayoutVersion after a Pricing Community
-        // change), re-apply our cached settings so user customizations don't
-        // get lost mid-session.
         else if (_gridSettingsLoaded)
         {
             ReapplyAfterRebuildIfNeeded();
@@ -1274,12 +964,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         await EnsureTrailingNewRowIfNeededAsync();
 
-        // Batch-edit focus handling — fires once per batch-edit start after
-        // the input has actually been laid into the DOM. Without this,
-        // single-click editing can show an input while focus remains on the
-        // grid/cell, so typed characters are not rendered in the editor.
         if (_pendingBatchEditFocus && !string.IsNullOrEmpty(_batchEditField))
         {
+            if (!HasElementReference(_batchEditInputRef) && _pendingBatchEditFocusRetries < 3)
+            {
+                _pendingBatchEditFocusRetries++;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
             var selectAll = _pendingBatchEditSelectAll;
             var clientX = _pendingBatchEditClientX;
             var scrollIntoView = _pendingBatchEditScrollIntoView;
@@ -1287,14 +980,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
             _pendingBatchEditScrollIntoView = false;
+            _pendingBatchEditFocusRetries = 0;
 
-            // Programmatic edit (host "New row" / BeginEditCellAsync): focus the
-            // input and LET the browser scroll it into view. FocusAsync with
-            // preventScroll:false is the pure-Blazor way to bring an off-screen
-            // row on screen — no JS scrollIntoView. The sticky header (CSS
-            // position:sticky on .fx-grid-header) stays visible through the
-            // scroll. Done here (not via the JS module) so it works even when
-            // grid-control.js can't be imported.
             if (scrollIntoView)
             {
                 try { await _batchEditInputRef.FocusAsync(preventScroll: false); }
@@ -1319,11 +1006,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             catch (Exception)
             {
                 try { await _batchEditInputRef.FocusAsync(preventScroll: true); }
-                catch { /* best-effort */ }
-                // Best-effort: if the module can't be imported (consumer
-                // app misconfigured static assets, browser cache miss
-                // mid-request, etc.) the user still gets a normal caret.
-                // Not worth surfacing; the user can still click into the input.
+                catch {  }
             }
         }
 
@@ -1344,28 +1027,38 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort viewport correction. Keyboard selection still moves
-            // even if static assets are unavailable during circuit teardown.
         }
     }
 
-    /// <summary>
-    /// Static-asset path to <c>grid-control.js</c>. Resolved from the
-    /// executing assembly's simple name so the same source line works for
-    /// both packages — FlexCore consumers reach
-    /// <c>_content/FlexCore/grid-control.js</c>, FlexKit consumers reach
-    /// <c>_content/FlexKit/grid-control.js</c>. Keep the path computed
-    /// (not a string literal) so the FlexCore ↔ FlexKit byte-identical-
-    /// source rule holds.
-    /// </summary>
+    private int GetKeyboardPageRowCount()
+    {
+        if (TryParsePixelSize(Height ?? string.Empty, out var heightPx))
+        {
+            var rowHeight = RowHeight > 0 ? RowHeight : Math.Max(18, (int)Math.Ceiling(MinRowHeight));
+            return Math.Max(1, (int)Math.Floor(Math.Max(0, heightPx - 24) / rowHeight));
+        }
+
+        return IsPagingActive && _pageState.PageSize > 0
+            ? Math.Max(1, Math.Min(_pageState.PageSize, 20))
+            : 20;
+    }
+
     private static string GridJsModulePath =>
         $"./_content/{typeof(GridControl<TValue>).Assembly.GetName().Name}/grid-control.js";
 
-    /// <summary>Pulls the saved <see cref="GridSettings"/> for the current
-    /// <see cref="PersistenceKey"/> and applies them: column order, visibility
-    /// overrides, header overrides, runtime widths, group descriptors. Sets
-    /// <see cref="_gridSettingsLoaded"/> at the end so subsequent user
-    /// mutations trigger a save (this initial apply must NOT save itself).</summary>
+    private async ValueTask<IJSObjectReference?> GetGridJsModuleAsync()
+    {
+        try
+        {
+            return _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private async Task LoadGridSettingsAsync()
     {
         if (string.IsNullOrEmpty(PersistenceKey) || GridSettingsStore == null) return;
@@ -1386,16 +1079,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Don't take down the grid if persistence fails — just behave as
-            // if no saved settings existed. Mark loaded so saves still fire
-            // for ongoing user mutations.
             _gridSettingsLoaded = true;
         }
     }
 
-    /// <summary>Walks <see cref="GridSettings"/> and applies each piece to
-    /// the current column instances. Shared between the initial load and the
-    /// post-rebuild re-apply path.</summary>
     private void ApplyLoadedSettings(GridSettings settings)
     {
         if (settings.HeaderOverrides != null)
@@ -1437,13 +1124,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private string ComputeColumnSignature() => string.Join("|", Columns.Select(c => c.Field));
 
-    /// <summary>Re-applies the cached saved settings whenever the host
-    /// rebuilds the columns (a fresh <c>&lt;GridColumnsBase&gt;</c> keyed on a
-    /// version counter — e.g. FAssembly's <c>ItemsGridLayoutVersion</c> after
-    /// a Pricing Community change reloads the layout dict from the database).
-    /// New <see cref="GridColumn"/> instances arrive in the host's default
-    /// order with no <c>RuntimeWidth</c>; without this pass the user's
-    /// last-saved order/widths would be silently lost mid-session.</summary>
     private void ReapplyAfterRebuildIfNeeded()
     {
         if (!_gridSettingsLoaded || _lastAppliedSettings == null || Columns.Count == 0)
@@ -1451,18 +1131,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var sig = ComputeColumnSignature();
         if (sig == _lastAppliedColumnSignature) return;
         ApplyLoadedSettings(_lastAppliedSettings);
-        // After ReorderColumns the signature has changed again — capture
-        // the post-apply value so we don't loop on the next render.
         _lastAppliedColumnSignature = ComputeColumnSignature();
         StateHasChanged();
     }
 
-    /// <summary>Variant of <see cref="SaveGridSettingsAsync"/> that takes the
-    /// post-mutation column list as an explicit snapshot rather than reading
-    /// the live <see cref="Columns"/> collection. Used after
-    /// <see cref="OnColumnsChosen"/> fires, where the host's update is async
-    /// (a version bump that triggers Blazor to rebuild the columns) and the
-    /// live collection still reflects the pre-OK state.</summary>
     private async Task SaveSnapshotSettingsAsync(List<ChooseColumnDescriptor> snapshot)
     {
         if (!_gridSettingsLoaded || string.IsNullOrEmpty(PersistenceKey) || GridSettingsStore == null)
@@ -1472,28 +1144,16 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             ColumnOrder     = snapshot.Select(c => c.Field).Where(f => !string.IsNullOrEmpty(f)).ToList(),
             Visibility      = snapshot.ToDictionary(c => c.Field, c => c.Visible),
-            // Carry forward any existing user state for fields the dialog
-            // didn't touch — widths, header overrides, group columns.
             Widths          = Columns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
                                      .ToDictionary(c => c.Field, c => c.RuntimeWidth!.Value),
             HeaderOverrides = _headerOverrides.Count > 0 ? new Dictionary<string, string>(_headerOverrides) : null,
             GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList()
         };
         _lastAppliedSettings = settings;
-        // Don't capture column signature here — the host's column rebuild is
-        // async, so the live signature will diverge in a moment and trigger
-        // ReapplyAfterRebuildIfNeeded as intended.
         try { await GridSettingsStore.SaveAsync(PersistenceKey, settings); }
-        catch (Exception) { /* persistence shouldn't surface errors */ }
+        catch (Exception) {  }
     }
 
-    /// <summary>Writes the grid's current user-modifiable state to the
-    /// configured store. No-op when persistence is off or the initial load
-    /// hasn't happened yet (we don't want to save the unloaded blank state
-    /// over a previously-saved one).</summary>
-    /// <summary>Builds a snapshot of every persistable aspect of the grid's
-    /// current state. Shared by the IGridSettingsStore save path and the
-    /// <see cref="OnLayoutChanged"/> event so both stay in sync.</summary>
     private GridSettings BuildCurrentSnapshot()
     {
         return new GridSettings
@@ -1507,11 +1167,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         };
     }
 
-    /// <summary>Fires <see cref="OnLayoutChanged"/> with the current snapshot
-    /// when a host has subscribed. Called from every user-mutation handler
-    /// other than <see cref="ChooseColumnsOk"/> (which uses
-    /// <see cref="OnColumnsChosen"/> with the dialog snapshot instead, since
-    /// the host's rebuild is async at that point).</summary>
     private async Task FireLayoutChangedAsync()
     {
         if (!OnLayoutChanged.HasDelegate) return;
@@ -1524,9 +1179,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return;
 
         var settings = BuildCurrentSnapshot();
-        // Refresh the cache so the post-rebuild re-apply uses the latest
-        // user state (otherwise a host-triggered rebuild after a user mutation
-        // would re-apply pre-mutation state from the previous load).
         _lastAppliedSettings = settings;
         _lastAppliedColumnSignature = ComputeColumnSignature();
         try
@@ -1535,8 +1187,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Persistence failures shouldn't reach the user — the worst case
-            // is the user's customization doesn't survive next session.
         }
     }
 
@@ -1555,9 +1205,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         ResetFiltersIfDataSourceChanged();
         ClearSelectionIfDataSourceChanged();
 
-        // Apply DefaultGroupsCollapsed once on first parameter set so all groups
-        // start collapsed. Subsequent parameter changes won't re-collapse — the
-        // user's manual expand/collapse state takes over.
         if (DefaultGroupsCollapsed && !_appliedDefaultCollapsed)
         {
             _allGroupsCollapsed = true;
@@ -1699,8 +1346,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         ClearKeyboardNavigationSource();
     }
 
-    // ── Sorting ──────────────────────────────────────────────────────────
-
     private async Task HandleSort(GridColumn col)
     {
         if (!AllowSorting || !col.AllowSorting || string.IsNullOrEmpty(col.Field))
@@ -1708,7 +1353,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var state = GetColumnState(col.Field);
 
-        // Fire Sorting event
         if (EventsRef?.Sorting.HasDelegate == true)
         {
             var args = new SortEventArgs
@@ -1721,7 +1365,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (args.Cancel) return;
         }
 
-        // Clear other sorts unless multi-sort
         if (!AllowMultiSorting)
         {
             foreach (var kvp in _columnStates)
@@ -1729,7 +1372,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     kvp.Value.SortDirection = null;
         }
 
-        // Toggle
         if (!state.SortDirection.HasValue)
             state.SortDirection = SortDirection.Ascending;
         else if (state.SortDirection == SortDirection.Ascending)
@@ -1742,8 +1384,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
     }
-
-    // ── Filtering ────────────────────────────────────────────────────────
 
     private async Task ApplyFilter(string field, string? value, TextFilterOperator? filterOperator = null)
     {
@@ -1862,8 +1502,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             .ToList();
     }
 
-    // ── Search ───────────────────────────────────────────────────────────
-
     private async Task ApplySearchDebounced()
     {
         _searchCts?.Cancel();
@@ -1878,8 +1516,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (TaskCanceledException) { }
     }
-
-    // ── Paging ───────────────────────────────────────────────────────────
 
     private void EnsureCurrentPageInRange()
     {
@@ -1949,20 +1585,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return Enumerable.Range(start, end - start + 1);
     }
 
-    // ── Selection ────────────────────────────────────────────────────────
-
     private async Task HandleRowClick(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
     {
-        // Commit any in-progress batch cell edit when clicking away
         await CommitBatchEdit();
+        ClearTypeSearchBuffer();
         ClearKeyboardNavigationSource();
         if (mouseArgs?.ShiftKey != true)
             ClearKeyboardRangeSelectionAnchor();
 
-        // If the mouseup that just preceded this click came at the end of
-        // a drag-select, the selection was already established by
-        // HandleRowMouseEnter. Swallow the click so the normal SelectRow
-        // path doesn't collapse the range back to a single row.
         if (_isDragSelecting)
         {
             _isDragSelecting = false;
@@ -1984,25 +1614,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await FocusGridHostAsync();
     }
 
-    // ── Drag-select ──────────────────────────────────────────────────────
-    //
-    // Spreadsheet-style click-and-drag selection across rows. Mousedown on
-    // a row in SelectionType.Multiple sets the anchor; subsequent
-    // mouseenters with the left button still held extend the range from
-    // anchor to current row, replacing any previous selection. The
-    // trailing click event (browsers fire click after every mouseup) is
-    // swallowed by HandleRowClick when _isDragSelecting is true so the
-    // drag's selection survives.
-
     private void HandleRowMouseDown(TValue item, int rowIndex, MouseEventArgs args)
     {
-        // Only the primary button (Button == 0) starts a drag. Right-click
-        // and middle-click should not select.
         if (args.Button != 0) return;
 
-        // Modifier keys are reserved for SelectRow's range/toggle gestures —
-        // letting them seed a drag here would clobber Ctrl+click toggling
-        // and confuse Shift+click range extension. Plain clicks only.
         if (args.CtrlKey || args.MetaKey || args.ShiftKey) return;
 
         if (SelectionSettingsRef?.Mode == SelectionMode.Cell && SelectionSettingsRef?.CheckboxOnly != true)
@@ -2016,12 +1631,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _dragAnchorRowIndex = ResolveRowIndex(item, rowIndex);
         _isDragSelecting = false;   // promoted to first mouseenter
 
-        // Wipe any document-level text selection left over from earlier
-        // interactions (or from a browser that paints a transient
-        // selection on the mousedown itself, before user-select: none
-        // takes effect). Fire-and-forget — we don't await it because
-        // mousedown handlers must stay synchronous to keep click ordering
-        // predictable, and the helper is idempotent / cheap.
         _ = ClearGridTextSelectionAsync();
     }
 
@@ -2054,18 +1663,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
         }
 
-        // Data cells stop mousedown propagation so popup/template buttons do
-        // not also trigger the row handler. Start the same row drag protocol
-        // here, now with the cell known, so the anchor cell can reveal its
-        // flat "..." button while the user is selecting a range.
         HandleRowMouseDown(item, rowIndex, args);
     }
 
     private void HandleGridMouseUp(MouseEventArgs args)
     {
-        // A real drag-select is cleared by the trailing click path so that
-        // click can be swallowed. For plain clicks on child controls that
-        // stop their own click event, drop the unused anchor on mouseup.
         if (_isDragSelecting || _isCellDragSelecting) return;
 
         _dragAnchorRowIndex = null;
@@ -2192,13 +1794,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _ = NotifyTypeAheadChangedAsync();
     }
 
-    /// <summary>
-    /// Lazy-imports grid-control.js (if not already loaded) and invokes
-    /// <c>clearTextSelection</c> to drop any document-level Selection
-    /// ranges. The CSS rule <c>user-select: none</c> on the grid body
-    /// stops most accidental selections from forming in the first place;
-    /// this is the cleanup path for the ones that slip through.
-    /// </summary>
     private async Task ClearGridTextSelectionAsync()
     {
         try
@@ -2209,17 +1804,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort — if interop fails the worst case is the user
-            // sees a stray selection until their next click; not worth
-            // surfacing.
         }
     }
 
-    /// <summary>
-    /// Prevents browser-native Tab from racing ahead of Blazor's grid
-    /// navigation while focus is inside a data cell/editor. Text entry stays
-    /// native; only Tab is trapped client-side.
-    /// </summary>
     private async Task EnsureGridKeyboardTrapRegisteredAsync()
     {
         if (_gridKeyboardTrapRegistered) return;
@@ -2232,15 +1819,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort — without this, Blazor navigation still runs but the
-            // browser may also move focus to the next tabbable element.
         }
     }
 
-    /// <summary>
-    /// Installs a custom, compact drag image for header reordering so the
-    /// browser's full-cell ghost doesn't occlude drop indicators.
-    /// </summary>
     private async Task EnsureHeaderDragPreviewRegisteredAsync()
     {
         if (_headerDragPreviewRegistered) return;
@@ -2253,17 +1834,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort — if this fails, drag still works with default
-            // browser ghost image; we'll retry on the next render.
         }
     }
 
-    /// <summary>
-    /// Installs browser-side edge auto-scroll for spreadsheet-style row
-    /// drag selection. Blazor row selection still owns the selected state;
-    /// JS only scrolls the viewport and nudges the row mouseenter path when
-    /// scrolling moves new rows under a stationary pointer.
-    /// </summary>
     private async Task EnsureRowDragSelectionAutoScrollRegisteredAsync()
     {
         if (_rowDragSelectionAutoScrollRegistered) return;
@@ -2277,8 +1850,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort — normal drag-select still works without edge
-            // auto-scroll; we'll retry on the next render.
         }
     }
 
@@ -2286,10 +1857,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         if (_dragAnchorItem == null) return;
 
-        // MouseEventArgs.Buttons is a bitmask of currently-held buttons;
-        // bit 0 = primary. If the user released outside any row (no
-        // mouseup landed on the grid) Buttons drops to 0 here, so we end
-        // the drag silently.
         if ((args.Buttons & 1) == 0)
         {
             _dragAnchorItem = default;
@@ -2318,12 +1885,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var anchorItem = _dragAnchorItem;
         if (anchorItem == null) return;
 
-        // Range is computed against the VISIBLE row order, not raw
-        // DataSource indices. With grouping/sorting enabled the gap
-        // between anchor.DataSourceIndex and current.DataSourceIndex can
-        // span hundreds of rows that are hidden in collapsed groups or
-        // belong to other groups — selecting them all reads as a wildly
-        // inflated count for what looks like a small drag.
         var visible = GetVisibleRowItems();
         var anchorIdx = visible.IndexOf(anchorItem);
         var currentIdx = visible.IndexOf(item);
@@ -2331,7 +1892,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (anchorIdx == currentIdx && !_isDragSelecting)
         {
-            // Still on the anchor row — not yet a drag.
             return;
         }
 
@@ -2347,14 +1907,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         _lastSelectedItem = item;
         _lastSelectedRowIndex = ResolveRowIndex(item, rowIndex);
-
-        // Don't fire RowSelected for every row crossed — that would flood
-        // user code with one callback per mousemove. The trailing click
-        // doesn't fire RowSelected either (we early-return). Hosts that
-        // need to react to drag-select progress (e.g. live count labels)
-        // subscribe to SelectionChanged, which fires once per drag-extend
-        // with the current count — already the natural per-mousemove
-        // cadence so it's safe.
 
         await InvokeAsync(StateHasChanged);
         await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
@@ -2398,26 +1950,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             if (!isCtrl && !isShift && selType == SelectionType.Multiple)
             {
-                // Plain click (no modifiers) in Multiple mode. Match the
-                // desktop convention: a bare click always collapses to
-                // exactly the clicked row, *unless* the clicked row is
-                // the lone existing selection AND EnableToggle is on, in
-                // which case it toggles off to an empty selection (parity
-                // with the Single-mode branch above).
-                //
-                // Cases:
-                //   • Multi-selection (Count > 1), click on ANY row →
-                //     reduce to just the clicked row.
-                //   • Single selection (Count == 1) of a DIFFERENT row →
-                //     swap to the clicked row.
-                //   • Single selection (Count == 1) of the SAME row →
-                //     toggle off (when EnableToggle) or stay (when not).
-                //   • Empty selection → select the clicked row.
-                //
-                // The earlier "preserve multi-selection on click" branch
-                // was removed because it broke the desktop convention and
-                // made the "reset selection" gesture invisible to users.
-                // Editable-cell clicks bypass this path via HandleCellClick.
                 var wasSelected = _selectedItems.Contains(item);
                 var hadMulti = _selectedItems.Count > 1;
                 _selectedItems.Clear();
@@ -2426,14 +1958,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
             else if (isShift && _lastSelectedItem != null)
             {
-                // Range selection — anchor and current resolved against the
-                // VISIBLE row order (PagedData when ungrouped, GroupedData
-                // walked with collapsed groups skipped). Using DataSource
-                // indices here was wrong for the same reason it was wrong
-                // for drag-select: hidden / grouped-but-not-shown rows
-                // between anchor and current would be added to the set,
-                // making "Shift-click two adjacent visible rows" select
-                // hundreds of underlying records.
                 var visible = GetVisibleRowItems();
                 var anchorIdx = visible.IndexOf(_lastSelectedItem);
                 var currentIdx = visible.IndexOf(item);
@@ -2452,7 +1976,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
             else if (isCtrl)
             {
-                // Toggle single item
                 if (!_selectedItems.Remove(item))
                     _selectedItems.Add(item);
             }
@@ -2474,9 +1997,249 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await NotifySelectionChangedAsync(source);
     }
 
+    private bool CanStartRowReorder(TValue item) =>
+        ShowRowReorderColumn && (RowReorderPredicate?.Invoke(item) ?? true);
+
+    private bool CanShowRowSelectorHandle(TValue item)
+    {
+        if (!ShowRowSelectorHandleColumn)
+            return false;
+
+        if (RowSelectorHandlePredicate == null)
+            return true;
+
+        try
+        {
+            return RowSelectorHandlePredicate.Invoke(item);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool IsRowSelectorHandleEmphasized(TValue item)
+    {
+        if (RowSelectorHandleEmphasisPredicate == null)
+            return false;
+
+        try
+        {
+            return RowSelectorHandleEmphasisPredicate.Invoke(item);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private string RowSelectorHandleShapeClass =>
+        RowSelectorHandleShape switch
+        {
+            GridRowSelectorHandleShape.Button => "button",
+            GridRowSelectorHandleShape.CheckBox => "checkbox",
+            _ => "half-button"
+        };
+
+    private string GetRowSelectorHandleStyle(bool isSelected, bool isEmphasized)
+    {
+        var background = isSelected
+            ? "linear-gradient(#c9d9ec,#8fb0d4)"
+            : isEmphasized
+                ? "linear-gradient(#eeeeee,#c9c9c9)"
+                : "linear-gradient(#f5f5f5,#d8d8d8)";
+        var borderColor = isSelected ? "#4f79a7" : isEmphasized ? "#707070" : "#8f8f8f";
+        var width = RowSelectorHandleShape switch
+        {
+            GridRowSelectorHandleShape.Button => "14px",
+            GridRowSelectorHandleShape.CheckBox => "13px",
+            _ => "10px"
+        };
+        var height = RowSelectorHandleShape == GridRowSelectorHandleShape.CheckBox ? "13px" : "12px";
+        var borderLeft = RowSelectorHandleShape == GridRowSelectorHandleShape.HalfButton ? "border-left:none;" : "";
+        var radius = RowSelectorHandleShape switch
+        {
+            GridRowSelectorHandleShape.HalfButton => "0 2px 2px 0",
+            GridRowSelectorHandleShape.CheckBox => "0",
+            _ => "1px"
+        };
+        var boxShadow = RowSelectorHandleShape == GridRowSelectorHandleShape.CheckBox ? "none" : "inset 1px 1px 0 #fff";
+        var resolvedBackground = RowSelectorHandleShape == GridRowSelectorHandleShape.CheckBox && !isSelected && !isEmphasized
+            ? "#fff"
+            : background;
+
+        return "display:inline-flex;align-items:center;justify-content:center;"
+            + $"width:{width};height:{height};margin:0;padding:0;border:1px solid {borderColor};"
+            + borderLeft
+            + $"border-radius:{radius};background:{resolvedBackground};box-shadow:{boxShadow};"
+            + "cursor:pointer;vertical-align:middle;appearance:none;-webkit-appearance:none;";
+    }
+
+    private string GetRowSelectorHandleMarkStyle(bool isSelected)
+    {
+        if (!isSelected || RowSelectorHandleShape != GridRowSelectorHandleShape.CheckBox)
+            return string.Empty;
+
+        return "width:4px;height:8px;border:solid #000;border-width:0 2px 2px 0;transform:rotate(45deg);";
+    }
+
+    private async Task HandleRowSelectorHandleClick(TValue item, int rowIndex, MouseEventArgs args)
+    {
+        await CommitBatchEdit();
+        ClearKeyboardNavigationSource();
+        if (!args.ShiftKey)
+            ClearKeyboardRangeSelectionAnchor();
+
+        _selectedCells.Clear();
+        _activeCell = null;
+        _cellDragAnchor = null;
+        _dragAnchorRowIndex = null;
+        _dragAnchorItem = default;
+        _isDragSelecting = false;
+        _isCellDragSelecting = false;
+
+        if (!AllowSelection)
+            return;
+
+        await SelectRow(item, rowIndex, args);
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task StartRowReorderDrag(TValue item, int rowIndex, DragEventArgs _)
+    {
+        if (!CanStartRowReorder(item))
+            return;
+
+        await CommitBatchEdit();
+        ClearTypeSearchBuffer();
+        ClearCellDragState();
+        _selectedCells.Clear();
+        _activeCell = null;
+        _lastSelectedCell = null;
+
+        _isRowReorderDragging = true;
+        _rowReorderDragItem = item;
+        _rowReorderDragSourceIndex = ResolveRowIndex(item, rowIndex);
+        _rowReorderDragTargetIndex = _rowReorderDragSourceIndex;
+        _isDragSelecting = false;
+        _isCellDragSelecting = false;
+    }
+
+    private void HandleRowReorderDragOver(TValue item, int rowIndex, DragEventArgs _)
+    {
+        if (!_isRowReorderDragging || _rowReorderDragItem == null)
+            return;
+
+        _rowReorderDragTargetIndex = ResolveRowIndex(item, rowIndex);
+    }
+
+    private async Task HandleRowReorderDrop(TValue targetItem, int targetRowIndex, DragEventArgs _)
+    {
+        if (!_isRowReorderDragging || _rowReorderDragItem == null)
+        {
+            EndRowReorderDrag();
+            return;
+        }
+
+        var sourceItem = _rowReorderDragItem;
+        var oldIndex = _rowReorderDragSourceIndex;
+        var targetIndex = ResolveRowIndex(targetItem, targetRowIndex);
+        var newIndex = ComputeRowReorderInsertIndex(sourceItem, targetItem, oldIndex, targetIndex);
+
+        if (oldIndex < 0
+            || newIndex < 0
+            || EqualityComparer<TValue>.Default.Equals(sourceItem, targetItem))
+        {
+            EndRowReorderDrag();
+            return;
+        }
+
+        var args = new RowReorderEventArgs<TValue>
+        {
+            Data = sourceItem,
+            TargetData = targetItem,
+            OldIndex = oldIndex,
+            NewIndex = newIndex
+        };
+
+        if (EventsRef?.RowReordering.HasDelegate == true)
+            await EventsRef.RowReordering.InvokeAsync(args);
+        if (RowReordering.HasDelegate)
+            await RowReordering.InvokeAsync(args);
+        if (args.Cancel)
+        {
+            EndRowReorderDrag();
+            return;
+        }
+
+        TryReorderMutableDataSource(sourceItem, targetItem);
+
+        var finalIndex = ResolveRowIndex(sourceItem, args.NewIndex);
+        if (finalIndex >= 0)
+            args.NewIndex = finalIndex;
+
+        _selectedItems.Clear();
+        _selectedItems.Add(sourceItem);
+        _lastSelectedItem = sourceItem;
+        _lastSelectedRowIndex = args.NewIndex;
+        if (_activeCell?.RowIndex == oldIndex)
+            _activeCell = (args.NewIndex, _activeCell.Value.CellIndex);
+        if (_lastSelectedCell?.RowIndex == oldIndex)
+            _lastSelectedCell = (args.NewIndex, _lastSelectedCell.Value.CellIndex);
+
+        if (EventsRef?.RowReordered.HasDelegate == true)
+            await EventsRef.RowReordered.InvokeAsync(args);
+        if (RowReordered.HasDelegate)
+            await RowReordered.InvokeAsync(args);
+
+        EndRowReorderDrag();
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Pointer);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private int ComputeRowReorderInsertIndex(TValue sourceItem, TValue targetItem, int fallbackOldIndex, int fallbackTargetIndex)
+    {
+        if (DataSource is IList<TValue> list)
+        {
+            var from = list.IndexOf(sourceItem);
+            var to = list.IndexOf(targetItem);
+            if (from >= 0 && to >= 0)
+                return from < to ? to - 1 : to;
+        }
+
+        return fallbackOldIndex < fallbackTargetIndex ? fallbackTargetIndex - 1 : fallbackTargetIndex;
+    }
+
+    private void TryReorderMutableDataSource(TValue sourceItem, TValue targetItem)
+    {
+        if (DataSource is not IList<TValue> list)
+            return;
+
+        var from = list.IndexOf(sourceItem);
+        var to = list.IndexOf(targetItem);
+        if (from < 0 || to < 0 || from == to)
+            return;
+
+        list.RemoveAt(from);
+        if (from < to)
+            to--;
+        to = Math.Clamp(to, 0, list.Count);
+        list.Insert(to, sourceItem);
+    }
+
+    private void EndRowReorderDrag()
+    {
+        _rowReorderDragItem = default;
+        _rowReorderDragSourceIndex = -1;
+        _rowReorderDragTargetIndex = -1;
+        _isRowReorderDragging = false;
+    }
+
     private async Task HandleCellClick(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        ClearTypeSearchBuffer();
 
         if (_isCellDragSelecting)
         {
@@ -2515,18 +2278,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (!AllowSelection)
             return;
 
-        // Commit any in-progress batch cell edit when clicking a different cell.
-        // (StartBatchEdit also calls CommitBatchEdit internally, but this covers
-        // clicks on non-editable cells that wouldn't reach StartBatchEdit.)
         await CommitBatchEdit();
 
-        // Determine if the clicked cell is editable (batch mode)
         var clickedCol = VisibleColumns.ElementAtOrDefault(cellIndex);
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
         {
-            // Row-selection grids use _activeCell for the dotted edit cue.
-            // Leaving a previous programmatic cell selection behind makes
-            // popup/template cells look "stuck" after focus moves elsewhere.
             _selectedCells.Clear();
         }
 
@@ -2536,23 +2292,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             && clickedCol.AllowEditing
             && !clickedCol.IsPrimaryKey
             && !string.IsNullOrEmpty(clickedCol.Field);
+        var isOptionListCell = isEditableCell && clickedCol?.EditOptions?.Any() == true;
         var useSingleCellBatchBehavior = isEditableCell
             && BatchEditBehavior == GridBatchEditBehavior.SingleCell;
 
-        // Handle row selection for Row-mode grids.
-        // Cell clicks use stopPropagation so the <tr> onclick (HandleRowClick)
-        // does NOT fire — we must handle selection here.
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell &&
             SelectionSettingsRef?.CheckboxOnly != true)
         {
             var isPlainClick = !args.CtrlKey && !args.MetaKey && !args.ShiftKey;
-            // FullMultiSelect preserves a multi-row selection when the user
-            // plain-clicks an editable/action cell inside it so bulk-edit
-            // stays armed. VBMultiSelect keeps Ctrl/Shift/drag selection but
-            // lets a plain click collapse the selection to the clicked row.
-            //
-            // Modifier-key clicks (Ctrl/Shift) intentionally fall through
-            // to SelectRow so range/toggle gestures keep working.
             var isActionCell = clickedCol?.EffectiveTemplate != null
                 || clickedCol?.Commands is { Count: > 0 };
             var preserveSelection = BatchEditBehavior == GridBatchEditBehavior.MultiRow
@@ -2571,10 +2318,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
         }
 
-        // Text/numeric cells do not enter edit mode on single click; the click
-        // only selects the cell. A typed printable key starts editing and
-        // replaces the full value, while double-click opens an in-cell editor at
-        // the clicked character. Checkbox cells keep their click-to-toggle path.
         if (isEditableCell && !useSingleCellBatchBehavior && clickedCol?.Type == ColumnType.CheckBox)
         {
             await StartBatchEdit(item, resolvedRowIndex, clickedCol!);
@@ -2583,6 +2326,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
         {
+            if (isEditableCell && (EditOnSingleClick || isOptionListCell) && clickedCol?.Type != ColumnType.CheckBox)
+            {
+                await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX);
+                return;
+            }
+
             await FocusGridHostAsync();
             return;
         }
@@ -2652,6 +2401,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             });
         }
 
+        if (isEditableCell && (EditOnSingleClick || isOptionListCell) && clickedCol?.Type != ColumnType.CheckBox)
+        {
+            await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX);
+            return;
+        }
+
         await FocusGridHostAsync();
     }
 
@@ -2671,9 +2426,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return;
         }
 
-        // Mass-edit selections are intentionally one-column only. If the user
-        // starts a modifier selection in another column, make that column the
-        // new mass-edit column instead of allowing ambiguous multi-column edits.
         if (_selectedCells.Any(c => c.CellIndex != cellIndex))
             _selectedCells.Clear();
 
@@ -2710,26 +2462,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (InvalidOperationException)
         {
-            // Focus is best-effort; the grid may have been removed by the host callback.
         }
         catch (JSException)
         {
-            // Static assets/circuit teardown should not break row selection.
         }
     }
 
-    /// <summary>
-    /// Restores keyboard focus to the grid host without changing the current
-    /// row/cell selection. Consumers should call this after an external popup,
-    /// dialog, or picker closes so Tab/Shift+Tab continues grid navigation
-    /// instead of falling back to the browser's page-level tab order.
-    /// </summary>
     public Task FocusGridAsync() => FocusGridHostAsync();
 
-    /// <summary>
-    /// Alias for <see cref="FocusGridAsync"/> that reads naturally at popup
-    /// close sites.
-    /// </summary>
     public Task ResumeKeyboardNavigationAsync() => FocusGridHostAsync();
 
     private void SetActiveCell(int rowIndex, int cellIndex)
@@ -2737,6 +2477,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
         _activeCell = col != null ? (rowIndex, cellIndex) : null;
     }
+
+    private static bool HasElementReference(ElementReference elementReference) =>
+        !string.IsNullOrEmpty(elementReference.Id);
 
     private async Task ActivateCheckboxCellAsync(TValue item, int rowIndex, int cellIndex, bool focusGridHost)
     {
@@ -2839,17 +2582,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return rowIndex < visible.Count ? visible[rowIndex] : default;
     }
 
-    /// <summary>
-    /// Flat list of currently-visible data items in display order.
-    /// When grouping is off this is just <see cref="PagedData"/>; when
-    /// grouping is on it walks the group tree and skips items inside
-    /// collapsed groups. Drives drag-select and Shift-range so the
-    /// "selected count" matches what the user actually visually selected,
-    /// rather than the underlying <c>DataSource</c> index span (which can
-    /// include hundreds of rows hidden in collapsed groups or in other
-    /// groups whose items happen to fall between the anchor and current
-    /// rows in <c>DataSource</c> order).
-    /// </summary>
     private List<TValue> GetVisibleRowItems()
     {
         if (_groupDescriptors.Count == 0)
@@ -2904,8 +2636,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
-    // ── Editing ──────────────────────────────────────────────────────────
-
     private async Task StartEdit(TValue item, int rowIndex)
     {
         if (EventsRef?.OnBeginEdit.HasDelegate == true)
@@ -2933,7 +2663,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (_editingRowIndex >= 0)
         {
-            // Update existing
             if (EventsRef?.RowUpdating.HasDelegate == true)
             {
                 var args = new RowEditEventArgs<TValue> { Data = _editItem, RowIndex = _editingRowIndex };
@@ -2963,7 +2692,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else
         {
-            // Add new
             if (EventsRef?.RowCreating.HasDelegate == true)
             {
                 var args = new RowEditEventArgs<TValue> { Data = _editItem };
@@ -3000,7 +2728,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         if (EditSettingsRef?.ShowConfirmDialog == true)
         {
-            // In a real implementation, show a confirmation dialog.
         }
 
         if (EventsRef?.RowDeleting.HasDelegate == true)
@@ -3037,8 +2764,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // ── Batch Cell Editing ─────────────────────────────────────────────
-
     private async Task StartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false)
     {
         await TryStartBatchEdit(item, rowIndex, col, clientX, replaceOnFirstInput);
@@ -3049,7 +2774,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return false;
         if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return false;
 
-        // Save previous edit if any
         await CommitBatchEdit();
 
         if (col.Type == ColumnType.CheckBox)
@@ -3062,7 +2786,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             var args = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
             await EventsRef.OnCellEdit.InvokeAsync(args);
-            // Per-row / per-column edit veto (VB6 gData_BeforeEdit parity).
             if (args.Cancel) return false;
         }
 
@@ -3072,13 +2795,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
         _batchEditReplaceOnFirstInput = replaceOnFirstInput;
-        // Focus every batch input after render so single-click editing is
-        // immediately typeable. SelectAllOnEdit is reserved for keyboard /
-        // programmatic starts; a mouse click should place the caret at the
-        // clicked character instead of selecting the whole cell.
+        _batchEditInputRef = default;
         _pendingBatchEditFocus = true;
         _pendingBatchEditSelectAll = col.SelectAllOnEdit && clientX == null;
         _pendingBatchEditClientX = clientX;
+        _pendingBatchEditFocusRetries = 0;
         return true;
     }
 
@@ -3134,6 +2855,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             });
         }
 
+        await EnsureTrailingNewRowIfNeededAsync();
+
         var rowIndex = ResolveRowIndex(item, -1);
         var cellIndex = ResolveVisibleColumnIndex(col.Field);
         if (rowIndex >= 0 && cellIndex >= 0)
@@ -3180,6 +2903,16 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         var text = GetCellDisplayValue(item, col);
 
+        if (TryGetTypeSearchHighlight(text, item, col, out var matchedText, out var remainingText))
+        {
+            builder.OpenElement(sequence, "span");
+            builder.AddAttribute(sequence + 1, "class", "fx-type-search-match");
+            builder.AddContent(sequence + 2, matchedText);
+            builder.CloseElement();
+            builder.AddContent(sequence + 3, remainingText);
+            return;
+        }
+
         if (!ShouldShowAlwaysEditButton(col, item))
         {
             builder.AddContent(sequence, text);
@@ -3205,6 +2938,37 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         builder.AddContent(sequence + 13, "...");
         builder.CloseElement();
         builder.CloseElement();
+    }
+
+    private bool TryGetTypeSearchHighlight(
+        string text,
+        TValue item,
+        GridColumn col,
+        out string matchedText,
+        out string remainingText)
+    {
+        matchedText = "";
+        remainingText = text;
+
+        if (!EnableTypeSearch
+            || !_hasTypeSearchMatch
+            || _typeSearchBuffer.Length == 0
+            || string.IsNullOrWhiteSpace(col.Field)
+            || string.IsNullOrWhiteSpace(_typeSearchMatchField)
+            || !string.Equals(col.Field, _typeSearchMatchField, StringComparison.OrdinalIgnoreCase)
+            || _typeSearchMatchItem == null
+            || !EqualityComparer<TValue>.Default.Equals(item, _typeSearchMatchItem))
+        {
+            return false;
+        }
+
+        if (!text.StartsWith(_typeSearchBuffer, StringComparison.CurrentCultureIgnoreCase))
+            return false;
+
+        var matchLength = Math.Min(_typeSearchBuffer.Length, text.Length);
+        matchedText = text[..matchLength];
+        remainingText = text[matchLength..];
+        return true;
     }
 
     private bool TryGetCheckboxDisplayValue(TValue item, string field, out bool value)
@@ -3269,50 +3033,42 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var options = col.EditOptions?.ToList();
         if (options is { Count: > 0 })
         {
-            builder.OpenElement(sequence, "select");
-            builder.AddAttribute(sequence + 1, "class", "fx-batch-input fx-batch-select");
-            builder.AddAttribute(sequence + 2, "value", _batchEditValue);
-            builder.AddAttribute(sequence + 3, "style", GetEditorInputStyle(col));
-            builder.AddAttribute(sequence + 4, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
-            builder.AddAttribute(sequence + 5, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
-            builder.AddAttribute(sequence + 6, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
-            builder.AddEventStopPropagationAttribute(sequence + 7, "onclick", true);
-            builder.AddEventStopPropagationAttribute(sequence + 8, "onkeydown", true);
-            builder.AddEventStopPropagationAttribute(sequence + 9, "onmousedown", true);
-            builder.AddElementReferenceCapture(sequence + 10, er => _batchEditInputRef = er);
+            _pendingBatchEditFocus = false;
 
-            var seq = sequence + 20;
-            foreach (var option in GetEditOptions(col))
+            builder.OpenComponent<DropDownListControl<string, string>>(sequence);
+            builder.SetKey((editItem, editField, rowIndex));
+            builder.AddAttribute(sequence + 1, "DataSource", GetEditOptions(col).ToList());
+            builder.AddAttribute(sequence + 2, "Value", _batchEditValue ?? string.Empty);
+            builder.AddAttribute(sequence + 3, "ValueChanged", EventCallback.Factory.Create<string>(this, async value =>
             {
-                builder.OpenElement(seq++, "option");
-                builder.AddAttribute(seq++, "value", option);
-                if (string.Equals(option, _batchEditValue, StringComparison.Ordinal))
-                    builder.AddAttribute(seq++, "selected", true);
-                builder.AddContent(seq++, option);
-                builder.CloseElement();
-            }
-
-            builder.CloseElement();
+                UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
+                await CommitBatchEdit(editItem, editField);
+            }));
+            builder.AddAttribute(sequence + 4, "Width", "100%");
+            builder.AddAttribute(sequence + 5, "CssClass", "fx-batch-dropdown");
+            builder.AddAttribute(sequence + 6, "OpenOnRender", true);
+            builder.AddAttribute(sequence + 7, "Closed", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
+            var popupWidth = GetColumnWidthPx(col);
+            if (popupWidth > 0)
+                builder.AddAttribute(sequence + 8, "PopupWidth", $"{popupWidth.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            builder.CloseComponent();
         }
         else
         {
             var inputType = GetEditorInputType(col);
-            builder.OpenElement(sequence, "input");
-            builder.AddAttribute(sequence + 1, "type", inputType);
-            builder.AddAttribute(sequence + 2, "class", "fx-batch-input");
-            builder.AddAttribute(sequence + 3, "value", _batchEditValue);
+            builder.OpenComponent<TextBoxControl>(sequence);
+            builder.AddAttribute(sequence + 1, "InputType", inputType);
+            builder.AddAttribute(sequence + 2, "CssClass", "fx-batch-input");
+            builder.AddAttribute(sequence + 3, "Value", _batchEditValue);
             builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
             if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
-            builder.AddAttribute(sequence + 6, "oninput", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
+            builder.AddAttribute(sequence + 13, "UpdateOnInput", true);
+            builder.AddAttribute(sequence + 14, "ValueChanged", EventCallback.Factory.Create<string?>(this, value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
             builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
             builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
-            builder.AddAttribute(sequence + 13, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => UpdateBatchEditValue(editItem, editField, e)));
-            builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
-            builder.AddEventStopPropagationAttribute(sequence + 10, "onkeydown", true);
-            builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
-            builder.AddElementReferenceCapture(sequence + 12, er => _batchEditInputRef = er);
-            builder.CloseElement();
+            builder.AddAttribute(sequence + 12, "ElementReferenceCaptured", (Action<ElementReference>)(er => _batchEditInputRef = er));
+            builder.CloseComponent();
         }
 
         if (col.ShowEditButton && !col.AlwaysShowEditButton)
@@ -3341,22 +3097,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var field = _batchEditField;
         var newValue = _batchEditValue ?? "";
 
-        // ── Build the fan-out target list ─────────────────────────────────
-        // Only fan out across the multi-selection when the user actually
-        // touched the input (_batchEditDirty). Without this guard, any
-        // CommitBatchEdit that fires between StartBatchEdit and the user's
-        // first keystroke (Blazor blur cascade on render, focus-shift
-        // round-trip when the <input> first paints, etc.) would propagate
-        // the cell's PRE-EDIT value across every selected row — exactly
-        // the regression where clicking an editable cell visibly rewrote
-        // sibling rows to the clicked row's existing value.
-        //
-        // Two-stage protection against stale references when we do fan out:
-        // (1) Collect "live" selected items — those that are BOTH in the
-        //     current DataSource AND in _selectedItems. Drop stale refs.
-        // (2) Only fan out when the edited row itself is selected. A single
-        //     selected row that differs from the editor row is a navigation
-        //     race/stale selection, not a mass-edit request.
         var live = new HashSet<TValue>();
         if (_batchEditDirty && DataSource != null)
         {
@@ -3391,10 +3131,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             targets = new List<TValue> { primary };
         }
 
-        // Clear the selection BEFORE invoking host handlers so any handler
-        // that re-queries GetSelectedRecords() doesn't see stale state and
-        // try to re-propagate. Iteration runs against the captured `targets`
-        // list, so the clear is safe.
         if (targets.Count > 1)
         {
             _selectedItems.Clear();
@@ -3412,11 +3148,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else
         {
+            var committedAnyCell = false;
             foreach (var item in targets)
             {
-                // Compare via raw object value, not stringified — formatted display
-                // ("5.00") would fail string-equality against the user's typed "5"
-                // even though they're the same number.
                 var oldValueObj = GetPropertyValue(item, field);
                 var oldValueStr = oldValueObj?.ToString() ?? "";
                 var changed = !string.Equals(oldValueStr, newValue, StringComparison.Ordinal);
@@ -3424,12 +3158,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
                 if (changed)
                     SetPropertyValue(item, field, newValue);
+                if (shouldRaiseCellSave)
+                    committedAnyCell = true;
 
-                // Fire OnCellSave for a real value change, or for an editor the
-                // user actually touched. Do not fire a no-dirty/no-change blur:
-                // hosts such as FDBGrid write the supplied Value into dynamic
-                // dictionary rows, so a stale blank editor value can otherwise
-                // overwrite a cell while focus is merely moving.
                 if (shouldRaiseCellSave && EventsRef?.OnCellSave.HasDelegate == true)
                 {
                     await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
@@ -3440,6 +3171,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     });
                 }
             }
+
+            if (committedAnyCell)
+                await EnsureTrailingNewRowIfNeededAsync();
         }
 
         _lastCommittedBatchEditItem = primary;
@@ -3475,10 +3209,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void UpdateBatchEditValue(TValue item, string? field, ChangeEventArgs e)
     {
+        UpdateBatchEditValue(item, field, e.Value?.ToString() ?? string.Empty);
+    }
+
+    private void UpdateBatchEditValue(TValue item, string? field, string incomingValue)
+    {
         if (!IsActiveBatchEditSource(item, field))
             return;
 
-        var incomingValue = e.Value?.ToString() ?? "";
         if (_batchEditReplaceOnFirstInput)
         {
             incomingValue = ResolveFirstInputReplacement(_batchEditValue ?? "", incomingValue);
@@ -3486,10 +3224,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
 
         _batchEditValue = incomingValue;
-        // Only typed input flips the dirty flag — auto-fired commits that
-        // happen before the user actually changes anything (Blazor blur
-        // cascade, focus-shift round-trips, etc.) must NOT propagate the
-        // pre-edit value across the multi-selection. See CommitBatchEdit.
         _batchEditDirty = true;
     }
 
@@ -3540,8 +3274,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var isHorizontalNavigation = TryGetHorizontalKeyboardNavigation(e, out var backwards);
         var isVerticalNavigation = TryGetVerticalKeyboardNavigation(e, out var rowDelta);
+        var isScrollNavigation = TryGetScrollKeyboardNavigation(e, out var scrollKey);
 
-        if (isHorizontalNavigation || isVerticalNavigation)
+        if (isHorizontalNavigation || isVerticalNavigation || isScrollNavigation)
         {
             var hasLiveEdit = _batchEditItem != null && !string.IsNullOrWhiteSpace(_batchEditField);
             var item = hasLiveEdit ? _batchEditItem : default;
@@ -3555,14 +3290,22 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             else if (!TryResolveActiveCellNavigationSource(ref item, ref rowIndex, ref colIndex)
                 && !TryResolveLastCommittedNavigationSource(ref item, ref rowIndex, ref colIndex))
             {
-                await InvokeAsync(StateHasChanged);
-                return;
+                if (!isScrollNavigation
+                    || !TryResolveKeyboardNavigationSource(scrollKey is GridScrollNavigationKey.PageUp or GridScrollNavigationKey.Home, out var selectedItem, out rowIndex, out colIndex))
+                {
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
+
+                item = selectedItem;
             }
 
             if (item != null && colIndex >= 0)
             {
                 RememberKeyboardNavigationSource(item, rowIndex, colIndex);
-                if (isVerticalNavigation)
+                if (isScrollNavigation)
+                    await NavigateByScrollKeyFromActiveCellAsync(scrollKey);
+                else if (isVerticalNavigation)
                     await NavigateToVerticalEditTargetAsync(item, rowIndex, colIndex, rowDelta);
                 else
                     await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards);
@@ -3594,7 +3337,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else if (e.Key == "Escape")
         {
-            // Cancel edit without saving
             _batchEditItem = default;
             _batchEditRowIndex = -1;
             _batchEditField = null;
@@ -3734,6 +3476,116 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return true;
     }
 
+    private async Task<bool> NavigateByScrollKeyFromActiveCellAsync(GridScrollNavigationKey key)
+    {
+        if (key is GridScrollNavigationKey.Home or GridScrollNavigationKey.End)
+            return await NavigateToGridEdgeAsync(key == GridScrollNavigationKey.End);
+
+        var backwards = key == GridScrollNavigationKey.PageUp;
+        if (!TryResolveKeyboardNavigationSource(backwards, out var item, out var rowIndex, out var cellIndex))
+            return false;
+
+        var visibleRows = GetKeyboardPageRowCount();
+        var rowDelta = Math.Max(1, visibleRows - 1);
+        if (backwards)
+            rowDelta = -rowDelta;
+
+        return await NavigateToRelativeRowEditTargetAsync(item, rowIndex, cellIndex, rowDelta);
+    }
+
+    private async Task<bool> NavigateToGridEdgeAsync(bool end)
+    {
+        var rows = GetKeyboardNavigationRowItems();
+        var columns = VisibleColumns.ToList();
+        if (rows.Count == 0 || columns.Count == 0)
+            return false;
+
+        var targetCellIndex = end
+            ? FindLastKeyboardNavigationTargetColumnIndex(columns)
+            : columns.FindIndex(IsKeyboardNavigationTargetColumn);
+        if (targetCellIndex < 0)
+            return false;
+
+        var targetVisibleRowIndex = end ? rows.Count - 1 : 0;
+        var targetItem = rows[targetVisibleRowIndex];
+        var targetResolvedRowIndex = ResolveRowIndex(targetItem, targetVisibleRowIndex);
+        var targetColumn = columns[targetCellIndex];
+
+        return await TryActivateKeyboardEditTargetAsync(
+            targetItem,
+            targetResolvedRowIndex,
+            targetCellIndex,
+            targetColumn,
+            scrollIntoView: true,
+            allowSelectionOnly: true);
+    }
+
+    private async Task<bool> NavigateToRelativeRowEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, int rowDelta)
+    {
+        if (rowDelta == 0)
+            return false;
+
+        var rows = GetKeyboardNavigationRowItems();
+        var columns = VisibleColumns.ToList();
+        if (rows.Count == 0 || columns.Count == 0)
+            return false;
+
+        var displayRowIndex = ResolveKeyboardDisplayRowIndex(rows, currentItem, currentRowIndex);
+        if (displayRowIndex < 0)
+            return false;
+
+        var targetVisibleRowIndex = Math.Clamp(displayRowIndex + rowDelta, 0, rows.Count - 1);
+        var targetCellIndex = ResolvePreferredKeyboardNavigationCellIndex(columns, currentCellIndex);
+        if (targetCellIndex < 0)
+            return false;
+
+        var targetItem = rows[targetVisibleRowIndex];
+        var targetResolvedRowIndex = ResolveRowIndex(targetItem, targetVisibleRowIndex);
+        var targetColumn = columns[targetCellIndex];
+
+        return await TryActivateKeyboardEditTargetAsync(
+            targetItem,
+            targetResolvedRowIndex,
+            targetCellIndex,
+            targetColumn,
+            scrollIntoView: true,
+            allowSelectionOnly: true);
+    }
+
+    private bool TryResolveKeyboardNavigationSource(bool backwards, out TValue item, out int rowIndex, out int cellIndex)
+    {
+        item = default!;
+        rowIndex = -1;
+        cellIndex = backwards ? VisibleColumns.Count() : -1;
+
+        if (_hasLastKeyboardNavigationSource
+            && _lastKeyboardNavigationItem != null
+            && _lastKeyboardNavigationCellIndex >= 0)
+        {
+            item = _lastKeyboardNavigationItem;
+            rowIndex = _lastKeyboardNavigationRowIndex;
+            cellIndex = _lastKeyboardNavigationCellIndex;
+            return true;
+        }
+
+        TValue? candidateItem = default;
+        var candidateRowIndex = -1;
+        var candidateCellIndex = -1;
+        if (TryResolveActiveCellNavigationSource(ref candidateItem, ref candidateRowIndex, ref candidateCellIndex)
+            || TryResolveLastCommittedNavigationSource(ref candidateItem, ref candidateRowIndex, ref candidateCellIndex))
+        {
+            if (candidateItem == null)
+                return false;
+
+            item = candidateItem;
+            rowIndex = candidateRowIndex;
+            cellIndex = candidateCellIndex;
+            return true;
+        }
+
+        return TryResolveSelectedRowNavigationSource(backwards, out item, out rowIndex, out cellIndex);
+    }
+
     private bool TryResolveSelectedRowNavigationSource(bool backwards, out TValue item, out int rowIndex, out int cellIndex)
     {
         item = default!;
@@ -3775,8 +3627,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var cursorRowIndex = currentRowIndex;
         var cursorCellIndex = currentCellIndex;
 
-        // A candidate can be vetoed by OnCellEdit. If so, keep walking in
-        // displayed order instead of dropping focus out of the grid.
         while (TryFindAdjacentEditTarget(cursorItem, cursorRowIndex, cursorCellIndex, backwards,
                    out var targetItem, out var targetRowIndex, out var targetCellIndex, out var targetColumn))
         {
@@ -3849,22 +3699,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (columns.Count == 0 || rows.Count == 0)
             return false;
 
-        var displayRowIndex = rows.FindIndex(item =>
-            EqualityComparer<TValue>.Default.Equals(item, currentItem));
-        if (displayRowIndex < 0)
-        {
-            var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
-            displayRowIndex = rows.FindIndex(item =>
-                EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
-        }
+        var displayRowIndex = ResolveKeyboardDisplayRowIndex(rows, currentItem, currentRowIndex);
         if (displayRowIndex < 0)
             return false;
 
-        var preferredCellIndex = currentCellIndex >= 0
-            && currentCellIndex < columns.Count
-            && IsKeyboardNavigationTargetColumn(columns[currentCellIndex])
-            ? currentCellIndex
-            : columns.FindIndex(IsKeyboardNavigationTargetColumn);
+        var preferredCellIndex = ResolvePreferredKeyboardNavigationCellIndex(columns, currentCellIndex);
         if (preferredCellIndex < 0)
             return false;
 
@@ -3881,6 +3720,39 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         targetCellIndex = preferredCellIndex;
         targetColumn = candidate;
         return true;
+    }
+
+    private int ResolveKeyboardDisplayRowIndex(IReadOnlyList<TValue> rows, TValue currentItem, int currentRowIndex)
+    {
+        var displayRowIndex = rows.ToList().FindIndex(item =>
+            EqualityComparer<TValue>.Default.Equals(item, currentItem));
+        if (displayRowIndex >= 0)
+            return displayRowIndex;
+
+        var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
+        return resolvedItem == null
+            ? -1
+            : rows.ToList().FindIndex(item => EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
+    }
+
+    private int ResolvePreferredKeyboardNavigationCellIndex(IReadOnlyList<GridColumn> columns, int currentCellIndex)
+    {
+        return currentCellIndex >= 0
+            && currentCellIndex < columns.Count
+            && IsKeyboardNavigationTargetColumn(columns[currentCellIndex])
+            ? currentCellIndex
+            : columns.ToList().FindIndex(IsKeyboardNavigationTargetColumn);
+    }
+
+    private int FindLastKeyboardNavigationTargetColumnIndex(IReadOnlyList<GridColumn> columns)
+    {
+        for (var i = columns.Count - 1; i >= 0; i--)
+        {
+            if (IsKeyboardNavigationTargetColumn(columns[i]))
+                return i;
+        }
+
+        return -1;
     }
 
     private bool TryFindAdjacentEditTarget(
@@ -4022,10 +3894,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (string.IsNullOrWhiteSpace(column.Field))
             return false;
 
-        // A keyboard move must save the current editor against its original
-        // row before selecting the destination row. If selection changes first,
-        // CommitBatchEdit can mistake the destination row for a multi-edit
-        // target and copy the old cell value into it.
         if (_batchEditItem != null)
             await CommitBatchEdit();
 
@@ -4176,7 +4044,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch
         {
-            // Without caret-position support, keep native text-editor behavior.
             return false;
         }
     }
@@ -4196,6 +4063,44 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (e.Key == "ArrowDown")
         {
             rowDelta = 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetScrollKeyboardNavigation(KeyboardEventArgs e, out GridScrollNavigationKey key)
+    {
+        key = GridScrollNavigationKey.PageDown;
+        if (e.AltKey || e.ShiftKey)
+            return false;
+
+        if (!e.CtrlKey && !e.MetaKey)
+        {
+            if (e.Key == "PageUp")
+            {
+                key = GridScrollNavigationKey.PageUp;
+                return true;
+            }
+
+            if (e.Key == "PageDown")
+            {
+                key = GridScrollNavigationKey.PageDown;
+                return true;
+            }
+
+            return false;
+        }
+
+        if (e.Key == "Home")
+        {
+            key = GridScrollNavigationKey.Home;
+            return true;
+        }
+
+        if (e.Key == "End")
+        {
+            key = GridScrollNavigationKey.End;
             return true;
         }
 
@@ -4338,8 +4243,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return rowIndex >= 0 && _selectedCells.Contains((rowIndex, activeColumnIndex));
     }
 
-    // ── Toolbar ──────────────────────────────────────────────────────────
-
     private async Task OnToolbarClick(string item)
     {
         switch (item.ToLower())
@@ -4366,7 +4269,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 await ExportToCsvAsync();
                 break;
             case "excel":
-                await ExportToExcelAsync();
+                await ExportToXlsxAsync();
                 break;
             case "pdf":
                 await ExportToPdfAsync();
@@ -4376,8 +4279,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (OnToolbarItemClick.HasDelegate)
             await OnToolbarItemClick.InvokeAsync(item);
     }
-
-    // ── Keyboard Navigation ──────────────────────────────────────────────
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
@@ -4414,6 +4315,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryCommitSelectedRowOnEnterAsync(e))
             return;
+
+        if (_batchEditItem == null && !_isEditing && await HandleTypeSearchKeyAsync(e))
+            return;
+
+        if (EnableTypeSearch && _typeSearchBuffer.Length > 0)
+            ClearTypeSearchBuffer();
 
         if (_batchEditItem == null
             && _typeAheadBuffer.Length > 0
@@ -4457,13 +4364,24 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 return;
         }
 
+        if (TryGetScrollKeyboardNavigation(e, out var scrollKey))
+        {
+            if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
+                && _batchEditItem == null
+                && _typeAheadBuffer.Length > 0)
+            {
+                await CommitPendingSingleCellTypeAheadAsync();
+            }
+
+            if (await NavigateByScrollKeyFromActiveCellAsync(scrollKey))
+                return;
+        }
+
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
             && _batchEditItem == null
             && await HandleSingleCellTypeAheadKeyAsync(e))
             return;
 
-        // Type-ahead: when multiple rows are selected and no batch edit is active,
-        // let user type a value and press Enter to apply it to the captured column.
         if (_selectedItems.Count > 1 && _batchEditItem == null)
         {
             var targetCol = ResolveTypeAheadTargetColumn();
@@ -4472,7 +4390,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol))
                     return;
 
-                // Prevent multiple decimal points
                 if (targetCol.Type == ColumnType.Number
                     && e.Key == "."
                     && _typeAheadBuffer.Contains('.'))
@@ -4523,6 +4440,170 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (_batchEditItem == null && await TryStartActiveBatchEditFromTypedKeyAsync(e))
             return;
+    }
+
+    private async Task<bool> HandleTypeSearchKeyAsync(KeyboardEventArgs e)
+    {
+        if (!EnableTypeSearch)
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey)
+            return false;
+
+        if (e.Key == "Escape" && _typeSearchBuffer.Length > 0)
+        {
+            ClearTypeSearchBuffer();
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
+        if (e.Key == "Backspace" && _typeSearchBuffer.Length > 0)
+        {
+            _typeSearchBuffer = _typeSearchBuffer[..^1];
+            await MoveTypeSearchSelectionAsync();
+            return true;
+        }
+
+        if (!IsTypeSearchCharacterKey(e))
+            return false;
+
+        var now = DateTime.UtcNow;
+        var delay = Math.Max(1, TypeSearchDelaySeconds);
+        if (_typeSearchBuffer.Length > 0
+            && (now - _typeSearchLastInputUtc).TotalSeconds > delay)
+        {
+            ClearTypeSearchBuffer();
+        }
+
+        _typeSearchLastInputUtc = now;
+        _typeSearchBuffer += e.Key;
+        await MoveTypeSearchSelectionAsync();
+        return true;
+    }
+
+    private static bool IsTypeSearchCharacterKey(KeyboardEventArgs e)
+    {
+        return e.Key.Length == 1 && !char.IsControl(e.Key[0]);
+    }
+
+    private async Task MoveTypeSearchSelectionAsync()
+    {
+        _typeSearchLastInputUtc = DateTime.UtcNow;
+
+        if (_typeSearchBuffer.Length == 0)
+        {
+            ClearTypeSearchBuffer();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var columns = VisibleColumns.ToList();
+        if (columns.Count == 0)
+            return;
+
+        var targetColumnIndex = ResolveTypeSearchColumnIndex(columns);
+        if (targetColumnIndex < 0 || targetColumnIndex >= columns.Count)
+            return;
+
+        var targetColumn = columns[targetColumnIndex];
+        if (string.IsNullOrWhiteSpace(targetColumn.Field))
+            return;
+
+        var rows = SortedData.ToList();
+        _pageState.TotalRecords = rows.Count;
+        EnsureCurrentPageInRange();
+
+        var matchDisplayIndex = rows.FindIndex(item =>
+            GetCellDisplayValue(item, targetColumn)
+                .StartsWith(_typeSearchBuffer, StringComparison.CurrentCultureIgnoreCase));
+
+        if (matchDisplayIndex < 0)
+        {
+            _hasTypeSearchMatch = false;
+            _typeSearchMatchItem = default;
+            _typeSearchMatchField = null;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var matchItem = rows[matchDisplayIndex];
+        if (IsPagingActive && _pageState.PageSize > 0)
+        {
+            var targetPage = (matchDisplayIndex / _pageState.PageSize) + 1;
+            if (targetPage != _pageState.CurrentPage)
+                await GoToPage(targetPage);
+        }
+
+        var resolvedRowIndex = ResolveRowIndex(matchItem, matchDisplayIndex);
+        _selectedItems.Clear();
+        if (AllowSelection && SelectionSettingsRef?.Mode != SelectionMode.Cell)
+            _selectedItems.Add(matchItem);
+        _selectedCells.Clear();
+        if (AllowSelection && SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            _selectedCells.Add((resolvedRowIndex, targetColumnIndex));
+
+        SetActiveCell(resolvedRowIndex, targetColumnIndex);
+        RememberKeyboardNavigationSource(matchItem, resolvedRowIndex, targetColumnIndex);
+        _lastSelectedCell = (resolvedRowIndex, targetColumnIndex);
+        _lastSelectedItem = matchItem;
+        _lastSelectedRowIndex = resolvedRowIndex;
+        _typeSearchMatchItem = matchItem;
+        _typeSearchMatchField = targetColumn.Field;
+        _hasTypeSearchMatch = true;
+        _pendingActiveCellScrollIntoView = true;
+
+        if (EventsRef?.RowSelected.HasDelegate == true)
+            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = matchItem, RowIndex = resolvedRowIndex });
+
+        if (EventsRef?.CellSelected.HasDelegate == true)
+        {
+            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+            {
+                Data = matchItem,
+                RowIndex = resolvedRowIndex,
+                CellIndex = targetColumnIndex,
+                CurrentValue = GetPropertyValue(matchItem, targetColumn.Field)
+            });
+        }
+
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private int ResolveTypeSearchColumnIndex(IReadOnlyList<GridColumn> columns)
+    {
+        if (_activeCell.HasValue
+            && _activeCell.Value.CellIndex >= 0
+            && _activeCell.Value.CellIndex < columns.Count
+            && !string.IsNullOrWhiteSpace(columns[_activeCell.Value.CellIndex].Field))
+        {
+            return _activeCell.Value.CellIndex;
+        }
+
+        if (_lastSelectedCell.HasValue
+            && _lastSelectedCell.Value.CellIndex >= 0
+            && _lastSelectedCell.Value.CellIndex < columns.Count
+            && !string.IsNullOrWhiteSpace(columns[_lastSelectedCell.Value.CellIndex].Field))
+        {
+            return _lastSelectedCell.Value.CellIndex;
+        }
+
+        for (var i = 0; i < columns.Count; i++)
+        {
+            if (!string.IsNullOrWhiteSpace(columns[i].Field))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private void ClearTypeSearchBuffer()
+    {
+        _typeSearchBuffer = "";
+        _typeSearchLastInputUtc = DateTime.MinValue;
+        _typeSearchMatchItem = default;
+        _typeSearchMatchField = null;
+        _hasTypeSearchMatch = false;
     }
 
     private bool ShouldPreserveKeyboardRangeAnchorForRowTypeAhead(KeyboardEventArgs e)
@@ -4993,9 +5074,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else
         {
+            var committedAnyCell = false;
             foreach (var target in targets)
             {
                 SetPropertyValue(target, field, newValue);
+                committedAnyCell = true;
 
                 if (EventsRef?.OnCellSave.HasDelegate == true)
                 {
@@ -5007,6 +5090,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     });
                 }
             }
+
+            if (committedAnyCell)
+                await EnsureTrailingNewRowIfNeededAsync();
         }
 
         _typeAheadBuffer = "";
@@ -5072,21 +5158,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return true;
     }
 
-    /// <summary>
-    /// Fires <see cref="GridControlEvents{TValue}.TypeAheadChanged"/>
-    /// with the current buffer text. Centralises the notification so
-    /// every mutation path in <c>HandleKeyDown</c> emits a consistent
-    /// signal. No-op when no consumer subscribes.
-    /// </summary>
     private async Task NotifyTypeAheadChangedAsync()
     {
         if (EventsRef?.TypeAheadChanged.HasDelegate == true)
             await EventsRef.TypeAheadChanged.InvokeAsync(_typeAheadBuffer);
     }
-
-    // ══════════════════════════════════════════════════════════════════════
-    // ── DRAG & DROP GROUPING ─────────────────────────────────────────────
-    // ══════════════════════════════════════════════════════════════════════
 
     private void StartColumnDrag(string colField, DragEventArgs _)
     {
@@ -5107,8 +5183,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private async Task CleanupHeaderDragStateAsync(int generation)
     {
-        // Browser drag event ordering may raise dragend before drop in some
-        // cases. Give drop a brief window to process before clearing source.
         await Task.Delay(120);
         if (generation != _headerDragGeneration) return;
 
@@ -5137,8 +5211,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _dragInsertAfterTarget = false;
     }
 
-    /// <summary>Handles a drop on a header half-zone and reorders the dragged
-    /// column relative to target (left half = before, right half = after).</summary>
     private async Task HandleHeaderDropZoneDrop(string targetField, bool insertAfter, DragEventArgs _)
     {
         try
@@ -5148,7 +5220,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             var fromField = _draggingColumnField;
             if (string.IsNullOrEmpty(fromField))
             {
-                // Fallback if dragend arrived before drop on this browser path.
                 if (!string.IsNullOrEmpty(_lastHeaderDragSourceField)
                     && DateTime.UtcNow - _lastHeaderDragStartedUtc <= TimeSpan.FromSeconds(2))
                 {
@@ -5181,45 +5252,25 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // ══════════════════════════════════════════════════════════════════════
-    // ── HEADER CONTEXT MENU ──────────────────────────────────────────────
-    // Right-click on a column header opens a small menu offering grouping,
-    // expand/collapse, hide-this-column, insert-a-column (from hidden ones),
-    // rename-this-column, plus print and save-as. Generic across all grids.
-    // ══════════════════════════════════════════════════════════════════════
-
     private bool _showHeaderContextMenu;
     private string _headerContextMenuField = "";
     private double _headerContextMenuX;
     private double _headerContextMenuY;
-    // Reserved for the upcoming "insert column" submenu (currently the parent
-    // header-menu item triggers HeaderMenuInsertColumn directly without a
-    // submenu; this flag will gate the submenu UI when that lands).
 #pragma warning disable CS0414
     private bool _showInsertColumnSubmenu;
 #pragma warning restore CS0414
     private bool _showRenameColumn;
     private string _renameColumnDraft = "";
 
-    /// <summary>Per-grid map of caller-supplied HeaderText overrides applied
-    /// at runtime via the "Rename this column" menu item.</summary>
     private readonly Dictionary<string, string> _headerOverrides =
         new(StringComparer.Ordinal);
 
-    /// <summary>Per-grid map of runtime visibility overrides applied via the
-    /// header menu's Hide / Insert items. Keyed by Field. Mutating the
-    /// underlying <see cref="GridColumn.Visible"/> [Parameter] directly is
-    /// futile because Blazor resets it from the consumer's Razor template on
-    /// each parent re-render — this map survives those resets.</summary>
     private readonly Dictionary<string, bool> _visibilityOverrides =
         new(StringComparer.Ordinal);
 
-    /// <summary>True when the column should render — checks the runtime
-    /// override first, falls back to the column's declared <c>Visible</c>.</summary>
     internal bool IsColumnVisible(GridColumn col)
         => _visibilityOverrides.TryGetValue(col.Field, out var ov) ? ov : col.Visible;
 
-    /// <summary>Right-click on a column header opens the context menu.</summary>
     private void OpenHeaderContextMenu(MouseEventArgs e, string field)
     {
         _headerContextMenuField = field;
@@ -5251,7 +5302,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         get
         {
-            // Can't hide the last visible column — grids need at least one.
             var visibleCount = Columns.Count(IsColumnVisible);
             return visibleCount > 1;
         }
@@ -5268,7 +5318,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return col.DisplayHeader;
     }
 
-    /// <summary>Toggles grouping on the right-clicked column.</summary>
     private async Task HeaderMenuToggleGroup()
     {
         var field = _headerContextMenuField;
@@ -5297,8 +5346,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var col = CurrentHeaderColumn;
         CloseHeaderContextMenu();
         if (col == null || !CanHideHeaderColumn) return;
-        // Override the column's [Parameter] Visible — see _visibilityOverrides
-        // doc comment for why we don't mutate col.Visible directly.
         _visibilityOverrides[col.Field] = false;
         StateHasChanged();
         await SaveGridSettingsAsync();
@@ -5307,9 +5354,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void HeaderMenuToggleInsertSubmenu()
     {
-        // Legacy submenu was a quick "show one of these hidden columns" picker.
-        // Replaced by the Choose Columns dialog (HeaderMenuOpenChooseColumns)
-        // which lists ALL columns (visible + hidden) per the legacy VB6 UX.
         _showInsertColumnSubmenu = false;
         _showRenameColumn = false;
         HeaderMenuOpenChooseColumns();
@@ -5326,13 +5370,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await FireLayoutChangedAsync();
     }
 
-    // ── Choose Columns dialog ──────────────────────────────────────────
-    // Mirrors the legacy VB6 dialog — a checkbox list of every column with
-    // Move Up / Move Down / Show / Hide / Show All / Hide All / Restore
-    // Default Layout actions and OK/Cancel commit.
-
-    /// <summary>One row in the Choose Columns dialog — a working copy that the
-    /// user mutates before pressing OK.</summary>
     private sealed class ChooseColumnRow
     {
         public string Field { get; init; } = "";
@@ -5344,8 +5381,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private List<ChooseColumnRow> _chooseColumnsRows = new();
     private string _chooseColumnsSelectedField = "";
 
-    /// <summary>Snapshot of the column order and visibility taken the first time
-    /// any Choose Columns dialog opens — drives "Restore Default Layout".</summary>
     private List<string>? _originalColumnOrder;
     private Dictionary<string, bool>? _originalVisibility;
 
@@ -5362,9 +5397,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         CloseHeaderContextMenu();
         CaptureOriginalLayoutOnce();
 
-        // Prefer the host-supplied AvailableColumns schema when present — that
-        // includes legacy hidden columns the grid isn't currently rendering.
-        // Fall back to whatever <GridColumn> children are wired up.
         if (AvailableColumns != null)
         {
             _chooseColumnsRows = AvailableColumns
@@ -5443,10 +5475,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void ChooseColumnsRestoreDefault()
     {
-        // Preferred path: host supplied a factory-default schema (e.g. from a
-        // layout service). Reset each listed column's checked state + order to
-        // match it; columns the default doesn't mention are left as-is. The grid
-        // stays general-purpose — it just applies whatever the host handed in.
         if (DefaultColumns != null)
         {
             var defaults = DefaultColumns.Where(d => !string.IsNullOrEmpty(d.Field)).ToList();
@@ -5470,6 +5498,21 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 .Select(t => t.r)
                 .ToList();
 
+            _chooseColumnsSelectedField = _chooseColumnsRows.FirstOrDefault()?.Field ?? "";
+            return;
+        }
+
+        if (AvailableColumns != null)
+        {
+            _chooseColumnsRows = AvailableColumns
+                .Where(d => !string.IsNullOrEmpty(d.Field))
+                .Select(d => new ChooseColumnRow
+                {
+                    Field = d.Field,
+                    Header = string.IsNullOrEmpty(d.Header) ? d.Field : d.Header,
+                    Visible = d.Visible
+                })
+                .ToList();
             _chooseColumnsSelectedField = _chooseColumnsRows.FirstOrDefault()?.Field ?? "";
             return;
         }
@@ -5512,19 +5555,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (OnColumnsChosen.HasDelegate)
         {
-            // Host owns the visual layout (e.g. FAssembly with its saved-layout
-            // dict + version bump that triggers a rebuild). Hand off, then ALSO
-            // persist via the configured store so the user's pick survives
-            // logout — using the dialog SNAPSHOT directly because the host's
-            // re-render is async and the live `Columns` collection still
-            // reflects the pre-OK order at this moment.
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
             await SaveSnapshotSettingsAsync(snapshot);
         }
         else
         {
-            // Built-in path for grids that just declare their columns inline:
-            // apply visibility overrides + reorder the underlying column list.
             foreach (var row in _chooseColumnsRows)
                 _visibilityOverrides[row.Field] = row.Visible;
             _columnsContainer?.ReorderColumns(_chooseColumnsRows.Select(r => r.Field));
@@ -5564,17 +5599,13 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private async Task HeaderMenuPrint()
     {
         CloseHeaderContextMenu();
-        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch { /* JS not available */ }
+        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch {  }
     }
 
     private async Task HeaderMenuSaveAs()
     {
         CloseHeaderContextMenu();
-        // Default: trigger the browser print dialog so the user can pick "Save as PDF".
-        // Matches the "Save As..." convention from the legacy app. Consumers that
-        // want a richer export (CSV/Excel) can override by intercepting in their
-        // toolbar, since this menu is generic across all grids.
-        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch { /* JS not available */ }
+        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch {  }
     }
 
     private void StartGroupChipDrag(string groupField)
@@ -5604,7 +5635,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else if (!string.IsNullOrEmpty(_draggingGroupChipField))
         {
-            // Re-ordering groups (simple: move to end)
             var existing = _groupDescriptors.FirstOrDefault(g => g.Field == _draggingGroupChipField);
             if (existing != null)
             {
@@ -5663,11 +5693,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await FireLayoutChangedAsync();
     }
 
-    /// <summary>Returns the index (within <paramref name="visibleCols"/>) of the
-    /// first column that has an <see cref="AggregateColumn"/> configured by any
-    /// of <paramref name="headerAggRows"/>; -1 if none. Used to compute the
-    /// shrunk colspan for the group label cell so the column-aligned aggregate
-    /// cells can sit on the same row.</summary>
     private static int ComputeFirstHeaderAggregateColumnIndex(
         List<AggregateRow> headerAggRows, List<GridColumn> visibleCols)
     {
@@ -5683,12 +5708,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return -1;
     }
 
-    /// <summary>Removes every active group descriptor — wired to the "Clear"
-    /// button shown alongside the chips when at least one group is active.</summary>
     private async Task ClearAllGroupsAsync()
     {
         if (_groupDescriptors.Count == 0) return;
-        // Snapshot first — RemoveGroup mutates the list during iteration.
         var fields = _groupDescriptors.Select(g => g.Field).ToList();
         foreach (var f in fields)
             await RemoveGroup(f);
@@ -5702,11 +5724,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         else
             _collapsedGroupPaths.Remove(group.GroupPath);
 
-        // Once the user toggles any individual group, the global collapse-all /
-        // expand-all flags must release — otherwise the next render's
-        // ApplyGroupCollapseState call would force every group back to the
-        // global state and the user's click would silently revert. Per-group
-        // state from _collapsedGroupPaths takes over from here.
         _allGroupsCollapsed = false;
         _expandAllGroups = false;
     }
@@ -5726,18 +5743,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    // ── Render Grouped Rows ──────────────────────────────────────────────
-
     private RenderFragment RenderGroupedRows(IEnumerable<GroupResult<TValue>> groups, int level) => builder =>
     {
         foreach (var group in groups)
         {
-            // Group header row
             builder.OpenElement(0, "tr");
             builder.AddAttribute(1, "class", "fx-group-header-row");
             builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => ToggleGroupCollapse(group)));
 
-            // Indent cells for nesting
             for (int i = 0; i < level; i++)
             {
                 builder.OpenElement(10, "td");
@@ -5746,12 +5759,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 builder.CloseElement();
             }
 
-            // Expand/collapse + group header.
-            // The label cell normally spans every remaining column (colspan = TotalColumnCount - level).
-            // When ShowInGroupHeader aggregates are configured we SHRINK that colspan so the
-            // aggregate <td>s emitted further down can sit on the same <tr> aligned with their
-            // data columns. The label cell still covers everything to the LEFT of the first
-            // aggregate column (indent + grouped placeholders + leading non-aggregate columns).
             var totalSpan = TotalColumnCount - level;
             var labelColspan = totalSpan;
             var headerAggForSpan = AggregateRows is { Count: > 0 }
@@ -5771,22 +5778,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.AddAttribute(21, "colspan", labelColspan);
             builder.AddAttribute(22, "class", "fx-cell fx-group-header-cell");
 
-            // Expand/collapse glyph. Three layers of customization:
-            //   1. ExpandIconTemplate (RenderFragment<bool>) — caller-supplied,
-            //      ultimate override (any markup, including <img>, font icons)
-            //   2. CollapsedGlyph / ExpandedGlyph + ExpandIconStyle — string
-            //      knobs to swap the glyph and/or its inline CSS
-            //   3. GroupExpandIconStyle preset (PlusMinus / Triangle) — the
-            //      built-in defaults if neither of the above is set
-            //
-            // Inline styles are used (vs external CSS class) because the icon
-            // span is emitted via RenderTreeBuilder, where Blazor's
-            // component-scoped CSS attribute is not reliably applied — inline
-            // styles always win.
-
             if (ExpandIconTemplate != null)
             {
-                // Caller takes full responsibility for markup and click handling.
                 builder.AddContent(30, ExpandIconTemplate, !group.IsCollapsed);
             }
             else
@@ -5805,11 +5798,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 builder.CloseElement();
             }
 
-            // The grouped column's VALUE is rendered as a plain span, with an
-            // optional inline color override when the consumer set
-            // GroupedColumnColor (e.g. the app's brand blue). When that
-            // parameter is empty (toolkit default) no color is applied — the
-            // value inherits from the surrounding row text color.
             builder.OpenElement(40, "span");
             builder.AddAttribute(41, "class", "fx-group-header-value");
             if (!string.IsNullOrEmpty(GroupItemTextStyle))
@@ -5828,7 +5816,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 builder.CloseElement();
             }
 
-            // Inline caption aggregates (e.g. "Sum: $1,234.56" next to group header)
             if (AggregateRows is { Count: > 0 } && group.Aggregates.Count > 0)
             {
                 var captionRows = AggregateRows.Where(r => r.ShowInGroupCaption).ToList();
@@ -5854,13 +5841,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
             builder.CloseElement(); // td (label cell)
 
-            // ── Inline column-aligned aggregates on the group header row ───
-            // When any AggregateRow has ShowInGroupHeader=true, emit one <td>
-            // per visible column from the first aggregate column onward —
-            // all on the SAME <tr> as the group label. The label cell above
-            // already used a SHRUNK colspan (computed below) so these cells
-            // line up with their data columns. Cells without a configured
-            // AggregateColumn stay empty.
             var headerAggRows = AggregateRows is { Count: > 0 }
                 ? AggregateRows.Where(r => r.ShowInGroupHeader).ToList()
                 : new List<AggregateRow>();
@@ -5906,14 +5886,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
             if (!group.IsCollapsed)
             {
-                // If this group has sub-groups, recurse
                 if (group.SubGroups.Any())
                 {
                     builder.AddContent(60, RenderGroupedRows(group.SubGroups, level + 1));
                 }
                 else
                 {
-                    // Render actual data rows
                     var rowIdx = 0;
                     foreach (var item in group.Items)
                     {
@@ -5924,21 +5902,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
                         builder.OpenElement(70, "tr");
                         builder.AddAttribute(71, "class",
-                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected ? "fx-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
+                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
                         builder.AddAttribute(72, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, currentIdx, e)));
-                        // Drag-select wiring — see HandleRowMouseDown /
-                        // HandleRowMouseEnter for the protocol. Keep
-                        // sequence numbers monotonic alongside 71/72/73.
                         builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, currentIdx, e))));
                         builder.AddAttribute(75, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowMouseEnter(item, currentIdx, e)));
-                        // Inline style as a belt-and-suspenders backstop —
-                        // see flat path for the rationale. Wins any CSS
-                        // specificity / isolation fight by spec.
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         if (rowStyle.Length > 0)
                             builder.AddAttribute(73, "style", rowStyle);
 
-                        // Grouped column placeholders (align data columns when grouped columns are hidden)
                         if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
                         {
                             foreach (var gcol in GroupedLayoutColumns)
@@ -5950,7 +5921,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             }
                         }
 
-                        // Checkbox column
                         if (ShowCheckboxColumn)
                         {
                             builder.OpenElement(90, "td");
@@ -5968,7 +5938,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.CloseElement();
                         }
 
-                        // Data cells
                         var colIdx = 0;
                         foreach (var col in VisibleColumns)
                         {
@@ -5976,6 +5945,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             var capturedCol = col;
                             var capturedItemForEdit = item;
                             var isBatchEditing = IsBatchEditing(item, col.Field);
+                            var isBatchDropdownEditing = isBatchEditing && col.EditOptions?.Any() == true;
                             var isTypeAheadPreview = IsTypeAheadPreviewCell(item, col);
                             var isCellSelected = _selectedCells.Contains((resolvedRowIdx, capturedColIdx));
                             var isActiveCell = _activeCell.HasValue
@@ -5990,14 +5960,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             var cellClass = "fx-cell"
                                 + (isCellSelected ? " fx-cell-selected" : string.Empty)
                                 + (isBatchEditing ? " fx-batch-editing" : string.Empty)
+                                + (isBatchDropdownEditing ? " fx-batch-dropdown-editing" : string.Empty)
                                 + activeClass + editableClass + typeAheadClass;
                             builder.OpenElement(100, "td");
                             builder.AddAttribute(101, "class", cellClass);
-                            // data-field exposes the bound field name as a CSS hook so
-                            // consumers can colour / style specific columns from their
-                            // own .razor.css (e.g. FPricingWorkSheet greens the
-                            // Published* columns and blues the proposed-price set).
-                            // Purely cosmetic — no behaviour changes hang off this.
                             if (!string.IsNullOrEmpty(capturedCol.Field))
                                 builder.AddAttribute(106, "data-field", capturedCol.Field);
                             builder.AddAttribute(102, "style", col.GetCellStyle());
@@ -6005,7 +5971,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
                             builder.AddAttribute(109, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIdx, capturedColIdx, e)));
 
-                            // Batch edit on double-click
                             if (EditSettingsRef?.Mode == EditMode.Batch
                                 && EditSettingsRef.AllowEditOnDblClick
                                 && col.AllowEditing
@@ -6013,6 +5978,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                                 && !string.IsNullOrEmpty(col.Field))
                             {
                                 builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(capturedItemForEdit, resolvedRowIdx, capturedCol, e.ClientX)));
+                                builder.AddEventStopPropagationAttribute(110, "ondblclick", true);
                             }
                             builder.AddAttribute(103, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIdx, capturedColIdx, args)));
                             builder.AddEventStopPropagationAttribute(105, "onclick", true);
@@ -6058,10 +6024,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                                     continue;
                                 }
 
-                                // VB6 flexDTBoolean cell: a togglable checkbox when the
-                                // column is editable (disabled only for read-only columns).
-                                // Toggling writes the bound bool and raises OnCellSave so
-                                // the host persists + marks dirty (VB6 AfterEdit).
                                 var cbItem = item;
                                 var cbCol = capturedCol;
                                 builder.OpenComponent<CheckBoxControl>(130);
@@ -6100,7 +6062,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     }
                 }
 
-                // ── Group Footer (aggregate totals for this group) ──
                 if (AggregateRows is { Count: > 0 } && group.Aggregates.Count > 0)
                 {
                     var footerRows = AggregateRows.Where(r => r.ShowInGroupFooter).ToList();
@@ -6109,7 +6070,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                         builder.OpenElement(200, "tr");
                         builder.AddAttribute(201, "class", "fx-group-footer-row");
 
-                        // Indent cells
                         for (int i = 0; i < _groupDescriptors.Count; i++)
                         {
                             builder.OpenElement(210, "td");
@@ -6118,7 +6078,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.CloseElement();
                         }
 
-                        // Render aggregate cells aligned with columns
                         foreach (var col in VisibleColumns)
                         {
                             var aggCol = aggRow.Columns.FirstOrDefault(a => a.Field == col.Field);
@@ -6146,8 +6105,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     };
 
-    // ── Render Data Cells (flat mode) ────────────────────────────────────
-
     private RenderFragment RenderDataCells(TValue item, int rowIndex, Func<GridColumn, GridColumn> transform) => builder =>
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
@@ -6159,6 +6116,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             var capturedColIdx = colIdx;
             var isLastDataCell = colIdx == visibleColumns.Count - 1;
             var isBatchEditing = IsBatchEditing(item, col.Field);
+            var isBatchDropdownEditing = isBatchEditing && capturedCol.EditOptions?.Any() == true;
             var isTypeAheadPreview = IsTypeAheadPreviewCell(item, col);
 
             builder.OpenElement(0, "td");
@@ -6175,9 +6133,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             var cellClass = "fx-cell"
                 + (isCellSelected ? " fx-cell-selected" : string.Empty)
                 + (isBatchEditing ? " fx-batch-editing" : string.Empty)
+                + (isBatchDropdownEditing ? " fx-batch-dropdown-editing" : string.Empty)
                 + activeClass + editableClass + typeAheadClass;
             builder.AddAttribute(1, "class", cellClass);
-            // data-field CSS hook — see same comment on the row-render path above.
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
             builder.AddAttribute(2, "style", col.GetCellStyle());
@@ -6187,7 +6145,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (col.ClipMode == ClipMode.EllipsisWithTooltip)
                 builder.AddAttribute(3, "title", GetCellDisplayValue(item, col));
 
-            // For batch mode, double-click also opens edit (fallback)
             if (EditSettingsRef?.Mode == EditMode.Batch
                 && EditSettingsRef.AllowEditOnDblClick
                 && col.AllowEditing
@@ -6195,6 +6152,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 && !string.IsNullOrEmpty(col.Field))
             {
                 builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(item, resolvedRowIndex, capturedCol, e.ClientX)));
+                builder.AddEventStopPropagationAttribute(11, "ondblclick", true);
             }
             builder.AddAttribute(5, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIndex, capturedColIdx, args)));
             builder.AddEventStopPropagationAttribute(6, "onclick", true);
@@ -6239,8 +6197,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     continue;
                 }
 
-                // VB6 flexDTBoolean cell: togglable when editable, disabled when
-                // read-only. Toggle writes the bound bool + raises OnCellSave.
                 var cbItem = item;
                 var cbCol = col;
                 builder.OpenComponent<CheckBoxControl>(30);
@@ -6286,16 +6242,47 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     };
 
-    // ══════════════════════════════════════════════════════════════════════
-    // ── COLUMN RESIZE ────────────────────────────────────────────────────
-    // ══════════════════════════════════════════════════════════════════════
+    private RenderFragment RenderRowSelectorHandleCell(TValue item, int rowIndex) => builder =>
+    {
+        var isSelected = _selectedItems.Contains(item);
+        var isEmphasized = IsRowSelectorHandleEmphasized(item);
+        var canShowHandle = CanShowRowSelectorHandle(item);
+        var cellClass = "fx-cell fx-row-selector-cell"
+            + (isSelected ? " fx-row-selector-selected" : string.Empty)
+            + (isEmphasized ? " fx-row-selector-emphasis" : string.Empty);
+
+        builder.OpenElement(0, "td");
+        builder.AddAttribute(1, "class", cellClass);
+        builder.AddAttribute(2, "style", RowSelectorHandleColumnStyle);
+
+        if (canShowHandle)
+        {
+            builder.OpenElement(3, "button");
+            builder.AddAttribute(4, "type", "button");
+            builder.AddAttribute(5, "class", $"fx-row-selector-handle fx-row-selector-handle-{RowSelectorHandleShapeClass}");
+            builder.AddAttribute(6, "title", "Select row");
+            builder.AddAttribute(7, "aria-label", "Select row");
+            builder.AddAttribute(8, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowSelectorHandleClick(item, rowIndex, e)));
+            builder.AddAttribute(15, "style", GetRowSelectorHandleStyle(isSelected, isEmphasized));
+            builder.AddEventStopPropagationAttribute(9, "onclick", true);
+            builder.AddAttribute(10, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (MouseEventArgs _) => { }));
+            builder.AddEventStopPropagationAttribute(11, "onmousedown", true);
+            builder.AddEventPreventDefaultAttribute(12, "onmousedown", true);
+            builder.OpenElement(13, "span");
+            builder.AddAttribute(14, "class", "fx-row-selector-handle-mark");
+            builder.AddAttribute(16, "style", GetRowSelectorHandleMarkStyle(isSelected));
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        builder.CloseElement();
+    };
 
     private void StartResize(GridColumn col, MouseEventArgs e)
     {
         _resizingCol = col;
         _resizeStartX = e.ClientX;
 
-        // Parse starting width
         if (col.RuntimeWidth.HasValue)
             _resizeStartWidth = col.RuntimeWidth.Value;
         else if (!string.IsNullOrEmpty(col.Width))
@@ -6441,12 +6428,26 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await FireLayoutChangedAsync();
     }
 
-    // ── Render Helpers ───────────────────────────────────────────────────
-
     private RenderFragment RenderEditRow() => builder =>
     {
         builder.OpenElement(0, "tr");
         builder.AddAttribute(1, "class", "fx-row fx-edit-row");
+
+        if (ShowRowReorderColumn)
+        {
+            builder.OpenElement(9, "td");
+            builder.AddAttribute(10, "class", "fx-cell fx-row-reorder-cell disabled");
+            builder.AddAttribute(11, "style", RowReorderColumnStyle);
+            builder.CloseElement();
+        }
+
+        if (ShowRowSelectorHandleColumn)
+        {
+            builder.OpenElement(6, "td");
+            builder.AddAttribute(7, "class", "fx-cell fx-row-selector-cell");
+            builder.AddAttribute(8, "style", RowSelectorHandleColumnStyle);
+            builder.CloseElement();
+        }
 
         if (ShowCheckboxColumn)
         {
@@ -6455,7 +6456,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.CloseElement();
         }
 
-        // Group indent cells for edit row
         if (AllowGrouping && _groupDescriptors.Count > 0)
         {
             for (int i = 0; i < _groupDescriptors.Count; i++)
@@ -6539,8 +6539,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         return $"text-align:{align};";
     }
-
-    // ── Reflection Helpers ───────────────────────────────────────────────
 
     private ColumnState GetColumnState(string field)
     {
@@ -6802,6 +6800,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var total = 0d;
         if (ShowCheckboxColumn)
             total += 50;
+        if (ShowRowReorderColumn)
+            total += RowReorderColumnWidth;
+        if (ShowRowSelectorHandleColumn)
+            total += ResolvedRowSelectorHandleWidth;
 
         if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
         {
@@ -7022,14 +7024,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var clone = CreateNewItem();
 
-        // Dictionary-shaped rows (e.g. FDBGrid's GridRow which inherits
-        // Dictionary<string, object?>) carry their data in the dictionary
-        // entries, not in CLR properties. CopyProperties would only see
-        // Dictionary's readonly meta-properties (Count / Keys / Values /
-        // Comparer) and copy nothing → the edit overlay would render
-        // blank. Detect both nullable and non-nullable dictionary shapes
-        // and clone entry-wise. Falls back to property-copy for the
-        // typical case (concrete row types with normal properties).
         if (source is IDictionary<string, object?> srcDictN
             && clone is IDictionary<string, object?> tgtDictN)
         {
@@ -7056,20 +7050,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         foreach (var prop in source.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
-            // Skip indexer properties (e.g. FDBGrid's `GridRow.this[string]`).
-            // GetProperties returns them alongside plain properties, but
-            // GetValue/SetValue on an indexer requires the index arguments —
-            // calling them without args throws TargetParameterCountException.
-            // The grid never edits indexed values via this clone path; the
-            // dictionary backing the indexer is its own property and gets
-            // copied separately if also exposed (or by ref).
             if (prop.GetIndexParameters().Length > 0) continue;
             if (prop.CanRead && prop.CanWrite)
                 prop.SetValue(target, prop.GetValue(source));
         }
     }
 
-    // ── Public API Methods (SyncFusion equivalent) ───────────────────────
     public int TotalPages => _pageState.TotalPages;
     public int CurrentPage => _pageState.CurrentPage;
 
@@ -7107,18 +7093,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (rowIndex >= 0 && rowIndex < list.Count)
         {
             _selectedItems.Add(list[rowIndex]);
+            _ = InvokeAsync(StateHasChanged);
             _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
         }
     }
 
-    /// <summary>
-    /// Fires <see cref="GridControlEvents{TValue}.SelectionChanged"/> with
-    /// the current selected-row count. Centralizes the "selection set
-    /// changed" notification so consumers can update count labels / status
-    /// bars in real time even during drag-select (where per-row events are
-    /// intentionally suppressed). Call after every mutation of
-    /// <c>_selectedItems</c>; the event is no-op when no consumer subscribes.
-    /// </summary>
     private async Task NotifySelectionChangedAsync(GridSelectionChangeSource source = GridSelectionChangeSource.Unknown)
     {
         if (_selectedItems.Count <= 1)
@@ -7283,74 +7262,65 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    /// <summary>Export grid data to CSV and trigger browser download.</summary>
-    public async Task ExportToCsvAsync(string fileName = "export.csv")
+    public async Task ExportAsync(GridExportFormat format, string? fileName = null, string title = "Export")
     {
-        var sb = new StringBuilder();
-        var cols = VisibleColumns.ToList();
-        // Header row
-        sb.AppendLine(string.Join(",", cols.Select(c => EscapeCsvField(c.DisplayHeader))));
-        // Data rows — all filtered+sorted data (not just current page)
-        foreach (var item in SortedData)
-        {
-            var values = cols.Select(c => EscapeCsvField(GetCellDisplayValue(item, c)));
-            sb.AppendLine(string.Join(",", values));
-        }
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
-        await JsRuntime.InvokeVoidAsync("hfGridExportDownload", fileName, base64, "text/csv");
+        var table = BuildExportTable(title);
+        var result = GridExporter.Export(table, format, fileName);
+        await GridExporter.DownloadAsync(JsRuntime, result);
     }
 
-    /// <summary>Export grid data to Excel-compatible HTML (.xls) and trigger browser download.</summary>
-    public async Task ExportToExcelAsync(string fileName = "export.xls")
+    public GridExportResult CreateExport(GridExportFormat format, string? fileName = null, string title = "Export")
     {
-        var sb = new StringBuilder();
-        var cols = VisibleColumns.ToList();
-        sb.Append("<table border='1'><thead><tr>");
-        foreach (var c in cols)
-            sb.Append($"<th>{System.Net.WebUtility.HtmlEncode(c.DisplayHeader)}</th>");
-        sb.Append("</tr></thead><tbody>");
-        foreach (var item in SortedData)
-        {
-            sb.Append("<tr>");
-            foreach (var c in cols)
-                sb.Append($"<td>{System.Net.WebUtility.HtmlEncode(GetCellDisplayValue(item, c))}</td>");
-            sb.Append("</tr>");
-        }
-        sb.Append("</tbody></table>");
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
-        await JsRuntime.InvokeVoidAsync("hfGridExportDownload", fileName, base64, "application/vnd.ms-excel");
+        var table = BuildExportTable(title);
+        return GridExporter.Export(table, format, fileName);
     }
 
-    /// <summary>Export grid data to a printable HTML table and open the browser print dialog (Save as PDF).</summary>
-    public async Task ExportToPdfAsync(string title = "Export")
-    {
-        var sb = new StringBuilder();
-        var cols = VisibleColumns.ToList();
-        sb.Append("<html><head><title>").Append(System.Net.WebUtility.HtmlEncode(title)).Append("</title>");
-        sb.Append("<style>table{border-collapse:collapse;width:100%;font-size:11px;font-family:Arial,sans-serif}th,td{border:1px solid #ccc;padding:4px 8px;text-align:left}th{background:#f0f0f0;font-weight:bold}@@media print{body{margin:0}}</style>");
-        sb.Append("</head><body>");
-        sb.Append("<table><thead><tr>");
-        foreach (var c in cols)
-            sb.Append($"<th>{System.Net.WebUtility.HtmlEncode(c.DisplayHeader)}</th>");
-        sb.Append("</tr></thead><tbody>");
-        foreach (var item in SortedData)
-        {
-            sb.Append("<tr>");
-            foreach (var c in cols)
-                sb.Append($"<td>{System.Net.WebUtility.HtmlEncode(GetCellDisplayValue(item, c))}</td>");
-            sb.Append("</tr>");
-        }
-        sb.Append("</tbody></table></body></html>");
-        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(sb.ToString()));
-        await JsRuntime.InvokeVoidAsync("hfGridExportPdf", base64);
-    }
+    public Task ExportToCsvAsync(string fileName = "export.csv") =>
+        ExportAsync(GridExportFormat.Csv, fileName);
 
-    private static string EscapeCsvField(string field)
+    public Task ExportToTsvAsync(string fileName = "export.tsv") =>
+        ExportAsync(GridExportFormat.Tsv, fileName);
+
+    public Task ExportToXlsxAsync(string fileName = "export.xlsx") =>
+        ExportAsync(GridExportFormat.Xlsx, fileName);
+
+    public Task ExportToExcelAsync(string fileName = "export.xls") =>
+        ExportToXlsAsync(fileName);
+
+    public Task ExportToXlsAsync(string fileName = "export.xls") =>
+        ExportAsync(GridExportFormat.Xls, fileName);
+
+    public Task ExportToHtmlAsync(string fileName = "export.html") =>
+        ExportAsync(GridExportFormat.Html, fileName);
+
+    public Task ExportToJsonAsync(string fileName = "export.json") =>
+        ExportAsync(GridExportFormat.Json, fileName);
+
+    public Task ExportToPdfAsync(string title = "Export") =>
+        ExportAsync(GridExportFormat.Pdf, "export.pdf", title);
+
+    public Task ExportToPdfAsync(string fileName, string title) =>
+        ExportAsync(GridExportFormat.Pdf, fileName, title);
+
+    public Task ExportToPdfFileAsync(string fileName = "export.pdf", string title = "Export") =>
+        ExportAsync(GridExportFormat.Pdf, fileName, title);
+
+    private GridExportTable BuildExportTable(string title)
     {
-        if (string.IsNullOrEmpty(field)) return "\"\"";
-        if (field.Contains(',') || field.Contains('"') || field.Contains('\n'))
-            return "\"" + field.Replace("\"", "\"\"") + "\"";
-        return field;
+        var table = new GridExportTable
+        {
+            Title = title,
+            SheetName = title
+        };
+
+        var cols = VisibleColumns.ToList();
+        foreach (var col in cols)
+            table.Columns.Add(new GridExportColumn(col.DisplayHeader, textAlign: col.TextAlign));
+
+        foreach (var item in SortedData)
+            table.Rows.Add(new GridExportRow(cols.Select(col => GetCellDisplayValue(item, col))));
+
+        return table;
     }
 
     private async Task EnsureTrailingNewRowIfNeededAsync()
@@ -7398,6 +7368,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             await AppendRowAsync(row, beginEdit: false);
             TrackTrailingNewRow(row);
+            SyncDataSourceChangeTrackers();
         }
         finally
         {
@@ -7566,23 +7537,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>
-    /// Bring a row into view AND open one of its cells in edit mode — the
-    /// programmatic equivalent of a single click on that cell. Used by hosts
-    /// after adding a "New" row so the new (often off-screen, bottom-of-list)
-    /// row scrolls into view with the cursor already in the given column.
-    ///
-    /// Pure Blazor: the row is paged to if needed, the cell enters batch edit
-    /// via the same path as a mouse click, and the post-render focus uses
-    /// <c>FocusAsync(preventScroll:false)</c> so the browser scrolls it into
-    /// view natively — NO JavaScript scrollIntoView. The sticky column header
-    /// (CSS) stays visible through the scroll.
-    ///
-    /// Requires Batch edit mode (EditSettingsRef.Mode = EditMode.Batch) and an
-    /// editable, non-primary-key column. Honors the same per-row/column veto as
-    /// a click (OnCellEdit Cancel). No-op if the row/field can't be resolved or
-    /// the column isn't editable.
-    /// </summary>
     public async Task BeginEditCellAsync(TValue row, string field)
     {
         if (row == null || string.IsNullOrEmpty(field)) return;
@@ -7594,8 +7548,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var rowIndex = ResolveRowIndex(row, -1);
         if (rowIndex < 0) return;
 
-        // Page the row onto the visible page when paging is on, so the edit
-        // cell actually renders (PagedData only emits the current page).
         if (IsPagingActive && _pageState.PageSize > 0)
         {
             var targetPage = (rowIndex / _pageState.PageSize) + 1;
@@ -7614,33 +7566,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         await StartBatchEdit(row, rowIndex, col);
 
-        // StartBatchEdit arms the post-render focus; upgrade it to scroll the
-        // freshly-shown row into view (a new bottom row is usually off-screen).
-        // If StartBatchEdit vetoed (e.g. OnCellEdit Cancel), _batchEditField is
-        // null and we must not force a stale focus/scroll.
         if (_pendingBatchEditFocus && _batchEditField == col.Field)
             _pendingBatchEditScrollIntoView = true;
 
-        // Re-baseline the data-source change trackers to the CURRENT DataSource.
-        // Programmatic edit typically follows a host "add new row" (DataSource
-        // count just grew). Without this, the next OnParametersSet sees a changed
-        // signature and runs ClearSelectionIfDataSourceChanged →
-        // ClearTransientSelectionState, which would wipe the edit/scroll just
-        // armed — a render-order race. Capturing the new signature here makes the
-        // begin-edit deterministic regardless of when the host called
-        // StateHasChanged relative to adding the row.
         SyncDataSourceChangeTrackers();
 
         await InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>
-    /// Snapshot the current DataSource into the filter/selection change-trackers
-    /// so a pending add/remove the host just made won't be re-detected as a
-    /// "data source changed" on the next OnParametersSet (which would clear
-    /// transient selection / batch-edit state). Used by BeginEditCellAsync after
-    /// a host adds a row and immediately starts editing it.
-    /// </summary>
     private void SyncDataSourceChangeTrackers()
     {
         _lastSelectionDataSource = DataSource;
@@ -7650,15 +7583,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _filterDataSourceCaptured = true;
     }
 
-    /// <summary>
-    /// Scroll a cell into view by (column, row) index — pure Blazor, no JS.
-    /// Implemented by entering edit on the cell (which focuses its input with
-    /// preventScroll:false, scrolling it on screen). For the common "new row"
-    /// case prefer <see cref="BeginEditCellAsync"/>, which is field-based and
-    /// doesn't depend on the caller knowing the rendered column index.
-    /// rowIndex is the index into the underlying data source; columnIndex is
-    /// into the VISIBLE columns in display order.
-    /// </summary>
     public async Task ScrollIntoViewAsync(int columnIndex, int rowIndex)
     {
         var visibleCols = VisibleColumns.ToList();
@@ -7734,7 +7658,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
-            // Best-effort teardown.
         }
 
         _headerDragPreviewRegistered = false;
@@ -7749,7 +7672,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
             catch (Exception)
             {
-                // Best-effort teardown.
             }
             _gridJsModule = null;
         }
