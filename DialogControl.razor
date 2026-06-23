@@ -6,8 +6,8 @@
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
          @onmousemove="HandleResizeMove"
-         @onmouseup="HandleResizeEnd"
-         @onmouseleave="HandleResizeEnd"
+         @onmouseup="e => HandleResizeEnd(e, true)"
+         @onmouseleave="e => HandleResizeEnd(e, false)"
          tabindex="0"
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" @onclick:stopPropagation="true">
@@ -50,7 +50,8 @@
     [Parameter] public bool IsModal { get; set; } = true;
     [Parameter] public bool ShowCloseIcon { get; set; } = true;
     [Parameter] public bool CloseOnEscape { get; set; }
-    [Parameter] public bool Resizable { get; set; }
+    [Parameter] public bool CloseOnOverlayClick { get; set; }
+    [Parameter] public bool Resizable { get; set; } = true;
     [Parameter] public double MinResizeWidth { get; set; } = 320;
     [Parameter] public double MinResizeHeight { get; set; } = 160;
     [Parameter] public double MaxResizeWidth { get; set; }
@@ -63,6 +64,8 @@
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public EventCallback<string?> WidthChanged { get; set; }
+    [Parameter] public EventCallback<string?> HeightChanged { get; set; }
 
     private bool _isResizing;
     private string? _resizeEdge;
@@ -72,6 +75,7 @@
     private double _resizeStartHeight;
     private double? _runtimeWidth;
     private double? _runtimeHeight;
+    private bool _suppressNextOverlayClick;
 
     private string OverlayCssClass => _isResizing
         ? "fx-dialog-overlay fx-dialog-overlay-resizing"
@@ -112,11 +116,18 @@
 
     private async Task HandleOverlayClick()
     {
+        if (_suppressNextOverlayClick)
+        {
+            _suppressNextOverlayClick = false;
+            return;
+        }
+
         if (_isResizing)
             return;
 
-        if (!IsModal)
+        if (!CloseOnOverlayClick)
             return;
+
         await RequestClose();
     }
 
@@ -171,11 +182,40 @@
         return Task.CompletedTask;
     }
 
-    private Task HandleResizeEnd(MouseEventArgs e)
+    private async Task HandleResizeEnd(MouseEventArgs e, bool suppressOverlayClick)
     {
+        if (!_isResizing) return;
         _isResizing = false;
         _resizeEdge = null;
-        return Task.CompletedTask;
+        if (suppressOverlayClick)
+            _suppressNextOverlayClick = true;
+
+        if (_runtimeWidth.HasValue)
+        {
+            var newWidth = $"{_runtimeWidth.Value:0.##}px";
+            Width = newWidth;
+            if (WidthChanged.HasDelegate)
+                await WidthChanged.InvokeAsync(newWidth);
+        }
+        if (_runtimeHeight.HasValue)
+        {
+            var newHeight = $"{_runtimeHeight.Value:0.##}px";
+            Height = newHeight;
+            if (HeightChanged.HasDelegate)
+                await HeightChanged.InvokeAsync(newHeight);
+        }
+    }
+
+    private bool _lastVisible;
+
+    protected override void OnParametersSet()
+    {
+        if (Visible && !_lastVisible)
+        {
+            _runtimeWidth = null;
+            _runtimeHeight = null;
+        }
+        _lastVisible = Visible;
     }
 
     private double ResolveCurrentWidth()

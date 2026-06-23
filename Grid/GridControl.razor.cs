@@ -428,6 +428,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private bool _pendingBatchEditSelectAll;
     private double? _pendingBatchEditClientX;
+    private bool _batchDropdownOpenOnRender;
 
     private bool _pendingBatchEditScrollIntoView;
     private bool _pendingActiveCellScrollIntoView;
@@ -1339,6 +1340,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditValue = null;
         _batchEditDirty = false;
         _batchEditReplaceOnFirstInput = false;
+        _batchDropdownOpenOnRender = false;
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
         _pendingBatchEditClientX = null;
@@ -2764,12 +2766,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
-    private async Task StartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false)
+    private async Task StartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false, bool openDropdownOnRender = false)
     {
-        await TryStartBatchEdit(item, rowIndex, col, clientX, replaceOnFirstInput);
+        await TryStartBatchEdit(item, rowIndex, col, clientX, replaceOnFirstInput, openDropdownOnRender);
     }
 
-    private async Task<bool> TryStartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false)
+    private async Task<bool> TryStartBatchEdit(TValue item, int rowIndex, GridColumn col, double? clientX = null, bool replaceOnFirstInput = false, bool openDropdownOnRender = false)
     {
         if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return false;
         if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return false;
@@ -2795,6 +2797,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
         _batchEditReplaceOnFirstInput = replaceOnFirstInput;
+        _batchDropdownOpenOnRender = openDropdownOnRender && col.EditOptions?.Any() == true;
         _batchEditInputRef = default;
         _pendingBatchEditFocus = true;
         _pendingBatchEditSelectAll = col.SelectAllOnEdit && clientX == null;
@@ -3046,11 +3049,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }));
             builder.AddAttribute(sequence + 4, "Width", "100%");
             builder.AddAttribute(sequence + 5, "CssClass", "fx-batch-dropdown");
-            builder.AddAttribute(sequence + 6, "OpenOnRender", true);
-            builder.AddAttribute(sequence + 7, "Closed", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
-            var popupWidth = GetColumnWidthPx(col);
-            if (popupWidth > 0)
-                builder.AddAttribute(sequence + 8, "PopupWidth", $"{popupWidth.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            builder.AddAttribute(sequence + 6, "OpenOnRender", _batchDropdownOpenOnRender);
+            builder.AddAttribute(sequence + 7, "OpenOnArrowClickOnly", true);
+            builder.AddAttribute(sequence + 8, "Closed", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
             builder.CloseComponent();
         }
         else
@@ -3186,6 +3187,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _batchEditValue = null;
         _batchEditDirty = false;
         _batchEditReplaceOnFirstInput = false;
+        _batchDropdownOpenOnRender = false;
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
         _pendingBatchEditScrollIntoView = false;
@@ -3342,6 +3344,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _batchEditField = null;
             _batchEditValue = null;
             _batchEditReplaceOnFirstInput = false;
+            _batchDropdownOpenOnRender = false;
             _pendingBatchEditFocus = false;
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
@@ -5977,7 +5980,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                                 && !col.IsPrimaryKey
                                 && !string.IsNullOrEmpty(col.Field))
                             {
-                                builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(capturedItemForEdit, resolvedRowIdx, capturedCol, e.ClientX)));
+                                builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(capturedItemForEdit, resolvedRowIdx, capturedCol, e.ClientX, openDropdownOnRender: true)));
                                 builder.AddEventStopPropagationAttribute(110, "ondblclick", true);
                             }
                             builder.AddAttribute(103, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIdx, capturedColIdx, args)));
@@ -6151,7 +6154,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 && !col.IsPrimaryKey
                 && !string.IsNullOrEmpty(col.Field))
             {
-                builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(item, resolvedRowIndex, capturedCol, e.ClientX)));
+                builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(item, resolvedRowIndex, capturedCol, e.ClientX, openDropdownOnRender: true)));
                 builder.AddEventStopPropagationAttribute(11, "ondblclick", true);
             }
             builder.AddAttribute(5, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIndex, capturedColIdx, args)));

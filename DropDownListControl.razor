@@ -7,17 +7,43 @@
      @onclick:stopPropagation="true"
      @onmousedown:stopPropagation="true"
      @onkeydown:stopPropagation="true">
-    <button type="button"
-            class="@ButtonCssClass"
-            disabled="@(!Enabled)"
-            tabindex="@TabIndex"
-            aria-haspopup="listbox"
-            aria-expanded="@_isOpen"
-            @onclick="ToggleOpen"
-            @onkeydown="HandleButtonKeyDown">
-        <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
-        <span class="fx-dropdown-arrow" aria-hidden="true"></span>
-    </button>
+    @if (Editable)
+    {
+        <div class="@ButtonCssClass"
+             role="combobox"
+             aria-haspopup="listbox"
+             aria-expanded="@_isOpen">
+            <input class="fx-dropdown-input"
+                   disabled="@(!Enabled)"
+                   tabindex="@TabIndex"
+                   value="@_editableText"
+                   placeholder="@Placeholder"
+                   @onfocus="HandleEditableFocus"
+                   @onblur="HandleEditableBlur"
+                   @oninput="HandleEditableInput"
+                   @onkeydown="HandleEditableKeyDown" />
+            <span class="fx-dropdown-arrow" aria-hidden="true"
+                  @onmousedown="SuppressNextEditableBlurCommit"
+                  @onclick="HandleEditableArrowClick"
+                  @onclick:stopPropagation="true"></span>
+        </div>
+    }
+    else
+    {
+        <button type="button"
+                class="@ButtonCssClass"
+                disabled="@(!Enabled)"
+                tabindex="@TabIndex"
+                aria-haspopup="listbox"
+                aria-expanded="@_isOpen"
+                @onclick="HandleButtonClick"
+                @onkeydown="HandleButtonKeyDown">
+            <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
+            <span class="fx-dropdown-arrow" aria-hidden="true"
+                  @onclick="HandleArrowClick"
+                  @onclick:stopPropagation="@OpenOnArrowClickOnly"></span>
+        </button>
+    }
 
     @if (_isOpen && Enabled)
     {
@@ -27,7 +53,7 @@
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
 
-        <div class="fx-dropdown-panel" role="listbox" @onclick:stopPropagation="true">
+        <div class="fx-dropdown-panel" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true">
             @if (DataSource != null)
             {
                 foreach (var item in DataSource)
@@ -58,12 +84,14 @@
     [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? Width { get; set; }
-    [Parameter] public string? PopupWidth { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    [Parameter] public bool Editable { get; set; }
+    [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
     [Parameter] public bool OpenOnRender { get; set; }
+    [Parameter] public bool OpenOnArrowClickOnly { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
     [Parameter] public string TextFieldName { get; set; } = "";
@@ -75,18 +103,18 @@
 
     private bool _isOpen;
     private bool _openOnRenderInitialized;
+    private bool _editableInputFocused;
+    private bool _suppressNextEditableBlurCommit;
+    private string _editableText = "";
 
     private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
-    private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", Editable ? "fx-dropdown-editable" : null, !Enabled ? "disabled" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
     private string HostStyle
     {
         get
         {
             var w = string.IsNullOrWhiteSpace(Width) ? CalculatedWidth() : Width;
-            var style = string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
-            if (!string.IsNullOrWhiteSpace(PopupWidth))
-                style += $" --fx-dropdown-popup-width:{PopupWidth};";
-            return style;
+            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
         }
     }
 
@@ -117,7 +145,8 @@
         }
     }
     private string PlaceholderCssClass => HasSelectedValue ? "" : "fx-dropdown-placeholder";
-    private string DisplayText => SelectedText ?? Placeholder ?? "";
+    private string DisplayText => SelectedText ?? (HasSelectedValue ? Value?.ToString() ?? "" : Placeholder ?? "");
+    private string EditableDisplayText => SelectedText ?? (HasSelectedValue ? Value?.ToString() ?? "" : "");
 
     private string? SelectedText
     {
@@ -150,6 +179,21 @@
             _isOpen = true;
             _openOnRenderInitialized = true;
         }
+
+        if (Editable && !_editableInputFocused)
+            _editableText = EditableDisplayText;
+    }
+
+    private async Task HandleButtonClick()
+    {
+        if (!OpenOnArrowClickOnly)
+            await ToggleOpen();
+    }
+
+    private async Task HandleArrowClick()
+    {
+        if (OpenOnArrowClickOnly)
+            await ToggleOpen();
     }
 
     private async Task ToggleOpen()
@@ -194,10 +238,91 @@
         return Task.CompletedTask;
     }
 
+    private Task HandleEditableFocus()
+    {
+        _editableInputFocused = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleEditableBlur()
+    {
+        _editableInputFocused = false;
+
+        if (_suppressNextEditableBlurCommit)
+        {
+            _suppressNextEditableBlurCommit = false;
+            return;
+        }
+
+        if (CommitEditableTextOnBlur)
+            await PublishEditableTextAsync(_editableText);
+        else
+            _editableText = EditableDisplayText;
+    }
+
+    private async Task HandleEditableKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (!Enabled)
+            return;
+
+        if (e.Key == "Enter")
+        {
+            await PublishEditableTextAsync(_editableText);
+            await CloseAsync();
+        }
+        else if (e.Key is "ArrowDown" or "F4")
+        {
+            _isOpen = true;
+        }
+        else if (e.Key == "Escape")
+        {
+            _editableText = EditableDisplayText;
+            await CloseAsync();
+        }
+    }
+
+    private async Task HandleEditableArrowClick()
+    {
+        await ToggleOpen();
+        _suppressNextEditableBlurCommit = false;
+    }
+
+    private void SuppressNextEditableBlurCommit()
+    {
+        if (_editableInputFocused)
+            _suppressNextEditableBlurCommit = true;
+    }
+
+    private Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _editableText = e.Value?.ToString() ?? "";
+        return Task.CompletedTask;
+    }
+
+    private async Task PublishEditableTextAsync(string text)
+    {
+        _editableText = text;
+        var newValue = ConvertToValue(text);
+
+        if (object.Equals(Value, newValue))
+            return;
+
+        Value = newValue;
+
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(newValue);
+
+        if (ValueChange.HasDelegate)
+            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue });
+    }
+
     private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true)
     {
+        _suppressNextEditableBlurCommit = false;
         var newValue = ConvertToValue(strVal);
         Value = newValue;
+        if (Editable)
+            _editableText = GetFieldValue(item, TextFieldName);
 
         if (closeAfterSelect)
             _isOpen = false;

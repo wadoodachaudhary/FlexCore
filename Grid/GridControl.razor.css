@@ -1444,7 +1444,7 @@
 }
 .fx-grid ::deep .fx-cell:has(.fx-dropdown-host),
 .fx-cell:has(.fx-dropdown-host) {
-    overflow: visible !important;
+    overflow: visible;
 }
 .fx-grid ::deep .fx-cell:has(.fx-dropdown-panel),
 .fx-cell:has(.fx-dropdown-panel),
@@ -1452,23 +1452,6 @@
 tr.fx-row:has(.fx-dropdown-panel) {
     position: relative;
     z-index: 30;
-}
-.fx-grid ::deep .fx-cell:has(.fx-datepicker-host),
-.fx-cell:has(.fx-datepicker-host) {
-    overflow: visible !important;
-}
-.fx-grid ::deep .fx-cell:has(.fx-datepicker-dropdown),
-.fx-cell:has(.fx-datepicker-dropdown),
-.fx-grid ::deep tr.fx-row:has(.fx-datepicker-dropdown),
-tr.fx-row:has(.fx-datepicker-dropdown) {
-    position: relative;
-    z-index: 31;
-    overflow: visible !important;
-}
-.fx-grid:has(.fx-datepicker-dropdown) .fx-grid-body-viewport,
-.fx-grid:has(.fx-datepicker-dropdown) .fx-grid-content,
-.fx-grid:has(.fx-dropdown-panel) .fx-grid-body-viewport {
-    overflow: visible;
 }
 
 .fx-grid ::deep .fx-cell > .inline-edit {
@@ -1770,13 +1753,13 @@ tr.fx-row:has(.fx-datepicker-dropdown) {
 }
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel,
 .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel {
-    position: fixed;
-    top: auto;
-    left: auto;
-    z-index: 10000;
-    width: var(--fx-dropdown-popup-width, 100%);
-    min-width: var(--fx-dropdown-popup-width, 100%);
-    max-width: min(var(--fx-dropdown-popup-width, 360px), calc(100vw - 24px));
+    position: absolute;
+    top: calc(100% - 1px);
+    left: 0;
+    z-index: 9999;
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
     max-height: min(180px, calc(100vh - 24px));
 }
 
