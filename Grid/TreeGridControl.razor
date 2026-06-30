@@ -308,7 +308,7 @@
                                         {
                                             
                                             <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(node.IsExpanded ? "expanded" : "collapsed")"
-                                                  style="@ResolveExpandIconStyle() @(IsCompact ? ";height:10px;width:10px;line-height:10px;margin-right:2px;font-size:9px;" : "")"
+                                                  style="@ResolveExpandIconStyle() @(IsCompact ? ";height:12px;width:12px;line-height:1;margin-right:2px;font-size:13px;" : "")"
                                                   @onclick="() => ToggleNode(node)"
                                                   @onclick:stopPropagation="true">
                                                 @(node.IsExpanded ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
@@ -316,7 +316,7 @@
 
                                             @if (GetNodeIcon != null)
                                             {
-                                                var customIcon = GetNodeIcon(node.Data, node.IsExpanded);
+                                                var customIcon = ResolveNodeIcon(node);
                                                 if (!string.IsNullOrEmpty(customIcon))
                                                 {
                                                     <span class="fx-treegrid-node-folder" aria-hidden="true" style="@(IsCompact ? "width:14px;height:14px;margin-right:3px;vertical-align:middle;display:inline-flex;align-items:center;justify-content:center;" : "")">
@@ -333,7 +333,7 @@
                                                     }
                                                     else
                                                     {
-                                                        <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @(node.IsExpanded ? "open" : "closed")" style="@(IsCompact ? "width:14px;height:14px;flex:0 0 14px;" : "")"></span>
+                                                        <span class="fx-treegrid-folder-icon fx-treegrid-folder-icon-parent @ResolveFolderIconState(node)" style="@(IsCompact ? "width:14px;height:14px;flex:0 0 14px;" : "")"></span>
                                                     }
                                                 </span>
                                             }
@@ -347,7 +347,7 @@
                                                   @onclick:stopPropagation="true">
                                                 @if (GetNodeIcon != null)
                                                 {
-                                                    var customIcon = GetNodeIcon(node.Data, node.IsExpanded);
+                                                    var customIcon = ResolveNodeIcon(node);
                                                     if (!string.IsNullOrEmpty(customIcon))
                                                     {
                                                         <img class="fx-treegrid-icon" src="@customIcon" alt="" style="@(IsCompact ? "width:14px;height:14px;vertical-align:middle;" : "")" />
@@ -360,7 +360,7 @@
                                                 else
                                                 {
                                                     <img class="fx-treegrid-icon"
-                                                         src="@(node.IsExpanded ? TreeOpenFolderIconSrc : TreeClosedFolderIconSrc)"
+                                                         src="@ResolveTreeFolderIconSrc(node)"
                                                          alt="" style="@(IsCompact ? "width:14px;height:14px;vertical-align:middle;" : "")" />
                                                 }
                                             </span>

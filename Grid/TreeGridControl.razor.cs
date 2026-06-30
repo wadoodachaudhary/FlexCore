@@ -57,6 +57,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     [Parameter] public Func<TValue, bool, string?>? GetNodeIcon { get; set; }
 
+    [Parameter] public bool ChangeNodeIconOnExpand { get; set; }
+
     [Parameter] public bool ShowLeafNodeIcons { get; set; } = true;
 
     internal string ResolveCollapsedGlyph() =>
@@ -105,6 +107,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     internal string YellowFolderIconSrc => $"{StaticAssetRoot}/images/16/folder-open.ico";
     internal string TreeOpenFolderIconSrc => $"{StaticAssetRoot}/images/16/folder-open.ico";
     internal string TreeClosedFolderIconSrc => $"{StaticAssetRoot}/images/32/folder.ico";
+
+    internal string? ResolveNodeIcon(TreeNode<TValue> node) =>
+        GetNodeIcon?.Invoke(node.Data, ChangeNodeIconOnExpand && node.IsExpanded);
+
+    internal string ResolveTreeFolderIconSrc(TreeNode<TValue> node) =>
+        ChangeNodeIconOnExpand && node.IsExpanded ? TreeOpenFolderIconSrc : TreeClosedFolderIconSrc;
+
+    internal string ResolveFolderIconState(TreeNode<TValue> node) =>
+        ChangeNodeIconOnExpand && node.IsExpanded ? "open" : "closed";
 
     internal bool UseYellowFolderIcons =>
         CssClass?.Contains("fx-treegrid-yellow-folder", StringComparison.OrdinalIgnoreCase) == true;

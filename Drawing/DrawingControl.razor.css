@@ -132,7 +132,7 @@
 .fx-tb-tool.active { background: #e9ecf5; border-color: #d3d8ea; }
 .fx-tb-tool:disabled { opacity: .4; cursor: default; }
 .fx-tb-ico { display: flex; align-items: center; justify-content: center; height: 24px; }
-.fx-tb-ico svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.fx-tb-ico ::deep svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .fx-tb-glyph { font-size: 20px; line-height: 24px; }
 .fx-tb-lbl { font-size: 11px; color: #3a4150; white-space: nowrap; }
 .fx-tb-swatch { width: 20px; height: 20px; border-radius: 4px; border: 1px solid #c0c4cc; display: inline-block; }
@@ -157,7 +157,7 @@
 .fx-tb-menu-item:hover { background: #f1f2f5; }
 .fx-tb-menu-item.active { background: #e9ecf5; }
 .fx-tb-menu-ico { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; color: #1f2430; }
-.fx-tb-menu-ico svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.fx-tb-menu-ico ::deep svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.5; }
 .fx-tb-tbadge { position: absolute; right: -4px; bottom: -3px; font-size: 9px; font-weight: bold; color: #1f2430; }
 
 .fx-tb-colormenu { display: grid; grid-template-columns: repeat(4, 26px); gap: 4px; min-width: 0; }
@@ -165,6 +165,13 @@
 .fx-tb-widthrow { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: #3a4150; }
 .fx-tb-widthrow input[type="range"] { width: 90px; }
 .fx-tb-backdrop { position: fixed; inset: 0; z-index: 39; background: transparent; }
+
+.fx-tb-fileitem { position: relative; }
+.fx-tb-fileinput { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.fx-tb-fileinput::file-selector-button { display: none; }
+
+.fx-draw-imgshape { display: block; object-fit: fill; }
+.fx-draw-imgshape.selected { outline: 2px dashed #4c7bf3; outline-offset: 1px; }
 
 .fx-tb-width { min-width: 86px; }
 .fx-tb-width input[type="range"] { width: 72px; }

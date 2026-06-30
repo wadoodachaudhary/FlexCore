@@ -60,6 +60,42 @@ export function cropImage(srcUrl, sx, sy, sw, sh) {
     });
 }
 
+// Natural pixel size of a data/URL image that is NOT in the DOM — used to size a placed overlay
+// to its real aspect ratio. Resolves [0,0] on failure.
+export function imageSize(srcUrl) {
+    return new Promise((resolve) => {
+        try {
+            const img = new Image();
+            img.onload = () => resolve([img.naturalWidth || 0, img.naturalHeight || 0]);
+            img.onerror = () => resolve([0, 0]);
+            img.src = srcUrl;
+        } catch (e) { resolve([0, 0]); }
+    });
+}
+
+// Read an image off the clipboard as a data URL ('' if none / denied). Requires a user gesture and
+// a secure context (https or localhost). Pure capability — no app coupling.
+export function readClipboardImage() {
+    return new Promise(async (resolve) => {
+        try {
+            if (!navigator.clipboard || !navigator.clipboard.read) { resolve(''); return; }
+            const items = await navigator.clipboard.read();
+            for (const item of items) {
+                const type = (item.types || []).find(t => t.startsWith('image/'));
+                if (type) {
+                    const blob = await item.getType(type);
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result || '');
+                    reader.onerror = () => resolve('');
+                    reader.readAsDataURL(blob);
+                    return;
+                }
+            }
+            resolve('');
+        } catch (e) { resolve(''); }
+    });
+}
+
 export function rasterize(svg, w, h) {
     return new Promise((resolve) => {
         try {

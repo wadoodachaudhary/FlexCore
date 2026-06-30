@@ -20,6 +20,18 @@
     box-shadow: var(--fx-dialog-shadow, 0 6px 24px rgba(0, 0, 0, 0.2));
 }
 
+.fx-dialog.fx-dialog-classic {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #f0f0f0;
+    border: 1px solid #c7c7c7;
+    border-radius: 6px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+    color: #000;
+    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+}
+
 .fx-dialog-overlay-resizing {
     cursor: default;
 }
@@ -141,16 +153,53 @@
 .fx-dialog-close {
     border: none;
     background: transparent;
-    font-size: 18px;
+    font-size: 22.5px;
     cursor: pointer;
     line-height: 1;
     color: var(--fx-dialog-header-color, inherit);
+}
+
+.fx-dialog-close:hover {
+    background: #e81123;
+    color: #fff;
+}
+
+.fx-dialog-classic .fx-dialog-header {
+    flex: 0 0 28px;
+    min-height: 28px;
+    padding: 0 6px;
+    border-bottom: 0;
+    background: #f0f0f0;
+    color: #8a8a8a;
+    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font-weight: 400;
+}
+
+.fx-dialog-classic .fx-dialog-title {
+    font-weight: 400;
+}
+
+.fx-dialog-classic .fx-dialog-close {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    font-size: 25px;
+    line-height: 28px;
 }
 
 .fx-dialog-body {
     padding: 16px;
     background: var(--fx-dialog-bg, #fff);
     color: var(--fx-text-color, inherit);
+}
+
+.fx-dialog-classic .fx-dialog-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    padding: 9px 12px 12px;
+    background: #f0f0f0;
+    color: #000;
 }
 
 .fx-dialog-footer {

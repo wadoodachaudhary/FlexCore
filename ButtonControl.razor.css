@@ -30,6 +30,31 @@
     padding: 6px 12px;
 }
 
+.fx-button.fx-button-classic {
+    min-width: 70px;
+    height: 25px;
+    padding: 2px 10px;
+    border: 1px solid #7a7a7a;
+    border-radius: 0;
+    background: #f0f0f0;
+    box-shadow: inset 1px 1px #fff, inset -1px -1px #8a8a8a;
+    color: #000;
+    cursor: default;
+    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    line-height: 18px;
+}
+
+.fx-button.fx-button-classic:hover:not(:disabled),
+.fx-button.fx-button-classic:focus-visible:not(:disabled) {
+    background: #f0f0f0;
+    outline: 1px dotted #000;
+    outline-offset: -4px;
+}
+
+.fx-button.fx-button-classic:active:not(:disabled) {
+    box-shadow: inset 1px 1px #8a8a8a, inset -1px -1px #fff;
+}
+
 .fx-button.mini-btn {
     padding: 2px 6px;
     font-size: 12px;

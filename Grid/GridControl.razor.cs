@@ -66,6 +66,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public bool AllowPaging { get; set; }
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public bool HighlightSelectedRows { get; set; } = true;
+    [Parameter] public bool AllowRowDragSelection { get; set; } = true;
+    [Parameter] public string SelectedRowBackground { get; set; } = string.Empty;
+    [Parameter] public string SelectedRowForeground { get; set; } = string.Empty;
+    [Parameter] public string SelectedRowHoverBackground { get; set; } = string.Empty;
+    [Parameter] public string RowHoverBackground { get; set; } = string.Empty;
     [Parameter] public bool CommitSelectedRowOnEnter { get; set; }
     [Parameter] public bool ShowSelectionInfoBar { get; set; }
     [Parameter] public string? TypeAheadTargetField { get; set; }
@@ -81,7 +86,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public bool ShowSearchBar { get; set; }
     [Parameter] public bool EnableTypeSearch { get; set; }
     [Parameter] public int TypeSearchDelaySeconds { get; set; } = 3;
-    [Parameter] public GridLines GridLines { get; set; } = GridLines.Default;
+    [Parameter] public GridLines GridLines { get; set; } = GridLines.Both;
     [Parameter] public List<string>? Toolbar { get; set; }
 
     [Parameter] public bool? ShowGridToolbar { get; set; }
@@ -241,6 +246,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         {
             var sb = new System.Text.StringBuilder();
             sb.Append("--fx-grid-reorder-pipe-color:").Append(ResolvedColumnReorderPipeColor).Append("; ");
+            if (!string.IsNullOrWhiteSpace(SelectedRowBackground))
+                sb.Append("--fx-grid-selected-row-bg:").Append(SelectedRowBackground).Append("; ");
+            if (!string.IsNullOrWhiteSpace(SelectedRowForeground))
+                sb.Append("--fx-grid-selected-row-color:").Append(SelectedRowForeground).Append("; ");
+            if (!string.IsNullOrWhiteSpace(SelectedRowHoverBackground))
+                sb.Append("--fx-grid-selected-row-hover-bg:").Append(SelectedRowHoverBackground).Append("; ");
+            if (!string.IsNullOrWhiteSpace(RowHoverBackground))
+                sb.Append("--fx-grid-row-hover-bg:").Append(RowHoverBackground).Append("; ");
             if (!string.IsNullOrEmpty(ResolvedGroupItemTextColor))
             {
                 sb.Append("--fx-grid-group-color:").Append(ResolvedGroupItemTextColor).Append("; ");
@@ -1618,6 +1631,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void HandleRowMouseDown(TValue item, int rowIndex, MouseEventArgs args)
     {
+        if (!AllowRowDragSelection) return;
+
         if (args.Button != 0) return;
 
         if (args.CtrlKey || args.MetaKey || args.ShiftKey) return;
@@ -1926,6 +1941,58 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         if (EventsRef?.OnRecordDoubleClick.HasDelegate == true)
             await EventsRef.OnRecordDoubleClick.InvokeAsync(new CellClickEventArgs<TValue> { Data = item, RowIndex = rowIndex });
+    }
+
+    private bool ShouldHandleCellDoubleClick(GridColumn col)
+    {
+        return EventsRef?.OnRecordDoubleClick.HasDelegate == true
+            || (col.ShowEditButton
+                && EventsRef?.OnEditButtonClick.HasDelegate == true
+                && !string.IsNullOrEmpty(col.Field))
+            || IsBatchDoubleClickEditCell(col);
+    }
+
+    private bool IsBatchDoubleClickEditCell(GridColumn col)
+    {
+        return EditSettingsRef?.Mode == EditMode.Batch
+            && EditSettingsRef.AllowEditOnDblClick
+            && col.AllowEditing
+            && !col.IsPrimaryKey
+            && !string.IsNullOrEmpty(col.Field);
+    }
+
+    private async Task HandleCellDblClick(TValue item, int rowIndex, GridColumn col, MouseEventArgs args)
+    {
+        var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+
+        if (EventsRef?.OnRecordDoubleClick.HasDelegate == true)
+        {
+            if (AllowSelection
+                && SelectionSettingsRef?.Mode != SelectionMode.Cell
+                && SelectionSettingsRef?.CheckboxOnly != true)
+            {
+                await SelectRow(item, resolvedRowIndex);
+            }
+
+            await EventsRef.OnRecordDoubleClick.InvokeAsync(new CellClickEventArgs<TValue>
+            {
+                Data = item,
+                RowIndex = resolvedRowIndex,
+                Column = col.Field ?? string.Empty
+            });
+            return;
+        }
+
+        if (col.ShowEditButton
+            && EventsRef?.OnEditButtonClick.HasDelegate == true
+            && !string.IsNullOrEmpty(col.Field))
+        {
+            await HandleEditButtonClick(item, col);
+            return;
+        }
+
+        if (IsBatchDoubleClickEditCell(col))
+            await StartBatchEdit(item, resolvedRowIndex, col, args.ClientX, openDropdownOnRender: true);
     }
 
     private async Task SelectRow(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
@@ -2314,7 +2381,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (!preserveSelection)
             {
                 if (EventsRef?.OnRecordClick.HasDelegate == true)
-                    await EventsRef.OnRecordClick.InvokeAsync(new CellClickEventArgs<TValue> { Data = item, RowIndex = rowIndex });
+                    await EventsRef.OnRecordClick.InvokeAsync(new CellClickEventArgs<TValue> { Data = item, RowIndex = rowIndex, Column = clickedCol?.Field ?? "" });
 
                 await SelectRow(item, rowIndex, args);
             }
@@ -5974,13 +6041,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
                             builder.AddAttribute(109, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIdx, capturedColIdx, e)));
 
-                            if (EditSettingsRef?.Mode == EditMode.Batch
-                                && EditSettingsRef.AllowEditOnDblClick
-                                && col.AllowEditing
-                                && !col.IsPrimaryKey
-                                && !string.IsNullOrEmpty(col.Field))
+                            if (ShouldHandleCellDoubleClick(capturedCol))
                             {
-                                builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(capturedItemForEdit, resolvedRowIdx, capturedCol, e.ClientX, openDropdownOnRender: true)));
+                                builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(capturedItemForEdit, resolvedRowIdx, capturedCol, e)));
                                 builder.AddEventStopPropagationAttribute(110, "ondblclick", true);
                             }
                             builder.AddAttribute(103, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIdx, capturedColIdx, args)));
@@ -6148,13 +6211,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (col.ClipMode == ClipMode.EllipsisWithTooltip)
                 builder.AddAttribute(3, "title", GetCellDisplayValue(item, col));
 
-            if (EditSettingsRef?.Mode == EditMode.Batch
-                && EditSettingsRef.AllowEditOnDblClick
-                && col.AllowEditing
-                && !col.IsPrimaryKey
-                && !string.IsNullOrEmpty(col.Field))
+            if (ShouldHandleCellDoubleClick(capturedCol))
             {
-                builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => StartBatchEdit(item, resolvedRowIndex, capturedCol, e.ClientX, openDropdownOnRender: true)));
+                builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(item, resolvedRowIndex, capturedCol, e)));
                 builder.AddEventStopPropagationAttribute(11, "ondblclick", true);
             }
             builder.AddAttribute(5, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIndex, capturedColIdx, args)));
@@ -6790,6 +6849,35 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             : $"width:100%;min-width:{widthPx}px;max-width:none;";
     }
 
+    private string GetScrollSurfaceStyle()
+    {
+        var totalWidth = GetTotalColumnWidthPx();
+        if (totalWidth <= 0)
+            return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
+
+        var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
+        if (WidthMode != GridWidthMode.FitColumns)
+            return $"width:100%;min-width:{widthPx}px;max-width:none;";
+
+        var surfaceWidth = $"calc({widthPx}px + var(--fx-grid-scrollbar-gutter-width, 13px))";
+        return $"width:{surfaceWidth};min-width:{surfaceWidth};max-width:none;";
+    }
+
+    private async Task ScrollGridBodyByAsync(int direction)
+    {
+        var module = await GetGridJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            await module.InvokeVoidAsync("scrollGridBodyByLine", _gridHostElement, direction);
+        }
+        catch
+        {
+        }
+    }
+
     private string GetGroupedPlaceholderStyle(GridColumn col)
     {
         var width = GetColumnWidthPx(col);
@@ -7095,7 +7183,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var list = PagedData.ToList();
         if (rowIndex >= 0 && rowIndex < list.Count)
         {
-            _selectedItems.Add(list[rowIndex]);
+            var item = list[rowIndex];
+            if ((SelectionSettingsRef?.Type ?? SelectionType.Single) == SelectionType.Single)
+                _selectedItems.Clear();
+
+            if (!_selectedItems.Contains(item))
+                _selectedItems.Add(item);
+
+            _lastSelectedItem = item;
+            _lastSelectedRowIndex = ResolveRowIndex(item, rowIndex);
             _ = InvokeAsync(StateHasChanged);
             _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
         }

@@ -85,10 +85,17 @@
     border-radius: 0;
     resize: both;
     overflow: hidden;
-    min-width: 236px;
-    min-height: 232px;
+    min-width: 184px;
+    min-height: 148px;
     max-width: min(820px, calc(100vw - 24px));
     max-height: min(720px, calc(100vh - 24px));
+}
+
+.fx-datepicker-dropdown.fx-datepicker-floating {
+    top: auto;
+    left: auto;
+    right: auto;
+    bottom: auto;
 }
 
 .fx-datepicker-dropdown::after {
@@ -110,13 +117,13 @@
 }
 
 .fx-datepicker-dropdown.minimal {
-    width: 236px;
-    height: 232px;
+    width: 184px;
+    height: auto;
 }
 
 .fx-datepicker-dropdown.expanded {
-    width: 386px;
-    height: 232px;
+    width: 334px;
+    height: auto;
 }
 
 /* Main Calendar Section */
@@ -125,7 +132,7 @@
     height: 100%;
     flex: 1 1 auto;
     position: relative;
-    padding: 6px 8px 18px 8px;
+    padding: 4px 4px 8px 4px;
     display: flex;
     flex-direction: column;
     box-sizing: border-box;
@@ -153,22 +160,22 @@
 
 .fx-nav-btn {
     position: absolute;
-    top: 10px;
+    top: 6px;
     z-index: 2;
 }
 
 .fx-nav-prev {
-    left: 11px;
+    left: 6px;
 }
 
 .fx-nav-next {
-    right: 11px;
+    right: 6px;
 }
 
 .fx-expand-btn {
     position: absolute;
-    top: 10px;
-    right: 38px;
+    top: 6px;
+    right: 32px;
     z-index: 2;
 }
 
@@ -189,29 +196,31 @@
 
 .fx-calendar-months-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, 220px);
-    grid-auto-rows: 169px;
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, 176px);
+    grid-auto-rows: max-content;
+    gap: 8px;
     align-items: start;
     align-content: start;
 }
 
 .fx-month-panel {
-    width: 220px;
-    height: 169px;
+    width: 176px;
+    height: auto;
     box-sizing: border-box;
     overflow: hidden;
     background: #ffffff;
 }
 
 .fx-month-title {
-    height: 26px;
-    line-height: 26px;
+    box-sizing: border-box;
+    height: 18px;
+    line-height: 18px;
     margin: 0 0 2px 0;
+    padding: 0 28px;
     background: #efefef;
     color: #000;
     text-align: center;
-    font: 700 14px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: 700 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -231,13 +240,13 @@
 
 .fx-weekday {
     font: 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
-    line-height: 16px;
+    line-height: 14px;
 }
 
 .fx-days-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    grid-template-rows: repeat(6, 20px);
+    grid-auto-rows: 21px;
     gap: 0;
 }
 
@@ -246,17 +255,23 @@
     background: transparent;
     cursor: pointer;
     position: relative;
-    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: 13px "MS Sans Serif", Tahoma, Arial, sans-serif;
     padding: 0;
-    height: 20px;
-    min-height: 20px;
+    height: 21px;
+    min-height: 21px;
     display: flex;
     align-items: center;
     justify-content: center;
     border-radius: 0;
     box-sizing: border-box;
     color: #000;
-    line-height: 20px;
+    line-height: 21px;
+    isolation: isolate;
+}
+
+.fx-day-number {
+    position: relative;
+    z-index: 1;
 }
 
 .fx-day-cell:hover:not(.disabled) {
@@ -275,17 +290,18 @@
     border-color: transparent;
 }
 
-.fx-day-cell.selected::after {
+.fx-day-cell.selected::before {
     content: "";
     position: absolute;
-    left: 4px;
-    right: 4px;
-    top: 3px;
-    bottom: 2px;
-    border: 2px solid #e00000;
+    left: 50%;
+    top: 50%;
+    width: 17px;
+    height: 15px;
+    border: 1px solid #e00000;
     border-radius: 50%;
-    transform: rotate(-9deg);
+    transform: translate(-50%, -50%);
     pointer-events: none;
+    z-index: 0;
 }
 
 .fx-day-cell.today:not(.selected) {
@@ -304,28 +320,15 @@
     width: 100%;
     flex: 0 0 auto;
     margin: 3px 0 0 0;
-    padding: 0 0 0 34px;
+    padding: 0 0 0 3px;
     border: 0;
     background: transparent;
     color: #000;
     text-align: left;
     cursor: pointer;
     font: 700 13px "MS Sans Serif", Tahoma, Arial, sans-serif;
-    line-height: 20px;
+    line-height: 17px;
     box-sizing: border-box;
-}
-
-.fx-today-link::before {
-    content: "";
-    position: absolute;
-    left: 3px;
-    top: 5px;
-    width: 27px;
-    height: 9px;
-    border: 2px solid #e00000;
-    border-radius: 50%;
-    border-right-color: transparent;
-    transform: rotate(-7deg);
 }
 
 .fx-today-link:hover {

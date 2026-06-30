@@ -434,7 +434,7 @@
 
     
     <div class="fx-grid-content fx-grid-table-content" style="@GridContentStyle">
-        <div class="fx-grid-scroll-surface" style="@GetTableStyle()">
+        <div class="fx-grid-scroll-surface" style="@GetScrollSurfaceStyle()">
         <div class="fx-grid-header-viewport">
         <table class="fx-grid-table fx-grid-header-table" style="@GetTableStyle()">
 
@@ -561,6 +561,7 @@
         </table>
         </div>
 
+        <div class="fx-grid-body-frame">
         <div class="fx-grid-body-viewport">
         <table class="fx-grid-table fx-grid-body-table" style="@GetTableStyle()">
 
@@ -705,6 +706,27 @@
                 }
             }
         </table>
+        </div>
+        <div class="fx-grid-vscroll-chrome">
+            <button type="button"
+                    class="fx-grid-vscroll-arrow fx-grid-vscroll-arrow-up"
+                    title="Scroll up"
+                    aria-label="Scroll up"
+                    tabindex="-1"
+                    @onclick="() => ScrollGridBodyByAsync(-1)"
+                    @onclick:stopPropagation="true"
+                    @onmousedown:preventDefault="true"
+                    @onmousedown:stopPropagation="true"></button>
+            <button type="button"
+                    class="fx-grid-vscroll-arrow fx-grid-vscroll-arrow-down"
+                    title="Scroll down"
+                    aria-label="Scroll down"
+                    tabindex="-1"
+                    @onclick="() => ScrollGridBodyByAsync(1)"
+                    @onclick:stopPropagation="true"
+                    @onmousedown:preventDefault="true"
+                    @onmousedown:stopPropagation="true"></button>
+        </div>
         </div>
         </div>
     </div>

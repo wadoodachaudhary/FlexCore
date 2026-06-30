@@ -1,10 +1,13 @@
 @namespace Fx.ControlKit
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.JSInterop
 @using System.Linq.Expressions
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
 
 @if (Multiline)
 {
-    if (ValueExpression is not null)
+    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus)
     {
         <InputTextArea class="@ResolvedCssClass"
                        Value="@Value"
@@ -18,6 +21,7 @@
                   value="@Value"
                   @oninput="OnNativeInput"
                   @onchange="OnNativeChange"
+                  @onfocus="OnInputFocus"
                   @ref="_inputElement"
                   @onclick:stopPropagation="true"
                   @onmousedown:stopPropagation="true"
@@ -27,7 +31,7 @@
 }
 else
 {
-    if (ValueExpression is not null)
+    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus)
     {
         <InputText class="@ResolvedCssClass"
                    Value="@Value"
@@ -41,6 +45,7 @@ else
                value="@Value"
                @oninput="OnNativeInput"
                @onchange="OnNativeChange"
+               @onfocus="OnInputFocus"
                @ref="_inputElement"
                @onclick:stopPropagation="true"
                @onmousedown:stopPropagation="true"
@@ -64,15 +69,25 @@ else
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
     [Parameter] public bool UpdateOnInput { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
+    [Parameter] public bool SelectOnFocus { get; set; }
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
 
     private ElementReference _inputElement;
+    private IJSObjectReference? _controlJsModule;
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         ElementReferenceCaptured?.Invoke(_inputElement);
+
+        if (firstRender && (AutoFocus || SelectOnFocus))
+        {
+            var module = await GetControlJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+        }
     }
 
     private string ResolvedCssClass
@@ -122,6 +137,8 @@ else
                 merged["disabled"] = "disabled";
             if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
                 merged["type"] = InputType;
+            if (AutoFocus && !merged.ContainsKey("autofocus"))
+                merged["autofocus"] = "autofocus";
 
             return merged;
         }
@@ -138,5 +155,37 @@ else
         Value = e.Value?.ToString();
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task OnInputFocus()
+    {
+        if (!SelectOnFocus)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("select", _inputElement);
+    }
+
+    private async ValueTask<IJSObjectReference?> GetControlJsModuleAsync()
+    {
+        try
+        {
+            return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/FlexCore/textbox-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_controlJsModule != null)
+        {
+            try { await _controlJsModule.DisposeAsync(); }
+            catch { }
+        }
     }
 }

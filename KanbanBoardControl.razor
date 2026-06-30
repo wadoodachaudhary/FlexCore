@@ -1,0 +1,87 @@
+@namespace Fx.ControlKit
+@typeparam TItem
+
+@*
+   General-purpose Jira-style Kanban board. Renders one lane per Column; each item is placed in the lane
+   whose Key matches ColumnKeySelector(item). Cards are draggable (Blazor native drag events — NO JS);
+   dropping a card into a different lane raises OnItemMoved so the host can update + persist the item.
+*@
+
+<div class="fx-kanban @CssClass">
+    @foreach (var col in Columns)
+    {
+        var key = col.Key;
+        <div class="fx-kanban-col @(_dragOverColumn == key ? "fx-kanban-col-over" : null)"
+             @ondragover:preventDefault="true"
+             @ondragenter="() => _dragOverColumn = key"
+             @ondragleave="() => HandleLeave(key)"
+             @ondrop="() => HandleDrop(key)">
+            <div class="fx-kanban-col-header" style="@HeaderStyle(col)">
+                <span class="fx-kanban-col-title">@col.Title</span>
+                <span class="fx-kanban-col-count">@CountFor(key)</span>
+            </div>
+            <div class="fx-kanban-col-body">
+                @foreach (var item in ItemsFor(key))
+                {
+                    var card = item;
+                    <div class="fx-kanban-card @(EqualityComparer<TItem>.Default.Equals(_dragItem, card) ? "fx-kanban-card-dragging" : null)"
+                         draggable="true"
+                         @ondragstart="() => _dragItem = card"
+                         @ondragend="HandleDragEnd"
+                         @onclick="() => OnCardClick.InvokeAsync(card)">
+                        @if (CardTemplate != null)
+                        {
+                            @CardTemplate(card)
+                        }
+                    </div>
+                }
+                @if (!ItemsFor(key).Any())
+                {
+                    <div class="fx-kanban-empty">@(_dragOverColumn == key ? "Drop here" : EmptyText)</div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IEnumerable<KanbanColumn> Columns { get; set; } = new List<KanbanColumn>();
+
+    [Parameter] public IEnumerable<TItem> Items { get; set; } = Enumerable.Empty<TItem>();
+
+    [Parameter] public Func<TItem, string> ColumnKeySelector { get; set; } = _ => string.Empty;
+
+    [Parameter] public RenderFragment<TItem>? CardTemplate { get; set; }
+
+    [Parameter] public EventCallback<KanbanMoveArgs<TItem>> OnItemMoved { get; set; }
+
+    [Parameter] public EventCallback<TItem> OnCardClick { get; set; }
+
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string EmptyText { get; set; } = "No items";
+
+    private TItem? _dragItem;
+    private string? _dragOverColumn;
+
+    private IEnumerable<TItem> ItemsFor(string key) =>
+        Items.Where(i => string.Equals(ColumnKeySelector(i) ?? string.Empty, key, StringComparison.OrdinalIgnoreCase));
+
+    private int CountFor(string key) => ItemsFor(key).Count();
+
+    private static string HeaderStyle(KanbanColumn c) =>
+        string.IsNullOrEmpty(c.AccentColor) ? string.Empty : $"border-top:3px solid {c.AccentColor};";
+
+    private void HandleLeave(string key) { if (_dragOverColumn == key) _dragOverColumn = null; }
+    private void HandleDragEnd() { _dragItem = default; _dragOverColumn = null; }
+
+    private async Task HandleDrop(string toKey)
+    {
+        _dragOverColumn = null;
+        if (_dragItem is null) return;
+        var item = _dragItem;
+        _dragItem = default;
+        var from = ColumnKeySelector(item) ?? string.Empty;
+        if (!string.Equals(from, toKey, StringComparison.OrdinalIgnoreCase) && OnItemMoved.HasDelegate)
+            await OnItemMoved.InvokeAsync(new KanbanMoveArgs<TItem> { Item = item, FromColumn = from, ToColumn = toKey });
+    }
+}

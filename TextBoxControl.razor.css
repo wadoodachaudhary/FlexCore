@@ -5,6 +5,23 @@
     border-radius: 3px;
 }
 
+.fx-textbox-classic {
+    width: 100%;
+    height: 22px;
+    padding: 1px 3px;
+    border: 1px solid #7f9db9;
+    border-radius: 0;
+    background: #fff;
+    box-sizing: border-box;
+    color: #000;
+    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+}
+
+.fx-textbox-classic:focus {
+    outline: 0;
+    box-shadow: none;
+}
+
 .comments-textarea {
     width: 100%;
     min-height: 200px;

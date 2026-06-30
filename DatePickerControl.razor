@@ -1,11 +1,15 @@
 @namespace Fx.ControlKit
 @inherits FlexControlBase
+@implements IAsyncDisposable
 @using System.Globalization
 @using System.Linq.Expressions
+@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime
 
 @if (Visible)
 {
-    <div class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
+    <div @ref="_hostElement"
+         class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
          @onclick:stopPropagation="true"
          @onmousedown:stopPropagation="true"
          @onkeydown:stopPropagation="true">
@@ -31,7 +35,9 @@
         {
             <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
             
-            <div class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
+            <div @ref="_dropdownElement"
+                 @key="_dropdownOpenKey"
+                 class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
                 
                 <div class="fx-calendar-main">
                     <button type="button" class="fx-nav-btn fx-nav-prev" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
@@ -79,7 +85,7 @@
                                                     disabled="@isDisabled"
                                                     tabindex="-1"
                                                     @onclick="() => SelectDay(date)">
-                                                @date.Day
+                                                <span class="fx-day-number">@date.Day</span>
                                             </button>
                                         }
                                     </div>
@@ -203,6 +209,10 @@
     private string _inputText = "";
     private bool _isOpen = false;
     private bool _expanded = false;
+    private ElementReference _hostElement;
+    private ElementReference _dropdownElement;
+    private IJSObjectReference? _controlJsModule;
+    private int _dropdownOpenKey;
 
     private int _viewMonth = DateTime.Today.Month;
     private int _viewYear = DateTime.Today.Year;
@@ -227,6 +237,27 @@
         _decadeStart = (_viewYear / 12) * 12;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_isOpen && Enabled)
+            await PositionDropdownAsync();
+    }
+
+    private static string ControlJsModulePath =>
+        $"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js";
+
+    private async Task PositionDropdownAsync()
+    {
+        try
+        {
+            _controlJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", ControlJsModulePath);
+            await _controlJsModule.InvokeVoidAsync("positionDatePickerDropdown", _hostElement, _dropdownElement);
+        }
+        catch
+        {
+        }
+    }
+
     private string FormatDate(DateTime date)
     {
         return date.ToString(ResolvedFormat, CultureInfo.InvariantCulture);
@@ -246,6 +277,8 @@
 
     private void OpenDropdown()
     {
+        _expanded = false;
+        _dropdownOpenKey++;
         _isOpen = true;
         var focusDate = Value ?? DateTime.Today;
         _viewMonth = focusDate.Month;
@@ -395,17 +428,17 @@
 
     private IEnumerable<DateTime> GetCalendarMonths()
     {
-        var start = new DateTime(_viewYear, _viewMonth, 1);
-        for (var i = 0; i < 12; i++)
-            yield return start.AddMonths(i);
+        yield return new DateTime(_viewYear, _viewMonth, 1);
     }
 
     private List<DateTime> GetDaysInGrid(DateTime monthStart)
     {
         int offset = (int)monthStart.DayOfWeek;
         var startDate = monthStart.AddDays(-offset);
+        var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+        var visibleCellCount = Math.Clamp(((offset + daysInMonth + 6) / 7) * 7, 28, 42);
         var days = new List<DateTime>();
-        for (int i = 0; i < 42; i++)
+        for (int i = 0; i < visibleCellCount; i++)
         {
             days.Add(startDate.AddDays(i));
         }
@@ -540,5 +573,19 @@
     {
         var today = DateTime.Today;
         return today.AddDays(6 - (int)today.DayOfWeek);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_controlJsModule != null)
+        {
+            try
+            {
+                await _controlJsModule.DisposeAsync();
+            }
+            catch
+            {
+            }
+        }
     }
 }

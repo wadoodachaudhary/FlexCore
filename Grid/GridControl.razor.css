@@ -6,7 +6,8 @@
     --fx-grid-bg: var(--fx-surface-color, #fff);
     --fx-grid-text-color: var(--fx-text-color, #212529);
     --fx-grid-border-color: var(--fx-border-color, #9a9a9a);
-    --fx-grid-table-border-color: var(--fx-border-color, #e6e6e6);
+    --fx-grid-line-color: var(--fx-grid-cell-border, #e3e3e3);
+    --fx-grid-table-border-color: var(--fx-grid-line-color);
     --fx-grid-header-bg: #f0f0f0;
     --fx-grid-header-hover-bg: var(--fx-sidebar-item-hover-bg, #dcdcdc);
     --fx-grid-header-selected-bg: var(--fx-grid-row-selected-bg, #d4d0c8);
@@ -18,11 +19,12 @@
     --fx-grid-footer-border-color: var(--fx-border-color, #8a8a8a);
     --fx-grid-row-hover-bg: var(--fx-grid-row-hover-bg, #eeeeee);
     --fx-grid-alt-row-bg: var(--fx-grid-row-alt-bg, #fff);
-    --fx-grid-cell-border-color: var(--fx-grid-cell-border, #ededed);
-    --fx-grid-cell-border-right-color: var(--fx-grid-cell-border, #e6e6e6);
+    --fx-grid-cell-border-color: var(--fx-grid-line-color);
+    --fx-grid-cell-border-right-color: var(--fx-grid-line-color);
     --fx-grid-selected-row-bg: var(--fx-grid-row-selected-bg, #b6c8dd);
     --fx-grid-selected-row-hover-bg: var(--fx-grid-row-hover-bg, #adc0d7);
     --fx-grid-selected-row-border: var(--fx-border-color, #7f9db9);
+    --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: var(--fx-grid-row-selected-bg, #f0f0f0);
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
     --fx-grid-selected-cell-border: var(--fx-border-color, #808080);
@@ -30,6 +32,11 @@
     --fx-grid-active-cell-border: var(--fx-text-color, #000);
     --fx-grid-filter-mark-color: var(--fx-btn-bg, #0d6efd);
     --fx-grid-checkbox-accent: var(--fx-text-color, #000);
+    --fx-grid-scrollbar-gutter-width: 13px;
+    --fx-grid-scrollbar-track-bg: #f3f3f3;
+    --fx-grid-scrollbar-thumb-bg: #9a9a9a;
+    --fx-grid-scrollbar-border-color: #d8d8d8;
+    --fx-grid-scrollbar-button-arrow: #8a8a8a;
     box-sizing: border-box;
     width: 100%;
     display: flex;
@@ -41,8 +48,8 @@
     border: 1px solid var(--fx-grid-border-color);
     border-radius: var(--fx-border-radius, 4px);
     background: var(--fx-grid-bg);
-    font-family: inherit;
-    font-size: var(--fx-font-size, 11px);
+    font-family: var(--fx-grid-font-family, "MS Sans Serif", Tahoma, Arial, sans-serif);
+    font-size: var(--fx-grid-font-size, var(--fx-font-size, 11px));
     line-height: 1.1;
     color: var(--fx-grid-text-color);
     overflow: hidden;
@@ -136,18 +143,20 @@
     --fx-grid-bg: #fff;
     --fx-grid-text-color: #000;
     --fx-grid-border-color: #808080;
-    --fx-grid-table-border-color: #c0c0c0;
+    --fx-grid-line-color: var(--fx-grid-cell-border, #e3e3e3);
+    --fx-grid-table-border-color: var(--fx-grid-line-color);
     --fx-grid-header-bg: #eeeeee;
     --fx-grid-header-hover-bg: #dcdcdc;
     --fx-grid-header-selected-bg: #d4d0c8;
     --fx-grid-header-text-color: #000;
     --fx-grid-row-hover-bg: #e8e8e8;
     --fx-grid-alt-row-bg: #fff;
-    --fx-grid-cell-border-color: #e5e5e5;
-    --fx-grid-cell-border-right-color: #d8d8d8;
+    --fx-grid-cell-border-color: var(--fx-grid-line-color);
+    --fx-grid-cell-border-right-color: var(--fx-grid-line-color);
     --fx-grid-selected-row-bg: #d4d0c8;
     --fx-grid-selected-row-hover-bg: #c8c8c8;
     --fx-grid-selected-row-border: #808080;
+    --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: #f0f0f0;
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
     --fx-grid-selected-cell-border: #808080;
@@ -1142,6 +1151,12 @@
 .fx-grid-header-table {
     flex: 0 0 auto;
 }
+.fx-grid-body-frame {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+}
 .fx-grid-body-viewport {
     box-sizing: border-box;
     flex: 1 1 auto;
@@ -1152,6 +1167,93 @@
     scroll-snap-type: y mandatory;
     scroll-padding-top: 2px;
     scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--fx-grid-scrollbar-thumb-bg) var(--fx-grid-scrollbar-track-bg);
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar {
+    width: var(--fx-grid-scrollbar-gutter-width);
+    height: var(--fx-grid-scrollbar-gutter-width);
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar-track {
+    background: var(--fx-grid-scrollbar-track-bg);
+    border-left: 1px solid var(--fx-grid-scrollbar-border-color);
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar-thumb {
+    min-height: 22px;
+    border: 3px solid var(--fx-grid-scrollbar-track-bg);
+    border-radius: 7px;
+    background: var(--fx-grid-scrollbar-thumb-bg);
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar-button:vertical:single-button {
+    display: block;
+    width: var(--fx-grid-scrollbar-gutter-width);
+    height: var(--fx-grid-scrollbar-gutter-width);
+    background-color: var(--fx-grid-scrollbar-track-bg);
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 8px 8px;
+    border-left: 1px solid var(--fx-grid-scrollbar-border-color);
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar-button:vertical:single-button:decrement {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M4 1 8 6H0z' fill='%238a8a8a'/%3E%3C/svg%3E");
+}
+
+.fx-grid-body-viewport::-webkit-scrollbar-button:vertical:single-button:increment {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' viewBox='0 0 8 8'%3E%3Cpath d='M4 7 0 2h8z' fill='%238a8a8a'/%3E%3C/svg%3E");
+}
+.fx-grid-vscroll-chrome {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--fx-grid-scrollbar-gutter-width);
+    pointer-events: none;
+    z-index: 4;
+}
+.fx-grid-vscroll-arrow {
+    appearance: none;
+    -webkit-appearance: none;
+    position: absolute;
+    right: 0;
+    width: var(--fx-grid-scrollbar-gutter-width);
+    height: var(--fx-grid-scrollbar-gutter-width);
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--fx-grid-scrollbar-border-color);
+    border-radius: 0;
+    background: var(--fx-grid-scrollbar-track-bg);
+    pointer-events: auto;
+    cursor: default;
+}
+.fx-grid-vscroll-arrow::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform: translate(-50%, -50%);
+}
+.fx-grid-vscroll-arrow-up {
+    top: 0;
+}
+.fx-grid-vscroll-arrow-down {
+    bottom: 0;
+}
+.fx-grid-vscroll-arrow-up::before {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid var(--fx-grid-scrollbar-button-arrow);
+}
+.fx-grid-vscroll-arrow-down::before {
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid var(--fx-grid-scrollbar-button-arrow);
 }
 .fx-grid-body-table {
     flex: 0 0 auto;
@@ -1162,6 +1264,8 @@
     border-collapse: separate;
     border-spacing: 0;
     table-layout: fixed;
+    font-family: inherit;
+    font-size: inherit;
 }
 
 .fx-grid.fx-grid-width-fit-columns {
@@ -1406,6 +1510,17 @@
     scroll-snap-align: start;
     scroll-snap-stop: normal;
 }
+.fx-grid-body,
+.fx-grid-body tr,
+.fx-grid-body td,
+.fx-grid ::deep .fx-grid-body,
+.fx-grid ::deep .fx-grid-body tr,
+.fx-grid ::deep .fx-grid-body td,
+.fx-grid ::deep .fx-cell,
+.fx-cell {
+    font-family: inherit;
+    font-size: inherit;
+}
 
 .fx-batch-input,
 .fx-grid ::deep .fx-batch-input {
@@ -1427,7 +1542,9 @@
 }
 .fx-selected {
     background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit);
 }
+.fx-grid ::deep .fx-cell,
 .fx-cell {
     padding: 0 4px;
     border-bottom: 1px solid var(--fx-grid-cell-border-color);
@@ -2570,12 +2687,14 @@ tr.fx-row:has(.fx-dropdown-panel) {
 
 .fx-selected {
     background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
     box-shadow: none !important;
     outline: none !important;
 }
 .fx-row.fx-selected > td,
 .fx-row.fx-selected .fx-cell {
     background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
 }
 .fx-grid ::deep tr.fx-row.fx-selected {
     box-shadow: none !important;
@@ -2585,9 +2704,11 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-grid ::deep tr.fx-row.fx-selected .fx-cell,
 .fx-grid ::deep tr.fx-row.fx-selected {
     background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
 }
 .fx-selected:hover {
     background: var(--fx-grid-selected-row-hover-bg, var(--fx-grid-selected-row-bg)) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
 }
 
 .fx-grid.fx-grid-dark .fx-grid-toolbar,

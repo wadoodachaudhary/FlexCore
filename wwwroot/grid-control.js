@@ -91,6 +91,24 @@ function getGridBodyViewportElement(gridRoot) {
     return gridRoot.querySelector(".fx-grid-body-viewport") || getGridContentElement(gridRoot);
 }
 
+export function scrollGridBodyByLine(gridRoot, direction) {
+    const viewport = getGridBodyViewportElement(gridRoot);
+    if (!viewport) return;
+
+    const dir = direction < 0 ? -1 : 1;
+    const firstRow = viewport.querySelector(".fx-grid-body tr");
+    let amount = 16;
+
+    if (firstRow) {
+        const rowHeight = firstRow.getBoundingClientRect().height;
+        if (Number.isFinite(rowHeight) && rowHeight > 0) {
+            amount = Math.max(8, Math.round(rowHeight));
+        }
+    }
+
+    viewport.scrollTop += dir * amount;
+}
+
 function getHeaderReorderPipeColor(gridRoot) {
     try {
         const value = window.getComputedStyle(gridRoot)
@@ -931,4 +949,33 @@ export function openPrintableHtml(base64HtmlContent) {
     printWindow.document.write(htmlContent);
     printWindow.document.close();
     printWindow.onload = () => printWindow.print();
+}
+
+export function positionDatePickerDropdown(hostEl, dropdownEl) {
+    if (!hostEl || !dropdownEl) return;
+
+    const margin = 4;
+    const hostRect = hostEl.getBoundingClientRect();
+    const width = dropdownEl.offsetWidth || 184;
+    const height = dropdownEl.offsetHeight || 154;
+    const alignRight = hostEl.classList && hostEl.classList.contains("fx-datepicker-align-right");
+
+    let left = alignRight ? hostRect.right - width : hostRect.left;
+    left = Math.min(left, window.innerWidth - width - margin);
+    left = Math.max(margin, left);
+
+    let top = hostRect.bottom + 2;
+    const topWhenFlipped = hostRect.top - height - 2;
+    if (top + height > window.innerHeight - margin && topWhenFlipped >= margin) {
+        top = topWhenFlipped;
+    } else if (top + height > window.innerHeight - margin) {
+        top = Math.max(margin, window.innerHeight - height - margin);
+    }
+
+    dropdownEl.classList.add("fx-datepicker-floating");
+    dropdownEl.style.position = "fixed";
+    dropdownEl.style.left = `${Math.round(left)}px`;
+    dropdownEl.style.top = `${Math.round(top)}px`;
+    dropdownEl.style.right = "auto";
+    dropdownEl.style.bottom = "auto";
 }

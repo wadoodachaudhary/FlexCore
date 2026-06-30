@@ -1,0 +1,99 @@
+@namespace Fx.ControlKit
+
+@*
+   Compact multi-select combo: a button that opens a checkbox dropdown list. Pick several values; the
+   button summarises the selection. No JS — the popup closes on a click-away backdrop (same pattern as
+   ButtonControl's drop-down / ColorPickerControl). Bind with SelectedValues / SelectedValuesChanged.
+*@
+
+<div class="fx-mscombo @CssClass" style="@WidthStyle">
+    <button type="button" class="fx-mscombo-btn @(_open ? "fx-mscombo-btn-open" : null)" @onclick="Toggle" disabled="@Disabled">
+        <span class="fx-mscombo-text">@SummaryText</span>
+        <span class="fx-mscombo-arrow">▾</span>
+    </button>
+    @if (_open)
+    {
+        <div class="fx-mscombo-backdrop" @onclick="Close"></div>
+        <div class="fx-mscombo-popup">
+            @if (ShowSelectAll && Options.Count > 0)
+            {
+                <label class="fx-mscombo-item fx-mscombo-all">
+                    <input type="checkbox" checked="@AllSelected" @onchange="ToggleAll" />
+                    <span>(All)</span>
+                </label>
+                <div class="fx-mscombo-sep"></div>
+            }
+            @if (Options.Count == 0)
+            {
+                <div class="fx-mscombo-empty">@EmptyText</div>
+            }
+            else
+            {
+                @foreach (var opt in Options)
+                {
+                    var o = opt;
+                    <label class="fx-mscombo-item">
+                        <input type="checkbox" checked="@IsChecked(o)" @onchange="@(e => SetAsync(o, (bool)(e.Value ?? false)))" />
+                        <span>@o</span>
+                    </label>
+                }
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IEnumerable<string>? DataSource { get; set; }
+
+    [Parameter] public List<string> SelectedValues { get; set; } = new();
+    [Parameter] public EventCallback<List<string>> SelectedValuesChanged { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    [Parameter] public bool ShowSelectAll { get; set; } = true;
+
+    [Parameter] public string EmptyText { get; set; } = "No options";
+
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private bool _open;
+    private List<string> Options => DataSource?.ToList() ?? new();
+
+    private void Toggle() { if (!Disabled) _open = !_open; }
+    private void Close() => _open = false;
+
+    private bool IsChecked(string o) => SelectedValues?.Contains(o) == true;
+    private bool AllSelected => Options.Count > 0 && SelectedValues != null && Options.All(SelectedValues.Contains);
+
+    private async Task SetAsync(string o, bool on)
+    {
+        var list = new List<string>(SelectedValues ?? new());
+        if (on) { if (!list.Contains(o)) list.Add(o); }
+        else list.Remove(o);
+        SelectedValues = list;
+        await SelectedValuesChanged.InvokeAsync(list);
+    }
+
+    private async Task ToggleAll(ChangeEventArgs e)
+    {
+        var on = (bool)(e.Value ?? false);
+        var list = on ? new List<string>(Options) : new List<string>();
+        SelectedValues = list;
+        await SelectedValuesChanged.InvokeAsync(list);
+    }
+
+    private string SummaryText
+    {
+        get
+        {
+            var n = SelectedValues?.Count ?? 0;
+            if (n == 0) return Placeholder ?? "Select…";
+            if (n == 1) return SelectedValues![0];
+            return $"{Placeholder ?? "Selected"} ({n})";
+        }
+    }
+
+    private string WidthStyle => string.IsNullOrEmpty(Width) ? "" : $"width:{Width};";
+}

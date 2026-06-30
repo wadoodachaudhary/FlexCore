@@ -1,0 +1,80 @@
+/* Jira-style Kanban board: horizontal lanes, draggable cards. Scoped to the control. */
+.fx-kanban {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    overflow-x: auto;
+    padding: 4px;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.fx-kanban-col {
+    flex: 0 0 290px;
+    max-width: 290px;
+    display: flex;
+    flex-direction: column;
+    max-height: 100%;
+    background: #f1f2f4;
+    border-radius: 8px;
+    transition: background .12s, outline .12s;
+}
+
+.fx-kanban-col-over {
+    background: #e3e9f7;
+    outline: 2px dashed #4c7bf3;
+    outline-offset: -2px;
+}
+
+.fx-kanban-col-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px 7px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #44546f;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.fx-kanban-col-count {
+    margin-left: auto;
+    background: #dcdfe4;
+    color: #44546f;
+    border-radius: 10px;
+    padding: 0 8px;
+    font-size: 11px;
+    line-height: 18px;
+}
+
+.fx-kanban-col-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 8px 10px;
+    overflow-y: auto;
+    min-height: 40px;
+}
+
+.fx-kanban-card {
+    background: #fff;
+    border-radius: 6px;
+    box-shadow: 0 1px 1px rgba(9, 30, 66, .25), 0 0 1px rgba(9, 30, 66, .31);
+    padding: 9px 11px;
+    cursor: grab;
+    user-select: none;
+}
+
+.fx-kanban-card:hover { box-shadow: 0 1px 3px rgba(9, 30, 66, .35); }
+.fx-kanban-card:active { cursor: grabbing; }
+.fx-kanban-card-dragging { opacity: .45; }
+
+.fx-kanban-empty {
+    color: #8993a4;
+    font-size: 12px;
+    text-align: center;
+    padding: 14px;
+    border: 1px dashed #c1c7d0;
+    border-radius: 6px;
+}

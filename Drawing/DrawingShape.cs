@@ -18,7 +18,9 @@ public enum DrawingTool
     ArrowText,
     Polygon,
     PolygonText,
-    Text
+    Text,
+    Image,
+    Pen
 }
 
 public class DrawingShape
@@ -37,6 +39,8 @@ public class DrawingShape
     public string Text { get; set; } = string.Empty;
 
     public List<double[]> Points { get; set; } = new();
+
+    public string ImageHref { get; set; } = string.Empty;
 
     public double Left => Width >= 0 ? X : X + Width;
     public double Top => Height >= 0 ? Y : Y + Height;
