@@ -82,7 +82,7 @@ else
     {
         ElementReferenceCaptured?.Invoke(_inputElement);
 
-        if (firstRender && (AutoFocus || SelectOnFocus))
+        if (firstRender && AutoFocus)
         {
             var module = await GetControlJsModuleAsync();
             if (module != null)
@@ -144,8 +144,12 @@ else
         }
     }
 
-    private Task OnNativeInput(ChangeEventArgs e) =>
-        UpdateOnInput ? OnNativeValueChanged(e) : Task.CompletedTask;
+    private async Task OnNativeInput(ChangeEventArgs e)
+    {
+        Value = e.Value?.ToString();
+        if (UpdateOnInput && ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(Value);
+    }
 
     private Task OnNativeChange(ChangeEventArgs e) =>
         UpdateOnInput ? Task.CompletedTask : OnNativeValueChanged(e);
@@ -172,7 +176,7 @@ else
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/FlexCore/textbox-control.js");
+                "import", "./_content/FlexKit/textbox-control.js");
         }
         catch
         {

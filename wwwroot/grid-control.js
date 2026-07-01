@@ -91,24 +91,6 @@ function getGridBodyViewportElement(gridRoot) {
     return gridRoot.querySelector(".fx-grid-body-viewport") || getGridContentElement(gridRoot);
 }
 
-export function scrollGridBodyByLine(gridRoot, direction) {
-    const viewport = getGridBodyViewportElement(gridRoot);
-    if (!viewport) return;
-
-    const dir = direction < 0 ? -1 : 1;
-    const firstRow = viewport.querySelector(".fx-grid-body tr");
-    let amount = 16;
-
-    if (firstRow) {
-        const rowHeight = firstRow.getBoundingClientRect().height;
-        if (Number.isFinite(rowHeight) && rowHeight > 0) {
-            amount = Math.max(8, Math.round(rowHeight));
-        }
-    }
-
-    viewport.scrollTop += dir * amount;
-}
-
 function getHeaderReorderPipeColor(gridRoot) {
     try {
         const value = window.getComputedStyle(gridRoot)

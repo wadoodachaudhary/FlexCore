@@ -133,6 +133,8 @@ public partial class GridControl<TValue>
                 classes.Add("fx-grid-paged");
             if (WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
                 classes.Add("fx-grid-width-fit-columns");
+            if (ExtendVerticalScrollbarIntoHeader)
+                classes.Add("fx-grid-vscroll-header-gutter");
             if (_pivotMode)
                 classes.Add("fx-grid-pivot-mode");
             if (!string.IsNullOrWhiteSpace(CssClass))

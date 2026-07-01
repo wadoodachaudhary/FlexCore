@@ -139,17 +139,19 @@
          tabindex="0" @onkeydown="OnKeyDown" @ref="_scrollRef">
         <div class="fx-drawing-sizer" style="@SizerStyle">
             <div class="fx-drawing-surface" style="@SurfaceStyle">
-                @if (!string.IsNullOrEmpty(_imageUrl))
-                {
-                    <img @ref="_imgRef" src="@_imageUrl" class="fx-drawing-bg" alt="annotation background" />
-                }
-
                 
                 @if (_showRulers && _imgW > 0)
                 {
                     @((MarkupString)RulerTopHtml())
                     @((MarkupString)RulerLeftHtml())
                 }
+
+                
+                <div class="fx-drawing-imagebox" style="@ImageBoxStyle">
+                    @if (!string.IsNullOrEmpty(_imageUrl))
+                    {
+                        <img @ref="_imgRef" src="@_imageUrl" class="fx-drawing-bg" alt="annotation background" />
+                    }
 
                 @foreach (var s in EnumerateShapes())
                 {
@@ -180,9 +182,11 @@
 
                 @if (_editing is not null)
                 {
+                    
                     <textarea class="fx-draw-editor"
-                              style="position:absolute; left:@Px(EditLeft); top:@Px(EditTop); border-color:@_editing.Color;"
+                              style="position:absolute; left:@Px(EditLeft); top:@Px(EditTop); width:@Px(EditWidth); border-color:@_editing.Color;"
                               @bind="_editing.Text" @bind:event="oninput" @onblur="StopEditing"
+                              @onkeydown:stopPropagation="true"
                               @ref="_editorRef"></textarea>
                 }
 
@@ -194,9 +198,10 @@
                     </div>
                 }
 
-                <div class="fx-drawing-capture" style="cursor:@(_tool == DrawingTool.Select ? "default" : "crosshair");"
-                     @onpointerdown="OnPointerDown" @onpointermove="OnPointerMove" @onpointerup="OnPointerUp"
-                     @ondblclick="OnDoubleClick"></div>
+                    <div class="fx-drawing-capture" style="cursor:@(_tool == DrawingTool.Select ? "default" : "crosshair");"
+                         @onpointerdown="OnPointerDown" @onpointermove="OnPointerMove" @onpointerup="OnPointerUp"
+                         @ondblclick="OnDoubleClick"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -302,7 +307,7 @@
     private string RulerTopHtml()
     {
         var sb = new StringBuilder();
-        sb.Append($"<svg class='fx-ruler' width='{Num(_imgW)}' height='16' style='position:absolute;left:0;top:0;pointer-events:none;z-index:1;'>");
+        sb.Append($"<svg class='fx-ruler' width='{Num(_imgW)}' height='16' style='position:absolute;left:{Num(Gutter)}px;top:0;pointer-events:none;z-index:1;'>");
         sb.Append($"<rect width='{Num(_imgW)}' height='16' fill='rgba(245,245,245,0.72)'/>");
         for (int x = 0; x <= (int)_imgW; x += 50)
         {
@@ -316,7 +321,7 @@
     private string RulerLeftHtml()
     {
         var sb = new StringBuilder();
-        sb.Append($"<svg class='fx-ruler' width='16' height='{Num(_imgH)}' style='position:absolute;left:0;top:0;pointer-events:none;z-index:1;'>");
+        sb.Append($"<svg class='fx-ruler' width='16' height='{Num(_imgH)}' style='position:absolute;left:0;top:{Num(Gutter)}px;pointer-events:none;z-index:1;'>");
         sb.Append($"<rect width='16' height='{Num(_imgH)}' fill='rgba(245,245,245,0.72)'/>");
         for (int y = 0; y <= (int)_imgH; y += 50)
         {
@@ -350,10 +355,15 @@
         if (_draft is not null) yield return _draft;
     }
 
+    private const double RulerStrip = 16;   // ruler thickness
+    private const double RulerGap = 6;      // clear space between the ruler and the image border
+    private double Gutter => _showRulers && _imgW > 0 ? RulerStrip + RulerGap : 0;
+
     private string SurfaceStyle => _imgW > 0
-        ? $"transform:scale({Num(_zoom)}); transform-origin:top left; width:{Px(_imgW)}; height:{Px(_imgH)};"
+        ? $"transform:scale({Num(_zoom)}); transform-origin:top left; width:{Px(_imgW + Gutter)}; height:{Px(_imgH + Gutter)};"
         : "";
-    private string SizerStyle => _imgW > 0 ? $"width:{Px(_imgW * _zoom)}; height:{Px(_imgH * _zoom)};" : "";
+    private string SizerStyle => _imgW > 0 ? $"width:{Px((_imgW + Gutter) * _zoom)}; height:{Px((_imgH + Gutter) * _zoom)};" : "";
+    private string ImageBoxStyle => Gutter > 0 ? $"margin:{Px(Gutter)} 0 0 {Px(Gutter)};" : "";
     private void ZoomIn() => _zoom = System.Math.Min(3.0, System.Math.Round(_zoom + 0.1, 2));
     private void ZoomOut() => _zoom = System.Math.Max(0.1, System.Math.Round(_zoom - 0.1, 2));
 
@@ -367,8 +377,8 @@
             var cs = await (await ModuleAsync()).InvokeAsync<double[]>("clientSize", _scrollRef);
             if (cs is { Length: 2 } && cs[0] > 4 && cs[1] > 4)
             {
-                const double pad = 22;   // ruler strip (16) + breathing room
-                double fit = System.Math.Min((cs[0] - pad) / _imgW, (cs[1] - pad) / _imgH);
+                const double pad = 16;   // sunken border + scrollbar (the ruler strip is now in Gutter)
+                double fit = System.Math.Min((cs[0] - pad) / (_imgW + Gutter), (cs[1] - pad) / (_imgH + Gutter));
                 _zoom = System.Math.Round(System.Math.Clamp(fit, 0.1, 1.0), 3);
                 StateHasChanged();
             }
@@ -383,6 +393,7 @@
 
     private void OnKeyDown(KeyboardEventArgs e)
     {
+        if (_editing is not null) return;
         if (e.CtrlKey && (e.Key == "z" || e.Key == "Z")) Undo();
         else if (e.Key == "Delete" || e.Key == "Backspace") DeleteSelected();
     }
@@ -631,6 +642,16 @@
     private void StopEditing() { _editing = null; }
     private double EditLeft => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.X : BubbleAnchor(_editing).left);
     private double EditTop => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.Y : BubbleAnchor(_editing).top);
+    private double EditWidth
+    {
+        get
+        {
+            const double desired = 360;
+            if (_editing is null || _imgW <= 0) return desired;
+            double avail = _imgW - EditLeft - 4;
+            return System.Math.Max(120, System.Math.Min(desired, avail));
+        }
+    }
 
     public bool IsModified => _shapes.Count > 0 || _cropped;
 

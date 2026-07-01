@@ -40,6 +40,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public string ViewportSafeMaxWidth { get; set; } = "";
     [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool ExtendVerticalScrollbarIntoHeader { get; set; }
     [Parameter] public int RowHeight { get; set; }
     [Parameter] public bool AllowRowResizing { get; set; }
     [Parameter] public bool AllowRowReorder { get; set; }
@@ -6861,21 +6862,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var surfaceWidth = $"calc({widthPx}px + var(--fx-grid-scrollbar-gutter-width, 13px))";
         return $"width:{surfaceWidth};min-width:{surfaceWidth};max-width:none;";
-    }
-
-    private async Task ScrollGridBodyByAsync(int direction)
-    {
-        var module = await GetGridJsModuleAsync();
-        if (module == null)
-            return;
-
-        try
-        {
-            await module.InvokeVoidAsync("scrollGridBodyByLine", _gridHostElement, direction);
-        }
-        catch
-        {
-        }
     }
 
     private string GetGroupedPlaceholderStyle(GridColumn col)

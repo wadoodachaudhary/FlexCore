@@ -707,26 +707,6 @@
             }
         </table>
         </div>
-        <div class="fx-grid-vscroll-chrome">
-            <button type="button"
-                    class="fx-grid-vscroll-arrow fx-grid-vscroll-arrow-up"
-                    title="Scroll up"
-                    aria-label="Scroll up"
-                    tabindex="-1"
-                    @onclick="() => ScrollGridBodyByAsync(-1)"
-                    @onclick:stopPropagation="true"
-                    @onmousedown:preventDefault="true"
-                    @onmousedown:stopPropagation="true"></button>
-            <button type="button"
-                    class="fx-grid-vscroll-arrow fx-grid-vscroll-arrow-down"
-                    title="Scroll down"
-                    aria-label="Scroll down"
-                    tabindex="-1"
-                    @onclick="() => ScrollGridBodyByAsync(1)"
-                    @onclick:stopPropagation="true"
-                    @onmousedown:preventDefault="true"
-                    @onmousedown:stopPropagation="true"></button>
-        </div>
         </div>
         </div>
     </div>
