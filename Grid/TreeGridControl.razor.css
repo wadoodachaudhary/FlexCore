@@ -235,9 +235,9 @@
     font-size: 12px;
 }
 
-.fx-treegrid:focus {
-    outline: 1px dotted #000;
-    outline-offset: -2px;
+.fx-treegrid:focus,
+.fx-treegrid:focus-visible {
+    outline: none;
 }
 
 .fx-treegrid * {
@@ -323,8 +323,9 @@
     display: inline-flex;
     align-items: center;
     gap: 2px;
-    margin-left: auto;
+    margin-left: 4px;
     min-width: 0;
+    flex: 0 0 auto;
 }
 
 .fx-treegrid-header-toolbar-button {
@@ -668,13 +669,14 @@
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.expanded {
     width: 13px;
     height: 13px;
-    font-size: 12px;
-    line-height: 12px;
-    border: 1px solid #a6a6a6;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    border: 1px solid #b8b8b8;
     background: #fff;
-    color: #000;
-    font-family: "Lucida Console", Consolas, "Courier New", monospace;
-    font-weight: 400;
+    color: var(--fx-treegrid-plusminus-color, #2f66b3);
+    font-family: Arial, Tahoma, "MS Sans Serif", sans-serif;
+    font-weight: 800;
     border-radius: 1px;
     box-sizing: border-box;
     display: inline-flex;

@@ -32,6 +32,17 @@
     border-color: #ced4da;
 }
 
+.fx-toolbar-btn:focus-visible:not(:disabled) {
+    background: #e9ecef;
+    border-color: #9a9a9a;
+    outline: 1px dotted #000;
+    outline-offset: -3px;
+}
+
+.fx-toolbar-btn:focus:not(:focus-visible) {
+    outline: none;
+}
+
 .fx-toolbar-btn:active:not(:disabled) {
     background: #dee2e6;
 }

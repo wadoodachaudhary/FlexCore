@@ -7,3 +7,10 @@
     position: relative;
     display: inline-block;
 }
+
+.fx-filepicker:hover ::deep .fx-toolbar-btn:not(:disabled),
+.fx-filepicker:focus-within ::deep .fx-toolbar-btn:not(:disabled) {
+    background: #e9ecef;
+    border-color: #ced4da;
+    outline: none;
+}

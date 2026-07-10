@@ -36,11 +36,39 @@
     cursor: default;
 }
 
+/* Non-modal window: no dim, no pointer interception — everything behind stays live.
+   The dialog itself (and the system menu) re-enable pointer events; while dragging or
+   resizing the -resizing class returns pointer capture to the overlay so its
+   mousemove/mouseup tracking handlers still fire. */
+.fx-dialog-overlay-nonmodal {
+    background: transparent;
+    pointer-events: none;
+}
+
+.fx-dialog-overlay-nonmodal .fx-dialog,
+.fx-dialog-overlay-nonmodal .fx-dialog-system-menu,
+.fx-dialog-overlay-nonmodal .fx-dialog-system-menu-backdrop {
+    pointer-events: auto;
+}
+
+.fx-dialog-overlay-nonmodal.fx-dialog-overlay-resizing {
+    pointer-events: auto;
+}
+
 .fx-dialog-resizable {
     position: relative;
     display: flex;
     flex-direction: column;
     overflow: hidden;
+}
+
+.fx-dialog-draggable .fx-dialog-header {
+    cursor: move;
+    user-select: none;
+}
+
+.fx-dialog-dragging {
+    cursor: move;
 }
 
 .fx-dialog-resizable .fx-dialog-body {
@@ -150,6 +178,35 @@
     font-weight: 600;
 }
 
+.fx-dialog-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-dialog-window-icon {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0 6px 0 0;
+    padding: 0;
+    border: 1px solid #7b9ac0;
+    border-radius: 1px;
+    background:
+        linear-gradient(to bottom, rgba(255, 255, 255, .8), rgba(255, 255, 255, 0) 45%),
+        linear-gradient(135deg, #4da3ff 0 48%, #f5f5f5 48% 52%, #2d6cb3 52% 100%);
+    box-shadow: inset 1px 1px 0 rgba(255, 255, 255, .75);
+    cursor: default;
+}
+
+.fx-dialog-window-icon:hover,
+.fx-dialog-window-icon:focus-visible {
+    outline: 1px dotted #000;
+    outline-offset: -2px;
+}
+
 .fx-dialog-close {
     border: none;
     background: transparent;
@@ -157,6 +214,13 @@
     cursor: pointer;
     line-height: 1;
     color: var(--fx-dialog-header-color, inherit);
+    align-self: stretch;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    margin: -12px -16px -12px 8px;
+    padding: 0;
 }
 
 .fx-dialog-close:hover {
@@ -180,11 +244,85 @@
 }
 
 .fx-dialog-classic .fx-dialog-close {
-    width: 28px;
-    height: 28px;
+    align-self: stretch;
+    width: 30px;
+    height: auto;
+    margin: 0 -6px 0 6px;
     padding: 0;
     font-size: 25px;
     line-height: 28px;
+}
+
+.fx-dialog-system-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    background: transparent;
+}
+
+.fx-dialog-system-menu {
+    position: fixed;
+    z-index: 1002;
+    min-width: 164px;
+    padding: 2px 0;
+    border: 1px solid #9a9a9a;
+    background: #f0f0f0;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
+    color: #000;
+    font: 12px "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.fx-dialog-system-menu button {
+    display: flex;
+    justify-content: space-between;
+    gap: 24px;
+    width: 100%;
+    min-height: 24px;
+    padding: 3px 24px 3px 28px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+}
+
+.fx-dialog-system-menu button:hover:not(:disabled),
+.fx-dialog-system-menu button:focus-visible:not(:disabled) {
+    background: #e5f1fb;
+    outline: none;
+}
+
+.fx-dialog-system-menu-close {
+    font-weight: 700;
+}
+
+.fx-dialog-system-menu-close-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.fx-dialog-system-menu-close-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 14px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.fx-dialog-system-menu button:disabled {
+    color: #8a8a8a;
+}
+
+.fx-dialog-system-menu-separator {
+    display: block;
+    height: 1px;
+    margin: 3px 28px;
+    background: #b8b8b8;
 }
 
 .fx-dialog-body {

@@ -1,0 +1,125 @@
+.fx-editor-lite {
+    display: flex;
+    flex-direction: column;
+    min-height: var(--fx-editor-lite-min-height, 160px);
+    border: 1px solid #c8c8c8;
+    background: #fff;
+    color: #202124;
+    font-family: Arial, "Segoe UI", sans-serif;
+    font-size: 14px;
+}
+
+.fx-editor-lite-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 32px;
+    padding: 3px 6px;
+    border-bottom: 1px solid #e2e2e2;
+    background: #fafafa;
+    flex: 0 0 auto;
+}
+
+.fx-editor-lite-toolbar button,
+.fx-editor-lite-block {
+    height: 24px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    color: #202124;
+    font: inherit;
+}
+
+.fx-editor-lite-toolbar button {
+    min-width: 26px;
+    padding: 0 6px;
+    line-height: 22px;
+    cursor: pointer;
+}
+
+.fx-editor-lite-toolbar button:hover,
+.fx-editor-lite-toolbar button:focus-visible,
+.fx-editor-lite-block:hover,
+.fx-editor-lite-block:focus-visible {
+    border-color: #b7c7e6;
+    background: #eef4ff;
+    outline: none;
+}
+
+.fx-editor-lite-toolbar button:disabled,
+.fx-editor-lite-block:disabled {
+    opacity: .48;
+    cursor: default;
+}
+
+.fx-editor-lite-block {
+    min-width: 104px;
+    padding: 0 22px 0 6px;
+    cursor: pointer;
+}
+
+.fx-editor-lite-separator {
+    width: 1px;
+    height: 18px;
+    margin: 0 5px;
+    background: #d4d4d4;
+}
+
+.fx-editor-lite-u {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.fx-editor-lite-surface {
+    flex: 1 1 auto;
+    min-height: var(--fx-editor-lite-min-height, 160px);
+    padding: 18px 32px;
+    overflow: auto;
+    outline: none;
+    line-height: 1.55;
+    white-space: normal;
+}
+
+.fx-editor-lite-surface:focus {
+    outline: none;
+}
+
+.fx-editor-lite-surface:empty::before {
+    content: attr(data-placeholder);
+    color: #777;
+    pointer-events: none;
+}
+
+.fx-editor-lite-surface ::deep p,
+.fx-editor-lite-surface ::deep h2,
+.fx-editor-lite-surface ::deep h3,
+.fx-editor-lite-surface ::deep blockquote,
+.fx-editor-lite-surface ::deep ul,
+.fx-editor-lite-surface ::deep ol {
+    margin: 0 0 .85em;
+}
+
+.fx-editor-lite-surface ::deep h2 {
+    font-size: 1.1rem;
+    font-weight: 700;
+}
+
+.fx-editor-lite-surface ::deep h3 {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.fx-editor-lite-surface ::deep blockquote {
+    margin-left: 0;
+    padding-left: 12px;
+    border-left: 3px solid #d0d7de;
+    color: #4d5358;
+}
+
+.fx-editor-lite.is-disabled {
+    background: #f7f7f7;
+}
+
+.fx-editor-lite.is-disabled .fx-editor-lite-surface {
+    color: #5c5c5c;
+}

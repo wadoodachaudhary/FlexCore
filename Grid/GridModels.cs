@@ -169,6 +169,7 @@ public class GroupResult<TValue>
     public string Field { get; set; } = "";
     public string HeaderText { get; set; } = "";
     public object? Key { get; set; }
+    public string DisplayText { get; set; } = "";
     public string GroupPath { get; set; } = "";
     public int Count { get; set; }
     public IEnumerable<TValue> Items { get; set; } = Enumerable.Empty<TValue>();

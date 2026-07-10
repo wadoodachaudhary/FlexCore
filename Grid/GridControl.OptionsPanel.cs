@@ -133,8 +133,12 @@ public partial class GridControl<TValue>
                 classes.Add("fx-grid-paged");
             if (WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
                 classes.Add("fx-grid-width-fit-columns");
+            if (!string.IsNullOrWhiteSpace(Height))
+                classes.Add("fx-grid-has-height");
             if (ExtendVerticalScrollbarIntoHeader)
                 classes.Add("fx-grid-vscroll-header-gutter");
+            if (ShouldHideGridContentForNoVisibleColumns)
+                classes.Add("fx-grid-no-visible-columns");
             if (_pivotMode)
                 classes.Add("fx-grid-pivot-mode");
             if (!string.IsNullOrWhiteSpace(CssClass))
@@ -294,16 +298,39 @@ public partial class GridControl<TValue>
 
         if (OnColumnsChosen.HasDelegate)
         {
-            var snapshot = Columns
+            var renderedColumnsByField = Columns
                 .Where(c => !string.IsNullOrWhiteSpace(c.Field))
-                .Select(c => new ChooseColumnDescriptor
-                {
-                    Field = c.Field,
-                    Header = HeaderColumnDisplay(c),
-                    Visible = string.Equals(c.Field, col.Field, StringComparison.Ordinal)
-                        ? visible
-                        : IsColumnVisible(c)
-                })
+                .GroupBy(c => c.Field, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+            var snapshot = (AvailableColumns != null
+                    ? AvailableColumns
+                        .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                        .Select(c =>
+                        {
+                            var field = c.Field;
+                            var rendered = renderedColumnsByField.GetValueOrDefault(field);
+                            return new ChooseColumnDescriptor
+                            {
+                                Field = field,
+                                Header = !string.IsNullOrWhiteSpace(c.Header)
+                                    ? c.Header
+                                    : (rendered != null ? HeaderColumnDisplay(rendered) : field),
+                                Visible = string.Equals(field, col.Field, StringComparison.Ordinal)
+                                    ? visible
+                                    : (rendered != null ? IsColumnVisible(rendered) : c.Visible)
+                            };
+                        })
+                    : Columns
+                        .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                        .Select(c => new ChooseColumnDescriptor
+                        {
+                            Field = c.Field,
+                            Header = HeaderColumnDisplay(c),
+                            Visible = string.Equals(c.Field, col.Field, StringComparison.Ordinal)
+                                ? visible
+                                : IsColumnVisible(c)
+                        }))
                 .ToList();
 
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
@@ -334,8 +361,8 @@ public partial class GridControl<TValue>
     {
         var state = GetColumnState(field);
         _filterTextDraft = state.FilterValue ?? "";
-        _filterOperatorDraft = string.IsNullOrWhiteSpace(state.FilterValue)
-            ? TextFilterOperator.Contains
+        _filterOperatorDraft = _filterOperatorDraftsByField.TryGetValue(field, out var cachedOperator)
+            ? cachedOperator
             : state.FilterOperator;
         IEnumerable<string> checkedValues = state.UseCheckedFilter
             ? state.CheckedFilterValues
@@ -349,6 +376,9 @@ public partial class GridControl<TValue>
             parsed = TextFilterOperator.Contains;
 
         _filterOperatorDraft = parsed;
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = parsed;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -356,6 +386,9 @@ public partial class GridControl<TValue>
     private async Task OnTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
     {
         _filterOperatorDraft = filterOperator;
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = filterOperator;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -363,6 +396,9 @@ public partial class GridControl<TValue>
     private async Task OnTextFilterInput(ChangeEventArgs e)
     {
         _filterTextDraft = e.Value?.ToString() ?? "";
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = _filterOperatorDraft;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -373,6 +409,7 @@ public partial class GridControl<TValue>
             return;
 
         SetColumnFilterValueSearch(_filterPopupField, e.Value?.ToString());
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ValueSearchInput);
         await Task.CompletedTask;
     }
 

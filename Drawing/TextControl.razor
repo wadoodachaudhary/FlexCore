@@ -1,8 +1,13 @@
 @namespace Fx.ControlKit.Drawing
 @inherits DrawingObjectBase
 
-@* Free text label. The host DrawingControl renders an editable textarea over it during editing. *@
+@* Free text label. The host DrawingControl renders an editable textarea over it during editing.
+   FontSize comes from the host (scaled with the canvas so labels stay readable on large captures). *@
 <div class="fx-draw-text"
-     style="position:absolute; left:@Px(Shape.X); top:@Px(Shape.Y); color:@Shape.Color; pointer-events:none; font:600 18px 'Segoe UI',Tahoma,sans-serif; white-space:pre;@SelStyle">
+     style="position:absolute; left:@Px(Shape.X); top:@Px(Shape.Y); color:@Shape.Color; pointer-events:none; font:600 @(Px(FontSize)) 'Segoe UI',Tahoma,sans-serif; white-space:pre;@SelStyle">
     @(string.IsNullOrWhiteSpace(Shape.Text) ? "✎ text" : Shape.Text)
 </div>
+
+@code {
+    [Parameter] public double FontSize { get; set; } = 18;
+}

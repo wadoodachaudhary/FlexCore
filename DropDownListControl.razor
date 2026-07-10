@@ -37,7 +37,8 @@
                 aria-haspopup="listbox"
                 aria-expanded="@_isOpen"
                 @onclick="HandleButtonClick"
-                @onkeydown="HandleButtonKeyDown">
+                @onkeydown="HandleButtonKeyDown"
+                @onkeydown:preventDefault="@_isOpen">
             <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
             <span class="fx-dropdown-arrow" aria-hidden="true"
                   @onclick="HandleArrowClick"
@@ -65,6 +66,8 @@
                             class="fx-dropdown-option @(isSelected ? "selected" : "")"
                             role="option"
                             aria-selected="@isSelected"
+                            @onkeydown="e => HandleOptionKeyDown(e, val, item)"
+                            @onkeydown:preventDefault="true"
                             @onclick="() => SelectItemAsync(val, item)">
                         @txt
                     </button>
@@ -217,25 +220,67 @@
             await Closed.InvokeAsync();
     }
 
-    private Task HandleButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    private async Task HandleButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
     {
         if (!Enabled)
-            return Task.CompletedTask;
+            return;
 
         if (e.Key is "Enter" or " ")
         {
-            _isOpen = true;
+            if (_isOpen)
+                await CommitCurrentSelectionAsync();
         }
         else if (e.Key == "Escape")
         {
-            return CloseAsync();
+            await CloseAsync();
         }
         else if (e.Key == "ArrowDown")
         {
-            _isOpen = true;
+            await MoveSelectionAsync(1);
         }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "Home")
+        {
+            await MoveSelectionToAsync(first: true);
+        }
+        else if (e.Key == "End")
+        {
+            await MoveSelectionToAsync(first: false);
+        }
+    }
 
-        return Task.CompletedTask;
+    private async Task HandleOptionKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, string strVal, TItem item)
+    {
+        if (!Enabled)
+            return;
+
+        if (e.Key is "Enter" or " ")
+        {
+            await SelectItemAsync(strVal, item);
+        }
+        else if (e.Key == "Escape")
+        {
+            await CloseAsync();
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            await MoveSelectionAsync(1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "Home")
+        {
+            await MoveSelectionToAsync(first: true);
+        }
+        else if (e.Key == "End")
+        {
+            await MoveSelectionToAsync(first: false);
+        }
     }
 
     private Task HandleEditableFocus()
@@ -270,7 +315,15 @@
             await PublishEditableTextAsync(_editableText);
             await CloseAsync();
         }
-        else if (e.Key is "ArrowDown" or "F4")
+        else if (e.Key == "ArrowDown")
+        {
+            await MoveSelectionAsync(1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "F4")
         {
             _isOpen = true;
         }
@@ -333,6 +386,72 @@
         if (ValueChange.HasDelegate)
             await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
     }
+
+    private async Task MoveSelectionAsync(int delta)
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            _isOpen = true;
+            return;
+        }
+
+        var currentIndex = FindSelectedIndex(items);
+        var nextIndex = currentIndex < 0
+            ? (delta >= 0 ? 0 : items.Count - 1)
+            : Math.Clamp(currentIndex + delta, 0, items.Count - 1);
+
+        await SelectItemAtAsync(items, nextIndex);
+    }
+
+    private Task MoveSelectionToAsync(bool first)
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            _isOpen = true;
+            return Task.CompletedTask;
+        }
+
+        return SelectItemAtAsync(items, first ? 0 : items.Count - 1);
+    }
+
+    private async Task SelectItemAtAsync(IReadOnlyList<TItem> items, int index)
+    {
+        var item = items[index];
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, closeAfterSelect: false);
+        _isOpen = true;
+    }
+
+    private async Task CommitCurrentSelectionAsync()
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            await CloseAsync();
+            return;
+        }
+
+        var index = FindSelectedIndex(items);
+        if (index < 0)
+            index = 0;
+
+        var item = items[index];
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item);
+    }
+
+    private int FindSelectedIndex(IReadOnlyList<TItem> items)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (IsSelectedValue(GetFieldValue(items[i], ValueFieldName)))
+                return i;
+        }
+
+        return -1;
+    }
+
+    private List<TItem> GetMaterializedItems() => DataSource?.ToList() ?? new List<TItem>();
 
     private string GetFieldValue(TItem item, string field)
     {

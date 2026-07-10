@@ -60,6 +60,12 @@ export function cropImage(srcUrl, sx, sy, sw, sh) {
     });
 }
 
+// Route pointermove/up to the capture layer for the whole drag even when the cursor leaves it —
+// keeps fast shape drags lossless. The browser releases the capture automatically on pointerup.
+export function capturePointer(el, pointerId) {
+    try { if (el && el.setPointerCapture) el.setPointerCapture(pointerId); } catch (e) { }
+}
+
 // Natural pixel size of a data/URL image that is NOT in the DOM — used to size a placed overlay
 // to its real aspect ratio. Resolves [0,0] on failure.
 export function imageSize(srcUrl) {

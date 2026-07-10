@@ -1208,6 +1208,362 @@
     window.fxEditor = fxEditor;
     window.hfEditor = fxEditor;
 
+    // ── EditorLiteControl helpers ────────────────────────────────────────
+    var fxEditorLite = (function () {
+        var allowedTags = {
+            P: true, DIV: true, BR: true, B: true, STRONG: true, I: true, EM: true,
+            U: true, S: true, STRIKE: true, UL: true, OL: true, LI: true,
+            H1: true, H2: true, H3: true, BLOCKQUOTE: true, CODE: true, PRE: true,
+            A: true, SPAN: true
+        };
+
+        function liteEscapeHtml(text) {
+            return String(text || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;");
+        }
+
+        function safeUrl(url) {
+            url = String(url || "").trim();
+            if (!url) return "";
+            if (/^(https?:|mailto:|#|\/)/i.test(url)) return url;
+            return "";
+        }
+
+        function safeInlineStyle(node) {
+            var parts = [];
+            if (!node || !node.style) return "";
+            ["color", "backgroundColor", "fontWeight", "fontStyle", "textDecorationLine"].forEach(function (prop) {
+                var value = node.style[prop];
+                if (!value || /[<>"\\]/.test(value)) return;
+                var css = prop.replace(/[A-Z]/g, function (m) { return "-" + m.toLowerCase(); });
+                parts.push(css + ":" + value);
+            });
+            return parts.join(";");
+        }
+
+        function sanitizeHtml(html) {
+            if (!html) return "";
+            var template = document.createElement("template");
+            template.innerHTML = String(html);
+
+            function walk(node) {
+                if (node.nodeType === 3) return document.createTextNode(node.nodeValue || "");
+                if (node.nodeType !== 1) return document.createTextNode("");
+
+                var tag = node.tagName.toUpperCase();
+                if (!allowedTags[tag]) {
+                    var frag = document.createDocumentFragment();
+                    Array.prototype.forEach.call(node.childNodes, function (child) {
+                        frag.appendChild(walk(child));
+                    });
+                    return frag;
+                }
+
+                var outTag = tag === "DIV" ? "p" : tag.toLowerCase();
+                var el = document.createElement(outTag);
+                if (tag === "A") {
+                    var href = safeUrl(node.getAttribute("href"));
+                    if (href) {
+                        el.setAttribute("href", href);
+                        el.setAttribute("rel", "noopener noreferrer");
+                    }
+                }
+                if (tag === "SPAN") {
+                    var style = safeInlineStyle(node);
+                    if (style) el.setAttribute("style", style);
+                }
+                Array.prototype.forEach.call(node.childNodes, function (child) {
+                    el.appendChild(walk(child));
+                });
+                return el;
+            }
+
+            var clean = document.createElement("div");
+            Array.prototype.forEach.call(template.content.childNodes, function (child) {
+                clean.appendChild(walk(child));
+            });
+            return clean.innerHTML;
+        }
+
+        function editor(editorId) {
+            return document.getElementById(editorId);
+        }
+
+        function normalizeInitialHtml(html) {
+            html = sanitizeHtml(html || "");
+            if (!html.trim()) return "";
+            if (!/<(p|h1|h2|h3|ul|ol|blockquote|pre)\b/i.test(html)) {
+                return "<p>" + html + "</p>";
+            }
+            return html;
+        }
+
+        function installPasteSanitizer(el) {
+            if (!el || el.__fxEditorLitePaste) return;
+            el.__fxEditorLitePaste = true;
+            el.addEventListener("paste", function (event) {
+                if (!event.clipboardData) return;
+                // HHM-145: if the clipboard holds an image (e.g. a screenshot), embed it as a data-URL <img>
+                // instead of dropping it. Checked before the text/html path so a copied image isn't lost.
+                var items = event.clipboardData.items || [];
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i] && items[i].type && items[i].type.indexOf("image/") === 0) {
+                        var file = items[i].getAsFile();
+                        if (file) {
+                            event.preventDefault();
+                            var reader = new FileReader();
+                            reader.onload = function (ev) {
+                                document.execCommand("insertHTML", false,
+                                    '<img src="' + ev.target.result + '" style="max-width:100%;height:auto;" alt="pasted image" />');
+                            };
+                            reader.readAsDataURL(file);
+                            return;
+                        }
+                    }
+                }
+                event.preventDefault();
+                var html = event.clipboardData.getData("text/html");
+                var text = event.clipboardData.getData("text/plain");
+                var payload = html ? sanitizeHtml(html) : liteEscapeHtml(text).replace(/\r?\n/g, "<br>");
+                document.execCommand("insertHTML", false, payload);
+            });
+        }
+
+        function plainTextFrom(node) {
+            return (node ? node.innerText : "") || "";
+        }
+
+        function inlineMarkdown(node) {
+            if (!node) return "";
+            if (node.nodeType === 3) return node.nodeValue || "";
+            if (node.nodeType !== 1) return "";
+            var text = "";
+            Array.prototype.forEach.call(node.childNodes, function (child) {
+                text += inlineMarkdown(child);
+            });
+            var tag = node.tagName.toUpperCase();
+            if (!text) return "";
+            if (tag === "STRONG" || tag === "B") return "**" + text + "**";
+            if (tag === "EM" || tag === "I") return "*" + text + "*";
+            if (tag === "U") return "<u>" + text + "</u>";
+            if (tag === "S" || tag === "STRIKE") return "~~" + text + "~~";
+            if (tag === "CODE") return "`" + text + "`";
+            if (tag === "A") {
+                var href = safeUrl(node.getAttribute("href"));
+                return href ? "[" + text + "](" + href + ")" : text;
+            }
+            return text;
+        }
+
+        function blockMarkdown(node, index) {
+            if (!node || node.nodeType !== 1) return "";
+            var tag = node.tagName.toUpperCase();
+            if (tag === "UL" || tag === "OL") {
+                var lines = [];
+                Array.prototype.forEach.call(node.children, function (li, i) {
+                    if (li.tagName && li.tagName.toUpperCase() === "LI") {
+                        lines.push((tag === "OL" ? (i + 1) + ". " : "- ") + inlineMarkdown(li).trim());
+                    }
+                });
+                return lines.join("\n");
+            }
+            if (tag === "H1") return "# " + inlineMarkdown(node).trim();
+            if (tag === "H2") return "## " + inlineMarkdown(node).trim();
+            if (tag === "H3") return "### " + inlineMarkdown(node).trim();
+            if (tag === "BLOCKQUOTE") return "> " + inlineMarkdown(node).trim();
+            if (tag === "PRE") return "```\n" + plainTextFrom(node).trim() + "\n```";
+            return inlineMarkdown(node).trim();
+        }
+
+        function toMarkdown(el) {
+            if (!el) return "";
+            var blocks = Array.prototype.filter.call(el.childNodes, function (n) {
+                return n.nodeType === 1 || (n.nodeType === 3 && String(n.nodeValue || "").trim());
+            });
+            if (!blocks.length) return plainTextFrom(el).trim();
+            return blocks.map(blockMarkdown).filter(Boolean).join("\n\n").trim();
+        }
+
+        function marksForNode(node) {
+            var marks = [];
+            var current = node && node.parentElement;
+            while (current) {
+                var tag = current.tagName ? current.tagName.toUpperCase() : "";
+                if (tag === "B" || tag === "STRONG") marks.push({ type: "strong" });
+                if (tag === "I" || tag === "EM") marks.push({ type: "em" });
+                if (tag === "U") marks.push({ type: "underline" });
+                if (tag === "S" || tag === "STRIKE") marks.push({ type: "strike" });
+                if (tag === "CODE") marks.push({ type: "code" });
+                if (tag === "A") {
+                    var href = safeUrl(current.getAttribute("href"));
+                    if (href) marks.push({ type: "link", attrs: { href: href } });
+                }
+                current = current.parentElement;
+                if (current && current.classList && current.classList.contains("fx-editor-lite-surface")) break;
+            }
+            return marks;
+        }
+
+        function adfInlineContent(node) {
+            var content = [];
+            var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+            var textNode;
+            while ((textNode = walker.nextNode())) {
+                var text = textNode.nodeValue || "";
+                if (!text) continue;
+                var item = { type: "text", text: text };
+                var marks = marksForNode(textNode);
+                if (marks.length) item.marks = marks;
+                content.push(item);
+            }
+            return content;
+        }
+
+        function paragraphAdf(node) {
+            var content = adfInlineContent(node);
+            return content.length ? { type: "paragraph", content: content } : { type: "paragraph" };
+        }
+
+        function blockAdf(node) {
+            var tag = node.tagName ? node.tagName.toUpperCase() : "";
+            if (tag === "H1" || tag === "H2" || tag === "H3") {
+                return { type: "heading", attrs: { level: tag === "H1" ? 1 : tag === "H2" ? 2 : 3 }, content: adfInlineContent(node) };
+            }
+            if (tag === "BLOCKQUOTE") {
+                return { type: "blockquote", content: [paragraphAdf(node)] };
+            }
+            if (tag === "UL" || tag === "OL") {
+                return {
+                    type: tag === "UL" ? "bulletList" : "orderedList",
+                    content: Array.prototype.filter.call(node.children, function (li) {
+                        return li.tagName && li.tagName.toUpperCase() === "LI";
+                    }).map(function (li) {
+                        return { type: "listItem", content: [paragraphAdf(li)] };
+                    })
+                };
+            }
+            if (tag === "PRE") {
+                return { type: "codeBlock", content: [{ type: "text", text: plainTextFrom(node) }] };
+            }
+            return paragraphAdf(node);
+        }
+
+        function toAdfJson(el) {
+            var content = [];
+            Array.prototype.forEach.call(el ? el.childNodes : [], function (node) {
+                if (node.nodeType === 1) content.push(blockAdf(node));
+                else if (node.nodeType === 3 && String(node.nodeValue || "").trim()) {
+                    content.push({ type: "paragraph", content: [{ type: "text", text: node.nodeValue }] });
+                }
+            });
+            return JSON.stringify({ type: "doc", version: 1, content: content });
+        }
+
+        function rtfEscape(text) {
+            return String(text || "")
+                .replace(/\\/g, "\\\\")
+                .replace(/{/g, "\\{")
+                .replace(/}/g, "\\}")
+                .replace(/\n/g, "\\par ");
+        }
+
+        function inlineRtf(node) {
+            if (!node) return "";
+            if (node.nodeType === 3) return rtfEscape(node.nodeValue || "");
+            if (node.nodeType !== 1) return "";
+            var inner = "";
+            Array.prototype.forEach.call(node.childNodes, function (child) { inner += inlineRtf(child); });
+            var tag = node.tagName.toUpperCase();
+            if (tag === "B" || tag === "STRONG") return "\\b " + inner + "\\b0 ";
+            if (tag === "I" || tag === "EM") return "\\i " + inner + "\\i0 ";
+            if (tag === "U") return "\\ul " + inner + "\\ul0 ";
+            if (tag === "S" || tag === "STRIKE") return "\\strike " + inner + "\\strike0 ";
+            return inner;
+        }
+
+        function toRtf(el) {
+            var body = "";
+            Array.prototype.forEach.call(el ? el.childNodes : [], function (node) {
+                if (node.nodeType !== 1) return;
+                var tag = node.tagName.toUpperCase();
+                if (tag === "UL" || tag === "OL") {
+                    Array.prototype.forEach.call(node.children, function (li, i) {
+                        body += (tag === "OL" ? (i + 1) + ". " : "\\bullet ") + inlineRtf(li) + "\\par ";
+                    });
+                } else {
+                    body += inlineRtf(node) + "\\par ";
+                }
+            });
+            return "{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}\\fs22 " + body + "}";
+        }
+
+        function toOpenDocumentHtml(html) {
+            return "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>EditorLite Document</title>" +
+                "<style>body{font-family:Arial,sans-serif;font-size:11pt;line-height:1.5;} p{margin:0 0 9pt;} h2,h3{margin:0 0 9pt;font-weight:bold;}</style>" +
+                "</head><body>" + html + "</body></html>";
+        }
+
+        return {
+            setHtml: function (editorId, html) {
+                var el = editor(editorId);
+                if (!el) return;
+                installPasteSanitizer(el);
+                el.innerHTML = normalizeInitialHtml(html);
+            },
+            getHtml: function (editorId) {
+                var el = editor(editorId);
+                return sanitizeHtml(el ? el.innerHTML : "");
+            },
+            focus: function (editorId) {
+                var el = editor(editorId);
+                if (el) el.focus();
+            },
+            exec: function (editorId, command) {
+                var el = editor(editorId);
+                if (!el) return;
+                el.focus();
+                document.execCommand(command, false, null);
+            },
+            formatBlock: function (editorId, blockName) {
+                var el = editor(editorId);
+                if (!el) return;
+                el.focus();
+                document.execCommand("formatBlock", false, blockName || "P");
+            },
+            createLink: function (editorId) {
+                var el = editor(editorId);
+                if (!el) return;
+                el.focus();
+                var url = window.prompt("Link URL");
+                url = safeUrl(url);
+                if (url) document.execCommand("createLink", false, url);
+            },
+            read: function (editorId) {
+                var el = editor(editorId);
+                var html = sanitizeHtml(el ? el.innerHTML : "");
+                var shell = document.createElement("div");
+                shell.innerHTML = html;
+                var text = plainTextFrom(shell).trim();
+                var markdown = toMarkdown(shell);
+                return {
+                    schema: "fx-editor-lite/1",
+                    html: html,
+                    text: text,
+                    markdown: markdown,
+                    jiraText: markdown || text,
+                    jiraDocumentJson: toAdfJson(shell),
+                    rtf: toRtf(shell),
+                    openDocumentHtml: toOpenDocumentHtml(html)
+                };
+            }
+        };
+    })();
+
+    window.fxEditorLite = fxEditorLite;
+    window.hfEditorLite = fxEditorLite;
+
     // ── Clipboard helpers — plain-text copy from result cards ──
     //
     // The result card renders rich HTML (with fonts, background tints, tab

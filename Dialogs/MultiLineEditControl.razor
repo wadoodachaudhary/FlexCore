@@ -29,7 +29,10 @@
 {
     <div class="fx-mled-overlay" @onclick="Cancel">
         <div class="fx-mled @CssClass" @onclick:stopPropagation="true">
-            <div class="fx-mled-header">
+            <div class="fx-mled-header"
+                 @oncontextmenu="OpenSystemMenu"
+                 @oncontextmenu:preventDefault="true"
+                 @oncontextmenu:stopPropagation="true">
                 <span>@Title</span>
                 <button class="fx-mled-close" @onclick="Cancel" title="Cancel (Esc)">&times;</button>
             </div>
@@ -57,6 +60,26 @@
                 <button class="fx-mled-btn" @onclick="Cancel" title="Cancel (Esc)">Cancel</button>
             </div>
         </div>
+        @if (_systemMenuVisible)
+        {
+            <button type="button"
+                    class="fx-mled-system-menu-backdrop"
+                    tabindex="-1"
+                    aria-label="Close menu"
+                    @onclick="CloseSystemMenu"
+                    @oncontextmenu="CloseSystemMenu"
+                    @oncontextmenu:preventDefault="true"></button>
+            <div class="fx-mled-system-menu"
+                 style="@SystemMenuStyle"
+                 role="menu"
+                 @onclick:stopPropagation="true"
+                 @oncontextmenu:stopPropagation="true">
+                <button type="button" role="menuitem" @onclick="CloseSystemMenu">Move</button>
+                <button type="button" role="menuitem" @onclick="CloseSystemMenu">Size</button>
+                <span class="fx-mled-system-menu-separator"></span>
+                <button type="button" role="menuitem" class="fx-mled-system-menu-close" @onclick="Cancel">Close</button>
+            </div>
+        }
     </div>
 }
 
@@ -72,6 +95,10 @@
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<string?>? _tcs;
+    private bool _systemMenuVisible;
+    private double _systemMenuX;
+    private double _systemMenuY;
+    private string SystemMenuStyle => $"left:{_systemMenuX:0.##}px;top:{_systemMenuY:0.##}px";
 
     public Task<string?> ShowAsync(string initial, string title = "Edit", int maxLength = 4000, string? prompt = null)
     {
@@ -80,6 +107,7 @@
         InputValue = initial ?? "";
         MaxLength = maxLength;
         Visible = true;
+        _systemMenuVisible = false;
         _tcs = new TaskCompletionSource<string?>();
         StateHasChanged();
         return _tcs.Task;
@@ -88,6 +116,7 @@
     private async Task Confirm()
     {
         Visible = false;
+        _systemMenuVisible = false;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
@@ -98,6 +127,7 @@
     private async Task Cancel()
     {
         Visible = false;
+        _systemMenuVisible = false;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
@@ -109,5 +139,19 @@
     {
         if (e.Key == "Escape") await Cancel();
         else if (e.Key == "Enter" && e.CtrlKey) await Confirm();
+    }
+
+    private Task OpenSystemMenu(Microsoft.AspNetCore.Components.Web.MouseEventArgs e)
+    {
+        _systemMenuVisible = true;
+        _systemMenuX = e.ClientX;
+        _systemMenuY = e.ClientY;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseSystemMenu()
+    {
+        _systemMenuVisible = false;
+        return Task.CompletedTask;
     }
 }

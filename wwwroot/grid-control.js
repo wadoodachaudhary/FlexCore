@@ -44,6 +44,9 @@ const dragPreviewElementByDocument = new WeakMap();
 const headerDropIndicatorByContent = new WeakMap();
 const rowDragAutoScrollBindings = new WeakMap();
 const gridKeyboardTrapBindings = new WeakMap();
+const gridScrollSyncBindings = new WeakMap();
+const filterPopupDragBindings = new WeakMap();
+const gridResizeCaptureBindings = new WeakMap();
 const horizontalBoundaryKeyState = new WeakMap();
 const defaultHeaderReorderPipeColor = "#2b2b2b";
 const headerAutoScrollEdgePx = 56;
@@ -89,6 +92,282 @@ function getGridContentElement(gridRoot) {
 
 function getGridBodyViewportElement(gridRoot) {
     return gridRoot.querySelector(".fx-grid-body-viewport") || getGridContentElement(gridRoot);
+}
+
+function getGridHorizontalViewportElement(gridRoot) {
+    if (gridRoot.classList?.contains("fx-grid-vscroll-header-gutter")) {
+        return gridRoot.querySelector(".fx-grid-scroll-surface") || getGridBodyViewportElement(gridRoot);
+    }
+    return gridRoot.querySelector(".fx-grid-body-viewport") || getGridContentElement(gridRoot);
+}
+
+function getGridVerticalViewportElement(gridRoot) {
+    if (gridRoot.classList?.contains("fx-grid-vscroll-header-gutter")) {
+        return gridRoot.querySelector(".fx-grid-scroll-surface") || getGridBodyViewportElement(gridRoot);
+    }
+    return getGridBodyViewportElement(gridRoot);
+}
+
+function getGridScrollResetTargets(gridRoot) {
+    return [
+        getGridContentElement(gridRoot),
+        gridRoot.querySelector(".fx-grid-scroll-surface"),
+        gridRoot.querySelector(".fx-grid-header-viewport"),
+        gridRoot.querySelector(".fx-grid-body-frame"),
+        gridRoot.querySelector(".fx-grid-body-viewport")
+    ].filter(Boolean);
+}
+
+function resetGridScrollTargets(gridRoot) {
+    const targets = new Set(getGridScrollResetTargets(gridRoot));
+    for (const target of targets) {
+        target.scrollTop = 0;
+        target.scrollLeft = 0;
+    }
+}
+
+export function resetInitialGridScroll(gridRoot) {
+    if (!gridRoot) return;
+
+    const doc = gridRoot.ownerDocument || document;
+    const win = doc.defaultView || window;
+    const requestFrame = typeof win.requestAnimationFrame === "function"
+        ? win.requestAnimationFrame.bind(win)
+        : callback => win.setTimeout(callback, 0);
+
+    resetGridScrollTargets(gridRoot);
+    requestFrame(() => {
+        resetGridScrollTargets(gridRoot);
+        requestFrame(() => resetGridScrollTargets(gridRoot));
+    });
+    win.setTimeout(() => resetGridScrollTargets(gridRoot), 0);
+    win.setTimeout(() => resetGridScrollTargets(gridRoot), 80);
+}
+
+export function registerFilterPopupDrag(gridRoot) {
+    if (!gridRoot) return;
+
+    const popup = gridRoot.querySelector(".fx-filter-popup");
+    const header = popup?.querySelector(".fx-filter-popup-header");
+    if (!popup || !header || filterPopupDragBindings.has(popup)) return;
+
+    const doc = popup.ownerDocument || document;
+    const win = doc.defaultView || window;
+    const state = {
+        dragging: false,
+        pointerOffsetX: 0,
+        pointerOffsetY: 0
+    };
+
+    const pinPopupToViewport = (left, top) => {
+        const width = popup.offsetWidth || 340;
+        const height = popup.offsetHeight || 240;
+        const maxLeft = Math.max(4, win.innerWidth - width - 4);
+        const maxTop = Math.max(4, win.innerHeight - height - 4);
+        popup.style.position = "fixed";
+        popup.style.left = `${Math.round(clamp(left, 4, maxLeft))}px`;
+        popup.style.top = `${Math.round(clamp(top, 4, maxTop))}px`;
+        popup.style.right = "auto";
+        popup.style.bottom = "auto";
+    };
+
+    const onMouseDown = (event) => {
+        if (event.button !== 0) return;
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest?.("button, input, select, textarea, a, [contenteditable='true'], [contenteditable='']")) {
+            return;
+        }
+
+        const rect = popup.getBoundingClientRect();
+        state.dragging = true;
+        state.pointerOffsetX = event.clientX - rect.left;
+        state.pointerOffsetY = event.clientY - rect.top;
+        pinPopupToViewport(rect.left, rect.top);
+        event.preventDefault();
+    };
+
+    const onMouseMove = (event) => {
+        if (!state.dragging) return;
+        pinPopupToViewport(event.clientX - state.pointerOffsetX, event.clientY - state.pointerOffsetY);
+    };
+
+    const onMouseUp = () => {
+        state.dragging = false;
+    };
+
+    header.addEventListener("mousedown", onMouseDown);
+    doc.addEventListener("mousemove", onMouseMove, true);
+    doc.addEventListener("mouseup", onMouseUp, true);
+
+    filterPopupDragBindings.set(popup, { header, onMouseDown, onMouseMove, onMouseUp });
+
+    const requestFrame = typeof win.requestAnimationFrame === "function"
+        ? win.requestAnimationFrame.bind(win)
+        : callback => win.setTimeout(callback, 0);
+
+    requestFrame(() => {
+        const rect = popup.getBoundingClientRect();
+        pinPopupToViewport(rect.left, rect.top);
+    });
+}
+
+export function registerGridResizeCapture(gridRoot, dotNetRef, initialClientX = 0, initialClientY = 0) {
+    if (!gridRoot || !dotNetRef) return;
+
+    unregisterGridResizeCapture(gridRoot);
+
+    const doc = gridRoot.ownerDocument || document;
+    let ended = false;
+    let lastClientX = Number(initialClientX) || 0;
+    let lastClientY = Number(initialClientY) || 0;
+
+    const invokeMove = (event) => {
+        if (ended) return;
+        lastClientX = event.clientX;
+        lastClientY = event.clientY;
+        dotNetRef.invokeMethodAsync("ContinueGridResizeFromBrowserAsync", event.clientX, event.clientY)
+            .catch(() => {});
+    };
+
+    const invokeEnd = (event) => {
+        if (ended) return;
+        ended = true;
+        cleanup();
+        dotNetRef.invokeMethodAsync("EndGridResizeFromBrowserAsync", event.clientX, event.clientY)
+            .catch(() => {});
+    };
+
+    const onMouseMove = (event) => {
+        event.preventDefault();
+        invokeMove(event);
+    };
+
+    const onMouseUp = (event) => {
+        event.preventDefault();
+        invokeEnd(event);
+    };
+
+    const onWindowBlur = () => {
+        if (ended) return;
+        ended = true;
+        cleanup();
+        dotNetRef.invokeMethodAsync("EndGridResizeFromBrowserAsync", lastClientX, lastClientY)
+            .catch(() => {});
+    };
+
+    const cleanup = () => {
+        doc.removeEventListener("mousemove", onMouseMove, true);
+        doc.removeEventListener("mouseup", onMouseUp, true);
+        (doc.defaultView || window).removeEventListener("blur", onWindowBlur, true);
+        gridResizeCaptureBindings.delete(gridRoot);
+    };
+
+    doc.addEventListener("mousemove", onMouseMove, true);
+    doc.addEventListener("mouseup", onMouseUp, true);
+    (doc.defaultView || window).addEventListener("blur", onWindowBlur, true);
+    gridResizeCaptureBindings.set(gridRoot, { cleanup });
+}
+
+export function unregisterGridResizeCapture(gridRoot) {
+    const state = gridResizeCaptureBindings.get(gridRoot);
+    if (!state) return;
+    state.cleanup();
+}
+
+const scrollbarActivityByRoot = new WeakMap();
+
+export function registerScrollbarActivity(gridRoot) {
+    if (!gridRoot) return;
+
+    unregisterScrollbarActivity(gridRoot);
+
+    const targets = [
+        gridRoot.querySelector(".fx-grid-scroll-surface"),
+        gridRoot.querySelector(".fx-grid-body-viewport")
+    ].filter(Boolean);
+
+    let hideTimer = 0;
+    const markScrolling = () => {
+        gridRoot.classList.add("fx-grid-scrolling");
+        if (hideTimer) {
+            window.clearTimeout(hideTimer);
+        }
+        hideTimer = window.setTimeout(() => {
+            gridRoot.classList.remove("fx-grid-scrolling");
+            hideTimer = 0;
+        }, 650);
+    };
+
+    for (const target of targets) {
+        target.addEventListener("scroll", markScrolling, { passive: true });
+    }
+    gridRoot.addEventListener("wheel", markScrolling, { passive: true });
+    gridRoot.addEventListener("keydown", markScrolling);
+
+    scrollbarActivityByRoot.set(gridRoot, { targets, markScrolling, getTimer: () => hideTimer });
+}
+
+export function unregisterScrollbarActivity(gridRoot) {
+    const state = scrollbarActivityByRoot.get(gridRoot);
+    if (!state) return;
+
+    for (const target of state.targets) {
+        target.removeEventListener("scroll", state.markScrolling);
+    }
+    gridRoot.removeEventListener("wheel", state.markScrolling);
+    gridRoot.removeEventListener("keydown", state.markScrolling);
+
+    const timer = state.getTimer();
+    if (timer) {
+        window.clearTimeout(timer);
+    }
+
+    gridRoot.classList.remove("fx-grid-scrolling");
+    scrollbarActivityByRoot.delete(gridRoot);
+}
+
+export function registerGridScrollSync(gridRoot) {
+    if (!gridRoot) return;
+
+    unregisterGridScrollSync(gridRoot);
+
+    const headerViewport = gridRoot.querySelector(".fx-grid-header-viewport");
+    const horizontalViewport = getGridHorizontalViewportElement(gridRoot);
+    if (!headerViewport || !horizontalViewport) return;
+
+    let syncing = false;
+    const syncHeaderFromBody = () => {
+        if (syncing) return;
+        syncing = true;
+        headerViewport.scrollLeft = horizontalViewport.scrollLeft;
+        syncing = false;
+    };
+    const syncBodyFromHeader = () => {
+        if (syncing) return;
+        syncing = true;
+        horizontalViewport.scrollLeft = headerViewport.scrollLeft;
+        syncing = false;
+    };
+
+    horizontalViewport.addEventListener("scroll", syncHeaderFromBody, { passive: true });
+    headerViewport.addEventListener("scroll", syncBodyFromHeader, { passive: true });
+    syncHeaderFromBody();
+
+    gridScrollSyncBindings.set(gridRoot, {
+        headerViewport,
+        horizontalViewport,
+        syncHeaderFromBody,
+        syncBodyFromHeader
+    });
+}
+
+export function unregisterGridScrollSync(gridRoot) {
+    const state = gridScrollSyncBindings.get(gridRoot);
+    if (!state) return;
+
+    state.horizontalViewport.removeEventListener("scroll", state.syncHeaderFromBody);
+    state.headerViewport.removeEventListener("scroll", state.syncBodyFromHeader);
+    gridScrollSyncBindings.delete(gridRoot);
 }
 
 function getHeaderReorderPipeColor(gridRoot) {
@@ -315,7 +594,7 @@ function scheduleRowAutoScroll(gridRoot, state) {
         state.autoScrollFrame = 0;
         if (!state.activeRowDrag || !state.hasMoved) return;
 
-        const contentEl = getGridBodyViewportElement(gridRoot);
+        const contentEl = getGridVerticalViewportElement(gridRoot);
         if (!contentEl) return;
 
         const delta = getRowAutoScrollDelta(contentEl, state.lastClientY);
@@ -732,8 +1011,8 @@ export function unregisterRowDragSelectionAutoScroll(gridRoot) {
 export function ensureActiveGridCellVisible(gridRoot) {
     if (!gridRoot) return;
 
-    const contentEl = getGridContentElement(gridRoot);
-    const bodyViewportEl = getGridBodyViewportElement(gridRoot);
+    const contentEl = getGridHorizontalViewportElement(gridRoot);
+    const bodyViewportEl = getGridVerticalViewportElement(gridRoot);
     const activeCell = gridRoot.querySelector(".fx-cell-active");
     if (!contentEl || !bodyViewportEl || !activeCell) return;
 
@@ -772,6 +1051,22 @@ export function ensureActiveGridCellVisible(gridRoot) {
             bodyViewportEl.scrollTop + (cellRect.bottom - (bodyRect.bottom - padding)),
             0,
             maxScrollTop);
+    }
+}
+
+export function focusInputAtEnd(el) {
+    if (!el) return;
+    try {
+        if (typeof el.focus === "function") {
+            el.focus({ preventScroll: true });
+        }
+        const value = "value" in el ? (el.value || "") : "";
+        if (typeof el.setSelectionRange === "function") {
+            const end = value.length;
+            el.setSelectionRange(end, end);
+        }
+    } catch (_) {
+        /* best-effort */
     }
 }
 

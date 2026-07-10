@@ -45,7 +45,7 @@
     --fx-grid-row-hover-bg: #e0e0e0;
     --fx-grid-row-selected-bg: #000080;
     --fx-grid-row-selected-color: #ffffff;
-    --fx-grid-cell-border: 1px solid #d4d0c8;
+    --fx-grid-cell-border: #e3e3e3;
 
     
     --fx-tree-node-color: #000000;
@@ -117,7 +117,7 @@
     --fx-grid-row-hover-bg: #e0e0e0;
     --fx-grid-row-selected-bg: #000080;
     --fx-grid-row-selected-color: #ffffff;
-    --fx-grid-cell-border: 1px solid #d4d0c8;
+    --fx-grid-cell-border: #e3e3e3;
 
     --fx-tree-node-color: #000000;
     --fx-tree-node-hover-bg: #dde8f0;
@@ -184,7 +184,7 @@
     --fx-grid-row-hover-bg: #f1f5f9;
     --fx-grid-row-selected-bg: #dbeafe; 
     --fx-grid-row-selected-color: #1e3a8a;
-    --fx-grid-cell-border: 1px solid #f1f5f9;
+    --fx-grid-cell-border: #e2e8f0;
 
     
     --fx-tree-node-color: #334155;
@@ -254,7 +254,7 @@
     --fx-grid-row-hover-bg: #2d3748;
     --fx-grid-row-selected-bg: #4f46e5;
     --fx-grid-row-selected-color: #ffffff;
-    --fx-grid-cell-border: 1px solid #334155;
+    --fx-grid-cell-border: #334155;
 
     
     --fx-tree-node-color: #e2e8f0;

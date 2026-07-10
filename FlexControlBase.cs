@@ -14,6 +14,14 @@ public abstract class FlexControlBase : ComponentBase
 
     [Parameter] public string? Id { get; set; }
 
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public string? Tag { get; set; }
+
+    [Parameter] public string? Data { get; set; }
+
+    [Parameter] public FlexControlBase? Parent { get; set; }
+
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object>? AdditionalAttributes { get; set; }
 

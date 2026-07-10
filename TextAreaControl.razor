@@ -1,5 +1,9 @@
 @namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
 @using System.Linq.Expressions
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
 
 @* FlexKit multi-line text input. Dedicated, lightweight TextArea (EditorControl is a
    rich editor — overkill for plain multi-line text). Supports two-way binding via
@@ -11,7 +15,100 @@
           placeholder="@Placeholder"
           maxlength="@MaxLength"
           disabled="@(!Enabled)"
-          @onchange="OnNativeValueChanged"></textarea>
+          @ref="_inputElement"
+          @oninput="OnNativeInput"
+          @onchange="OnNativeValueChanged"
+          @oncontextmenu="OpenTextContextMenuAsync"
+          @oncontextmenu:preventDefault="UseClassicContextMenu"
+          @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+
+@if (_showTextContextMenu)
+{
+    <div class="fx-text-context-backdrop"
+         @onclick="CloseTextContextMenu"
+         @oncontextmenu="CloseTextContextMenu"
+         @oncontextmenu:preventDefault="true"></div>
+    <div class="fx-text-context-menu"
+         style="@TextContextMenuStyle"
+         @onclick:stopPropagation="true"
+         @onmousedown:stopPropagation="true">
+        @if (HasTextContextMenuItem(TextContextMenuItems.Undo))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("undo")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("undo"))">Undo</button>
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Cut))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("cut")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("cut"))">Cut</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Copy))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("copy")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("copy"))">Copy</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Paste))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("paste")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("paste"))">Paste</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Delete))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("delete")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("delete"))">Delete</button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.Cut | TextContextMenuItems.Copy | TextContextMenuItems.Paste | TextContextMenuItems.Delete)
+            && HasTextContextMenuItem(TextContextMenuItems.SelectAll))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.SelectAll))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("selectAll")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("selectAll"))">Select All</button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.ReadingOrder | TextContextMenuItems.UnicodeOptions | TextContextMenuItems.Ime | TextContextMenuItems.Reconversion))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.ReadingOrder))
+        {
+            <button type="button"
+                    class="@(_textContextMenuState.IsRightToLeft ? "is-checked" : null)"
+                    disabled="@IsTextContextCommandDisabled("readingOrder")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("readingOrder"))">Right to left Reading order</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.UnicodeOptions))
+        {
+            <button type="button" disabled>Show Unicode control characters</button>
+            <button type="button" disabled>
+                <span>Insert Unicode control character</span>
+                <span class="fx-text-context-arrow">&gt;</span>
+            </button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.Ime | TextContextMenuItems.Reconversion))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Ime))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("ime")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("ime"))">Open IME</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Reconversion))
+        {
+            <button type="button" disabled>Reconversion</button>
+        }
+    </div>
+}
 
 @code {
     [Parameter] public string? Value { get; set; }
@@ -22,14 +119,123 @@
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public int? Rows { get; set; }
+    [Parameter] public bool UpdateOnInput { get; set; }
+    [Parameter] public bool UseClassicContextMenu { get; set; }
+    [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
+
+    private ElementReference _inputElement;
+    private IJSObjectReference? _controlJsModule;
+    private bool _showTextContextMenu;
+    private int _textContextMenuX;
+    private int _textContextMenuY;
+    private TextContextMenuState _textContextMenuState = new();
 
     private string ResolvedCssClass =>
         string.IsNullOrWhiteSpace(CssClass) ? "fx-textarea" : $"fx-textarea {CssClass}";
+
+    private async Task OnNativeInput(ChangeEventArgs e)
+    {
+        Value = e.Value?.ToString();
+        if (UpdateOnInput && ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(Value);
+    }
 
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task OpenTextContextMenuAsync(MouseEventArgs e)
+    {
+        if (!UseClassicContextMenu)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            _textContextMenuState = await module.InvokeAsync<TextContextMenuState>(
+                "getTextContextMenuState", _inputElement);
+            var position = await module.InvokeAsync<TextContextMenuPosition>(
+                "positionTextContextMenu", e.ClientX, e.ClientY);
+            _textContextMenuX = (int)Math.Round(position.X);
+            _textContextMenuY = (int)Math.Round(position.Y);
+            _showTextContextMenu = true;
+        }
+        catch
+        {
+            _showTextContextMenu = false;
+        }
+    }
+
+    private void CloseTextContextMenu() => _showTextContextMenu = false;
+
+    private string TextContextMenuStyle => $"left:{_textContextMenuX}px;top:{_textContextMenuY}px";
+
+    private bool HasTextContextMenuItem(TextContextMenuItems item) =>
+        (ContextMenuItems & item) == item;
+
+    private bool HasAnyTextContextMenuItem(TextContextMenuItems items) =>
+        (ContextMenuItems & items) != 0;
+
+    private bool IsTextContextCommandDisabled(string command) => command switch
+    {
+        "undo" => !Enabled,
+        "cut" => !Enabled || !_textContextMenuState.HasSelection,
+        "copy" => !_textContextMenuState.HasSelection,
+        "paste" => !Enabled,
+        "delete" => !Enabled || !_textContextMenuState.HasSelection,
+        "selectAll" => !_textContextMenuState.HasValue || _textContextMenuState.AllSelected,
+        "ime" => !Enabled,
+        _ => false
+    };
+
+    private async Task ExecuteTextContextCommandAsync(string command)
+    {
+        _showTextContextMenu = false;
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            var result = await module.InvokeAsync<TextContextCommandResult>(
+                "applyTextContextCommand", _inputElement, command);
+            if (result.ValueChanged)
+            {
+                Value = result.Value;
+                if (ValueChanged.HasDelegate)
+                    await ValueChanged.InvokeAsync(Value);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private async ValueTask<IJSObjectReference?> GetControlJsModuleAsync()
+    {
+        try
+        {
+            return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/FlexKit/textbox-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_controlJsModule != null)
+        {
+            try { await _controlJsModule.DisposeAsync(); }
+            catch { }
+        }
     }
 }

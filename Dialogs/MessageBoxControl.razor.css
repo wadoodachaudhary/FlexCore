@@ -59,7 +59,8 @@
 }
 
 .fx-msgbox-vb6 .fx-msgbox-close:hover {
-    background: #e5e5e5;
+    background: #e81123;
+    color: #fff;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-body {
@@ -114,14 +115,37 @@
     border-style: inset;
 }
 
+.fx-msgbox-vb6 .fx-msgbox-btn:disabled {
+    color: #8a8a8a;
+    text-shadow: 1px 1px #fff;
+    cursor: default;
+}
+
 .fx-msgbox-vb6 .fx-msgbox-btn-primary {
     color: #000;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-btn-primary:focus,
 .fx-msgbox-vb6 .fx-msgbox-btn:focus {
-    outline: 1px dotted #000;
-    outline-offset: -5px;
+    outline: none;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 16px 8px 58px;
+    padding: 3px 6px;
+    border: 1px dotted #000;
+    color: #000;
+    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    cursor: default;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-confirm input {
+    width: 13px;
+    height: 13px;
+    margin: 0;
 }
 
 .fx-msgbox-icon-warning::before,

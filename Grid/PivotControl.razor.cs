@@ -724,6 +724,64 @@ public partial class PivotControl<TValue>
         return string.IsNullOrWhiteSpace(text) ? "Value" : $"P_{text}";
     }
 
+    internal GridExportTable CreateExportTable(string title = "Pivot Export")
+    {
+        BuildPivot();
+
+        var table = new GridExportTable
+        {
+            Title = title,
+            SheetName = string.IsNullOrWhiteSpace(title) ? "Pivot Export" : title
+        };
+
+        foreach (var field in _effectiveRowFields)
+            table.Columns.Add(new GridExportColumn(GetFieldLabel(field), textAlign: TextAlign.Left));
+
+        foreach (var column in _valueColumns)
+            table.Columns.Add(new GridExportColumn(
+                column.Header,
+                format: column.ValueConfig.Format,
+                textAlign: TextAlign.Right));
+
+        var expectedColumnCount = table.Columns.Count;
+        foreach (var row in _displayRows)
+        {
+            var values = FlattenPivotExportRow(row.Cells, expectedColumnCount);
+            table.Rows.Add(new GridExportRow(values, IsPivotExportTotalRow(row)));
+        }
+
+        return table;
+    }
+
+    private static IEnumerable<object?> FlattenPivotExportRow(
+        IReadOnlyList<PivotDisplayCell> cells,
+        int expectedColumnCount)
+    {
+        var values = new List<object?>(expectedColumnCount);
+        foreach (var cell in cells)
+        {
+            if (cell.Rowspan == 0)
+            {
+                values.Add("");
+                continue;
+            }
+
+            values.Add(cell.DisplayValue);
+            for (var span = 1; span < cell.Colspan; span++)
+                values.Add("");
+        }
+
+        while (values.Count < expectedColumnCount)
+            values.Add("");
+
+        return values.Count > expectedColumnCount
+            ? values.Take(expectedColumnCount).ToList()
+            : values;
+    }
+
+    private static bool IsPivotExportTotalRow(PivotDisplayRow row) =>
+        row.CssClass.Contains("total", StringComparison.OrdinalIgnoreCase);
+
     internal enum PivotArea { None, Row, Column, Value, Filter }
 
     private sealed record PivotValueColumn(string Field, string Header, PivotKey Key,

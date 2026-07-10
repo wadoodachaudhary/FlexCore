@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
+using Fx.ControlKit;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Linq.Expressions;
@@ -12,7 +13,7 @@ using System.Text.RegularExpressions;
 
 namespace Fx.ControlKit.Grid;
 
-public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
+public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDisposable
 {
     void IGridOwner.RegisterColumnsContainer(GridColumnsBase container)
     {
@@ -39,7 +40,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public bool EnableViewportSafeSizing { get; set; } = true;
     [Parameter] public string ViewportSafeMaxWidth { get; set; } = "";
     [Parameter] public string ViewportSafeMaxHeight { get; set; } = "";
-    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public EventCallback<MouseEventArgs> OnContextMenu { get; set; }
+    [Parameter] public bool PreventDefaultContextMenu { get; set; }
+    [Parameter] public bool StopContextMenuPropagation { get; set; }
     [Parameter] public bool ExtendVerticalScrollbarIntoHeader { get; set; }
     [Parameter] public int RowHeight { get; set; }
     [Parameter] public bool AllowRowResizing { get; set; }
@@ -62,6 +65,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     [Parameter] public int PageButtonCount { get; set; } = 5;
     [Parameter] public int AutoPageRowThreshold { get; set; } = 10000;
     [Parameter] public bool ClearFiltersOnDataSourceChange { get; set; } = true;
+    [Parameter] public bool AutoSelectFirstRow { get; set; }
     [Parameter] public bool ShowHeaderFilterIcon { get; set; } = true;
     [Parameter] public string HeaderFilterIcon { get; set; } = string.Empty;
     [Parameter] public bool AllowPaging { get; set; }
@@ -105,6 +109,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     [Parameter] public List<string>? GroupColumns { get; set; }
 
+    [Parameter] public Func<string, string, IReadOnlyList<TValue>, string>? GroupHeaderTextSelector { get; set; }
+
     [Parameter] public List<AggregateRow>? AggregateRows { get; set; }
 
     [Parameter] public bool ShowGroupExpandCollapse { get; set; } = true;
@@ -130,7 +136,27 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     [Parameter] public bool AllowColumnReorder { get; set; } = true;
 
+    [Parameter] public bool EnableHeaderContextMenu { get; set; } = true;
+
+    [Parameter] public bool EnableCellContextMenu { get; set; }
+
     [Parameter] public string ColumnReorderPipeColor { get; set; } = "#2b2b2b";
+
+    [Parameter] public bool ShowPrintOptionsDialog { get; set; } = true;
+
+    [Parameter] public GridPdfOrientation DefaultPrintOrientation { get; set; } = GridPdfOrientation.Portrait;
+
+    [Parameter] public GridPdfPageSize DefaultPrintPageSize { get; set; } = GridPdfPageSize.Letter;
+
+    [Parameter] public GridPdfColumnLayout DefaultPrintColumnLayout { get; set; } = GridPdfColumnLayout.WrapText;
+
+    [Parameter] public bool DefaultPrintGridLines { get; set; } = true;
+
+    [Parameter] public GridPdfZoomMode DefaultPrintZoomMode { get; set; } = GridPdfZoomMode.FitToPage;
+
+    [Parameter] public int DefaultPrintZoomPercent { get; set; } = 100;
+
+    [Parameter] public bool IncludeTotalsInExport { get; set; } = true;
 
     [Parameter] public IEnumerable<ChooseColumnDescriptor>? AvailableColumns { get; set; }
 
@@ -222,7 +248,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (string.IsNullOrEmpty(Height))
                 return string.Empty;
 
-            return "overflow-x:auto; overflow-y:hidden; flex:1;";
+            return IsPagingActive
+                ? "overflow-x:auto; overflow-y:hidden; flex:1;"
+                : "overflow:auto; flex:1;";
         }
     }
 
@@ -277,6 +305,14 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (!string.IsNullOrEmpty(width))  sb.Append("width:").Append(width).Append("; ");
             return sb.ToString();
         }
+    }
+
+    private bool GridContextMenuPreventDefault => EnableCellContextMenu || PreventDefaultContextMenu || OnContextMenu.HasDelegate;
+
+    private async Task HandleGridContextMenu(MouseEventArgs e)
+    {
+        if (OnContextMenu.HasDelegate)
+            await OnContextMenu.InvokeAsync(e);
     }
 
     private string? ResolveViewportSafeSize(string? size, string maxSize)
@@ -452,10 +488,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private IJSObjectReference? _gridJsModule;
     private ElementReference _gridHostElement;
+    private PivotControl<TValue>? _pivotControlRef;
     private DotNetObjectReference<GridControl<TValue>>? _gridDotNetRef;
     private bool _headerDragPreviewRegistered;
     private bool _rowDragSelectionAutoScrollRegistered;
     private bool _gridKeyboardTrapRegistered;
+    private bool _gridScrollSyncRegistered;
+    private bool _scrollbarActivityRegistered;
+    private bool _gridResizeCaptureRegistered;
+    private bool _initialScrollResetOnFirstRenderPending = true;
+    private bool _initialScrollResetOnFirstDataPending = true;
+    private bool _pendingFirstRowSelection;
+    private string? _focusedGroupPath;
     private int? _lastHostResolvedPageSize;
 
     private enum GridScrollNavigationKey
@@ -473,14 +517,25 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     private TextFilterOperator _filterOperatorDraft = TextFilterOperator.Contains;
     private bool _filterPopupAutoApply = true;
     private HashSet<string> _filterCheckedDraft = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TextFilterOperator> _filterOperatorDraftsByField = new(StringComparer.Ordinal);
     private IEnumerable<TValue>? _lastFilterDataSource;
+    private DataSourceSelectionSignature _lastFilterDataSourceSignature;
     private bool _filterDataSourceCaptured;
+    private ElementReference _filterConditionInputRef;
+    private ElementReference _filterValueSearchInputRef;
+    private FilterPopupFocusTarget? _pendingFilterPopupFocusTarget;
     private IEnumerable<TValue>? _lastSelectionDataSource;
     private DataSourceSelectionSignature _lastSelectionDataSourceSignature;
     private bool _selectionDataSourceCaptured;
     private string FilterPopupStyle =>
         string.Create(CultureInfo.InvariantCulture,
-            $"left:clamp(8px,{_filterPopupX - 280}px,calc(100vw - 360px));top:clamp(8px,{_filterPopupY + 10}px,calc(100vh - 440px));");
+            $"left:clamp(8px,{_filterPopupX + 8}px,calc(100vw - 360px));top:clamp(8px,{_filterPopupY + 10}px,calc(100vh - 440px));");
+
+    private enum FilterPopupFocusTarget
+    {
+        ConditionInput,
+        ValueSearchInput
+    }
 
     private string _typeAheadBuffer = "";
     private bool _rowSelectionTypeAheadTargetCaptured;
@@ -490,6 +545,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private string? SearchText;
     private CancellationTokenSource? _searchCts;
+    private string? _exportStatusMessage;
+    private int _exportStatusGeneration;
 
     private readonly List<GroupDescriptor> _groupDescriptors = new();
     private string? _draggingColumnField;
@@ -568,7 +625,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         get
         {
-            var cols = _columnsContainer?.Columns.Where(IsColumnVisible) ?? Enumerable.Empty<GridColumn>();
+            var cols = EffectiveColumns.Where(IsColumnVisible);
             if (HideGroupedColumns && _groupDescriptors.Count > 0)
             {
                 var groupedFields = _groupDescriptors.Select(g => g.Field).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -578,17 +635,45 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
+    private IEnumerable<GridColumn> EffectiveColumns
+    {
+        get
+        {
+            var columns = _columnsContainer?.Columns;
+            if (columns is { Count: > 0 })
+                return columns;
+
+            return AvailableColumns?
+                .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                .Select(CreateTransientColumn)
+                ?? Enumerable.Empty<GridColumn>();
+        }
+    }
+
+    #pragma warning disable BL0005 // Transient non-rendered columns mirror host schema when data is empty.
+    private static GridColumn CreateTransientColumn(ChooseColumnDescriptor column) => new()
+    {
+        Field = column.Field,
+        HeaderText = string.IsNullOrWhiteSpace(column.Header) ? column.Field : column.Header,
+        Visible = column.Visible
+    };
+    #pragma warning restore BL0005
+
     public IReadOnlyList<GridColumn> Columns =>
         _columnsContainer?.Columns ?? Array.Empty<GridColumn>();
 
     private bool AllRowsSelected =>
         PagedData.Any() && PagedData.All(item => _selectedItems.Contains(item));
 
+    private bool ShouldHideGridContentForNoVisibleColumns =>
+        !VisibleColumns.Any()
+        && Columns.Count > 0;
+
     private EventCallback<bool> SelectAllCheckedChanged =>
         EventCallback.Factory.Create<bool>(this, (bool value) => ToggleSelectAll(value));
 
     private int GroupedPlaceholderCount =>
-        (AllowGrouping && HideGroupedColumns) ? _groupDescriptors.Count : 0;
+        (AllowGrouping && HideGroupedColumns) ? GroupedLayoutColumns.Count : 0;
 
     private int TotalColumnCount =>
         VisibleColumns.Count()
@@ -689,13 +774,24 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             if (sortedCol.Key != null)
             {
                 var sortField = sortedCol.Key;
+                var rows = data.ToList();
+                var regularRows = rows.Where(item => !IsPinnedTrailingNewRow(item));
+                var pinnedRows = rows.Where(IsPinnedTrailingNewRow);
+
                 if (sortedCol.Value.SortDirection == SortDirection.Ascending)
-                    data = data.OrderBy(item => GetPropertyValue(item, sortField));
+                    data = regularRows.OrderBy(item => GetPropertyValue(item, sortField)).Concat(pinnedRows);
                 else
-                    data = data.OrderByDescending(item => GetPropertyValue(item, sortField));
+                    data = regularRows.OrderByDescending(item => GetPropertyValue(item, sortField)).Concat(pinnedRows);
             }
             return data;
         }
+    }
+
+    private bool IsPinnedTrailingNewRow(TValue item)
+    {
+        return _hasTrailingNewRowItem
+            && EqualityComparer<TValue>.Default.Equals(item, _trailingNewRowItem!)
+            && IsTrackedTrailingNewRowStillBlank(item);
     }
 
     private IEnumerable<TValue> PagedData
@@ -747,6 +843,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     Field = gd.Field,
                     HeaderText = gd.HeaderText,
                     Key = g.Key,
+                    DisplayText = ResolveGroupHeaderText(gd.Field, g.Key, allItems),
                     GroupPath = groupPath,
                     Count = allItems.Count,
                     Items = level == _groupDescriptors.Count - 1 ? allItems : Enumerable.Empty<TValue>(),
@@ -780,6 +877,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
 
         return groups;
+    }
+
+    private string ResolveGroupHeaderText(string field, string key, IReadOnlyList<TValue> items)
+    {
+        if (GroupHeaderTextSelector == null)
+            return key;
+
+        var displayText = GroupHeaderTextSelector(field, key, items);
+        return string.IsNullOrWhiteSpace(displayText) ? key : displayText;
     }
 
     private Dictionary<string, object?> ComputeAggregates(IEnumerable<TValue> items)
@@ -953,8 +1059,11 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
 
         await EnsureGridKeyboardTrapRegisteredAsync();
+        await EnsureGridScrollSyncRegisteredAsync();
         await EnsureHeaderDragPreviewRegisteredAsync();
         await EnsureRowDragSelectionAutoScrollRegisteredAsync();
+        await EnsureScrollbarActivityRegisteredAsync();
+        await EnsureFilterPopupDragRegisteredAsync();
 
         if (!string.IsNullOrEmpty(PersistenceKey)
             && PersistenceKey != _gridSettingsLoadedKey
@@ -1030,6 +1139,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _pendingActiveCellScrollIntoView = false;
             await EnsureActiveCellVisibleAsync();
         }
+
+        await ResetInitialGridScrollIfNeededAsync(firstRender);
+        await EnsurePendingFirstRowSelectionAsync();
+        await RestoreFilterPopupFocusAsync();
     }
 
     private async Task EnsureActiveCellVisibleAsync()
@@ -1042,6 +1155,163 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         catch (Exception)
         {
+        }
+    }
+
+    private async Task ResetInitialGridScrollIfNeededAsync(bool firstRender)
+    {
+        var hasData = HasAnyData;
+        var shouldReset = (_initialScrollResetOnFirstRenderPending && firstRender)
+            || (_initialScrollResetOnFirstDataPending && hasData);
+
+        if (!shouldReset)
+            return;
+
+        if (!await ResetInitialGridScrollAsync())
+            return;
+
+        if (hasData)
+        {
+            _initialScrollResetOnFirstDataPending = false;
+            _initialScrollResetOnFirstRenderPending = false;
+        }
+        else if (firstRender)
+        {
+            _initialScrollResetOnFirstRenderPending = false;
+        }
+    }
+
+    private async Task EnsurePendingFirstRowSelectionAsync()
+    {
+        if (!_pendingFirstRowSelection)
+            return;
+
+        if (!ShouldAutoSelectFirstRow())
+        {
+            _pendingFirstRowSelection = false;
+            return;
+        }
+
+        var rows = GetVisibleRowItems();
+        if (rows.Count == 0)
+            return;
+
+        _pendingFirstRowSelection = false;
+        if (_selectedItems.Count > 0)
+            return;
+
+        await SelectFirstVisibleRowAsync(force: false);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool ShouldAutoSelectFirstRow()
+    {
+        if (!AutoSelectFirstRow || !AllowSelection)
+            return false;
+        if (SelectionSettingsRef?.CheckboxOnly == true)
+            return false;
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            return false;
+        if (ShouldHideGridContentForNoVisibleColumns)
+            return false;
+
+        return true;
+    }
+
+    private async Task SelectFirstVisibleRowAsync(bool force)
+    {
+        if (!ShouldAutoSelectFirstRow())
+            return;
+
+        var item = GetVisibleRowItems().FirstOrDefault();
+        if (item == null)
+            return;
+
+        if (!force && _selectedItems.Count > 0)
+            return;
+
+        var rowIndex = ResolveRowIndex(item, 0);
+        if (rowIndex < 0)
+            rowIndex = 0;
+
+        _focusedGroupPath = null;
+        _selectedItems.Clear();
+        _selectedItems.Add(item);
+        _selectedCells.Clear();
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = rowIndex;
+
+        _activeCell = VisibleColumns.Any() ? (rowIndex, 0) : null;
+        if (_activeCell.HasValue)
+            _lastSelectedCell = _activeCell.Value;
+
+        if (EventsRef?.RowSelected.HasDelegate == true)
+        {
+            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue>
+            {
+                Data = item,
+                RowIndex = rowIndex
+            });
+        }
+
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
+        if (_filterPopupField == null)
+            await FocusGridHostAsync();
+    }
+
+    private void QueueFilterPopupFocus(FilterPopupFocusTarget target)
+    {
+        if (_filterPopupField != null)
+            _pendingFilterPopupFocusTarget = target;
+    }
+
+    private async Task RestoreFilterPopupFocusAsync()
+    {
+        if (_filterPopupField == null || !_pendingFilterPopupFocusTarget.HasValue)
+            return;
+
+        var target = _pendingFilterPopupFocusTarget.Value;
+        _pendingFilterPopupFocusTarget = null;
+        var element = target == FilterPopupFocusTarget.ConditionInput
+            ? _filterConditionInputRef
+            : _filterValueSearchInputRef;
+
+        try
+        {
+            var module = await GetGridJsModuleAsync();
+            if (module != null)
+            {
+                await module.InvokeVoidAsync("focusInputAtEnd", element);
+                return;
+            }
+        }
+        catch (Exception)
+        {
+        }
+
+        try
+        {
+            await element.FocusAsync(preventScroll: true);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task<bool> ResetInitialGridScrollAsync()
+    {
+        try
+        {
+            var module = await GetGridJsModuleAsync();
+            if (module == null)
+                return false;
+
+            await module.InvokeVoidAsync("resetInitialGridScroll", _gridHostElement);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 
@@ -1217,6 +1487,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _autoWidthPending = true;
         EnsureThemeInitialized();
         EnsureAdvancedViewInitialized();
+        SyncPrintDefaults();
         ResetFiltersIfDataSourceChanged();
         ClearSelectionIfDataSourceChanged();
 
@@ -1230,19 +1501,57 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         SyncGroupDescriptorsFromParameter();
     }
 
+    private void SyncPrintDefaults()
+    {
+        var defaultsChanged = !_printDefaultsInitialized
+            || _lastDefaultPrintOrientation != DefaultPrintOrientation
+            || _lastDefaultPrintPageSize != DefaultPrintPageSize
+            || _lastDefaultPrintColumnLayout != DefaultPrintColumnLayout
+            || _lastDefaultPrintGridLines != DefaultPrintGridLines
+            || _lastDefaultPrintZoomMode != DefaultPrintZoomMode
+            || _lastDefaultPrintZoomPercent != ClampPrintZoomPercent(DefaultPrintZoomPercent);
+
+        if (!defaultsChanged)
+            return;
+
+        _lastDefaultPrintOrientation = DefaultPrintOrientation;
+        _lastDefaultPrintPageSize = DefaultPrintPageSize;
+        _lastDefaultPrintColumnLayout = DefaultPrintColumnLayout;
+        _lastDefaultPrintGridLines = DefaultPrintGridLines;
+        _lastDefaultPrintZoomMode = DefaultPrintZoomMode;
+        _lastDefaultPrintZoomPercent = ClampPrintZoomPercent(DefaultPrintZoomPercent);
+        _printDefaultsInitialized = true;
+
+        if (_showPrintOptionsDialog)
+            return;
+
+        _printOrientation = DefaultPrintOrientation;
+        _printPageSize = DefaultPrintPageSize;
+        _printColumnLayout = DefaultPrintColumnLayout;
+        _printShowGridLines = DefaultPrintGridLines;
+        _printZoomMode = DefaultPrintZoomMode;
+        _printZoomPercent = ClampPrintZoomPercent(DefaultPrintZoomPercent);
+    }
+
     private void ResetFiltersIfDataSourceChanged()
     {
+        var signature = ComputeSelectionDataSourceSignature();
         if (!_filterDataSourceCaptured)
         {
             _lastFilterDataSource = DataSource;
+            _lastFilterDataSourceSignature = signature;
             _filterDataSourceCaptured = true;
             return;
         }
 
-        if (ReferenceEquals(_lastFilterDataSource, DataSource))
+        if (signature.Equals(_lastFilterDataSourceSignature))
+        {
+            _lastFilterDataSource = DataSource;
             return;
+        }
 
         _lastFilterDataSource = DataSource;
+        _lastFilterDataSourceSignature = signature;
         if (ClearFiltersOnDataSourceChange)
             ClearAllFilterState();
     }
@@ -1255,17 +1564,21 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _lastSelectionDataSource = DataSource;
             _lastSelectionDataSourceSignature = signature;
             _selectionDataSourceCaptured = true;
+            _pendingFirstRowSelection = AutoSelectFirstRow;
             return;
         }
 
-        if (ReferenceEquals(_lastSelectionDataSource, DataSource)
-            && signature.Equals(_lastSelectionDataSourceSignature))
+        if (signature.Equals(_lastSelectionDataSourceSignature))
+        {
+            _lastSelectionDataSource = DataSource;
             return;
+        }
 
         _lastSelectionDataSource = DataSource;
         _lastSelectionDataSourceSignature = signature;
         _runtimeRowHeights.Clear();
         ClearTransientSelectionState(clearRows: true);
+        _pendingFirstRowSelection = AutoSelectFirstRow;
     }
 
     private DataSourceSelectionSignature ComputeSelectionDataSourceSignature()
@@ -1399,6 +1712,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
+
+        _pendingFirstRowSelection = false;
+        await SelectFirstVisibleRowAsync(force: true);
     }
 
     private async Task ApplyFilter(string field, string? value, TextFilterOperator? filterOperator = null)
@@ -1413,9 +1729,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
 
         state.FilterValue = string.IsNullOrWhiteSpace(value) ? null : value;
-        state.FilterOperator = string.IsNullOrWhiteSpace(value)
-            ? TextFilterOperator.Contains
-            : (filterOperator ?? TextFilterOperator.Contains);
+        state.FilterOperator = filterOperator ?? state.FilterOperator;
         state.CheckedNumericRangeKeys.Clear();
         state.UseNumericRangeFilter = false;
         state.NumericFilterMin = null;
@@ -1474,8 +1788,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _numericFilterMaxText.Remove(field);
         if (string.Equals(_filterPopupField, field, StringComparison.Ordinal))
         {
+            var state = GetColumnState(field);
             _filterTextDraft = "";
-            _filterOperatorDraft = TextFilterOperator.Contains;
+            _filterOperatorDraft = state.FilterOperator;
             _filterCheckedDraft = new HashSet<string>(GetDistinctValues(field), StringComparer.Ordinal);
         }
     }
@@ -1505,6 +1820,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _filterPopupField = null;
         _filterTextDraft = "";
         _filterOperatorDraft = TextFilterOperator.Contains;
+        _filterOperatorDraftsByField.Clear();
         _filterCheckedDraft.Clear();
         _pageState.CurrentPage = 1;
     }
@@ -1684,6 +2000,257 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         HandleRowMouseDown(item, rowIndex, args);
     }
 
+    private void HandleCellContextMenu(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
+    {
+        var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        SetActiveCell(resolvedRowIndex, cellIndex);
+        _lastSelectedCell = (resolvedRowIndex, cellIndex);
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = resolvedRowIndex;
+        ClearKeyboardNavigationSource();
+        CaptureRowSelectionTypeAheadTarget(cellIndex);
+
+        if (!EnableCellContextMenu)
+            return;
+
+        var visibleColumns = VisibleColumns.ToList();
+        if (cellIndex < 0 || cellIndex >= visibleColumns.Count)
+            return;
+
+        _cellContextMenuItem = item;
+        _cellContextMenuColumn = visibleColumns[cellIndex];
+        _cellContextMenuX = Math.Max(0, args.ClientX);
+        _cellContextMenuY = Math.Max(0, args.ClientY);
+        _showCellContextMenu = true;
+        _showHeaderContextMenu = false;
+        _showInsertColumnSubmenu = false;
+    }
+
+    private void CloseCellContextMenu()
+    {
+        _showCellContextMenu = false;
+        _cellContextMenuItem = default;
+        _cellContextMenuColumn = null;
+    }
+
+    private bool CanReadCellContext => _cellContextMenuItem is not null && _cellContextMenuColumn is not null;
+
+    private bool CanApplyCellContextEdit => CanEditCellContextColumn(_cellContextMenuColumn);
+
+    private bool CanEditCellContextColumn(GridColumn? col)
+    {
+        return EnableCellContextMenu
+            && col is not null
+            && col.AllowEditing
+            && !col.IsPrimaryKey
+            && !string.IsNullOrWhiteSpace(col.Field)
+            && EditSettingsRef?.AllowEditing == true;
+    }
+
+    private async Task CellContextCutAsync()
+    {
+        if (!CanApplyCellContextEdit)
+            return;
+
+        var text = GetCellContextText();
+        await WriteCellContextClipboardAsync(text);
+        await CommitCellContextValueAsync(GetCellContextDeleteValue(_cellContextMenuColumn!));
+        CloseCellContextMenu();
+    }
+
+    private async Task CellContextCopyAsync()
+    {
+        if (!CanReadCellContext)
+            return;
+
+        await WriteCellContextClipboardAsync(GetCellContextText());
+        CloseCellContextMenu();
+    }
+
+    private async Task CellContextPasteAsync()
+    {
+        if (!CanApplyCellContextEdit || _cellContextMenuColumn is null)
+            return;
+
+        var text = await ReadCellContextClipboardAsync();
+        if (text is null)
+        {
+            CloseCellContextMenu();
+            return;
+        }
+
+        await CommitCellContextValueAsync(CoerceCellContextText(_cellContextMenuColumn, text));
+        CloseCellContextMenu();
+    }
+
+    private async Task CellContextDeleteAsync()
+    {
+        if (!CanApplyCellContextEdit || _cellContextMenuColumn is null)
+            return;
+
+        await CommitCellContextValueAsync(GetCellContextDeleteValue(_cellContextMenuColumn));
+        CloseCellContextMenu();
+    }
+
+    private string GetCellContextText()
+    {
+        return _cellContextMenuItem is null || _cellContextMenuColumn is null
+            ? string.Empty
+            : GetCellDisplayValue(_cellContextMenuItem, _cellContextMenuColumn);
+    }
+
+    private async Task WriteCellContextClipboardAsync(string text)
+    {
+        _cellContextClipboardText = text;
+        _hasCellContextClipboard = true;
+
+        try
+        {
+            await JsRuntime.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task<string?> ReadCellContextClipboardAsync()
+    {
+        try
+        {
+            var text = await JsRuntime.InvokeAsync<string>("navigator.clipboard.readText");
+            if (text is not null)
+                return text;
+        }
+        catch
+        {
+        }
+
+        return _hasCellContextClipboard ? _cellContextClipboardText : null;
+    }
+
+    private static object? CoerceCellContextText(GridColumn col, string text)
+    {
+        if (col.Type is ColumnType.CheckBox or ColumnType.Boolean)
+        {
+            if (bool.TryParse(text, out var boolValue))
+                return boolValue;
+            if (int.TryParse(text, NumberStyles.Any, CultureInfo.InvariantCulture, out var intValue))
+                return intValue != 0;
+
+            return false;
+        }
+
+        return text;
+    }
+
+    private static object? GetCellContextDeleteValue(GridColumn col)
+    {
+        return col.Type is ColumnType.CheckBox or ColumnType.Boolean ? false : "";
+    }
+
+    private async Task<bool> CommitCellContextValueAsync(object? newValue)
+    {
+        if (_cellContextMenuItem is null || _cellContextMenuColumn is null || !CanApplyCellContextEdit)
+            return false;
+
+        var item = _cellContextMenuItem;
+        var col = _cellContextMenuColumn;
+        await CommitBatchEdit();
+
+        if (EventsRef?.OnCellEdit.HasDelegate == true)
+        {
+            var editArgs = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
+            await EventsRef.OnCellEdit.InvokeAsync(editArgs);
+            if (editArgs.Cancel)
+            {
+                await InvokeAsync(StateHasChanged);
+                return false;
+            }
+        }
+
+        if (!SetPropertyObjectValue(item, col.Field, newValue))
+        {
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
+
+        if (EventsRef?.OnCellSave.HasDelegate == true)
+        {
+            await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
+            {
+                Data = item,
+                ColumnName = col.Field,
+                Value = newValue
+            });
+        }
+
+        await EnsureTrailingNewRowIfNeededAsync();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private async Task<bool> TryHandleCellContextShortcutAsync(KeyboardEventArgs e)
+    {
+        if (!EnableCellContextMenu || _batchEditItem != null || _isEditing)
+            return false;
+
+        var key = e.Key?.ToLowerInvariant() ?? "";
+        var modifier = e.CtrlKey || e.MetaKey;
+
+        if (modifier && key == "x")
+        {
+            if (!TryPrepareActiveCellContext())
+                return false;
+
+            await CellContextCutAsync();
+            return true;
+        }
+
+        if (modifier && key == "c")
+        {
+            if (!TryPrepareActiveCellContext())
+                return false;
+
+            await CellContextCopyAsync();
+            return true;
+        }
+
+        if (modifier && key == "v")
+        {
+            if (!TryPrepareActiveCellContext())
+                return false;
+
+            await CellContextPasteAsync();
+            return true;
+        }
+
+        if (!modifier && !e.AltKey && key == "delete")
+        {
+            if (!TryPrepareActiveCellContext())
+                return false;
+
+            await CellContextDeleteAsync();
+            return true;
+        }
+
+        return false;
+    }
+
+    private bool TryPrepareActiveCellContext()
+    {
+        if (!_activeCell.HasValue)
+            return false;
+
+        var col = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
+        var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (col is null || item is null)
+            return false;
+
+        _cellContextMenuItem = item;
+        _cellContextMenuColumn = col;
+        return true;
+    }
+
     private void HandleGridMouseUp(MouseEventArgs args)
     {
         if (_isDragSelecting || _isCellDragSelecting) return;
@@ -1840,6 +2407,21 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
     }
 
+    private async Task EnsureGridScrollSyncRegisteredAsync()
+    {
+        if (_gridScrollSyncRegistered) return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerGridScrollSync", _gridHostElement);
+            _gridScrollSyncRegistered = true;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
     private async Task EnsureHeaderDragPreviewRegisteredAsync()
     {
         if (_headerDragPreviewRegistered) return;
@@ -1865,6 +2447,35 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerRowDragSelectionAutoScroll", _gridHostElement, _gridDotNetRef);
             _rowDragSelectionAutoScrollRegistered = true;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task EnsureScrollbarActivityRegisteredAsync()
+    {
+        if (_scrollbarActivityRegistered) return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerScrollbarActivity", _gridHostElement);
+            _scrollbarActivityRegistered = true;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task EnsureFilterPopupDragRegisteredAsync()
+    {
+        if (_filterPopupField == null) return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerFilterPopupDrag", _gridHostElement);
         }
         catch (Exception)
         {
@@ -1998,6 +2609,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private async Task SelectRow(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
     {
+        _focusedGroupPath = null;
         var selType = SelectionSettingsRef?.Type ?? SelectionType.Single;
         var isCtrl = mouseArgs?.CtrlKey == true || mouseArgs?.MetaKey == true;
         var isShift = mouseArgs?.ShiftKey == true;
@@ -2011,20 +2623,15 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         if (selType == SelectionType.Single && !isCtrl && !isShift)
         {
-            var wasSelected = _selectedItems.Contains(item);
             _selectedItems.Clear();
-            if (!wasSelected || SelectionSettingsRef?.EnableToggle != true)
-                _selectedItems.Add(item);
+            _selectedItems.Add(item);
         }
         else if (selType == SelectionType.Multiple || isCtrl || isShift)
         {
             if (!isCtrl && !isShift && selType == SelectionType.Multiple)
             {
-                var wasSelected = _selectedItems.Contains(item);
-                var hadMulti = _selectedItems.Count > 1;
                 _selectedItems.Clear();
-                if (hadMulti || !wasSelected || SelectionSettingsRef?.EnableToggle != true)
-                    _selectedItems.Add(item);
+                _selectedItems.Add(item);
             }
             else if (isShift && _lastSelectedItem != null)
             {
@@ -2051,8 +2658,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             }
             else
             {
-                if (!_selectedItems.Remove(item))
-                    _selectedItems.Add(item);
+                _selectedItems.Clear();
+                _selectedItems.Add(item);
             }
         }
 
@@ -2348,9 +2955,13 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (!AllowSelection)
             return;
 
-        await CommitBatchEdit();
-
         var clickedCol = VisibleColumns.ElementAtOrDefault(cellIndex);
+
+        var clickingActiveEditCell = clickedCol != null
+            && !string.IsNullOrEmpty(clickedCol.Field)
+            && IsBatchEditing(item, clickedCol.Field);
+        if (!clickingActiveEditCell)
+            await CommitBatchEdit();
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
         {
             _selectedCells.Clear();
@@ -2683,7 +3294,29 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private async Task ToggleRowSelection(TValue item, int rowIndex)
     {
-        await SelectRow(item, rowIndex);
+        _focusedGroupPath = null;
+
+        if (EventsRef?.RowSelecting.HasDelegate == true)
+        {
+            var args = new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex };
+            await EventsRef.RowSelecting.InvokeAsync(args);
+            if (args.Cancel) return;
+        }
+
+        if (!_selectedItems.Remove(item))
+        {
+            if ((SelectionSettingsRef?.Type ?? SelectionType.Single) == SelectionType.Single)
+                _selectedItems.Clear();
+            _selectedItems.Add(item);
+        }
+
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = ResolveRowIndex(item, rowIndex);
+
+        if (EventsRef?.RowSelected.HasDelegate == true)
+            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex });
+
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Pointer);
     }
 
     private void ToggleSelectAll(ChangeEventArgs e)
@@ -2844,6 +3477,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return false;
         if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return false;
 
+        if (IsBatchEditing(item, col.Field))
+            return true;
+
         await CommitBatchEdit();
 
         if (col.Type == ColumnType.CheckBox)
@@ -2992,22 +3628,41 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var buttonItem = item;
         var buttonCol = col;
+        var editButtonText = string.IsNullOrWhiteSpace(col.EditButtonText) ? "..." : col.EditButtonText;
+        if (editButtonText == "...")
+        {
+            builder.OpenElement(sequence, "span");
+            builder.AddAttribute(sequence + 1, "class", "fx-cell-action-content");
+
+            builder.OpenElement(sequence + 2, "span");
+            builder.AddAttribute(sequence + 3, "class", "fx-cell-action-text");
+            builder.AddContent(sequence + 4, text);
+            builder.CloseElement();
+
+            builder.OpenElement(sequence + 5, "button");
+            builder.AddAttribute(sequence + 6, "type", "button");
+            builder.AddAttribute(sequence + 7, "class", "fx-cell-action-btn fx-cell-action-ellipsis-btn");
+            builder.AddAttribute(sequence + 8, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+            builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
+            builder.AddAttribute(sequence + 10, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
+            builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
+            builder.AddEventPreventDefaultAttribute(sequence + 12, "onmousedown", true);
+            builder.AddContent(sequence + 13, "...");
+            builder.CloseElement();
+
+            builder.CloseElement();
+            return;
+        }
+
         builder.OpenElement(sequence, "button");
         builder.AddAttribute(sequence + 1, "type", "button");
-        builder.AddAttribute(sequence + 2, "class", "fx-cell-action-btn");
+        builder.AddAttribute(sequence + 2, "class", "fx-cell-action-btn fx-cell-action-command");
         builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
         builder.AddEventStopPropagationAttribute(sequence + 4, "onclick", true);
         builder.AddAttribute(sequence + 5, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
         builder.AddEventStopPropagationAttribute(sequence + 6, "onmousedown", true);
         builder.AddEventPreventDefaultAttribute(sequence + 7, "onmousedown", true);
-        builder.OpenElement(sequence + 8, "span");
-        builder.AddAttribute(sequence + 9, "class", "fx-cell-action-text");
-        builder.AddContent(sequence + 10, text);
-        builder.CloseElement();
-        builder.OpenElement(sequence + 11, "span");
-        builder.AddAttribute(sequence + 12, "class", "fx-cell-action-ellipsis");
-        builder.AddContent(sequence + 13, "...");
-        builder.CloseElement();
+        builder.AddContent(sequence + 8, editButtonText);
         builder.CloseElement();
     }
 
@@ -3132,6 +3787,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
             if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
+            if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
+                builder.AddAttribute(sequence + 6, "MaxLength", col.MaxLength.Value);
             builder.AddAttribute(sequence + 13, "UpdateOnInput", true);
             builder.AddAttribute(sequence + 14, "ValueChanged", EventCallback.Factory.Create<string?>(this, value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
             builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
@@ -3153,7 +3810,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.AddEventStopPropagationAttribute(sequence + 46, "onmousedown", true);
             builder.AddAttribute(sequence + 47, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(ebItem, ebCol)));
             builder.AddEventStopPropagationAttribute(sequence + 48, "onclick", true);
-            builder.AddContent(sequence + 49, "...");
+            builder.AddContent(sequence + 49, string.IsNullOrWhiteSpace(col.EditButtonText) ? "..." : col.EditButtonText);
             builder.CloseElement();
         }
     }
@@ -4353,6 +5010,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (await TryHandleCellContextShortcutAsync(e))
+            return;
+
         if (e.Key == "Escape" && _isEditing)
         {
             CancelEdit();
@@ -5325,25 +5985,51 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private bool _showHeaderContextMenu;
     private string _headerContextMenuField = "";
+    private string _renameColumnField = "";
     private double _headerContextMenuX;
     private double _headerContextMenuY;
+    private bool _showCellContextMenu;
+    private double _cellContextMenuX;
+    private double _cellContextMenuY;
+    private TValue? _cellContextMenuItem;
+    private GridColumn? _cellContextMenuColumn;
+    private string _cellContextClipboardText = "";
+    private bool _hasCellContextClipboard;
 #pragma warning disable CS0414
     private bool _showInsertColumnSubmenu;
 #pragma warning restore CS0414
     private bool _showRenameColumn;
     private string _renameColumnDraft = "";
+    private bool _showPrintOptionsDialog;
+    private bool _printDefaultsInitialized;
+    private GridPdfOrientation _lastDefaultPrintOrientation;
+    private GridPdfPageSize _lastDefaultPrintPageSize;
+    private GridPdfColumnLayout _lastDefaultPrintColumnLayout;
+    private bool _lastDefaultPrintGridLines = true;
+    private GridPdfZoomMode _lastDefaultPrintZoomMode = GridPdfZoomMode.FitToPage;
+    private int _lastDefaultPrintZoomPercent = 100;
+    private GridPdfOrientation _printOrientation = GridPdfOrientation.Portrait;
+    private GridPdfPageSize _printPageSize = GridPdfPageSize.Letter;
+    private GridPdfColumnLayout _printColumnLayout = GridPdfColumnLayout.WrapText;
+    private bool _printShowGridLines = true;
+    private GridPdfZoomMode _printZoomMode = GridPdfZoomMode.FitToPage;
+    private int _printZoomPercent = 100;
 
     private readonly Dictionary<string, string> _headerOverrides =
         new(StringComparer.Ordinal);
 
     private readonly Dictionary<string, bool> _visibilityOverrides =
-        new(StringComparer.Ordinal);
+        new(StringComparer.OrdinalIgnoreCase);
 
     internal bool IsColumnVisible(GridColumn col)
         => _visibilityOverrides.TryGetValue(col.Field, out var ov) ? ov : col.Visible;
 
     private void OpenHeaderContextMenu(MouseEventArgs e, string field)
     {
+        if (!EnableHeaderContextMenu)
+            return;
+
+        CloseCellContextMenu();
         _headerContextMenuField = field;
         _headerContextMenuX = e.ClientX;
         _headerContextMenuY = e.ClientY;
@@ -5356,7 +6042,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         _showHeaderContextMenu = false;
         _showInsertColumnSubmenu = false;
-        _showRenameColumn = false;
         _headerContextMenuField = "";
     }
 
@@ -5417,10 +6102,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var col = CurrentHeaderColumn;
         CloseHeaderContextMenu();
         if (col == null || !CanHideHeaderColumn) return;
-        _visibilityOverrides[col.Field] = false;
-        StateHasChanged();
-        await SaveGridSettingsAsync();
-        await FireLayoutChangedAsync();
+        await SetColumnPanelVisibleAsync(col, false);
     }
 
     private void HeaderMenuToggleInsertSubmenu()
@@ -5435,10 +6117,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         var col = Columns.FirstOrDefault(c => c.Field == field);
         CloseHeaderContextMenu();
         if (col == null) return;
-        _visibilityOverrides[col.Field] = true;
-        StateHasChanged();
-        await SaveGridSettingsAsync();
-        await FireLayoutChangedAsync();
+        await SetColumnPanelVisibleAsync(col, true);
     }
 
     private sealed class ChooseColumnRow
@@ -5476,7 +6155,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 {
                     Field = d.Field,
                     Header = string.IsNullOrEmpty(d.Header) ? d.Field : d.Header,
-                    Visible = d.Visible
+                    Visible = ResolveChooseColumnVisible(d)
                 })
                 .ToList();
         }
@@ -5499,7 +6178,20 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private void ChooseColumnsSelect(string field) => _chooseColumnsSelectedField = field;
 
-    private void ChooseColumnsToggle(ChooseColumnRow row) => row.Visible = !row.Visible;
+    private bool ResolveChooseColumnVisible(ChooseColumnDescriptor descriptor) =>
+        _visibilityOverrides.TryGetValue(descriptor.Field, out var visible)
+            ? visible
+            : descriptor.Visible;
+
+    private static void ChooseColumnsSetVisible(ChooseColumnRow row, ChangeEventArgs e)
+    {
+        row.Visible = e.Value switch
+        {
+            bool value => value,
+            string text when bool.TryParse(text, out var value) => value,
+            _ => row.Visible
+        };
+    }
 
     private ChooseColumnRow? CurrentChooseRow =>
         _chooseColumnsRows.FirstOrDefault(r => r.Field == _chooseColumnsSelectedField);
@@ -5624,6 +6316,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             })
             .ToList();
 
+        foreach (var item in snapshot)
+            _visibilityOverrides[item.Field] = item.Visible;
+
         if (OnColumnsChosen.HasDelegate)
         {
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
@@ -5631,8 +6326,6 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else
         {
-            foreach (var row in _chooseColumnsRows)
-                _visibilityOverrides[row.Field] = row.Visible;
             _columnsContainer?.ReorderColumns(_chooseColumnsRows.Select(r => r.Field));
             await SaveGridSettingsAsync();
         }
@@ -5647,16 +6340,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         var col = CurrentHeaderColumn;
         if (col == null) return;
+        _renameColumnField = col.Field;
         _renameColumnDraft = HeaderColumnDisplay(col);
+        _showHeaderContextMenu = false;
         _showRenameColumn = true;
         _showInsertColumnSubmenu = false;
     }
 
     private async Task HeaderMenuCommitRename()
     {
-        var field = _headerContextMenuField;
+        var field = _renameColumnField;
         var draft = _renameColumnDraft?.Trim() ?? "";
-        CloseHeaderContextMenu();
+        HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
         if (string.IsNullOrEmpty(draft))
             _headerOverrides.Remove(field);
@@ -5667,17 +6362,74 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         await FireLayoutChangedAsync();
     }
 
+    private void HeaderMenuCancelRename()
+    {
+        _showRenameColumn = false;
+        _renameColumnField = "";
+        _renameColumnDraft = "";
+    }
+
     private async Task HeaderMenuPrint()
     {
         CloseHeaderContextMenu();
-        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch {  }
+        ResetPrintOptionsToDefaults();
+
+        if (ShowPrintOptionsDialog)
+        {
+            _showPrintOptionsDialog = true;
+            return;
+        }
+
+        await ExportToPdfAsync("grid-export.pdf", "", CreateCurrentPdfPrintOptions(), showCompletionStatus: false);
     }
 
     private async Task HeaderMenuSaveAs()
     {
         CloseHeaderContextMenu();
-        try { await JsRuntime.InvokeVoidAsync("window.print"); } catch {  }
+        var title = ResolveExportTitle("Grid Export");
+        var table = BuildExportTable(title);
+        var result = GridExporter.Export(table, GridExportFormat.Xlsx);
+        var saveResult = await GridExporter.SaveAsync(JsRuntime, result);
+        if (saveResult is "saved" or "downloaded")
+            await ShowExportCompletedAsync(table.Rows.Count);
     }
+
+    private void ResetPrintOptionsToDefaults()
+    {
+        _printOrientation = DefaultPrintOrientation;
+        _printPageSize = DefaultPrintPageSize;
+        _printColumnLayout = DefaultPrintColumnLayout;
+        _printShowGridLines = DefaultPrintGridLines;
+        _printZoomMode = DefaultPrintZoomMode;
+        _printZoomPercent = ClampPrintZoomPercent(DefaultPrintZoomPercent);
+    }
+
+    private GridPdfPrintOptions CreateCurrentPdfPrintOptions() =>
+        new()
+        {
+            Orientation = _printOrientation,
+            PageSize = _printPageSize,
+            ColumnLayout = _printColumnLayout,
+            IncludeColumnHeaders = true,
+            ShowGridLines = _printShowGridLines,
+            ZoomMode = _printZoomMode,
+            ZoomPercent = ClampPrintZoomPercent(_printZoomPercent)
+        };
+
+    private async Task PrintOptionsOk()
+    {
+        _printZoomPercent = ClampPrintZoomPercent(_printZoomPercent);
+        _showPrintOptionsDialog = false;
+        await ExportToPdfAsync("grid-export.pdf", "", CreateCurrentPdfPrintOptions(), showCompletionStatus: false);
+    }
+
+    private void PrintOptionsCancel()
+    {
+        _showPrintOptionsDialog = false;
+    }
+
+    private static int ClampPrintZoomPercent(int zoomPercent) =>
+        Math.Clamp(zoomPercent, 25, 200);
 
     private void StartGroupChipDrag(string groupField)
     {
@@ -5787,6 +6539,16 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             await RemoveGroup(f);
     }
 
+    private async Task FocusGroupHeaderAsync(GroupResult<TValue> group)
+    {
+        _focusedGroupPath = group.GroupPath;
+        _selectedItems.Clear();
+        _selectedCells.Clear();
+        _activeCell = null;
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Pointer);
+        await FocusGridHostAsync();
+    }
+
     private void ToggleGroupCollapse(GroupResult<TValue> group)
     {
         group.IsCollapsed = !group.IsCollapsed;
@@ -5818,9 +6580,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     {
         foreach (var group in groups)
         {
+            var groupHeaderClass = string.Equals(_focusedGroupPath, group.GroupPath, StringComparison.Ordinal)
+                ? "fx-group-header-row fx-group-header-focused"
+                : "fx-group-header-row";
             builder.OpenElement(0, "tr");
-            builder.AddAttribute(1, "class", "fx-group-header-row");
-            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => ToggleGroupCollapse(group)));
+            builder.AddAttribute(1, "class", groupHeaderClass);
+            builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => FocusGroupHeaderAsync(group)));
 
             for (int i = 0; i < level; i++)
             {
@@ -5865,7 +6630,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                 builder.AddAttribute(31, "class", $"fx-group-expand-icon {iconStyleClass} {(group.IsCollapsed ? "collapsed" : "expanded")}");
                 if (!string.IsNullOrEmpty(iconInlineStyle))
                     builder.AddAttribute(32, "style", iconInlineStyle);
-                builder.AddContent(33, iconGlyph);
+                builder.AddAttribute(34, "onclick", EventCallback.Factory.Create(this, () => ToggleGroupCollapse(group)));
+                builder.AddEventStopPropagationAttribute(35, "onclick", true);
+                builder.AddContent(36, iconGlyph);
                 builder.CloseElement();
             }
 
@@ -5873,7 +6640,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.AddAttribute(41, "class", "fx-group-header-value");
             if (!string.IsNullOrEmpty(GroupItemTextStyle))
                 builder.AddAttribute(42, "style", GroupItemTextStyle);
-            builder.AddContent(43, $"{group.Key}");
+            builder.AddContent(43, string.IsNullOrWhiteSpace(group.DisplayText) ? $"{group.Key}" : group.DisplayText);
             builder.CloseElement();
 
             builder.OpenElement(50, "span");
@@ -6041,6 +6808,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                             builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
                             builder.AddAttribute(109, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIdx, capturedColIdx, e)));
+                            builder.AddAttribute(111, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
+                            if (EnableCellContextMenu)
+                            {
+                                builder.AddEventPreventDefaultAttribute(116, "oncontextmenu", true);
+                                builder.AddEventStopPropagationAttribute(117, "oncontextmenu", true);
+                            }
 
                             if (ShouldHandleCellDoubleClick(capturedCol))
                             {
@@ -6209,6 +6982,12 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddEventStopPropagationAttribute(9, "onmousedown", true);
             builder.AddAttribute(10, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIndex, capturedColIdx, e)));
+            builder.AddAttribute(12, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
+            if (EnableCellContextMenu)
+            {
+                builder.AddEventPreventDefaultAttribute(16, "oncontextmenu", true);
+                builder.AddEventStopPropagationAttribute(17, "oncontextmenu", true);
+            }
             if (col.ClipMode == ClipMode.EllipsisWithTooltip)
                 builder.AddAttribute(3, "title", GetCellDisplayValue(item, col));
 
@@ -6341,7 +7120,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         builder.CloseElement();
     };
 
-    private void StartResize(GridColumn col, MouseEventArgs e)
+    private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
         _resizingCol = col;
         _resizeStartX = e.ClientX;
@@ -6358,13 +7137,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         }
         else
             _resizeStartWidth = 150;
+
+        await RegisterGridResizeCaptureAsync(e.ClientX, e.ClientY);
     }
 
     private async Task HandleResizeMove(MouseEventArgs e)
+        => await HandleResizeMove(e.ClientX);
+
+    private async Task HandleResizeMove(double clientX)
     {
         if (_resizingCol == null) return;
 
-        var delta = e.ClientX - _resizeStartX;
+        var delta = clientX - _resizeStartX;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
         if (EventsRef?.ColumnResizing.HasDelegate == true)
@@ -6383,6 +7167,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     }
 
     private async Task EndResize(MouseEventArgs e)
+        => await EndResize();
+
+    private async Task EndResize()
     {
         if (_resizingCol != null && EventsRef?.ColumnResized.HasDelegate == true)
         {
@@ -6396,9 +7183,10 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _resizingCol = null;
         await SaveGridSettingsAsync();
         await FireLayoutChangedAsync();
+        await UnregisterGridResizeCaptureAsync();
     }
 
-    private void StartRowResize(TValue item, int resolvedRowIndex, MouseEventArgs e)
+    private async Task StartRowResize(TValue item, int resolvedRowIndex, MouseEventArgs e)
     {
         if (!AllowRowResizing)
             return;
@@ -6408,38 +7196,42 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _rowResizeStartY = e.ClientY;
         _rowResizeStartHeight = GetEffectiveRowHeight(item, resolvedRowIndex)
             ?? Math.Max(MinRowHeight, RowHeight > 0 ? RowHeight : 24);
+        await RegisterGridResizeCaptureAsync(e.ClientX, e.ClientY);
     }
 
     private async Task HandleGridResizeMove(MouseEventArgs e)
     {
         if (_resizingCol != null)
         {
-            await HandleResizeMove(e);
+            await HandleResizeMove(e.ClientX);
             return;
         }
 
         if (_resizingRowIndex >= 0)
-            await HandleRowResizeMove(e);
+            await HandleRowResizeMove(e.ClientY);
     }
 
     private async Task EndGridResize(MouseEventArgs e)
     {
         if (_resizingCol != null)
         {
-            await EndResize(e);
+            await EndResize();
             return;
         }
 
         if (_resizingRowIndex >= 0)
-            await EndRowResize(e);
+            await EndRowResize();
     }
 
     private async Task HandleRowResizeMove(MouseEventArgs e)
+        => await HandleRowResizeMove(e.ClientY);
+
+    private async Task HandleRowResizeMove(double clientY)
     {
         if (_resizingRowIndex < 0)
             return;
 
-        var delta = e.ClientY - _rowResizeStartY;
+        var delta = clientY - _rowResizeStartY;
         var newHeight = Math.Max(MinRowHeight, _rowResizeStartHeight + delta);
 
         if (EventsRef?.RowResizing.HasDelegate == true || RowResizing.HasDelegate)
@@ -6468,6 +7260,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
     }
 
     private async Task EndRowResize(MouseEventArgs e)
+        => await EndRowResize();
+
+    private async Task EndRowResize()
     {
         if (_resizingRowIndex >= 0 && (EventsRef?.RowResized.HasDelegate == true || RowResized.HasDelegate))
         {
@@ -6488,7 +7283,71 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         _resizingRowItem = default;
         _resizingRowIndex = -1;
+        _rowResizeStartY = 0;
+        _rowResizeStartHeight = 0;
+        await SaveGridSettingsAsync();
         await FireLayoutChangedAsync();
+        await UnregisterGridResizeCaptureAsync();
+    }
+
+    private async Task RegisterGridResizeCaptureAsync(double clientX, double clientY)
+    {
+        if (_gridResizeCaptureRegistered)
+            return;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            _gridDotNetRef ??= DotNetObjectReference.Create(this);
+            await _gridJsModule.InvokeVoidAsync("registerGridResizeCapture", _gridHostElement, _gridDotNetRef, clientX, clientY);
+            _gridResizeCaptureRegistered = true;
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private async Task UnregisterGridResizeCaptureAsync()
+    {
+        if (!_gridResizeCaptureRegistered || _gridJsModule == null)
+            return;
+
+        try
+        {
+            await _gridJsModule.InvokeVoidAsync("unregisterGridResizeCapture", _gridHostElement);
+        }
+        catch (Exception)
+        {
+        }
+        finally
+        {
+            _gridResizeCaptureRegistered = false;
+        }
+    }
+
+    [JSInvokable]
+    public async Task ContinueGridResizeFromBrowserAsync(double clientX, double clientY)
+    {
+        if (_resizingCol != null)
+            await HandleResizeMove(clientX);
+        else if (_resizingRowIndex >= 0)
+            await HandleRowResizeMove(clientY);
+    }
+
+    [JSInvokable]
+    public async Task EndGridResizeFromBrowserAsync(double clientX, double clientY)
+    {
+        if (_resizingCol != null)
+        {
+            await HandleResizeMove(clientX);
+            await EndResize();
+        }
+        else if (_resizingRowIndex >= 0)
+        {
+            await HandleRowResizeMove(clientY);
+            await EndRowResize();
+        }
     }
 
     private RenderFragment RenderEditRow() => builder =>
@@ -6565,6 +7424,8 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
                     builder.AddAttribute(55, "style", GetEditorInputStyle(col));
                     if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                         builder.AddAttribute(56, "inputmode", "decimal");
+                    if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
+                        builder.AddAttribute(57, "maxlength", col.MaxLength.Value);
                     builder.AddAttribute(54, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this,
                         e => SetPropertyValue(_editItem, col.Field, e.Value?.ToString())));
                     builder.CloseElement();
@@ -6852,16 +7713,7 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
     private string GetScrollSurfaceStyle()
     {
-        var totalWidth = GetTotalColumnWidthPx();
-        if (totalWidth <= 0)
-            return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
-
-        var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
-        if (WidthMode != GridWidthMode.FitColumns)
-            return $"width:100%;min-width:{widthPx}px;max-width:none;";
-
-        var surfaceWidth = $"calc({widthPx}px + var(--fx-grid-scrollbar-gutter-width, 13px))";
-        return $"width:{surfaceWidth};min-width:{surfaceWidth};max-width:none;";
+        return "width:100%;min-width:0;max-width:100%;";
     }
 
     private string GetGroupedPlaceholderStyle(GridColumn col)
@@ -6981,6 +7833,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             return FormatPlainNumber(val);
 
         return val.ToString() ?? "";
+    }
+
+    private object? GetCellExportValue(object? item, GridColumn col)
+    {
+        var val = ResolveCellValue(item, col);
+        if (val == null)
+            return null;
+
+        if (col.Type == ColumnType.CheckBox)
+            return val is bool boolValue ? (boolValue ? 1 : 0) : val;
+
+        return GetCellDisplayValue(item, col);
     }
 
     private static string FormatPlainNumber(object value)
@@ -7147,6 +8011,49 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         Task.FromResult(_selectedCells.ToList());
 
     public int? GetCurrentRowIndex() => _lastSelectedRowIndex;
+
+    public TValue? GetCurrentRecord()
+    {
+        if (_activeCell.HasValue)
+        {
+            var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+            if (item != null)
+                return item;
+        }
+
+        if (_lastSelectedItem != null)
+            return _lastSelectedItem;
+
+        if (_lastSelectedRowIndex.HasValue)
+        {
+            var item = GetItemAtResolvedRowIndex(_lastSelectedRowIndex.Value);
+            if (item != null)
+                return item;
+        }
+
+        return _selectedItems.LastOrDefault();
+    }
+
+    public string GetCurrentColumnField()
+    {
+        var columns = VisibleColumns.ToList();
+
+        if (_activeCell.HasValue
+            && _activeCell.Value.CellIndex >= 0
+            && _activeCell.Value.CellIndex < columns.Count)
+        {
+            return columns[_activeCell.Value.CellIndex].Field ?? string.Empty;
+        }
+
+        if (_lastSelectedCell.HasValue
+            && _lastSelectedCell.Value.CellIndex >= 0
+            && _lastSelectedCell.Value.CellIndex < columns.Count)
+        {
+            return columns[_lastSelectedCell.Value.CellIndex].Field ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
 
     public void ClearSelection()
     {
@@ -7347,50 +8254,127 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         return Task.CompletedTask;
     }
 
-    public async Task ExportAsync(GridExportFormat format, string? fileName = null, string title = "Export")
+    private string ResolveExportTitle(string fallback)
     {
-        var table = BuildExportTable(title);
-        var result = GridExporter.Export(table, format, fileName);
+        if (!string.IsNullOrWhiteSpace(Title))
+            return Title.Trim();
+
+        if (!string.IsNullOrWhiteSpace(Data))
+            return Data.Trim();
+
+        if (!string.IsNullOrWhiteSpace(Id))
+            return Id.Trim();
+
+        return string.IsNullOrWhiteSpace(fallback) ? "Export" : fallback.Trim();
+    }
+
+    public async Task ExportAsync(
+        GridExportFormat format,
+        string? fileName = null,
+        string title = "Export",
+        GridPdfPrintOptions? pdfOptions = null,
+        bool showCompletionStatus = true)
+    {
+        var table = BuildExportTable(ResolveExportTitle(title));
+        var result = GridExporter.Export(table, format, fileName, pdfOptions);
         await GridExporter.DownloadAsync(JsRuntime, result);
+        if (showCompletionStatus)
+            await ShowExportCompletedAsync(table.Rows.Count);
     }
 
-    public GridExportResult CreateExport(GridExportFormat format, string? fileName = null, string title = "Export")
+    private async Task ShowExportCompletedAsync(int rowCount)
     {
-        var table = BuildExportTable(title);
-        return GridExporter.Export(table, format, fileName);
+        await Task.Delay(150);
+        var generation = ++_exportStatusGeneration;
+        _exportStatusMessage = FormatExportCompletedMessage(rowCount);
+        await InvokeAsync(StateHasChanged);
+        _ = ClearExportStatusAfterDelayAsync(generation);
     }
 
-    public Task ExportToCsvAsync(string fileName = "export.csv") =>
+    private static string FormatExportCompletedMessage(int rowCount)
+    {
+        var formattedCount = rowCount.ToString("N0", CultureInfo.CurrentCulture);
+        return rowCount == 1
+            ? "Export completed successfully - 1 row exported"
+            : $"Export completed successfully - {formattedCount} rows exported";
+    }
+
+    private async Task ClearExportStatusAfterDelayAsync(int generation)
+    {
+        try
+        {
+            await Task.Delay(2500);
+            if (generation != _exportStatusGeneration)
+                return;
+
+            _exportStatusMessage = null;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+        }
+    }
+
+    public GridExportResult CreateExport(
+        GridExportFormat format,
+        string? fileName = null,
+        string title = "Export",
+        GridPdfPrintOptions? pdfOptions = null)
+    {
+        var table = BuildExportTable(ResolveExportTitle(title));
+        return GridExporter.Export(table, format, fileName, pdfOptions);
+    }
+
+    public Task ExportToCsvAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Csv, fileName);
 
-    public Task ExportToTsvAsync(string fileName = "export.tsv") =>
+    public Task ExportToTsvAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Tsv, fileName);
 
-    public Task ExportToXlsxAsync(string fileName = "export.xlsx") =>
+    public Task ExportToXlsxAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Xlsx, fileName);
 
-    public Task ExportToExcelAsync(string fileName = "export.xls") =>
+    public Task ExportToExcelAsync(string? fileName = null) =>
         ExportToXlsAsync(fileName);
 
-    public Task ExportToXlsAsync(string fileName = "export.xls") =>
+    public Task ExportToXlsAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Xls, fileName);
 
-    public Task ExportToHtmlAsync(string fileName = "export.html") =>
+    public Task ExportToHtmlAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Html, fileName);
 
-    public Task ExportToJsonAsync(string fileName = "export.json") =>
+    public Task ExportToJsonAsync(string? fileName = null) =>
         ExportAsync(GridExportFormat.Json, fileName);
 
     public Task ExportToPdfAsync(string title = "Export") =>
-        ExportAsync(GridExportFormat.Pdf, "export.pdf", title);
+        ExportAsync(GridExportFormat.Pdf, null, title);
 
     public Task ExportToPdfAsync(string fileName, string title) =>
         ExportAsync(GridExportFormat.Pdf, fileName, title);
+
+    public Task ExportToPdfAsync(
+        string fileName,
+        string title,
+        GridPdfPrintOptions? pdfOptions,
+        bool showCompletionStatus = true) =>
+        ExportAsync(GridExportFormat.Pdf, fileName, title, pdfOptions, showCompletionStatus);
 
     public Task ExportToPdfFileAsync(string fileName = "export.pdf", string title = "Export") =>
         ExportAsync(GridExportFormat.Pdf, fileName, title);
 
     private GridExportTable BuildExportTable(string title)
+    {
+        if (_pivotMode && _pivotControlRef != null)
+        {
+            var pivotTable = _pivotControlRef.CreateExportTable(title);
+            if (pivotTable.Columns.Count > 0 || pivotTable.Rows.Count > 0)
+                return pivotTable;
+        }
+
+        return BuildGridExportTable(title);
+    }
+
+    private GridExportTable BuildGridExportTable(string title)
     {
         var table = new GridExportTable
         {
@@ -7400,12 +8384,50 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
 
         var cols = VisibleColumns.ToList();
         foreach (var col in cols)
-            table.Columns.Add(new GridExportColumn(col.DisplayHeader, textAlign: col.TextAlign));
+        {
+            var width = GetColumnWidthPx(col);
+            table.Columns.Add(new GridExportColumn(
+                col.DisplayHeader,
+                format: col.Format,
+                textAlign: col.TextAlign,
+                width: width > 0 ? width : null));
+        }
 
-        foreach (var item in SortedData)
-            table.Rows.Add(new GridExportRow(cols.Select(col => GetCellDisplayValue(item, col))));
+        var items = SortedData.ToList();
+        foreach (var item in items)
+            table.Rows.Add(new GridExportRow(cols.Select(col => GetCellExportValue(item, col))));
 
+        AddExportTotalRows(table, cols, items);
         return table;
+    }
+
+    private void AddExportTotalRows(GridExportTable table, IReadOnlyList<GridColumn> cols, IReadOnlyList<TValue> items)
+    {
+        if (!IncludeTotalsInExport || AggregateRows is not { Count: > 0 } || items.Count == 0)
+            return;
+
+        var footerRows = AggregateRows.Where(row => row.ShowInFooter).ToList();
+        if (footerRows.Count == 0)
+            return;
+
+        var footerAggs = ComputeAggregates(items);
+        foreach (var aggRow in footerRows)
+        {
+            var values = new object?[cols.Count];
+            for (var colIndex = 0; colIndex < cols.Count; colIndex++)
+            {
+                var col = cols[colIndex];
+                var aggCol = aggRow.Columns.FirstOrDefault(a => string.Equals(a.Field, col.Field, StringComparison.OrdinalIgnoreCase));
+                if (aggCol == null)
+                    continue;
+
+                var key = $"{aggCol.Field}_{aggCol.Type}";
+                footerAggs.TryGetValue(key, out var val);
+                values[colIndex] = FormatAggregateValue(aggCol, val);
+            }
+
+            table.Rows.Add(new GridExportRow(values, isBold: true));
+        }
     }
 
     private async Task EnsureTrailingNewRowIfNeededAsync()
@@ -7740,6 +8762,18 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterGridKeyboardTrap", _gridHostElement);
             }
+            if (_gridScrollSyncRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterGridScrollSync", _gridHostElement);
+            }
+            if (_scrollbarActivityRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterScrollbarActivity", _gridHostElement);
+            }
+            if (_gridResizeCaptureRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterGridResizeCapture", _gridHostElement);
+            }
         }
         catch (Exception)
         {
@@ -7748,6 +8782,9 @@ public partial class GridControl<TValue> : IGridOwner, IAsyncDisposable
         _headerDragPreviewRegistered = false;
         _rowDragSelectionAutoScrollRegistered = false;
         _gridKeyboardTrapRegistered = false;
+        _gridScrollSyncRegistered = false;
+        _scrollbarActivityRegistered = false;
+        _gridResizeCaptureRegistered = false;
 
         if (_gridJsModule != null)
         {

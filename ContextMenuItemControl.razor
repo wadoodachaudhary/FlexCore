@@ -1,26 +1,30 @@
 @namespace Fx.ControlKit
 
-<button class="@RootCssClass"
-        type="button"
-        role="menuitem"
-        disabled="@Disabled"
-        title="@Title"
-        @onclick="HandleClick">
-    @if (!string.IsNullOrWhiteSpace(Icon))
+<div class="@WrapperCssClass" role="presentation">
+    <button class="@RootCssClass"
+            type="button"
+            role="menuitem"
+            aria-haspopup="@(HasSubmenu ? "menu" : null)"
+            disabled="@Disabled"
+            title="@Title"
+            @onclick="HandleClick">
+        @if (!string.IsNullOrWhiteSpace(Icon))
+        {
+            <span class="fx-context-menu-item-icon">@Icon</span>
+        }
+        <span class="fx-context-menu-item-text">@Text</span>
+        @if (HasSubmenu)
+        {
+            <span class="fx-context-menu-item-arrow" aria-hidden="true">&#9654;</span>
+        }
+    </button>
+    @if (HasSubmenu && !Disabled)
     {
-        <span class="fx-context-menu-item-icon">@Icon</span>
-    }
-    <span class="fx-context-menu-item-text">
-        @if (ChildContent is not null)
-        {
+        <div class="fx-context-submenu" role="menu">
             @ChildContent
-        }
-        else
-        {
-            @Text
-        }
-    </span>
-</button>
+        </div>
+    }
+</div>
 
 @code {
     [CascadingParameter] public ContextMenuControl? ParentMenu { get; set; }
@@ -34,6 +38,13 @@
     [Parameter] public EventCallback OnClick { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    private bool HasSubmenu => ChildContent is not null;
+
+    private string WrapperCssClass =>
+        HasSubmenu
+            ? "fx-context-menu-item-host has-submenu"
+            : "fx-context-menu-item-host";
+
     private string RootCssClass =>
         string.IsNullOrWhiteSpace(CssClass)
             ? "fx-context-menu-item"
@@ -44,10 +55,13 @@
         if (Disabled)
             return;
 
+        if (HasSubmenu && !OnClick.HasDelegate)
+            return;
+
         if (OnClick.HasDelegate)
             await OnClick.InvokeAsync();
 
-        if (CloseOnClick && ParentMenu is not null)
+        if (!HasSubmenu && CloseOnClick && ParentMenu is not null)
             await ParentMenu.RequestCloseAsync();
     }
 }

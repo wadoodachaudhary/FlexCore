@@ -7,11 +7,15 @@
 
 @if (Visible)
 {
-    <div class="@OverlayClass" @onclick="HandleOverlayClick">
+    <div class="@OverlayClass" @onclick="HandleOverlayClick" @onkeydown="HandleKeyDown">
         <div class="@MessageBoxClass" role="dialog" aria-modal="true" aria-labelledby="@TitleId" @onclick:stopPropagation="true">
             <div class="fx-msgbox-header">
                 <span id="@TitleId">@Title</span>
-                <button type="button" class="fx-msgbox-close" aria-label="Close" @onclick="Close">&times;</button>
+                <button @ref="_closeButton" type="button" class="fx-msgbox-close" aria-label="Close" title="Close"
+                        @onclick="Close"
+                        @onkeydown="e => HandleDialogButtonKeyDown(e, CloseButtonIndex)"
+                        @onkeydown:preventDefault="true"
+                        @onkeydown:stopPropagation="true">&times;</button>
             </div>
             <div class="fx-msgbox-body">
                 @if (HasIcon)
@@ -27,24 +31,31 @@
                 }
                 <div class="fx-msgbox-message">@Message</div>
             </div>
+            @if (RequiresConfirmation)
+            {
+                <label class="fx-msgbox-confirm">
+                    <input type="checkbox" @bind="_confirmationChecked" />
+                    <span>@RequiredConfirmationText</span>
+                </label>
+            }
             <div class="fx-msgbox-footer">
                 @switch (Buttons)
                 {
                     case MessageBoxButtons.Ok:
-                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
+                        <button @ref="_primaryButton" type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" title="OK" autofocus disabled="@PrimaryButtonDisabled" @onclick="() => CloseWith(MessageBoxResult.Ok)" @onkeydown="e => HandleDialogButtonKeyDown(e, 0)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">OK</button>
                         break;
                     case MessageBoxButtons.OkCancel:
-                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Ok)">OK</button>
-                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        <button @ref="_primaryButton" type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" title="OK" autofocus disabled="@PrimaryButtonDisabled" @onclick="() => CloseWith(MessageBoxResult.Ok)" @onkeydown="e => HandleDialogButtonKeyDown(e, 0)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">OK</button>
+                        <button @ref="_secondaryButton" type="button" class="fx-msgbox-btn" title="Cancel" @onclick="() => CloseWith(MessageBoxResult.Cancel)" @onkeydown="e => HandleDialogButtonKeyDown(e, 1)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">Cancel</button>
                         break;
                     case MessageBoxButtons.YesNo:
-                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
-                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
+                        <button @ref="_primaryButton" type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" title="Yes" autofocus disabled="@PrimaryButtonDisabled" @onclick="() => CloseWith(MessageBoxResult.Yes)" @onkeydown="e => HandleDialogButtonKeyDown(e, 0)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">Yes</button>
+                        <button @ref="_secondaryButton" type="button" class="fx-msgbox-btn" title="No" @onclick="() => CloseWith(MessageBoxResult.No)" @onkeydown="e => HandleDialogButtonKeyDown(e, 1)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">No</button>
                         break;
                     case MessageBoxButtons.YesNoCancel:
-                        <button type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" @onclick="() => CloseWith(MessageBoxResult.Yes)">Yes</button>
-                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.No)">No</button>
-                        <button type="button" class="fx-msgbox-btn" @onclick="() => CloseWith(MessageBoxResult.Cancel)">Cancel</button>
+                        <button @ref="_primaryButton" type="button" class="fx-msgbox-btn fx-msgbox-btn-primary" title="Yes" autofocus disabled="@PrimaryButtonDisabled" @onclick="() => CloseWith(MessageBoxResult.Yes)" @onkeydown="e => HandleDialogButtonKeyDown(e, 0)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">Yes</button>
+                        <button @ref="_secondaryButton" type="button" class="fx-msgbox-btn" title="No" @onclick="() => CloseWith(MessageBoxResult.No)" @onkeydown="e => HandleDialogButtonKeyDown(e, 1)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">No</button>
+                        <button @ref="_tertiaryButton" type="button" class="fx-msgbox-btn" title="Cancel" @onclick="() => CloseWith(MessageBoxResult.Cancel)" @onkeydown="e => HandleDialogButtonKeyDown(e, 2)" @onkeydown:preventDefault="true" @onkeydown:stopPropagation="true">Cancel</button>
                         break;
                 }
             </div>
@@ -59,12 +70,19 @@
     [Parameter] public string? Message { get; set; }
     [Parameter] public string? IconCss { get; set; }
     [Parameter] public MessageBoxButtons Buttons { get; set; } = MessageBoxButtons.Ok;
+    [Parameter] public string? RequiredConfirmationText { get; set; }
     [Parameter] public MessageBoxLook Look { get; set; } = MessageBoxLook.VB6;
     [Parameter] public EventCallback<MessageBoxResult> OnResult { get; set; }
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<MessageBoxResult>? _tcs;
     private MessageBoxLook? _activeLook;
+    private bool _confirmationChecked;
+    private bool _primaryButtonFocused;
+    private ElementReference _primaryButton;
+    private ElementReference _secondaryButton;
+    private ElementReference _tertiaryButton;
+    private ElementReference _closeButton;
     private readonly string TitleId = $"fx-msgbox-title-{Guid.NewGuid():N}";
     private MessageBoxLook EffectiveLook => _activeLook ?? Look;
     private string LookCssSuffix => EffectiveLook == MessageBoxLook.DotNet ? "dotnet" : "vb6";
@@ -77,25 +95,53 @@
     private string IconClass => string.IsNullOrWhiteSpace(EffectiveIconCss)
         ? "fx-msgbox-icon"
         : $"fx-msgbox-icon {ResolveIconCss(EffectiveIconCss)}{(string.IsNullOrWhiteSpace(IconImageSrc) ? "" : " fx-msgbox-icon-image")}";
+    private bool RequiresConfirmation => !string.IsNullOrWhiteSpace(RequiredConfirmationText);
+    private bool PrimaryButtonDisabled => RequiresConfirmation && !_confirmationChecked;
+    private int ActionButtonCount => Buttons switch
+    {
+        MessageBoxButtons.Ok => 1,
+        MessageBoxButtons.OkCancel => 2,
+        MessageBoxButtons.YesNo => 2,
+        MessageBoxButtons.YesNoCancel => 3,
+        _ => 1
+    };
+    private int CloseButtonIndex => ActionButtonCount;
+    private int FocusableButtonCount => ActionButtonCount + 1;
 
     public Task<MessageBoxResult> ShowAsync(string message, string title = "Message",
-        MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null, MessageBoxLook? look = null)
+        MessageBoxButtons buttons = MessageBoxButtons.Ok, string? icon = null, MessageBoxLook? look = null,
+        string? requiredConfirmationText = null)
     {
         Message = message;
         Title = title;
         Buttons = buttons;
         IconCss = icon;
         _activeLook = look;
+        RequiredConfirmationText = requiredConfirmationText;
+        _confirmationChecked = false;
+        _primaryButtonFocused = false;
         Visible = true;
         _tcs = new TaskCompletionSource<MessageBoxResult>();
         StateHasChanged();
         return _tcs.Task;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Visible && !_primaryButtonFocused && !PrimaryButtonDisabled)
+        {
+            _primaryButtonFocused = true;
+            await FocusDialogButtonAsync(0);
+        }
+    }
+
     private async Task CloseWith(MessageBoxResult result)
     {
         Visible = false;
         _activeLook = null;
+        RequiredConfirmationText = null;
+        _confirmationChecked = false;
+        _primaryButtonFocused = false;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
@@ -105,6 +151,103 @@
 
     private Task Close() => CloseWith(MessageBoxResult.Cancel);
     private Task HandleOverlayClick() => Close();
+    private Task HandleKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+        => e.Key switch
+        {
+            "Escape" => Close(),
+            "Enter" or "NumpadEnter" when !PrimaryButtonDisabled => CloseWith(DefaultResult),
+            _ => Task.CompletedTask
+        };
+
+    private async Task HandleDialogButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, int buttonIndex)
+    {
+        if (e.Key == "Tab")
+        {
+            await FocusDialogButtonAsync(GetNextButtonIndex(buttonIndex, e.ShiftKey ? -1 : 1));
+            return;
+        }
+
+        if (e.Key is "Enter" or "NumpadEnter" or " ")
+        {
+            await CloseWith(GetResultForButtonIndex(buttonIndex));
+        }
+    }
+
+    private int GetNextButtonIndex(int currentIndex, int delta)
+    {
+        var nextIndex = currentIndex;
+        for (var i = 0; i < FocusableButtonCount; i++)
+        {
+            nextIndex = (nextIndex + delta + FocusableButtonCount) % FocusableButtonCount;
+            if (!IsButtonDisabled(nextIndex))
+                return nextIndex;
+        }
+
+        return CloseButtonIndex;
+    }
+
+    private bool IsButtonDisabled(int buttonIndex) => buttonIndex == 0 && PrimaryButtonDisabled;
+
+    private async Task FocusDialogButtonAsync(int buttonIndex)
+    {
+        if (IsButtonDisabled(buttonIndex))
+            buttonIndex = GetNextButtonIndex(buttonIndex, 1);
+
+        try
+        {
+            switch (buttonIndex)
+            {
+                case 0:
+                    await _primaryButton.FocusAsync();
+                    break;
+                case 1 when Buttons == MessageBoxButtons.Ok:
+                    await _closeButton.FocusAsync();
+                    break;
+                case 1:
+                    await _secondaryButton.FocusAsync();
+                    break;
+                case 2 when Buttons is MessageBoxButtons.OkCancel or MessageBoxButtons.YesNo:
+                    await _closeButton.FocusAsync();
+                    break;
+                case 2:
+                    await _tertiaryButton.FocusAsync();
+                    break;
+                default:
+                    await _closeButton.FocusAsync();
+                    break;
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private MessageBoxResult DefaultResult => Buttons switch
+    {
+        MessageBoxButtons.Ok or MessageBoxButtons.OkCancel => MessageBoxResult.Ok,
+        MessageBoxButtons.YesNo or MessageBoxButtons.YesNoCancel => MessageBoxResult.Yes,
+        _ => MessageBoxResult.Ok
+    };
+
+    private MessageBoxResult GetResultForButtonIndex(int buttonIndex)
+    {
+        if (buttonIndex == CloseButtonIndex)
+            return MessageBoxResult.Cancel;
+
+        return Buttons switch
+        {
+            MessageBoxButtons.Ok => MessageBoxResult.Ok,
+            MessageBoxButtons.OkCancel => buttonIndex == 0 ? MessageBoxResult.Ok : MessageBoxResult.Cancel,
+            MessageBoxButtons.YesNo => buttonIndex == 0 ? MessageBoxResult.Yes : MessageBoxResult.No,
+            MessageBoxButtons.YesNoCancel => buttonIndex switch
+            {
+                0 => MessageBoxResult.Yes,
+                1 => MessageBoxResult.No,
+                _ => MessageBoxResult.Cancel
+            },
+            _ => MessageBoxResult.Cancel
+        };
+    }
 
     private string? ResolveEffectiveIconCss()
     {

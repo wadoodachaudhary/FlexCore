@@ -265,8 +265,9 @@
                 {
                     var currentIdx = rowIdx;
                     var isSelected = AllowSelection && _selectedItem != null && EqualityComparer<TValue>.Default.Equals(node.Data, _selectedItem);
+                    var rowCssClass = GetRowCssClass(node, currentIdx);
 
-                    <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "")"
+                    <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "") @rowCssClass"
                         style="@(IsCompact ? "height:14px;" : "")"
                         @onclick="() => HandleRowClick(node, currentIdx)"
                         @ondblclick="() => HandleRowDoubleClick(node, currentIdx)">
@@ -274,7 +275,9 @@
                         @{ var colIdx = 0; }
                         @foreach (var col in VisibleColumns)
                         {
-                            <td class="fx-treegrid-cell" style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
+                            <td class="fx-treegrid-cell"
+                                title="@GetCellTitle(node.Data, col)"
+                                style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {
                                     
@@ -309,7 +312,7 @@
                                             
                                             <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(node.IsExpanded ? "expanded" : "collapsed")"
                                                   style="@ResolveExpandIconStyle() @(IsCompact ? ";height:12px;width:12px;line-height:1;margin-right:2px;font-size:13px;" : "")"
-                                                  @onclick="() => ToggleNode(node)"
+                                                  @onclick="() => HandleExpandIconClick(node, currentIdx)"
                                                   @onclick:stopPropagation="true">
                                                 @(node.IsExpanded ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
                                             </span>
@@ -343,7 +346,7 @@
                                             
                                             <span class="fx-treegrid-expand-icon @(node.IsExpanded ? "expanded" : "collapsed")"
                                                   style="@(IsCompact ? "height:14px;line-height:14px;margin-right:2px;" : "")"
-                                                  @onclick="() => ToggleNode(node)"
+                                                  @onclick="() => HandleExpandIconClick(node, currentIdx)"
                                                   @onclick:stopPropagation="true">
                                                 @if (GetNodeIcon != null)
                                                 {

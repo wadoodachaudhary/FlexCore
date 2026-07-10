@@ -1,4 +1,5 @@
 @namespace Fx.ControlKit.Grid
+@inherits FlexControlBase
 @typeparam TValue
 @using Fx.ControlKit
 @using System.Reflection
@@ -9,7 +10,17 @@
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
+     @oncontextmenu="HandleGridContextMenu"
+     @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
+     @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
      @onmouseup="HandleGridMouseUp">
+
+    @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
+    {
+        <div class="fx-grid-export-status-pill" role="status" aria-live="polite">
+            @_exportStatusMessage
+        </div>
+    }
 
     @* ── Toolbar ──────────────────────────────────────────────── *@
     
@@ -84,10 +95,10 @@
                         var capturedField = gd.Field;
                         <span class="fx-group-chip" draggable="true"
                               @ondragstart="() => StartGroupChipDrag(capturedField)"
-                              @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
-                              @oncontextmenu:preventDefault="true"
-                              @oncontextmenu:stopPropagation="true"
-                              title="Right-click for options">
+             @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
+             title="Right-click for options">
                             <span class="fx-group-chip-text">@gd.HeaderText</span>
                             <span class="fx-group-chip-remove"
                                   role="button"
@@ -98,7 +109,7 @@
                                   @onclick:stopPropagation="true"
                                   @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                                   @oncontextmenu:preventDefault="true"
-                                  @oncontextmenu:stopPropagation="true">×</span>
+                                  @oncontextmenu:stopPropagation="@EnableHeaderContextMenu">×</span>
                         </span>
                     }
                 }
@@ -402,6 +413,7 @@
         <div class="fx-grid-content fx-grid-pivot-shell"
              style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
             <PivotControl TValue="TValue"
+                          @ref="_pivotControlRef"
                           DataSource="@FilteredData"
                           RowFields="@_pivotRowFields"
                           ColumnFields="@_pivotColumnFields"
@@ -433,10 +445,8 @@
     {
 
     
-    <div class="fx-grid-content fx-grid-table-content" style="@GridContentStyle">
-        <div class="fx-grid-scroll-surface" style="@GetScrollSurfaceStyle()">
-        <div class="fx-grid-header-viewport">
-        <table class="fx-grid-table fx-grid-header-table" style="@GetTableStyle()">
+    <div class="fx-grid-content" style="@GridContentStyle">
+        <table class="fx-grid-table" style="@GetTableStyle()">
 
             
             <thead class="fx-grid-header">
@@ -468,7 +478,7 @@
                             <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
                                 @oncontextmenu:preventDefault="true"
-                                @oncontextmenu:stopPropagation="true"
+                                @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
                                 title="Right-click for options">
                                 <span class="fx-header-text">@HeaderColumnDisplay(gcol)</span>
                             </th>
@@ -487,7 +497,7 @@
                             @onclick="() => HandleSort(col)"
                             @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                             @oncontextmenu:preventDefault="true"
-                            @oncontextmenu:stopPropagation="true"
+                            @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
                             title="@headerLabel"
                             draggable="@(headerDraggable ? "true" : "false")"
                             @ondragstart="(e => StartColumnDrag(capturedField, e))"
@@ -557,13 +567,6 @@
                 </tr>
 
             </thead>
-
-        </table>
-        </div>
-
-        <div class="fx-grid-body-frame">
-        <div class="fx-grid-body-viewport">
-        <table class="fx-grid-table fx-grid-body-table" style="@GetTableStyle()">
 
             
             <tbody class="fx-grid-body">
@@ -706,9 +709,6 @@
                 }
             }
         </table>
-        </div>
-        </div>
-        </div>
     </div>
     }   
 
@@ -833,17 +833,27 @@
                                              ValueChanged="OnTextFilterOperatorValueChanged"
                                              CssClass="fx-filter-operator-select" />
                         <input type="text"
+                               @ref="_filterConditionInputRef"
                                class="fx-filter-popup-input fx-filter-condition-input"
                                placeholder="Filter value..."
                                value="@_filterTextDraft"
-                               @oninput="OnTextFilterInput" />
+                               @oninput="OnTextFilterInput"
+                               @oninput:stopPropagation="true"
+                               @onkeydown:stopPropagation="true"
+                               @onkeyup:stopPropagation="true"
+                               @onclick:stopPropagation="true" />
                     </div>
 
                     <div class="fx-filter-popup-search">
                         <input type="text" class="fx-filter-popup-input"
+                               @ref="_filterValueSearchInputRef"
                                placeholder="Search list values..."
                                value="@GetColumnFilterValueSearch(_filterPopupField)"
-                               @oninput="OnFilterValueSearchInput" />
+                               @oninput="OnFilterValueSearchInput"
+                               @oninput:stopPropagation="true"
+                               @onkeydown:stopPropagation="true"
+                               @onkeyup:stopPropagation="true"
+                               @onclick:stopPropagation="true" />
                         <div class="fx-filter-popup-summary">
                             @selectedValueCount of @totalValueCount selected
                         </div>
@@ -938,6 +948,47 @@
     }
 
     
+    @if (_showCellContextMenu)
+    {
+        <div class="fx-grid-cell-context-backdrop"
+             @onclick="CloseCellContextMenu"
+             @oncontextmenu="CloseCellContextMenu"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-cell-context-menu"
+             style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
+             @onclick:stopPropagation="true">
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextCutAsync">
+                <span>Cut</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+X</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanReadCellContext)"
+                    @onclick="CellContextCopyAsync">
+                <span>Copy</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+C</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextPasteAsync">
+                <span>Paste</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+V</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextDeleteAsync">
+                <span>Delete</span>
+                <span class="fx-grid-cell-context-shortcut">Del</span>
+            </button>
+        </div>
+    }
+
+    
     
     @if (_showHeaderContextMenu)
     {
@@ -990,18 +1041,6 @@
                 <span class="fx-grid-header-context-check"></span>
                 Rename this column...
             </button>
-            @if (_showRenameColumn)
-            {
-                <div class="fx-grid-header-context-rename">
-                    <input type="text" class="fx-grid-header-context-rename-input"
-                           value="@_renameColumnDraft"
-                           @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
-                           @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); })" />
-                    <button type="button" class="fx-grid-header-context-rename-ok"
-                            @onclick="HeaderMenuCommitRename">OK</button>
-                </div>
-            }
-
             <div class="fx-grid-header-context-sep"></div>
 
             <button type="button" class="fx-grid-header-context-item"
@@ -1014,6 +1053,111 @@
                 <span class="fx-grid-header-context-check"></span>
                 Save As...
             </button>
+        </div>
+    }
+
+    @if (_showRenameColumn)
+    {
+        <div class="fx-grid-rename-overlay"
+             @onclick="HeaderMenuCancelRename"
+             @oncontextmenu="HeaderMenuCancelRename"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-rename-dialog" @onclick:stopPropagation="true">
+            <div class="fx-grid-rename-header">
+                <span>Rename Column</span>
+                <button type="button"
+                        class="fx-grid-rename-close"
+                        title="Close"
+                        aria-label="Close"
+                        @onclick="HeaderMenuCancelRename">x</button>
+            </div>
+            <div class="fx-grid-rename-body">
+                <label class="fx-grid-rename-field">
+                    <span>Name</span>
+                    <input type="text"
+                           class="fx-grid-rename-input"
+                           value="@_renameColumnDraft"
+                           @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
+                           @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); else if (e.Key == "Escape") HeaderMenuCancelRename(); })" />
+                </label>
+            </div>
+            <div class="fx-grid-rename-footer">
+                <button type="button" class="fx-grid-rename-ok"
+                        @onclick="HeaderMenuCommitRename">OK</button>
+                <button type="button" class="fx-grid-rename-cancel"
+                        @onclick="HeaderMenuCancelRename">Cancel</button>
+            </div>
+        </div>
+    }
+
+    
+    @if (_showPrintOptionsDialog)
+    {
+        <div class="fx-grid-print-options-overlay"
+             @onclick="PrintOptionsCancel"
+             @oncontextmenu="PrintOptionsCancel"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-print-options-dialog" @onclick:stopPropagation="true">
+            <div class="fx-grid-print-options-header">
+                <span>Print Grid</span>
+                <button type="button" class="fx-grid-print-options-close"
+                        title="Close" aria-label="Close"
+                        @onclick="PrintOptionsCancel">×</button>
+            </div>
+            <div class="fx-grid-print-options-body">
+                <label class="fx-grid-print-options-field">
+                    <span>Orientation</span>
+                    <select @bind="_printOrientation">
+                        <option value="@GridPdfOrientation.Portrait">Portrait</option>
+                        <option value="@GridPdfOrientation.Landscape">Landscape</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Page size</span>
+                    <select @bind="_printPageSize">
+                        <option value="@GridPdfPageSize.Letter">Letter</option>
+                        <option value="@GridPdfPageSize.Legal">Legal</option>
+                        <option value="@GridPdfPageSize.A4">A4</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Columns</span>
+                    <select @bind="_printColumnLayout">
+                        <option value="@GridPdfColumnLayout.WrapText">Wrap text</option>
+                        <option value="@GridPdfColumnLayout.ClipText">Clip text</option>
+                        <option value="@GridPdfColumnLayout.FitColumnsToPage">Fit columns</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Grid lines</span>
+                    <span class="fx-grid-print-options-check">
+                        <input type="checkbox" @bind="_printShowGridLines" />
+                        <span>On</span>
+                    </span>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Zoom</span>
+                    <select @bind="_printZoomMode">
+                        <option value="@GridPdfZoomMode.Percent">Zoom %</option>
+                        <option value="@GridPdfZoomMode.FitToPage">Fit to page</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Zoom %</span>
+                    <input type="number"
+                           min="25"
+                           max="200"
+                           step="5"
+                           disabled="@(_printZoomMode == GridPdfZoomMode.FitToPage)"
+                           @bind="_printZoomPercent" />
+                </label>
+            </div>
+            <div class="fx-grid-print-options-footer">
+                <button type="button" class="fx-grid-print-options-ok"
+                        @onclick="PrintOptionsOk">Print</button>
+                <button type="button" class="fx-grid-print-options-cancel"
+                        @onclick="PrintOptionsCancel">Cancel</button>
+            </div>
         </div>
     }
 
@@ -1042,11 +1186,12 @@
                     @foreach (var row in _chooseColumnsRows)
                     {
                         var capturedRow = row;
-                        <div class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
+                        <div @key="capturedRow.Field"
+                             class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">
                             <input type="checkbox"
                                    checked="@row.Visible"
-                                   @onchange="() => ChooseColumnsToggle(capturedRow)"
+                                   @onchange="e => ChooseColumnsSetVisible(capturedRow, e)"
                                    @onclick:stopPropagation="true" />
                             <span class="fx-choose-columns-label">@row.Header</span>
                         </div>

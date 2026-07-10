@@ -1,6 +1,6 @@
 <button type="@Type"
         class="@ResolvedCssClass"
-        title="@Title"
+        title="@(ShowTooltip ? ResolvedTitle : null)"
         aria-label="@ResolvedAriaLabel"
         aria-pressed="@AriaPressed"
         disabled="@Disabled"
@@ -32,6 +32,7 @@
     [Parameter] public string IconCss { get; set; } = string.Empty;
     [Parameter] public string IconAlt { get; set; } = string.Empty;
     [Parameter] public string Label { get; set; } = string.Empty;
+    [Parameter] public bool ShowTooltip { get; set; } = true;
     [Parameter] public bool Vertical { get; set; }
     [Parameter] public bool Large { get; set; }
     [Parameter] public bool Selected { get; set; }
@@ -54,9 +55,11 @@
 
     private string? AriaPressed => Selected ? "true" : null;
 
-    private string? ResolvedAriaLabel =>
+    private string? ResolvedTitle =>
         !string.IsNullOrWhiteSpace(Title) ? Title :
         !string.IsNullOrWhiteSpace(Label) ? Label :
         !string.IsNullOrWhiteSpace(IconAlt) ? IconAlt :
         null;
+
+    private string? ResolvedAriaLabel => ResolvedTitle;
 }

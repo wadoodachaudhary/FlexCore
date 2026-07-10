@@ -1,4 +1,7 @@
 @namespace Fx.ControlKit
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
 
 @if (Visible)
 {
@@ -10,6 +13,7 @@
     <CascadingValue Value="this" IsFixed="true">
         <div class="@RootCssClass"
              style="@PositionStyle"
+             @ref="_menuElement"
              role="menu"
              @onclick:stopPropagation="true"
              @oncontextmenu:stopPropagation="true">
@@ -30,6 +34,9 @@
     [Parameter] public string? Style { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    private ElementReference _menuElement;
+    private IJSObjectReference? _contextMenuJsModule;
+
     private string RootCssClass =>
         string.IsNullOrWhiteSpace(CssClass)
             ? "fx-context-menu"
@@ -37,6 +44,16 @@
 
     private string PositionStyle =>
         $"left:{X}px;top:{Y}px;min-width:{MinWidth}px;z-index:{ZIndex};{Style}";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Visible)
+            return;
+
+        var module = await GetContextMenuJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("positionContextMenu", _menuElement, X, Y, MinWidth, ZIndex);
+    }
 
     public async Task CloseAsync()
     {
@@ -48,4 +65,27 @@
     }
 
     internal Task RequestCloseAsync() => CloseAsync();
+
+    private async ValueTask<IJSObjectReference?> GetContextMenuJsModuleAsync()
+    {
+        try
+        {
+            return _contextMenuJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", $"./_content/{typeof(ContextMenuControl).Assembly.GetName().Name}/context-menu-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_contextMenuJsModule != null)
+        {
+            try { await _contextMenuJsModule.DisposeAsync(); }
+            catch { }
+            _contextMenuJsModule = null;
+        }
+    }
 }

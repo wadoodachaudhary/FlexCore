@@ -57,6 +57,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     [Parameter] public Func<TValue, bool, string?>? GetNodeIcon { get; set; }
 
+    [Parameter] public Func<TValue, bool>? TreatAsParent { get; set; }
+
     [Parameter] public bool ChangeNodeIconOnExpand { get; set; }
 
     [Parameter] public bool ShowLeafNodeIcons { get; set; } = true;
@@ -131,6 +133,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         CssClass?.Contains("fx-treegrid-compact", StringComparison.OrdinalIgnoreCase) == true;
 
     [Parameter] public SelectionMode SelectionMode { get; set; } = SelectionMode.Row;
+
+    [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
 
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
@@ -317,7 +321,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 break;
             case GridToolbarAction.ToggleExpandCollapse:
                 item.Title ??= AreAllExpandableNodesExpanded ? "Collapse All" : "Expand All";
-                item.IconSrc ??= $"{StaticAssetRoot}/images/16/{(AreAllExpandableNodesExpanded ? "collapse_all" : "expand_all")}.svg";
+                item.IconSrc ??= AreAllExpandableNodesExpanded
+                    ? $"{StaticAssetRoot}/images/16/collapse_all.svg"
+                    : $"{StaticAssetRoot}/images/16/expand_all.svg";
                 item.IconAlt ??= "";
                 break;
             case GridToolbarAction.Refresh:
@@ -561,7 +567,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             for (var index = 0; index < children.Count; index++)
             {
                 var (item, id) = children[index];
-                var hasChildren = childrenMap.ContainsKey(id) && childrenMap[id].Count > 0;
+                var hasChildren = (childrenMap.ContainsKey(id) && childrenMap[id].Count > 0)
+                    || (TreatAsParent?.Invoke(item) == true);
                 var isLastSibling = index == children.Count - 1;
                 _flatNodes.Add(new TreeNode<TValue>
                 {
@@ -586,7 +593,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         for (var index = 0; index < roots.Count; index++)
         {
             var root = roots[index];
-            var hasChildren = root.Id != null && childrenMap.ContainsKey(root.Id) && childrenMap[root.Id].Count > 0;
+            var hasChildren = (root.Id != null && childrenMap.ContainsKey(root.Id) && childrenMap[root.Id].Count > 0)
+                || (TreatAsParent?.Invoke(root.Item) == true);
             var isLastSibling = index == roots.Count - 1;
             _flatNodes.Add(new TreeNode<TValue>
             {
@@ -637,6 +645,12 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task ToggleNode(TreeNode<TValue> node)
     {
         await SetNodeExpandedAsync(node, !node.IsExpanded);
+    }
+
+    private async Task HandleExpandIconClick(TreeNode<TValue> node, int visibleIndex)
+    {
+        await ToggleNode(node);
+        await SelectNodeAsync(node, visibleIndex);
     }
 
     private async Task SetNodeExpandedAsync(TreeNode<TValue> node, bool expanded)
@@ -824,6 +838,21 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await RowSelected.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
     }
 
+    private string GetRowCssClass(TreeNode<TValue> node, int visibleIndex)
+    {
+        if (RowCssClassSelector == null || node.Data == null)
+            return string.Empty;
+
+        try
+        {
+            return RowCssClassSelector.Invoke(node.Data, visibleIndex) ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
     private static TreeRowSelectEventArgs<TValue> CreateRowEventArgs(TreeNode<TValue> node, int visibleIndex) =>
         new()
         {
@@ -882,6 +911,28 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     }
 
     public TValue? GetSelectedRecord() => _selectedItem;
+
+    public async Task ClearSelectionAsync()
+    {
+        if (_selectedItem == null && _selectedIndex < 0)
+            return;
+
+        var previous = _selectedItem;
+        var previousIndex = _selectedIndex;
+        _selectedItem = default;
+        _selectedIndex = -1;
+
+        if (previous != null && RowDeselected.HasDelegate)
+        {
+            await RowDeselected.InvokeAsync(new TreeRowSelectEventArgs<TValue>
+            {
+                Data = previous,
+                RowIndex = previousIndex
+            });
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
 
     internal async Task HandleHeaderClickAsync(TreeGridColumn column)
     {
@@ -1058,6 +1109,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             parts.Add($"min-width:{column.MinWidth}");
         parts.Add($"text-align:{column.TextAlign.ToString().ToLowerInvariant()}");
         return string.Join(";", parts);
+    }
+
+    internal string? GetCellTitle(TValue? item, TreeGridColumn column)
+    {
+        if (item == null || string.IsNullOrWhiteSpace(column.Field))
+            return null;
+
+        var value = GetCellDisplayValue(item, column);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private bool HasActiveFilters => _columnStates.Values.Any(s => s.FilterActive);

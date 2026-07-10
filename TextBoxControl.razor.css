@@ -33,3 +33,67 @@
 .tax-field-input {
     width: 120px;
 }
+
+.fx-text-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: transparent;
+}
+
+.fx-text-context-menu {
+    position: fixed;
+    z-index: 3001;
+    min-width: 292px;
+    padding: 6px 10px;
+    border: 1px solid #d7d7d7;
+    background: #f4f4f4;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.24);
+    color: #000;
+    font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.fx-text-context-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    min-height: 29px;
+    padding: 2px 58px 2px 48px;
+    border: 0;
+    background: transparent;
+    color: #000;
+    font: inherit;
+    text-align: left;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.fx-text-context-menu button:hover:not(:disabled),
+.fx-text-context-menu button:focus-visible:not(:disabled) {
+    outline: 0;
+    background: #0078d7;
+    color: #fff;
+}
+
+.fx-text-context-menu button:disabled {
+    color: #9d9d9d;
+}
+
+.fx-text-context-menu button.is-checked::before {
+    content: "\2713";
+    width: 0;
+    margin-left: -28px;
+    margin-right: 20px;
+}
+
+.fx-text-context-separator {
+    height: 1px;
+    margin: 7px 8px;
+    background: #dddddd;
+}
+
+.fx-text-context-arrow {
+    margin-left: auto;
+    padding-left: 20px;
+}

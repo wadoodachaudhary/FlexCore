@@ -1,0 +1,42 @@
+@namespace Fx.ControlKit.Editor
+
+<div class="fx-editor-lite @(Disabled ? "is-disabled" : "") @(CssClass ?? string.Empty)"
+     style="@ContainerStyle">
+    @if (ShowToolbar)
+    {
+        <div class="fx-editor-lite-toolbar" role="toolbar" aria-label="@ToolbarLabel">
+            <select class="fx-editor-lite-block"
+                    title="Text style"
+                    value="@_selectedBlock"
+                    disabled="@Disabled"
+                    @onchange="HandleBlockChangedAsync">
+                <option value="P">Normal</option>
+                <option value="H2">Heading</option>
+                <option value="H3">Subheading</option>
+                <option value="BLOCKQUOTE">Quote</option>
+            </select>
+
+            <span class="fx-editor-lite-separator"></span>
+
+            <button type="button" title="Bold" aria-label="Bold" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("bold")'><strong>B</strong></button>
+            <button type="button" title="Italic" aria-label="Italic" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("italic")'><em>I</em></button>
+            <button type="button" title="Underline" aria-label="Underline" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("underline")'><span class="fx-editor-lite-u">U</span></button>
+
+            <span class="fx-editor-lite-separator"></span>
+
+            <button type="button" title="Bulleted list" aria-label="Bulleted list" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("insertUnorderedList")'>&bull;</button>
+            <button type="button" title="Numbered list" aria-label="Numbered list" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("insertOrderedList")'>1.</button>
+            <button type="button" title="Link" aria-label="Link" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick="CreateLinkAsync">&#128279;</button>
+            <button type="button" title="Clear formatting" aria-label="Clear formatting" disabled="@Disabled" @onmousedown:preventDefault="true" @onclick='() => ExecAsync("removeFormat")'>Tx</button>
+        </div>
+    }
+
+    <div id="@EffectiveEditorId"
+         @key="_editorKey"
+         class="fx-editor-lite-surface"
+         contenteditable="@(!Disabled)"
+         spellcheck="@SpellCheck"
+         data-placeholder="@Placeholder"
+         @oninput="HandleInputAsync">
+    </div>
+</div>

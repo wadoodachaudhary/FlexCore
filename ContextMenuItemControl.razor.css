@@ -1,10 +1,14 @@
+.fx-context-menu-item-host {
+    position: relative;
+}
+
 .fx-context-menu-item {
     display: flex;
     align-items: center;
     width: 100%;
-    min-height: 20px;
-    gap: 6px;
-    padding: 2px 24px 2px 18px;
+    min-height: 21px;
+    gap: 5px;
+    padding: 2px 26px 2px 10px;
     border: 0;
     border-radius: 0;
     background: transparent;
@@ -28,11 +32,44 @@
 }
 
 .fx-context-menu-item-icon {
-    flex: 0 0 14px;
-    width: 14px;
+    flex: 0 0 15px;
+    width: 15px;
     text-align: center;
 }
 
 .fx-context-menu-item-text {
     flex: 1 1 auto;
+}
+
+.fx-context-menu-item-arrow {
+    flex: 0 0 auto;
+    margin-left: 18px;
+    font-size: 10px;
+    line-height: 1;
+}
+
+.fx-context-submenu {
+    display: none;
+    position: absolute;
+    left: calc(100% - 1px);
+    top: -4px;
+    min-width: 150px;
+    padding: 3px 0;
+    border: 1px solid #808080;
+    background: #eeeeee;
+    color: #000;
+    box-shadow: 2px 2px 3px rgba(0, 0, 0, 0.32);
+    font: inherit;
+    z-index: 1;
+}
+
+.fx-context-menu-item-host.has-submenu:hover > .fx-context-submenu,
+.fx-context-menu-item-host.has-submenu:focus-within > .fx-context-submenu {
+    display: block;
+}
+
+.fx-context-menu-item-host.has-submenu:hover > .fx-context-menu-item:not(:disabled),
+.fx-context-menu-item-host.has-submenu:focus-within > .fx-context-menu-item:not(:disabled) {
+    background: #0078d7;
+    color: #fff;
 }

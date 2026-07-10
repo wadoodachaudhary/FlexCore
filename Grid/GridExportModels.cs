@@ -17,6 +17,45 @@ public enum GridExportFormat
     Json
 }
 
+public enum GridPdfOrientation
+{
+    Portrait,
+    Landscape
+}
+
+public enum GridPdfPageSize
+{
+    Letter,
+    Legal,
+    A4
+}
+
+public enum GridPdfColumnLayout
+{
+    WrapText,
+    ClipText,
+    FitColumnsToPage
+}
+
+public enum GridPdfZoomMode
+{
+    FitToPage,
+    Percent
+}
+
+public sealed class GridPdfPrintOptions
+{
+    public GridPdfOrientation Orientation { get; set; } = GridPdfOrientation.Portrait;
+    public GridPdfPageSize PageSize { get; set; } = GridPdfPageSize.Letter;
+    public GridPdfColumnLayout ColumnLayout { get; set; } = GridPdfColumnLayout.WrapText;
+    public double Margin { get; set; } = 24;
+    public int MaxWrappedLines { get; set; } = 4;
+    public bool IncludeColumnHeaders { get; set; } = true;
+    public bool ShowGridLines { get; set; } = true;
+    public GridPdfZoomMode ZoomMode { get; set; } = GridPdfZoomMode.FitToPage;
+    public int ZoomPercent { get; set; } = 100;
+}
+
 public sealed class GridExportColumn
 {
     public GridExportColumn(string header, string? format = null, TextAlign textAlign = TextAlign.Left, double? width = null)
@@ -71,7 +110,11 @@ public static class GridExporter
     private const string HtmlMime = "text/html";
     private const string JsonMime = "application/json";
 
-    public static GridExportResult Export(GridExportTable table, GridExportFormat format, string? fileName = null)
+    public static GridExportResult Export(
+        GridExportTable table,
+        GridExportFormat format,
+        string? fileName = null,
+        GridPdfPrintOptions? pdfOptions = null)
     {
         var resolvedName = EnsureExtension(
             string.IsNullOrWhiteSpace(fileName) ? SanitizeFileName(table.Title) : fileName!,
@@ -84,7 +127,7 @@ public static class GridExporter
             GridExportFormat.Html => new GridExportResult(BuildHtml(table, standalone: true), resolvedName, HtmlMime),
             GridExportFormat.Xls => new GridExportResult(BuildHtml(table, standalone: false), resolvedName, XlsMime),
             GridExportFormat.Xlsx => new GridExportResult(BuildXlsx(table), resolvedName, XlsxMime),
-            GridExportFormat.Pdf => new GridExportResult(BuildPdf(table), resolvedName, PdfMime),
+            GridExportFormat.Pdf => new GridExportResult(BuildPdf(table, pdfOptions), resolvedName, PdfMime),
             GridExportFormat.Json => new GridExportResult(BuildJson(table), resolvedName, JsonMime),
             _ => new GridExportResult(BuildXlsx(table), resolvedName, XlsxMime)
         };
@@ -141,6 +184,7 @@ public static class GridExporter
 
         if (table.IncludeHeaderRow && table.Columns.Count > 0)
         {
+            worksheet.Row(rowIndex).Style.Font.Bold = true;
             for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
             {
                 var cell = worksheet.Cell(rowIndex, colIndex + 1);
@@ -189,7 +233,7 @@ public static class GridExporter
         for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
         {
             if (table.Columns[colIndex].Width is double width)
-                worksheet.Column(colIndex + 1).Width = width;
+                worksheet.Column(colIndex + 1).Width = ConvertPixelsToExcelColumnWidth(width);
             else
                 worksheet.Column(colIndex + 1).AdjustToContents();
         }
@@ -197,6 +241,15 @@ public static class GridExporter
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
         return stream.ToArray();
+    }
+
+    private static double ConvertPixelsToExcelColumnWidth(double width)
+    {
+        if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+            return 8.43;
+
+        var excelWidth = (width - 5) / 7d;
+        return Math.Clamp(excelWidth, 4, 80);
     }
 
     private static byte[] BuildDelimited(GridExportTable table, string delimiter)
@@ -272,44 +325,600 @@ public static class GridExporter
         return JsonSerializer.SerializeToUtf8Bytes(rows, new JsonSerializerOptions { WriteIndented = true });
     }
 
-    private static byte[] BuildPdf(GridExportTable table)
+    private static byte[] BuildPdf(GridExportTable table, GridPdfPrintOptions? pdfOptions)
     {
-        const double pageWidth = 842;
-        const double pageHeight = 595;
-        const double margin = 24;
-        const double fontSize = 8.5;
-        const double lineHeight = 12;
-        var maxRowsPerPage = Math.Max(1, (int)((pageHeight - (margin * 2) - 24) / lineHeight));
+        var options = pdfOptions ?? new GridPdfPrintOptions();
+        var (pageWidth, pageHeight) = ResolvePdfPageSize(options.PageSize, options.Orientation);
+        var margin = Math.Clamp(options.Margin, 12, 72);
+        var contentWidth = Math.Max(72, pageWidth - (margin * 2));
+        var effectiveColumnLayout = ResolvePdfColumnLayout(options);
+        var zoomScale = ResolvePdfZoomScale(options, table, contentWidth);
+        var fontSize = 8.5 * zoomScale;
+        var headerFontSize = 8.5 * zoomScale;
+        var lineHeight = 10.75 * zoomScale;
+        var cellPaddingX = 3.25 * zoomScale;
+        var cellPaddingY = 2.25 * zoomScale;
+        var headerHeight = lineHeight + (cellPaddingY * 2);
+        var baseRowHeight = lineHeight + (cellPaddingY * 2);
+        var maxWrappedLines = Math.Clamp(options.MaxWrappedLines, 1, 12);
 
-        var textRows = new List<(bool Bold, string Text)>();
-        if (!string.IsNullOrWhiteSpace(table.Title))
-            textRows.Add((true, table.Title));
-        if (table.IncludeHeaderRow && table.Columns.Count > 0)
-            textRows.Add((true, string.Join("  ", table.Columns.Select(c => c.Header))));
-        textRows.AddRange(table.Rows.Select(row => (row.IsBold, string.Join("  ", row.Values.Select(ToExportString)))));
-
-        var pages = textRows.Chunk(maxRowsPerPage).Select(chunk =>
+        var pages = new List<string>();
+        if (table.Columns.Count == 0)
         {
-            var sb = new StringBuilder();
-            var y = pageHeight - margin;
-            foreach (var row in chunk)
-            {
-                var escaped = EscapePdfText(TrimForPdf(row.Text));
-                sb.Append("BT /F1 ")
-                  .Append(row.Bold ? fontSize + 0.5 : fontSize)
-                  .Append(" Tf ")
-                  .Append(margin.ToString(CultureInfo.InvariantCulture))
-                  .Append(' ')
-                  .Append(y.ToString(CultureInfo.InvariantCulture))
-                  .Append(" Td (")
-                  .Append(escaped)
-                  .AppendLine(") Tj ET");
-                y -= lineHeight;
-            }
-            return sb.ToString();
-        }).ToList();
+            pages.Add(string.Empty);
+            return PdfDocumentWriter.Write(pageWidth, pageHeight, pages);
+        }
 
-        return PdfDocumentWriter.Write(pageWidth, pageHeight, pages);
+        var columnWidths = ResolvePdfColumnWidths(table, contentWidth, fontSize, effectiveColumnLayout, zoomScale);
+        var columnSegments = BuildPdfColumnSegments(columnWidths, contentWidth, effectiveColumnLayout);
+        var rows = table.Rows.ToList();
+
+        foreach (var segment in columnSegments)
+        {
+            if (rows.Count == 0)
+            {
+                var headerOnly = new StringBuilder();
+                var y = pageHeight - margin;
+                if (options.IncludeColumnHeaders && table.IncludeHeaderRow)
+                {
+                    DrawPdfRow(
+                        headerOnly,
+                        table,
+                        null,
+                        segment.Start,
+                        segment.Count,
+                        columnWidths,
+                        margin,
+                        y,
+                        headerHeight,
+                        isHeader: true,
+                        GridPdfColumnLayout.ClipText,
+                        headerFontSize,
+                        lineHeight,
+                        cellPaddingX,
+                        cellPaddingY,
+                        maxWrappedLines,
+                        options.ShowGridLines);
+                }
+                pages.Add(headerOnly.ToString());
+                continue;
+            }
+
+            var rowIndex = 0;
+            while (rowIndex < rows.Count)
+            {
+                var sb = new StringBuilder();
+                var y = pageHeight - margin;
+
+                if (options.IncludeColumnHeaders && table.IncludeHeaderRow)
+                {
+                    DrawPdfRow(
+                        sb,
+                        table,
+                        null,
+                        segment.Start,
+                        segment.Count,
+                        columnWidths,
+                        margin,
+                        y,
+                        headerHeight,
+                        isHeader: true,
+                        GridPdfColumnLayout.ClipText,
+                        headerFontSize,
+                        lineHeight,
+                        cellPaddingX,
+                        cellPaddingY,
+                        maxWrappedLines,
+                        options.ShowGridLines);
+                    y -= headerHeight;
+                }
+
+                var wroteDataRow = false;
+                while (rowIndex < rows.Count)
+                {
+                    var row = rows[rowIndex];
+                    var rowHeight = ComputePdfRowHeight(
+                        table,
+                        row,
+                        segment.Start,
+                        segment.Count,
+                        columnWidths,
+                        effectiveColumnLayout,
+                        fontSize,
+                        lineHeight,
+                        cellPaddingX,
+                        cellPaddingY,
+                        maxWrappedLines);
+
+                    if (wroteDataRow && y - rowHeight < margin)
+                        break;
+
+                    if (!wroteDataRow && y - rowHeight < margin)
+                        rowHeight = Math.Max(baseRowHeight, y - margin);
+
+                    DrawPdfRow(
+                        sb,
+                        table,
+                        row,
+                        segment.Start,
+                        segment.Count,
+                        columnWidths,
+                        margin,
+                        y,
+                        rowHeight,
+                        isHeader: false,
+                        effectiveColumnLayout,
+                        fontSize,
+                        lineHeight,
+                        cellPaddingX,
+                        cellPaddingY,
+                        maxWrappedLines,
+                        options.ShowGridLines);
+
+                    y -= rowHeight;
+                    rowIndex++;
+                    wroteDataRow = true;
+                }
+
+                pages.Add(sb.ToString());
+            }
+        }
+
+        return PdfDocumentWriter.Write(pageWidth, pageHeight, pages.Count > 0 ? pages : new List<string> { string.Empty });
+    }
+
+    private static void DrawPdfRow(
+        StringBuilder sb,
+        GridExportTable table,
+        GridExportRow? row,
+        int startColumn,
+        int columnCount,
+        IReadOnlyList<double> columnWidths,
+        double left,
+        double top,
+        double rowHeight,
+        bool isHeader,
+        GridPdfColumnLayout columnLayout,
+        double fontSize,
+        double lineHeight,
+        double paddingX,
+        double paddingY,
+        int maxWrappedLines,
+        bool showGridLines)
+    {
+        var x = left;
+        for (var offset = 0; offset < columnCount; offset++)
+        {
+            var columnIndex = startColumn + offset;
+            var width = columnWidths[columnIndex];
+            var text = isHeader
+                ? table.Columns[columnIndex].Header
+                : columnIndex < (row?.Values.Count ?? 0) ? ToExportString(row!.Values[columnIndex]) : string.Empty;
+            var align = isHeader ? TextAlign.Left : table.Columns[columnIndex].TextAlign;
+            var highlighted = !isHeader && table.HighlightColumnIndexes.Contains(columnIndex);
+
+            DrawPdfCell(
+                sb,
+                text,
+                x,
+                top,
+                width,
+                rowHeight,
+                align,
+                isHeader,
+                row?.IsBold == true,
+                highlighted,
+                columnLayout,
+                fontSize,
+                lineHeight,
+                paddingX,
+                paddingY,
+                maxWrappedLines,
+                showGridLines);
+
+            x += width;
+        }
+    }
+
+    private static void DrawPdfCell(
+        StringBuilder sb,
+        string text,
+        double x,
+        double top,
+        double width,
+        double height,
+        TextAlign align,
+        bool isHeader,
+        bool isBold,
+        bool isHighlighted,
+        GridPdfColumnLayout columnLayout,
+        double fontSize,
+        double lineHeight,
+        double paddingX,
+        double paddingY,
+        int maxWrappedLines,
+        bool showGridLines)
+    {
+        var bottom = top - height;
+        if (isHeader)
+            AppendPdfFilledRectangle(sb, x, bottom, width, height, "0.92 0.92 0.92");
+        else if (isHighlighted)
+            AppendPdfFilledRectangle(sb, x, bottom, width, height, "1 1 0.86");
+
+        if (showGridLines)
+            AppendPdfBorder(sb, x, bottom, width, height);
+
+        var availableWidth = Math.Max(1, width - (paddingX * 2));
+        var availableLines = Math.Max(1, (int)Math.Floor(Math.Max(lineHeight, height - (paddingY * 2)) / lineHeight));
+        var effectiveMaxLines = Math.Min(maxWrappedLines, availableLines);
+        var lines = GetPdfCellLines(text, availableWidth, fontSize, columnLayout, effectiveMaxLines);
+        var fontName = isHeader || isBold ? "F2" : "F1";
+        var baseline = top - paddingY - fontSize;
+
+        foreach (var line in lines.Take(availableLines))
+        {
+            var lineWidth = EstimatePdfTextWidth(line, fontSize);
+            var textX = align switch
+            {
+                TextAlign.Center => x + paddingX + Math.Max(0, (availableWidth - lineWidth) / 2),
+                TextAlign.Right => x + width - paddingX - Math.Min(lineWidth, availableWidth),
+                _ => x + paddingX
+            };
+
+            AppendPdfText(sb, line, textX, baseline, fontName, fontSize);
+            baseline -= lineHeight;
+        }
+    }
+
+    private static double ComputePdfRowHeight(
+        GridExportTable table,
+        GridExportRow row,
+        int startColumn,
+        int columnCount,
+        IReadOnlyList<double> columnWidths,
+        GridPdfColumnLayout columnLayout,
+        double fontSize,
+        double lineHeight,
+        double paddingX,
+        double paddingY,
+        int maxWrappedLines)
+    {
+        if (columnLayout != GridPdfColumnLayout.WrapText)
+            return lineHeight + (paddingY * 2);
+
+        var lineCount = 1;
+        for (var offset = 0; offset < columnCount; offset++)
+        {
+            var columnIndex = startColumn + offset;
+            var text = columnIndex < row.Values.Count ? ToExportString(row.Values[columnIndex]) : string.Empty;
+            var availableWidth = Math.Max(1, columnWidths[columnIndex] - (paddingX * 2));
+            lineCount = Math.Max(lineCount, GetPdfCellLines(text, availableWidth, fontSize, columnLayout, maxWrappedLines).Count);
+        }
+
+        return (lineCount * lineHeight) + (paddingY * 2);
+    }
+
+    private static List<double> ResolvePdfColumnWidths(
+        GridExportTable table,
+        double contentWidth,
+        double fontSize,
+        GridPdfColumnLayout columnLayout,
+        double zoomScale,
+        bool applyFitToPage = true)
+    {
+        var widths = new List<double>(table.Columns.Count);
+        var scaledMinimumWidth = columnLayout == GridPdfColumnLayout.FitColumnsToPage
+            ? Math.Max(4, 30 * Math.Clamp(zoomScale, 0.12, 2))
+            : 30;
+        var maximumWidth = Math.Max(scaledMinimumWidth, contentWidth);
+
+        for (var index = 0; index < table.Columns.Count; index++)
+        {
+            var column = table.Columns[index];
+            var width = column.Width is > 0
+                ? column.Width.Value * 0.75 * zoomScale
+                : EstimatePdfColumnWidth(table, index, fontSize, zoomScale);
+            widths.Add(Math.Clamp(width, scaledMinimumWidth, maximumWidth));
+        }
+
+        if (applyFitToPage && columnLayout == GridPdfColumnLayout.FitColumnsToPage && widths.Count > 0)
+        {
+            var totalWidth = widths.Sum();
+            if (totalWidth > 0)
+            {
+                var scale = contentWidth / totalWidth;
+                var fitMinimumWidth = Math.Max(3, 10 * Math.Clamp(zoomScale, 0.12, 2));
+                for (var i = 0; i < widths.Count; i++)
+                    widths[i] = Math.Max(fitMinimumWidth, widths[i] * scale);
+
+                var adjustedTotal = widths.Sum();
+                if (adjustedTotal > contentWidth && adjustedTotal > 0)
+                {
+                    var adjustment = contentWidth / adjustedTotal;
+                    for (var i = 0; i < widths.Count; i++)
+                        widths[i] *= adjustment;
+                }
+            }
+        }
+
+        return widths;
+    }
+
+    private static double EstimatePdfColumnWidth(GridExportTable table, int columnIndex, double fontSize, double zoomScale)
+    {
+        var maxWidth = EstimatePdfTextWidth(table.Columns[columnIndex].Header, fontSize);
+        foreach (var row in table.Rows.Take(100))
+        {
+            var value = columnIndex < row.Values.Count ? ToExportString(row.Values[columnIndex]) : string.Empty;
+            maxWidth = Math.Max(maxWidth, Math.Min(EstimatePdfTextWidth(value, fontSize), 220));
+        }
+
+        return Math.Clamp(maxWidth + (14 * zoomScale), 36 * zoomScale, 240 * zoomScale);
+    }
+
+    private static List<(int Start, int Count)> BuildPdfColumnSegments(
+        IReadOnlyList<double> widths,
+        double contentWidth,
+        GridPdfColumnLayout columnLayout)
+    {
+        if (widths.Count == 0)
+            return [];
+
+        if (columnLayout == GridPdfColumnLayout.FitColumnsToPage)
+            return [(0, widths.Count)];
+
+        var segments = new List<(int Start, int Count)>();
+        var start = 0;
+        while (start < widths.Count)
+        {
+            var used = 0d;
+            var end = start;
+            while (end < widths.Count)
+            {
+                var width = Math.Min(widths[end], contentWidth);
+                if (end > start && used + width > contentWidth)
+                    break;
+                used += width;
+                end++;
+                if (width >= contentWidth)
+                    break;
+            }
+
+            segments.Add((start, Math.Max(1, end - start)));
+            start = Math.Max(start + 1, end);
+        }
+
+        return segments;
+    }
+
+    private static IReadOnlyList<string> GetPdfCellLines(
+        string text,
+        double maxWidth,
+        double fontSize,
+        GridPdfColumnLayout columnLayout,
+        int maxLines)
+    {
+        var normalized = NormalizePdfText(text);
+        if (columnLayout != GridPdfColumnLayout.WrapText)
+            return [TrimPdfTextToWidth(normalized, maxWidth, fontSize)];
+
+        return WrapPdfText(normalized, maxWidth, fontSize, maxLines);
+    }
+
+    private static IReadOnlyList<string> WrapPdfText(string text, double maxWidth, double fontSize, int maxLines)
+    {
+        if (string.IsNullOrEmpty(text))
+            return [string.Empty];
+
+        var lines = new List<string>();
+        var current = "";
+        var truncated = false;
+
+        foreach (var word in text.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = string.IsNullOrEmpty(current) ? word : current + " " + word;
+            if (EstimatePdfTextWidth(candidate, fontSize) <= maxWidth)
+            {
+                current = candidate;
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(current))
+            {
+                lines.Add(current);
+                current = "";
+                if (lines.Count >= maxLines)
+                {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if (EstimatePdfTextWidth(word, fontSize) <= maxWidth)
+            {
+                current = word;
+                continue;
+            }
+
+            var chunk = "";
+            foreach (var ch in word)
+            {
+                var charCandidate = chunk + ch;
+                if (EstimatePdfTextWidth(charCandidate, fontSize) <= maxWidth || string.IsNullOrEmpty(chunk))
+                {
+                    chunk = charCandidate;
+                    continue;
+                }
+
+                lines.Add(chunk);
+                chunk = ch.ToString();
+                if (lines.Count >= maxLines)
+                {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if (truncated)
+                break;
+            current = chunk;
+        }
+
+        if (!truncated && !string.IsNullOrEmpty(current))
+            lines.Add(current);
+
+        if (lines.Count == 0)
+            lines.Add(string.Empty);
+
+        if (lines.Count > maxLines)
+        {
+            lines = lines.Take(maxLines).ToList();
+            truncated = true;
+        }
+
+        if (truncated && lines.Count > 0)
+            lines[^1] = TrimPdfTextToWidth(lines[^1] + "...", maxWidth, fontSize);
+
+        return lines;
+    }
+
+    private static string NormalizePdfText(string text) =>
+        string.Join(" ", (text ?? string.Empty)
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Replace("\t", " ", StringComparison.Ordinal)
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+
+    private static string TrimPdfTextToWidth(string text, double maxWidth, double fontSize)
+    {
+        if (string.IsNullOrEmpty(text) || maxWidth <= 0)
+            return string.Empty;
+
+        if (EstimatePdfTextWidth(text, fontSize) <= maxWidth)
+            return text;
+
+        const string ellipsis = "...";
+        var ellipsisWidth = EstimatePdfTextWidth(ellipsis, fontSize);
+        if (ellipsisWidth >= maxWidth)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        foreach (var ch in text)
+        {
+            var candidate = sb.ToString() + ch;
+            if (EstimatePdfTextWidth(candidate, fontSize) + ellipsisWidth > maxWidth)
+                break;
+            sb.Append(ch);
+        }
+
+        return sb.Length == 0 ? string.Empty : sb.ToString() + ellipsis;
+    }
+
+    private static double EstimatePdfTextWidth(string text, double fontSize)
+    {
+        if (string.IsNullOrEmpty(text))
+            return 0;
+
+        var units = 0d;
+        foreach (var ch in text)
+        {
+            if (char.IsWhiteSpace(ch))
+                units += 0.28;
+            else if ("ilI.,:;|'!".IndexOf(ch) >= 0)
+                units += 0.24;
+            else if ("mwMW@#%&".IndexOf(ch) >= 0)
+                units += 0.82;
+            else if (char.IsUpper(ch))
+                units += 0.62;
+            else if (char.IsDigit(ch))
+                units += 0.56;
+            else
+                units += 0.5;
+        }
+
+        return units * fontSize;
+    }
+
+    private static double ResolvePdfZoomScale(GridPdfPrintOptions options, GridExportTable table, double contentWidth)
+    {
+        if (options.ZoomMode != GridPdfZoomMode.FitToPage)
+            return Math.Clamp(options.ZoomPercent, 25, 200) / 100d;
+
+        var naturalWidths = ResolvePdfColumnWidths(
+            table,
+            contentWidth,
+            fontSize: 8.5,
+            columnLayout: GridPdfColumnLayout.ClipText,
+            zoomScale: 1d,
+            applyFitToPage: false);
+        var naturalWidth = naturalWidths.Sum();
+        if (naturalWidth <= 0 || naturalWidth <= contentWidth)
+            return 1d;
+
+        return Math.Clamp(contentWidth / naturalWidth, 0.12, 1d);
+    }
+
+    private static GridPdfColumnLayout ResolvePdfColumnLayout(GridPdfPrintOptions options) =>
+        options.ZoomMode == GridPdfZoomMode.FitToPage
+            ? GridPdfColumnLayout.FitColumnsToPage
+            : options.ColumnLayout;
+
+    private static void AppendPdfFilledRectangle(StringBuilder sb, double x, double y, double width, double height, string fillColor)
+    {
+        sb.Append(fillColor).AppendLine(" rg");
+        AppendPdfRectangle(sb, x, y, width, height, "f");
+    }
+
+    private static void AppendPdfBorder(StringBuilder sb, double x, double y, double width, double height)
+    {
+        sb.AppendLine("0.82 0.82 0.82 RG");
+        sb.AppendLine("0.35 w");
+        AppendPdfRectangle(sb, x, y, width, height, "S");
+    }
+
+    private static void AppendPdfRectangle(StringBuilder sb, double x, double y, double width, double height, string operation)
+    {
+        sb.Append(PdfNumber(x)).Append(' ')
+          .Append(PdfNumber(y)).Append(' ')
+          .Append(PdfNumber(width)).Append(' ')
+          .Append(PdfNumber(height)).Append(" re ")
+          .AppendLine(operation);
+    }
+
+    private static void AppendPdfText(
+        StringBuilder sb,
+        string text,
+        double x,
+        double y,
+        string fontName,
+        double fontSize)
+    {
+        if (string.IsNullOrEmpty(text))
+            return;
+
+        sb.AppendLine("0 0 0 rg");
+        sb.Append("BT /").Append(fontName).Append(' ')
+          .Append(PdfNumber(fontSize)).Append(" Tf ")
+          .Append(PdfNumber(x)).Append(' ')
+          .Append(PdfNumber(y)).Append(" Td (")
+          .Append(EscapePdfText(text))
+          .AppendLine(") Tj ET");
+    }
+
+    private static (double Width, double Height) ResolvePdfPageSize(
+        GridPdfPageSize pageSize,
+        GridPdfOrientation orientation)
+    {
+        var size = pageSize switch
+        {
+            GridPdfPageSize.Legal => (Width: 612d, Height: 1008d),
+            GridPdfPageSize.A4 => (Width: 595d, Height: 842d),
+            _ => (Width: 612d, Height: 792d)
+        };
+
+        return orientation == GridPdfOrientation.Landscape
+            ? (Math.Max(size.Width, size.Height), Math.Min(size.Width, size.Height))
+            : (Math.Min(size.Width, size.Height), Math.Max(size.Width, size.Height));
     }
 
     private static void SetCellValue(IXLCell cell, object? value)
@@ -370,6 +979,9 @@ public static class GridExporter
 
     private static string Html(string value) => System.Net.WebUtility.HtmlEncode(value);
 
+    private static string PdfNumber(double value) =>
+        value.ToString("0.###", CultureInfo.InvariantCulture);
+
     private static string EnsureExtension(string fileName, string extension)
     {
         if (string.IsNullOrWhiteSpace(Path.GetExtension(fileName)))
@@ -400,9 +1012,6 @@ public static class GridExporter
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal);
 
-    private static string TrimForPdf(string text) =>
-        text.Length <= 180 ? text : text[..177] + "...";
-
     private static class PdfDocumentWriter
     {
         public static byte[] Write(double pageWidth, double pageHeight, IReadOnlyList<string> pageContents)
@@ -411,7 +1020,8 @@ public static class GridExporter
             {
                 "<< /Type /Catalog /Pages 2 0 R >>",
                 "",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
             };
 
             var pageObjectNumbers = new List<int>();
@@ -423,7 +1033,7 @@ public static class GridExporter
                 pageObjectNumbers.Add(pageObjectNumber);
 
                 objects.Add(
-                    $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pageWidth.ToString(CultureInfo.InvariantCulture)} {pageHeight.ToString(CultureInfo.InvariantCulture)}] /Resources << /Font << /F1 3 0 R >> >> /Contents {contentObjectNumber} 0 R >>");
+                    $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PdfNumber(pageWidth)} {PdfNumber(pageHeight)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {contentObjectNumber} 0 R >>");
                 objects.Add($"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream");
             }
 

@@ -47,8 +47,9 @@
 .fx-button.fx-button-classic:hover:not(:disabled),
 .fx-button.fx-button-classic:focus-visible:not(:disabled) {
     background: #f0f0f0;
-    outline: 1px dotted #000;
-    outline-offset: -4px;
+    border-color: #7a7a7a;
+    outline: none;
+    box-shadow: inset 1px 1px #fff, inset -1px -1px #8a8a8a;
 }
 
 .fx-button.fx-button-classic:active:not(:disabled) {

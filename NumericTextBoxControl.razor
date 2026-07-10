@@ -64,17 +64,15 @@
             newValue = default;
         }
 
-        if (newValue != null && Min.HasValue)
+        if (newValue != null && Min.HasValue && TryConvertToDecimal(newValue, out var minDecVal))
         {
-            var decVal = Convert.ToDecimal(newValue);
-            if (decVal < Min.Value)
-                newValue = (TValue)Convert.ChangeType(Min.Value, typeof(TValue));
+            if (minDecVal < Min.Value)
+                newValue = ConvertDecimalToValue(Min.Value, newValue);
         }
-        if (newValue != null && Max.HasValue)
+        if (newValue != null && Max.HasValue && TryConvertToDecimal(newValue, out var maxDecVal))
         {
-            var decVal = Convert.ToDecimal(newValue);
-            if (decVal > Max.Value)
-                newValue = (TValue)Convert.ChangeType(Max.Value, typeof(TValue));
+            if (maxDecVal > Max.Value)
+                newValue = ConvertDecimalToValue(Max.Value, newValue);
         }
 
         Value = newValue;
@@ -85,8 +83,72 @@
             await ValueChange.InvokeAsync(new NumericChangeEventArgs<TValue> { Value = newValue });
     }
 
-    public class NumericChangeEventArgs<T>
+	    public class NumericChangeEventArgs<T>
+	    {
+	        public T? Value { get; set; }
+	    }
+
+    private static bool TryConvertToDecimal(TValue value, out decimal result)
     {
-        public T? Value { get; set; }
+        result = 0m;
+        try
+        {
+            switch (value)
+            {
+                case decimal d:
+                    result = d;
+                    return true;
+                case double d:
+                    if (double.IsNaN(d))
+                        return false;
+                    if (double.IsPositiveInfinity(d) || d > (double)decimal.MaxValue)
+                    {
+                        result = decimal.MaxValue;
+                        return true;
+                    }
+                    if (double.IsNegativeInfinity(d) || d < (double)decimal.MinValue)
+                    {
+                        result = decimal.MinValue;
+                        return true;
+                    }
+                    result = (decimal)d;
+                    return true;
+                case float f:
+                    if (float.IsNaN(f))
+                        return false;
+                    if (float.IsPositiveInfinity(f) || f > (float)decimal.MaxValue)
+                    {
+                        result = decimal.MaxValue;
+                        return true;
+                    }
+                    if (float.IsNegativeInfinity(f) || f < (float)decimal.MinValue)
+                    {
+                        result = decimal.MinValue;
+                        return true;
+                    }
+                    result = (decimal)f;
+                    return true;
+                default:
+                    result = Convert.ToDecimal(value, System.Globalization.CultureInfo.InvariantCulture);
+                    return true;
+            }
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static TValue? ConvertDecimalToValue(decimal value, TValue? fallback)
+    {
+        try
+        {
+            var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+            return (TValue)Convert.ChangeType(value, targetType, System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return fallback;
+        }
     }
 }

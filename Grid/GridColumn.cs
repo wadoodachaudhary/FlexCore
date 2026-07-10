@@ -7,7 +7,7 @@ public class GridColumn : ComponentBase
     [CascadingParameter] internal GridColumnsBase? Parent { get; set; }
 
     [Parameter] public string Field { get; set; } = "";
-    [Parameter] public string HeaderText { get; set; } = "";
+    [Parameter] public string? HeaderText { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? MinWidth { get; set; }
     [Parameter] public string? MaxWidth { get; set; }
@@ -27,12 +27,14 @@ public class GridColumn : ComponentBase
     [Parameter] public ClipMode ClipMode { get; set; } = ClipMode.Clip;
     [Parameter] public string? ValidationRules { get; set; }
     [Parameter] public string? DefaultValue { get; set; }
+    [Parameter] public int? MaxLength { get; set; }
 
     [Parameter] public bool SelectAllOnEdit { get; set; }
 
     [Parameter] public bool ShowNumericSpinner { get; set; }
 
     [Parameter] public bool ShowEditButton { get; set; }
+    [Parameter] public string EditButtonText { get; set; } = "...";
 
     [Parameter] public bool AlwaysShowEditButton { get; set; }
 
@@ -52,7 +54,7 @@ public class GridColumn : ComponentBase
 
     [Parameter] public List<GridCommandModel>? Commands { get; set; }
 
-    public string DisplayHeader => string.IsNullOrEmpty(HeaderText) ? Field : HeaderText;
+    public string DisplayHeader => HeaderText ?? Field;
 
     public RenderFragment<object>? EffectiveTemplate => Template ?? ChildContent;
 
