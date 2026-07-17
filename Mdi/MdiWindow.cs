@@ -17,13 +17,16 @@ public sealed class MdiWindow
 
     public bool IsSingleton { get; }
 
+    public string? IconUrl { get; }
+
     public MdiWindow(
         string id,
         string route,
         Type pageType,
         IDictionary<string, object> parameters,
         string title,
-        bool isSingleton)
+        bool isSingleton,
+        string? iconUrl = null)
     {
         Id = id;
         Route = route;
@@ -31,5 +34,6 @@ public sealed class MdiWindow
         Parameters = parameters;
         Title = title;
         IsSingleton = isSingleton;
+        IconUrl = iconUrl;
     }
 }

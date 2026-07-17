@@ -8071,6 +8071,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
+    public async Task ClearActiveCellAsync()
+    {
+        _activeCell = null;
+        _lastSelectedCell = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
     public void SelectRow(int rowIndex)
     {
         var list = PagedData.ToList();

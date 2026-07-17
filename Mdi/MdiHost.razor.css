@@ -61,6 +61,12 @@
     z-index: 1;
 }
 
+.fx-mdi-tab-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
 .fx-mdi-tab-title {
     overflow: hidden;
     text-overflow: ellipsis;

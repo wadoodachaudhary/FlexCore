@@ -168,10 +168,22 @@
                             {
                                 var cell = CellAt(r, c);
                                 var cellStyle = $"left:{Px(c * _cellW)}; top:{Px(r * _cellH)}; width:{Px(_cellW)}; height:{Px(_cellH)};";
+                                var band = BandFor(cell);   // caption strip height (0 when the cell has no title)
                                 <div class="fx-cell" style="@cellStyle">
+                                    @if (band > 0 && cell is not null)
+                                    {
+                                        
+                                        <div class="fx-cell-title" style="height:@Px(band);">
+                                            <input class="fx-cell-title-input" value="@cell.Title"
+                                                   @oninput="@(e => OnCellTitleInput(cell, e))"
+                                                   @onmousedown:stopPropagation="true"
+                                                   placeholder="Title…" />
+                                        </div>
+                                    }
                                     @if (cell is not null)
                                     {
-                                        <img class="fx-cell-img" src="@cell.Url" alt="" />
+                                        <img class="fx-cell-img" src="@cell.Url" alt=""
+                                             style="top:@Px(band); height:@Px(_cellH - band);" />
                                     }
                                     else
                                     {
@@ -309,13 +321,14 @@
 
     private bool _cropping;
     private bool _cropped;   // any surface edit (crop / cell / grid change) — counts even with no shapes
+    private bool _contentEdited;   // a cell image was pasted/attached or a cell title typed this session
     private double _cropX, _cropY, _cropW, _cropH;
     private double CropLeft => _cropW >= 0 ? _cropX : _cropX + _cropW;
     private double CropTop => _cropH >= 0 ? _cropY : _cropY + _cropH;
     private double CropAbsW => System.Math.Abs(_cropW);
     private double CropAbsH => System.Math.Abs(_cropH);
 
-    private sealed class CellImg { public string Url = ""; public double NatW, NatH; }
+    private sealed class CellImg { public string Url = ""; public double NatW, NatH; public string Title = ""; }
     private int _gridRows = 1, _gridCols = 1;
     private List<CellImg?> _cells = new() { null };
     private double _cellW, _cellH;
@@ -434,28 +447,32 @@
     private void ResetGrid(string? url)
     {
         _gridRows = 1; _gridCols = 1;
-        _cells = new List<CellImg?> { string.IsNullOrEmpty(url) ? null : new CellImg { Url = url } };
+        var cell0 = string.IsNullOrEmpty(url) ? null : new CellImg { Url = url };
+        SeedCellTitle(cell0, 0);   // e.g. "HomeFront" on a fresh capture
+        _cells = new List<CellImg?> { cell0 };
         _cellW = _cellH = 0;   // re-derived from the image's natural size in OnAfterRenderAsync
         _ctxOpen = false;
-        if (!string.IsNullOrEmpty(url)) AddColumnTitleIfAny(0, 0);   // e.g. "HF .Net" on a fresh capture
+        _contentEdited = false;
     }
 
-    private void AddColumnTitleIfAny(int row, int col)
+    private void SeedCellTitle(CellImg? cell, int col)
     {
+        if (cell is null || !string.IsNullOrWhiteSpace(cell.Title)) return;
         var titles = DefaultColumnTitles;
         if (titles is null || col >= titles.Count) return;
         var title = titles[col];
-        if (string.IsNullOrWhiteSpace(title)) return;
-        if (_cellW <= 0 && col > 0) return;
-        double left = col * _cellW, right = col == 0 && _cellW <= 0 ? double.MaxValue : left + _cellW;
-        if (_shapes.Any(s => s.Kind == DrawingTool.Text && string.Equals(s.Text, title, StringComparison.Ordinal)
-                             && s.X >= left && s.X < right)) return;
-        _shapes.Add(new DrawingShape
-        {
-            Id = NewId(), Kind = DrawingTool.Text,
-            X = left + 12, Y = row * _cellH + 10,
-            Color = _color, StrokeWidth = _size, Text = title
-        });
+        if (!string.IsNullOrWhiteSpace(title)) cell.Title = title;
+    }
+
+    private double CellTitleH => _cellW > 0 ? System.Math.Clamp(FontPx + 12, 26, 48) : 0;
+    private double BandFor(CellImg? cell) =>
+        cell is not null && !string.IsNullOrWhiteSpace(cell.Title) ? CellTitleH : 0;
+
+    private void OnCellTitleInput(CellImg cell, ChangeEventArgs e)
+    {
+        cell.Title = e.Value?.ToString() ?? "";
+        _contentEdited = true;
+        StateHasChanged();
     }
 
     private IEnumerable<DrawingShape> EnumerateShapes()
@@ -892,7 +909,7 @@
         await TitleChanged.InvokeAsync(Title);
     }
 
-    public bool IsModified => _shapes.Count > 0 || _cropped;
+    public bool IsModified => _shapes.Count > 0 || _cropped || _contentEdited;
 
     public async Task<string> GetImageAsync()
     {
@@ -904,6 +921,14 @@
     }
     public Task<string> GetShapesJsonAsync() => Task.FromResult(JsonSerializer.Serialize(_shapes));
 
+    public Task<string> GetStateJsonAsync() => Task.FromResult(JsonSerializer.Serialize(new DrawingEditorState
+    {
+        GridRows = _gridRows,
+        GridCols = _gridCols,
+        Cells = _cells.Select(c => c is null ? null : new DrawingCellState { Url = c.Url, Title = c.Title }).ToList(),
+        Shapes = _shapes.ToList()
+    }));
+
     public IReadOnlyList<string> GetShapeTexts() =>
         _shapes.Where(s => !string.IsNullOrWhiteSpace(s.Text)).Select(s => s.Text.Trim()).ToList();
 
@@ -912,15 +937,63 @@
         _shapes.Clear();
         if (shapes is not null) _shapes.AddRange(shapes);
         _selected = null; _draft = null; _editing = null;
-        _cropped = false;   // fresh load — no edits yet
+        _cropped = false; _contentEdited = false;   // fresh load — no edits yet
         StateHasChanged();
+    }
+
+    public void LoadState(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) { LoadShapes(null); return; }
+        var trimmed = json.TrimStart();
+        if (trimmed.StartsWith("["))   // legacy format: a plain List<DrawingShape>
+        {
+            try { LoadShapes(JsonSerializer.Deserialize<List<DrawingShape>>(json)); }
+            catch { LoadShapes(null); }
+            return;
+        }
+        DrawingEditorState? st = null;
+        try { st = JsonSerializer.Deserialize<DrawingEditorState>(json); } catch { }
+        if (st is null) { LoadShapes(null); return; }
+
+        _gridRows = System.Math.Max(1, st.GridRows);
+        _gridCols = System.Math.Max(1, st.GridCols);
+        var cells = new List<CellImg?>();
+        foreach (var c in st.Cells ?? new())
+            cells.Add(c is null || string.IsNullOrEmpty(c.Url) ? null : new CellImg { Url = c.Url, Title = c.Title ?? "" });
+        int need = _gridRows * _gridCols;
+        while (cells.Count < need) cells.Add(null);
+        if (cells.Count > need) cells.RemoveRange(need, cells.Count - need);
+        _cells = cells;
+        _cellW = _cellH = 0;   // natural cell size re-derived from the images in OnAfterRenderAsync
+
+        _shapes.Clear();
+        if (st.Shapes is not null) _shapes.AddRange(st.Shapes);
+        _selected = null; _draft = null; _editing = null;
+        _cropped = false; _contentEdited = false;
+        StateHasChanged();
+    }
+
+    public sealed class DrawingEditorState
+    {
+        public int GridRows { get; set; } = 1;
+        public int GridCols { get; set; } = 1;
+        public List<DrawingCellState?> Cells { get; set; } = new();
+        public List<DrawingShape> Shapes { get; set; } = new();
+    }
+
+    public sealed class DrawingCellState
+    {
+        public string Url { get; set; } = "";
+        public string Title { get; set; } = "";
     }
 
     private async Task InsertImageIntoCell(string? dataUrl, int row, int col)
     {
         if (string.IsNullOrEmpty(dataUrl)) return;
-        SetCell(row, col, new CellImg { Url = dataUrl });
-        AddColumnTitleIfAny(row, col);   // e.g. "Legacy VB6" on a clipboard paste into column 2
+        var img = new CellImg { Url = dataUrl };
+        SeedCellTitle(img, col);   // e.g. "Legacy VB6" on a clipboard paste into column 2
+        SetCell(row, col, img);
+        _contentEdited = true;
         _ctxOpen = false;
         _imageMenuOpen = false;
         StateHasChanged();
@@ -1009,7 +1082,15 @@
             {
                 var cell = CellAt(r, c2);
                 if (cell is null) continue;
-                sb.Append($"<image x='{N(c2 * _cellW)}' y='{N(r * _cellH + titleH)}' width='{N(_cellW)}' height='{N(_cellH)}' preserveAspectRatio='xMidYMid slice' xlink:href=\"{cell.Url}\" href=\"{cell.Url}\" />");
+                double cellTop = r * _cellH + titleH;
+                double band = BandFor(cell);
+                if (band > 0)
+                {
+                    sb.Append($"<rect x='{N(c2 * _cellW)}' y='{N(cellTop)}' width='{N(_cellW)}' height='{N(band)}' fill='#ffffff'/>");
+                    sb.Append($"<text x='{N(c2 * _cellW + _cellW / 2)}' y='{N(cellTop + band * 0.68)}' fill='#000000' font-family='Segoe UI, Tahoma, sans-serif' font-size='{N(TitleFontPx)}' font-weight='600' text-anchor='middle'>{Xml(cell.Title)}</text>");
+                    sb.Append($"<line x1='{N(c2 * _cellW)}' y1='{N(cellTop + band)}' x2='{N(c2 * _cellW + _cellW)}' y2='{N(cellTop + band)}' stroke='#999999' stroke-width='1'/>");
+                }
+                sb.Append($"<image x='{N(c2 * _cellW)}' y='{N(cellTop + band)}' width='{N(_cellW)}' height='{N(_cellH - band)}' preserveAspectRatio='xMidYMid slice' xlink:href=\"{cell.Url}\" href=\"{cell.Url}\" />");
             }
         if (_gridRows > 1 || _gridCols > 1)
             for (int r = 0; r < _gridRows; r++)

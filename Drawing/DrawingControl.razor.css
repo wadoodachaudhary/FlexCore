@@ -115,7 +115,19 @@
     border: 2px solid #8a8a8a;   
     box-sizing: border-box;
 }
-.fx-cell-img { display: block; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
+
+.fx-cell-img { position: absolute; left: 0; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
+
+.fx-cell-title {
+    position: absolute; left: 0; top: 0; width: 100%;
+    background: #ffffff; border-bottom: 1px solid #999999;
+    display: flex; align-items: center; box-sizing: border-box; z-index: 1;
+}
+.fx-cell-title-input {
+    width: 100%; height: 100%; box-sizing: border-box;
+    border: 0; outline: none; background: transparent;
+    text-align: center; color: #000; font: 600 16px "Segoe UI", Tahoma, sans-serif;
+}
 .fx-cell-empty {
     display: flex; align-items: center; justify-content: center;
     width: 100%; height: 100%;

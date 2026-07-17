@@ -52,6 +52,10 @@
             <div class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "")"
                  @onclick="() => OnTabClick(win.Id)"
                  title="@win.Title">
+                @if (!string.IsNullOrEmpty(win.IconUrl))
+                {
+                    <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" />
+                }
                 <span class="fx-mdi-tab-title">@win.Title</span>
                 <button class="fx-mdi-tab-close"
                         type="button"
