@@ -1,21 +1,99 @@
 @namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JSRuntime
 
-<div class="fx-menu-dropdown" @onclick:stopPropagation="true">
-    <button class="fx-menu-trigger @(IsOpen ? "active" : "") @(Disabled ? "disabled" : "")"
-            type="button"
-            disabled="@Disabled"
-            role="menuitem"
-            aria-haspopup="true"
-            aria-expanded="@IsOpen"
-            @onclick="OnTriggerClicked"
-            @onmouseover="OnMouseOver">
-        @Label
-    </button>
+<div class="@ResolvedCssClass" contenteditable="false" @onclick:stopPropagation="true">
+    @if (SplitButton)
+    {
+        <div class="@ResolvedSplitCssClass">
+            <button class="@ResolvedPrimaryCssClass"
+                    @ref="_primaryRef"
+                    type="button"
+                    contenteditable="false"
+                    disabled="@Disabled"
+                    role="menuitem"
+                    @onclick="OnPrimaryClicked"
+                    @onkeydown="OnPrimaryKeyDown"
+                    @onkeydown:preventDefault="true"
+                    @onkeydown:stopPropagation="true">
+                @if (PrimaryContent is not null)
+                {
+                    @PrimaryContent
+                }
+                else
+                {
+                    @Label
+                }
+            </button>
+            <button class="@ResolvedTriggerCssClass"
+                    @ref="_triggerRef"
+                    type="button"
+                    contenteditable="false"
+                    disabled="@Disabled"
+                    role="menuitem"
+                    aria-label="@ResolvedArrowLabel"
+                    aria-haspopup="true"
+                    aria-expanded="@IsOpen"
+                    @onclick="OnTriggerClicked"
+                    @onkeydown="OnTriggerKeyDown"
+                    @onkeydown:preventDefault="true"
+                    @onkeydown:stopPropagation="true"
+                    @onmouseover="OnMouseOver">
+                @if (TriggerContent is not null)
+                {
+                    @TriggerContent
+                }
+                else
+                {
+                    <span class="fx-menu-trigger-arrow" aria-hidden="true"></span>
+                }
+            </button>
+        </div>
+    }
+    else
+    {
+        <button class="@ResolvedTriggerCssClass"
+                @ref="_triggerRef"
+                type="button"
+                contenteditable="false"
+                disabled="@Disabled"
+                role="menuitem"
+                aria-haspopup="true"
+                aria-expanded="@IsOpen"
+                @onclick="OnTriggerClicked"
+                @onkeydown="OnTriggerKeyDown"
+                @onkeydown:preventDefault="true"
+                @onkeydown:stopPropagation="true"
+                @onmouseover="OnMouseOver">
+            @if (TriggerContent is not null)
+            {
+                @TriggerContent
+            }
+            else
+            {
+                @Label
+            }
+        </button>
+    }
 
     @if (IsOpen)
     {
+        <button type="button"
+                class="fx-menu-backdrop"
+                tabindex="-1"
+                aria-label="Close menu"
+                @onclick="CloseFromBackdrop"></button>
         <CascadingValue Value="this" IsFixed="true">
-            <div class="fx-menu-panel" role="menu">
+            <div class="@ResolvedPanelCssClass"
+                 @ref="_panelRef"
+                 contenteditable="false"
+                 role="menu"
+                 @onkeydown="OnPanelKeyDown"
+                 @onmousemove="OnPanelMouseMove"
+                 @onkeydown:preventDefault="true"
+                 @onkeydown:stopPropagation="true">
                 @ChildContent
             </div>
         </CascadingValue>
@@ -25,15 +103,135 @@
 @code {
     [Parameter] public string Label { get; set; } = string.Empty;
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool SplitButton { get; set; }
+    [Parameter] public string CssClass { get; set; } = string.Empty;
+    [Parameter] public string SplitCssClass { get; set; } = string.Empty;
+    [Parameter] public string TriggerCssClass { get; set; } = string.Empty;
+    [Parameter] public string PrimaryCssClass { get; set; } = string.Empty;
+    [Parameter] public string PanelCssClass { get; set; } = string.Empty;
+    [Parameter] public string? ArrowLabel { get; set; }
+    [Parameter] public EventCallback PrimaryClick { get; set; }
+    [Parameter] public RenderFragment? PrimaryContent { get; set; }
+    [Parameter] public RenderFragment? TriggerContent { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
     [CascadingParameter] public MenuBarControl? Parent { get; set; }
 
-    internal bool IsOpen => Parent?.ActiveMenu == this;
+    private bool _isOpen;
+    private bool _focusFirstItemAfterRender;
+    private bool _focusLastItemAfterRender;
+    private bool _focusTriggerAfterRender;
+    private bool _focusItemsByKeyboardAfterRender;
+    private bool _keyboardNavigationActive;
+    private ElementReference _panelRef;
+    private ElementReference _triggerRef;
+    private ElementReference _primaryRef;
+    private IJSObjectReference? _menuJsModule;
+
+    internal bool IsOpen => Parent?.ActiveMenu == this || (Parent is null && _isOpen);
 
     internal void RequestClose()
     {
-        Parent?.CloseAll();
+        if (Parent is not null)
+        {
+            Parent.CloseAll();
+            return;
+        }
+
+        if (!_isOpen)
+        {
+            return;
+        }
+
+        _isOpen = false;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusFirstItemAfterRender && IsOpen)
+        {
+            _focusFirstItemAfterRender = false;
+            var keyboardActive = _focusItemsByKeyboardAfterRender;
+            _focusItemsByKeyboardAfterRender = false;
+            var module = await GetMenuJsModuleAsync();
+            if (module is not null)
+            {
+                await module.InvokeVoidAsync("focusFirstMenuItem", _panelRef, keyboardActive);
+            }
+        }
+
+        if (_focusLastItemAfterRender && IsOpen)
+        {
+            _focusLastItemAfterRender = false;
+            var keyboardActive = _focusItemsByKeyboardAfterRender;
+            _focusItemsByKeyboardAfterRender = false;
+            var module = await GetMenuJsModuleAsync();
+            if (module is not null)
+            {
+                await module.InvokeVoidAsync("focusLastMenuItem", _panelRef, keyboardActive);
+            }
+        }
+
+        if (_focusTriggerAfterRender && !IsOpen)
+        {
+            _focusTriggerAfterRender = false;
+            try
+            {
+                await _triggerRef.FocusAsync();
+            }
+            catch
+            {
+                try { await _primaryRef.FocusAsync(); } catch { }
+            }
+        }
+    }
+
+    private async Task OnPrimaryClicked()
+    {
+        await OnPrimaryClicked(keyboardActive: false);
+    }
+
+    private async Task OnPrimaryClicked(bool keyboardActive)
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        if (PrimaryClick.HasDelegate)
+        {
+            await PrimaryClick.InvokeAsync();
+            RequestClose();
+            return;
+        }
+
+        Toggle(focusFirstItem: true, keyboardActive: keyboardActive);
+    }
+
+    private async Task OnPrimaryKeyDown(KeyboardEventArgs e)
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        if (e.Key is "Enter" or " ")
+        {
+            await OnPrimaryClicked(keyboardActive: true);
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            Open(focusFirstItem: true, keyboardActive: true);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            Open(focusLastItem: true, keyboardActive: true);
+        }
+        else if (e.Key == "Escape")
+        {
+            RequestClose();
+        }
     }
 
     private void OnTriggerClicked()
@@ -43,7 +241,7 @@
             return;
         }
 
-        Parent?.Toggle(this);
+        Toggle(focusFirstItem: true, keyboardActive: false);
     }
 
     private void OnMouseOver()
@@ -53,6 +251,192 @@
             return;
         }
 
-        Parent?.Activate(this);
+        if (Parent is not null)
+        {
+            Parent.Activate(this);
+        }
+    }
+
+    private Task OnTriggerKeyDown(KeyboardEventArgs e)
+    {
+        if (Disabled)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (e.Key is "Enter" or " ")
+        {
+            Toggle(focusFirstItem: true, keyboardActive: true);
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            Open(focusFirstItem: true, keyboardActive: true);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            Open(focusLastItem: true, keyboardActive: true);
+        }
+        else if (e.Key == "Escape")
+        {
+            RequestClose();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task OnPanelKeyDown(KeyboardEventArgs e)
+    {
+        var module = await GetMenuJsModuleAsync();
+        if (module is null)
+        {
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                _keyboardNavigationActive = true;
+                await module.InvokeVoidAsync("focusAdjacentMenuItem", _panelRef, 1, true);
+                break;
+            case "ArrowUp":
+                _keyboardNavigationActive = true;
+                await module.InvokeVoidAsync("focusAdjacentMenuItem", _panelRef, -1, true);
+                break;
+            case "Home":
+                _keyboardNavigationActive = true;
+                await module.InvokeVoidAsync("focusFirstMenuItem", _panelRef, true);
+                break;
+            case "End":
+                _keyboardNavigationActive = true;
+                await module.InvokeVoidAsync("focusLastMenuItem", _panelRef, true);
+                break;
+            case "Enter":
+            case " ":
+                await module.InvokeVoidAsync("clickFocusedMenuItem", _panelRef);
+                break;
+            case "Escape":
+                _focusTriggerAfterRender = true;
+                RequestClose();
+                break;
+        }
+    }
+
+    private async Task OnPanelMouseMove()
+    {
+        if (!_keyboardNavigationActive)
+        {
+            return;
+        }
+
+        _keyboardNavigationActive = false;
+        var module = await GetMenuJsModuleAsync();
+        if (module is not null)
+        {
+            await module.InvokeVoidAsync("clearKeyboardMode", _panelRef);
+        }
+    }
+
+    private void CloseFromBackdrop()
+    {
+        RequestClose();
+    }
+
+    private void Toggle(bool focusFirstItem = false, bool keyboardActive = false)
+    {
+        var opening = !IsOpen;
+        if (Parent is not null)
+        {
+            Parent.Toggle(this);
+            _focusFirstItemAfterRender = opening && focusFirstItem;
+            _focusItemsByKeyboardAfterRender = opening && keyboardActive;
+            _keyboardNavigationActive = opening && keyboardActive;
+            return;
+        }
+
+        _isOpen = !_isOpen;
+        _focusFirstItemAfterRender = _isOpen && focusFirstItem;
+        _focusItemsByKeyboardAfterRender = _isOpen && keyboardActive;
+        _keyboardNavigationActive = _isOpen && keyboardActive;
+    }
+
+    private void Open(bool focusFirstItem = false, bool focusLastItem = false, bool keyboardActive = false)
+    {
+        if (Parent is not null)
+        {
+            Parent.Open(this);
+            _focusFirstItemAfterRender = focusFirstItem;
+            _focusLastItemAfterRender = focusLastItem;
+            _focusItemsByKeyboardAfterRender = keyboardActive;
+            _keyboardNavigationActive = keyboardActive;
+            return;
+        }
+
+        _isOpen = true;
+        _focusFirstItemAfterRender = focusFirstItem;
+        _focusLastItemAfterRender = focusLastItem;
+        _focusItemsByKeyboardAfterRender = keyboardActive;
+        _keyboardNavigationActive = keyboardActive;
+    }
+
+    private string ResolvedCssClass =>
+        string.IsNullOrWhiteSpace(CssClass) ? "fx-menu-dropdown" : $"fx-menu-dropdown {CssClass}";
+
+    private string ResolvedSplitCssClass =>
+        string.IsNullOrWhiteSpace(SplitCssClass) ? "fx-menu-split" : $"fx-menu-split {SplitCssClass}";
+
+    private string ResolvedTriggerCssClass
+    {
+        get
+        {
+            var css = string.IsNullOrWhiteSpace(TriggerCssClass) ? "fx-menu-trigger" : $"fx-menu-trigger {TriggerCssClass}";
+            if (IsOpen)
+                css += " active";
+            if (Disabled)
+                css += " disabled";
+            return css;
+        }
+    }
+
+    private string ResolvedPrimaryCssClass
+    {
+        get
+        {
+            var css = string.IsNullOrWhiteSpace(PrimaryCssClass) ? "fx-menu-primary" : $"fx-menu-primary {PrimaryCssClass}";
+            if (Disabled)
+                css += " disabled";
+            return css;
+        }
+    }
+
+    private string ResolvedPanelCssClass =>
+        string.IsNullOrWhiteSpace(PanelCssClass) ? "fx-menu-panel" : $"fx-menu-panel {PanelCssClass}";
+
+    private string ResolvedArrowLabel =>
+        !string.IsNullOrWhiteSpace(ArrowLabel)
+            ? ArrowLabel!
+            : !string.IsNullOrWhiteSpace(Label)
+                ? $"{Label} menu"
+                : "Open menu";
+
+    private async ValueTask<IJSObjectReference?> GetMenuJsModuleAsync()
+    {
+        try
+        {
+            return _menuJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/FlexKit/menu-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_menuJsModule is not null)
+        {
+            try { await _menuJsModule.DisposeAsync(); }
+            catch { }
+        }
     }
 }

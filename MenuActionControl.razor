@@ -2,6 +2,7 @@
 
 <button class="fx-menu-action @CssClass"
         type="button"
+        contenteditable="false"
         disabled="@Disabled"
         role="menuitem"
         @onclick="HandleClick">
@@ -28,11 +29,11 @@
             return;
         }
 
+        ParentMenu?.RequestClose();
+
         if (OnClick.HasDelegate)
         {
             await OnClick.InvokeAsync();
         }
-
-        ParentMenu?.RequestClose();
     }
 }

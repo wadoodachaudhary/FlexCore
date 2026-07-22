@@ -74,8 +74,11 @@
                  role="menu"
                  @onclick:stopPropagation="true"
                  @oncontextmenu:stopPropagation="true">
+                <button type="button" role="menuitem" disabled>Restore</button>
                 <button type="button" role="menuitem" @onclick="CloseSystemMenu">Move</button>
                 <button type="button" role="menuitem" disabled="@(!Resizable)" @onclick="CloseSystemMenu">Size</button>
+                <button type="button" role="menuitem" disabled>Minimize</button>
+                <button type="button" role="menuitem" disabled>Maximize</button>
                 <span class="fx-dialog-system-menu-separator"></span>
                 <button type="button" role="menuitem" class="fx-dialog-system-menu-close" @onclick="HandleSystemMenuClose">
                     <span class="fx-dialog-system-menu-close-label">

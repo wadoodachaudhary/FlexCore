@@ -67,10 +67,116 @@
     flex-shrink: 0;
 }
 
+.fx-mdi-tab-icon-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: default;
+}
+
+.fx-mdi-tab-icon-button:focus-visible {
+    outline: 1px dotted #000;
+    outline-offset: -1px;
+}
+
 .fx-mdi-tab-title {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 180px;
+}
+
+.fx-mdi-system-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1001;
+    background: transparent;
+}
+
+.fx-mdi-system-menu {
+    position: fixed;
+    z-index: 1002;
+    min-width: 164px;
+    padding: 2px 0;
+    border: 1px solid #9a9a9a;
+    background: #f0f0f0;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
+    color: #000;
+    font: 12px "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.fx-mdi-system-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 24px;
+    padding: 3px 24px 3px 28px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    line-height: 16px;
+    text-align: left;
+    cursor: default;
+}
+
+.fx-mdi-system-menu button:hover:not(:disabled),
+.fx-mdi-system-menu button:focus-visible:not(:disabled) {
+    background: #e5f1fb;
+    outline: none;
+}
+
+.fx-mdi-system-menu button:disabled {
+    color: #8a8a8a;
+}
+
+.fx-mdi-system-menu button.fx-mdi-system-menu-close {
+    align-items: center;
+    font-weight: 700;
+    padding-left: 8px;
+    padding-right: 18px;
+}
+
+.fx-mdi-system-menu-close-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    line-height: 16px;
+}
+
+.fx-mdi-system-menu-close > span:last-child {
+    display: inline-flex;
+    align-items: center;
+    font-weight: 700;
+    line-height: 16px;
+}
+
+.fx-mdi-system-menu-close-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 14px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.fx-mdi-system-menu-separator {
+    display: block;
+    height: 1px;
+    margin: 3px 8px;
+    background: #b8b8b8;
 }
 
 .fx-mdi-tab-close {

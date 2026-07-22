@@ -14,9 +14,9 @@
 }
 
 .fx-textarea:focus {
-    outline: 1px dotted #000000;
-    outline-offset: -3px;
-    border-color: #000000;
+    outline: 0;
+    border-color: #7f9db9;
+    box-shadow: none;
 }
 
 .fx-textarea:disabled {

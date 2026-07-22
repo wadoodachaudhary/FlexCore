@@ -14,11 +14,28 @@
     font-size: 11px;
     cursor: pointer;
     white-space: nowrap;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
 }
 
-.fx-menu-action:hover {
+.fx-menu-action:hover,
+.fx-menu-panel.fx-menu-keyboard-active .fx-menu-action:focus {
     background: #edf3ff;
     border-color: #d8e3fb;
+}
+
+.fx-menu-panel.fx-menu-keyboard-active .fx-menu-action:focus {
+    outline: none;
+}
+
+.fx-menu-panel.fx-menu-keyboard-active .fx-menu-action:hover:not(:focus),
+.fx-menu-panel:not(.fx-menu-keyboard-active) .fx-menu-action:focus {
+    background: transparent;
+    color: #0f172a;
+    border-color: transparent;
+    outline: none;
 }
 
 .fx-menu-action:disabled {
@@ -33,4 +50,7 @@
 
 .fx-menu-action-text {
     flex: 1;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }

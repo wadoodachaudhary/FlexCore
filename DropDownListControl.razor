@@ -1,9 +1,14 @@
 @namespace Fx.ControlKit
 @typeparam TValue
 @typeparam TItem
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
 @using System.Globalization
+@implements IAsyncDisposable
+@inject IJSRuntime JSRuntime
 
 <div class="@HostCssClass" style="@HostStyle"
+     @ref="_hostRef"
      @onclick:stopPropagation="true"
      @onmousedown:stopPropagation="true"
      @onkeydown:stopPropagation="true">
@@ -54,7 +59,7 @@
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
 
-        <div class="fx-dropdown-panel" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true">
+        <div class="fx-dropdown-panel" style="@PanelStyle" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true">
             @if (DataSource != null)
             {
                 foreach (var item in DataSource)
@@ -95,6 +100,7 @@
     [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
     [Parameter] public bool OpenOnRender { get; set; }
     [Parameter] public bool OpenOnArrowClickOnly { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
     [Parameter] public string TextFieldName { get; set; } = "";
@@ -108,16 +114,53 @@
     private bool _openOnRenderInitialized;
     private bool _editableInputFocused;
     private bool _suppressNextEditableBlurCommit;
+    private bool _openUp;
+    private bool _needsGeometryRefresh;
+    private double? _panelMaxHeight;
+    private double? _panelTop;
+    private double? _panelLeft;
+    private double? _panelMinWidth;
+    private bool _hasMeasuredGeometry;
+    private ElementReference _hostRef;
+    private IJSObjectReference? _dropdownJsModule;
     private string _editableText = "";
+    private string _typeSelectBuffer = "";
+    private DateTime _typeSelectLastInputUtc = DateTime.MinValue;
+    private static readonly TimeSpan TypeSelectResetDelay = TimeSpan.FromSeconds(1);
 
-    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", _openUp ? "fx-dropdown-open-up" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
     private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", Editable ? "fx-dropdown-editable" : null, !Enabled ? "disabled" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string PanelStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (_panelTop.HasValue || _panelLeft.HasValue)
+                parts.Add("position:fixed");
+            if (_panelTop is { } top)
+                parts.Add($"top:{top.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (_panelLeft is { } left)
+                parts.Add($"left:{left.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (_panelMinWidth is { } minWidth)
+            {
+                var width = minWidth.ToString("0.##", CultureInfo.InvariantCulture);
+                parts.Add($"width:{width}px");
+                parts.Add($"min-width:{width}px");
+                parts.Add($"max-width:{width}px");
+            }
+            if (_panelMaxHeight is > 0)
+                parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (parts.Count > 0)
+                parts.Add("bottom:auto");
+            return parts.Count == 0 ? string.Empty : string.Join(";", parts) + ";";
+        }
+    }
     private string HostStyle
     {
         get
         {
             var w = string.IsNullOrWhiteSpace(Width) ? CalculatedWidth() : Width;
-            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
+            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w};";
         }
     }
 
@@ -174,12 +217,13 @@
         if (!Enabled)
         {
             _isOpen = false;
+            ResetDropdownGeometry();
             return;
         }
 
         if (OpenOnRender && !_openOnRenderInitialized)
         {
-            _isOpen = true;
+            OpenDropdown();
             _openOnRenderInitialized = true;
         }
 
@@ -206,8 +250,34 @@
             if (_isOpen)
                 await CloseAsync();
             else
-                _isOpen = true;
+                OpenDropdown();
         }
+    }
+
+    private void OpenDropdown()
+    {
+        if (!Enabled)
+            return;
+
+        _isOpen = true;
+        _needsGeometryRefresh = true;
+        _openUp = false;
+        _panelMaxHeight = null;
+        _panelTop = null;
+        _panelLeft = null;
+        _panelMinWidth = null;
+        _hasMeasuredGeometry = false;
+    }
+
+    private void ResetDropdownGeometry()
+    {
+        _openUp = false;
+        _panelMaxHeight = null;
+        _panelTop = null;
+        _panelLeft = null;
+        _panelMinWidth = null;
+        _hasMeasuredGeometry = false;
+        _needsGeometryRefresh = false;
     }
 
     private async Task CloseAsync()
@@ -216,13 +286,18 @@
             return;
 
         _isOpen = false;
+        ResetDropdownGeometry();
+        ClearTypeSelectBuffer();
         if (Closed.HasDelegate)
             await Closed.InvokeAsync();
     }
 
-    private async Task HandleButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    private async Task HandleButtonKeyDown(KeyboardEventArgs e)
     {
         if (!Enabled)
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
             return;
 
         if (e.Key is "Enter" or " ")
@@ -250,11 +325,18 @@
         {
             await MoveSelectionToAsync(first: false);
         }
+        else if (await TrySelectByTypedPrefixAsync(e))
+        {
+            return;
+        }
     }
 
-    private async Task HandleOptionKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, string strVal, TItem item)
+    private async Task HandleOptionKeyDown(KeyboardEventArgs e, string strVal, TItem item)
     {
         if (!Enabled)
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
             return;
 
         if (e.Key is "Enter" or " ")
@@ -281,6 +363,10 @@
         {
             await MoveSelectionToAsync(first: false);
         }
+        else if (await TrySelectByTypedPrefixAsync(e))
+        {
+            return;
+        }
     }
 
     private Task HandleEditableFocus()
@@ -305,9 +391,12 @@
             _editableText = EditableDisplayText;
     }
 
-    private async Task HandleEditableKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    private async Task HandleEditableKeyDown(KeyboardEventArgs e)
     {
         if (!Enabled)
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
             return;
 
         if (e.Key == "Enter")
@@ -325,7 +414,7 @@
         }
         else if (e.Key == "F4")
         {
-            _isOpen = true;
+            OpenDropdown();
         }
         else if (e.Key == "Escape")
         {
@@ -350,6 +439,97 @@
     {
         _editableText = e.Value?.ToString() ?? "";
         return Task.CompletedTask;
+    }
+
+    private async Task<bool> TrySelectByTypedPrefixAsync(KeyboardEventArgs e)
+    {
+        if (!IsTypeSelectKey(e))
+            return false;
+
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+            return true;
+
+        var now = DateTime.UtcNow;
+        if (_typeSelectBuffer.Length > 0 && now - _typeSelectLastInputUtc > TypeSelectResetDelay)
+            _typeSelectBuffer = "";
+
+        _typeSelectLastInputUtc = now;
+        var requestedBuffer = _typeSelectBuffer + e.Key;
+        var repeatedCharacter = requestedBuffer.Length > 1
+            && requestedBuffer.All(c => char.ToUpperInvariant(c) == char.ToUpperInvariant(requestedBuffer[0]));
+
+        var matchIndex = FindTypeSelectMatchIndex(items, requestedBuffer, cycleFromCurrent: repeatedCharacter);
+        if (matchIndex < 0 && requestedBuffer.Length > 1)
+        {
+            requestedBuffer = e.Key;
+            matchIndex = FindTypeSelectMatchIndex(items, requestedBuffer, cycleFromCurrent: true);
+        }
+
+        _typeSelectBuffer = requestedBuffer;
+        if (matchIndex < 0)
+            return true;
+
+        await SelectItemAtAsync(items, matchIndex, keepOpen: _isOpen);
+        return true;
+    }
+
+    private static bool IsTypeSelectKey(KeyboardEventArgs e)
+    {
+        return !e.AltKey
+            && !e.CtrlKey
+            && !e.MetaKey
+            && e.Key.Length == 1
+            && !char.IsControl(e.Key[0])
+            && !char.IsWhiteSpace(e.Key[0]);
+    }
+
+    private int FindTypeSelectMatchIndex(IReadOnlyList<TItem> items, string prefix, bool cycleFromCurrent)
+    {
+        if (items.Count == 0 || string.IsNullOrEmpty(prefix))
+            return -1;
+
+        var start = 0;
+        if (cycleFromCurrent)
+        {
+            var currentIndex = FindSelectedIndex(items);
+            start = currentIndex < 0 ? 0 : (currentIndex + 1) % items.Count;
+        }
+
+        for (var offset = 0; offset < items.Count; offset++)
+        {
+            var index = (start + offset) % items.Count;
+            if (ItemStartsWithTypedPrefix(items[index], prefix))
+                return index;
+        }
+
+        return -1;
+    }
+
+    private bool ItemStartsWithTypedPrefix(TItem item, string prefix)
+    {
+        var text = GetFieldValue(item, TextFieldName);
+        if (text.StartsWith(prefix, StringComparison.CurrentCultureIgnoreCase))
+            return true;
+
+        var value = GetFieldValue(item, ValueFieldName);
+        return !string.Equals(value, text, StringComparison.Ordinal)
+            && value.StartsWith(prefix, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private void ClearTypeSelectBuffer()
+    {
+        _typeSelectBuffer = "";
+        _typeSelectLastInputUtc = DateTime.MinValue;
+    }
+
+    private async Task<bool> TryDelegateNavigationKeyAsync(KeyboardEventArgs e)
+    {
+        if (e.Key != "Tab" || !OnKeyDown.HasDelegate)
+            return false;
+
+        await OnKeyDown.InvokeAsync(e);
+        return true;
     }
 
     private async Task PublishEditableTextAsync(string text)
@@ -378,7 +558,11 @@
             _editableText = GetFieldValue(item, TextFieldName);
 
         if (closeAfterSelect)
+        {
             _isOpen = false;
+            ResetDropdownGeometry();
+            ClearTypeSelectBuffer();
+        }
 
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
@@ -392,7 +576,7 @@
         var items = GetMaterializedItems();
         if (items.Count == 0)
         {
-            _isOpen = true;
+            OpenDropdown();
             return;
         }
 
@@ -409,18 +593,90 @@
         var items = GetMaterializedItems();
         if (items.Count == 0)
         {
-            _isOpen = true;
+            OpenDropdown();
             return Task.CompletedTask;
         }
 
         return SelectItemAtAsync(items, first ? 0 : items.Count - 1);
     }
 
-    private async Task SelectItemAtAsync(IReadOnlyList<TItem> items, int index)
+    private async Task SelectItemAtAsync(IReadOnlyList<TItem> items, int index, bool keepOpen = true)
     {
         var item = items[index];
         await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, closeAfterSelect: false);
-        _isOpen = true;
+        if (keepOpen)
+            OpenDropdown();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_isOpen || !_needsGeometryRefresh)
+            return;
+
+        _needsGeometryRefresh = false;
+        try
+        {
+            var module = await GetDropdownJsModuleAsync();
+            if (module == null)
+                return;
+
+            var geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+            var changed = !_hasMeasuredGeometry
+                || _openUp != geometry.OpenUp
+                || Math.Abs((_panelMaxHeight ?? 0) - geometry.MaxHeight) > 0.5
+                || Math.Abs((_panelTop ?? 0) - geometry.Top) > 0.5
+                || Math.Abs((_panelLeft ?? 0) - geometry.Left) > 0.5
+                || Math.Abs((_panelMinWidth ?? 0) - geometry.MinWidth) > 0.5;
+
+            _openUp = geometry.OpenUp;
+            _panelMaxHeight = geometry.MaxHeight > 0 ? geometry.MaxHeight : null;
+            _panelTop = geometry.Top;
+            _panelLeft = geometry.Left;
+            _panelMinWidth = geometry.MinWidth > 0 ? geometry.MinWidth : null;
+            _hasMeasuredGeometry = true;
+            if (changed)
+                await InvokeAsync(StateHasChanged);
+        }
+        catch
+        {
+            ResetDropdownGeometry();
+        }
+    }
+
+    private async ValueTask<IJSObjectReference?> GetDropdownJsModuleAsync()
+    {
+        try
+        {
+            return _dropdownJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", $"./_content/{typeof(DropDownListControl<TValue, TItem>).Assembly.GetName().Name}/dropdown-list-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dropdownJsModule is null)
+            return;
+
+        try
+        {
+            await _dropdownJsModule.DisposeAsync();
+        }
+        catch
+        {
+        }
+    }
+
+    private sealed class DropdownGeometry
+    {
+        public bool OpenUp { get; set; }
+        public double MaxHeight { get; set; }
+        public double Top { get; set; }
+        public double Left { get; set; }
+        public double MinWidth { get; set; }
     }
 
     private async Task CommitCurrentSelectionAsync()

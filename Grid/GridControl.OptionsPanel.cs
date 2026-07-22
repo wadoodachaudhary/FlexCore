@@ -291,7 +291,7 @@ public partial class GridControl<TValue>
         if (string.IsNullOrWhiteSpace(col.Field))
             return;
 
-        if (!visible && IsColumnVisible(col) && Columns.Count(IsColumnVisible) <= 1)
+        if (!visible && IsColumnVisible(col) && !CanHideColumn(col))
             return;
 
         _visibilityOverrides[col.Field] = visible;

@@ -1,7 +1,7 @@
 .fx-dropdown-host {
     position: relative;
     display: inline-block;
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 80px;
     max-width: 100%;
     vertical-align: middle;
@@ -146,8 +146,9 @@
     left: 0;
     z-index: 9999;
     box-sizing: border-box;
+    width: 100%;
     min-width: 100%;
-    max-width: min(360px, calc(100vw - 24px));
+    max-width: 100%;
     max-height: 180px;
     overflow-x: hidden;
     overflow-y: auto;
@@ -160,8 +161,7 @@
 
 .fx-dropdown-host.fx-dropdown-open-up .fx-dropdown-panel,
 .fx-dropdown-host.dropdown-open-up .fx-dropdown-panel {
-    top: auto;
-    bottom: calc(100% - 1px);
+    bottom: auto;
 }
 
 .fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown,
@@ -219,6 +219,8 @@
     line-height: 16px;
     text-align: left;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     cursor: default;
 }
 

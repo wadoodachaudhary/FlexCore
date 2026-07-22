@@ -3,6 +3,7 @@ namespace Fx.ControlKit.Grid;
 public enum ColumnType
 {
     Text,
+    Password,
     Number,
     Date,
     Boolean,

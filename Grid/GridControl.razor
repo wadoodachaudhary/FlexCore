@@ -259,11 +259,11 @@
                         @foreach (var col in ColumnPanelColumns)
                         {
                             var capturedCol = col;
-                            var canHide = !IsColumnVisible(col) || Columns.Count(IsColumnVisible) > 1;
+                            var canToggle = !IsColumnVisible(col) || CanHideColumn(col);
                             <label class="fx-grid-check-row">
                                 <input type="checkbox"
                                        checked="@IsColumnVisible(col)"
-                                       disabled="@(!canHide)"
+                                       disabled="@(!canToggle)"
                                        @onchange="async e => await SetColumnPanelVisibleAsync(capturedCol, e.Value is bool b && b)" />
                                 <span>@HeaderColumnDisplay(col)</span>
                             </label>
@@ -540,7 +540,9 @@
                             @if (AllowResizing && col.AllowResizing)
                             {
                                 <span class="fx-resize-handle"
+                                      draggable="false"
                                       @onmousedown="e => StartResize(col, e)"
+                                      @onmousedown:preventDefault="true"
                                       @onmousedown:stopPropagation="true"
                                       @onclick:stopPropagation="true"></span>
                             }
@@ -587,6 +589,7 @@
                     {
                         var currentIdx = rowIdx;
                         var isSelected = _selectedItems.Contains(item);
+                        var isCellSelectedRow = IsCellSelectionRow(item, currentIdx);
                         var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         var rowCssClass = GetRowCssClass(item, currentIdx);
@@ -597,7 +600,8 @@
                         }
                         else
                         {
-                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
+                            <tr @key="item"
+                                class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
                                 @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
@@ -922,7 +926,7 @@
                             }
                             else
                             {
-                                <input type="@(col.Type == ColumnType.Number ? "number" : col.Type == ColumnType.Date ? "date" : "text")"
+                                <input type="@(col.Type == ColumnType.Number ? "number" : col.Type == ColumnType.Date ? "date" : col.Type == ColumnType.Password ? "password" : "text")"
                                        value="@GetPropertyValue(_editItem, col.Field)"
                                        disabled="@col.IsPrimaryKey"
                                        @onchange="e => SetPropertyValue(_editItem, col.Field, e.Value?.ToString())" />
@@ -1000,59 +1004,75 @@
              style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @onclick:stopPropagation="true">
 
-            @if (AllowGrouping && (CurrentHeaderColumn?.AllowGrouping ?? false))
+            @if (HeaderContextMenuShowsColumns)
             {
-                <button type="button" class="fx-grid-header-context-item"
-                        @onclick="HeaderMenuToggleGroup">
-                    <span class="fx-grid-header-context-check">@(IsHeaderColumnGrouped ? "✓" : "")</span>
-                    Group on this column
-                </button>
+                @foreach (var col in HeaderContextMenuColumns)
+                {
+                    var capturedCol = col;
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(!CanToggleHeaderContextColumn(col))"
+                            @onclick="() => ToggleHeaderContextColumnAsync(capturedCol)">
+                        <span class="fx-grid-header-context-check">@(IsColumnVisible(col) ? "✓" : "")</span>
+                        @HeaderColumnDisplay(col)
+                    </button>
+                }
             }
-            @if (AllowGrouping)
+            else
             {
+                @if (AllowGrouping && (CurrentHeaderColumn?.AllowGrouping ?? false))
+                {
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuToggleGroup">
+                        <span class="fx-grid-header-context-check">@(IsHeaderColumnGrouped ? "✓" : "")</span>
+                        Group on this column
+                    </button>
+                }
+                @if (AllowGrouping)
+                {
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(_groupDescriptors.Count == 0)"
+                            @onclick="HeaderMenuExpandAll">
+                        <span class="fx-grid-header-context-check"></span>
+                        Expand All
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(_groupDescriptors.Count == 0)"
+                            @onclick="HeaderMenuCollapseAll">
+                        <span class="fx-grid-header-context-check"></span>
+                        Collapse All
+                    </button>
+                    <div class="fx-grid-header-context-sep"></div>
+                }
+
                 <button type="button" class="fx-grid-header-context-item"
-                        disabled="@(_groupDescriptors.Count == 0)"
-                        @onclick="HeaderMenuExpandAll">
+                        disabled="@(!CanHideHeaderColumn)"
+                        @onclick="HeaderMenuHideColumn">
                     <span class="fx-grid-header-context-check"></span>
-                    Expand All
+                    Hide this column
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
-                        disabled="@(_groupDescriptors.Count == 0)"
-                        @onclick="HeaderMenuCollapseAll">
+                        @onclick="HeaderMenuOpenChooseColumns">
                     <span class="fx-grid-header-context-check"></span>
-                    Collapse All
+                    Insert a column...
+                </button>
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuStartRename">
+                    <span class="fx-grid-header-context-check"></span>
+                    Rename this column...
                 </button>
                 <div class="fx-grid-header-context-sep"></div>
+
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuPrint">
+                    <span class="fx-grid-header-context-check"></span>
+                    Print...
+                </button>
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuSaveAs">
+                    <span class="fx-grid-header-context-check"></span>
+                    Save As...
+                </button>
             }
-
-            <button type="button" class="fx-grid-header-context-item"
-                    disabled="@(!CanHideHeaderColumn)"
-                    @onclick="HeaderMenuHideColumn">
-                <span class="fx-grid-header-context-check"></span>
-                Hide this column
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuOpenChooseColumns">
-                <span class="fx-grid-header-context-check"></span>
-                Insert a column...
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuStartRename">
-                <span class="fx-grid-header-context-check"></span>
-                Rename this column...
-            </button>
-            <div class="fx-grid-header-context-sep"></div>
-
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuPrint">
-                <span class="fx-grid-header-context-check"></span>
-                Print...
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuSaveAs">
-                <span class="fx-grid-header-context-check"></span>
-                Save As...
-            </button>
         </div>
     }
 
@@ -1191,6 +1211,7 @@
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">
                             <input type="checkbox"
                                    checked="@row.Visible"
+                                   disabled="@(!row.CanHide)"
                                    @onchange="e => ChooseColumnsSetVisible(capturedRow, e)"
                                    @onclick:stopPropagation="true" />
                             <span class="fx-choose-columns-label">@row.Header</span>

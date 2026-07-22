@@ -21,6 +21,7 @@ public class GridColumn : ComponentBase
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
     [Parameter] public bool AllowEditing { get; set; } = true;
+    [Parameter] public bool AllowHiding { get; set; } = true;
     [Parameter] public bool AllowCellDragSelection { get; set; }
     [Parameter] public bool AllowGrouping { get; set; } = true;
     [Parameter] public bool AllowResizing { get; set; } = true;
@@ -38,9 +39,15 @@ public class GridColumn : ComponentBase
 
     [Parameter] public bool AlwaysShowEditButton { get; set; }
 
+    [Parameter] public bool OpenEditButtonOnDoubleClick { get; set; } = true;
+
+    [Parameter] public bool PreferCellEditOnDoubleClick { get; set; }
+
     [Parameter] public Func<object, bool>? ShowEditButtonPredicate { get; set; }
 
     [Parameter] public IEnumerable<string>? EditOptions { get; set; }
+
+    [Parameter] public bool OpenEditOptionsOnEdit { get; set; } = true;
 
     [Parameter] public RenderFragment<object>? Template { get; set; }
 
@@ -74,7 +81,8 @@ public class GridColumn : ComponentBase
             parts.Add($"width:{Width}");
         if (!string.IsNullOrEmpty(MinWidth)) parts.Add($"min-width:{MinWidth}");
         if (!string.IsNullOrEmpty(MaxWidth)) parts.Add($"max-width:{MaxWidth}");
-        parts.Add($"text-align:{TextAlign.ToString().ToLower()}");
+        var effectiveTextAlign = UsesMappedEditOptionDisplay() ? TextAlign.Left : TextAlign;
+        parts.Add($"text-align:{effectiveTextAlign.ToString().ToLower()}");
         parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");
         parts.Add("white-space:nowrap");
@@ -87,6 +95,14 @@ public class GridColumn : ComponentBase
             parts.Add("text-overflow:clip");
         }
         return string.Join(";", parts);
+    }
+
+    private bool UsesMappedEditOptionDisplay()
+    {
+        return EditOptions?.Any(option =>
+            !string.IsNullOrEmpty(option)
+            && option[0] == '#'
+            && option.IndexOf(';') > 1) == true;
     }
 
     public string GetHeaderStyle()

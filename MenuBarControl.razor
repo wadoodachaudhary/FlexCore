@@ -1,7 +1,7 @@
 @namespace Fx.ControlKit
 
 <CascadingValue Value="this" IsFixed="true">
-    <div class="@ResolvedCssClass" role="menubar" @onclick="CloseAllFromBackground">
+    <div class="@ResolvedCssClass" role="menubar" contenteditable="false" @onclick="CloseAllFromBackground">
         @ChildContent
     </div>
 </CascadingValue>
@@ -30,6 +30,17 @@
     internal void Activate(MenuDropDownControl menu)
     {
         if (!HasActiveMenu || ReferenceEquals(ActiveMenu, menu))
+        {
+            return;
+        }
+
+        ActiveMenu = menu;
+        StateHasChanged();
+    }
+
+    internal void Open(MenuDropDownControl menu)
+    {
+        if (ReferenceEquals(ActiveMenu, menu))
         {
             return;
         }

@@ -131,8 +131,15 @@ function setTextSelection(element, start, end = start) {
 function replaceSelection(element, text) {
     const value = getTextValue(element);
     const selection = getTextSelection(element);
-    const next = value.substring(0, selection.start) + text + value.substring(selection.end);
-    const caret = selection.start + text.length;
+    const before = value.substring(0, selection.start);
+    const after = value.substring(selection.end);
+    const maxLength = typeof element.maxLength === "number" ? element.maxLength : -1;
+    const allowedInsertLength = maxLength >= 0
+        ? Math.max(0, maxLength - before.length - after.length)
+        : text.length;
+    const insertText = text.substring(0, allowedInsertLength);
+    const next = before + insertText + after;
+    const caret = before.length + insertText.length;
     element.value = next;
     setTextSelection(element, caret);
 }

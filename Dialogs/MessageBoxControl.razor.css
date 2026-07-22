@@ -19,6 +19,10 @@
 .fx-msgbox {
     box-sizing: border-box;
     overflow: hidden;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-vb6 {
@@ -63,12 +67,18 @@
     color: #fff;
 }
 
+.fx-msgbox-vb6 .fx-msgbox-close:focus {
+    outline: 1px dotted #000;
+    outline-offset: -4px;
+}
+
 .fx-msgbox-vb6 .fx-msgbox-body {
     display: flex;
     align-items: center;
     gap: 13px;
     min-height: 68px;
     padding: 13px 16px 9px 22px;
+    background: #fff;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-icon {
@@ -89,6 +99,10 @@
     font-size: 12px;
     line-height: 1.75;
     white-space: pre-line;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-footer {
@@ -127,7 +141,8 @@
 
 .fx-msgbox-vb6 .fx-msgbox-btn-primary:focus,
 .fx-msgbox-vb6 .fx-msgbox-btn:focus {
-    outline: none;
+    outline: 1px dotted #000;
+    outline-offset: -5px;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-confirm {
@@ -255,6 +270,11 @@
     line-height: 1;
 }
 
+.fx-msgbox-dotnet .fx-msgbox-close:focus {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+}
+
 .fx-msgbox-dotnet .fx-msgbox-body {
     display: flex;
     align-items: flex-start;
@@ -271,6 +291,10 @@
     color: #374151;
     font-size: 14px;
     line-height: 1.5;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-dotnet .fx-msgbox-footer {

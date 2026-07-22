@@ -1,7 +1,7 @@
 @namespace Fx.ControlKit
 @typeparam TValue
 
-<input type="number"
+<input type="@InputType"
        class="fx-numeric @CssClass"
        style="@(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
        value="@FormattedValue"
@@ -9,6 +9,8 @@
        step="@StepValue"
        min="@(Min.HasValue ? Min.Value.ToString() : null)"
        max="@(Max.HasValue ? Max.Value.ToString() : null)"
+       maxlength="@MaxLength"
+       inputmode="@InputMode"
        placeholder="@Placeholder"
        @onchange="OnValueChanged" />
 
@@ -23,10 +25,13 @@
     [Parameter] public decimal? Min { get; set; }
     [Parameter] public decimal? Max { get; set; }
     [Parameter] public decimal Step { get; set; } = 1;
+    [Parameter] public int? MaxLength { get; set; }
 
     [Parameter] public EventCallback<NumericChangeEventArgs<TValue>> ValueChange { get; set; }
 
     private string StepValue => Step == 1 ? "any" : Step.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    private string InputType => MaxLength is > 0 ? "text" : "number";
+    private string InputMode => Min is < 0 ? "decimal" : Step == 1 ? "numeric" : "decimal";
 
     private string FormattedValue
     {
@@ -44,18 +49,18 @@
 
     private async Task OnValueChanged(ChangeEventArgs e)
     {
-        var strVal = e.Value?.ToString() ?? "";
+        var strVal = NormalizeInput(e.Value?.ToString() ?? "");
         TValue? newValue = default;
         try
         {
             if (typeof(TValue) == typeof(decimal))
-                newValue = (TValue)(object)(decimal.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d) ? d : 0m);
+                newValue = (TValue)(object)ParseDecimalOrBoundary(strVal);
             else if (typeof(TValue) == typeof(int))
-                newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : 0);
+                newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : ParseIntBoundary(strVal));
             else if (typeof(TValue) == typeof(double))
-                newValue = (TValue)(object)(double.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var dbl) ? dbl : 0.0);
+                newValue = (TValue)(object)(double.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var dbl) ? dbl : ParseDoubleBoundary(strVal));
             else if (typeof(TValue) == typeof(float))
-                newValue = (TValue)(object)(float.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : 0f);
+                newValue = (TValue)(object)(float.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : ParseFloatBoundary(strVal));
             else
                 newValue = (TValue)Convert.ChangeType(strVal, typeof(TValue));
         }
@@ -87,6 +92,81 @@
 	    {
 	        public T? Value { get; set; }
 	    }
+
+    private static string NormalizeInput(string value) =>
+        value.Trim()
+             .Replace("%", "", StringComparison.Ordinal)
+             .Replace(" ", "", StringComparison.Ordinal);
+
+    private static decimal ParseDecimalOrBoundary(string value)
+    {
+        if (decimal.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var d))
+            return d;
+
+        if (LooksNumeric(value, out var negative))
+            return negative ? decimal.MinValue : decimal.MaxValue;
+
+        return 0m;
+    }
+
+    private static int ParseIntBoundary(string value)
+    {
+        if (LooksNumeric(value, out var negative))
+            return negative ? int.MinValue : int.MaxValue;
+        return 0;
+    }
+
+    private static double ParseDoubleBoundary(string value)
+    {
+        if (LooksNumeric(value, out var negative))
+            return negative ? double.NegativeInfinity : double.PositiveInfinity;
+        return 0d;
+    }
+
+    private static float ParseFloatBoundary(string value)
+    {
+        if (LooksNumeric(value, out var negative))
+            return negative ? float.NegativeInfinity : float.PositiveInfinity;
+        return 0f;
+    }
+
+    private static bool LooksNumeric(string value, out bool negative)
+    {
+        negative = false;
+        var s = value.Trim();
+        if (s.Length == 0)
+            return false;
+
+        if (s[0] == '-' || s[0] == '+')
+        {
+            negative = s[0] == '-';
+            s = s[1..];
+        }
+
+        var hasDigit = false;
+        var hasDecimal = false;
+        foreach (var ch in s)
+        {
+            if (char.IsDigit(ch))
+            {
+                hasDigit = true;
+                continue;
+            }
+
+            if (ch == ',' || ch == '_')
+                continue;
+
+            if (ch == '.' && !hasDecimal)
+            {
+                hasDecimal = true;
+                continue;
+            }
+
+            return false;
+        }
+
+        return hasDigit;
+    }
 
     private static bool TryConvertToDecimal(TValue value, out decimal result)
     {

@@ -12,12 +12,13 @@
             <div class="fx-msgbox-header">
                 <span id="@TitleId">@Title</span>
                 <button @ref="_closeButton" type="button" class="fx-msgbox-close" aria-label="Close" title="Close"
+                        tabindex="-1"
                         @onclick="Close"
                         @onkeydown="e => HandleDialogButtonKeyDown(e, CloseButtonIndex)"
                         @onkeydown:preventDefault="true"
                         @onkeydown:stopPropagation="true">&times;</button>
             </div>
-            <div class="fx-msgbox-body">
+            <div class="fx-msgbox-body" @onmousedown:preventDefault="true">
                 @if (HasIcon)
                 {
                     @if (!string.IsNullOrWhiteSpace(IconImageSrc))
@@ -130,8 +131,8 @@
     {
         if (Visible && !_primaryButtonFocused && !PrimaryButtonDisabled)
         {
-            _primaryButtonFocused = true;
             await FocusDialogButtonAsync(0);
+            _primaryButtonFocused = true;
         }
     }
 
@@ -161,9 +162,18 @@
 
     private async Task HandleDialogButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, int buttonIndex)
     {
-        if (e.Key == "Tab")
+        if (e.Key == "Escape")
         {
-            await FocusDialogButtonAsync(GetNextButtonIndex(buttonIndex, e.ShiftKey ? -1 : 1));
+            await Close();
+            return;
+        }
+
+        if (e.Key is "Tab" or "ArrowRight" or "ArrowDown" or "ArrowLeft" or "ArrowUp")
+        {
+            var delta = e.Key is "ArrowLeft" or "ArrowUp" || (e.Key == "Tab" && e.ShiftKey)
+                ? -1
+                : 1;
+            await FocusDialogButtonAsync(GetNextButtonIndex(buttonIndex, delta));
             return;
         }
 
@@ -183,7 +193,7 @@
                 return nextIndex;
         }
 
-        return CloseButtonIndex;
+        return 0;
     }
 
     private bool IsButtonDisabled(int buttonIndex) => buttonIndex == 0 && PrimaryButtonDisabled;
@@ -197,23 +207,20 @@
         {
             switch (buttonIndex)
             {
+                case var index when index == CloseButtonIndex:
+                    await _closeButton.FocusAsync();
+                    break;
                 case 0:
                     await _primaryButton.FocusAsync();
                     break;
-                case 1 when Buttons == MessageBoxButtons.Ok:
-                    await _closeButton.FocusAsync();
-                    break;
                 case 1:
                     await _secondaryButton.FocusAsync();
-                    break;
-                case 2 when Buttons is MessageBoxButtons.OkCancel or MessageBoxButtons.YesNo:
-                    await _closeButton.FocusAsync();
                     break;
                 case 2:
                     await _tertiaryButton.FocusAsync();
                     break;
                 default:
-                    await _closeButton.FocusAsync();
+                    await _primaryButton.FocusAsync();
                     break;
             }
         }

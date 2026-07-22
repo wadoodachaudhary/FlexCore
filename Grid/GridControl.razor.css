@@ -27,6 +27,7 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: var(--fx-grid-row-selected-bg, #f0f0f0);
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
+    --fx-grid-cell-selected-row-bg: #f8f8f8;
     --fx-grid-selected-editable-cell-bg: var(--fx-grid-selected-cell-bg);
     --fx-grid-selected-editable-cell-shade: rgba(0, 0, 0, 0.04);
     --fx-grid-selected-cell-border: var(--fx-border-color, #808080);
@@ -195,6 +196,7 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: #f0f0f0;
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
+    --fx-grid-cell-selected-row-bg: #f8f8f8;
     --fx-grid-selected-editable-cell-bg: var(--fx-grid-selected-cell-bg);
     --fx-grid-selected-editable-cell-shade: rgba(0, 0, 0, 0.04);
     --fx-grid-selected-cell-border: #808080;
@@ -1539,6 +1541,9 @@
     z-index: 3;
     background: transparent;
     transition: background 0.15s;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
 }
 .fx-resize-handle:hover,
 .fx-resize-handle:active {
@@ -1940,39 +1945,81 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-cell.fx-batch-dropdown-editing {
     padding: 0 !important;
     overflow: visible !important;
+    line-height: normal;
+    vertical-align: top;
 }
 
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host,
 .fx-batch-dropdown.fx-dropdown-host {
     display: block;
     width: 100%;
-    height: 100%;
+    height: 100% !important;
+    min-height: 0 !important;
     min-width: 0;
     max-width: 100%;
+    max-height: 100%;
     font: inherit;
     line-height: inherit;
+    vertical-align: top;
+    overflow: visible;
 }
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown,
 .fx-batch-dropdown.fx-dropdown {
-    height: 100%;
-    min-height: 0;
-    border: 0;
-    padding-top: 0;
-    padding-bottom: 0;
+    box-sizing: border-box;
+    display: flex;
+    height: 100% !important;
+    min-height: 0 !important;
+    max-height: 100% !important;
+    border: 1px solid #7f9db9;
+    padding: 0 20px 0 4px;
     font: inherit;
     line-height: inherit;
-    background: transparent;
+    background: #fff;
+    overflow: hidden;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown .fx-dropdown-text,
+.fx-batch-dropdown.fx-dropdown .fx-dropdown-text {
+    line-height: inherit;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow,
+.fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 18px;
+    border-left: 1px solid #9a9a9a;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow::before,
+.fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow::before {
+    top: 50%;
+    transform: translateY(-50%);
 }
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel,
 .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel {
-    position: absolute;
-    top: calc(100% - 1px);
-    left: 0;
+    position: absolute !important;
+    top: calc(100% - 1px) !important;
+    right: auto !important;
+    bottom: auto !important;
+    left: 0 !important;
     z-index: 9999;
-    width: 100%;
-    min-width: 100%;
-    max-width: 100%;
+    width: 100% !important;
+    min-width: 100% !important;
+    max-width: 100% !important;
     max-height: min(180px, calc(100vh - 24px));
+    font: inherit !important;
+    line-height: inherit;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-option,
+.fx-batch-dropdown.fx-dropdown-host .fx-dropdown-option {
+    min-height: 0;
+    padding: 0 4px;
+    font: inherit !important;
+    line-height: inherit;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host.fx-dropdown-open-up .fx-dropdown-panel,
+.fx-batch-dropdown.fx-dropdown-host.fx-dropdown-open-up .fx-dropdown-panel {
+    top: auto !important;
+    bottom: calc(100% - 1px) !important;
 }
 
 .fx-cell-action-btn,
@@ -3109,6 +3156,17 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-selected:hover {
     background: var(--fx-grid-selected-row-hover-bg, var(--fx-grid-selected-row-bg)) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
+}
+.fx-row.fx-cell-row-selected > td,
+.fx-row.fx-cell-row-selected .fx-cell,
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected > td,
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell {
+    background: var(--fx-grid-cell-selected-row-bg, #f8f8f8) !important;
+}
+.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected,
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected {
+    background-color: var(--fx-grid-selected-cell-bg) !important;
+    box-shadow: inset 0 0 0 9999px var(--fx-grid-selected-cell-shade, rgba(0, 0, 0, 0.09)) !important;
 }
 
 .fx-grid.fx-grid-dark .fx-grid-toolbar,
