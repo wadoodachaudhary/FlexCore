@@ -15,6 +15,7 @@ public class GridColumn : ComponentBase
     [Parameter] public TextAlign TextAlign { get; set; } = TextAlign.Left;
     [Parameter] public TextAlign HeaderTextAlign { get; set; } = TextAlign.Left;
     [Parameter] public string? Format { get; set; }
+    [Parameter] public string? DisplayField { get; set; }
     [Parameter] public string? Formula { get; set; }
     [Parameter] public bool Visible { get; set; } = true;
     [Parameter] public bool IsPrimaryKey { get; set; }

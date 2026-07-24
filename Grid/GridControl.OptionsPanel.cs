@@ -26,10 +26,11 @@ public partial class GridControl<TValue>
     private bool _advancedViewInitialized;
     private bool _advancedViewEnabled;
 
+    private readonly record struct FilterValueCandidate(string Value, string DisplayText);
+
     private string _columnPanelSearch = "";
     private string _pivotFieldSearch = "";
 
-    private readonly Dictionary<string, string> _columnFilterValueSearch = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numericFilterMinText = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numericFilterMaxText = new(StringComparer.Ordinal);
     private static readonly GridThemeGalleryItem[] GridThemeGallery =
@@ -345,18 +346,6 @@ public partial class GridControl<TValue>
         await InvokeAsync(StateHasChanged);
     }
 
-    private void SetColumnFilterValueSearch(string field, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(field))
-            return;
-
-        var text = value ?? "";
-        if (string.IsNullOrWhiteSpace(text))
-            _columnFilterValueSearch.Remove(field);
-        else
-            _columnFilterValueSearch[field] = text;
-    }
-
     private void SeedFilterPopupDraft(string field)
     {
         var state = GetColumnState(field);
@@ -401,16 +390,6 @@ public partial class GridControl<TValue>
         QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
-    }
-
-    private async Task OnFilterValueSearchInput(ChangeEventArgs e)
-    {
-        if (_filterPopupField == null)
-            return;
-
-        SetColumnFilterValueSearch(_filterPopupField, e.Value?.ToString());
-        QueueFilterPopupFocus(FilterPopupFocusTarget.ValueSearchInput);
-        await Task.CompletedTask;
     }
 
     private async Task OnFilterPopupAutoApplyChanged(ChangeEventArgs e)
@@ -482,50 +461,108 @@ public partial class GridControl<TValue>
         };
     }
 
-    private string GetColumnFilterValueSearch(string field) =>
-        _columnFilterValueSearch.TryGetValue(field, out var value) ? value : "";
-
     private bool IsCurrentFilterPopupField(string field) =>
         string.Equals(_filterPopupField, field, StringComparison.Ordinal);
 
     private bool IsNumericFilterColumn(GridColumn? col) =>
         col?.Type == ColumnType.Number;
 
-    private IReadOnlyList<string> GetColumnFilterValues(string field)
+    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field)
     {
-        return GetDistinctValues(field)
+        return GetDistinctFilterValueCandidates(field)
             .Where(v => MatchesPopupTextFilter(field, v))
-            .Where(v => MatchesColumnFilterValueSearch(v, GetColumnFilterValueSearch(field)))
             .ToList();
     }
 
-    private bool MatchesPopupTextFilter(string field, string value)
+    private bool MatchesPopupTextFilter(string field, FilterValueCandidate candidate)
     {
         if (!IsCurrentFilterPopupField(field) || string.IsNullOrWhiteSpace(_filterTextDraft))
             return true;
 
-        return PassesTextFilter(GetFilterValueDisplay(value), _filterTextDraft, _filterOperatorDraft);
+        return PassesDisplayAwareTextFilter(candidate.Value, candidate.DisplayText, _filterTextDraft, _filterOperatorDraft);
     }
 
-    private static string GetFilterValueDisplay(string value) =>
-        string.IsNullOrEmpty(value) ? "(blank)" : value;
-
-    private static bool MatchesColumnFilterValueSearch(string value, string search)
+    private IReadOnlyList<FilterValueCandidate> GetDistinctFilterValueCandidates(string field)
     {
-        if (string.IsNullOrWhiteSpace(search))
+        var col = FindColumnByField(field);
+        var candidates = new Dictionary<string, FilterValueCandidate>(StringComparer.Ordinal);
+
+        foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
+        {
+            var rawValue = GetFilterRawValue(item, field)?.ToString() ?? "";
+            var displayText = GetFilterDisplayText(item, col, rawValue);
+            var candidate = new FilterValueCandidate(
+                rawValue,
+                string.IsNullOrEmpty(displayText) ? "(blank)" : displayText);
+
+            if (!candidates.TryGetValue(rawValue, out var existing)
+                || IsBetterFilterCandidate(candidate, existing))
+            {
+                candidates[rawValue] = candidate;
+            }
+        }
+
+        return candidates.Values
+            .OrderBy(v => v.DisplayText, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(v => v.Value, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private string GetFilterDisplayText(TValue item, GridColumn? col, string rawValue)
+    {
+        if (col == null)
+            return string.IsNullOrEmpty(rawValue) ? "" : rawValue;
+
+        var displayText = GetCellDisplayValue(item, col);
+        return string.IsNullOrWhiteSpace(displayText) ? rawValue : displayText;
+    }
+
+    private static string CombineFilterSearchText(string rawValue, string displayText)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return displayText;
+        if (string.IsNullOrWhiteSpace(displayText)
+            || string.Equals(rawValue, displayText, StringComparison.OrdinalIgnoreCase))
+            return rawValue;
+
+        return $"{displayText} {rawValue}";
+    }
+
+    private static bool PassesDisplayAwareTextFilter(string rawValue, string displayText, string expected, TextFilterOperator filterOperator)
+    {
+        displayText = string.IsNullOrWhiteSpace(displayText) ? rawValue : displayText;
+        if (string.Equals(rawValue, displayText, StringComparison.Ordinal))
+            return PassesTextFilter(displayText, expected, filterOperator);
+
+        return filterOperator switch
+        {
+            TextFilterOperator.DoesNotEqual =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotBeginWith =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotEndWith =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotContain =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            _ =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                || PassesTextFilter(displayText, expected, filterOperator)
+        };
+    }
+
+    private static bool IsBetterFilterCandidate(FilterValueCandidate candidate, FilterValueCandidate existing)
+    {
+        if (string.IsNullOrWhiteSpace(existing.DisplayText) || existing.DisplayText == "(blank)")
+            return true;
+        if (string.Equals(existing.DisplayText, existing.Value, StringComparison.Ordinal)
+            && !string.Equals(candidate.DisplayText, candidate.Value, StringComparison.Ordinal))
             return true;
 
-        var display = GetFilterValueDisplay(value);
-        var terms = search.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return terms.All(term =>
-        {
-            var normalizedTerm = term.Trim('*');
-            var wantsBlank = normalizedTerm.Equals("blank", StringComparison.OrdinalIgnoreCase)
-                || normalizedTerm.Equals("(blank)", StringComparison.OrdinalIgnoreCase);
-            return wantsBlank
-                ? string.IsNullOrEmpty(value)
-                : display.Contains(normalizedTerm, StringComparison.OrdinalIgnoreCase);
-        });
+        return false;
     }
 
     private bool IsFilterValueChecked(string field, string value)
@@ -928,7 +965,7 @@ public partial class GridControl<TValue>
 
     private object? GetFilterRawValue(TValue item, string field)
     {
-        var col = Columns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        var col = FindColumnByField(field);
         return col == null ? GetPropertyValue(item, field) : ResolveCellValue(item, col);
     }
 

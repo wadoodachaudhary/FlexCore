@@ -1,0 +1,651 @@
+@namespace Fx.ControlKit
+@using System.IO
+@inherits FlexControlBase
+
+@if (Visible)
+{
+    <div class="@ResolvedCssClass" style="@ResolvedRootStyle" id="@Id" @attributes="AdditionalAttributes">
+        <div class="fx-filebrowser-toolbar">
+            <ButtonControl CssClass="fx-filebrowser-tool-btn"
+                           Disabled="@(!Enabled || !CanNavigateUp)"
+                           Title="Up one folder"
+                           OnClick="NavigateUpFromClickAsync">
+                <span class="fx-btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg></span>
+                <span>Up</span>
+            </ButtonControl>
+            <ButtonControl CssClass="fx-filebrowser-tool-btn"
+                           Disabled="@(!Enabled || string.IsNullOrWhiteSpace(_rootPath))"
+                           Title="Root folder"
+                           OnClick="NavigateRootAsync">
+                <span class="fx-btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg></span>
+                <span>Root</span>
+            </ButtonControl>
+            <ButtonControl CssClass="fx-filebrowser-tool-btn"
+                           Disabled="@(!Enabled)"
+                           Title="Refresh"
+                           OnClick="RefreshFromClickAsync">
+                <span class="fx-btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg></span>
+                <span>Refresh</span>
+            </ButtonControl>
+            @if (CanSelectDirectories)
+            {
+                <ButtonControl CssClass="fx-filebrowser-tool-btn fx-filebrowser-select-btn"
+                               Disabled="@(!Enabled || string.IsNullOrWhiteSpace(_currentPath))"
+                               Title="Select current folder"
+                               OnClick="SelectCurrentFolderAsync">
+                    <span class="fx-btn-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></span>
+                    <span>Select Folder</span>
+                </ButtonControl>
+            }
+        </div>
+
+        @if (ShowAddressBar)
+        {
+            <div class="fx-filebrowser-address-row">
+                <label class="fx-filebrowser-address-label">Look in:</label>
+                <input class="fx-filebrowser-address"
+                       value="@_addressText"
+                       disabled="@(!Enabled)"
+                       spellcheck="false"
+                       @onchange="OnAddressChangedAsync" />
+            </div>
+        }
+
+        @if (!string.IsNullOrWhiteSpace(_errorMessage))
+        {
+            <div class="fx-filebrowser-message">@_errorMessage</div>
+        }
+
+        <div class="fx-filebrowser-list"
+             tabindex="0"
+             @onkeydown="OnBrowserKeyDownAsync">
+            <table class="fx-filebrowser-table">
+                <thead>
+                    <tr>
+                        <th class="fx-filebrowser-name-col">Name</th>
+                        <th class="fx-filebrowser-type-col">Type</th>
+                        @if (ShowSize)
+                        {
+                            <th class="fx-filebrowser-size-col">Size</th>
+                        }
+                        @if (ShowModified)
+                        {
+                            <th class="fx-filebrowser-date-col">Modified</th>
+                        }
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (ShowParentEntry && CanNavigateUp)
+                    {
+                        <tr class="fx-filebrowser-entry fx-filebrowser-parent"
+                            @onclick="@(() => NavigateUpInternalAsync())">
+                            <td class="fx-filebrowser-name-cell">
+                                <span class="fx-filebrowser-icon"><svg viewBox="0 0 24 24" class="fx-icon-folder-svg"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg></span>
+                                <span class="fx-filebrowser-name">..</span>
+                            </td>
+                            <td>Folder</td>
+                            @if (ShowSize)
+                            {
+                                <td></td>
+                            }
+                            @if (ShowModified)
+                            {
+                                <td></td>
+                            }
+                        </tr>
+                    }
+                    @if (_items.Count == 0)
+                    {
+                        <tr class="fx-filebrowser-empty">
+                            <td colspan="@ColumnCount">No files or folders found.</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var item in _items)
+                        {
+                            var isSelected = IsSelected(item);
+                            <tr class="fx-filebrowser-entry @(isSelected ? "fx-filebrowser-selected" : null)"
+                                title="@item.FullPath"
+                                @onclick="@(() => OnItemClickedAsync(item))"
+                                @ondblclick="@(() => OnItemActivatedAsync(item))">
+                                <td class="fx-filebrowser-name-cell">
+                                    <span class="fx-filebrowser-icon">
+                                        @if (item.IsDirectory)
+                                        {
+                                            <svg viewBox="0 0 24 24" class="fx-icon-folder-svg"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                                        }
+                                        else
+                                        {
+                                            <svg viewBox="0 0 24 24" class="fx-icon-file-svg"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+                                        }
+                                    </span>
+                                    <span class="fx-filebrowser-name">@item.Name</span>
+                                </td>
+                                <td>@item.TypeText</td>
+                                @if (ShowSize)
+                                {
+                                    <td class="fx-filebrowser-size-cell">@(item.IsDirectory ? "" : FormatSize(item.Size))</td>
+                                }
+                                @if (ShowModified)
+                                {
+                                    <td>@FormatDate(item.LastModified)</td>
+                                }
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (ShowSelectedPath)
+        {
+            <div class="fx-filebrowser-selected-path">
+                <span>Selected:</span>
+                <input value="@(_selectedPath ?? string.Empty)" readonly />
+            </div>
+        }
+    </div>
+}
+
+@code {
+    protected override string? BaseCssClass => "fx-filebrowser";
+
+    [Parameter] public string? RootPath { get; set; }
+    [Parameter] public string? InitialPath { get; set; }
+    [Parameter] public string? CurrentPath { get; set; }
+    [Parameter] public EventCallback<string?> CurrentPathChanged { get; set; }
+    [Parameter] public string? SelectedPath { get; set; }
+    [Parameter] public EventCallback<string?> SelectedPathChanged { get; set; }
+
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter] public FileBrowserSelectionMode SelectionMode { get; set; } = FileBrowserSelectionMode.Files;
+    [Parameter] public bool OpenFolderOnSingleClick { get; set; } = true;
+    [Parameter] public bool ShowAddressBar { get; set; } = true;
+    [Parameter] public bool ShowParentEntry { get; set; } = true;
+    [Parameter] public bool ShowHidden { get; set; }
+    [Parameter] public bool ShowFiles { get; set; } = true;
+    [Parameter] public bool ShowFolders { get; set; } = true;
+    [Parameter] public bool ShowSize { get; set; } = true;
+    [Parameter] public bool ShowModified { get; set; } = true;
+    [Parameter] public bool ShowSelectedPath { get; set; } = true;
+    [Parameter] public bool AllowNavigateAboveRoot { get; set; }
+    [Parameter] public string? Accept { get; set; }
+    [Parameter] public string SearchPattern { get; set; } = "*";
+    [Parameter] public string? Width { get; set; } = "100%";
+    [Parameter] public string? Height { get; set; } = "320px";
+
+    [Parameter] public EventCallback<FileBrowserItem?> SelectedItemChanged { get; set; }
+    [Parameter] public EventCallback<FileBrowserItem> FileActivated { get; set; }
+    [Parameter] public EventCallback<FileBrowserItem> FolderActivated { get; set; }
+    [Parameter] public EventCallback<string?> DirectoryChanged { get; set; }
+
+    private readonly List<FileBrowserItem> _items = new();
+    private readonly HashSet<string> _acceptedExtensions = new(StringComparer.OrdinalIgnoreCase);
+    private string? _rootPath;
+    private string? _currentPath;
+    private string? _selectedPath;
+    private string _addressText = string.Empty;
+    private string? _errorMessage;
+    private bool _initialized;
+    private string? _lastRootParameter;
+    private string? _lastCurrentParameter;
+    private string? _lastAcceptParameter;
+
+    private bool CanSelectDirectories =>
+        SelectionMode is FileBrowserSelectionMode.Directories or FileBrowserSelectionMode.FilesAndDirectories;
+
+    private bool CanSelectFiles =>
+        SelectionMode is FileBrowserSelectionMode.Files or FileBrowserSelectionMode.FilesAndDirectories;
+
+    private int ColumnCount => 2 + (ShowSize ? 1 : 0) + (ShowModified ? 1 : 0);
+
+    private bool CanNavigateUp
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_currentPath))
+                return false;
+
+            var parent = GetParentPath(_currentPath);
+            if (string.IsNullOrWhiteSpace(parent))
+                return false;
+
+            return AllowNavigateAboveRoot || IsPathWithinRoot(parent);
+        }
+    }
+
+    private string? ResolvedRootStyle
+    {
+        get
+        {
+            var styles = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Width))
+                styles.Add($"width: {Width}");
+            if (!string.IsNullOrWhiteSpace(Height))
+                styles.Add($"height: {Height}");
+            if (!string.IsNullOrWhiteSpace(Style))
+                styles.Add(Style!);
+            return styles.Count == 0 ? null : string.Join("; ", styles);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        var rootChanged = !string.Equals(_lastRootParameter, RootPath, StringComparison.Ordinal);
+        var currentChanged = !string.Equals(_lastCurrentParameter, CurrentPath, StringComparison.Ordinal);
+        var acceptChanged = !string.Equals(_lastAcceptParameter, Accept, StringComparison.Ordinal);
+
+        if (rootChanged)
+        {
+            _rootPath = NormalizeExistingDirectory(RootPath);
+            _lastRootParameter = RootPath;
+        }
+
+        if (acceptChanged)
+        {
+            RebuildAcceptedExtensions();
+            _lastAcceptParameter = Accept;
+        }
+
+        _selectedPath = FirstNonBlank(SelectedPath, Value, _selectedPath);
+
+        if (!_initialized || rootChanged || currentChanged)
+        {
+            _initialized = true;
+            var target = FirstNonBlank(CurrentPath, _currentPath, InitialPath, _rootPath, GetDefaultStartPath());
+            LoadDirectory(target);
+            _lastCurrentParameter = CurrentPath;
+        }
+    }
+
+    private async Task OnAddressChangedAsync(ChangeEventArgs e)
+    {
+        if (!Enabled)
+            return;
+
+        var requested = e.Value?.ToString();
+        await NavigateToAsync(requested, notify: true);
+    }
+
+    private async Task NavigateRootAsync(MouseEventArgs _)
+    {
+        if (!Enabled || string.IsNullOrWhiteSpace(_rootPath))
+            return;
+
+        await NavigateToAsync(_rootPath, notify: true);
+    }
+
+    private async Task NavigateUpFromClickAsync(MouseEventArgs _)
+    {
+        await NavigateUpInternalAsync();
+    }
+
+    private async Task NavigateUpInternalAsync()
+    {
+        if (!Enabled || !CanNavigateUp || string.IsNullOrWhiteSpace(_currentPath))
+            return;
+
+        await NavigateToAsync(GetParentPath(_currentPath), notify: true);
+    }
+
+    private async Task RefreshFromClickAsync(MouseEventArgs _)
+    {
+        await RefreshInternalAsync();
+    }
+
+    private Task RefreshInternalAsync()
+    {
+        LoadDirectory(_currentPath);
+        return Task.CompletedTask;
+    }
+
+    private async Task SelectCurrentFolderAsync(MouseEventArgs _)
+    {
+        if (!Enabled || !CanSelectDirectories || string.IsNullOrWhiteSpace(_currentPath))
+            return;
+
+        var item = CreateDirectoryItem(_currentPath);
+        await SelectItemAsync(item);
+    }
+
+    private async Task OnItemClickedAsync(FileBrowserItem item)
+    {
+        if (!Enabled)
+            return;
+
+        if (item.IsDirectory && OpenFolderOnSingleClick)
+        {
+            await OpenFolderAsync(item);
+            return;
+        }
+
+        await SelectItemAsync(item);
+    }
+
+    private async Task OnItemActivatedAsync(FileBrowserItem item)
+    {
+        if (!Enabled)
+            return;
+
+        if (item.IsDirectory)
+        {
+            await OpenFolderAsync(item);
+            return;
+        }
+
+        await SelectItemAsync(item);
+        if (FileActivated.HasDelegate)
+            await FileActivated.InvokeAsync(item);
+    }
+
+    private async Task OpenFolderAsync(FileBrowserItem item)
+    {
+        await NavigateToAsync(item.FullPath, notify: true);
+        if (FolderActivated.HasDelegate)
+            await FolderActivated.InvokeAsync(item);
+    }
+
+    private async Task SelectItemAsync(FileBrowserItem item)
+    {
+        if (item.IsDirectory && !CanSelectDirectories)
+            return;
+        if (!item.IsDirectory && !CanSelectFiles)
+            return;
+
+        _selectedPath = item.FullPath;
+        SelectedPath = _selectedPath;
+        Value = _selectedPath;
+
+        if (SelectedPathChanged.HasDelegate)
+            await SelectedPathChanged.InvokeAsync(_selectedPath);
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(_selectedPath);
+        if (SelectedItemChanged.HasDelegate)
+            await SelectedItemChanged.InvokeAsync(item);
+    }
+
+    private async Task OnBrowserKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (!Enabled)
+            return;
+
+        if (string.Equals(e.Key, "Backspace", StringComparison.OrdinalIgnoreCase))
+        {
+            await NavigateUpInternalAsync();
+        }
+        else if (string.Equals(e.Key, "F5", StringComparison.OrdinalIgnoreCase))
+        {
+            await RefreshInternalAsync();
+        }
+    }
+
+    private async Task NavigateToAsync(string? path, bool notify)
+    {
+        var previousPath = _currentPath;
+        LoadDirectory(path);
+
+        if (!string.Equals(previousPath, _currentPath, PathComparison))
+        {
+            CurrentPath = _currentPath;
+            _lastCurrentParameter = CurrentPath;
+
+            if (notify && CurrentPathChanged.HasDelegate)
+                await CurrentPathChanged.InvokeAsync(_currentPath);
+            if (notify && DirectoryChanged.HasDelegate)
+                await DirectoryChanged.InvokeAsync(_currentPath);
+        }
+    }
+
+    private void LoadDirectory(string? requestedPath)
+    {
+        _errorMessage = null;
+
+        var normalized = NormalizePath(requestedPath);
+        if (string.IsNullOrWhiteSpace(normalized))
+            normalized = GetDefaultStartPath();
+
+        if (File.Exists(normalized))
+            normalized = Path.GetDirectoryName(normalized);
+
+        if (!Directory.Exists(normalized))
+        {
+            _items.Clear();
+            _currentPath = normalized;
+            _addressText = normalized ?? string.Empty;
+            _errorMessage = "Folder not found.";
+            return;
+        }
+
+        if (!AllowNavigateAboveRoot && !IsPathWithinRoot(normalized))
+            normalized = _rootPath;
+
+        if (string.IsNullOrWhiteSpace(normalized) || !Directory.Exists(normalized))
+        {
+            _items.Clear();
+            _currentPath = normalized;
+            _addressText = normalized ?? string.Empty;
+            _errorMessage = "Folder not found.";
+            return;
+        }
+
+        try
+        {
+            var directories = ShowFolders
+                ? Directory.EnumerateDirectories(normalized)
+                    .Select(CreateDirectoryItem)
+                    .Where(ShouldShowItem)
+                : Enumerable.Empty<FileBrowserItem>();
+
+            var files = ShowFiles
+                ? Directory.EnumerateFiles(normalized, string.IsNullOrWhiteSpace(SearchPattern) ? "*" : SearchPattern)
+                    .Select(CreateFileItem)
+                    .Where(ShouldShowItem)
+                    .Where(MatchesAcceptedExtensions)
+                : Enumerable.Empty<FileBrowserItem>();
+
+            _items.Clear();
+            _items.AddRange(directories.OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase));
+            _items.AddRange(files.OrderBy(i => i.Name, StringComparer.OrdinalIgnoreCase));
+            _currentPath = normalized;
+            _addressText = normalized;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or DirectoryNotFoundException)
+        {
+            _items.Clear();
+            _currentPath = normalized;
+            _addressText = normalized;
+            _errorMessage = ex.Message;
+        }
+    }
+
+    private FileBrowserItem CreateDirectoryItem(string path)
+    {
+        var info = new DirectoryInfo(path);
+        return new FileBrowserItem
+        {
+            Name = info.Name.Length == 0 ? info.FullName : info.Name,
+            FullPath = info.FullName,
+            IsDirectory = true,
+            LastModified = TryGetLastWriteTime(info)
+        };
+    }
+
+    private FileBrowserItem CreateFileItem(string path)
+    {
+        var info = new FileInfo(path);
+        return new FileBrowserItem
+        {
+            Name = info.Name,
+            FullPath = info.FullName,
+            IsDirectory = false,
+            Size = TryGetLength(info),
+            LastModified = TryGetLastWriteTime(info),
+            Extension = info.Extension
+        };
+    }
+
+    private bool ShouldShowItem(FileBrowserItem item)
+    {
+        if (ShowHidden)
+            return true;
+
+        var name = item.Name;
+        if (name.StartsWith(".", StringComparison.Ordinal))
+            return false;
+
+        try
+        {
+            var attrs = File.GetAttributes(item.FullPath);
+            return (attrs & FileAttributes.Hidden) == 0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    private bool MatchesAcceptedExtensions(FileBrowserItem item)
+    {
+        if (item.IsDirectory || _acceptedExtensions.Count == 0)
+            return true;
+        return _acceptedExtensions.Contains(item.Extension);
+    }
+
+    private bool IsSelected(FileBrowserItem item) =>
+        !string.IsNullOrWhiteSpace(_selectedPath)
+        && string.Equals(NormalizePath(_selectedPath), NormalizePath(item.FullPath), PathComparison);
+
+    private bool IsPathWithinRoot(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(_rootPath) || string.IsNullOrWhiteSpace(path))
+            return true;
+
+        var normalizedRoot = EnsureTrailingSeparator(NormalizePath(_rootPath)!);
+        var normalizedPath = EnsureTrailingSeparator(NormalizePath(path)!);
+        return normalizedPath.StartsWith(normalizedRoot, PathComparison);
+    }
+
+    private void RebuildAcceptedExtensions()
+    {
+        _acceptedExtensions.Clear();
+        if (string.IsNullOrWhiteSpace(Accept))
+            return;
+
+        foreach (var part in Accept.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (part == "*" || part == "*.*" || part.EndsWith("/*", StringComparison.Ordinal))
+            {
+                _acceptedExtensions.Clear();
+                return;
+            }
+
+            var extension = part.StartsWith(".", StringComparison.Ordinal) ? part : Path.GetExtension(part);
+            if (!string.IsNullOrWhiteSpace(extension))
+                _acceptedExtensions.Add(extension);
+        }
+    }
+
+    private static string? NormalizeExistingDirectory(string? path)
+    {
+        var normalized = NormalizePath(path);
+        return string.IsNullOrWhiteSpace(normalized) || !Directory.Exists(normalized)
+            ? null
+            : normalized;
+    }
+
+    private static string? NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        var expanded = Environment.ExpandEnvironmentVariables(path.Trim());
+        if (expanded == "~" || expanded.StartsWith("~/", StringComparison.Ordinal))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            expanded = Path.Combine(home, expanded.Length == 1 ? string.Empty : expanded[2..]);
+        }
+
+        try
+        {
+            return Path.GetFullPath(expanded);
+        }
+        catch
+        {
+            return expanded;
+        }
+    }
+
+    private string GetDefaultStartPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(home) && Directory.Exists(home))
+            return home;
+
+        return Directory.GetCurrentDirectory();
+    }
+
+    private static string? GetParentPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        try
+        {
+            return Directory.GetParent(path)?.FullName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        if (path.EndsWith(Path.DirectorySeparatorChar) || path.EndsWith(Path.AltDirectorySeparatorChar))
+            return path;
+        return path + Path.DirectorySeparatorChar;
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+    private static long? TryGetLength(FileInfo info)
+    {
+        try { return info.Length; }
+        catch { return null; }
+    }
+
+    private static DateTime? TryGetLastWriteTime(FileSystemInfo info)
+    {
+        try { return info.LastWriteTime; }
+        catch { return null; }
+    }
+
+    private static string FormatSize(long? bytes)
+    {
+        if (!bytes.HasValue)
+            return string.Empty;
+
+        var value = (double)bytes.Value;
+        string[] suffixes = ["B", "KB", "MB", "GB", "TB"];
+        var suffixIndex = 0;
+        while (value >= 1024 && suffixIndex < suffixes.Length - 1)
+        {
+            value /= 1024;
+            suffixIndex++;
+        }
+
+        return suffixIndex == 0
+            ? $"{bytes.Value} {suffixes[suffixIndex]}"
+            : $"{value:0.#} {suffixes[suffixIndex]}";
+    }
+
+    private static string FormatDate(DateTime? value) =>
+        value.HasValue ? value.Value.ToString("g") : string.Empty;
+
+    private static StringComparison PathComparison =>
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+}

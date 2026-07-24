@@ -824,7 +824,8 @@
                 }
                 else
                 {
-                    var values = GetColumnFilterValues(_filterPopupField);
+                    var candidates = GetColumnFilterValueCandidates(_filterPopupField);
+                    var values = candidates.Select(v => v.Value).ToList();
                     var totalValueCount = GetDistinctValues(_filterPopupField).Count;
                     var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
 
@@ -848,19 +849,8 @@
                                @onclick:stopPropagation="true" />
                     </div>
 
-                    <div class="fx-filter-popup-search">
-                        <input type="text" class="fx-filter-popup-input"
-                               @ref="_filterValueSearchInputRef"
-                               placeholder="Search list values..."
-                               value="@GetColumnFilterValueSearch(_filterPopupField)"
-                               @oninput="OnFilterValueSearchInput"
-                               @oninput:stopPropagation="true"
-                               @onkeydown:stopPropagation="true"
-                               @onkeyup:stopPropagation="true"
-                               @onclick:stopPropagation="true" />
-                        <div class="fx-filter-popup-summary">
-                            @selectedValueCount of @totalValueCount selected
-                        </div>
+                    <div class="fx-filter-popup-summary fx-filter-value-summary">
+                        @selectedValueCount of @totalValueCount selected
                     </div>
 
                     <label class="fx-filter-checkbox-item fx-filter-select-all-row">
@@ -871,14 +861,14 @@
                     </label>
 
                     <div class="fx-filter-checkbox-list">
-                        @foreach (var val in values)
+                        @foreach (var candidate in candidates)
                         {
-                            var v = val;
+                            var v = candidate.Value;
                             <label class="fx-filter-checkbox-item">
                                 <input type="checkbox"
                                        checked="@IsFilterValueChecked(_filterPopupField, v)"
                                        @onchange="e => SetFilterValueChecked(_filterPopupField, v, e.Value is bool b && b)" />
-                                <span>@GetFilterValueDisplay(v)</span>
+                                <span>@candidate.DisplayText</span>
                             </label>
                         }
                         @if (values.Count == 0)

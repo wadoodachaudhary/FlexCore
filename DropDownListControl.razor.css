@@ -161,7 +161,8 @@
 
 .fx-dropdown-host.fx-dropdown-open-up .fx-dropdown-panel,
 .fx-dropdown-host.dropdown-open-up .fx-dropdown-panel {
-    bottom: auto;
+    top: auto;
+    bottom: calc(100% - 1px);
 }
 
 .fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown,

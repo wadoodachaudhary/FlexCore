@@ -117,8 +117,6 @@
     private bool _openUp;
     private bool _needsGeometryRefresh;
     private double? _panelMaxHeight;
-    private double? _panelTop;
-    private double? _panelLeft;
     private double? _panelMinWidth;
     private bool _hasMeasuredGeometry;
     private ElementReference _hostRef;
@@ -135,12 +133,6 @@
         get
         {
             var parts = new List<string>();
-            if (_panelTop.HasValue || _panelLeft.HasValue)
-                parts.Add("position:fixed");
-            if (_panelTop is { } top)
-                parts.Add($"top:{top.ToString("0.##", CultureInfo.InvariantCulture)}px");
-            if (_panelLeft is { } left)
-                parts.Add($"left:{left.ToString("0.##", CultureInfo.InvariantCulture)}px");
             if (_panelMinWidth is { } minWidth)
             {
                 var width = minWidth.ToString("0.##", CultureInfo.InvariantCulture);
@@ -150,8 +142,6 @@
             }
             if (_panelMaxHeight is > 0)
                 parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
-            if (parts.Count > 0)
-                parts.Add("bottom:auto");
             return parts.Count == 0 ? string.Empty : string.Join(";", parts) + ";";
         }
     }
@@ -263,8 +253,6 @@
         _needsGeometryRefresh = true;
         _openUp = false;
         _panelMaxHeight = null;
-        _panelTop = null;
-        _panelLeft = null;
         _panelMinWidth = null;
         _hasMeasuredGeometry = false;
     }
@@ -273,8 +261,6 @@
     {
         _openUp = false;
         _panelMaxHeight = null;
-        _panelTop = null;
-        _panelLeft = null;
         _panelMinWidth = null;
         _hasMeasuredGeometry = false;
         _needsGeometryRefresh = false;
@@ -624,14 +610,10 @@
             var changed = !_hasMeasuredGeometry
                 || _openUp != geometry.OpenUp
                 || Math.Abs((_panelMaxHeight ?? 0) - geometry.MaxHeight) > 0.5
-                || Math.Abs((_panelTop ?? 0) - geometry.Top) > 0.5
-                || Math.Abs((_panelLeft ?? 0) - geometry.Left) > 0.5
                 || Math.Abs((_panelMinWidth ?? 0) - geometry.MinWidth) > 0.5;
 
             _openUp = geometry.OpenUp;
             _panelMaxHeight = geometry.MaxHeight > 0 ? geometry.MaxHeight : null;
-            _panelTop = geometry.Top;
-            _panelLeft = geometry.Left;
             _panelMinWidth = geometry.MinWidth > 0 ? geometry.MinWidth : null;
             _hasMeasuredGeometry = true;
             if (changed)

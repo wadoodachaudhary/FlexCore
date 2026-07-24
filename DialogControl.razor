@@ -182,9 +182,14 @@
                 parts.Add($"width:{Width}");
 
             if (_runtimeHeight.HasValue)
-                parts.Add($"height:{_runtimeHeight.Value:0.##}px");
+                parts.Add($"height:{ClampResize(_runtimeHeight.Value, MinResizeHeight, MaxResizeHeight):0.##}px");
             else if (!string.IsNullOrWhiteSpace(Height))
-                parts.Add($"height:{Height}");
+            {
+                var heightPixels = TryParsePixelValue(Height);
+                parts.Add(heightPixels.HasValue
+                    ? $"height:{ClampResize(heightPixels.Value, MinResizeHeight, MaxResizeHeight):0.##}px"
+                    : $"height:{Height}");
+            }
 
             if (_dialogOffsetX != 0 || _dialogOffsetY != 0)
                 parts.Add($"transform:translate({_dialogOffsetX:0.##}px,{_dialogOffsetY:0.##}px)");

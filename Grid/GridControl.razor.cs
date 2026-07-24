@@ -80,6 +80,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool ShowSelectionInfoBar { get; set; }
     [Parameter] public string? TypeAheadTargetField { get; set; }
     [Parameter] public string? TypeAheadFallbackField { get; set; }
+    [Parameter] public bool ShowRowSelectionEditColumnCue { get; set; }
     [Parameter] public GridBatchEditBehavior BatchEditBehavior { get; set; } = GridBatchEditBehavior.MultiRow;
     [Parameter] public bool EditOnSingleClick { get; set; }
     [Parameter] public bool AllowSingleCellColumnMassEdit { get; set; }
@@ -457,6 +458,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private TValue? _lastSelectedItem;
     private bool _isDragSelecting;
     private bool _suppressNextClickAfterDragSelect;
+    private DateTime _suppressNextClickAfterDragSelectUntilUtc = DateTime.MinValue;
     private (int RowIndex, int CellIndex)? _cellDragAnchor;
     private bool _isCellDragSelecting;
 
@@ -508,7 +510,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _pendingActiveCellScrollIntoView;
 
     private ElementReference _batchEditInputRef;
-    private int _pendingBatchEditFocusRetries;
 
     private IJSObjectReference? _gridJsModule;
     private ElementReference _gridHostElement;
@@ -546,7 +547,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private DataSourceSelectionSignature _lastFilterDataSourceSignature;
     private bool _filterDataSourceCaptured;
     private ElementReference _filterConditionInputRef;
-    private ElementReference _filterValueSearchInputRef;
     private FilterPopupFocusTarget? _pendingFilterPopupFocusTarget;
     private IEnumerable<TValue>? _lastSelectionDataSource;
     private DataSourceSelectionSignature _lastSelectionDataSourceSignature;
@@ -557,8 +557,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private enum FilterPopupFocusTarget
     {
-        ConditionInput,
-        ValueSearchInput
+        ConditionInput
     }
 
     private string _typeAheadBuffer = "";
@@ -743,10 +742,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 if (!string.IsNullOrEmpty(state.FilterValue))
                 {
                     var filterVal = state.FilterValue;
+                    var col = FindColumnByField(colField);
                     data = data.Where(item =>
                     {
-                        var val = GetFilterRawValue(item, colField)?.ToString() ?? "";
-                        return PassesTextFilter(val, filterVal, state.FilterOperator);
+                        var rawVal = GetFilterRawValue(item, colField)?.ToString() ?? "";
+                        var displayText = GetFilterDisplayText(item, col, rawVal);
+                        return PassesDisplayAwareTextFilter(rawVal, displayText, filterVal, state.FilterOperator);
                     });
                 }
 
@@ -780,7 +781,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 data = data.Where(item =>
                     VisibleColumns.Any(col =>
                     {
-                        var val = GetPropertyValue(item, col.Field)?.ToString() ?? "";
+                        var val = GetColumnSearchText(item, col);
                         return val.Contains(searchLower, StringComparison.OrdinalIgnoreCase);
                     }));
             }
@@ -813,6 +814,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static object? GetSortKeyValue(object? item, string field)
         => NormalizeSortValue(GetPropertyValue(item, field));
+
+    private GridColumn? FindColumnByField(string? field)
+    {
+        if (string.IsNullOrWhiteSpace(field))
+            return null;
+
+        return Columns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+    }
 
     private static object? NormalizeSortValue(object? value)
     {
@@ -1269,13 +1278,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (_pendingBatchEditFocus && !string.IsNullOrEmpty(_batchEditField))
         {
-            if (!HasElementReference(_batchEditInputRef) && _pendingBatchEditFocusRetries < 3)
-            {
-                _pendingBatchEditFocusRetries++;
-                await InvokeAsync(StateHasChanged);
-                return;
-            }
-
             var selectAll = _pendingBatchEditSelectAll;
             var clientX = _pendingBatchEditClientX;
             var scrollIntoView = _pendingBatchEditScrollIntoView;
@@ -1283,7 +1285,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
             _pendingBatchEditScrollIntoView = false;
-            _pendingBatchEditFocusRetries = 0;
 
             if (scrollIntoView)
             {
@@ -1449,11 +1450,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_filterPopupField == null || !_pendingFilterPopupFocusTarget.HasValue)
             return;
 
-        var target = _pendingFilterPopupFocusTarget.Value;
         _pendingFilterPopupFocusTarget = null;
-        var element = target == FilterPopupFocusTarget.ConditionInput
-            ? _filterConditionInputRef
-            : _filterValueSearchInputRef;
+        var element = _filterConditionInputRef;
 
         try
         {
@@ -1965,7 +1963,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void ResetFilterPopupDraft(string field)
     {
-        SetColumnFilterValueSearch(field, null);
         _numericFilterMinText.Remove(field);
         _numericFilterMaxText.Remove(field);
         if (string.Equals(_filterPopupField, field, StringComparison.Ordinal))
@@ -1995,7 +1992,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         foreach (var state in _columnStates.Values)
             ResetColumnFilterState(state);
 
-        _columnFilterValueSearch.Clear();
         _numericFilterMinText.Clear();
         _numericFilterMaxText.Clear();
         ClearExpressionFilterState();
@@ -2168,6 +2164,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await CommitBatchEdit();
 
             SetActiveCell(resolvedRowIndex, cellIndex);
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+                _selectedItems.Clear();
+
             ClearKeyboardNavigationSource();
             if (!args.ShiftKey)
                 ClearKeyboardRangeSelectionAnchor();
@@ -2564,6 +2563,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_isDragSelecting || _isCellDragSelecting)
         {
             _suppressNextClickAfterDragSelect = true;
+            _suppressNextClickAfterDragSelectUntilUtc = DateTime.UtcNow.AddMilliseconds(350);
             _isDragSelecting = false;
             _dragAnchorRowIndex = null;
             _dragAnchorItem = default;
@@ -2634,7 +2634,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!_suppressNextClickAfterDragSelect && !_isDragSelecting && !_isCellDragSelecting)
             return false;
 
+        if (_suppressNextClickAfterDragSelect
+            && !_isDragSelecting
+            && !_isCellDragSelecting
+            && DateTime.UtcNow > _suppressNextClickAfterDragSelectUntilUtc)
+        {
+            _suppressNextClickAfterDragSelect = false;
+            _suppressNextClickAfterDragSelectUntilUtc = DateTime.MinValue;
+            return false;
+        }
+
         _suppressNextClickAfterDragSelect = false;
+        _suppressNextClickAfterDragSelectUntilUtc = DateTime.MinValue;
         _isDragSelecting = false;
         _dragAnchorRowIndex = null;
         _dragAnchorItem = default;
@@ -2674,7 +2685,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void CaptureRowSelectionTypeAheadTarget(int cellIndex)
     {
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
-        var field = CanReceiveTypeAhead(col) ? col!.Field : null;
+        var field = CanReceiveTypeAhead(col)
+            || (ShowRowSelectionEditColumnCue && CanUseAsRowSelectionEditCueTarget(col))
+                ? col!.Field
+                : null;
 
         _rowSelectionTypeAheadTargetCaptured = true;
         if (!string.Equals(_rowSelectionTypeAheadTargetField, field, StringComparison.OrdinalIgnoreCase))
@@ -2698,6 +2712,53 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !col.IsPrimaryKey
             && col.Type != ColumnType.CheckBox
             && EditSettingsRef?.AllowEditing != false;
+    }
+
+    private bool CanUseAsRowSelectionEditCueTarget(GridColumn? col)
+    {
+        return col != null
+            && !string.IsNullOrWhiteSpace(col.Field)
+            && !col.IsPrimaryKey
+            && (col.AllowEditing || col.AllowCellDragSelection)
+            && EditSettingsRef?.AllowEditing != false;
+    }
+
+    private string? ResolveRowSelectionEditCueTargetField()
+    {
+        if (_rowSelectionTypeAheadTargetCaptured)
+            return _rowSelectionTypeAheadTargetField;
+
+        if (_activeCell.HasValue)
+        {
+            var activeCol = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
+            if (CanUseAsRowSelectionEditCueTarget(activeCol))
+                return activeCol!.Field;
+        }
+
+        if (_lastSelectedCell.HasValue)
+        {
+            var lastCol = VisibleColumns.ElementAtOrDefault(_lastSelectedCell.Value.CellIndex);
+            if (CanUseAsRowSelectionEditCueTarget(lastCol))
+                return lastCol!.Field;
+        }
+
+        return null;
+    }
+
+    private bool ShouldShowRowSelectionEditColumnCue(TValue item, GridColumn column)
+    {
+        if (!ShowRowSelectionEditColumnCue
+            || SelectionSettingsRef?.Mode == SelectionMode.Cell
+            || _selectedItems.Count <= 1
+            || !_selectedItems.Contains(item)
+            || !CanUseAsRowSelectionEditCueTarget(column))
+        {
+            return false;
+        }
+
+        var targetField = ResolveRowSelectionEditCueTargetField();
+        return !string.IsNullOrWhiteSpace(targetField)
+            && string.Equals(column.Field, targetField, StringComparison.OrdinalIgnoreCase);
     }
 
     private void ClearTypeAheadBuffer()
@@ -2909,9 +2970,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
 
-        if (col.PreferCellEditOnDoubleClick && IsBatchDoubleClickEditCell(col))
+        if (IsBatchDoubleClickEditCell(col))
         {
-            await StartBatchEdit(item, resolvedRowIndex, col, args.ClientX, openDropdownOnRender: col.OpenEditOptionsOnEdit);
+            await StartBatchEdit(item, resolvedRowIndex, col, args.ClientX);
             return;
         }
 
@@ -2941,9 +3002,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await HandleEditButtonClick(item, col);
             return;
         }
-
-        if (IsBatchDoubleClickEditCell(col))
-            await StartBatchEdit(item, resolvedRowIndex, col, args.ClientX, openDropdownOnRender: col.OpenEditOptionsOnEdit);
     }
 
     private async Task SelectRow(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
@@ -3285,6 +3343,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _cellDragAnchor = null;
         _dragAnchorRowIndex = null;
         _dragAnchorItem = default;
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            _selectedItems.Clear();
 
         if (!AllowSelection)
             return;
@@ -3455,11 +3515,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (!isCtrl && !isShift)
         {
-            if (_selectedCells.Count > 1
-                && _selectedCells.Contains(cell)
-                && _selectedCells.All(c => c.CellIndex == cellIndex))
-                return;
-
             _selectedCells.Clear();
             _selectedCells.Add(cell);
             return;
@@ -3517,9 +3572,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _activeCell = col != null ? (rowIndex, cellIndex) : null;
     }
 
-    private static bool HasElementReference(ElementReference elementReference) =>
-        !string.IsNullOrEmpty(elementReference.Id);
-
     private async Task ActivateCheckboxCellAsync(TValue item, int rowIndex, int cellIndex, bool focusGridHost)
     {
         await CommitBatchEdit();
@@ -3529,9 +3581,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
         _lastSelectedCell = (resolvedRowIndex, cellIndex);
 
-        _selectedCells.Clear();
-        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
-            _selectedCells.Add((resolvedRowIndex, cellIndex));
+        var cell = (resolvedRowIndex, cellIndex);
+        var preserveCellSelection = SingleCellColumnMassEditEnabled
+            && SelectionSettingsRef?.Mode == SelectionMode.Cell
+            && _selectedCells.Count > 1
+            && _selectedCells.Contains(cell);
+        if (!preserveCellSelection)
+        {
+            _selectedCells.Clear();
+            if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+                _selectedCells.Add(cell);
+        }
 
         if (EventsRef?.CellSelected.HasDelegate == true)
         {
@@ -3553,6 +3613,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         await InvokeAsync(StateHasChanged);
     }
+
+    private Task HandleCheckboxMouseDown(TValue item, int rowIndex, int cellIndex, MouseEventArgs args) =>
+        HandleCellMouseDown(item, rowIndex, cellIndex, args);
 
     private async Task HandleCheckboxKeyDown(TValue item, int rowIndex, int cellIndex, GridColumn col, KeyboardEventArgs e)
     {
@@ -3878,7 +3941,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _pendingBatchEditFocus = true;
         _pendingBatchEditSelectAll = col.SelectAllOnEdit && clientX == null;
         _pendingBatchEditClientX = clientX;
-        _pendingBatchEditFocusRetries = 0;
         return true;
     }
 
@@ -3903,35 +3965,42 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         await CommitBatchEdit();
 
-        if (EventsRef?.OnCellEdit.HasDelegate == true)
-        {
-            var args = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
-            await EventsRef.OnCellEdit.InvokeAsync(args);
-            if (args.Cancel)
-            {
-                await InvokeAsync(StateHasChanged);
-                return;
-            }
-        }
-
         var newValue = e?.Value is bool changedValue
             ? changedValue
             : !GetBoolValue(item, col.Field);
 
-        if (!SetPropertyObjectValue(item, col.Field, newValue))
+        var targets = ResolveCheckboxToggleTargets(item, col);
+        var changedAny = false;
+        foreach (var target in targets)
+        {
+            if (EventsRef?.OnCellEdit.HasDelegate == true)
+            {
+                var editArgs = new CellEditArgs<TValue> { Data = target, ColumnName = col.Field };
+                await EventsRef.OnCellEdit.InvokeAsync(editArgs);
+                if (editArgs.Cancel)
+                    continue;
+            }
+
+            if (!SetPropertyObjectValue(target, col.Field, newValue))
+                continue;
+
+            changedAny = true;
+
+            if (EventsRef?.OnCellSave.HasDelegate == true)
+            {
+                await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
+                {
+                    Data = target,
+                    ColumnName = col.Field,
+                    Value = newValue
+                });
+            }
+        }
+
+        if (!changedAny)
         {
             await InvokeAsync(StateHasChanged);
             return;
-        }
-
-        if (EventsRef?.OnCellSave.HasDelegate == true)
-        {
-            await EventsRef.OnCellSave.InvokeAsync(new CellSaveArgs<TValue>
-            {
-                Data = item,
-                ColumnName = col.Field,
-                Value = newValue
-            });
         }
 
         await EnsureTrailingNewRowIfNeededAsync();
@@ -3942,6 +4011,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await TryAppendTrailingNewRowFromLastCellAsync(item, rowIndex, cellIndex, beginEdit: false);
 
         await InvokeAsync(StateHasChanged);
+    }
+
+    private List<TValue> ResolveCheckboxToggleTargets(TValue primary, GridColumn col)
+    {
+        if (!SingleCellColumnMassEditEnabled)
+            return new List<TValue> { primary };
+
+        var targets = ResolveSingleCellColumnMassEditTargets(primary, col);
+        return targets.Count > 1 && targets.Contains(primary)
+            ? targets
+            : new List<TValue> { primary };
     }
 
     private async Task HandleEditButtonClick(TValue item, GridColumn col)
@@ -4339,7 +4419,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 builder.AddAttribute(sequence + 3, "style", GetEditorInputStyle(col));
                 if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
                     builder.AddAttribute(sequence + 4, "MaxLength", col.MaxLength.Value);
-                builder.AddAttribute(sequence + 5, "UpdateOnInput", true);
+                builder.AddAttribute(sequence + 5, "InputValueChanged", (Action<string?>)(value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
                 builder.AddAttribute(sequence + 6, "ValueChanged", EventCallback.Factory.Create<string?>(this, value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
                 builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
                 builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
@@ -4358,7 +4438,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     builder.AddAttribute(sequence + 5, "inputmode", "decimal");
                 if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
                     builder.AddAttribute(sequence + 6, "MaxLength", col.MaxLength.Value);
-                builder.AddAttribute(sequence + 13, "UpdateOnInput", true);
+                builder.AddAttribute(sequence + 13, "InputValueChanged", (Action<string?>)(value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
                 builder.AddAttribute(sequence + 14, "ValueChanged", EventCallback.Factory.Create<string?>(this, value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
                 builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
                 builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
@@ -4391,6 +4471,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var primary = _batchEditItem;
         var field = _batchEditField;
+        var selectedItemsBeforeCommit = _selectedItems.ToList();
+        var selectedCellsBeforeCommit = _selectedCells.ToList();
         var batchEditColumn = ResolveBatchEditColumn(field);
         var currentValue = _batchEditValue ?? "";
         var newValue = ApplyColumnMaxLength(currentValue, batchEditColumn);
@@ -4427,12 +4509,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         else
         {
             targets = new List<TValue> { primary };
-        }
-
-        if (targets.Count > 1)
-        {
-            _selectedItems.Clear();
-            ResetRowSelectionTypeAheadTarget();
         }
 
         var shouldEnsureTrailingNewRow = false;
@@ -4474,6 +4550,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             shouldEnsureTrailingNewRow = committedAnyCell;
         }
 
+        RestoreMultiSelectionAfterBatchCommit(selectedItemsBeforeCommit, selectedCellsBeforeCommit);
+
         _lastCommittedBatchEditItem = primary;
         _lastCommittedBatchEditRowIndex = _batchEditRowIndex;
         _lastCommittedBatchEditField = field;
@@ -4495,6 +4573,41 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await EnsureTrailingNewRowAfterBatchCommitAsync(deferTrailingNewRowEnsure);
         else if (!deferTrailingNewRowEnsure)
             await FlushDeferredTrailingNewRowEnsureAsync();
+    }
+
+    private void RestoreMultiSelectionAfterBatchCommit(
+        IReadOnlyList<TValue> selectedItemsBeforeCommit,
+        IReadOnlyList<(int RowIndex, int CellIndex)> selectedCellsBeforeCommit)
+    {
+        if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
+        {
+            if (selectedCellsBeforeCommit.Count <= 1)
+                return;
+
+            var maxRowIndex = DataSource?.Count() - 1 ?? -1;
+            _selectedCells.Clear();
+            foreach (var cell in selectedCellsBeforeCommit)
+            {
+                if (cell.RowIndex >= 0 && (maxRowIndex < 0 || cell.RowIndex <= maxRowIndex))
+                    _selectedCells.Add(cell);
+            }
+            _selectedItems.Clear();
+            return;
+        }
+
+        if (selectedItemsBeforeCommit.Count <= 1)
+            return;
+
+        var liveItems = DataSource != null
+            ? new HashSet<TValue>(DataSource)
+            : null;
+
+        _selectedItems.Clear();
+        foreach (var item in selectedItemsBeforeCommit)
+        {
+            if (liveItems == null || liveItems.Contains(item))
+                _selectedItems.Add(item);
+        }
     }
 
     private async Task EnsureTrailingNewRowAfterBatchCommitAsync(bool deferTrailingNewRowEnsure)
@@ -5687,7 +5800,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (_batchEditItem == null
             && _typeAheadBuffer.Length > 0
-            && _selectedItems.Count > 1
+            && HasRowSelectionTypeAheadSelection()
             && IsRowSelectionTypeAheadCommitKey(e, out var commitAndStop))
         {
             var committed = await CommitPendingRowSelectionTypeAheadAsync();
@@ -5745,7 +5858,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && await HandleSingleCellTypeAheadKeyAsync(e))
             return;
 
-        if (_selectedItems.Count > 1 && _batchEditItem == null)
+        if (HasRowSelectionTypeAheadSelection() && _batchEditItem == null)
         {
             var targetCol = ResolveTypeAheadTargetColumn();
             if (e.Key.Length == 1)
@@ -6013,7 +6126,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private bool ShouldPreserveKeyboardRangeAnchorForRowTypeAhead(KeyboardEventArgs e)
     {
-        if (_batchEditItem != null || _selectedItems.Count <= 1)
+        if (_batchEditItem != null || !HasRowSelectionTypeAheadSelection())
             return false;
 
         return e.Key.Length == 1
@@ -6044,7 +6157,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task<bool> CommitPendingRowSelectionTypeAheadAsync()
     {
-        if (_typeAheadBuffer.Length == 0 || _selectedItems.Count <= 1)
+        if (_typeAheadBuffer.Length == 0 || !HasRowSelectionTypeAheadSelection())
             return false;
 
         var targetCol = ResolveTypeAheadTargetColumn();
@@ -6367,11 +6480,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.AltKey || e.CtrlKey || e.MetaKey)
             return false;
 
-        if (!TryGetActiveEditableCell(out var item, out var col))
-            return false;
-
         if (!HasSingleCellBulkEditSelection())
             return await TryStartActiveBatchEditFromTypedKeyAsync(e);
+
+        if (!TryGetActiveEditableCell(out var item, out var col))
+            return false;
 
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && _typeAheadBuffer.Length > 0)
         {
@@ -6403,8 +6516,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private bool HasSingleCellBulkEditSelection()
     {
-        return _selectedItems.Count > 1
-            || (SingleCellColumnMassEditEnabled && _selectedCells.Count > 1);
+        if (SingleCellColumnMassEditEnabled && SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            return _selectedCells.Count > 1;
+
+        return _selectedItems.Count > 1;
+    }
+
+    private bool HasRowSelectionTypeAheadSelection()
+    {
+        return SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && _selectedItems.Count > 1;
     }
 
     private async Task<bool> CommitPendingSingleCellTypeAheadAsync()
@@ -7531,9 +7652,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 	                        builder.SetKey(item);
 	                        builder.AddAttribute(71, "class",
 	                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
-                        builder.AddAttribute(72, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, currentIdx, e)));
-                        builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, currentIdx, e))));
-                        builder.AddAttribute(75, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowMouseEnter(item, currentIdx, e)));
+                        builder.AddAttribute(72, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, resolvedRowIdx, e)));
+                        builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
+                        builder.AddAttribute(75, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowMouseEnter(item, resolvedRowIdx, e)));
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         if (rowStyle.Length > 0)
                             builder.AddAttribute(73, "style", rowStyle);
@@ -7558,7 +7679,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             builder.AddAttribute(94, "Checked", isSelected);
                             builder.AddAttribute(95, "CheckedChanged",
                                 EventCallback.Factory.Create<bool>(this,
-                                    _ => ToggleRowSelection(item, currentIdx)));
+                                    _ => ToggleRowSelection(item, resolvedRowIdx)));
                             builder.AddAttribute(96, "TabIndex", -1);
                             builder.AddAttribute(97, "StopClickPropagation", true);
                             builder.AddAttribute(98, "StopMouseDownPropagation", true);
@@ -7585,11 +7706,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
                                 : string.Empty;
                             var typeAheadClass = isTypeAheadPreview ? " fx-typeahead-preview-cell" : string.Empty;
+                            var rowSelectionEditTargetClass = ShouldShowRowSelectionEditColumnCue(item, capturedCol)
+                                ? " fx-row-selection-edit-target"
+                                : string.Empty;
                             var cellClass = "fx-cell"
                                 + (isCellSelected ? " fx-cell-selected" : string.Empty)
                                 + (isBatchEditing ? " fx-batch-editing" : string.Empty)
                                 + (isBatchDropdownEditing ? " fx-batch-dropdown-editing" : string.Empty)
-                                + activeClass + editableClass + typeAheadClass;
+                                + activeClass + editableClass + typeAheadClass + rowSelectionEditTargetClass;
                             builder.OpenElement(100, "td");
                             builder.AddAttribute(101, "class", cellClass);
                             if (!string.IsNullOrEmpty(capturedCol.Field))
@@ -7665,6 +7789,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                     builder.AddAttribute(134, "CheckedChanged",
                                         EventCallback.Factory.Create<bool>(this,
                                             value => HandleCheckboxToggle(cbItem, cbCol, value)));
+                                    builder.AddAttribute(135, "OnMouseDown",
+                                        EventCallback.Factory.Create<MouseEventArgs>(this,
+                                            e => HandleCheckboxMouseDown(cbItem, resolvedRowIdx, capturedColIdx, e)));
                                     builder.AddAttribute(136, "OnFocus",
                                         EventCallback.Factory.Create<FocusEventArgs>(this,
                                             _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIdx, capturedColIdx, false)));
@@ -7760,11 +7887,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
                 : string.Empty;
             var typeAheadClass = isTypeAheadPreview ? " fx-typeahead-preview-cell" : string.Empty;
+            var rowSelectionEditTargetClass = ShouldShowRowSelectionEditColumnCue(item, capturedCol)
+                ? " fx-row-selection-edit-target"
+                : string.Empty;
             var cellClass = "fx-cell"
                 + (isCellSelected ? " fx-cell-selected" : string.Empty)
                 + (isBatchEditing ? " fx-batch-editing" : string.Empty)
                 + (isBatchDropdownEditing ? " fx-batch-dropdown-editing" : string.Empty)
-                + activeClass + editableClass + typeAheadClass;
+                + activeClass + editableClass + typeAheadClass + rowSelectionEditTargetClass;
             builder.AddAttribute(1, "class", cellClass);
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
@@ -7840,6 +7970,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     builder.AddAttribute(34, "CheckedChanged",
                         EventCallback.Factory.Create<bool>(this,
                             value => HandleCheckboxToggle(cbItem, cbCol, value)));
+                    builder.AddAttribute(35, "OnMouseDown",
+                        EventCallback.Factory.Create<MouseEventArgs>(this,
+                            e => HandleCheckboxMouseDown(cbItem, resolvedRowIndex, capturedColIdx, e)));
                     builder.AddAttribute(36, "OnFocus",
                         EventCallback.Factory.Create<FocusEventArgs>(this,
                             _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIndex, capturedColIdx, false)));
@@ -8609,10 +8742,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private string GetCellDisplayValue(object? item, GridColumn col)
     {
-        var val = ResolveCellValue(item, col);
+        var rawVal = ResolveCellValue(item, col);
+        var val = ResolveCellDisplayValue(item, col, rawVal);
         if (val == null) return "";
 
-        if (TryGetEditOptionDisplayValue(col, val, out var optionText))
+        if (string.IsNullOrWhiteSpace(col.DisplayField)
+            && TryGetEditOptionDisplayValue(col, val, out var optionText))
             return optionText;
 
         if (!string.IsNullOrEmpty(col.Format))
@@ -8628,6 +8763,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return new string('*', val.ToString()?.Length ?? 0);
 
         return val.ToString() ?? "";
+    }
+
+    private string GetColumnSearchText(TValue item, GridColumn col)
+    {
+        var rawText = ResolveCellValue(item, col)?.ToString() ?? "";
+        var displayText = GetCellDisplayValue(item, col);
+        return CombineFilterSearchText(rawText, displayText);
     }
 
     private object? GetCellExportValue(object? item, GridColumn col)
@@ -8672,6 +8814,26 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return EvaluateFormula(item, text);
 
         return val;
+    }
+
+    private object? ResolveCellDisplayValue(object? item, GridColumn col, object? rawValue)
+    {
+        if (!string.IsNullOrWhiteSpace(col.DisplayField))
+        {
+            var displayValue = GetPropertyValue(item, col.DisplayField);
+            if (!IsEmptyDisplayValue(displayValue))
+                return displayValue;
+        }
+
+        return rawValue;
+    }
+
+    private static bool IsEmptyDisplayValue(object? value)
+    {
+        if (value is null or DBNull)
+            return true;
+
+        return value is string text && string.IsNullOrWhiteSpace(text);
     }
 
     private object? EvaluateFormula(object? item, string formula)
@@ -8883,7 +9045,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public void ClearSelection()
     {
         _selectedItems.Clear();
+        _selectedCells.Clear();
+        _cellDragAnchor = null;
+        _isCellDragSelecting = false;
         ResetRowSelectionTypeAheadTarget();
+        _ = InvokeAsync(StateHasChanged);
         _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 

@@ -164,6 +164,7 @@ else
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
     [Parameter] public bool UpdateOnInput { get; set; }
+    [Parameter] public Action<string?>? InputValueChanged { get; set; }
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool SelectOnFocus { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
@@ -248,6 +249,7 @@ else
     private async Task OnNativeInput(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        InputValueChanged?.Invoke(Value);
         if (UpdateOnInput && ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }

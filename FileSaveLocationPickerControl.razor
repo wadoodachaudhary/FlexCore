@@ -1,0 +1,353 @@
+@namespace Fx.ControlKit
+@using Fx.ControlKit.Dialogs
+@using System.Globalization
+@using System.IO
+@inherits FlexControlBase
+
+@if (Visible)
+{
+    <div class="@ResolvedCssClass" style="@ResolvedRootStyle" id="@Id" @attributes="AdditionalAttributes">
+        @if (!string.IsNullOrWhiteSpace(Label))
+        {
+            <label class="fx-filesave-label">@Label</label>
+        }
+
+        <FileBrowserControl RootPath="@RootPath"
+                            InitialPath="@InitialPath"
+                            CurrentPath="@_selectedDirectory"
+                            CurrentPathChanged="OnDirectoryChangedAsync"
+                            SelectionMode="FileBrowserSelectionMode.FilesAndDirectories"
+                            Accept="@Accept"
+                            SearchPattern="@SearchPattern"
+                            Height="@BrowserHeight"
+                            Enabled="@Enabled"
+                            OpenFolderOnSingleClick="true"
+                            ShowHidden="@ShowHidden"
+                            ShowFiles="@ShowFiles"
+                            ShowFolders="true"
+                            SelectedItemChanged="OnBrowserItemSelectedAsync" />
+
+        <div class="fx-filesave-row">
+            <label>File name:</label>
+            <input class="fx-filesave-input"
+                   value="@_fileName"
+                   disabled="@(!Enabled)"
+                   @onchange="OnFileNameChangedAsync" />
+        </div>
+
+        <div class="fx-filesave-row">
+            <label>Save in:</label>
+            <input class="fx-filesave-input"
+                   value="@(_selectedDirectory ?? string.Empty)"
+                   readonly />
+        </div>
+
+        @if (ShowFullPath)
+        {
+            <div class="fx-filesave-row">
+                <label>Path:</label>
+                <input class="fx-filesave-input"
+                       value="@(_selectedPath ?? string.Empty)"
+                       readonly />
+            </div>
+        }
+
+        @if (ShowActionButtons)
+        {
+            <div class="fx-filesave-actions">
+                <ButtonControl CssClass="fx-dialog-btn fx-primary"
+                               Disabled="@(!CanConfirmSave)"
+                               OnClick="ConfirmSaveFromButtonAsync">@SaveButtonText</ButtonControl>
+                <ButtonControl CssClass="fx-dialog-btn" OnClick="CancelSaveFromButtonAsync">@CancelButtonText</ButtonControl>
+            </div>
+        }
+    </div>
+}
+
+<MessageBoxControl @ref="_overwriteMessageBox" />
+
+@code {
+    protected override string? BaseCssClass => "fx-filesave-picker";
+
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? RootPath { get; set; }
+    [Parameter] public string? InitialPath { get; set; }
+    [Parameter] public string? SelectedDirectory { get; set; }
+    [Parameter] public EventCallback<string?> SelectedDirectoryChanged { get; set; }
+    [Parameter] public string? FileName { get; set; }
+    [Parameter] public EventCallback<string?> FileNameChanged { get; set; }
+    [Parameter] public string? SelectedPath { get; set; }
+    [Parameter] public EventCallback<string?> SelectedPathChanged { get; set; }
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public string? Accept { get; set; }
+    [Parameter] public string SearchPattern { get; set; } = "*";
+    [Parameter] public string? Width { get; set; } = "100%";
+    [Parameter] public string? BrowserHeight { get; set; } = "320px";
+    [Parameter] public bool ShowFiles { get; set; } = true;
+    [Parameter] public bool ShowHidden { get; set; }
+    [Parameter] public bool ShowFullPath { get; set; } = true;
+    [Parameter] public bool ConfirmOverwrite { get; set; } = true;
+    [Parameter] public string OverwriteTitle { get; set; } = "Confirm Save As";
+    [Parameter] public string OverwriteMessageFormat { get; set; } = "{0} already exists.\nDo you want to replace it?";
+    [Parameter] public string? OverwriteMessage { get; set; }
+    [Parameter] public string OverwriteIcon { get; set; } = "warning";
+    [Parameter] public bool ShowActionButtons { get; set; }
+    [Parameter] public string SaveButtonText { get; set; } = "Save";
+    [Parameter] public string CancelButtonText { get; set; } = "Cancel";
+    [Parameter] public EventCallback<string?> SavePathChanged { get; set; }
+    [Parameter] public EventCallback<string?> SavePathConfirmed { get; set; }
+    [Parameter] public EventCallback<string?> OverwriteConfirmed { get; set; }
+    [Parameter] public EventCallback<string?> OverwriteCancelled { get; set; }
+    [Parameter] public EventCallback Cancelled { get; set; }
+
+    private string? _selectedDirectory;
+    private string? _selectedPath;
+    private string _fileName = string.Empty;
+    private string? _lastDirectoryParameter;
+    private string? _lastFileNameParameter;
+    private string? _lastPathParameter;
+    private MessageBoxControl? _overwriteMessageBox;
+
+    private bool CanConfirmSave =>
+        Enabled && !string.IsNullOrWhiteSpace(_selectedDirectory) && !string.IsNullOrWhiteSpace(_fileName);
+
+    private string? ResolvedRootStyle
+    {
+        get
+        {
+            var styles = new List<string>();
+            if (!string.IsNullOrWhiteSpace(Width))
+                styles.Add($"width: {Width}");
+            if (!string.IsNullOrWhiteSpace(Style))
+                styles.Add(Style!);
+            return styles.Count == 0 ? null : string.Join("; ", styles);
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        var incomingPath = FirstNonBlank(SelectedPath, Value);
+        if (!string.Equals(_lastPathParameter, incomingPath, StringComparison.Ordinal))
+        {
+            _lastPathParameter = incomingPath;
+            if (!string.IsNullOrWhiteSpace(incomingPath))
+            {
+                _selectedPath = NormalizePath(incomingPath);
+                var pathFileName = Path.GetFileName(_selectedPath);
+                if (!string.IsNullOrWhiteSpace(pathFileName))
+                    _fileName = pathFileName;
+                var pathDirectory = Path.GetDirectoryName(_selectedPath);
+                if (!string.IsNullOrWhiteSpace(pathDirectory))
+                    _selectedDirectory = pathDirectory;
+            }
+        }
+
+        if (!string.Equals(_lastDirectoryParameter, SelectedDirectory, StringComparison.Ordinal))
+        {
+            _lastDirectoryParameter = SelectedDirectory;
+            _selectedDirectory = FirstNonBlank(NormalizeDirectory(SelectedDirectory), _selectedDirectory, NormalizeDirectory(InitialPath), GetDefaultStartPath());
+        }
+        else if (string.IsNullOrWhiteSpace(_selectedDirectory))
+        {
+            _selectedDirectory = FirstNonBlank(NormalizeDirectory(InitialPath), GetDefaultStartPath());
+        }
+
+        if (!string.Equals(_lastFileNameParameter, FileName, StringComparison.Ordinal))
+        {
+            _lastFileNameParameter = FileName;
+            if (!string.IsNullOrWhiteSpace(FileName))
+                _fileName = FileName!;
+        }
+
+        UpdateSelectedPath();
+    }
+
+    private async Task OnDirectoryChangedAsync(string? directory)
+    {
+        _selectedDirectory = NormalizeDirectory(directory) ?? directory;
+        await NotifyDirectoryAndPathChangedAsync();
+    }
+
+    private async Task OnBrowserItemSelectedAsync(FileBrowserItem? item)
+    {
+        if (item == null)
+            return;
+
+        if (item.IsDirectory)
+        {
+            _selectedDirectory = item.FullPath;
+        }
+        else
+        {
+            _selectedDirectory = Path.GetDirectoryName(item.FullPath) ?? _selectedDirectory;
+            _fileName = item.Name;
+            FileName = _fileName;
+            if (FileNameChanged.HasDelegate)
+                await FileNameChanged.InvokeAsync(_fileName);
+        }
+
+        await NotifyDirectoryAndPathChangedAsync();
+    }
+
+    private async Task OnFileNameChangedAsync(ChangeEventArgs e)
+    {
+        _fileName = e.Value?.ToString() ?? string.Empty;
+        FileName = _fileName;
+        if (FileNameChanged.HasDelegate)
+            await FileNameChanged.InvokeAsync(_fileName);
+
+        await NotifyPathChangedAsync();
+    }
+
+    private async Task NotifyDirectoryAndPathChangedAsync()
+    {
+        SelectedDirectory = _selectedDirectory;
+        if (SelectedDirectoryChanged.HasDelegate)
+            await SelectedDirectoryChanged.InvokeAsync(_selectedDirectory);
+
+        await NotifyPathChangedAsync();
+    }
+
+    private async Task NotifyPathChangedAsync()
+    {
+        UpdateSelectedPath();
+        SelectedPath = _selectedPath;
+        Value = _selectedPath;
+
+        if (SelectedPathChanged.HasDelegate)
+            await SelectedPathChanged.InvokeAsync(_selectedPath);
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(_selectedPath);
+        if (SavePathChanged.HasDelegate)
+            await SavePathChanged.InvokeAsync(_selectedPath);
+    }
+
+    public async Task<bool> ConfirmSavePathAsync()
+    {
+        UpdateSelectedPath();
+        if (string.IsNullOrWhiteSpace(_selectedPath))
+            return false;
+
+        _selectedPath = NormalizePath(_selectedPath) ?? _selectedPath;
+        SelectedPath = _selectedPath;
+        Value = _selectedPath;
+
+        if (ConfirmOverwrite && File.Exists(_selectedPath))
+        {
+            var result = await ShowOverwritePromptAsync(_selectedPath);
+            if (result != MessageBoxResult.Yes)
+            {
+                if (OverwriteCancelled.HasDelegate)
+                    await OverwriteCancelled.InvokeAsync(_selectedPath);
+                return false;
+            }
+
+            if (OverwriteConfirmed.HasDelegate)
+                await OverwriteConfirmed.InvokeAsync(_selectedPath);
+        }
+
+        if (SelectedPathChanged.HasDelegate)
+            await SelectedPathChanged.InvokeAsync(_selectedPath);
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(_selectedPath);
+        if (SavePathChanged.HasDelegate)
+            await SavePathChanged.InvokeAsync(_selectedPath);
+        if (SavePathConfirmed.HasDelegate)
+            await SavePathConfirmed.InvokeAsync(_selectedPath);
+
+        return true;
+    }
+
+    public async Task<string?> GetConfirmedSavePathAsync() =>
+        await ConfirmSavePathAsync() ? _selectedPath : null;
+
+    public void SetSelectedPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+        _selectedPath = NormalizePath(path);
+        var pathFileName = Path.GetFileName(_selectedPath);
+        if (!string.IsNullOrWhiteSpace(pathFileName))
+            _fileName = pathFileName;
+        var pathDirectory = Path.GetDirectoryName(_selectedPath);
+        if (!string.IsNullOrWhiteSpace(pathDirectory))
+            _selectedDirectory = pathDirectory;
+        UpdateSelectedPath();
+        StateHasChanged();
+    }
+
+    private async Task ConfirmSaveFromButtonAsync(MouseEventArgs? _ = null)
+    {
+        await ConfirmSavePathAsync();
+    }
+
+    private async Task CancelSaveFromButtonAsync(MouseEventArgs? _ = null)
+    {
+        if (Cancelled.HasDelegate)
+            await Cancelled.InvokeAsync();
+    }
+
+    private Task<MessageBoxResult> ShowOverwritePromptAsync(string path)
+    {
+        if (_overwriteMessageBox == null)
+            return Task.FromResult(MessageBoxResult.No);
+
+        var message = !string.IsNullOrWhiteSpace(OverwriteMessage)
+            ? OverwriteMessage!
+            : string.Format(CultureInfo.CurrentCulture, OverwriteMessageFormat, Path.GetFileName(path));
+
+        return _overwriteMessageBox.ShowAsync(message, OverwriteTitle, MessageBoxButtons.YesNo, OverwriteIcon);
+    }
+
+    private void UpdateSelectedPath()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedDirectory))
+        {
+            _selectedPath = null;
+            return;
+        }
+
+        _selectedPath = string.IsNullOrWhiteSpace(_fileName)
+            ? _selectedDirectory
+            : Path.Combine(_selectedDirectory, _fileName);
+    }
+
+    private static string? NormalizeDirectory(string? path)
+    {
+        var normalized = NormalizePath(path);
+        if (string.IsNullOrWhiteSpace(normalized))
+            return null;
+
+        if (File.Exists(normalized))
+            return Path.GetDirectoryName(normalized);
+
+        return Directory.Exists(normalized) ? normalized : null;
+    }
+
+    private static string? NormalizePath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+
+        var expanded = Environment.ExpandEnvironmentVariables(path.Trim());
+        if (expanded == "~" || expanded.StartsWith("~/", StringComparison.Ordinal))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            expanded = Path.Combine(home, expanded.Length == 1 ? string.Empty : expanded[2..]);
+        }
+
+        try { return Path.GetFullPath(expanded); }
+        catch { return expanded; }
+    }
+
+    private static string? FirstNonBlank(params string?[] values) =>
+        values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+    private static string GetDefaultStartPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return !string.IsNullOrWhiteSpace(home) && Directory.Exists(home)
+            ? home
+            : Directory.GetCurrentDirectory();
+    }
+}

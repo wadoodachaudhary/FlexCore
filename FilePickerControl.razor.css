@@ -8,6 +8,15 @@
     display: inline-block;
 }
 
+.fx-filepicker-browser-trigger {
+    display: inline-block;
+    cursor: default;
+}
+
+.fx-filepicker-browser-trigger[aria-disabled="true"] {
+    opacity: 0.6;
+}
+
 .fx-filepicker:hover ::deep .fx-toolbar-btn:not(:disabled),
 .fx-filepicker:focus-within ::deep .fx-toolbar-btn:not(:disabled) {
     background: #e9ecef;
