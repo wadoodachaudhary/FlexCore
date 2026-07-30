@@ -5,11 +5,14 @@
 @using System.Reflection
 @using System.Globalization
 
+@{ BeginGridRenderPass(); }
+
 <div class="@GridHostCssClass"
      style="@HostStyle"
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
+     @onfocusout="HandleGridFocusOut"
      @oncontextmenu="HandleGridContextMenu"
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
@@ -37,6 +40,9 @@
             @if (ShowSearchBar)
             {
                 <div class="fx-toolbar-search">
+                    <svg class="fx-toolbar-search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+                    </svg>
                     <input type="text" placeholder="Search..."
                            @bind="SearchText" @bind:event="oninput"
                            @bind:after="ApplySearchDebounced" />
@@ -445,7 +451,8 @@
     {
 
     
-    <div class="fx-grid-content" style="@GridContentStyle">
+    
+    <div class="fx-grid-content" style="@GridContentStyle" @ref="_scrollElement">
         <table class="fx-grid-table" style="@GetTableStyle()">
 
             
@@ -584,16 +591,18 @@
                 }
                 else
                 {
-                    var rowIdx = 0;
-                    @foreach (var item in PagedData)
-                    {
-                        var currentIdx = rowIdx;
-                        var isSelected = _selectedItems.Contains(item);
-                        var isCellSelectedRow = IsCellSelectionRow(item, currentIdx);
-                        var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
-                        var rowStyle = GetRowStyle(item, currentIdx, isSelected);
-                        var rowCssClass = GetRowCssClass(item, currentIdx);
-
+                    
+                    RenderFragment<(TValue Item, int Index)> rowTemplate = row =>
+                    @<text>
+                        @{
+                            var item = row.Item;
+                            var currentIdx = row.Index;
+                            var isSelected = _selectedItems.Contains(item);
+                            var isCellSelectedRow = IsCellSelectionRow(item, currentIdx);
+                            var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
+                            var rowStyle = GetRowStyle(item, currentIdx, isSelected);
+                            var rowCssClass = GetRowCssClass(item, currentIdx);
+                        }
                         @if (isEditingThis)
                         {
                             @RenderEditRow()
@@ -601,7 +610,7 @@
                         else
                         {
                             <tr @key="item"
-                                class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
+                                class="fx-row @(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
                                 @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
@@ -644,7 +653,39 @@
                                 @RenderDataCells(item, currentIdx, col => col)
                             </tr>
                         }
-                        rowIdx++;
+                    </text>;
+
+                    
+                    var pagedList = PagedData as IList<TValue> ?? PagedData.ToList();
+
+                    
+                    @if (UseRowWindowing)
+                    {
+                        PrepareRowWindow(pagedList);
+                        var winTotal = pagedList.Count;
+                        var winStart = _winStart;
+                        var winEnd = Math.Min(winTotal, winStart + _winCount);
+
+                        
+                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                            <td colspan="999" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
+                        </tr>
+                        @for (int wi = winStart; wi < winEnd; wi++)
+                        {
+                            @rowTemplate((pagedList[wi], wi))
+                        }
+                        
+                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                            <td colspan="999" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
+                        </tr>
+                    }
+                    else
+                    {
+                        
+                        @for (int fi = 0; fi < pagedList.Count; fi++)
+                        {
+                            @rowTemplate((pagedList[fi], fi))
+                        }
                     }
                 }
 
@@ -1237,3 +1278,5 @@
         </div>
     }
 </div>
+
+@{ EndGridRenderPass(); }

@@ -31,7 +31,7 @@
 }
 
 .fx-menu-panel.fx-menu-keyboard-active .fx-menu-action:hover:not(:focus),
-.fx-menu-panel:not(.fx-menu-keyboard-active) .fx-menu-action:focus {
+.fx-menu-panel:not(.fx-menu-keyboard-active) .fx-menu-action:focus:not(:hover) {
     background: transparent;
     color: #0f172a;
     border-color: transparent;

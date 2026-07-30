@@ -199,9 +199,7 @@
     color: #fff;
 }
 
-.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-option:hover,
-.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-option:focus,
-.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-option.selected {
+.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-option.highlighted {
     background: #004a9f;
     color: #fff;
 }
@@ -225,15 +223,23 @@
     cursor: default;
 }
 
-.fx-dropdown-option:hover,
 .fx-dropdown-option:focus {
     outline: none;
-    background: #e6f2ff;
+}
+
+/* VB6 combo look: ONE moving highlight. `.highlighted` is driven from C#
+   (_highlightedIndex) by BOTH the mouse (@onmouseover) and the arrow keys, and
+   deliberately persists on the last-hovered option when the pointer leaves the
+   panel. `.selected` stays uncolored (aria/commit semantics only) and there is
+   no CSS :hover color — a second color source is what produced the old
+   "double selection" and "auto-selects the top item" illusions. */
+.fx-dropdown-option.selected {
+    background: #fff;
     color: #000;
 }
 
-.fx-dropdown-option.selected {
-    background: #0a64c8;
+.fx-dropdown-option.highlighted {
+    background: #316ac5;
     color: #fff;
 }
 

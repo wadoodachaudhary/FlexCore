@@ -19,7 +19,7 @@
     else
     {
         <textarea class="@ResolvedCssClass"
-                  value="@Value"
+                  value="@EffectiveValue"
                   @oninput="OnNativeInput"
                   @onchange="OnNativeChange"
                   @onfocus="OnInputFocus"
@@ -35,7 +35,52 @@
 }
 else
 {
-    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
+    if (IsPasswordInput)
+    {
+        <div class="fx-textbox fx-textbox-password-host">
+            <input class="@ResolvedPasswordInputCssClass"
+                   value="@EffectiveValue"
+                   @oninput="OnNativeInput"
+                   @onchange="OnNativeChange"
+                   @onfocus="OnInputFocus"
+                   @oncontextmenu="OpenTextContextMenuAsync"
+                   @oncontextmenu:preventDefault="UseClassicContextMenu"
+                   @oncontextmenu:stopPropagation="UseClassicContextMenu"
+                   @ref="_inputElement"
+                   @onclick:stopPropagation="true"
+                   @onmousedown:stopPropagation="true"
+                   @onkeydown:stopPropagation="true"
+                   @attributes="MergedAttributes" />
+            <button type="button"
+                    class="fx-textbox-password-toggle"
+                    aria-label="@PasswordToggleLabel"
+                    title="@PasswordToggleLabel"
+                    aria-pressed="@_showPassword"
+                    disabled="@(!Enabled)"
+                    @onclick="TogglePasswordVisibility"
+                    @onclick:stopPropagation="true"
+                    @onmousedown:preventDefault="true"
+                    @onmousedown:stopPropagation="true">
+                @if (_showPassword)
+                {
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.7 10.7a2 2 0 0 0 2.6 2.6" />
+                        <path d="M9.9 4.2A10.6 10.6 0 0 1 12 4c5 0 8.5 4.1 10 8-.5 1.3-1.3 2.6-2.3 3.7" />
+                        <path d="M6.5 6.5C4.4 7.9 2.9 10.1 2 12c1.5 3.9 5 8 10 8 1.8 0 3.4-.5 4.8-1.3" />
+                    </svg>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M2 12s3.5-8 10-8 10 8 10 8-3.5 8-10 8S2 12 2 12z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                }
+            </button>
+        </div>
+    }
+    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
     {
         <InputText class="@ResolvedCssClass"
                    Value="@Value"
@@ -46,7 +91,7 @@ else
     else
     {
         <input class="@ResolvedCssClass"
-               value="@Value"
+               value="@EffectiveValue"
                @oninput="OnNativeInput"
                @onchange="OnNativeChange"
                @onfocus="OnInputFocus"
@@ -165,6 +210,8 @@ else
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
     [Parameter] public bool UpdateOnInput { get; set; }
     [Parameter] public Action<string?>? InputValueChanged { get; set; }
+
+    [Parameter] public bool Uncontrolled { get; set; }
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool SelectOnFocus { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
@@ -179,6 +226,40 @@ else
     private int _textContextMenuX;
     private int _textContextMenuY;
     private TextContextMenuState _textContextMenuState = new();
+    private bool _suppressNextNativeInputRender;
+    private bool _showPassword;
+
+    private string? _uncontrolledValue;
+    private bool _uncontrolledInitialized;
+
+    private string? EffectiveValue => Uncontrolled ? _uncontrolledValue : Value;
+
+    private bool IsPasswordInput =>
+        !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
+
+    private string EffectiveInputType => IsPasswordInput && _showPassword ? "text" : InputType;
+
+    private string PasswordToggleLabel => _showPassword ? "Hide password" : "Show password";
+
+    protected override void OnParametersSet()
+    {
+        if (Uncontrolled && !_uncontrolledInitialized)
+        {
+            _uncontrolledValue = Value;
+            _uncontrolledInitialized = true;
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        if (_suppressNextNativeInputRender)
+        {
+            _suppressNextNativeInputRender = false;
+            return false;
+        }
+
+        return true;
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -204,6 +285,17 @@ else
             if (AdditionalAttributes != null && AdditionalAttributes.TryGetValue("class", out var extraClass))
                 classes.Add(extraClass?.ToString() ?? string.Empty);
             return string.Join(" ", classes.Where(c => !string.IsNullOrWhiteSpace(c)));
+        }
+    }
+
+    private string ResolvedPasswordInputCssClass
+    {
+        get
+        {
+            var classes = new List<string> { "fx-textbox-password-input" };
+            if (!string.IsNullOrWhiteSpace(ResolvedCssClass))
+                classes.Add(ResolvedCssClass);
+            return string.Join(" ", classes);
         }
     }
 
@@ -237,7 +329,9 @@ else
                 merged["rows"] = Rows.Value;
             if (!Enabled && !merged.ContainsKey("disabled"))
                 merged["disabled"] = "disabled";
-            if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
+            if (IsPasswordInput)
+                merged["type"] = EffectiveInputType;
+            else if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
                 merged["type"] = InputType;
             if (AutoFocus && !merged.ContainsKey("autofocus"))
                 merged["autofocus"] = "autofocus";
@@ -248,8 +342,21 @@ else
 
     private async Task OnNativeInput(ChangeEventArgs e)
     {
-        Value = e.Value?.ToString();
+        var typed = e.Value?.ToString();
+
+        if (Uncontrolled)
+        {
+            InputValueChanged?.Invoke(typed);
+            _suppressNextNativeInputRender = true;
+            if (UpdateOnInput && ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(typed);
+            return;
+        }
+
+        Value = typed;
         InputValueChanged?.Invoke(Value);
+        if (!UpdateOnInput)
+            _suppressNextNativeInputRender = true;
         if (UpdateOnInput && ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }
@@ -300,6 +407,12 @@ else
     }
 
     private void CloseTextContextMenu() => _showTextContextMenu = false;
+
+    private void TogglePasswordVisibility()
+    {
+        _suppressNextNativeInputRender = false;
+        _showPassword = !_showPassword;
+    }
 
     private string TextContextMenuStyle => $"left:{_textContextMenuX}px;top:{_textContextMenuY}px";
 

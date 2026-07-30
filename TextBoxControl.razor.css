@@ -22,6 +22,58 @@
     box-shadow: none;
 }
 
+.fx-textbox-password-host {
+    position: relative;
+    display: inline-block;
+    min-width: 0;
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+.fx-textbox-password-input {
+    padding-right: 24px !important;
+}
+
+.fx-textbox-password-toggle {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 21px;
+    min-width: 21px;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid #b7b7b7;
+    border-radius: 0;
+    background: transparent;
+    color: #333;
+    cursor: pointer;
+}
+
+.fx-textbox-password-toggle:hover:not(:disabled),
+.fx-textbox-password-toggle:focus-visible:not(:disabled) {
+    background: #e8e8e8;
+    outline: none;
+}
+
+.fx-textbox-password-toggle:disabled {
+    color: #8a8a8a;
+    cursor: default;
+}
+
+.fx-textbox-password-toggle svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
 .comments-textarea {
     width: 100%;
     min-height: 200px;

@@ -7,12 +7,35 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8) {
     const panel = host.querySelector(".fx-dropdown-panel");
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+
+    // HHM-576: the panel is position:absolute inside the host, so any scrollable
+    // ancestor (computed overflow-y auto/scroll/hidden/clip/overlay) clips it.
+    // Measuring the open-up flip against the viewport alone let the panel open
+    // downward into a scroll container's overflow — the options merely extended
+    // the container's scrollHeight and stayed hidden until the user scrolled.
+    // Walk the clip ancestors and intersect their rects with the viewport, then
+    // measure the space above/below against that visible rect so the panel flips
+    // upward when the host sits at the bottom of a scrollable region (matching
+    // the VB6 combo auto-flip behavior).
+    let visibleTop = 0;
+    let visibleBottom = viewportHeight;
+    let ancestor = host.parentElement;
+    while (ancestor && ancestor !== document.body && ancestor !== document.documentElement) {
+        const overflowY = (window.getComputedStyle(ancestor).overflowY || "").toLowerCase();
+        if (overflowY && overflowY !== "visible") {
+            const ancestorRect = ancestor.getBoundingClientRect();
+            visibleTop = Math.max(visibleTop, ancestorRect.top);
+            visibleBottom = Math.min(visibleBottom, ancestorRect.bottom);
+        }
+        ancestor = ancestor.parentElement;
+    }
+
     const panelHeight = panel
         ? panel.scrollHeight || panel.offsetHeight || desiredMaxHeight
         : desiredMaxHeight;
     const desiredHeight = Math.max(1, Math.min(panelHeight, desiredMaxHeight));
-    const spaceBelow = Math.max(0, viewportHeight - rect.bottom - margin);
-    const spaceAbove = Math.max(0, rect.top - margin);
+    const spaceBelow = Math.max(0, visibleBottom - rect.bottom - margin);
+    const spaceAbove = Math.max(0, rect.top - visibleTop - margin);
     const openUp = spaceBelow < desiredHeight && spaceAbove > spaceBelow;
     const available = openUp ? spaceAbove : spaceBelow;
     const maxHeight = Math.max(36, Math.min(desiredHeight, available || desiredHeight));
@@ -32,3 +55,4 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8) {
         minWidth
     };
 }
+

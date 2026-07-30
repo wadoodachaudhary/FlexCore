@@ -270,7 +270,8 @@
                     <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "") @rowCssClass"
                         style="@(IsCompact ? "height:14px;" : "")"
                         @onclick="() => HandleRowClick(node, currentIdx)"
-                        @ondblclick="() => HandleRowDoubleClick(node, currentIdx)">
+                        @ondblclick="() => HandleRowDoubleClick(node, currentIdx)"
+                        @oncontextmenu="() => HandleRowContextMenu(node, currentIdx)">
 
                         @{ var colIdx = 0; }
                         @foreach (var col in VisibleColumns)

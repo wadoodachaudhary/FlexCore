@@ -9,18 +9,35 @@
    rich editor — overkill for plain multi-line text). Supports two-way binding via
    @bind-Value. Renders a native <textarea> directly so the scoped .fx-textarea CSS
    applies. *@
-<textarea class="@ResolvedCssClass"
-          value="@Value"
-          rows="@(Rows ?? 4)"
-          placeholder="@Placeholder"
-          maxlength="@MaxLength"
-          disabled="@(!Enabled)"
-          @ref="_inputElement"
-          @oninput="OnNativeInput"
-          @onchange="OnNativeValueChanged"
-          @oncontextmenu="OpenTextContextMenuAsync"
-          @oncontextmenu:preventDefault="UseClassicContextMenu"
-          @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+@if (UpdateOnInput)
+{
+    <textarea class="@ResolvedCssClass"
+              value="@Value"
+              rows="@(Rows ?? 4)"
+              placeholder="@Placeholder"
+              maxlength="@MaxLength"
+              disabled="@(!Enabled)"
+              @ref="_inputElement"
+              @oninput="OnNativeInput"
+              @onchange="OnNativeValueChanged"
+              @oncontextmenu="OpenTextContextMenuAsync"
+              @oncontextmenu:preventDefault="UseClassicContextMenu"
+              @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+}
+else
+{
+    <textarea class="@ResolvedCssClass"
+              value="@Value"
+              rows="@(Rows ?? 4)"
+              placeholder="@Placeholder"
+              maxlength="@MaxLength"
+              disabled="@(!Enabled)"
+              @ref="_inputElement"
+              @onchange="OnNativeValueChanged"
+              @oncontextmenu="OpenTextContextMenuAsync"
+              @oncontextmenu:preventDefault="UseClassicContextMenu"
+              @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+}
 
 @if (_showTextContextMenu)
 {
@@ -129,6 +146,18 @@
     private int _textContextMenuX;
     private int _textContextMenuY;
     private TextContextMenuState _textContextMenuState = new();
+    private bool _suppressNextNativeInputRender;
+
+    protected override bool ShouldRender()
+    {
+        if (_suppressNextNativeInputRender)
+        {
+            _suppressNextNativeInputRender = false;
+            return false;
+        }
+
+        return true;
+    }
 
     private string ResolvedCssClass =>
         string.IsNullOrWhiteSpace(CssClass) ? "fx-textarea" : $"fx-textarea {CssClass}";
@@ -136,6 +165,7 @@
     private async Task OnNativeInput(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        _suppressNextNativeInputRender = true;
         if (UpdateOnInput && ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }

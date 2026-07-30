@@ -19,8 +19,8 @@ These rules apply universally when coding, building, and debugging within the Ho
 - **Prefer Native Blazor/CSS**: Rely on native Blazor features (`FocusAsync`, `@ref`, `@bind`, etc.) and CSS selectors (`position: sticky`, `:focus-within`) before turning to JS.
 - **JS Fallbacks Only**: Use JavaScript only if no C# or CSS equivalent exists. Wrap it in a lazily-imported module with a C# fallback. Avoid adding new script files or inline `<script>` blocks without explicit warning.
 
-## 4. Kept in Sync & Multi-Target Builds
-- **FlexKit ↔ FlexCore**: Library source files must be byte-identical. Only project metadata (.csproj) and VCS (.git) may differ. Mirrors must be updated in the same change set.
+## 4. Sync Policy & Multi-Target Builds
+- **FlexKit ↔ FlexCore**: Do not mirror automatically. Sync between FlexKit and FlexCore only when explicitly requested; when requested, only project metadata (.csproj) and VCS (.git) may differ.
 - **HomeFront ↔ HomeFrontPB**: Mirror migrated form fixes between both host applications.
   - HomeFront path: `Components/Pages/Migrated/F*.razor`
   - HomeFrontPB path: `Components/Pages/F*.razor`

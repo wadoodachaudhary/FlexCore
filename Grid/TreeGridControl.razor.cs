@@ -139,6 +139,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
+    [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Expanded { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Collapsed { get; set; }
@@ -684,6 +685,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await RowDoubleClicked.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
     }
 
+    private async Task HandleRowContextMenu(TreeNode<TValue> node, int visibleIndex)
+    {
+        if (!RowRightClicked.HasDelegate)
+            return;
+
+        await SelectNodeAsync(node, visibleIndex);
+        await RowRightClicked.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
+    }
+
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
         switch (e.Key)
@@ -911,6 +921,43 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     }
 
     public TValue? GetSelectedRecord() => _selectedItem;
+
+    public async Task SelectRecordAsync(TValue? item)
+    {
+        if (EqualityComparer<TValue>.Default.Equals(_selectedItem, item))
+            return;
+
+        var prevSelected = _selectedItem;
+        _selectedItem = item;
+        _selectedIndex = -1;
+
+        if (item != null)
+        {
+            var visible = VisibleNodes.ToList();
+            for (var i = 0; i < visible.Count; i++)
+            {
+                if (EqualityComparer<TValue>.Default.Equals(visible[i].Data, item))
+                {
+                    _selectedIndex = i;
+                    break;
+                }
+            }
+        }
+
+        if (prevSelected != null && RowDeselected.HasDelegate)
+            await RowDeselected.InvokeAsync(new TreeRowSelectEventArgs<TValue> { Data = prevSelected });
+
+        if (item != null && RowSelected.HasDelegate)
+        {
+            var node = _flatNodes.FirstOrDefault(n => EqualityComparer<TValue>.Default.Equals(n.Data, item));
+            if (node != null)
+            {
+                await RowSelected.InvokeAsync(CreateRowEventArgs(node, _selectedIndex));
+            }
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
 
     public async Task ClearSelectionAsync()
     {

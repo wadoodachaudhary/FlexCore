@@ -1228,6 +1228,68 @@ export function openPrintableHtml(base64HtmlContent) {
     printWindow.onload = () => printWindow.print();
 }
 
+/**
+ * Custom row-windowing scroll reader. GridControl renders only the visible row
+ * slice plus overscan; this reports the scroll container's scrollTop/clientHeight
+ * back to C# (OnGridWindowScrollAsync) so it can recompute which slice to render.
+ *
+ * Reading scrollTop/clientHeight is pure geometry with no Blazor equivalent — the
+ * one browser dependency of the windowing feature. The listener is rAF-throttled,
+ * so at most one round-trip per animation frame regardless of scroll velocity.
+ * An initial sync fires immediately so the window is right-sized to the real
+ * viewport height on the first paint (before the user scrolls).
+ */
+export function registerGridWindowScroll(scrollEl, dotNetRef) {
+    if (!scrollEl || !dotNetRef) return;
+
+    // Idempotent: drop any prior listener on this element before re-binding.
+    unregisterGridWindowScroll(scrollEl);
+
+    let scheduled = false;
+    const fire = () => {
+        scheduled = false;
+        dotNetRef.invokeMethodAsync("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight)
+            .catch(() => { /* best-effort — circuit may be tearing down */ });
+    };
+    const onScroll = () => {
+        if (scheduled) return;
+        scheduled = true;
+        // rAF is the smooth, battery-friendly throttle for a visible tab, but the
+        // browser PAUSES it while the tab is hidden/backgrounded — which would
+        // freeze the row window on a programmatic scroll. Fall back to a coarse
+        // timer when hidden so the window still tracks.
+        if (typeof document !== "undefined" && document.hidden) {
+            setTimeout(fire, 32);
+        } else {
+            requestAnimationFrame(fire);
+        }
+    };
+
+    scrollEl.__gridWindowScroll = onScroll;
+    scrollEl.addEventListener("scroll", onScroll, { passive: true });
+
+    // Initial window sync — viewport height is known now that we're in the DOM.
+    dotNetRef.invokeMethodAsync("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight)
+        .catch(() => { /* best-effort */ });
+}
+
+// Scroll the row-windowing container to an absolute pixel offset. Used to jump
+// the virtualized viewport to a row that isn't currently rendered (type-search
+// hit, Home/End, PageDown) — C# has already moved the window to include that
+// row; this keeps the scrollbar position in sync. Pure geometry.
+export function setGridScrollTop(scrollEl, top) {
+    if (!scrollEl) return;
+    const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    scrollEl.scrollTop = Math.max(0, Math.min(top || 0, max));
+}
+
+export function unregisterGridWindowScroll(scrollEl) {
+    if (scrollEl && scrollEl.__gridWindowScroll) {
+        scrollEl.removeEventListener("scroll", scrollEl.__gridWindowScroll);
+        scrollEl.__gridWindowScroll = null;
+    }
+}
+
 export function positionDatePickerDropdown(hostEl, dropdownEl) {
     if (!hostEl || !dropdownEl) return;
 
