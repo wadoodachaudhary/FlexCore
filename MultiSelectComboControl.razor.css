@@ -23,6 +23,7 @@
 .fx-mscombo-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fx-mscombo-arrow { font-size: 10px; color: #626f86; flex: 0 0 auto; }
 
+/* Click-away catcher (no JS). */
 .fx-mscombo-backdrop { position: fixed; inset: 0; z-index: 1000; background: transparent; }
 
 .fx-mscombo-popup {

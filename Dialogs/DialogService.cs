@@ -1,10 +1,18 @@
 namespace Fx.ControlKit.Dialogs;
 
+/// <inheritdoc cref="IDialogService"/>
+/// <remarks>
+/// The hosted <see cref="DialogHostControl"/> calls <see cref="RegisterHost"/> once
+/// its <see cref="MessageBoxControl"/> / <see cref="InputDialogControl"/> have rendered.
+/// Until then (or if no host is mounted) the methods return safe no-op defaults
+/// (Confirm → false, ConfirmCancel → Cancel, Prompt → null) rather than throwing.
+/// </remarks>
 public sealed class DialogService : IDialogService
 {
     private Func<string, string, MessageBoxButtons, Task<MessageBoxResult>>? _showMessage;
     private Func<string, string, string, Task<string?>>? _showInput;
 
+    /// <summary>Wired up by <see cref="DialogHostControl"/> after its controls render.</summary>
     public void RegisterHost(
         Func<string, string, MessageBoxButtons, Task<MessageBoxResult>> showMessage,
         Func<string, string, string, Task<string?>> showInput)

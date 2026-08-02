@@ -13,6 +13,9 @@ public class InstructionEntry
 
 public class PromptFormatter
 {
+    /// <summary>
+    /// Formats an instruction and input into the standard Alpaca prompt template format.
+    /// </summary>
     public static string FormatInput(InstructionEntry entry)
     {
         string instructionText = 

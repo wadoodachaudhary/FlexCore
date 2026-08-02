@@ -19,9 +19,11 @@ public class OpenAiGpt2Encoder
 
     public OpenAiGpt2Encoder(string vocabJsonPath, string bpeMergesPath)
     {
+        // 1. Initialize byte-to-unicode mappings
         byte_encoder = BytesToUnicode();
         byte_decoder = byte_encoder.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 
+        // 2. Load encoder json
         string json = File.ReadAllText(vocabJsonPath);
         var loadedVocab = JsonSerializer.Deserialize<Dictionary<string, int>>(json) 
             ?? throw new InvalidOperationException("Failed to load OpenAI vocabulary json.");
@@ -32,6 +34,7 @@ public class OpenAiGpt2Encoder
             decoder[kvp.Value] = kvp.Key;
         }
 
+        // 3. Load merges
         var lines = File.ReadAllLines(bpeMergesPath);
         int startIndex = 0;
         if (lines.Length > 0 && lines[0].StartsWith("#"))

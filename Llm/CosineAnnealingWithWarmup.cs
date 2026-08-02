@@ -17,10 +17,14 @@ public class CosineAnnealingWithWarmup
         MaxSteps = maxSteps;
     }
 
+    /// <summary>
+    /// Calculates the learning rate for a given training step.
+    /// </summary>
     public double GetLearningRate(int currentStep)
     {
         if (currentStep < WarmupSteps)
         {
+            // Linear warmup
             return BaseLr * ((double)currentStep / Math.Max(1, WarmupSteps));
         }
 
@@ -29,6 +33,7 @@ public class CosineAnnealingWithWarmup
             return MinLr;
         }
 
+        // Cosine decay
         double progress = (double)(currentStep - WarmupSteps) / Math.Max(1, MaxSteps - WarmupSteps);
         return MinLr + 0.5 * (BaseLr - MinLr) * (1.0 + Math.Cos(progress * Math.PI));
     }

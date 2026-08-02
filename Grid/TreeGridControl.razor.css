@@ -2,6 +2,7 @@
    TreeGridControl — Scoped styles (equivalent to SyncFusion SfTreeGrid)
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Container ───────────────────────────────────────────────────── */
 .fx-treegrid {
     position: relative;
     display: flex;
@@ -245,6 +246,7 @@
     user-select: none;
 }
 
+/* ── Content / Scroll Area ───────────────────────────────────────── */
 .fx-treegrid-content {
     overflow: auto;
     flex: 1;
@@ -276,12 +278,14 @@
     z-index: 40;
 }
 
+/* ── Table ────────────────────────────────────────────────────────── */
 .fx-treegrid-table {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
 }
 
+/* ── Header ──────────────────────────────────────────────────────── */
 .fx-treegrid-header {
     position: sticky;
     top: 0;
@@ -453,6 +457,7 @@
     cursor: col-resize !important;
 }
 
+/* ── Body Rows ───────────────────────────────────────────────────── */
 .fx-treegrid-row {
     cursor: pointer;
     transition: background 0.1s;
@@ -467,6 +472,7 @@
     background: #bbdefb !important;
 }
 
+/* ── Cells ────────────────────────────────────────────────────────── */
 .fx-treegrid-cell {
     padding: 8px 12px;
     border-bottom: 1px solid #e9ecef;
@@ -480,6 +486,7 @@
     border-right: none;
 }
 
+/* ── Expand/Collapse Icon ────────────────────────────────────────── */
 .fx-treegrid-expand-icon {
     display: inline-flex;
     align-items: center;
@@ -649,6 +656,7 @@
     background: #76aecb;
 }
 
+/* ── Cell Text ────────────────────────────────────────────────────── */
 .fx-treegrid-cell-text {
     vertical-align: middle;
 }
@@ -657,6 +665,7 @@
     color: #1565c0;
 }
 
+/* ── Empty Row ────────────────────────────────────────────────────── */
 .fx-treegrid-empty {
     text-align: center;
     padding: 40px;
@@ -664,6 +673,12 @@
     font-style: italic;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   PLUS/MINUS NODE ICON — project-default node expand/collapse glyph.
+   Identical box style to .fx-group-expand-icon-plusminus on GridControl,
+   so tree nodes and grid group rows look like the same control family.
+   Light grey border + solid black fixed-width text glyph (VB6 VSFlexGrid look).
+   ═══════════════════════════════════════════════════════════════════ */
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus,
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.collapsed,
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus.expanded {
@@ -711,7 +726,8 @@
 .fx-treegrid-expand-icon.fx-treegrid-expand-icon-plusminus:hover {
     background: #e3f2fd;
 }
-
+/* Leaf placeholder — invisible spacer matching the icon's footprint so
+   leaf cells align with their parent siblings. */
 .fx-treegrid-leaf-plusminus {
     width: 12px;
     height: 12px;
@@ -741,6 +757,10 @@
     pointer-events: none;
 }
 
+/* ═══════════════════════════════════════════════════════════════════
+   COMPACT VARIANT — VB6-style dense tree (small font, tight rows,
+   triangle expand icons). Apply by setting CssClass="fx-treegrid-compact".
+   ═══════════════════════════════════════════════════════════════════ */
 .fx-treegrid-compact {
     font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
     font-size: 12px;
@@ -772,7 +792,7 @@
     height: 14px !important;
 }
 .fx-treegrid-compact .fx-treegrid-row {
-    height: 14px !important;                 
+    height: 14px !important;                 /* tight row height like VB6 VSFlexGrid */
 }
 .fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected {
     background: #0078d7 !important;
@@ -784,7 +804,10 @@
 .fx-treegrid-compact .fx-treegrid-row.fx-treegrid-hover:hover {
     background: #d8e4f8 !important;
 }
-
+/* Selected + hovered: keep the dark blue background and white text. Without
+   this, the bare hover rule above wins on background but the white text from
+   .fx-treegrid-selected stays — making the row's text disappear (white-on-light-blue)
+   while the cursor sits on it. */
 .fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected.fx-treegrid-hover:hover,
 .fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover {
     background: #0078d7 !important;
@@ -794,10 +817,13 @@
     color: #fff;
 }
 .fx-treegrid-compact .fx-treegrid-parent-text {
-    font-weight: 400;             
+    font-weight: 400;             /* VB6 doesn't bold parent rows */
     color: inherit;
 }
-
+/* Compact expand icon — slightly tighter padding/margin than the standard
+   plus/minus box defined above. The actual glyph (+ / -) is now rendered as
+   element text content (see TreeGridControl.razor) so we don't add ::before
+   pseudo content here — that previously double-rendered the symbol. */
 .fx-treegrid-compact .fx-treegrid-expand-icon {
     margin-right: 2px;
     height: 14px !important;
@@ -832,7 +858,7 @@
     margin-right: 2px !important;
 }
 .fx-treegrid-compact .fx-treegrid-expand-icon img {
-    display: none;                
+    display: none;                /* hide the folder.ico when triangle mode is used in compact tree */
 }
 .fx-treegrid-compact .fx-treegrid-expand-icon .fx-treegrid-folder-image {
     display: inline-block;

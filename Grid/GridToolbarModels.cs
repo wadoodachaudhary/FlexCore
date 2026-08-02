@@ -1,5 +1,9 @@
 namespace Fx.ControlKit.Grid;
 
+/// <summary>
+/// Shared toolbar item model for grid-family controls. Consumers can provide
+/// host-specific icons/actions while built-in actions stay general-purpose.
+/// </summary>
 public sealed class GridToolbarItem
 {
     public string Key { get; set; } = "";

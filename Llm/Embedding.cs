@@ -25,6 +25,9 @@ public class Embedding
         }
     }
 
+    /// <summary>
+    /// Looks up a single token embedding vector.
+    /// </summary>
     public float[] Lookup(int tokenId)
     {
         if (tokenId < 0 || tokenId >= VocabSize)
@@ -58,6 +61,9 @@ public class PositionalEmbedding
         }
     }
 
+    /// <summary>
+    /// Looks up the positional embedding vector for a given index.
+    /// </summary>
     public float[] Lookup(int pos)
     {
         if (pos < 0 || pos >= ContextLength)
@@ -70,6 +76,10 @@ public class PositionalEmbedding
 
 public class EmbeddingProcessor
 {
+    /// <summary>
+    /// Computes the sum of Token Embeddings and Positional Embeddings for an input batch.
+    /// Output shape: [batchSize, seqLen, embeddingDim]
+    /// </summary>
     public static float[][][] ProcessBatch(int[][] batchInputIds, Embedding tokenEmbedding, PositionalEmbedding posEmbedding)
     {
         int batchSize = batchInputIds.Length;

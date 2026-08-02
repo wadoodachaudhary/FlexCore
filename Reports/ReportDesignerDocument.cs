@@ -4,6 +4,10 @@ using System.Xml.Linq;
 
 namespace Fx.ControlKit.Reports;
 
+/// <summary>
+/// In-memory design model for a Crystal Reports XML layout. The model keeps the
+/// Crystal band/object structure but is intentionally UI-friendly for Blazor.
+/// </summary>
 public sealed class ReportDesignerDocument
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -585,6 +589,9 @@ public static class ReportDesignerMetrics
     }
 }
 
+/// <summary>
+/// Parser and writer for the Crystal XML subset used by the FlexKit report designer.
+/// </summary>
 public static class ReportDesignerXmlSerializer
 {
     private const string MetadataElementName = "FlexKitReportDesigner";

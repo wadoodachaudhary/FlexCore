@@ -2,6 +2,7 @@
    GridControl — Scoped styles (equivalent to SyncFusion .e-grid)
    ═══════════════════════════════════════════════════════════════════ */
 
+/* ── Grid Container ───────────────────────────────────────────────── */
 .fx-grid {
     --fx-grid-bg: var(--fx-surface-color, #fff);
     --fx-grid-text-color: var(--fx-text-color, #212529);
@@ -762,6 +763,7 @@
     background: #fff;
 }
 
+/* ── Grid Lines ───────────────────────────────────────────────────── */
 .fx-grid-lines-both {
     --fx-grid-cell-border-color: var(--fx-grid-table-border-color);
     --fx-grid-cell-border-right-color: var(--fx-grid-table-border-color);
@@ -783,6 +785,7 @@
     --fx-grid-cell-border-right-color: var(--fx-grid-table-border-color);
 }
 
+/* ── Toolbar ──────────────────────────────────────────────────────── */
 .fx-grid-toolbar {
     display: flex;
     align-items: center;
@@ -804,7 +807,8 @@
     background: #e9ecef;
     border-color: #adb5bd;
 }
-
+/* Built-in icon buttons (Expand All / Collapse All etc.) — compact square
+   buttons that sit on the left of the grid toolbar before any custom items. */
 .fx-grid-toolbar-icon-btn {
     display: inline-flex;
     align-items: center;
@@ -857,7 +861,7 @@
     pointer-events: none;
 }
 .fx-toolbar-search input {
-    
+    /* extra left padding leaves room for the magnifier icon */
     padding: 5px 10px 5px 26px;
     border: 1px solid #ced4da;
     border-radius: 4px;
@@ -865,6 +869,9 @@
     width: 200px;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   GROUP DROP AREA — Drag-and-drop grouping
+   ══════════════════════════════════════════════════════════════════ */
 .fx-group-drop-area {
     display: flex;
     align-items: center;
@@ -933,7 +940,8 @@
     gap: 4px;
     padding: 3px 8px 3px 12px;
     border-radius: 16px;
-    
+    /* Themed by GroupedColumnColor (default blue). Falls back to a neutral grey
+       if the variable hasn't been set (e.g. older callers). */
     background: var(--fx-grid-group-color, #2563eb);
     font-size: 11px;
     font-weight: 600;
@@ -969,6 +977,8 @@
     color: #fff;
 }
 
+/* Icon-style "Clear All" — removes every active group. Sized to match the
+   neighboring expand/collapse toggle so the two read as a control pair. */
 .fx-group-clear-all-btn {
     display: inline-flex;
     align-items: center;
@@ -1079,6 +1089,7 @@
     font-size: 11px;
 }
 
+/* ── Group Header Row ────────────────────────────────────────────── */
 .fx-group-header-row {
     cursor: pointer;
     transition: background 0.1s;
@@ -1087,7 +1098,10 @@
     background: #f0f6ff;
 }
 .fx-group-header-cell {
-    
+    /* VB6-style group header: normal white background, only the VALUE text
+       picks up GroupedColumnColor via the inline style on .fx-group-header-value.
+       Background and caption stay neutral so the column header up top doesn't
+       compete for attention. */
     padding: 4px 8px;
     background: #fff;
     border-bottom: 1px solid #e9ecef;
@@ -1111,12 +1125,12 @@
     background: var(--fx-grid-selected-row-bg, #b6c8dd) !important;
     color: var(--fx-grid-selected-row-color, inherit);
 }
-
+/* The value span — coloured inline with the grid's GroupedColumnColor. */
 .fx-group-header-value {
     font-weight: 600;
     color: var(--fx-grid-group-item-text-color, inherit);
 }
-
+/* Legacy class kept for any external consumers. */
 .fx-group-header-row .fx-group-header-text {
     color: inherit;
 }
@@ -1134,12 +1148,19 @@
     flex-shrink: 0;
 }
 
+/* Triangle variant — keep compact, no border. */
 .fx-group-expand-icon-triangle {
     width: 16px;
     font-size: 9px;
     color: #64748b;
 }
 
+/* Plus/Minus variant — visual styling lives INLINE on the rendered span
+   (see GridControl.RenderGroupedRows). Inline styles guarantee the
+   black-bordered rectangle paints regardless of Blazor's component-scoped
+   CSS attribute behaviour for builder-emitted elements. The class name
+   below is kept for selector-based hooks (e.g. tests) but carries no
+   layout — only the hover tint, which is fine to keep external. */
 .fx-group-expand-icon.fx-group-expand-icon-plusminus:hover {
     background: #e3f2fd !important;
 }
@@ -1169,6 +1190,7 @@
     background: #f9fafb;
 }
 
+/* ── Table ────────────────────────────────────────────────────────── */
 .fx-grid-content {
     box-sizing: border-box;
     flex: 1 1 0;
@@ -1373,6 +1395,7 @@
     box-sizing: border-box;
 }
 
+/* ── Header ───────────────────────────────────────────────────────── */
 .fx-grid-header {
     position: sticky;
     top: 0;
@@ -1542,6 +1565,9 @@
     background: #eef5ff;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   COLUMN RESIZE
+   ══════════════════════════════════════════════════════════════════ */
 .fx-header-cell.fx-resizable {
     padding-right: 18px;
 }
@@ -1589,6 +1615,24 @@
     opacity: 0.35;
 }
 
+/* ── Body Rows ────────────────────────────────────────────────────── */
+
+/* Suppress the browser's native text-selection on data rows.
+ *
+ * The grid has its own row / cell selection model. The browser's
+ * drag-to-select-text overlay would otherwise paint every cell the
+ * cursor sweeps through (the "every cell looks individually selected"
+ * effect under a Shift+click range or drag-select), AND that overlay
+ * persists after row selection is cleared because clearing row
+ * selection is a different operation than clearing the document's
+ * text selection.
+ *
+ * Scoped intentionally to .fx-grid-body so the toolbar / header /
+ * pager can still expose normal text selection for copy gestures.
+ * The .fx-batch-input override below re-enables text selection inside
+ * an active edit input so the user can still highlight / replace the
+ * value they're typing.
+ */
 .fx-grid-body,
 .fx-grid-body tr,
 .fx-grid-body td,
@@ -1621,6 +1665,10 @@
     font-size: inherit;
 }
 
+/* Re-enable text selection inside the batch-edit input — the user
+ * needs to be able to highlight / drag-select the current value to
+ * replace it. This is also where SelectAllOnEdit lands its
+ * select() call, so the highlight must be visible. */
 .fx-batch-input,
 .fx-grid ::deep .fx-batch-input {
     user-select: text;
@@ -1683,7 +1731,16 @@ tr.fx-row:has(.fx-dropdown-panel) {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-
+/* Cell focus indicator.
+   Keyboard/click selection uses a VB6-style dotted rectangle. Mouse hover over
+   an editable cell is conveyed by the cursor only; it must not move or paint
+   the selected-cell rectangle. When the cell is fully open for editing, the
+   caret in the input is the cue, so the cell outline is intentionally
+   suppressed. */
+/* Active-cell cursor — a clear focus rectangle so keyboard (arrows / Tab)
+   navigation visibly shows which cell is current, in EVERY state: editable or
+   not, selected row or not. Only suppressed while the cell is actually open for
+   editing (fx-batch-editing), where the input caret is the cue. */
 .fx-cell.fx-cell-active:not(.fx-batch-editing),
 .fx-grid ::deep .fx-cell.fx-cell-active:not(.fx-batch-editing) {
     box-shadow: inset 0 0 0 1px var(--fx-grid-active-cell-border);
@@ -1930,6 +1987,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-style: italic;
 }
 
+/* ── Batch Cell Editing ───────────────────────────────────────────── */
 .fx-batch-editing,
 .fx-grid ::deep .fx-cell.fx-batch-editing {
     padding: 0 !important;
@@ -1983,7 +2041,12 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host,
 .fx-batch-dropdown.fx-dropdown-host {
     display: block;
-    
+    /* Width comes from the inline Width param (calc(100% + 2px), set in
+       RenderBatchEditor) so the closed control covers the cell's right
+       grid-line and the arrow sits flush with the cell border instead of
+       leaving a ~2px gap. max-width must allow the +2px or it would clamp the
+       inline width back to 100%. The editing cell is overflow:visible so the
+       overhang shows. */
     width: 100%;
     height: 100% !important;
     min-height: 0 !important;
@@ -2146,6 +2209,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     box-shadow: inset 1px 1px #8a8a8a, inset -1px -1px #fff;
 }
 
+/* ── Edit Row ─────────────────────────────────────────────────────── */
 .fx-edit-row {
     background: #fff9e6 !important;
 }
@@ -2168,6 +2232,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     box-shadow: none;
 }
 
+/* ── Command Buttons ──────────────────────────────────────────────── */
 .fx-cmd-btn {
     padding: 3px 10px;
     margin: 0 2px;
@@ -2189,6 +2254,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-cmd-cancel { color: #6c757d; border-color: #6c757d; }
 .fx-cmd-cancel:hover { background: #e9ecef; }
 
+/* ── Pager ────────────────────────────────────────────────────────── */
 .fx-grid-pager {
     display: flex;
     align-items: center;
@@ -2240,6 +2306,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-size: 12px;
 }
 
+/* ── Filter Popup ─────────────────────────────────────────────────── */
 .fx-filter-popup-overlay {
     position: fixed;
     inset: 0;
@@ -2484,7 +2551,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #fff;
 }
 .fx-filter-popup-btn.fx-primary {
-    
+    /* Theme-driven (VB6 default theme = grey face, black default-button outline) —
+       hardcoded Bootstrap blue violated the host's legacy look. */
     background: var(--fx-btn-bg, #d4d0c8);
     color: var(--fx-btn-color, #000);
     border: var(--fx-btn-border, 1px solid);
@@ -2495,6 +2563,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: var(--fx-btn-hover-bg, #d4d0c8);
 }
 
+/* ── Dialog (Edit Mode) ───────────────────────────────────────────── */
 .fx-dialog-overlay {
     position: fixed;
     inset: 0;
@@ -2587,7 +2656,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #e9ecef;
 }
 .fx-dialog-btn.fx-primary {
-    
+    /* Theme-driven — see .fx-filter-popup-btn.fx-primary note. */
     background: var(--fx-btn-bg, #d4d0c8);
     color: var(--fx-btn-color, #000);
     border: var(--fx-btn-border, 1px solid);
@@ -2598,6 +2667,9 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: var(--fx-btn-hover-bg, #d4d0c8);
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   SELECTION INFO BAR
+   ══════════════════════════════════════════════════════════════════ */
 .fx-selection-info-bar {
     display: flex;
     align-items: center;
@@ -2633,6 +2705,9 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-weight: 600;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   EXPAND / COLLAPSE ALL BUTTON
+   ══════════════════════════════════════════════════════════════════ */
 .fx-group-expand-collapse-btn {
     display: inline-flex;
     align-items: center;
@@ -2653,6 +2728,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     border-color: #94a3b8;
 }
 
+/* ── Enhanced group expand icon ───────────────────────────────── */
 .fx-group-expand-icon {
     transition: transform 0.15s ease;
 }
@@ -2663,6 +2739,9 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #3b82f6;
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   GROUP FOOTER (Aggregate Row)
+   ══════════════════════════════════════════════════════════════════ */
 .fx-group-footer-row {
     background: var(--fx-grid-footer-bg);
     border-top: 1px solid var(--fx-grid-footer-border-color);
@@ -2678,6 +2757,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     border-right: 1px solid var(--fx-grid-footer-border-color);
 }
 
+/* ── Print Options Dialog ─────────────────────────────────────────── */
 .fx-grid-print-options-overlay {
     position: fixed;
     inset: 0;
@@ -2788,6 +2868,10 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-weight: 600;
 }
 
+/* ── Choose Columns Dialog ───────────────────────────────────────────
+   Mirrors the legacy VB6 "Choose Columns" dialog: a checkbox list with
+   Move Up / Move Down / Show / Hide / Show All / Hide All / Restore
+   Default Layout buttons on the right and OK / Cancel at the bottom. */
 .fx-choose-columns-overlay {
     position: fixed;
     inset: 0;
@@ -2929,9 +3013,16 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-weight: 600;
 }
 
+/* ── Header Context Menu ─────────────────────────────────────────────
+   Right-click on a column header opens this menu. Style mimics the legacy
+   VB6 "Group on this column / Expand All / Hide / Insert / Rename" panel
+   (see screenshot in repo). Used by every consumer of GridControl. */
 .fx-grid-header-context-menu {
     position: fixed;
-    
+    /* Sits above any host-level context menu (e.g. FAssembly's data-row menu
+       which uses z-index:1000). Without the bump the host menu — sometimes
+       opened by the same right-click event when stopPropagation didn't catch
+       in time — would paint on top of this one. */
     z-index: 1100;
     min-width: 200px;
     padding: 2px 0;
@@ -3022,6 +3113,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #e5e7eb;
 }
 
+/* ── Cell Context Menu ────────────────────────────────────────────── */
 .fx-grid-cell-context-backdrop {
     position: fixed;
     inset: 0;
@@ -3166,6 +3258,10 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #f7f7f7;
 }
 
+/* Column-aligned aggregate cells living INLINE on the group header row
+   (rendered when an AggregateRow has ShowInGroupHeader=true). Matches the
+   grand-total row palette at the bottom of the grid (.fx-aggregate-footer-row)
+   so a group's total reads as a smaller-scale grand total scoped to the group. */
 .fx-group-header-row .fx-group-header-aggregate-cell {
     padding: 8px 12px;
     font-weight: 700;
@@ -3174,6 +3270,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #eff6ff;
 }
 
+/* ── Grid Footer (total aggregate row) ────────────────────────── */
 .fx-grid-footer {
     position: relative;
     z-index: 1;
@@ -3194,10 +3291,12 @@ tr.fx-row:has(.fx-dropdown-panel) {
     border-right: 1px solid var(--fx-grid-footer-border-color);
 }
 
+/* ── Aggregate Value ──────────────────────────────────────────── */
 .fx-aggregate-value {
     white-space: nowrap;
 }
 
+/* ── Group Caption Aggregate (inline in header row) ───────────── */
 .fx-group-caption-agg {
     display: inline-block;
     margin-left: 16px;
@@ -3209,6 +3308,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: var(--fx-grid-group-total-text-color, #1d4ed8);
 }
 
+/* ── Enhanced Selected Row ────────────────────────────────────── */
 .fx-selected {
     background: var(--fx-grid-selected-row-bg) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
@@ -3264,7 +3364,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: var(--fx-grid-selected-row-bg, #b6c8dd) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
     outline: none;
-    
+    /* 2px active-cell-border (not the faint 1px grey) so the cursor stays
+       visible on top of the blue selected-row background during keyboard nav. */
     box-shadow: inset 0 0 0 1px var(--fx-grid-active-cell-border) !important;
     z-index: 2;
 }
@@ -3277,6 +3378,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     z-index: 2;
 }
 
+/* ── Local dark mode, scoped to this GridControl instance ───────────── */
 .fx-grid.fx-grid-dark .fx-grid-toolbar,
 .fx-grid.fx-grid-dark .fx-group-drop-area,
 .fx-grid.fx-grid-dark .fx-grid-pager,

@@ -13,6 +13,7 @@ public static class VerifyModels
         {
             var rand = new Random(123);
 
+            // 1. Verify Qwen3 & Qwen3.5
             Console.WriteLine("[Verification] Instantiating Qwen3 Model...");
             var qwenCfg = new QwenConfig
             {
@@ -31,6 +32,7 @@ public static class VerifyModels
             var qwenOut = qwen.Forward(inIdx);
             Console.WriteLine($"[Verification] Qwen Forward pass successful. Output shape: [{qwenOut.Length}, {qwenOut[0].Length}, {qwenOut[0][0].Length}]");
 
+            // 2. Verify Gemma3 & Gemma4
             Console.WriteLine("[Verification] Instantiating Gemma3 Model...");
             var gemmaCfg = new GemmaConfig
             {
@@ -54,6 +56,7 @@ public static class VerifyModels
             var gemma4Out = gemma4.Forward(inIdx);
             Console.WriteLine($"[Verification] Gemma4 Forward pass successful. Output shape: [{gemma4Out.Length}, {gemma4Out[0].Length}, {gemma4Out[0][0].Length}]");
 
+            // 3. Verify OLMo3
             Console.WriteLine("[Verification] Instantiating OLMo3 Model...");
             var olmoCfg = new OlmoConfig
             {
@@ -71,6 +74,7 @@ public static class VerifyModels
             var olmoOut = olmo.Forward(inIdx);
             Console.WriteLine($"[Verification] OLMo3 Forward pass successful. Output shape: [{olmoOut.Length}, {olmoOut[0].Length}, {olmoOut[0][0].Length}]");
 
+            // 4. Verify Tiny-Aya
             Console.WriteLine("[Verification] Instantiating TinyAya Model...");
             var ayaCfg = new TinyAyaConfig
             {
@@ -88,6 +92,7 @@ public static class VerifyModels
             var ayaOut = aya.Forward(inIdx);
             Console.WriteLine($"[Verification] TinyAya Forward pass successful. Output shape: [{ayaOut.Length}, {ayaOut[0].Length}, {ayaOut[0][0].Length}]");
 
+            // 5. Verify Muon Optimizer
             Console.WriteLine("[Verification] Testing Muon Optimizer Step...");
             var muon = new MuonOptimizer(0.01f);
             float[][] w = new float[][] { new float[] { 1, 2 }, new float[] { 3, 4 } };
@@ -95,8 +100,10 @@ public static class VerifyModels
             muon.Step(w, grad);
             Console.WriteLine($"[Verification] Muon step completed. Updated weight[0][0]: {w[0][0]}");
 
+            // 6. Verify Sliding Window Attention (SWA)
             VerifySwa.RunVerification();
 
+            // 7. Verify Safetensors weight loader
             VerifySafetensors.RunVerification();
 
             Console.WriteLine("[Verification] ALL MODEL VERIFICATIONS COMPLETED SUCCESSFULLY!");

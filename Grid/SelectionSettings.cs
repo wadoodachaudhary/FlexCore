@@ -1,5 +1,11 @@
 namespace Fx.ControlKit.Grid;
 
+/// <summary>
+/// Configures selection for GridControl. Equivalent to SyncFusion's GridSelectionSettings.
+/// Plain data object passed to GridControl via its <c>SelectionSettingsRef</c> parameter — it
+/// is never rendered as a component, so its properties carry no <c>[Parameter]</c> attribute
+/// (which would otherwise trip BL0005 on every host that sets them in C#).
+/// </summary>
 public class SelectionSettings
 {
     public SelectionType Type { get; set; } = SelectionType.Single;

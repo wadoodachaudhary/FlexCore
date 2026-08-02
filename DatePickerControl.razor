@@ -38,7 +38,7 @@
             <div @ref="_dropdownElement"
                  @key="_dropdownOpenKey"
                  class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
-                
+                <!-- Left Section: Main Calendar -->
                 <div class="fx-calendar-main">
                     <button type="button" class="fx-nav-btn fx-nav-prev" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
                     <button type="button" class="fx-nav-btn fx-nav-next" @onclick="NextMonth" title="Next Month" aria-label="Next month">►</button>
@@ -98,7 +98,7 @@
                         Today: @TodayText
                     </button>
 
-                    
+                    <!-- Optional Time Picker -->
                     @if (ShowTime)
                     {
                         <div class="fx-time-picker">
@@ -126,7 +126,7 @@
                     }
                 </div>
 
-                
+                <!-- Right Section: Sidebar (Expanded Mode) -->
                 @if (_expanded && ShowCalendarSidebar)
                 {
                     <div class="fx-calendar-sidebar">
@@ -145,7 +145,7 @@
                             </div>
                         </div>
 
-                        
+                        <!-- Quick Month Grid -->
                         <div class="fx-sidebar-section">
                             <span class="fx-section-title">Months</span>
                             <div class="fx-months-grid">
@@ -162,7 +162,7 @@
                             </div>
                         </div>
 
-                        
+                        <!-- Quick Decade Year Selector -->
                         <div class="fx-sidebar-section">
                             <span class="fx-section-title">Years (@_decadeStart - @(_decadeStart + 11))</span>
                             <div class="fx-decade-header">
@@ -214,13 +214,16 @@
     private IJSObjectReference? _controlJsModule;
     private int _dropdownOpenKey;
 
+    // View State (what month/year the popup calendar is currently focused on)
     private int _viewMonth = DateTime.Today.Month;
     private int _viewYear = DateTime.Today.Year;
 
+    // Time Selection fields
     private int _hour = 12;
     private int _minute = 0;
     private string _ampm = "AM";
 
+    // Decade state for quick year selector
     private int _decadeStart;
 
     protected override void OnParametersSet()
@@ -255,6 +258,7 @@
         }
         catch
         {
+            // CSS absolute positioning remains as the no-JS fallback.
         }
     }
 
@@ -353,6 +357,7 @@
         }
         else
         {
+            // Revert on invalid typing
             _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
         }
     }
@@ -376,6 +381,7 @@
         }
     }
 
+    // --- Calendar Nav ---
     private void PrevMonth()
     {
         if (_viewMonth == 1)
@@ -421,6 +427,7 @@
         }
     }
 
+    // --- Days Generation ---
     private string[] GetWeekdayNames()
     {
         return new[] { "Su", "Mo", "Tu", "We", "Th", "Fr", "Sa" };
@@ -475,6 +482,7 @@
         CloseDropdown();
     }
 
+    // --- Time Picker Handlers ---
     private void InitializeTime(DateTime dt)
     {
         _hour = dt.Hour % 12;
@@ -519,6 +527,7 @@
         }
     }
 
+    // --- Sidebar Shortcuts ---
     private async Task SelectShortcut(DateTime? date)
     {
         if (date.HasValue)
@@ -585,6 +594,7 @@
             }
             catch
             {
+                // Best-effort cleanup.
             }
         }
     }

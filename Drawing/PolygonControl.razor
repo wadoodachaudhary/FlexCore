@@ -11,6 +11,7 @@
 </svg>
 
 @code {
+    // Vertices relative to the (normalised) bounding box origin (Left, Top).
     private string LocalPoints =>
         string.Join(" ", Shape.Points.Select(p =>
             $"{Num(p[0] - Shape.Left)},{Num(p[1] - Shape.Top)}"));

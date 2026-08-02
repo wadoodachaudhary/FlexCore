@@ -195,6 +195,7 @@ public class TinyAyaAttention
             values[b] = _wValue.ForwardBatch(x[b]);
         }
 
+        // KV cache update
         float[][][] finalKeys;
         float[][][] finalValues;
         if (cache != null)
@@ -225,12 +226,14 @@ public class TinyAyaAttention
             float[][][] kHeads = SplitHeads(finalKeys[b], targetSeqLen, _numKvHeads);
             float[][][] vHeads = SplitHeads(finalValues[b], targetSeqLen, _numKvHeads);
 
+            // Apply RoPE ONLY for sliding attention layers
             if (_attnType == "sliding_attention")
             {
                 for (int h = 0; h < _numHeads; h++) qHeads[h] = TinyAyaRoPEHelper.ApplyRoPEAya(qHeads[h], cos, sin, startPos);
                 for (int h = 0; h < _numKvHeads; h++) kHeads[h] = TinyAyaRoPEHelper.ApplyRoPEAya(kHeads[h], cos, sin, startPos);
             }
 
+            // Expand KV groups to full heads
             if (_groupSize > 1)
             {
                 float[][][] kHeadsRep = new float[_numHeads][][];
@@ -265,10 +268,12 @@ public class TinyAyaAttention
                         }
                         attnScores[i][j] = sum * _scaling;
 
+                        // Causal masking
                         if (seqLen > 1 && j > i)
                         {
                             attnScores[i][j] = float.NegativeInfinity;
                         }
+                        // Sliding window masking
                         if (slidingWindow > 0 && (i - j >= slidingWindow))
                         {
                             attnScores[i][j] = float.NegativeInfinity;
@@ -397,6 +402,8 @@ public class TinyAyaTransformerBlock
 
         int window = (AttnType == "sliding_attention") ? slidingWindow : -1;
 
+        // Cohere parallel residual block
+        // x = shortcut + x_attn + x_ff
         float[][][] shortcut = x;
         float[][][] normX = _inputLayernorm.Forward3D(x);
         float[][][] attnOut = _att.Forward(normX, cos, sin, window, startPos, cache);
@@ -455,8 +462,10 @@ public class TinyAyaModel
 
         if (cfg.TieWordEmbeddings)
         {
+            // Output head shares the token embedding weights in forward pass
         }
 
+        // Precompute RoPE parameters
         var (cos, sin) = TinyAyaRoPEHelper.ComputeRopeParamsAya(cfg.HeadDim, cfg.RopeBase, cfg.ContextLength);
         _cos = cos;
         _sin = sin;
@@ -467,6 +476,7 @@ public class TinyAyaModel
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Embedding lookup
         float[][][] x = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
         {
@@ -479,16 +489,20 @@ public class TinyAyaModel
             }
         }
 
+        // Run blocks
         for (int i = 0; i < _trfBlocks.Count; i++)
         {
             var cache = (caches != null && i < caches.Count) ? caches[i] : null;
             x = _trfBlocks[i].Forward(x, _cos, _sin, Config.SlidingWindow, startPos, cache);
         }
 
+        // Final norm
         x = _finalNorm.Forward3D(x);
 
+        // Head projection
         float[][][] logits = _outHead.Forward3D(x);
 
+        // Logit scale
         if (Math.Abs(Config.LogitScale - 1.0f) > 1e-5f)
         {
             float scale = Config.LogitScale;

@@ -158,6 +158,7 @@
     [Parameter] public string? SelectedPath { get; set; }
     [Parameter] public EventCallback<string?> SelectedPathChanged { get; set; }
 
+    // Value is kept as an alias for simple @bind-Value consumers.
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
 

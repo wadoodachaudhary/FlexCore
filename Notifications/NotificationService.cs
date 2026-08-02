@@ -1,12 +1,19 @@
 namespace Fx.ControlKit.Notifications;
 
+/// <summary>
+/// Centralized notification service for displaying messages to users.
+/// Replaces scattered JSRuntime.InvokeVoidAsync("alert", ...) calls.
+/// Scoped per-circuit (each user session gets its own instance).
+/// </summary>
 public sealed class NotificationService
 {
     private readonly List<Notification> _notifications = new();
     private readonly object _lock = new();
 
+    /// <summary>Raised when a notification is added or dismissed.</summary>
     public event Action? OnChange;
 
+    /// <summary>Current active notifications (newest first).</summary>
     public IReadOnlyList<Notification> Notifications
     {
         get
@@ -16,18 +23,23 @@ public sealed class NotificationService
         }
     }
 
+    /// <summary>Show an error notification (red).</summary>
     public void Error(string message, string? detail = null, int durationMs = 0)
         => Add(NotificationLevel.Error, message, detail, durationMs);
 
+    /// <summary>Show a warning notification (yellow).</summary>
     public void Warning(string message, string? detail = null, int durationMs = 8000)
         => Add(NotificationLevel.Warning, message, detail, durationMs);
 
+    /// <summary>Show a success notification (green).</summary>
     public void Success(string message, string? detail = null, int durationMs = 4000)
         => Add(NotificationLevel.Success, message, detail, durationMs);
 
+    /// <summary>Show an info notification (blue).</summary>
     public void Info(string message, string? detail = null, int durationMs = 5000)
         => Add(NotificationLevel.Info, message, detail, durationMs);
 
+    /// <summary>Dismiss a specific notification.</summary>
     public void Dismiss(Guid id)
     {
         lock (_lock)
@@ -35,6 +47,7 @@ public sealed class NotificationService
         OnChange?.Invoke();
     }
 
+    /// <summary>Clear all notifications.</summary>
     public void Clear()
     {
         lock (_lock)
@@ -70,6 +83,7 @@ public sealed class NotificationService
     }
 }
 
+/// <summary>Notification severity level.</summary>
 public enum NotificationLevel
 {
     Info,
@@ -78,6 +92,7 @@ public enum NotificationLevel
     Error
 }
 
+/// <summary>A single notification message.</summary>
 public sealed class Notification
 {
     public Guid Id { get; init; }

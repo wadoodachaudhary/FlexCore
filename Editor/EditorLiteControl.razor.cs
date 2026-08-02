@@ -5,6 +5,12 @@ using Microsoft.JSInterop;
 
 namespace Fx.ControlKit.Editor;
 
+/// <summary>
+/// A compact rich-text editor for ticket descriptions and notes. It keeps the UI
+/// light but can read back multiple save/export formats: sanitized HTML, plain
+/// text, Markdown/Jira-friendly text, Atlassian Document Format JSON, RTF, and
+/// an HTML document that opens cleanly in Word/LibreOffice.
+/// </summary>
 public partial class EditorLiteControl : ComponentBase, IAsyncDisposable
 {
     [Inject] private IJSRuntime JS { get; set; } = default!;

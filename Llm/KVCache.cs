@@ -17,11 +17,17 @@ public class KVCache
         _values.Clear();
     }
 
+    /// <summary>
+    /// Appends the key and value vectors of the current step to the cache.
+    /// Input: k [batchSize][dim], v [batchSize][dim]
+    /// Output: (keysHistory [batchSize][seqLen][dim], valuesHistory [batchSize][seqLen][dim])
+    /// </summary>
     public (float[][][] keys, float[][][] values) Update(float[][] k, float[][] v)
     {
         int batchSize = k.Length;
         int dim = k[0].Length;
 
+        // Copy input slices to store in cache
         float[][] kCopy = new float[batchSize][];
         float[][] vCopy = new float[batchSize][];
         for (int b = 0; b < batchSize; b++)

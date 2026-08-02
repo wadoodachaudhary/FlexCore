@@ -18,6 +18,7 @@ public class QwenConfig
     public double RopeBase { get; set; } = 1000000.0;
     public string[] LayerTypes { get; set; } = Array.Empty<string>();
 
+    // Qwen3.5 parameters
     public int LinearConvKernelDim { get; set; } = 4;
     public int LinearKeyHeadDim { get; set; } = 128;
     public int LinearValueHeadDim { get; set; } = 128;
@@ -100,6 +101,7 @@ public class Qwen3_5GatedDeltaNet
 
         _norm = new Qwen3_5RMSNormGated(_headVDim, cfg.LayerNormEps);
 
+        // Convolution weights: [convDim][convKernelSize]
         _convWeight = new float[_convDim][];
         for (int i = 0; i < _convDim; i++)
         {
@@ -137,6 +139,7 @@ public class Qwen3_5GatedDeltaNet
         float[][][] b = _inProjB.Forward3D(x);
         float[][][] a = _inProjA.Forward3D(x);
 
+        // Causal depthwise 1D Convolution over sequence dimension
         float[][][] convOut = new float[batchSize][][];
         for (int batch = 0; batch < batchSize; batch++)
         {
@@ -160,6 +163,7 @@ public class Qwen3_5GatedDeltaNet
             }
         }
 
+        // Split convOut into queries, keys, values
         float[][][] queries = new float[batchSize][][];
         float[][][] keys = new float[batchSize][][];
         float[][][] values = new float[batchSize][][];
@@ -182,6 +186,7 @@ public class Qwen3_5GatedDeltaNet
             }
         }
 
+        // Recurrent Gated Delta Rule
         float[][][] coreAttnOut = new float[batchSize][][];
         int numGroups = _numVHeads / _numKHeads;
         float scale = 1.0f / (float)Math.Sqrt(_headKDim);
@@ -207,6 +212,7 @@ public class Qwen3_5GatedDeltaNet
                 {
                     int kh = h / numGroups; // Key-head mapping
 
+                    // Extract query, key, value for current head at step t
                     float[] q_t = new float[_headKDim];
                     float[] k_t = new float[_headKDim];
                     float[] v_t = new float[_headVDim];
@@ -215,14 +221,17 @@ public class Qwen3_5GatedDeltaNet
                     Array.Copy(keys[batch][t], kh * _headKDim, k_t, 0, _headKDim);
                     Array.Copy(values[batch][t], h * _headVDim, v_t, 0, _headVDim);
 
+                    // Apply L2Norm
                     q_t = L2Norm(q_t);
                     k_t = L2Norm(k_t);
 
+                    // Scale query
                     for (int i = 0; i < _headKDim; i++) q_t[i] *= scale;
 
                     float b_val = Sigmoid(b[batch][t][h]);
                     float g_val = (float)Math.Exp(-Math.Exp(_aLog[h]) * Softplus(a[batch][t][h] + _dtBias[h]));
 
+                    // Update recurrent state: state = state * g_val
                     for (int dk = 0; dk < _headKDim; dk++)
                     {
                         for (int dv = 0; dv < _headVDim; dv++)
@@ -231,6 +240,7 @@ public class Qwen3_5GatedDeltaNet
                         }
                     }
 
+                    // Compute kv_mem = state^T * k_t
                     float[] kv_mem = new float[_headVDim];
                     for (int dv = 0; dv < _headVDim; dv++)
                     {
@@ -242,12 +252,14 @@ public class Qwen3_5GatedDeltaNet
                         kv_mem[dv] = sum;
                     }
 
+                    // Compute delta = (v_t - kv_mem) * b_val
                     float[] delta = new float[_headVDim];
                     for (int dv = 0; dv < _headVDim; dv++)
                     {
                         delta[dv] = (v_t[dv] - kv_mem[dv]) * b_val;
                     }
 
+                    // Update state += k_t * delta^T
                     for (int dk = 0; dk < _headKDim; dk++)
                     {
                         for (int dv = 0; dv < _headVDim; dv++)
@@ -256,6 +268,7 @@ public class Qwen3_5GatedDeltaNet
                         }
                     }
 
+                    // Compute output = state^T * q_t
                     float[] headOut = new float[_headVDim];
                     for (int dv = 0; dv < _headVDim; dv++)
                     {
@@ -267,16 +280,19 @@ public class Qwen3_5GatedDeltaNet
                         headOut[dv] = sum;
                     }
 
+                    // Normalize output with Gated RMSNorm using z
                     float[] z_t = new float[_headVDim];
                     Array.Copy(z[batch][t], h * _headVDim, z_t, 0, _headVDim);
 
                     float[] normHeadOut = _norm.Forward(headOut, z_t);
 
+                    // Copy to coreAttnOut
                     Array.Copy(normHeadOut, 0, coreAttnOut[batch][t], h * _headVDim, _headVDim);
                 }
             }
         }
 
+        // Project output
         return _outProj.Forward3D(coreAttnOut);
     }
 }
@@ -367,6 +383,7 @@ public class QwenTransformerBlock
         int seqLen = x[0].Length;
         int dim = x[0][0].Length;
 
+        // 1. Attention Block
         float[][][] norm1X = _norm1.Forward3D(x);
         float[][][] attnOut;
 
@@ -393,6 +410,7 @@ public class QwenTransformerBlock
             }
         }
 
+        // 2. Feed-Forward Block
         float[][][] norm2X = _norm2.Forward3D(xAttention);
         float[][][] ffOut = _ff.Forward3D(norm2X);
 
@@ -446,6 +464,7 @@ public class Qwen3Model
         _finalNorm = new RMSNorm(cfg.EmbDim, cfg.LayerNormEps);
         _outHead = new TensorOps.Linear(cfg.EmbDim, cfg.VocabSize, useBias: false, rand: r);
 
+        // Precompute RoPE parameters
         var (cos, sin) = RoPEHelper.ComputeRopeParams(cfg.HeadDim, cfg.RopeBase, cfg.ContextLength);
         _cos = cos;
         _sin = sin;
@@ -456,6 +475,7 @@ public class Qwen3Model
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Lookup embedding
         float[][][] x = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
         {
@@ -468,14 +488,17 @@ public class Qwen3Model
             }
         }
 
+        // Run blocks
         for (int i = 0; i < _trfBlocks.Count; i++)
         {
             var cache = (caches != null && i < caches.Count) ? caches[i] : null;
             x = _trfBlocks[i].Forward(x, _cos, _sin, startPos, cache);
         }
 
+        // Final norm
         x = _finalNorm.Forward3D(x);
 
+        // Output head
         return _outHead.Forward3D(x);
     }
 }

@@ -4,18 +4,27 @@ using Microsoft.AspNetCore.Components.Web;
 
 namespace Fx.ControlKit.Grid;
 
+/// <summary>
+/// TreeGridControl — hierarchical data grid with expand/collapse, parent/child mapping,
+/// and row selection. Equivalent to SyncFusion's SfTreeGrid.
+/// </summary>
 public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOwner
 {
+    // ── Parameters ───────────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>Property name of the unique ID field (e.g. "NodeID").</summary>
     [Parameter] public string IdMapping { get; set; } = "";
 
+    /// <summary>Property name of the parent ID field (e.g. "ParentID").</summary>
     [Parameter] public string ParentIdMapping { get; set; } = "";
 
+    /// <summary>Index (0-based) of the column that renders the tree expand/collapse icons.</summary>
     [Parameter] public int TreeColumnIndex { get; set; } = 0;
 
+    /// <summary>Start with all nodes collapsed.</summary>
     [Parameter] public bool EnableCollapseAll { get; set; }
 
     [Parameter] public bool AllowSelection { get; set; } = true;
@@ -35,34 +44,79 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public IReadOnlyList<GridToolbarItem>? ToolbarItems { get; set; }
     [Parameter] public bool? ShowGridToolbar { get; set; }
 
+    /// <summary>
+    /// Extra CSS class added to the root .fx-treegrid element. Use
+    /// "fx-treegrid-compact" for the dense VB6-style row layout.
+    /// </summary>
     [Parameter] public string? CssClass { get; set; }
 
+    /// <summary>
+    /// Pixels of horizontal indent added per tree level (before the expand
+    /// icon). Default 16 — matches VB6's tight tree. Older callers using
+    /// 40px-per-level can override to 40 to keep the previous wider look.
+    /// </summary>
     [Parameter] public int IndentPerLevel { get; set; } = 16;
 
+    /// <summary>
+    /// Built-in preset for the per-node expand/collapse icon. Use the
+    /// override parameters below for full customisation.
+    /// </summary>
     [Parameter] public GroupExpandIconStyle NodeExpandIconStyle { get; set; } = GroupExpandIconStyle.PlusMinus;
 
+    // ── Caller-supplied glyph/icon overrides ─────────────────────────────
+    // Resolution order (highest to lowest):
+    //   1. ExpandIconTemplate / LeafIconTemplate — full RenderFragment override
+    //   2. CollapsedGlyph / ExpandedGlyph / LeafGlyph + *Style strings
+    //   3. NodeExpandIconStyle preset (toolkit default)
+
+    /// <summary>Glyph rendered for a collapsed parent node. Null → preset default.</summary>
     [Parameter] public string? CollapsedGlyph { get; set; }
 
+    /// <summary>Glyph rendered for an expanded parent node. Null → preset default.</summary>
     [Parameter] public string? ExpandedGlyph { get; set; }
 
+    /// <summary>Optional glyph rendered for leaf nodes. Null → empty placeholder of icon-width.</summary>
     [Parameter] public string? LeafGlyph { get; set; }
 
+    /// <summary>Inline CSS style for the parent expand/collapse icon span.</summary>
     [Parameter] public string? ExpandIconStyle { get; set; }
 
+    /// <summary>Inline CSS style for the leaf-node icon / placeholder span.</summary>
     [Parameter] public string? LeafIconStyle { get; set; }
 
+    /// <summary>
+    /// RenderFragment that fully overrides the parent expand/collapse icon.
+    /// Receives a bool indicating whether the node is currently expanded.
+    /// The fragment is responsible for click handling.
+    /// </summary>
     [Parameter] public RenderFragment<bool>? ExpandIconTemplate { get; set; }
 
+    /// <summary>RenderFragment that fully overrides the leaf-node icon.</summary>
     [Parameter] public RenderFragment? LeafIconTemplate { get; set; }
 
+    /// <summary>Function delegate returning custom icon path for a node item.</summary>
     [Parameter] public Func<TValue, bool, string?>? GetNodeIcon { get; set; }
 
+    /// <summary>
+    /// Optional predicate that treats a row as expandable even when its children
+    /// are not currently present in the data source.
+    /// </summary>
     [Parameter] public Func<TValue, bool>? TreatAsParent { get; set; }
 
+    /// <summary>
+    /// Allows folder artwork returned by GetNodeIcon, or the built-in folder icon,
+    /// to change when a node expands. Default false keeps the folder stable while
+    /// the plus/minus glyph shows expand state.
+    /// </summary>
     [Parameter] public bool ChangeNodeIconOnExpand { get; set; }
 
+    /// <summary>
+    /// Render folder/leaf icons for leaf rows. VB6 outline grids often show
+    /// folder icons only on category rows and leave children as plain text.
+    /// </summary>
     [Parameter] public bool ShowLeafNodeIcons { get; set; } = true;
 
+    // Resolved values used by TreeGridControl.razor markup.
     internal string ResolveCollapsedGlyph() =>
         CollapsedGlyph ?? (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus ? "+" : "▶");
 
@@ -132,19 +186,36 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     internal bool IsCompact =>
         CssClass?.Contains("fx-treegrid-compact", StringComparison.OrdinalIgnoreCase) == true;
 
+
+
+    // Selection settings
     [Parameter] public SelectionMode SelectionMode { get; set; } = SelectionMode.Row;
 
+    /// <summary>
+    /// Optional row CSS callback. Mirrors GridControl's RowCssClassSelector so
+    /// callers can mark a persistent business state independently of transient
+    /// tree selection.
+    /// </summary>
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
 
+    // Events
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
+    /// <summary>Fires when a row is right-clicked, AFTER the row has been selected —
+    /// VB6 VSFlexGrid BeforeMouseDown parity (.Row = .MouseRow), so a context menu
+    /// opened by an ancestor's @oncontextmenu acts on the row under the cursor
+    /// (HHM-88, owner-authorized 2026-07-29). Purely additive: when no delegate is
+    /// attached, right-click behavior is unchanged. The event does not stop
+    /// propagation; the browser contextmenu event still bubbles to page handlers.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Expanded { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Collapsed { get; set; }
     [Parameter] public EventCallback<string> OnToolbarItemClick { get; set; }
     [Parameter] public EventCallback<GridToolbarClickEventArgs> ToolbarItemClicked { get; set; }
+
+    // ── Internal State ──────────────────────────────────────────────────
 
     private List<TreeNode<TValue>> _flatNodes = new();
     private TValue? _selectedItem;
@@ -166,6 +237,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private double _resizeStartX;
     private double _resizeStartWidth;
     private string? _openToolbarMenuKey;
+
+    // ── Column Registration ─────────────────────────────────────────────
 
     public void AddColumn(TreeGridColumn column)
     {
@@ -245,6 +318,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private ColumnState GetColumnState(TreeGridColumn column) =>
         GetColumnState(GetColumnKey(column));
+
+    // ── Shared grid toolbar chrome ──────────────────────────────────────
 
     private IEnumerable<GridToolbarItem> ResolveToolbarItems(
         IReadOnlyList<GridToolbarItem>? richItems,
@@ -477,12 +552,17 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         return state;
     }
 
+    /// <summary>
+    /// Resolves TreeColumnIndex to the correct visible column index.
+    /// If TreeColumnIndex refers to a hidden column, finds the matching visible index.
+    /// </summary>
     internal int ResolvedTreeColumnIndex
     {
         get
         {
             if (TreeColumnIndex < _columns.Count)
             {
+                // TreeColumnIndex refers to the overall column list — find its position in visible columns
                 var targetCol = _columns[TreeColumnIndex];
                 if (targetCol.Visible)
                 {
@@ -494,14 +574,20 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                     }
                 }
             }
+            // Fallback: treat TreeColumnIndex as visible column index directly
             return TreeColumnIndex;
         }
     }
 
+    // ── Lifecycle ────────────────────────────────────────────────────────
+
     protected override void OnParametersSet()
     {
+        // Only rebuild the tree when DataSource actually changes, to preserve
+        // expand/collapse state across re-renders triggered by StateHasChanged.
         if (!_treeBuilt || !ReferenceEquals(DataSource, _previousDataSource))
         {
+            // Preserve existing expand/collapse states before rebuilding
             Dictionary<object, bool>? expandStates = null;
             if (_treeBuilt && _flatNodes.Count > 0)
             {
@@ -515,6 +601,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
             BuildTree();
 
+            // Restore expand/collapse states from before the rebuild
             if (expandStates != null)
             {
                 foreach (var node in _flatNodes)
@@ -529,6 +616,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
     }
 
+    // ── Tree Building ────────────────────────────────────────────────────
+
     private void BuildTree()
     {
         _flatNodes.Clear();
@@ -540,6 +629,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         var parentIdProp = typeof(TValue).GetProperty(ParentIdMapping);
         if (idProp == null || parentIdProp == null) return;
 
+        // Build lookup: parentId -> children
         var childrenMap = new Dictionary<object, List<(TValue Item, object Id)>>();
         var allItems = new List<(TValue Item, object? Id, object? ParentId)>();
 
@@ -555,6 +645,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             childrenMap[parentKey].Add((item, id!));
         }
 
+        // Find root nodes (parentId is null or not found in any id)
         var allIds = new HashSet<object>(allItems.Where(a => a.Id != null).Select(a => a.Id!));
         var roots = allItems.Where(a => a.ParentId == null || !allIds.Contains(a.ParentId)).ToList();
         SortRows(roots, row => row.Item);
@@ -591,6 +682,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             }
         }
 
+        // Process roots
         for (var index = 0; index < roots.Count; index++)
         {
             var root = roots[index];
@@ -614,6 +706,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
     }
 
+    // ── Visible Nodes (respecting expand/collapse) ──────────────────────
+
     private IEnumerable<TreeNode<TValue>> VisibleNodes
     {
         get
@@ -623,6 +717,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
             foreach (var node in _flatNodes)
             {
+                // Check if this node is hidden by a collapsed ancestor
                 while (collapsedLevels.Count > 0 && collapsedLevels.Peek() >= node.Level)
                     collapsedLevels.Pop();
 
@@ -642,6 +737,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             return result.Where(included.Contains).ToList();
         }
     }
+
+    // ── Event Handlers ──────────────────────────────────────────────────
 
     private async Task ToggleNode(TreeNode<TValue> node)
     {
@@ -671,6 +768,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
     {
+        // Toggle expand/collapse when clicking anywhere on a parent node row
         if (ToggleOnRowClick && node.HasChildren)
             await ToggleNode(node);
 
@@ -685,6 +783,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await RowDoubleClicked.InvokeAsync(CreateRowEventArgs(node, visibleIndex));
     }
 
+    // VB6 BeforeMouseDown parity: right-click first moves the selection to the row
+    // under the cursor, then notifies the host — but ONLY when a host subscribed,
+    // so unsubscribed consumers keep the exact previous right-click behavior.
     private async Task HandleRowContextMenu(TreeNode<TValue> node, int visibleIndex)
     {
         if (!RowRightClicked.HasDelegate)
@@ -883,6 +984,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await SetNodeExpandedAsync(node, expanded);
     }
 
+    // ── Public API ──────────────────────────────────────────────────────
+
     public async Task ExpandAllAsync()
     {
         foreach (var node in _flatNodes)
@@ -980,6 +1083,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         await InvokeAsync(StateHasChanged);
     }
+
+    // ── Column Sorting / Filtering / Options ────────────────────────────
 
     internal async Task HandleHeaderClickAsync(TreeGridColumn column)
     {
@@ -1284,6 +1389,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             : fallback;
     }
 
+    // ── Helper ──────────────────────────────────────────────────────────
+
     private object? GetPropertyValue(TValue? item, string propertyName)
     {
         if (item == null || string.IsNullOrEmpty(propertyName)) return null;
@@ -1302,6 +1409,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         return val.ToString() ?? "";
     }
 }
+
+// ── Supporting Types ────────────────────────────────────────────────────
 
 public class TreeNode<TValue>
 {

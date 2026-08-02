@@ -115,6 +115,10 @@ public class GroupedQueryAttention
         }
     }
 
+    /// <summary>
+    /// Forward pass of Grouped-Query Attention with optional RoPE and Key-Value cache support.
+    /// Input: x [batchSize, seqLen, dIn]
+    /// </summary>
     public float[][][] Forward(float[][][] x, float[][]? cos = null, float[][]? sin = null, int startPos = 0, KVCache? cache = null)
     {
         int batchSize = x.Length;
@@ -164,6 +168,7 @@ public class GroupedQueryAttention
             float[][][] kHeads = SplitHeads(finalKeys[b], targetSeqLen, NumHeadsKV);
             float[][][] vHeads = SplitHeads(finalValues[b], targetSeqLen, NumHeadsKV);
 
+            // Optional QK Normalization
             if (_qNorm != null && _kNorm != null)
             {
                 for (int qh = 0; qh < NumHeadsQ; qh++)
@@ -176,6 +181,7 @@ public class GroupedQueryAttention
                 }
             }
 
+            // Apply RoPE
             if (cos != null && sin != null)
             {
                 for (int qh = 0; qh < NumHeadsQ; qh++)
@@ -188,6 +194,7 @@ public class GroupedQueryAttention
                 }
             }
 
+            // Expand K and V to match number of query heads (GQA replication)
             float[][][] contextHeads = new float[NumHeadsQ][][];
 
             for (int qh = 0; qh < NumHeadsQ; qh++)

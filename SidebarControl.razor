@@ -3,7 +3,7 @@
 @if (!Hidden)
 {
     <div class="command-panel @(Collapsed ? "collapsed" : "") @CssClass" style="@Style">
-        
+        <!-- Panel Toolbar -->
         <div class="panel-toolbar">
             <button @onclick="OnClose" title="Close panel">
                 <img src="@CloseIconSrc" alt="Close" />
@@ -26,7 +26,7 @@
         {
             @if (Type == SidebarType.Accordion)
             {
-                
+                <!-- Explorer Bar Sections -->
                 <div class="explorer-bar">
                     @foreach (var section in Sections)
                     {
@@ -56,7 +56,7 @@
             }
             else if (Type == SidebarType.Tree)
             {
-                
+                <!-- Tree View Sections (each section as a card containing a TreeViewControl) -->
                 <div class="explorer-bar">
                     @foreach (var section in Sections)
                     {

@@ -169,6 +169,8 @@ internal static class CrystalReportContentsParser
                 throw;
             }
 
+            // The native converter is intentionally incremental. If a later report
+            // definition record is not understood yet, keep the metadata already read.
         }
     }
 
@@ -857,6 +859,7 @@ internal static class CrystalReportContentsParser
         }
         catch
         {
+            // Best effort for field references that are not needed by current XML.
         }
         finally
         {
@@ -2027,6 +2030,7 @@ internal static class CrystalReportContentsParser
         }
         catch
         {
+            // Keep default section formatting when a properties record variant is not understood yet.
         }
         finally
         {

@@ -26,6 +26,11 @@ public class CausalAttention
         _wValue = new TensorOps.Linear(dIn, dOut, useBias);
     }
 
+    /// <summary>
+    /// Forward pass of causal attention.
+    /// Input: [batchSize, seqLen, dIn]
+    /// Output: [batchSize, seqLen, dOut]
+    /// </summary>
     public float[][][] Forward(float[][][] x)
     {
         int batchSize = x.Length;
@@ -36,10 +41,12 @@ public class CausalAttention
 
         for (int b = 0; b < batchSize; b++)
         {
+            // 1. Calculate Q, K, V for this batch item
             float[][] queries = _wQuery.ForwardBatch(x[b]); // [seqLen, dOut]
             float[][] keys = _wKey.ForwardBatch(x[b]);       // [seqLen, dOut]
             float[][] values = _wValue.ForwardBatch(x[b]);   // [seqLen, dOut]
 
+            // 2. Attention Scores = (Q * K^T) * scale
             float[][] attnScores = new float[seqLen][];
             for (int i = 0; i < seqLen; i++)
             {
@@ -53,6 +60,7 @@ public class CausalAttention
                     }
                     attnScores[i][j] = sum * scale;
 
+                    // Apply causal mask: mask out future tokens (j > i)
                     if (j > i)
                     {
                         attnScores[i][j] = float.NegativeInfinity;
@@ -60,10 +68,13 @@ public class CausalAttention
                 }
             }
 
+            // 3. Apply Softmax to normalized scores
             TensorOps.Softmax(attnScores);
 
+            // 4. Apply Dropout
             TensorOps.Dropout(attnScores, _dropoutRate, _random);
 
+            // 5. Context vectors = attention weights * V
             output[b] = new float[seqLen][];
             for (int i = 0; i < seqLen; i++)
             {

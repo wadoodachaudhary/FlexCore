@@ -37,6 +37,11 @@ public class MultiHeadAttention
         _outProj = new TensorOps.Linear(dOut, dOut, useBias);
     }
 
+    /// <summary>
+    /// Forward pass of Multi-Head Attention.
+    /// Input: [batchSize, seqLen, dIn]
+    /// Output: [batchSize, seqLen, dOut]
+    /// </summary>
     public float[][][] Forward(float[][][] x)
     {
         int batchSize = x.Length;
@@ -47,10 +52,12 @@ public class MultiHeadAttention
 
         for (int b = 0; b < batchSize; b++)
         {
+            // 1. Calculate Q, K, V for this batch item (shape [seqLen, dOut])
             float[][] queries = _wQuery.ForwardBatch(x[b]);
             float[][] keys = _wKey.ForwardBatch(x[b]);
             float[][] values = _wValue.ForwardBatch(x[b]);
 
+            // 2. Split into heads: queriesHead[h] is shape [seqLen, headDim]
             float[][][] queriesHead = SplitHeads(queries, seqLen);
             float[][][] keysHead = SplitHeads(keys, seqLen);
             float[][][] valuesHead = SplitHeads(values, seqLen);
@@ -59,10 +66,12 @@ public class MultiHeadAttention
 
             for (int h = 0; h < NumHeads; h++)
             {
+                // Compute self-attention for head h
                 float[][] q = queriesHead[h];
                 float[][] k = keysHead[h];
                 float[][] v = valuesHead[h];
 
+                // Attention Scores = (Q * K^T) * scale
                 float[][] attnScores = new float[seqLen][];
                 for (int i = 0; i < seqLen; i++)
                 {
@@ -76,6 +85,7 @@ public class MultiHeadAttention
                         }
                         attnScores[i][j] = sum * scale;
 
+                        // Apply causal mask
                         if (j > i)
                         {
                             attnScores[i][j] = float.NegativeInfinity;
@@ -83,10 +93,13 @@ public class MultiHeadAttention
                     }
                 }
 
+                // Apply Softmax
                 TensorOps.Softmax(attnScores);
 
+                // Apply Dropout
                 TensorOps.Dropout(attnScores, _dropoutRate, _random);
 
+                // Compute Context vectors for this head
                 contextHead[h] = new float[seqLen][];
                 for (int i = 0; i < seqLen; i++)
                 {
@@ -103,8 +116,10 @@ public class MultiHeadAttention
                 }
             }
 
+            // 3. Concatenate heads back into [seqLen, dOut]
             float[][] concatenatedContext = ConcatHeads(contextHead, seqLen);
 
+            // 4. Pass through final projection layer
             output[b] = _outProj.ForwardBatch(concatenatedContext);
         }
 

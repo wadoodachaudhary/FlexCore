@@ -32,6 +32,9 @@
     [Parameter] public string IconCss { get; set; } = string.Empty;
     [Parameter] public string IconAlt { get; set; } = string.Empty;
     [Parameter] public string Label { get; set; } = string.Empty;
+    /// <summary>When false, suppresses the native browser tooltip while keeping the
+    /// resolved text as the aria-label (mirrors FilePickerControl.ShowTooltip — some
+    /// legacy toolbars have buttons with no tooltip at all).</summary>
     [Parameter] public bool ShowTooltip { get; set; } = true;
     [Parameter] public bool Vertical { get; set; }
     [Parameter] public bool Large { get; set; }

@@ -3,6 +3,7 @@
    Defines tokens and variables for the different look and feels.
    ============================================================ */
 
+/* Fallback/Default variables mapped to VB Style */
 :root {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     --fx-font-size: 11px;
@@ -13,7 +14,7 @@
     --fx-border-color: #808080;
     --fx-border-radius: 0px;
 
-    
+    /* Buttons */
     --fx-btn-bg: #d4d0c8;
     --fx-btn-color: #000000;
     --fx-btn-border: 1px solid;
@@ -25,7 +26,7 @@
     --fx-btn-active-bg: #b6b2aa;
     --fx-btn-shadow: none;
 
-    
+    /* Inputs */
     --fx-input-bg: #ffffff;
     --fx-input-color: #000000;
     --fx-input-border: 1px solid;
@@ -34,7 +35,7 @@
     --fx-input-focus-border: 1px solid #000000;
     --fx-input-focus-shadow: none;
 
-    
+    /* Grid */
     --fx-grid-header-bg: #d4d0c8;
     --fx-grid-header-color: #000000;
     --fx-grid-header-border: 1px solid;
@@ -47,13 +48,13 @@
     --fx-grid-row-selected-color: #ffffff;
     --fx-grid-cell-border: #e3e3e3;
 
-    
+    /* TreeView */
     --fx-tree-node-color: #000000;
     --fx-tree-node-hover-bg: #dde8f0;
     --fx-tree-node-selected-bg: #000080;
     --fx-tree-node-selected-color: #ffffff;
 
-    
+    /* Sidebar / Command Panel */
     --fx-sidebar-bg: #b6b8ca;
     --fx-sidebar-header-bg: #ffffff;
     --fx-sidebar-header-color: #000000;
@@ -61,7 +62,7 @@
     --fx-sidebar-item-active-bg: #787892;
     --fx-sidebar-item-active-color: #eafefe;
 
-    
+    /* Tabs */
     --fx-tab-bg: #d4d0c8;
     --fx-tab-color: #000000;
     --fx-tab-border: 1px solid #808080;
@@ -69,7 +70,7 @@
     --fx-tab-active-color: #000080;
     --fx-tab-active-border-color: #000080;
 
-    
+    /* Dialogs */
     --fx-dialog-bg: #d4d0c8;
     --fx-dialog-header-bg: #000080;
     --fx-dialog-header-color: #ffffff;
@@ -78,6 +79,9 @@
     --fx-dialog-shadow: none;
 }
 
+/* ============================================================
+   1. VB Style (Classic Win95/98 Look)
+   ============================================================ */
 .theme-vb {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     --fx-font-size: 11px;
@@ -146,18 +150,21 @@
     --fx-dialog-shadow: none;
 }
 
+/* ============================================================
+   2. Modern Blue Theme (Sleek Web Look)
+   ============================================================ */
 .theme-modern-blue {
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --fx-font-size: 12.5px;
-    --fx-bg-color: #f1f5f9; 
+    --fx-bg-color: #f1f5f9; /* Soft grey page bg */
     --fx-surface-color: #ffffff;
     --fx-text-color: #1e293b;
     --fx-text-muted: #64748b;
     --fx-border-color: #cbd5e1;
     --fx-border-radius: 6px;
 
-    
-    --fx-btn-bg: #3b82f6; 
+    /* Buttons */
+    --fx-btn-bg: #3b82f6; /* Vibrant Blue */
     --fx-btn-color: #ffffff;
     --fx-btn-border: 1px solid #2563eb;
     --fx-btn-radius: 6px;
@@ -166,7 +173,7 @@
     --fx-btn-active-bg: #1d4ed8;
     --fx-btn-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 
-    
+    /* Inputs */
     --fx-input-bg: #ffffff;
     --fx-input-color: #0f172a;
     --fx-input-border: 1px solid #cbd5e1;
@@ -174,7 +181,7 @@
     --fx-input-focus-border: 1px solid #3b82f6;
     --fx-input-focus-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
 
-    
+    /* Grid */
     --fx-grid-header-bg: #f8fafc;
     --fx-grid-header-color: #475569;
     --fx-grid-header-border: 1px solid #e2e8f0;
@@ -182,25 +189,25 @@
     --fx-grid-row-alt-bg: #f8fafc;
     --fx-grid-row-color: #334155;
     --fx-grid-row-hover-bg: #f1f5f9;
-    --fx-grid-row-selected-bg: #dbeafe; 
+    --fx-grid-row-selected-bg: #dbeafe; /* very soft highlight */
     --fx-grid-row-selected-color: #1e3a8a;
     --fx-grid-cell-border: #e2e8f0;
 
-    
+    /* TreeView */
     --fx-tree-node-color: #334155;
     --fx-tree-node-hover-bg: #f1f5f9;
     --fx-tree-node-selected-bg: #dbeafe;
     --fx-tree-node-selected-color: #1e3a8a;
 
-    
-    --fx-sidebar-bg: #1e293b; 
+    /* Sidebar / Command Panel */
+    --fx-sidebar-bg: #1e293b; /* Dark slate sidebar for modern contrast */
     --fx-sidebar-header-bg: #0f172a;
     --fx-sidebar-header-color: #f8fafc;
     --fx-sidebar-item-hover-bg: #334155;
     --fx-sidebar-item-active-bg: #3b82f6;
     --fx-sidebar-item-active-color: #ffffff;
 
-    
+    /* Tabs */
     --fx-tab-bg: #e2e8f0;
     --fx-tab-color: #475569;
     --fx-tab-border: 1px solid #cbd5e1;
@@ -208,7 +215,7 @@
     --fx-tab-active-color: #2563eb;
     --fx-tab-active-border-color: #2563eb;
 
-    
+    /* Dialogs */
     --fx-dialog-bg: #ffffff;
     --fx-dialog-header-bg: #f8fafc;
     --fx-dialog-header-color: #0f172a;
@@ -216,18 +223,21 @@
     --fx-dialog-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
 }
 
+/* ============================================================
+   3. Dark Obsidian Theme
+   ============================================================ */
 .theme-dark {
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --fx-font-size: 12.5px;
-    --fx-bg-color: #0f172a; 
-    --fx-surface-color: #1e293b; 
+    --fx-bg-color: #0f172a; /* Deep dark page background */
+    --fx-surface-color: #1e293b; /* Card/surface container background */
     --fx-text-color: #f8fafc;
     --fx-text-muted: #94a3b8;
     --fx-border-color: #334155;
     --fx-border-radius: 6px;
 
-    
-    --fx-btn-bg: #6366f1; 
+    /* Buttons */
+    --fx-btn-bg: #6366f1; /* Purple/Indigo accent */
     --fx-btn-color: #ffffff;
     --fx-btn-border: 1px solid #4f46e5;
     --fx-btn-radius: 6px;
@@ -236,7 +246,7 @@
     --fx-btn-active-bg: #4338ca;
     --fx-btn-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.2);
 
-    
+    /* Inputs */
     --fx-input-bg: #0f172a;
     --fx-input-color: #f8fafc;
     --fx-input-border: 1px solid #334155;
@@ -244,7 +254,7 @@
     --fx-input-focus-border: 1px solid #6366f1;
     --fx-input-focus-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
 
-    
+    /* Grid */
     --fx-grid-header-bg: #334155;
     --fx-grid-header-color: #cbd5e1;
     --fx-grid-header-border: 1px solid #475569;
@@ -256,13 +266,13 @@
     --fx-grid-row-selected-color: #ffffff;
     --fx-grid-cell-border: #334155;
 
-    
+    /* TreeView */
     --fx-tree-node-color: #e2e8f0;
     --fx-tree-node-hover-bg: #334155;
     --fx-tree-node-selected-bg: #4f46e5;
     --fx-tree-node-selected-color: #ffffff;
 
-    
+    /* Sidebar / Command Panel */
     --fx-sidebar-bg: #0f172a;
     --fx-sidebar-header-bg: #1e293b;
     --fx-sidebar-header-color: #f8fafc;
@@ -270,7 +280,7 @@
     --fx-sidebar-item-active-bg: #6366f1;
     --fx-sidebar-item-active-color: #ffffff;
 
-    
+    /* Tabs */
     --fx-tab-bg: #1e293b;
     --fx-tab-color: #94a3b8;
     --fx-tab-border: 1px solid #334155;
@@ -278,7 +288,7 @@
     --fx-tab-active-color: #818cf8;
     --fx-tab-active-border-color: #6366f1;
 
-    
+    /* Dialogs */
     --fx-dialog-bg: #1e293b;
     --fx-dialog-header-bg: #0f172a;
     --fx-dialog-header-color: #f8fafc;
@@ -286,6 +296,7 @@
     --fx-dialog-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
 }
 
+/* Apply base font and background to themed containers */
 .theme-vb, .theme-modern-blue, .theme-dark {
     font-family: var(--fx-font-family) !important;
     color: var(--fx-text-color) !important;

@@ -67,6 +67,8 @@
                 var items = DataSource.ToList();
                 for (var index = 0; index < items.Count; index++)
                 {
+                    // A C# for-loop variable is ONE shared variable — lambdas must
+                    // capture a per-iteration copy or every option reports the last index.
                     var optionIndex = index;
                     var item = items[index];
                     var val = GetFieldValue(item, ValueFieldName);
@@ -106,17 +108,20 @@
     [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
     [Parameter] public bool Editable { get; set; }
+    /// <summary>When editable, commit typed text on blur. This is standard combobox behavior; set false for Enter-only commit.</summary>
     [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
     [Parameter] public bool OpenOnRender { get; set; }
     [Parameter] public bool OpenOnArrowClickOnly { get; set; }
     [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
+    /// <summary>Field settings - set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
     [Parameter] public string TextFieldName { get; set; } = "";
     [Parameter] public string ValueFieldName { get; set; } = "";
 
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>Event fired when value changes. Provides the new value.</summary>
     [Parameter] public EventCallback<ChangeEventArgs<TValue, TItem>> ValueChange { get; set; }
 
     private bool _isOpen;
@@ -166,6 +171,9 @@
         }
     }
 
+    // No explicit Width -> size to the longest option text, but keep the
+    // control bounded. Long option labels should ellipsize inside the dropdown
+    // instead of forcing toolbars/dialogs wider than the viewport.
     private string CalculatedWidth()
     {
         int maxLen = (Placeholder ?? "").Length;
@@ -656,6 +664,8 @@
                 _hasMeasuredGeometry = true;
                 if (changed)
                 {
+                    // Scroll on the NEXT after-render — the DOM panel does not have
+                    // the measured size yet, so scrolling now would use stale geometry.
                     await InvokeAsync(StateHasChanged);
                     return;
                 }
@@ -671,6 +681,10 @@
         {
             _pendingHighlightScroll = false;
 
+            // Native focus brings the option into view — no JS involved. The options
+            // carry the full keydown handling, so keyboard navigation continues to
+            // work with focus inside the panel. Skipped in editable mode: stealing
+            // focus from the text input would interrupt typing and fire blur-commit.
             if (!Editable && _highlightedIndex >= 0 && _optionRefs.TryGetValue(_highlightedIndex, out var optionRef))
             {
                 try
@@ -679,6 +693,7 @@
                 }
                 catch
                 {
+                    // The element can be gone mid-render; the highlight works without the scroll.
                 }
             }
         }
@@ -708,6 +723,7 @@
         }
         catch
         {
+            // Best effort. The browser circuit can be gone while components tear down.
         }
     }
 
@@ -750,6 +766,12 @@
         return -1;
     }
 
+    // Mouse and keyboard share ONE moving highlight (_highlightedIndex): the VB6
+    // combo shows a single hot row that follows the cursor AND the arrow keys, and
+    // stays on the last-hovered option when the pointer leaves the panel. A CSS
+    // :hover approximation can't do the "stays" part — when nothing is hovered the
+    // stored highlight (seeded on the first/selected item) pops back, which reads
+    // as "it auto-selected the top item".
     private void SetHighlightedIndex(int index)
     {
         if (_highlightedIndex == index)
@@ -814,6 +836,9 @@
         }
     }
 
+    /// <summary>
+    /// Event args for dropdown value change events.
+    /// </summary>
     public class ChangeEventArgs<TVal, TItm>
     {
         public TVal? Value { get; set; }

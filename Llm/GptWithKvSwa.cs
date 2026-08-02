@@ -32,6 +32,7 @@ public class MultiHeadAttentionWithSWA
     public int HeadDim { get; }
     public int? SlidingWindowSize { get; set; }
 
+    // KV Cache
     private List<float[][]>? _cacheK; // Cache of shape [seqLen][batchSize][dOut]
     private List<float[][]>? _cacheV;
     private int _ptrCurrentPos = 0;
@@ -95,6 +96,7 @@ public class MultiHeadAttentionWithSWA
 
             int oldLen = _cacheK!.Count;
 
+            // Append new keys and values to the cache list
             for (int t = 0; t < numTokens; t++)
             {
                 float[][] stepK = new float[batchSize][];
@@ -115,6 +117,7 @@ public class MultiHeadAttentionWithSWA
                 attnKeep = Math.Min(combinedLen, SlidingWindowSize.Value + numTokens - 1);
             }
 
+            // Slice the active keys/values we will use for attention (last attnKeep steps)
             keys = new float[batchSize][][];
             values = new float[batchSize][][];
             for (int b = 0; b < batchSize; b++)
@@ -129,6 +132,7 @@ public class MultiHeadAttentionWithSWA
                 }
             }
 
+            // Update cache to keep at most SlidingWindowSize elements
             if (SlidingWindowSize != null && combinedLen > SlidingWindowSize.Value)
             {
                 int cacheKeep = SlidingWindowSize.Value;
@@ -305,6 +309,7 @@ public class TransformerBlockWithSWA
         int seqLen = x[0].Length;
         int dim = x[0][0].Length;
 
+        // Residual 1
         float[][][] norm1X = _norm1.Forward3D(x);
         float[][][] attnOut = _attn.Forward(norm1X, useCache);
 
@@ -325,6 +330,7 @@ public class TransformerBlockWithSWA
             }
         }
 
+        // Residual 2
         float[][][] norm2X = _norm2.Forward3D(xAttention);
         float[][][] ffOut = _ff.Forward3D(norm2X);
 
@@ -375,6 +381,7 @@ public class GPTModelWithSWA
         {
             var blk = new TransformerBlockWithSWA(cfg);
 
+            // Apply K:1 layer schedule
             bool useSwa;
             if (windowStride <= 0)
             {
@@ -408,6 +415,7 @@ public class GPTModelWithSWA
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Position ids and lookup
         int startPos = useCache ? CurrentPos : 0;
         if (useCache)
         {
@@ -433,11 +441,13 @@ public class GPTModelWithSWA
             }
         }
 
+        // 2. Blocks
         foreach (var blk in _trfBlocks)
         {
             x = blk.Forward(x, useCache);
         }
 
+        // 3. Final normalization and head
         x = _finalNorm.Forward3D(x);
         float[][][] logits = _outHead.Forward3D(x);
 
@@ -455,15 +465,18 @@ public static class SwaGenerator
         int[][] promptBatch = new int[batchSize][];
         promptBatch[0] = promptTokens.ToArray();
 
+        // Prefill
         float[][][] logits = model.Forward(promptBatch, useCache: true);
 
         List<int> result = new(promptTokens);
 
         for (int step = 0; step < maxNewTokens; step++)
         {
+            // Greedy sampling
             int nextToken = ArgMax(logits[0][logits[0].Length - 1]);
             result.Add(nextToken);
 
+            // Feed model only the new token
             int[][] stepBatch = new int[batchSize][];
             stepBatch[0] = new int[] { nextToken };
             logits = model.Forward(stepBatch, useCache: true);

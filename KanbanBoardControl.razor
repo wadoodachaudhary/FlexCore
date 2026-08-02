@@ -45,16 +45,22 @@
 </div>
 
 @code {
+    /// <summary>The lanes, in display order.</summary>
     [Parameter] public IEnumerable<KanbanColumn> Columns { get; set; } = new List<KanbanColumn>();
 
+    /// <summary>All items; each is placed via <see cref="ColumnKeySelector"/>.</summary>
     [Parameter] public IEnumerable<TItem> Items { get; set; } = Enumerable.Empty<TItem>();
 
+    /// <summary>Returns the column Key an item belongs to.</summary>
     [Parameter] public Func<TItem, string> ColumnKeySelector { get; set; } = _ => string.Empty;
 
+    /// <summary>Card body renderer for an item.</summary>
     [Parameter] public RenderFragment<TItem>? CardTemplate { get; set; }
 
+    /// <summary>Raised when a card is dropped into a DIFFERENT column.</summary>
     [Parameter] public EventCallback<KanbanMoveArgs<TItem>> OnItemMoved { get; set; }
 
+    /// <summary>Raised when a card is clicked (not dragged).</summary>
     [Parameter] public EventCallback<TItem> OnCardClick { get; set; }
 
     [Parameter] public string? CssClass { get; set; }

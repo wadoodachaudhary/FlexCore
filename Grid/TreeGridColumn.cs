@@ -2,11 +2,17 @@ using Microsoft.AspNetCore.Components;
 
 namespace Fx.ControlKit.Grid;
 
+/// <summary>
+/// Non-generic interface for column registration from TreeGridColumn.
+/// </summary>
 public interface ITreeGridControlOwner
 {
     void AddColumn(TreeGridColumn column);
 }
 
+/// <summary>
+/// Defines a column in the TreeGridControl. Equivalent to SyncFusion's TreeGridColumn.
+/// </summary>
 public class TreeGridColumn : ComponentBase
 {
     [CascadingParameter] internal ITreeGridControlOwner? Owner { get; set; }

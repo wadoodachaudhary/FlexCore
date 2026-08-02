@@ -1,5 +1,8 @@
 namespace Fx.ControlKit.Editor;
 
+/// <summary>
+/// Named output formats produced by <see cref="EditorLiteControl"/>.
+/// </summary>
 public enum EditorLiteOutputFormat
 {
     Json,
@@ -12,6 +15,9 @@ public enum EditorLiteOutputFormat
     OpenDocumentHtml
 }
 
+/// <summary>
+/// A complete readback snapshot from <see cref="EditorLiteControl"/>.
+/// </summary>
 public sealed class EditorLiteValue
 {
     public string Schema { get; set; } = "fx-editor-lite/1";

@@ -22,6 +22,7 @@ public class MemoryEstimatorSwa
 
     public static double CalcKvBytesPerLayer(int batch, int contextLength, int headDim, int nKvHeads, int bytesPerElem)
     {
+        // KV size = batch * tokens * head_dim * n_kv_heads * 2 (K,V) * bytes
         return (double)batch * contextLength * headDim * nKvHeads * 2.0 * bytesPerElem;
     }
 
@@ -72,6 +73,7 @@ public class MemoryEstimatorSwa
         int nKvHeadsMha = nHeads;
         int nKvHeadsGqa = nHeads / nKvGroups;
 
+        // Parse swa_ratio "a:b"
         int aSwa = 1;
         int bFull = 0;
         if (!string.IsNullOrEmpty(swaRatio))
@@ -87,11 +89,13 @@ public class MemoryEstimatorSwa
         var (nSwaLayers, nFullLayers) = DistributeLayers(nLayers, aSwa, bFull);
         int effW = Math.Min(contextLength, slidingWindowSize);
 
+        // Per-layer costs
         double perMhaFull = CalcKvBytesPerLayer(batchSize, contextLength, headDim, nKvHeadsMha, bytesPerElem);
         double perGqaFull = CalcKvBytesPerLayer(batchSize, contextLength, headDim, nKvHeadsGqa, bytesPerElem);
         double perMhaSwa = CalcKvBytesPerLayer(batchSize, effW, headDim, nKvHeadsMha, bytesPerElem);
         double perGqaSwa = CalcKvBytesPerLayer(batchSize, effW, headDim, nKvHeadsGqa, bytesPerElem);
 
+        // Totals
         double totalMhaAllFull = perMhaFull * nLayers;
         double totalGqaAllFull = perGqaFull * nLayers;
         double totalMixedMha = nSwaLayers * perMhaSwa + nFullLayers * perMhaFull;

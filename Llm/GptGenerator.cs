@@ -8,6 +8,9 @@ public class GptGenerator
 {
     private static readonly Random Rand = new(42);
 
+    /// <summary>
+    /// Generates tokens autoregressively for a single sequence context using advanced sampling.
+    /// </summary>
     public static List<int> GenerateText(
         GPTModel model, 
         List<int> startTokens, 
@@ -23,13 +26,16 @@ public class GptGenerator
 
             for (int step = 0; step < maxNewTokens; step++)
             {
+                // Crop current context if it exceeds the supported context size
                 int count = Math.Min(currentSequence.Count, contextSize);
                 int startIndex = currentSequence.Count - count;
                 var condTokens = currentSequence.GetRange(startIndex, count).ToArray();
 
+                // Prepare batch of size 1
                 int[][] batchInput = new int[1][];
                 batchInput[0] = condTokens;
 
+                // Run forward pass of the model for only the last token
                 float[][] lastLogits;
                 try
                 {
@@ -40,8 +46,10 @@ public class GptGenerator
                     throw new InvalidOperationException($"Model ForwardLastToken failed at generation step {step} with context size {condTokens.Length}.", ex);
                 }
 
+                // Focus only on the last time step logits
                 float[] lastTokenLogits = lastLogits[0]; // Shape: [vocabSize]
 
+                // Copy logits to avoid modifying the model's internal tensor arrays directly
                 float[] logitsCopy = new float[lastTokenLogits.Length];
                 Array.Copy(lastTokenLogits, logitsCopy, lastTokenLogits.Length);
 
@@ -49,6 +57,7 @@ public class GptGenerator
 
                 if (temperature > 0.0)
                 {
+                    // 1. Top-K filtering
                     if (topK.HasValue && topK.Value > 0)
                     {
                         try
@@ -61,6 +70,7 @@ public class GptGenerator
                         }
                     }
 
+                    // 2. Temperature scaling
                     for (int i = 0; i < logitsCopy.Length; i++)
                     {
                         if (logitsCopy[i] != float.NegativeInfinity)
@@ -69,6 +79,7 @@ public class GptGenerator
                         }
                     }
 
+                    // 3. Softmax calculation
                     float[] probs;
                     try
                     {
@@ -79,6 +90,7 @@ public class GptGenerator
                         throw new InvalidOperationException($"CalculateSoftmax failed (logits length={logitsCopy.Length}) at step {step}.", ex);
                     }
 
+                    // 4. Cumulative distribution sampling
                     try
                     {
                         nextTokenId = SampleFromDistribution(probs);
@@ -90,6 +102,7 @@ public class GptGenerator
                 }
                 else
                 {
+                    // ArgMax sampling
                     try
                     {
                         nextTokenId = ArgMax(logitsCopy);
@@ -116,6 +129,9 @@ public class GptGenerator
         }
     }
 
+    /// <summary>
+    /// Generates tokens autoregressively for a single sequence context using advanced sampling and TorchSharp.
+    /// </summary>
     public static List<int> GenerateText(
         TorchSharpGPTModel model, 
         List<int> startTokens, 
@@ -131,10 +147,12 @@ public class GptGenerator
 
             for (int step = 0; step < maxNewTokens; step++)
             {
+                // Crop current context if it exceeds the supported context size
                 int count = Math.Min(currentSequence.Count, contextSize);
                 int startIndex = currentSequence.Count - count;
                 var condTokens = currentSequence.GetRange(startIndex, count).ToArray();
 
+                // Run forward pass of the model for only the last token
                 float[] lastTokenLogits;
                 try
                 {
@@ -145,6 +163,7 @@ public class GptGenerator
                     throw new InvalidOperationException($"TorchSharp Model ForwardLastToken failed at generation step {step} with context size {condTokens.Length}.", ex);
                 }
 
+                // Copy logits to avoid modifying the model's internal tensor arrays directly
                 float[] logitsCopy = new float[lastTokenLogits.Length];
                 Array.Copy(lastTokenLogits, logitsCopy, lastTokenLogits.Length);
 
@@ -152,6 +171,7 @@ public class GptGenerator
 
                 if (temperature > 0.0)
                 {
+                    // 1. Top-K filtering
                     if (topK.HasValue && topK.Value > 0)
                     {
                         try
@@ -164,6 +184,7 @@ public class GptGenerator
                         }
                     }
 
+                    // 2. Temperature scaling
                     for (int i = 0; i < logitsCopy.Length; i++)
                     {
                         if (logitsCopy[i] != float.NegativeInfinity)
@@ -172,6 +193,7 @@ public class GptGenerator
                         }
                     }
 
+                    // 3. Softmax calculation
                     float[] probs;
                     try
                     {
@@ -182,6 +204,7 @@ public class GptGenerator
                         throw new InvalidOperationException($"CalculateSoftmax failed (logits length={logitsCopy.Length}) at step {step}.", ex);
                     }
 
+                    // 4. Cumulative distribution sampling
                     try
                     {
                         nextTokenId = SampleFromDistribution(probs);
@@ -193,6 +216,7 @@ public class GptGenerator
                 }
                 else
                 {
+                    // ArgMax sampling
                     try
                     {
                         nextTokenId = ArgMax(logitsCopy);
@@ -223,13 +247,17 @@ public class GptGenerator
     {
         if (k >= logits.Length) return;
 
+        // Copy logits to a temp array
         float[] temp = new float[logits.Length];
         Array.Copy(logits, temp, logits.Length);
 
+        // Sort the temp array in ascending order
         Array.Sort(temp);
 
+        // The k-th largest value is at index temp.Length - k
         float minAllowedVal = temp[temp.Length - k];
 
+        // Set all other values to negative infinity
         for (int i = 0; i < logits.Length; i++)
         {
             if (logits[i] < minAllowedVal)

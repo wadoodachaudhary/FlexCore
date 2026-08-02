@@ -92,7 +92,9 @@ public enum GridLines
 
 public enum GridWidthMode
 {
+    /// <summary>Table keeps at least the grid host width; this is the existing full-width behavior.</summary>
     FillAvailable,
+    /// <summary>Grid host and table size to the sum of visible column widths, up to the parent width.</summary>
     FitColumns
 }
 
@@ -123,9 +125,18 @@ public enum NewRowPosition
     Bottom
 }
 
+/// <summary>
+/// Visual style of the expand/collapse icon shown on grouped-column header
+/// rows. Project default is <see cref="PlusMinus"/> — a small bordered
+/// "+" / "−" box like the VB6 tree (and Windows Explorer). Use
+/// <see cref="Triangle"/> for the chevron-style ▶ / ▼ glyphs that older
+/// Blazor grids favour.
+/// </summary>
 public enum GroupExpandIconStyle
 {
+    /// <summary>Bordered "+" (collapsed) / "−" (expanded) box. Project default.</summary>
     PlusMinus,
+    /// <summary>Right-pointing "▶" (collapsed) / down-pointing "▼" (expanded) chevrons.</summary>
     Triangle
 }
 

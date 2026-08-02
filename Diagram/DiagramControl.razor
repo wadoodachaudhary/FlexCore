@@ -25,12 +25,12 @@
                     </marker>
                 }
             }
-            
+            @* Drop shadow filter *@
             <filter id="fx-shadow" x="-4%" y="-4%" width="108%" height="108%">
                 <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.15" />
             </filter>
 
-            
+            @* Clip paths for background images *@
             @if (Nodes != null)
             {
                 @foreach (var node in Nodes.Where(n => !string.IsNullOrWhiteSpace(n.BackgroundImage)))
@@ -67,7 +67,7 @@
         </defs>
 
         <g transform="translate(@F(DiagramPaddingPx),@F(DiagramPaddingPx))">
-            
+            @* Render connectors behind nodes *@
             @if (Connectors != null && Nodes != null)
             {
                 @foreach (var conn in Connectors)
@@ -98,7 +98,7 @@
                 }
             }
 
-            
+            @* Render nodes *@
             @if (Nodes != null)
             {
                 @foreach (var node in Nodes)
@@ -160,7 +160,7 @@
                                       stroke-width="@node.StrokeWidth" />
                                 break;
                         }
-                        
+                        @* Background image *@
                         @if (!string.IsNullOrWhiteSpace(node.BackgroundImage))
                         {
                             var (imgX, imgY, imgW, imgH) = ComputeImageRect(node);
@@ -172,7 +172,7 @@
                                    clip-path="url(#clip-@node.Id)"
                                    class="fx-node-bg-image" />
                         }
-                        
+                        @* Icon *@
                         @if (!string.IsNullOrWhiteSpace(node.Icon))
                         {
                             var iconY = string.IsNullOrWhiteSpace(node.SubLabel)
@@ -180,7 +180,7 @@
                                 : node.OffsetY - 12;
                             @RenderSvgText(node.OffsetX, iconY, "middle", node.TextColor, "fx-node-icon", node.Icon)
                         }
-                        
+                        @* Label *@
                         @{
                             var hasIcon = !string.IsNullOrWhiteSpace(node.Icon);
                             var hasBgImage = !string.IsNullOrWhiteSpace(node.BackgroundImage);
@@ -188,6 +188,7 @@
                             double labelY;
                             if (hasBgImage)
                             {
+                                // When a background image is present, render the label below the node
                                 labelY = node.OffsetY + node.Height / 2 + 14;
                             }
                             else if (hasIcon && hasSubLabel)
@@ -198,6 +199,7 @@
                                 labelY = node.OffsetY - 6;
                             else
                                 labelY = node.OffsetY;
+                            // Split multi-line labels (separated by \n)
                             var labelLines = (node.Label ?? "").Split('\n');
                         }
                         @if (labelLines.Length > 1)
@@ -231,20 +233,28 @@
 </div>
 
 @code {
+    /// <summary>Collection of nodes (boxes) to render.</summary>
     [Parameter] public List<DiagramNode>? Nodes { get; set; }
 
+    /// <summary>Collection of connectors (arrows) linking nodes.</summary>
     [Parameter] public List<DiagramConnector>? Connectors { get; set; }
 
+    /// <summary>Width of the SVG canvas. Defaults to "100%" of container.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
+    /// <summary>Height of the SVG canvas. Defaults to "500".</summary>
     [Parameter] public string Height { get; set; } = "500";
 
+    /// <summary>Additional CSS class on the outer container div.</summary>
     [Parameter] public string? CssClass { get; set; }
 
+    /// <summary>Extra padding around the diagram (in pixels). Applied on all sides.</summary>
     [Parameter] public double Padding { get; set; } = 18;
 
+    /// <summary>Additional padding as a percent of the diagram size. Defaults to 10%.</summary>
     [Parameter] public double SizePadPercent { get; set; } = 10;
 
+    /// <summary>Fired when a node is clicked. Set Handled=true to prevent default navigation.</summary>
     [Parameter] public EventCallback<DiagramNodeClickEventArgs> NodeClicked { get; set; }
 
     private Dictionary<string, DiagramNode> _nodeMap = new();
@@ -299,6 +309,10 @@
         }
     }
 
+    /// <summary>
+    /// Renders an SVG text element. Uses RenderFragment to avoid Razor treating &lt;text&gt; as
+    /// the Razor text directive (RZ1023).
+    /// </summary>
     private RenderFragment RenderSvgText(double x, double y, string anchor, string fill, string cssClass, string content) => builder =>
     {
         builder.OpenElement(0, "text");
@@ -331,6 +345,8 @@
         }
     }
 
+    // ---------- Connector path computation ----------
+
     private const double ArrowPull = 6.0;
     private const double BottomLabelGapSingle = 14.0;
     private const double BottomLabelGapMulti = 28.0;
@@ -351,6 +367,7 @@
             ty = target.OffsetY + target.Height / 2 + gap;
         }
 
+        // Pull target point back slightly so arrowhead tip lands on the edge
         if (conn.ShowArrow)
         {
             var angle = Math.Atan2(ty - sy, tx - sx);
@@ -395,6 +412,7 @@
         var sourcePort = ResolveAutoPort(source, target, conn.SourcePort);
         var targetPort = ResolveAutoPort(target, source, conn.TargetPort);
 
+        // Determine if going vertical-first or horizontal-first based on ports
         bool sourceVertical = sourcePort == DiagramPort.Top || sourcePort == DiagramPort.Bottom;
         bool targetVertical = targetPort == DiagramPort.Top || targetPort == DiagramPort.Bottom;
 
@@ -402,23 +420,27 @@
 
         if (sourceVertical && targetVertical)
         {
+            // Both vertical ports: go down from source, horizontal segment, up to target
             midY = (sy + ty) / 2;
             var path = $"M {F(sx)} {F(sy)} L {F(sx)} {F(midY)} L {F(tx)} {F(midY)} L {F(tx)} {F(ty)}";
             return (path, ((sx + tx) / 2, midY));
         }
         else if (!sourceVertical && !sourceVertical)
         {
+            // Both horizontal ports: go right from source, vertical segment, left to target
             midX = (sx + tx) / 2;
             var path = $"M {F(sx)} {F(sy)} L {F(midX)} {F(sy)} L {F(midX)} {F(ty)} L {F(tx)} {F(ty)}";
             return (path, (midX, (sy + ty) / 2));
         }
         else if (sourceVertical)
         {
+            // Source vertical, target horizontal: L-bend
             var path = $"M {F(sx)} {F(sy)} L {F(sx)} {F(ty)} L {F(tx)} {F(ty)}";
             return (path, (sx, ty));
         }
         else
         {
+            // Source horizontal, target vertical: L-bend
             var path = $"M {F(sx)} {F(sy)} L {F(tx)} {F(sy)} L {F(tx)} {F(ty)}";
             return (path, (tx, sy));
         }
@@ -445,12 +467,19 @@
         var dx = other.OffsetX - node.OffsetX;
         var dy = other.OffsetY - node.OffsetY;
 
+        // Choose the port on the side closest to the other node
         if (Math.Abs(dy) > Math.Abs(dx))
             return dy > 0 ? DiagramPort.Bottom : DiagramPort.Top;
         else
             return dx > 0 ? DiagramPort.Right : DiagramPort.Left;
     }
 
+    // ---------- Background Image ----------
+
+    /// <summary>
+    /// Computes the x, y, width, height for the background image element
+    /// based on the node dimensions, padding, and fit mode.
+    /// </summary>
     private static (double x, double y, double w, double h) ComputeImageRect(DiagramNode node)
     {
         var pad = node.BackgroundImagePadding;
@@ -461,11 +490,16 @@
 
         return node.BackgroundImageFit switch
         {
+            // Cover: use the full node rect (no padding) — the clip path crops overflow
             ImageFit.Cover => (node.OffsetX - node.Width / 2, node.OffsetY - node.Height / 2, node.Width, node.Height),
+            // Contain / Icon: use the padded inner rect
             _ => (nx, ny, nw, nh)
         };
     }
 
+    /// <summary>
+    /// Maps ImageFit to the SVG preserveAspectRatio attribute value.
+    /// </summary>
     private static string GetPreserveAspectRatio(ImageFit fit) => fit switch
     {
         ImageFit.Cover => "xMidYMid slice",   // fill and crop
@@ -473,8 +507,11 @@
         _ => "xMidYMid meet"                     // Contain — fit inside
     };
 
+    // ---------- Utilities ----------
+
     private static double MeasureTextWidth(string text)
     {
+        // Approximate: ~7px per character at default font size
         return (text?.Length ?? 0) * 7.0;
     }
 

@@ -32,15 +32,18 @@ public class SafetensorsLoader
         var (tensors, dataStart, fs) = OpenSafetensors(filePath);
         try
         {
+            // 1. Load Embeddings
             var tokEmb = (Embedding)GetPrivateField(model, "_tokEmb");
             var posEmb = (PositionalEmbedding)GetPrivateField(model, "_posEmb");
 
             LoadEmbedding(tokEmb, tensors, fs, dataStart, "transformer.wte.weight");
             LoadPositionalEmbedding(posEmb, tensors, fs, dataStart, "transformer.wpe.weight");
 
+            // 2. Load Final LayerNorm
             var finalNorm = (LayerNorm)GetPrivateField(model, "_finalNorm");
             LoadLayerNorm(finalNorm, tensors, fs, dataStart, "transformer.ln_f");
 
+            // 3. Load Output Projection Head
             var outHead = (TensorOps.Linear)GetPrivateField(model, "_outHead");
             if (TryGetTensor(tensors, "lm_head.weight", out _))
             {
@@ -48,12 +51,14 @@ public class SafetensorsLoader
             }
             else
             {
+                // Weight tying fallback: copy token embeddings weights
                 for (int i = 0; i < tokEmb.Weights.Length; i++)
                 {
                     Array.Copy(tokEmb.Weights[i], outHead.Weights[i], tokEmb.EmbeddingDim);
                 }
             }
 
+            // 4. Load Transformer Blocks
             var blocks = (List<TransformerBlock>)GetPrivateField(model, "_trfBlocks");
             for (int i = 0; i < blocks.Count; i++)
             {
@@ -66,11 +71,13 @@ public class SafetensorsLoader
                 LoadLayerNorm(norm1, tensors, fs, dataStart, $"transformer.h.{i}.ln_1");
                 LoadLayerNorm(norm2, tensors, fs, dataStart, $"transformer.h.{i}.ln_2");
 
+                // MLP
                 var ffLinear1 = (TensorOps.Linear)GetPrivateField(ff, "_linear1");
                 var ffLinear2 = (TensorOps.Linear)GetPrivateField(ff, "_linear2");
                 LoadLinear(ffLinear1, tensors, fs, dataStart, $"transformer.h.{i}.mlp.c_fc");
                 LoadLinear(ffLinear2, tensors, fs, dataStart, $"transformer.h.{i}.mlp.c_proj");
 
+                // Attention
                 var wQuery = (TensorOps.Linear)GetPrivateField(attn, "_wQuery");
                 var wKey = (TensorOps.Linear)GetPrivateField(attn, "_wKey");
                 var wValue = (TensorOps.Linear)GetPrivateField(attn, "_wValue");
@@ -93,15 +100,18 @@ public class SafetensorsLoader
         var (tensors, dataStart, fs) = OpenSafetensors(filePath);
         try
         {
+            // 1. Load Embeddings
             var tokEmb = (Embedding)GetPrivateField(model, "_tokEmb");
             var posEmb = (PositionalEmbedding)GetPrivateField(model, "_posEmb");
 
             LoadEmbedding(tokEmb, tensors, fs, dataStart, "transformer.wte.weight");
             LoadPositionalEmbedding(posEmb, tensors, fs, dataStart, "transformer.wpe.weight");
 
+            // 2. Load Final LayerNorm
             var finalNorm = (LayerNorm)GetPrivateField(model, "_finalNorm");
             LoadLayerNorm(finalNorm, tensors, fs, dataStart, "transformer.ln_f");
 
+            // 3. Load Output Projection Head
             var outHead = (TensorOps.Linear)GetPrivateField(model, "_outHead");
             if (TryGetTensor(tensors, "lm_head.weight", out _))
             {
@@ -109,12 +119,14 @@ public class SafetensorsLoader
             }
             else
             {
+                // Weight tying fallback
                 for (int i = 0; i < tokEmb.Weights.Length; i++)
                 {
                     Array.Copy(tokEmb.Weights[i], outHead.Weights[i], tokEmb.EmbeddingDim);
                 }
             }
 
+            // 4. Load Transformer Blocks
             var blocks = (List<TransformerBlockWithSWA>)GetPrivateField(model, "_trfBlocks");
             for (int i = 0; i < blocks.Count; i++)
             {
@@ -127,11 +139,13 @@ public class SafetensorsLoader
                 LoadLayerNorm(norm1, tensors, fs, dataStart, $"transformer.h.{i}.ln_1");
                 LoadLayerNorm(norm2, tensors, fs, dataStart, $"transformer.h.{i}.ln_2");
 
+                // MLP
                 var ffLinear1 = (TensorOps.Linear)GetPrivateField(ff, "_linear1");
                 var ffLinear2 = (TensorOps.Linear)GetPrivateField(ff, "_linear2");
                 LoadLinear(ffLinear1, tensors, fs, dataStart, $"transformer.h.{i}.mlp.c_fc");
                 LoadLinear(ffLinear2, tensors, fs, dataStart, $"transformer.h.{i}.mlp.c_proj");
 
+                // Attention
                 var wQuery = (TensorOps.Linear)GetPrivateField(attn, "_wQuery");
                 var wKey = (TensorOps.Linear)GetPrivateField(attn, "_wKey");
                 var wValue = (TensorOps.Linear)GetPrivateField(attn, "_wValue");
@@ -477,6 +491,7 @@ public class SafetensorsLoader
         }
         else
         {
+            // Try loading separate Q, K, V weights from trf_blocks.{idx}.att.W_query.weight etc.
             var parts = namePrefix.Split('.');
             int idx = -1;
             for (int p = 0; p < parts.Length; p++)
@@ -514,6 +529,7 @@ public class SafetensorsLoader
             var outHead = (TensorOps.Linear)GetPrivateField(model, "_outHead");
             var blocks = (List<TransformerBlock>)GetPrivateField(model, "_trfBlocks");
             
+            // Pass 1: Calculate offsets and build newTensors dictionary
             long currentOffset = 0;
             foreach (var key in keys)
             {
@@ -530,6 +546,7 @@ public class SafetensorsLoader
                 currentOffset += sizeBytes;
             }
             
+            // Build header JSON
             var headerObj = new Dictionary<string, object>();
             foreach (var pair in newTensors)
             {
@@ -551,12 +568,16 @@ public class SafetensorsLoader
                 Directory.CreateDirectory(dir);
             }
             
+            // Pass 2: Open target file and write header, then serialize and write each tensor directly
             using (var fsOut = new FileStream(newFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 4096 * 1024)) // 4MB buffer for fast write
             using (var bwOut = new BinaryWriter(fsOut))
             {
+                // Write header size (8 bytes)
                 bwOut.Write(headerSize);
+                // Write header string
                 bwOut.Write(headerBytes);
                 
+                // Write each tensor data directly to output file
                 foreach (var key in keys)
                 {
                     var info = originalTensors[key];

@@ -11,6 +11,7 @@ public static class VerifySwa
 
         try
         {
+            // 1. Verify MultiHeadAttentionWithSWA forward pass
             Console.WriteLine("[VerifySwa] Testing MultiHeadAttentionWithSWA...");
             int dIn = 128;
             int dOut = 128;
@@ -18,6 +19,7 @@ public static class VerifySwa
             int windowSize = 4;
             var attSwa = new MultiHeadAttentionWithSWA(dIn, dOut, dropout: 0.0f, numHeads: numHeads, qkvBias: false, slidingWindowSize: windowSize);
 
+            // Dummy batch [1, 10, 128]
             float[][][] x = new float[1][][];
             x[0] = new float[10][];
             var rand = new Random(42);
@@ -37,6 +39,7 @@ public static class VerifySwa
                 throw new Exception("Attention output shape mismatch!");
             }
 
+            // 2. Verify GPTModelWithSWA instantiation & forward
             Console.WriteLine("[VerifySwa] Testing GPTModelWithSWA...");
             var cfg = new GPTConfigSWA
             {
@@ -59,6 +62,7 @@ public static class VerifySwa
                 throw new Exception("Model logits shape mismatch!");
             }
 
+            // 3. Verify text generation with cache
             Console.WriteLine("[VerifySwa] Testing SwaGenerator cached text generation...");
             var prompt = new List<int> { 1, 2, 3 };
             var generated = SwaGenerator.GenerateTextSimpleCached(model, prompt, maxNewTokens: 5);
@@ -68,7 +72,10 @@ public static class VerifySwa
                 throw new Exception("Generated tokens count mismatch!");
             }
 
+            // 4. Verify MemoryEstimatorSwa
             Console.WriteLine("[VerifySwa] Testing MemoryEstimatorSwa calculation...");
+            // Estimate with exact parameters from Python README example:
+            // --emb_dim 4096 --n_heads 32 --n_layers 32 --context_length 32768 --n_kv_groups 4 --batch_size 1 --dtype bf16 --sliding_window_size 1024 --swa_ratio "5:1"
             var est = MemoryEstimatorSwa.EstimateTotals(
                 contextLength: 32768,
                 slidingWindowSize: 1024,

@@ -16,6 +16,7 @@ public class BPETokenizerSimple
 
     public void Train(string text, int vocabSize, HashSet<string>? allowedSpecial = null)
     {
+        // Preprocess: Replace spaces with 'Ġ'
         var processedTextList = new List<char>();
         for (int i = 0; i < text.Length; i++)
         {
@@ -31,12 +32,14 @@ public class BPETokenizerSimple
         }
         string processedText = new string(processedTextList.ToArray());
 
+        // Initialize vocab with first 256 ASCII characters
         var uniqueChars = new List<string>();
         for (int i = 0; i < 256; i++)
         {
             uniqueChars.Add(((char)i).ToString());
         }
 
+        // Extend with characters from processedText
         var sortedChars = processedText.Distinct().OrderBy(c => c).ToList();
         foreach (char c in sortedChars)
         {
@@ -60,6 +63,7 @@ public class BPETokenizerSimple
             inverse_vocab[uniqueChars[i]] = i;
         }
 
+        // Add allowed special tokens
         if (allowedSpecial != null)
         {
             foreach (var token in allowedSpecial)
@@ -73,8 +77,10 @@ public class BPETokenizerSimple
             }
         }
 
+        // Tokenize the processed_text into token IDs
         var tokenIds = processedText.Select(c => inverse_vocab[c.ToString()]).ToList();
 
+        // BPE steps 1-3: Repeatedly find and replace frequent pairs
         bpe_merges = new Dictionary<Tuple<int, int>, int>();
         int startId = vocab.Count;
         for (int newId = startId; newId < vocabSize; newId++)
@@ -91,6 +97,7 @@ public class BPETokenizerSimple
             bpe_merges[pairId] = newId;
         }
 
+        // Build the vocabulary with merged tokens
         foreach (var kvp in bpe_merges)
         {
             var pair = kvp.Key;
@@ -104,6 +111,7 @@ public class BPETokenizerSimple
     public List<int> Encode(string text)
     {
         var tokens = new List<string>();
+        // Ensure \n is treated as a separate token
         string replaced = text.Replace("\n", " \n ");
         string[] words = replaced.Split(new[] { ' ', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries);
 

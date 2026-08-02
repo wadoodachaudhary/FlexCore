@@ -56,6 +56,7 @@ public class OlmoAttention
         _wValue = new TensorOps.Linear(_embDim, _numKvHeads * _headDim, cfg.AttentionBias, rand);
         _outProj = new TensorOps.Linear(_numHeads * _headDim, _embDim, cfg.AttentionBias, rand);
 
+        // OLMo3-style RMSNorm over the flattened projections
         _qNorm = new RMSNorm(_numHeads * _headDim, cfg.RmsNormEps);
         _kNorm = new RMSNorm(_numKvHeads * _headDim, cfg.RmsNormEps);
 
@@ -77,11 +78,13 @@ public class OlmoAttention
             float[][] kBatch = _wKey.ForwardBatch(x[b]);
             float[][] vBatch = _wValue.ForwardBatch(x[b]);
 
+            // Normalization on flat projections
             queries[b] = _qNorm.ForwardBatch(qBatch);
             keys[b] = _kNorm.ForwardBatch(kBatch);
             values[b] = vBatch; // values are not normalized
         }
 
+        // KV Cache update
         float[][][] finalKeys;
         float[][][] finalValues;
         if (cache != null)
@@ -112,11 +115,14 @@ public class OlmoAttention
             float[][][] kHeads = SplitHeads(finalKeys[b], targetSeqLen, _numKvHeads);
             float[][][] vHeads = SplitHeads(finalValues[b], targetSeqLen, _numKvHeads);
 
+            // Apply RoPE
             for (int h = 0; h < _numHeads; h++) qHeads[h] = RoPEHelper.ApplyRoPE(qHeads[h], cos, sin, startPos);
             for (int h = 0; h < _numKvHeads; h++) kHeads[h] = RoPEHelper.ApplyRoPE(kHeads[h], cos, sin, startPos);
 
+            // Expand KV groups to full heads
             if (_groupSize > 1)
             {
+                // We replicate the GQA replication logic
                 float[][][] kHeadsRep = new float[_numHeads][][];
                 float[][][] vHeadsRep = new float[_numHeads][][];
                 for (int h = 0; h < _numHeads; h++)
@@ -128,6 +134,7 @@ public class OlmoAttention
                 vHeads = vHeadsRep;
             }
 
+            // Scale queries before the matrix multiplication (common in OLMo)
             for (int h = 0; h < _numHeads; h++)
             {
                 for (int i = 0; i < seqLen; i++)
@@ -160,10 +167,12 @@ public class OlmoAttention
                         }
                         attnScores[i][j] = sum;
 
+                        // Causal masking
                         if (seqLen > 1 && j > i)
                         {
                             attnScores[i][j] = float.NegativeInfinity;
                         }
+                        // Sliding window masking
                         if (slidingWindow > 0 && (i - j >= slidingWindow))
                         {
                             attnScores[i][j] = float.NegativeInfinity;
@@ -294,6 +303,7 @@ public class OlmoTransformerBlock
 
         int window = (AttnType == "sliding_attention") ? slidingWindow : -1;
 
+        // Post-LN structure: norm after attention, then add residual
         float[][][] shortcut = x;
         float[][][] attnOut = _att.Forward(x, cos, sin, window, startPos, cache);
         float[][][] normAttn = _postAttentionLayernorm.Forward3D(attnOut);
@@ -312,6 +322,7 @@ public class OlmoTransformerBlock
             }
         }
 
+        // Post-LN structure: norm after feedforward, then add residual
         shortcut = xAttnResidual;
         float[][][] ffOut = _ff.Forward3D(xAttnResidual);
         float[][][] normFf = _postFeedforwardLayernorm.Forward3D(ffOut);
@@ -367,6 +378,7 @@ public class Olmo3Model
         _finalNorm = new RMSNorm(cfg.EmbDim, cfg.RmsNormEps);
         _outHead = new TensorOps.Linear(cfg.EmbDim, cfg.VocabSize, useBias: false, rand: r);
 
+        // Precompute RoPE parameters (supports YaRN scaling)
         var (cos, sin) = ComputeRopeParamsOlmo(
             cfg.HeadDim,
             cfg.RopeBase,
@@ -387,6 +399,7 @@ public class Olmo3Model
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Embedding lookup
         float[][][] x = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
         {
@@ -399,14 +412,17 @@ public class Olmo3Model
             }
         }
 
+        // Run blocks
         for (int i = 0; i < _blocks.Count; i++)
         {
             var cache = (caches != null && i < caches.Count) ? caches[i] : null;
             x = _blocks[i].Forward(x, _cos, _sin, Config.SlidingWindow, startPos, cache);
         }
 
+        // Final norm
         x = _finalNorm.Forward3D(x);
 
+        // Head projection
         return _outHead.Forward3D(x);
     }
 

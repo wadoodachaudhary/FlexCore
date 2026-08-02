@@ -60,19 +60,27 @@ public class GPTClassifier
         _classHead = new TensorOps.Linear(gptModel.Config.EmbDim, numClasses, useBias: true);
     }
 
+    /// <summary>
+    /// Performs classification forward pass.
+    /// Input: inIdx [batchSize, seqLen] containing token IDs
+    /// Output: Class logits [batchSize, numClasses] for the last token position
+    /// </summary>
     public float[][] Forward(int[][] inIdx)
     {
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // 1. Run forward pass of GPT model up to final norm (before outHead)
         float[][][] x = _gptModel.ForwardRepresentations(inIdx); // Shape: [batchSize, seqLen, embDim]
 
+        // 2. Focus only on the last time step representing the context of the sequence
         float[][] lastTokenStates = new float[batchSize][];
         for (int b = 0; b < batchSize; b++)
         {
             lastTokenStates[b] = x[b][seqLen - 1]; // Shape: [embDim]
         }
 
+        // 3. Feed the representations into the classification head
         float[][] classLogits = _classHead.ForwardBatch(lastTokenStates); // Shape: [batchSize, numClasses]
         
         return classLogits;

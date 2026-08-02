@@ -10,9 +10,11 @@ namespace Fx.ControlKit.Llm
 {
     public class TorchSharpBlock : IDisposable
     {
+        // LayerNorm 1
         public Tensor ln1_w { get; }
         public Tensor ln1_b { get; }
 
+        // Attention Query, Key, Value Projections
         public Tensor w_query_w { get; }
         public Tensor w_query_b { get; }
         public Tensor w_key_w { get; }
@@ -20,12 +22,15 @@ namespace Fx.ControlKit.Llm
         public Tensor w_value_w { get; }
         public Tensor w_value_b { get; }
 
+        // Attention Out Projection
         public Tensor out_proj_w { get; }
         public Tensor out_proj_b { get; }
 
+        // LayerNorm 2
         public Tensor ln2_w { get; }
         public Tensor ln2_b { get; }
 
+        // MLP
         public Tensor mlp_fc_w { get; }
         public Tensor mlp_fc_b { get; }
         public Tensor mlp_proj_w { get; }
@@ -44,9 +49,11 @@ namespace Fx.ControlKit.Llm
             var ff = (FeedForward)GetPrivateField(managedBlock, "_ff");
             var attn = (MultiHeadAttention)GetPrivateField(managedBlock, "_attn");
 
+            // 1. LayerNorm 1
             ln1_w = ToTensor1D(norm1.Scale);
             ln1_b = ToTensor1D(norm1.Shift);
 
+            // 2. Attention
             var wQuery = (TensorOps.Linear)GetPrivateField(attn, "_wQuery");
             var wKey = (TensorOps.Linear)GetPrivateField(attn, "_wKey");
             var wValue = (TensorOps.Linear)GetPrivateField(attn, "_wValue");
@@ -64,9 +71,11 @@ namespace Fx.ControlKit.Llm
             out_proj_w = ToTensor2D(outProj.Weights);
             out_proj_b = outProj.Bias != null ? ToTensor1D(outProj.Bias) : torch.zeros(outProj.Weights.Length);
 
+            // 3. LayerNorm 2
             ln2_w = ToTensor1D(norm2.Scale);
             ln2_b = ToTensor1D(norm2.Shift);
 
+            // 4. MLP
             var ffLinear1 = (TensorOps.Linear)GetPrivateField(ff, "_linear1");
             var ffLinear2 = (TensorOps.Linear)GetPrivateField(ff, "_linear2");
 
@@ -81,10 +90,12 @@ namespace Fx.ControlKit.Llm
         {
             using (var scope = torch.NewDisposeScope())
             {
+                // 1. Attention residual block
                 var norm1 = LayerNorm(x, ln1_w, ln1_b);
                 var attnOut = AttentionForward(norm1, causal_mask);
                 var x_attn = x.add(attnOut);
 
+                // 2. Feed-forward residual block
                 var norm2 = LayerNorm(x_attn, ln2_w, ln2_b);
                 var ffOut = MLPForward(norm2);
                 var result = x_attn.add(ffOut);
@@ -102,28 +113,37 @@ namespace Fx.ControlKit.Llm
         {
             using (var scope = torch.NewDisposeScope())
             {
+                // x shape: [1, seqLen, embDim]
                 int seqLen = (int)x.shape[1];
                 float scale = 1.0f / (float)Math.Sqrt(_headDim);
 
+                // Project Q, K, V (Note: w_query_w is [dOut, dIn] shape, which linear expects)
                 var q = torch.nn.functional.linear(x, w_query_w, w_query_b); // [1, seqLen, dOut]
                 var k = torch.nn.functional.linear(x, w_key_w, w_key_b);     // [1, seqLen, dOut]
                 var v = torch.nn.functional.linear(x, w_value_w, w_value_b); // [1, seqLen, dOut]
 
+                // Reshape into heads: [1, seqLen, numHeads, headDim] -> transpose to [1, numHeads, seqLen, headDim]
                 var q_heads = q.view(1, seqLen, _numHeads, _headDim).transpose(1, 2);
                 var k_heads = k.view(1, seqLen, _numHeads, _headDim).transpose(1, 2);
                 var v_heads = v.view(1, seqLen, _numHeads, _headDim).transpose(1, 2);
 
+                // Compute attention weights: (Q @ K^T) * scale
                 var k_heads_t = k_heads.transpose(2, 3);
                 var scores = torch.matmul(q_heads, k_heads_t).mul(scale);
 
+                // Apply causal mask: scores = scores + mask
                 var masked_scores = scores.add(causal_mask);
 
+                // Softmax
                 var weights = torch.nn.functional.softmax(masked_scores, dim: -1);
 
+                // Compute context vectors: weights @ V
                 var context = torch.matmul(weights, v_heads); // [1, numHeads, seqLen, headDim]
 
+                // Concatenate heads: transpose to [1, seqLen, numHeads, headDim] -> reshape to [1, seqLen, dOut]
                 var concat_context = context.transpose(1, 2).contiguous().view(1, seqLen, x.shape[2]);
 
+                // Final linear projection
                 var result = torch.nn.functional.linear(concat_context, out_proj_w, out_proj_b);
                 
                 return result.MoveToOuterDisposeScope();
@@ -278,18 +298,22 @@ namespace Fx.ControlKit.Llm
             var finalNorm = (LayerNorm)GetPrivateField(managedModel, "_finalNorm");
             var outHead = (TensorOps.Linear)GetPrivateField(managedModel, "_outHead");
 
+            // 1. Embeddings
             tok_emb = ToTensor2D(tokEmb.Weights);
             pos_emb = ToTensor2D(posEmb.Weights);
 
+            // 2. Blocks
             int headDim = EmbDim / NHeads;
             foreach (var b in managedBlocks)
             {
                 blocks.Add(new TorchSharpBlock(b, NHeads, headDim));
             }
 
+            // 3. Final LayerNorm
             final_ln_w = ToTensor1D(finalNorm.Scale);
             final_ln_b = ToTensor1D(finalNorm.Shift);
 
+            // 4. Output Head
             out_head_w = ToTensor2D(outHead.Weights);
         }
 
@@ -299,20 +323,24 @@ namespace Fx.ControlKit.Llm
             {
                 int seqLen = tokenIds.Length;
 
+                // 1. Embeddings index selection
                 using var tokenIdsTensor = torch.tensor(tokenIds, dtype: ScalarType.Int64, device: tok_emb.device);
                 using var tok_emb_x = torch.index_select(tok_emb, 0, tokenIdsTensor); // [seqLen, embDim]
 
                 using var posIndicesTensor = torch.arange(0, seqLen, dtype: ScalarType.Int64, device: tok_emb.device);
                 using var pos_emb_x = torch.index_select(pos_emb, 0, posIndicesTensor); // [seqLen, embDim]
 
+                // Sum and add batch dimension [1, seqLen, embDim]
                 using var emb_sum = tok_emb_x.add(pos_emb_x);
                 var x = emb_sum.unsqueeze(0); // [1, seqLen, embDim]
 
+                // 2. Create sequence-length causal mask: 0 on lower-left, -inf on upper-right natively
                 using var ones = torch.ones(new long[] { seqLen, seqLen }, dtype: ScalarType.Float32, device: tok_emb.device);
                 using var mask = torch.triu(ones, diagonal: 1);
                 using var causalMaskBase = torch.zeros(new long[] { seqLen, seqLen }, dtype: ScalarType.Float32, device: tok_emb.device);
                 using var causalMask = causalMaskBase.masked_fill(mask.to(ScalarType.Bool), float.NegativeInfinity);
 
+                // 3. Blocks forward pass
                 for (int i = 0; i < blocks.Count; i++)
                 {
                     var next_x = blocks[i].Forward(x, causalMask);
@@ -320,11 +348,14 @@ namespace Fx.ControlKit.Llm
                     x = next_x;
                 }
 
+                // 4. Final LayerNorm
                 using var finalNormed = torch.nn.functional.layer_norm(x, new long[] { final_ln_w.shape[0] }, final_ln_w, final_ln_b);
 
+                // 5. Output head projection (only for the last token in the sequence)
                 using var lastTokenRep = finalNormed.select(1, seqLen - 1); // [1, embDim]
                 using var logitsTensor = torch.nn.functional.linear(lastTokenRep, out_head_w); // [1, vocabSize]
 
+                // Copy to C# array
                 float[] logits = logitsTensor.data<float>().ToArray();
                 x.Dispose();
 

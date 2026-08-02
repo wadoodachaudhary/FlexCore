@@ -116,7 +116,7 @@
         </div>
     }
 
-    
+    @* ── Tree Table ─────────────────────────────────────────────── *@
     <div class="fx-treegrid-content">
         <table class="fx-treegrid-table">
             @if (ShowColumnHeaders)
@@ -281,7 +281,10 @@
                                 style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {
-                                    
+                                    @* Indent + expand/collapse icon + cell value.
+                                       Per-level indent comes from IndentPerLevel
+                                       (default 16px). VB6 trees use ~14-16px;
+                                       40px makes the column needlessly wide. *@
                                     @if (UseDottedTreeLines)
                                     {
                                         @for (var indentLevel = 0; indentLevel < node.Level; indentLevel++)
@@ -300,7 +303,16 @@
                                         <span style="display:inline-block; width:@(node.Level * IndentPerLevel)px; @(IsCompact ? "height:14px;" : "")"></span>
                                     }
 
-                                    
+                                    @* Per-node expand/collapse icon. Resolution
+                                       order — caller-supplied first:
+                                         1. ExpandIconTemplate / LeafIconTemplate
+                                            (full RenderFragment override; caller
+                                             handles markup AND click)
+                                         2. CollapsedGlyph / ExpandedGlyph /
+                                            LeafGlyph + *Style strings
+                                         3. NodeExpandIconStyle preset (toolkit
+                                            built-in default — PlusMinus or
+                                            Triangle / folder.ico) *@
                                     @if (node.HasChildren)
                                     {
                                         @if (ExpandIconTemplate != null)
@@ -310,7 +322,8 @@
                                         else if (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus
                                                  || CollapsedGlyph != null || ExpandedGlyph != null)
                                         {
-                                            
+                                            @* Glyph + style path — covers PlusMinus preset
+                                               AND any caller that supplied custom glyph strings. *@
                                             <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(node.IsExpanded ? "expanded" : "collapsed")"
                                                   style="@ResolveExpandIconStyle() @(IsCompact ? ";height:12px;width:12px;line-height:1;margin-right:2px;font-size:13px;" : "")"
                                                   @onclick="() => HandleExpandIconClick(node, currentIdx)"
@@ -344,7 +357,7 @@
                                         }
                                         else
                                         {
-                                            
+                                            @* Triangle preset → original folder.ico look. *@
                                             <span class="fx-treegrid-expand-icon @(node.IsExpanded ? "expanded" : "collapsed")"
                                                   style="@(IsCompact ? "height:14px;line-height:14px;margin-right:2px;" : "")"
                                                   @onclick="() => HandleExpandIconClick(node, currentIdx)"
@@ -383,7 +396,8 @@
                                         }
                                         else if (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus)
                                         {
-                                            
+                                            @* Invisible placeholder of identical width so
+                                               leaf cells align with parent siblings. *@
                                             <span class="fx-treegrid-expand-icon fx-treegrid-leaf-icon fx-treegrid-leaf-plusminus"
                                                   style="@ResolveLeafIconStyle() @(IsCompact ? ";height:10px;width:10px;margin-right:2px;" : "")"></span>
 

@@ -103,40 +103,59 @@
 <MessageBoxControl @ref="_overwriteMessageBox" />
 
 @code {
+    /// <summary>File-type filter forwarded to the input's <c>accept</c> attribute, e.g. <c>".xls,.xlsx"</c>.</summary>
     [Parameter] public string? Accept { get; set; }
 
+    /// <summary>Allow selecting more than one file.</summary>
     [Parameter] public bool Multiple { get; set; }
 
+    /// <summary>Text for the default <see cref="ButtonControl"/> when no <see cref="ChildContent"/> is supplied.</summary>
     [Parameter] public string? Label { get; set; }
 
+    /// <summary>When false, keeps the picker title available as an aria-label without showing a native browser tooltip.</summary>
     [Parameter] public bool ShowTooltip { get; set; } = true;
 
+    /// <summary>When true, use FlexKit's filesystem browser dialog instead of the browser native upload picker.</summary>
     [Parameter] public bool UseFileBrowser { get; set; }
 
+    /// <summary>Keyboard tab order for the filesystem-browser trigger.</summary>
     [Parameter] public int? TabIndex { get; set; }
 
+    /// <summary>Custom button visual rendered under the transparent picker (e.g. a
+    /// <c>ToolbarButtonControl</c>). When null a default <see cref="ButtonControl"/> shows <see cref="Label"/>.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>Raised with the picked file(s) — same payload as a raw <c>&lt;InputFile&gt;</c>.</summary>
     [Parameter] public EventCallback<InputFileChangeEventArgs> OnChange { get; set; }
 
+    /// <summary>Root folder for the FlexKit filesystem browser. Null starts at the user's home/current folder.</summary>
     [Parameter] public string? RootPath { get; set; }
 
+    /// <summary>Initial folder for the FlexKit filesystem browser.</summary>
     [Parameter] public string? InitialPath { get; set; }
 
+    /// <summary>Current folder for the FlexKit filesystem browser.</summary>
     [Parameter] public string? CurrentPath { get; set; }
 
+    /// <summary>Selected file path for the FlexKit filesystem browser.</summary>
     [Parameter] public string? SelectedPath { get; set; }
 
+    /// <summary>Enables <c>@bind-SelectedPath</c> in filesystem-browser mode.</summary>
     [Parameter] public EventCallback<string?> SelectedPathChanged { get; set; }
 
+    /// <summary>Alias for simple <c>@bind-Value</c> usage in filesystem-browser mode.</summary>
     [Parameter] public string? Value { get; set; }
 
+    /// <summary>Enables <c>@bind-Value</c> in filesystem-browser mode.</summary>
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
 
+    /// <summary>Raised after a filesystem-browser file is confirmed.</summary>
     [Parameter] public EventCallback<FileBrowserItem?> SelectedItemChanged { get; set; }
 
+    /// <summary>Raised after a filesystem-browser file is confirmed.</summary>
     [Parameter] public EventCallback<string?> FilePicked { get; set; }
 
+    /// <summary>What the filesystem-browser mode is allowed to select.</summary>
     [Parameter] public FileBrowserSelectionMode SelectionMode { get; set; } = FileBrowserSelectionMode.Files;
 
     [Parameter] public string SearchPattern { get; set; } = "*";

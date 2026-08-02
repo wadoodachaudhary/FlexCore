@@ -223,6 +223,11 @@
             await SavePathChanged.InvokeAsync(_selectedPath);
     }
 
+    /// <summary>
+    /// Confirms the current save path. If the target file already exists and
+    /// <see cref="ConfirmOverwrite"/> is true, a standard FlexKit message box
+    /// asks the user whether to overwrite it.
+    /// </summary>
     public async Task<bool> ConfirmSavePathAsync()
     {
         UpdateSelectedPath();
@@ -259,9 +264,11 @@
         return true;
     }
 
+    /// <summary>Returns the confirmed save path, or null when overwrite is declined/cancelled.</summary>
     public async Task<string?> GetConfirmedSavePathAsync() =>
         await ConfirmSavePathAsync() ? _selectedPath : null;
 
+    /// <summary>Sets the selected path programmatically, bypassing parameter warnings.</summary>
     public void SetSelectedPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return;

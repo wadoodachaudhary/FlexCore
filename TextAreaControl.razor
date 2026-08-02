@@ -130,12 +130,18 @@ else
 @code {
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    // Accepted so @bind-Value compiles; not otherwise used (no EditForm dependency).
     [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public int? Rows { get; set; }
+    /// <summary>Commit the typed value to the parent on every keystroke (oninput) rather than
+    /// only on change/blur. Set this on textareas that stay mounted while background re-renders
+    /// can occur — otherwise a parent StateHasChanged mid-typing passes the stale (empty) model
+    /// value back in and Blazor reverts the DOM, wiping in-progress text (the Feedback comment
+    /// box lost text when the fire-and-forget Jira sync re-rendered the page).</summary>
     [Parameter] public bool UpdateOnInput { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
@@ -164,6 +170,9 @@ else
 
     private async Task OnNativeInput(ChangeEventArgs e)
     {
+        // Live-update callers need the parent model on each keystroke, but the
+        // browser already painted the typed character. Skip this child render so
+        // typing stays native-fast.
         Value = e.Value?.ToString();
         _suppressNextNativeInputRender = true;
         if (UpdateOnInput && ValueChanged.HasDelegate)
@@ -244,6 +253,7 @@ else
         }
         catch
         {
+            // Browser clipboard commands are best-effort and may be blocked by policy.
         }
     }
 

@@ -188,9 +188,11 @@ public class TransformerBlock
         int seqLen = x[0].Length;
         int dim = x[0][0].Length;
 
+        // 1. Attention residual block
         float[][][] norm1X = _norm1.Forward3D(x);
         float[][][] attnOut = _attn.Forward(norm1X);
         
+        // Apply dropout and residual addition
         float[][][] xAttention = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
         {
@@ -200,12 +202,14 @@ public class TransformerBlock
                 xAttention[b][t] = new float[dim];
                 for (int d = 0; d < dim; d++)
                 {
+                    // Apply dropout effect (simulated lookup)
                     float droppedVal = (_random.NextDouble() >= _dropRate) ? attnOut[b][t][d] / (1f - _dropRate) : 0f;
                     xAttention[b][t][d] = x[b][t][d] + droppedVal;
                 }
             }
         }
 
+        // 2. Feed-Forward residual block
         float[][][] norm2X = _norm2.Forward3D(xAttention);
         float[][][] ffOut = _ff.Forward3D(norm2X);
 
@@ -256,13 +260,19 @@ public class GPTModel
         _outHead = new TensorOps.Linear(cfg.EmbDim, cfg.VocabSize, useBias: false);
     }
 
+    /// <summary>
+    /// Forward pass of GPT model returning the hidden representations before the output head projection.
+    /// Output shape: [batchSize, seqLen, embDim]
+    /// </summary>
     public float[][][] ForwardRepresentations(int[][] inIdx)
     {
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // 1. Embedding layer lookup
         float[][][] x = EmbeddingProcessor.ProcessBatch(inIdx, _tokEmb, _posEmb);
 
+        // Apply dropout to embeddings
         if (_dropRate > 0f)
         {
             float scale = 1f / (1f - _dropRate);
@@ -281,32 +291,48 @@ public class GPTModel
             }
         }
 
+        // 2. Transformer blocks
         foreach (var block in _trfBlocks)
         {
             x = block.Forward(x);
         }
 
+        // 3. Final layer norm
         x = _finalNorm.Forward3D(x);
 
         return x;
     }
 
+    /// <summary>
+    /// Forward pass of GPT model.
+    /// Input: inIdx [batchSize, seqLen] containing token IDs
+    /// Output: Logits [batchSize, seqLen, vocabSize]
+    /// </summary>
     public float[][][] Forward(int[][] inIdx)
     {
+        // 1. Get representations before head
         float[][][] x = ForwardRepresentations(inIdx);
 
+        // 2. Output projection head
         float[][][] logits = _outHead.Forward3D(x);
 
         return logits;
     }
 
+    /// <summary>
+    /// Forward pass of GPT model returning logits only for the last token in the sequence.
+    /// Input: inIdx [batchSize, seqLen] containing token IDs
+    /// Output: Logits of the last token [batchSize, vocabSize]
+    /// </summary>
     public float[][] ForwardLastToken(int[][] inIdx)
     {
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // 1. Get representations
         float[][][] x = ForwardRepresentations(inIdx);
 
+        // 2. Project only the last token
         float[][] lastLogits = new float[batchSize][];
         for (int b = 0; b < batchSize; b++)
         {

@@ -20,8 +20,11 @@ public class BPETokenizer
 
     public void Train(string text, int vocabSize, HashSet<string>? allowedSpecial = null)
     {
+        // Pre-tokenize training text using the same boundary rules as encode()
         var tokens = PretokenizeText(text);
 
+        // Initialize vocab with unique characters, including "Ġ" if present
+        // Start with the first 256 ASCII characters
         var uniqueChars = new List<string>();
         for (int i = 0; i < 256; i++)
         {
@@ -60,6 +63,7 @@ public class BPETokenizer
             inverse_vocab[uniqueChars[i]] = i;
         }
 
+        // Add allowed special tokens
         if (allowedSpecial != null)
         {
             foreach (var token in allowedSpecial)
@@ -73,6 +77,7 @@ public class BPETokenizer
             }
         }
 
+        // Tokenize each pre-token into character IDs
         var tokenIdSequences = new List<List<int>>();
         foreach (var tok in tokens)
         {
@@ -84,6 +89,7 @@ public class BPETokenizer
             tokenIdSequences.Add(seq);
         }
 
+        // BPE steps 1-3: Repeatedly find and replace frequent pairs
         bpe_merges = new Dictionary<Tuple<int, int>, int>();
         int startId = vocab.Count;
         for (int newId = startId; newId < vocabSize; newId++)
@@ -95,6 +101,7 @@ public class BPETokenizer
             bpe_merges[pairId] = newId;
         }
 
+        // Build the vocabulary with merged tokens
         foreach (var kvp in bpe_merges)
         {
             var pair = kvp.Key;
@@ -287,6 +294,7 @@ public class BPETokenizer
             return tokenIds;
         }
 
+        // GPT-2 style merging using ranks
         var symbols = tokenIds.Select(idNum => vocab[idNum]).ToList();
 
         while (true)

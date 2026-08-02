@@ -36,18 +36,22 @@ public class MoEFeedForward
     {
         int embDim = x.Length;
 
+        // 1. Calculate gate scores
         float[] scores = _gate.Forward(x);
 
+        // 2. Select Top-K experts
         var topK = scores
             .Select((s, idx) => new { Score = s, Index = idx })
             .OrderByDescending(item => item.Score)
             .Take(_numExpertsPerTok)
             .ToList();
 
+        // 3. Softmax over the Top-K expert scores
         float maxScore = topK.Max(item => item.Score);
         double sumExp = topK.Sum(item => Math.Exp(item.Score - maxScore));
         var probs = topK.Select(item => (float)(Math.Exp(item.Score - maxScore) / sumExp)).ToList();
 
+        // 4. Compute weighted experts sum
         float[] output = new float[embDim];
         for (int k = 0; k < _numExpertsPerTok; k++)
         {

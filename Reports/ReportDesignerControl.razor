@@ -1768,6 +1768,8 @@
 
     private void ApplyTextFormatExpert()
     {
+        // Text-format controls bind directly to the selected object so users see
+        // Crystal-style live preview on the design canvas.
     }
 
     private void ApplyHighlightingExpert()
@@ -2197,6 +2199,7 @@
             }
             catch
             {
+                // Temporary upload cleanup should not replace the conversion result.
             }
         }
     }
@@ -2293,7 +2296,7 @@
         }
         catch (Exception ex)
         {
-            return $"";
+            return $"<!-- Could not generate XML: {ex.Message} -->";
         }
     }
 

@@ -1679,6 +1679,8 @@
     }
 }
 
+/* Crystal-style designer toolbar: render real icon glyphs inside the button
+   instead of relying on cross-component ::before rules on ToolbarButtonControl. */
 .fx-rd-toolbar.crystal {
     min-height: 88px;
     padding: 2px 6px;
@@ -1938,6 +1940,7 @@
     filter: grayscale(0.65);
 }
 
+/* Exact Crystal Reports toolbar icons extracted from CrystalReports2016_Toolbar_Labels.xlsx. */
 .fx-rd-toolbar.crystal .fx-rd-icon,
 .fx-rd-toolbar.crystal ::deep .fx-rd-icon {
     background-repeat: no-repeat;
@@ -2023,6 +2026,7 @@
 .fx-rd-icon.rd-highlight-expert { background-image: url("reports/crystal-toolbar-icons/highlighting-expert.png"); }
 .fx-rd-icon.rd-page-navigation { background-image: url("reports/crystal-toolbar-icons/page-navigation.png"); }
 
+/* The workbook labels include Borders but do not contain an embedded borders icon. */
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-border::before,
 .fx-rd-toolbar.crystal ::deep .fx-rd-icon.rd-border::before {
     content: "□" !important;
@@ -2035,6 +2039,7 @@
     font: 700 18px/16px Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
+/* Fallback glyphs for Crystal commands whose extracted PNG is not present yet. */
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-indent-decrease::before,
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-indent-increase::before,
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-text-format::before,

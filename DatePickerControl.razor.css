@@ -335,6 +335,7 @@
     text-decoration: underline;
 }
 
+/* Time Picker Section */
 .fx-time-picker {
     display: flex;
     align-items: center;
@@ -368,6 +369,7 @@
     font-weight: bold;
 }
 
+/* Sidebar Section (Expanded View) */
 .fx-calendar-sidebar {
     width: 148px;
     border-left: 1px solid #808080;
@@ -430,6 +432,7 @@
     border-color: #a00000;
 }
 
+/* Quick Month Grid */
 .fx-months-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
@@ -452,6 +455,7 @@
     border-color: #316ac5;
 }
 
+/* Quick Years Grid */
 .fx-decade-header {
     display: flex;
     justify-content: flex-end;

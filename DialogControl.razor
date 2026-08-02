@@ -147,6 +147,10 @@
             var cls = "fx-dialog-overlay";
             if (_isResizing || _isDragging)
                 cls += " fx-dialog-overlay-resizing";
+            // Non-modal: the overlay stops dimming and stops intercepting the pointer, so
+            // the app behind stays fully interactive (VB6 non-modal .Show). During a drag
+            // or resize the -resizing class re-enables pointer capture on the overlay so
+            // the mousemove/mouseup handlers (which live on the overlay) keep tracking.
             if (!IsModal)
                 cls += " fx-dialog-overlay-nonmodal";
             return cls;

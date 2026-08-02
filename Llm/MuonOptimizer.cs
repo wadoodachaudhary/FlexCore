@@ -23,6 +23,7 @@ public class MuonOptimizer
         int rows = w.Length;
         int cols = w[0].Length;
 
+        // 1. Get or create momentum state
         if (!_states.TryGetValue(w, out var m))
         {
             m = new float[rows][];
@@ -33,6 +34,7 @@ public class MuonOptimizer
             _states[w] = m;
         }
 
+        // 2. Momentum update: m = momentum * m + grad
         float[][] update = new float[rows][];
         for (int i = 0; i < rows; i++)
         {
@@ -40,12 +42,15 @@ public class MuonOptimizer
             for (int j = 0; j < cols; j++)
             {
                 m[i][j] = _momentum * m[i][j] + grad[i][j];
+                // Nesterov momentum update
                 update[i][j] = grad[i][j] + _momentum * m[i][j];
             }
         }
 
+        // 3. Orthogonalize the update matrix using Newton-Schulz 5
         float[][] orthogonalUpdate = NewtonSchulz5(update);
 
+        // 4. Update weight: w = w - lr * (orthogonalUpdate + wd * w)
         for (int i = 0; i < rows; i++)
         {
             for (int j = 0; j < cols; j++)
@@ -76,6 +81,7 @@ public class MuonOptimizer
         int M = X.Length;
         int N = X[0].Length;
 
+        // Frobenius norm of X
         double sumSq = 0;
         for (int i = 0; i < M; i++)
         {
@@ -86,6 +92,7 @@ public class MuonOptimizer
         }
         float norm = (float)Math.Sqrt(sumSq);
 
+        // Normalize
         float scale = 1.0f / (norm + eps);
         for (int i = 0; i < M; i++)
         {
@@ -95,12 +102,14 @@ public class MuonOptimizer
             }
         }
 
+        // Constants optimised for convergence of polar decomposition
         const float a = 3.4445f;
         const float b = -4.7750f;
         const float c = 2.0315f;
 
         for (int step = 0; step < steps; step++)
         {
+            // A = X @ X^T -> Size [M][M]
             float[][] A = new float[M][];
             for (int i = 0; i < M; i++)
             {
@@ -116,6 +125,7 @@ public class MuonOptimizer
                 }
             }
 
+            // A_sq = A @ A -> Size [M][M]
             float[][] A_sq = new float[M][];
             for (int i = 0; i < M; i++)
             {
@@ -131,6 +141,7 @@ public class MuonOptimizer
                 }
             }
 
+            // B = b * A + c * A_sq -> Size [M][M]
             float[][] B = new float[M][];
             for (int i = 0; i < M; i++)
             {
@@ -141,6 +152,7 @@ public class MuonOptimizer
                 }
             }
 
+            // X_new = a * X + B @ X -> Size [M][N]
             float[][] X_new = new float[M][];
             for (int i = 0; i < M; i++)
             {

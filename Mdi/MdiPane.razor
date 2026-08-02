@@ -33,8 +33,12 @@
 @code {
     [Parameter, EditorRequired] public MdiWindow Window { get; set; } = default!;
 
+    /// <summary>Raised when the hosted component throws — carries this pane's window
+    /// so the host can clear any persisted "restore this page" state.</summary>
     [Parameter] public EventCallback<MdiWindow> OnError { get; set; }
 
+    /// <summary>Raised when the user clicks Close on the error panel — the host
+    /// removes the (faulted) window.</summary>
     [Parameter] public EventCallback<MdiWindow> OnCloseRequested { get; set; }
 
     private DynamicComponent? _component;

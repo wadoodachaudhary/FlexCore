@@ -13,7 +13,7 @@
 .fx-drawing-toolbar {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;                 
+    flex-wrap: wrap;                 /* never push actions/tools off-screen */
     gap: 4px 6px;
     background: #d4d0c8;
     padding: 5px 8px;
@@ -21,6 +21,7 @@
     border-color: #ffffff #808080 #808080 #ffffff;
 }
 
+/* Keep the buttons of one logical group together; the toolbar wraps between groups. */
 .fx-draw-group { display: flex; align-items: center; gap: 4px; }
 
 .fx-draw-lbl { font-weight: bold; color: #000; margin: 0 2px; }
@@ -34,7 +35,7 @@
     font-size: 12px;
     background: #d4d0c8;
     border: 2px solid;
-    border-color: #ffffff #808080 #808080 #ffffff;   
+    border-color: #ffffff #808080 #808080 #ffffff;   /* raised 3D */
     color: #000;
     cursor: pointer;
     border-radius: 0;
@@ -52,10 +53,12 @@
 }
 .fx-draw-color.active { border-color: #808080 #ffffff #ffffff #808080; outline: 1px solid #000080; }
 
+/* Tool icons (inline SVG, currentColor) + the "+Text" badge. */
 .fx-draw-tool { display: inline-flex; align-items: center; justify-content: center; padding: 0 5px; }
 .fx-draw-tool svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .fx-draw-tbadge { font-size: 9px; font-weight: bold; margin-left: 1px; line-height: 1; }
 
+/* Colour dropdown (swatch button + popup palette). */
 .fx-draw-colorwrap { position: relative; }
 .fx-draw-colorbtn {
     display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 5px;
@@ -73,6 +76,7 @@
 
 .fx-drawing-toolbar input[type="range"] { width: 96px; height: 6px; }
 
+/* Editable title bar between toolbar and image. White background, centred, VB6-style text. */
 .fx-drawing-titlebar {
     display: flex;
     align-items: center;
@@ -101,6 +105,8 @@
     font-weight: 400;
 }
 
+/* Sunken scroll viewport. The sizer carries the zoom-scaled box (so scrollbars are correct);
+   the surface inside is scaled via CSS transform (offsetX/Y stay in image px). */
 .fx-drawing-scroll {
     border: 2px solid; border-color: #808080 #ffffff #ffffff #808080;
     background: #808080; overflow: auto; outline: none;
@@ -108,16 +114,20 @@
 .fx-drawing-sizer { position: relative; }
 .fx-drawing-surface { position: relative; display: inline-block; line-height: 0; }
 
+/* Background cell grid — every cell the same size; the image is scaled + centre-cropped
+   (object-fit: cover) to the cell's full dimensions. Empty cells invite a right-click. */
 .fx-cell {
     position: absolute;
     overflow: hidden;
     background: #fff;
-    border: 2px solid #8a8a8a;   
+    border: 2px solid #8a8a8a;   /* clear separation between cells */
     box-sizing: border-box;
 }
-
+/* Positioned so the caption band can reserve space above it (top/height come inline). */
 .fx-cell-img { position: absolute; left: 0; width: 100%; height: 100%; object-fit: cover; user-select: none; -webkit-user-drag: none; }
 
+/* Per-cell caption band — sits ABOVE the image, same white box + centred dark text as the main
+   title bar so it never bleeds onto the picture (height comes inline). */
 .fx-cell-title {
     position: absolute; left: 0; top: 0; width: 100%;
     background: #ffffff; border-bottom: 1px solid #999999;
@@ -136,10 +146,17 @@
     text-align: center; padding: 8px; box-sizing: border-box;
 }
 
+/* Image + annotations box, inset from the surface by the ruler gutter. The box-shadow is a crisp
+   1px border that sits just outside the image (in the gap before the ruler) without shifting the
+   absolutely-positioned shapes/capture inside it. */
+/* The whole canvas gets a CLEAR THICK border (inside the rulers, around the visible area) so
+   the image's extent is obvious against the page background. */
 .fx-drawing-imagebox { position: relative; display: inline-block; line-height: 0; background: #fff; box-shadow: 0 0 0 3px #666; }
 
 .fx-drawing-capture { position: absolute; inset: 0; background: transparent; }
 
+/* Text-bubble callout (DrawingControl renders these for every "+Text" shape). left/top/
+   border-color/text-color come inline; the box look is here. */
 .fx-draw-bubble {
     background: #ffffe0;
     border: 1.5px solid;
@@ -165,6 +182,7 @@
     pointer-events: auto;
 }
 
+/* ── Clean icon-above-label toolbar (overrides the VB6 toolbar look) ─────────── */
 .fx-drawing-toolbar {
     background: #ffffff;
     border: 0;
@@ -222,19 +240,25 @@
 .fx-tb-widthrow input[type="range"] { width: 90px; }
 .fx-tb-backdrop { position: fixed; inset: 0; z-index: 39; background: transparent; }
 
+/* "From file…" menu item wraps a hidden <InputFile> — clicking the label opens the OS picker (no JS). */
 .fx-tb-fileitem { position: relative; }
 .fx-tb-fileinput { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
 .fx-tb-fileinput::file-selector-button { display: none; }
 
+/* Image overlay shape — laid over the background; selected outline mirrors the other shapes. */
 .fx-draw-imgshape { display: block; object-fit: fill; }
 .fx-draw-imgshape.selected { outline: 2px dashed #4c7bf3; outline-offset: 1px; }
 
+/* Corner resize handles on the selected shape (drag one with the Pointer tool; the opposite
+   corner stays fixed). Visual only — the grab is hit-tested in C# via the capture layer. */
 .fx-draw-handle {
     position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px;
     background: #fff; border: 1.5px solid #4c7bf3; border-radius: 1px;
     box-sizing: border-box; z-index: 6; pointer-events: none;
 }
 
+/* Cell context menu — reuses the toolbar dropdown look but is positioned at the right-clicked
+   point (outside the zoom transform, so it never scales with the surface). */
 .fx-ctx-menu { position: absolute; top: auto; z-index: 40; }
 .fx-ctx-sep { height: 1px; margin: 4px 6px; background: #e2e5ea; }
 
@@ -248,10 +272,11 @@
 .fx-tb-zval { min-width: 38px; text-align: center; font-size: 12px; }
 .fx-tb-dims { font-size: 11px; color: #667085; margin-left: 8px; white-space: nowrap; }
 
+/* Crop marquee — the kept region. box-shadow dims everything outside; dashed marching border. */
 .fx-crop-rect {
     position: absolute; z-index: 4; pointer-events: none;
     border: 1.5px dashed #fff;
-    outline: 1.5px dashed #000;            
+    outline: 1.5px dashed #000;            /* dual dash → visible on any background */
     box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
 }
 .fx-crop-dims {

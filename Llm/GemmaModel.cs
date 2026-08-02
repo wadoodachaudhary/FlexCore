@@ -22,6 +22,7 @@ public class GemmaConfig
     public float? QueryPreAttnScalar { get; set; } = 256.0f;
     public float LayerNormEps { get; set; } = 1e-6f;
 
+    // Gemma4 parameters
     public int VocabSizePerLayerInput { get; set; } = 262144;
     public int HiddenSizePerLayerInput { get; set; } = 256;
     public int NumKvSharedLayers { get; set; } = 20;
@@ -262,6 +263,7 @@ public class GemmaAttention
             values[b] = _wValue.ForwardBatch(x[b]);
         }
 
+        // KV cache update
         float[][][] finalKeys;
         float[][][] finalValues;
         if (cache != null)
@@ -292,12 +294,14 @@ public class GemmaAttention
             float[][][] kHeads = SplitHeads(finalKeys[b], targetSeqLen, _numKvGroups);
             float[][][] vHeads = SplitHeads(finalValues[b], targetSeqLen, _numKvGroups);
 
+            // Optional QK Norm
             if (_qNorm != null && _kNorm != null)
             {
                 for (int h = 0; h < _numHeads; h++) qHeads[h] = _qNorm.ForwardBatch(qHeads[h]);
                 for (int h = 0; h < _numKvGroups; h++) kHeads[h] = _kNorm.ForwardBatch(kHeads[h]);
             }
 
+            // Apply RoPE
             for (int h = 0; h < _numHeads; h++) qHeads[h] = RoPEHelper.ApplyRoPE(qHeads[h], cos, sin, startPos);
             for (int h = 0; h < _numKvGroups; h++) kHeads[h] = RoPEHelper.ApplyRoPE(kHeads[h], cos, sin, startPos);
 
@@ -324,10 +328,12 @@ public class GemmaAttention
                         }
                         attnScores[i][j] = sum * _scaling;
 
+                        // Causal masking
                         if (seqLen > 1 && j > i)
                         {
                             attnScores[i][j] = float.NegativeInfinity;
                         }
+                        // Sliding window masking
                         if (slidingWindow > 0 && (i - j >= slidingWindow))
                         {
                             attnScores[i][j] = float.NegativeInfinity;
@@ -418,10 +424,12 @@ public class Gemma3TransformerBlock
         int seqLen = x[0].Length;
         int dim = x[0][0].Length;
 
+        // Determine RoPE bases and sliding window settings
         float[][] cos = (AttnType == "sliding_attention") ? cosLocal : cosGlobal;
         float[][] sin = (AttnType == "sliding_attention") ? sinLocal : sinGlobal;
         int window = (AttnType == "sliding_attention") ? slidingWindow : -1;
 
+        // 1. Attention residual block
         float[][][] shortcut = x;
         float[][][] normX = _inputLayernorm.Forward3D(x);
         float[][][] attnOut = _attn.Forward(normX, cos, sin, window, startPos, cache);
@@ -441,6 +449,7 @@ public class Gemma3TransformerBlock
             }
         }
 
+        // 2. Feedforward residual block
         shortcut = xAttnResidual;
         float[][][] normXff = _preFeedforwardLayernorm.Forward3D(xAttnResidual);
         float[][][] ffOut = _ff.Forward3D(normXff);
@@ -499,6 +508,7 @@ public class Gemma3Model
         _finalNorm = new Gemma3RMSNorm(cfg.EmbDim, cfg.LayerNormEps);
         _outHead = new TensorOps.Linear(cfg.EmbDim, cfg.VocabSize, useBias: false, rand: r);
 
+        // Precompute RoPE parameters
         var (cosL, sinL) = RoPEHelper.ComputeRopeParams(cfg.HeadDim, cfg.RopeLocalBase, cfg.ContextLength);
         _cosLocal = cosL;
         _sinLocal = sinL;
@@ -513,6 +523,7 @@ public class Gemma3Model
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Embedding lookup & scale
         float scaleVal = (float)Math.Sqrt(Config.EmbDim);
         float[][][] x = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
@@ -529,14 +540,17 @@ public class Gemma3Model
             }
         }
 
+        // Run blocks
         for (int i = 0; i < _blocks.Count; i++)
         {
             var cache = (caches != null && i < caches.Count) ? caches[i] : null;
             x = _blocks[i].Forward(x, _cosGlobal, _sinGlobal, _cosLocal, _sinLocal, Config.SlidingWindow, startPos, cache);
         }
 
+        // Final norm
         x = _finalNorm.Forward3D(x);
 
+        // Head projection
         return _outHead.Forward3D(x);
     }
 }
@@ -594,6 +608,7 @@ public class Gemma4Attention
             values[b] = _wValue.ForwardBatch(x[b]);
         }
 
+        // KV cache update
         float[][][] finalKeys;
         float[][][] finalValues;
         if (cache != null)
@@ -624,10 +639,12 @@ public class Gemma4Attention
             float[][][] kHeads = SplitHeads(finalKeys[b], targetSeqLen, _numKvHeads);
             float[][][] vHeads = SplitHeads(finalValues[b], targetSeqLen, _numKvHeads);
 
+            // QK and V Norms
             for (int h = 0; h < _numHeads; h++) qHeads[h] = _qNorm.ForwardBatch(qHeads[h]);
             for (int h = 0; h < _numKvHeads; h++) kHeads[h] = _kNorm.ForwardBatch(kHeads[h]);
             for (int h = 0; h < _numKvHeads; h++) vHeads[h] = _vNorm.ForwardBatch(vHeads[h]);
 
+            // Apply RoPE
             for (int h = 0; h < _numHeads; h++) qHeads[h] = RoPEHelper.ApplyRoPE(qHeads[h], cos, sin, startPos);
             for (int h = 0; h < _numKvHeads; h++) kHeads[h] = RoPEHelper.ApplyRoPE(kHeads[h], cos, sin, startPos);
 
@@ -654,10 +671,12 @@ public class Gemma4Attention
                         }
                         attnScores[i][j] = sum * _scaling;
 
+                        // Causal masking
                         if (seqLen > 1 && j > i)
                         {
                             attnScores[i][j] = float.NegativeInfinity;
                         }
+                        // Sliding window masking
                         if (slidingWindow > 0 && (i - j >= slidingWindow))
                         {
                             attnScores[i][j] = float.NegativeInfinity;
@@ -766,6 +785,7 @@ public class Gemma4DenseBlock
         int seqLen = x[0].Length;
         int dim = x[0][0].Length;
 
+        // 1. Attention residual block
         float[][][] shortcut = x;
         float[][][] normX = _inputLayernorm.Forward3D(x);
         float[][][] attnOut = _attn.Forward(normX, cos, sin, slidingWindow, startPos, cache);
@@ -785,6 +805,7 @@ public class Gemma4DenseBlock
             }
         }
 
+        // 2. Feedforward residual block
         shortcut = xAttnResidual;
         float[][][] normXff = _preFeedforwardLayernorm.Forward3D(xAttnResidual);
         float[][][] ffOut = _mlp.Forward3D(normXff);
@@ -804,6 +825,7 @@ public class Gemma4DenseBlock
             }
         }
 
+        // 3. Per-layer input injection
         if (_hiddenSizePerLayerInput > 0 && perLayerInputForBlock != null)
         {
             float[][][] gatedPerLayer = _perLayerInputGate!.Forward3D(output);
@@ -837,6 +859,7 @@ public class Gemma4DenseBlock
             }
         }
 
+        // Scale by layer scalar
         if (Math.Abs(_layerScalar - 1.0f) > 1e-5f)
         {
             for (int b = 0; b < batchSize; b++)
@@ -890,6 +913,8 @@ public class Gemma4Model
 
         if (cfg.TieWordEmbeddings)
         {
+            // Tied embedding weights
+            // Output head uses same weights as token embeddings in final projection
         }
 
         int layerInputDim = cfg.HiddenSizePerLayerInput;
@@ -900,6 +925,7 @@ public class Gemma4Model
             _perLayerProjectionNorm = new Gemma4RMSNorm(layerInputDim, cfg.LayerNormEps);
         }
 
+        // Precompute RoPE parameters
         var (cosL, sinL) = RoPEHelper.ComputeRopeParams(cfg.HeadDim, cfg.RopeLocalBase, cfg.ContextLength);
         _cosLocal = cosL;
         _sinLocal = sinL;
@@ -914,6 +940,7 @@ public class Gemma4Model
         int batchSize = inIdx.Length;
         int seqLen = inIdx[0].Length;
 
+        // Embedding lookup & scale
         float scaleVal = (float)Math.Sqrt(Config.EmbDim);
         float[][][] x = new float[batchSize][][];
         for (int b = 0; b < batchSize; b++)
@@ -930,6 +957,7 @@ public class Gemma4Model
             }
         }
 
+        // Project per-layer inputs
         float[][][][]? perLayerInputs = null; // shape: [batchSize][seqLen][nLayers][layerInputDim]
         int layerInputDim = Config.HiddenSizePerLayerInput;
         if (layerInputDim > 0)
@@ -968,6 +996,7 @@ public class Gemma4Model
             }
         }
 
+        // Run blocks
         for (int i = 0; i < _blocks.Count; i++)
         {
             var cache = (caches != null && i < caches.Count) ? caches[i] : null;
@@ -976,6 +1005,7 @@ public class Gemma4Model
             float[][] sin = isSliding ? _sinLocal : _sinGlobal;
             int window = isSliding ? Config.SlidingWindow : -1;
 
+            // Extract slice of perLayerInputs for layer i: shape [batch][seq][layerInputDim]
             float[][][]? perLayerInputForBlock = null;
             if (perLayerInputs != null)
             {
@@ -993,10 +1023,13 @@ public class Gemma4Model
             x = _blocks[i].Forward(x, perLayerInputForBlock, cos, sin, window, startPos, cache);
         }
 
+        // Final norm
         x = _finalNorm.Forward3D(x);
 
+        // Head projection
         float[][][] logits = _outHead.Forward3D(x);
 
+        // Final Logit Softcap
         float softcap = Config.FinalLogitSoftcap;
         if (softcap > 0)
         {

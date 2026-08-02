@@ -9,6 +9,9 @@ using System.Threading.Tasks;
 
 namespace Fx.ControlKit.Llm;
 
+/// <summary>
+/// Runtime configuration for the FlexKit LLM API gate.
+/// </summary>
 public class LLMConfiguration
 {
     public string TextCorpusPath { get; set; } = "";
@@ -27,6 +30,11 @@ public class LLMConfiguration
     public bool AllowFileSystemOperations { get; set; } = true;
 }
 
+/// <summary>
+/// Operations accepted by <see cref="LLMControl.Send"/> and
+/// <see cref="LLMControl.SendAsync"/>. These message operations are the
+/// intended public gate for callers that do not need strongly typed methods.
+/// </summary>
 public enum LlmOperation
 {
     BuildFromJson,
@@ -54,6 +62,10 @@ public enum LlmOperation
     RunVerification
 }
 
+/// <summary>
+/// Message envelope for all LLM requests. Hosts can use the strongly typed
+/// methods directly, or route all requests through this small API-gate shape.
+/// </summary>
 public class LlmMessage
 {
     public string MessageId { get; set; } = Guid.NewGuid().ToString("N");
@@ -169,6 +181,12 @@ public class LlmVerificationResult
     public string Output { get; set; } = "";
 }
 
+/// <summary>
+/// Single API gate for FlexKit LLM functionality. The individual tokenizer,
+/// model, classifier, safetensor, and verification classes remain available
+/// for advanced users, but application code should prefer this control as the
+/// one place where LLM messages are validated and dispatched.
+/// </summary>
 public class LLMControl
 {
     internal static readonly JsonSerializerOptions JsonOptions = new()

@@ -43,15 +43,20 @@
 </div>
 
 @code {
+    /// <summary>The options to choose from.</summary>
     [Parameter] public IEnumerable<string>? DataSource { get; set; }
 
+    /// <summary>The currently-selected values (a subset of DataSource). Two-way bindable.</summary>
     [Parameter] public List<string> SelectedValues { get; set; } = new();
     [Parameter] public EventCallback<List<string>> SelectedValuesChanged { get; set; }
 
+    /// <summary>Shown on the button when nothing is selected, and as the "(N)" prefix when several are.</summary>
     [Parameter] public string? Placeholder { get; set; }
 
+    /// <summary>Show an "(All)" toggle at the top of the list.</summary>
     [Parameter] public bool ShowSelectAll { get; set; } = true;
 
+    /// <summary>Text shown when DataSource is empty.</summary>
     [Parameter] public string EmptyText { get; set; } = "No options";
 
     [Parameter] public string? Width { get; set; }
@@ -67,6 +72,8 @@
     private bool IsChecked(string o) => SelectedValues?.Contains(o) == true;
     private bool AllSelected => Options.Count > 0 && SelectedValues != null && Options.All(SelectedValues.Contains);
 
+    // Always hand back a FRESH list — a list mutated in place won't trip the binding's change detection
+    // (the same reference-equality trap MultiSelectDualListControl documents).
     private async Task SetAsync(string o, bool on)
     {
         var list = new List<string>(SelectedValues ?? new());

@@ -248,6 +248,9 @@ public static class GridExporter
         if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
             return 8.43;
 
+        // GridControl stores runtime widths as CSS pixels. ClosedXML expects
+        // Excel's character-based column width, so passing pixels directly
+        // makes normal grid columns become half-page-wide Excel columns.
         var excelWidth = (width - 5) / 7d;
         return Math.Clamp(excelWidth, 4, 80);
     }

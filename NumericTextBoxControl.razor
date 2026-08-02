@@ -27,6 +27,7 @@
     [Parameter] public decimal Step { get; set; } = 1;
     [Parameter] public int? MaxLength { get; set; }
 
+    /// <summary>Event fired when value changes.</summary>
     [Parameter] public EventCallback<NumericChangeEventArgs<TValue>> ValueChange { get; set; }
 
     private string StepValue => Step == 1 ? "any" : Step.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -40,6 +41,7 @@
             if (Value == null) return "";
             if (Value is IFormattable formattable && !string.IsNullOrEmpty(Format))
             {
+                // For numeric input, strip currency/percent symbols — just show the raw number
                 var fmt = Format.Replace("C", "F").Replace("N", "F");
                 return formattable.ToString(fmt, System.Globalization.CultureInfo.InvariantCulture);
             }
@@ -69,6 +71,8 @@
             newValue = default;
         }
 
+        // Clamp to min/max. Huge double/float input can exceed decimal range;
+        // treat that as unclamped unless a bound brings it back into range.
         if (newValue != null && Min.HasValue && TryConvertToDecimal(newValue, out var minDecVal))
         {
             if (minDecVal < Min.Value)
