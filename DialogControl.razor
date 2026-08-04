@@ -75,7 +75,7 @@
                  @onclick:stopPropagation="true"
                  @oncontextmenu:stopPropagation="true">
                 <button type="button" role="menuitem" disabled>Restore</button>
-                <button type="button" role="menuitem" @onclick="CloseSystemMenu">Move</button>
+                <button type="button" role="menuitem" disabled="@(!Draggable)" @onclick="HandleSystemMenuMove">Move</button>
                 <button type="button" role="menuitem" disabled="@(!Resizable)" @onclick="CloseSystemMenu">Size</button>
                 <button type="button" role="menuitem" disabled>Minimize</button>
                 <button type="button" role="menuitem" disabled>Maximize</button>
@@ -130,6 +130,7 @@
     private double? _runtimeHeight;
     private bool _suppressNextOverlayClick;
     private bool _isDragging;
+    private bool _moveArmed;
     private double _dragStartX;
     private double _dragStartY;
     private double _dragStartOffsetX;
@@ -147,6 +148,10 @@
             var cls = "fx-dialog-overlay";
             if (_isResizing || _isDragging)
                 cls += " fx-dialog-overlay-resizing";
+            if (_isDragging)
+                cls += " fx-dialog-overlay-dragging";
+            else if (_moveArmed)
+                cls += " fx-dialog-overlay-move-armed";
             // Non-modal: the overlay stops dimming and stops intercepting the pointer, so
             // the app behind stays fully interactive (VB6 non-modal .Show). During a drag
             // or resize the -resizing class re-enables pointer capture on the overlay so
@@ -168,6 +173,8 @@
                 parts.Add("fx-dialog-draggable");
             if (_isDragging)
                 parts.Add("fx-dialog-dragging");
+            else if (_moveArmed)
+                parts.Add("fx-dialog-move-armed");
             if (!string.IsNullOrWhiteSpace(CssClass))
                 parts.Add(CssClass);
             return string.Join(" ", parts);
@@ -236,6 +243,12 @@
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (_moveArmed && e.Key == "Escape")
+        {
+            _moveArmed = false;
+            return;
+        }
+
         if (e.AltKey && string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase))
         {
             _systemMenuVisible = false;
@@ -280,6 +293,7 @@
             return Task.CompletedTask;
 
         _systemMenuVisible = false;
+        _moveArmed = false;
         _isDragging = true;
         _dragStartX = e.ClientX;
         _dragStartY = e.ClientY;
@@ -308,6 +322,13 @@
     private Task CloseSystemMenu()
     {
         _systemMenuVisible = false;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleSystemMenuMove()
+    {
+        _systemMenuVisible = false;
+        _moveArmed = Draggable;
         return Task.CompletedTask;
     }
 
@@ -394,6 +415,7 @@
             _systemMenuVisible = false;
             _isDragging = false;
             _isResizing = false;
+            _moveArmed = false;
         }
         _lastVisible = Visible;
     }

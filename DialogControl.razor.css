@@ -36,6 +36,13 @@
     cursor: default;
 }
 
+.fx-dialog-overlay-dragging,
+.fx-dialog-overlay-move-armed,
+.fx-dialog-move-armed,
+.fx-dialog-move-armed .fx-dialog-header {
+    cursor: move;
+}
+
 /* Non-modal window: no dim, no pointer interception — everything behind stays live.
    The dialog itself (and the system menu) re-enable pointer events; while dragging or
    resizing the -resizing class returns pointer capture to the overlay so its
