@@ -312,6 +312,9 @@
 
     private async Task OnInputBlur()
     {
+        if (_isOpen)
+            return;
+
         await ParseInputText(true);
     }
 
@@ -372,10 +375,11 @@
                 newValue = MaxDate.Value;
         }
 
+        var changed = Value != newValue;
         Value = newValue;
         _inputText = newValue.HasValue ? FormatDate(newValue.Value) : "";
 
-        if (ValueChanged.HasDelegate)
+        if (changed && ValueChanged.HasDelegate)
         {
             await ValueChanged.InvokeAsync(Value);
         }

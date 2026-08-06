@@ -462,6 +462,10 @@
     cursor: pointer;
     transition: background 0.1s;
 }
+
+.fx-treegrid-row:focus {
+    outline: none;
+}
 .fx-treegrid-row.fx-treegrid-hover:hover {
     background: #f0f6ff !important;
 }
@@ -862,4 +866,132 @@
 }
 .fx-treegrid-compact .fx-treegrid-expand-icon .fx-treegrid-folder-image {
     display: inline-block;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   LEGACY SCROLLBAR (opt-in via ShowLegacyScrollBar)
+
+   None of these rules bite unless the component adds
+   .fx-treegrid-legacy-scroll / renders .fx-legacy-vscroll, so an existing
+   consumer sees no change.
+
+   Win9x palette: #d4d0c8 face, white top/left highlight, #808080
+   bottom/right shadow, 16px wide — the Windows metric a VSFlexGrid used.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/* The scroller keeps scrolling (wheel, trackpad, keys) but stops painting a
+   native bar, and reserves the 16px the DOM one occupies. */
+.fx-treegrid-legacy-scroll {
+    scrollbar-width: none;          /* Firefox */
+    -ms-overflow-style: none;       /* legacy Edge */
+    margin-right: 16px;
+}
+
+.fx-treegrid-legacy-scroll::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.fx-treegrid-legacy-scroll + .fx-legacy-vscroll,
+.fx-legacy-vscroll {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    display: flex;
+    flex-direction: column;
+    background: #d4d0c8;
+    border-left: 1px solid #808080;
+    user-select: none;
+    z-index: 3;
+}
+
+/* Nothing to scroll — Windows hides the thumb but keeps the bar and arrows. */
+.fx-legacy-vscroll-empty .fx-legacy-vscroll-thumb {
+    display: none;
+}
+
+.fx-legacy-vscroll-btn {
+    flex: 0 0 16px;
+    height: 16px;
+    padding: 0;
+    font-size: 7px;
+    line-height: 14px;
+    color: #000;
+    background: #d4d0c8;
+    border: 1px solid;
+    border-color: #fff #808080 #808080 #fff;
+    cursor: default;
+}
+
+.fx-legacy-vscroll-btn:active {
+    border-color: #808080 #fff #fff #808080;
+}
+
+.fx-legacy-vscroll-track {
+    position: relative;
+    flex: 1 1 auto;
+    background: #e9e9e6;
+}
+
+.fx-legacy-vscroll-thumb {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    min-height: 12px;
+    background: #d4d0c8;
+    border: 1px solid;
+    border-color: #fff #808080 #808080 #fff;
+    cursor: default;
+}
+
+/* Held only while the thumb is dragged, so the pointer can leave the 16px bar
+   without dropping the drag — the pure-Blazor stand-in for setPointerCapture. */
+.fx-legacy-vscroll-dragveil {
+    position: fixed;
+    inset: 0;
+    z-index: 998;
+    cursor: default;
+}
+
+/* ── The Windows scroll menu ──────────────────────────────────────── */
+.fx-legacy-vscroll-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 999;
+    background: transparent;
+}
+
+.fx-legacy-vscroll-menu {
+    position: fixed;
+    z-index: 1000;
+    min-width: 150px;
+    padding: 2px 0;
+    background: #fff;
+    border: 1px solid #8f8f8f;
+    box-shadow: 1px 2px 6px rgba(0, 0, 0, 0.22);
+    font-size: 12px;
+}
+
+.fx-legacy-vscroll-menu-row {
+    display: block;
+    width: 100%;
+    padding: 3px 20px;
+    background: transparent;
+    border: none;
+    text-align: left;
+    color: #222;
+    cursor: default;
+    font-size: 12px;
+}
+
+.fx-legacy-vscroll-menu-row:hover {
+    background: #316ac5;
+    color: #fff;
+}
+
+.fx-legacy-vscroll-menu-sep {
+    margin: 3px 6px;
+    border-top: 1px solid #c0c0c0;
 }

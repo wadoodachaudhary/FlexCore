@@ -3,6 +3,7 @@
 
 <div class="@TreeGridCssClass"
      style="@(string.IsNullOrEmpty(Height) ? "" : $"height:{Height};") @(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
+     @ref="_treeGridElement"
      tabindex="@TabIndex"
      @onkeydown="HandleKeyDown"
      @onmousemove="HandleColumnResizeMove"
@@ -117,7 +118,9 @@
     }
 
     @* ── Tree Table ─────────────────────────────────────────────── *@
-    <div class="fx-treegrid-content">
+    <div class="fx-treegrid-content@(ShowLegacyScrollBar ? " fx-treegrid-legacy-scroll" : "")"
+         @ref="_scrollViewportElement"
+         @onscroll="HandleLegacyScroll">
         <table class="fx-treegrid-table">
             @if (ShowColumnHeaders)
             {
@@ -269,6 +272,8 @@
 
                     <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "") @rowCssClass"
                         style="@(IsCompact ? "height:14px;" : "")"
+                        tabindex="-1"
+                        @ref="node.RowElement"
                         @onclick="() => HandleRowClick(node, currentIdx)"
                         @ondblclick="() => HandleRowDoubleClick(node, currentIdx)"
                         @oncontextmenu="() => HandleRowContextMenu(node, currentIdx)">
@@ -488,4 +493,57 @@
             </tbody>
         </table>
     </div>
+
+    @* Win9x-style scrollbar drawn as DOM: a browser-drawn one dispatches no mouse
+       events, so it can be neither styled nor right-clicked. *@
+    @if (ShowLegacyScrollBar)
+    {
+        <div class="fx-legacy-vscroll@(_legacyScrollable ? "" : " fx-legacy-vscroll-empty")"
+             @oncontextmenu="HandleLegacyScrollBarContextMenu"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="true">
+            <button type="button" class="fx-legacy-vscroll-btn fx-legacy-vscroll-up" tabindex="-1"
+                    @onclick="@(() => ScrollByLineAsync(-1))">▲</button>
+            <div class="fx-legacy-vscroll-track" @ref="_legacyTrackElement"
+                 @onmousedown="HandleLegacyTrackMouseDown">
+                <div class="fx-legacy-vscroll-thumb"
+                     style="top:@(_legacyThumbTopPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;height:@(_legacyThumbHeightPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;"
+                     @onmousedown="HandleLegacyThumbMouseDown"
+                     @onmousedown:stopPropagation="true"></div>
+            </div>
+            <button type="button" class="fx-legacy-vscroll-btn fx-legacy-vscroll-down" tabindex="-1"
+                    @onclick="@(() => ScrollByLineAsync(1))">▼</button>
+        </div>
+
+        @* Keeps the drag alive when the pointer leaves the 16px bar. *@
+        @if (_legacyThumbDragging)
+        {
+            <div class="fx-legacy-vscroll-dragveil"
+                 @onmousemove="HandleLegacyThumbDragMove"
+                 @onmouseup="EndLegacyThumbDrag"
+                 @onmouseleave="EndLegacyThumbDrag"></div>
+        }
+
+        @if (_showLegacyScrollMenu && EnableLegacyScrollBarMenu)
+        {
+            <div class="fx-legacy-vscroll-menu-backdrop"
+                 @onclick="CloseLegacyScrollMenu"
+                 @oncontextmenu="CloseLegacyScrollMenu"
+                 @oncontextmenu:preventDefault="true"></div>
+            <div class="fx-legacy-vscroll-menu"
+                 style="left:@(_legacyScrollMenuX)px;top:@(_legacyScrollMenuY)px;"
+                 @onclick:stopPropagation="true">
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="ScrollHereAsync">Scroll Here</button>
+                <div class="fx-legacy-vscroll-menu-sep"></div>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollToEdgeAsync(true))">Top</button>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollToEdgeAsync(false))">Bottom</button>
+                <div class="fx-legacy-vscroll-menu-sep"></div>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollByPageAsync(-1))">Page Up</button>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollByPageAsync(1))">Page Down</button>
+                <div class="fx-legacy-vscroll-menu-sep"></div>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollByLineAsync(-1))">Scroll Up</button>
+                <button type="button" class="fx-legacy-vscroll-menu-row" @onclick="@(() => ScrollByLineAsync(1))">Scroll Down</button>
+            </div>
+        }
+    }
 </div>

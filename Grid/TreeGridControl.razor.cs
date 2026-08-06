@@ -1,6 +1,7 @@
 using System.Reflection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 
 namespace Fx.ControlKit.Grid;
 
@@ -225,6 +226,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private bool _treeBuilt;
     private int _lastRenderedColumnCount;
     private string? _staticAssetRoot;
+    private ElementReference _treeGridElement;
+    private TreeNode<TValue>? _pendingKeyboardFocusNode;
+    private bool _pendingTreeFocus;
     private readonly Dictionary<string, ColumnState> _columnStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _visibilityOverrides = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, double> _columnWidthOverrides = new(StringComparer.OrdinalIgnoreCase);
@@ -246,14 +250,279 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             _columns.Add(column);
     }
 
-    protected override void OnAfterRender(bool firstRender)
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_columns.Count != _lastRenderedColumnCount)
         {
             _lastRenderedColumnCount = _columns.Count;
             StateHasChanged();
         }
+
+        IJSObjectReference? legacyScrollModule = null;
+        if (ShowLegacyScrollBar)
+        {
+            legacyScrollModule = await GetLegacyScrollModuleAsync();
+            if (!_legacyKeyboardNavigationEnabled && legacyScrollModule is not null)
+            {
+                try
+                {
+                    await legacyScrollModule.InvokeVoidAsync("enableTreeKeyboardNavigation", _treeGridElement);
+                    _legacyKeyboardNavigationEnabled = true;
+                }
+                catch { }
+            }
+        }
+
+        if (_pendingTreeFocus)
+        {
+            _pendingTreeFocus = false;
+            _pendingKeyboardFocusNode = null;
+            try { await _treeGridElement.FocusAsync(preventScroll: true); } catch { }
+        }
+        else if (_pendingKeyboardFocusNode is { } pendingNode)
+        {
+            _pendingKeyboardFocusNode = null;
+            try
+            {
+                if (legacyScrollModule is not null)
+                    await legacyScrollModule.InvokeVoidAsync("focusSelectedTreeRow", _scrollViewportElement);
+                else
+                    await pendingNode.RowElement.FocusAsync(preventScroll: false);
+            }
+            catch
+            {
+                try { await pendingNode.RowElement.FocusAsync(preventScroll: false); } catch { }
+            }
+        }
+
+        if (ShowLegacyScrollBar)
+            await SyncLegacyScrollBarAsync();
     }
+
+    // ── Legacy scrollbar (opt-in; inert unless ShowLegacyScrollBar is set) ──
+    // A browser-drawn scrollbar dispatches no mouse events, so it can carry
+    // neither a context menu nor Win9x styling. This one is ordinary DOM.
+
+    /// <summary>Replaces the native vertical scrollbar with a DOM-drawn Win9x-style one.</summary>
+    [Parameter] public bool ShowLegacyScrollBar { get; set; }
+
+    /// <summary>Standard Windows scroll menu on right-click. Needs <see cref="ShowLegacyScrollBar"/>.</summary>
+    [Parameter] public bool EnableLegacyScrollBarMenu { get; set; } = true;
+
+    /// <summary>Row height in px used by the line-scroll commands and the arrow buttons.</summary>
+    [Parameter] public double LegacyScrollLineHeight { get; set; } = 17;
+
+    /// <summary>Raised before the built-in menu, so a host can show its own instead.</summary>
+    [Parameter] public EventCallback<MouseEventArgs> LegacyScrollBarRightClicked { get; set; }
+
+    [Inject] private IJSRuntime? LegacyScrollJs { get; set; }
+
+    private const string LegacyScrollBarJsModulePath = "./_content/FlexCore/legacy-scrollbar.js";
+    private IJSObjectReference? _legacyScrollModule;
+    private bool _legacyKeyboardNavigationEnabled;
+
+    private ElementReference _scrollViewportElement;
+    private ElementReference _legacyTrackElement;
+
+    private bool _legacyScrollable;
+    private double _legacyThumbTopPct;
+    private double _legacyThumbHeightPct = 100;
+    private bool _legacyThumbDragging;
+    private double _legacyDragStartClientY;
+    private double _legacyDragStartScrollTop;
+
+    private bool _showLegacyScrollMenu;
+    private double _legacyScrollMenuX;
+    private double _legacyScrollMenuY;
+    private double _legacyScrollMenuRatio;
+
+    private async Task<IJSObjectReference?> GetLegacyScrollModuleAsync()
+    {
+        if (LegacyScrollJs is null) return null;
+        try
+        {
+            return _legacyScrollModule ??=
+                await LegacyScrollJs.InvokeAsync<IJSObjectReference>("import", LegacyScrollBarJsModulePath);
+        }
+        catch { return null; }   // prerender / torn-down circuit — bar just stays hidden
+    }
+
+    private async Task<(double Top, double Height, double Client)?> ReadLegacyMetricsAsync()
+    {
+        var mod = await GetLegacyScrollModuleAsync();
+        if (mod is null) return null;
+        try
+        {
+            var m = await mod.InvokeAsync<double[]>("readScrollMetrics", _scrollViewportElement);
+            return m is { Length: 3 } ? (m[0], m[1], m[2]) : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Recomputes the thumb. Called from OnAfterRenderAsync, so it MUST only raise
+    /// StateHasChanged when a number actually moved — otherwise it would re-render on
+    /// every render and spin forever.
+    /// </summary>
+    private async Task SyncLegacyScrollBarAsync()
+    {
+        var m = await ReadLegacyMetricsAsync();
+
+        var scrollable = _legacyScrollable;
+        var top = _legacyThumbTopPct;
+        var height = _legacyThumbHeightPct;
+
+        if (m is null || m.Value.Height <= 0 || m.Value.Height - m.Value.Client <= 1)
+        {
+            scrollable = false;
+            top = 0;
+            height = 100;
+        }
+        else
+        {
+            var overflow = m.Value.Height - m.Value.Client;
+            scrollable = true;
+            // Windows keeps the thumb grabbable on very long lists — floor it at 10%.
+            height = Math.Max(10, m.Value.Client / m.Value.Height * 100);
+            top = Math.Clamp(m.Value.Top / overflow, 0, 1) * (100 - height);
+        }
+
+        if (scrollable == _legacyScrollable
+            && Math.Abs(top - _legacyThumbTopPct) < 0.05
+            && Math.Abs(height - _legacyThumbHeightPct) < 0.05)
+        {
+            return;
+        }
+
+        _legacyScrollable = scrollable;
+        _legacyThumbTopPct = top;
+        _legacyThumbHeightPct = height;
+        StateHasChanged();
+    }
+
+    private Task HandleLegacyScroll() => ShowLegacyScrollBar ? SyncLegacyScrollBarAsync() : Task.CompletedTask;
+
+    private async Task SetLegacyScrollTopAsync(double top)
+    {
+        var mod = await GetLegacyScrollModuleAsync();
+        if (mod is null) return;
+        try { await mod.InvokeVoidAsync("setScrollTop", _scrollViewportElement, top); }
+        catch { return; }
+        await SyncLegacyScrollBarAsync();
+    }
+
+    private async Task ScrollByLineAsync(int direction)
+    {
+        CloseLegacyScrollMenuForCommand();
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+        await SetLegacyScrollTopAsync(m.Value.Top + direction * LegacyScrollLineHeight);
+    }
+
+    private async Task ScrollByPageAsync(int direction)
+    {
+        CloseLegacyScrollMenuForCommand();
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+        await SetLegacyScrollTopAsync(m.Value.Top + direction * m.Value.Client);
+    }
+
+    private async Task ScrollToEdgeAsync(bool toTop)
+    {
+        CloseLegacyScrollMenuForCommand();
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+        await SetLegacyScrollTopAsync(toTop ? 0 : m.Value.Height);
+    }
+
+    /// <summary>Windows "Scroll Here": jump to the fraction of the track that was clicked.</summary>
+    private async Task ScrollHereAsync()
+    {
+        var ratio = _legacyScrollMenuRatio;
+        CloseLegacyScrollMenuForCommand();
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+        await SetLegacyScrollTopAsync(ratio * Math.Max(0, m.Value.Height - m.Value.Client));
+    }
+
+    /// <summary>Where a viewport-space Y falls inside the track, 0..1.</summary>
+    private async Task<double> LegacyTrackRatioAsync(double clientY)
+    {
+        var mod = await GetLegacyScrollModuleAsync();
+        if (mod is null) return 0;
+        try
+        {
+            var r = await mod.InvokeAsync<double[]>("readElementRect", _legacyTrackElement);
+            if (r is not { Length: 4 } || r[3] <= 0) return 0;
+            return Math.Clamp((clientY - r[1]) / r[3], 0, 1);
+        }
+        catch { return 0; }
+    }
+
+    private async Task HandleLegacyScrollBarContextMenu(MouseEventArgs e)
+    {
+        if (LegacyScrollBarRightClicked.HasDelegate)
+            await LegacyScrollBarRightClicked.InvokeAsync(e);
+
+        if (!EnableLegacyScrollBarMenu) return;
+
+        _legacyScrollMenuX = e.ClientX;
+        _legacyScrollMenuY = e.ClientY;
+        _legacyScrollMenuRatio = await LegacyTrackRatioAsync(e.ClientY);
+        _showLegacyScrollMenu = true;
+        StateHasChanged();
+    }
+
+    private void CloseLegacyScrollMenu() => _showLegacyScrollMenu = false;
+
+    private void CloseLegacyScrollMenuForCommand()
+    {
+        if (_showLegacyScrollMenu)
+            _pendingTreeFocus = true;
+
+        _showLegacyScrollMenu = false;
+    }
+
+    /// <summary>Clicking the track above/below the thumb pages, as in Windows.</summary>
+    private async Task HandleLegacyTrackMouseDown(MouseEventArgs e)
+    {
+        if (e.Button != 0 || !_legacyScrollable) return;
+        var ratio = await LegacyTrackRatioAsync(e.ClientY) * 100;
+        await ScrollByPageAsync(ratio < _legacyThumbTopPct ? -1 : 1);
+    }
+
+    private async Task HandleLegacyThumbMouseDown(MouseEventArgs e)
+    {
+        if (e.Button != 0 || !_legacyScrollable) return;
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+        _legacyDragStartClientY = e.ClientY;
+        _legacyDragStartScrollTop = m.Value.Top;
+        _legacyThumbDragging = true;
+    }
+
+    private async Task HandleLegacyThumbDragMove(MouseEventArgs e)
+    {
+        if (!_legacyThumbDragging) return;
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) return;
+
+        var mod = await GetLegacyScrollModuleAsync();
+        if (mod is null) return;
+        double[] rect;
+        try { rect = await mod.InvokeAsync<double[]>("readElementRect", _legacyTrackElement); }
+        catch { return; }
+        if (rect is not { Length: 4 } || rect[3] <= 0) return;
+
+        // Thumb travel is the track minus the thumb, so one pixel of drag is worth
+        // (overflow / travel) pixels of scroll.
+        var travelPx = rect[3] * (1 - _legacyThumbHeightPct / 100);
+        if (travelPx <= 0) return;
+        var overflow = m.Value.Height - m.Value.Client;
+        await SetLegacyScrollTopAsync(_legacyDragStartScrollTop + (e.ClientY - _legacyDragStartClientY) / travelPx * overflow);
+    }
+
+    private void EndLegacyThumbDrag() => _legacyThumbDragging = false;
 
     internal List<TreeGridColumn> VisibleColumns => _columns.Where(IsColumnVisible).ToList();
 
@@ -847,7 +1116,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (visible.Count == 0 || index < 0 || index >= visible.Count)
             return;
 
-        await SelectNodeAsync(visible[index], index);
+        var node = visible[index];
+        _pendingKeyboardFocusNode = node;
+        await SelectNodeAsync(node, index);
     }
 
     private async Task ActivateSelectedNodeAsync()
@@ -860,12 +1131,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (selectedIndex < 0)
         {
             await SelectVisibleNodeAsync(0, visible);
-            return;
+            selectedIndex = 0;
         }
 
         var node = visible[selectedIndex];
+        _pendingTreeFocus = true;
         if (RowActivated.HasDelegate)
             await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
+        else if (node.HasChildren)
+            await ToggleNode(node);
     }
 
     private async Task ExpandOrMoveToChildAsync()
@@ -884,6 +1158,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         if (!node.IsExpanded)
         {
+            _pendingTreeFocus = true;
             await SetNodeExpandedAsync(node, true);
             return;
         }
@@ -906,6 +1181,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         var node = visible[selectedIndex];
         if (node.HasChildren && node.IsExpanded)
         {
+            _pendingTreeFocus = true;
             await SetNodeExpandedAsync(node, false);
             return;
         }
@@ -1024,6 +1300,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     }
 
     public TValue? GetSelectedRecord() => _selectedItem;
+
+    public async Task FocusAsync(bool preventScroll = true)
+    {
+        try { await _treeGridElement.FocusAsync(preventScroll); } catch { }
+    }
 
     public async Task SelectRecordAsync(TValue? item)
     {
@@ -1422,6 +1703,7 @@ public class TreeNode<TValue>
     public object? ParentId { get; set; }
     public bool IsLastSibling { get; set; }
     public IReadOnlyList<bool> AncestorLineContinuations { get; set; } = Array.Empty<bool>();
+    public ElementReference RowElement { get; set; }
 }
 
 public class TreeRowSelectEventArgs<TValue>
