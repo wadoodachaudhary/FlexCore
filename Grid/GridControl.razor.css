@@ -3046,7 +3046,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: inherit;
     white-space: nowrap;
 }
-.fx-grid-header-context-item:hover:not(:disabled) {
+.fx-grid-header-context-item:hover:not(:disabled),
+.fx-grid-header-context-item:focus:not(:disabled) {
     background: #316ac5;
     color: #ffffff;
 }
@@ -3062,7 +3063,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     text-align: center;
     flex-shrink: 0;
 }
-.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-check {
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-check,
+.fx-grid-header-context-item:focus:not(:disabled) .fx-grid-header-context-check {
     color: #ffffff;
 }
 .fx-grid-header-context-arrow {
@@ -3071,7 +3073,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #6b7280;
     font-size: 10px;
 }
-.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-arrow {
+.fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-arrow,
+.fx-grid-header-context-item:focus:not(:disabled) .fx-grid-header-context-arrow {
     color: #ffffff;
 }
 .fx-grid-header-context-sep {
@@ -3180,7 +3183,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     left: 50%;
     top: 50%;
     z-index: 1009;
-    width: 300px;
+    width: min(440px, calc(100vw - 24px));
     transform: translate(-50%, -50%);
     border: 1px solid #8f8f8f;
     background: #f0f0f0;
@@ -3216,15 +3219,27 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #dcdcdc;
 }
 
+/* VB6 InputBox geometry: the button stack occupies the top-right, the prompt
+   sits to its left, and the entry box spans the full width underneath both. */
 .fx-grid-rename-body {
-    padding: 12px 10px 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 82px;
+    grid-template-areas:
+        "prompt buttons"
+        "input  input";
+    align-items: start;
+    gap: 14px;
+    padding: 14px 12px 12px;
 }
 
-.fx-grid-rename-field {
-    display: grid;
-    grid-template-columns: 52px minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
+.fx-grid-rename-prompt {
+    grid-area: prompt;
+    min-width: 0;
+    align-self: start;
+}
+
+.fx-grid-rename-input {
+    grid-area: input;
 }
 
 .fx-grid-rename-input {
@@ -3238,14 +3253,14 @@ tr.fx-row:has(.fx-dropdown-panel) {
 }
 
 .fx-grid-rename-footer {
+    grid-area: buttons;
     display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding: 0 10px 10px;
+    flex-direction: column;
+    gap: 6px;
 }
 
 .fx-grid-rename-footer button {
-    min-width: 72px;
+    width: 82px;
     height: 24px;
     border: 1px solid #8f8f8f;
     background: #e9e9e9;

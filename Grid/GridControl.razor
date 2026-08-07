@@ -560,7 +560,10 @@
                                       @onmousedown="e => StartResize(col, e)"
                                       @onmousedown:preventDefault="true"
                                       @onmousedown:stopPropagation="true"
-                                      @onclick:stopPropagation="true"></span>
+                                      @onclick:stopPropagation="true"
+                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
+                                      @ondblclick:preventDefault="true"
+                                      @ondblclick:stopPropagation="true"></span>
                             }
 
                             @if (AllowColumnReorder)
@@ -1025,6 +1028,12 @@
              @oncontextmenu="CloseCellContextMenu"
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-cell-context-menu"
+             @ref="_cellMenuElement"
+             role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="_menuKeyHandled"
+             @onkeydown:stopPropagation="true"
              style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
              @onclick:stopPropagation="true">
             <button type="button"
@@ -1068,6 +1077,12 @@
              @oncontextmenu="CloseHeaderContextMenu"
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-header-context-menu"
+             @ref="_headerMenuElement"
+             role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="_menuKeyHandled"
+             @onkeydown:stopPropagation="true"
              style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @onclick:stopPropagation="true">
 
@@ -1127,6 +1142,22 @@
                     <span class="fx-grid-header-context-check"></span>
                     Rename this column...
                 </button>
+                @if (AllowColumnAutoFit)
+                {
+                    <div class="fx-grid-header-context-sep"></div>
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(CurrentHeaderColumn == null)"
+                            @onclick="HeaderMenuBestFitColumn">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuBestFitAllColumns">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit All Columns
+                    </button>
+                }
+
                 <div class="fx-grid-header-context-sep"></div>
 
                 <button type="button" class="fx-grid-header-context-item"
@@ -1151,28 +1182,29 @@
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-rename-dialog" @onclick:stopPropagation="true">
             <div class="fx-grid-rename-header">
-                <span>Rename Column</span>
+                <span>@RenameColumnDialogTitle</span>
                 <button type="button"
                         class="fx-grid-rename-close"
                         title="Close"
                         aria-label="Close"
                         @onclick="HeaderMenuCancelRename">x</button>
             </div>
+            @* VB6 InputBox layout: OK over Cancel at the TOP RIGHT, the prompt to
+               their left, and a full-width entry box along the bottom. *@
             <div class="fx-grid-rename-body">
-                <label class="fx-grid-rename-field">
-                    <span>Name</span>
-                    <input type="text"
-                           class="fx-grid-rename-input"
-                           value="@_renameColumnDraft"
-                           @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
-                           @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); else if (e.Key == "Escape") HeaderMenuCancelRename(); })" />
-                </label>
-            </div>
-            <div class="fx-grid-rename-footer">
-                <button type="button" class="fx-grid-rename-ok"
-                        @onclick="HeaderMenuCommitRename">OK</button>
-                <button type="button" class="fx-grid-rename-cancel"
-                        @onclick="HeaderMenuCancelRename">Cancel</button>
+                <div class="fx-grid-rename-footer">
+                    <button type="button" class="fx-grid-rename-ok"
+                            @onclick="HeaderMenuCommitRename">OK</button>
+                    <button type="button" class="fx-grid-rename-cancel"
+                            @onclick="HeaderMenuCancelRename">Cancel</button>
+                </div>
+                <span class="fx-grid-rename-prompt">@RenameColumnPrompt</span>
+                <input type="text"
+                       class="fx-grid-rename-input"
+                       autofocus
+                       value="@_renameColumnDraft"
+                       @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
+                       @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); else if (e.Key == "Escape") HeaderMenuCancelRename(); })" />
             </div>
         </div>
     }

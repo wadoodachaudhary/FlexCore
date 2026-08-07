@@ -1,5 +1,6 @@
 @namespace Fx.ControlKit
 @using Microsoft.JSInterop
+@using Microsoft.AspNetCore.Components.Web
 @inject IJSRuntime JSRuntime
 @implements IAsyncDisposable
 
@@ -15,6 +16,9 @@
              style="@PositionStyle"
              @ref="_menuElement"
              role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="_menuKeyHandled"
              @onclick:stopPropagation="true"
              @oncontextmenu:stopPropagation="true">
             @ChildContent
@@ -36,6 +40,8 @@
 
     private ElementReference _menuElement;
     private IJSObjectReference? _contextMenuJsModule;
+    private bool _menuOpened;
+    private bool _menuKeyHandled = true;   // seeded: swallow the first arrow too
 
     private string RootCssClass =>
         string.IsNullOrWhiteSpace(CssClass)
@@ -51,12 +57,61 @@
             return;
 
         var module = await GetContextMenuJsModuleAsync();
-        if (module != null)
-            await module.InvokeVoidAsync("positionContextMenu", _menuElement, X, Y, MinWidth, ZIndex);
+        if (module == null)
+            return;
+
+        await module.InvokeVoidAsync("positionContextMenu", _menuElement, X, Y, MinWidth, ZIndex);
+
+        // Open with the first item highlighted, as the Win32 popup menu did.
+        if (!_menuOpened)
+        {
+            _menuOpened = true;
+            await FocusMenuItemAsync("first");
+        }
+    }
+
+    // Enter and Space are left to the focused <button>'s own activation; this
+    // owns only the arrows, Home/End and Escape.
+    private async Task HandleMenuKeyDownAsync(KeyboardEventArgs e)
+    {
+        string mode;
+        switch (e.Key)
+        {
+            case "ArrowDown": mode = "next"; break;
+            case "ArrowUp": mode = "prev"; break;
+            case "Home": mode = "first"; break;
+            case "End": mode = "last"; break;
+            case "Escape":
+                _menuKeyHandled = true;
+                await CloseAsync();
+                return;
+            default:
+                _menuKeyHandled = false;
+                return;
+        }
+
+        _menuKeyHandled = true;
+        await FocusMenuItemAsync(mode);
+    }
+
+    private async Task FocusMenuItemAsync(string mode)
+    {
+        try
+        {
+            var module = await GetContextMenuJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("focusMenuItem", _menuElement, mode);
+        }
+        catch
+        {
+            // Mouse and Tab still work without it.
+        }
     }
 
     public async Task CloseAsync()
     {
+        _menuOpened = false;
+
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
 

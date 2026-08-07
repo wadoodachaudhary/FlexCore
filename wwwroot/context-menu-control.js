@@ -36,3 +36,28 @@ export function positionContextMenu(menuElement, x, y, minWidth, zIndex) {
         menuElement.style.top = `${Math.round(top)}px`;
     });
 }
+
+/**
+ * Roving focus for a popup menu. VB6 used native Win32 PopupMenu, where the OS
+ * supplied first-item highlight, Up/Down and Enter for free; these menus are plain
+ * <button>s in a div, so the movement has to be driven explicitly. Enter/Space are
+ * deliberately NOT handled here — a focused <button> already activates on both.
+ *
+ * mode: "first" | "last" | "next" | "prev". Returns true when focus moved.
+ */
+export function focusMenuItem(menuEl, mode) {
+    if (!menuEl) return false;
+    const items = [...menuEl.querySelectorAll("button")].filter(
+        b => !b.disabled && b.offsetParent !== null);
+    if (!items.length) return false;
+
+    const current = items.indexOf(document.activeElement);
+    let next;
+    if (mode === "first") next = 0;
+    else if (mode === "last") next = items.length - 1;
+    else if (mode === "prev") next = current <= 0 ? items.length - 1 : current - 1;
+    else next = current < 0 || current === items.length - 1 ? 0 : current + 1;
+
+    items[next].focus();
+    return true;
+}

@@ -1318,3 +1318,106 @@ export function positionDatePickerDropdown(hostEl, dropdownEl) {
     dropdownEl.style.right = "auto";
     dropdownEl.style.bottom = "auto";
 }
+
+/**
+ * Best-fit measurement: the width a column's content actually needs.
+ *
+ * Measured with a Range over each cell's contents, NOT scrollWidth — scrollWidth
+ * is floored at clientWidth, so a column that has been dragged wide always reports
+ * its dragged width and best-fit could never shrink it. A Range reports the laid-out
+ * text width independently of the box it sits in, so widening then best-fitting
+ * returns to the same number.
+ *
+ * Rows are sampled around the scroll viewport so one long value far off-screen
+ * cannot stretch the column. Returns { field: px } for the fields it could measure;
+ * the caller falls back to its own estimate for anything missing.
+ */
+export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
+    if (!gridRoot || !fields || !fields.length) return null;
+
+    const wanted = new Set(fields);
+    const limit = Math.max(1, Number(sampleSize) || 50);
+    const out = {};
+    const range = document.createRange();
+
+    const contentWidth = (el) => {
+        if (!el) return 0;
+        try {
+            range.selectNodeContents(el);
+            const w = range.getBoundingClientRect().width;
+            // A Range collapses over replaced content (images, inputs); fall back to
+            // the element's own box so those cells are not measured as empty.
+            return w > 0 ? w : el.getBoundingClientRect().width;
+        } catch {
+            return 0;
+        }
+    };
+
+    const padOf = (el) => {
+        const cs = getComputedStyle(el);
+        return (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+             + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+    };
+
+    const bump = (field, w) => {
+        if (!isFinite(w) || w <= 0) return;
+        if (!(field in out) || w > out[field]) out[field] = w;
+    };
+
+    for (const th of gridRoot.querySelectorAll("thead th[data-field]")) {
+        const field = th.getAttribute("data-field");
+        if (!wanted.has(field)) continue;
+        // Measure the label, then add back the chrome that shares the header cell:
+        // sort glyph, filter icon, and the grip the user just double-clicked.
+        const label = th.querySelector(".fx-header-text") || th;
+        const icons = th.querySelectorAll(".fx-sort-icon, .fx-filter-icon, .fx-filter-applied-mark").length * 16;
+        bump(field, contentWidth(label) + padOf(th) + icons + 10);
+    }
+
+    const rows = gridRoot.querySelectorAll("tbody tr");
+    if (rows.length) {
+        // Centre the sample on whatever is currently scrolled into view.
+        const scroller = gridRoot.querySelector(".fx-grid-content") || gridRoot;
+        const scRect = scroller.getBoundingClientRect();
+        let first = 0;
+        for (let i = 0; i < rows.length; i++) {
+            const r = rows[i].getBoundingClientRect();
+            if (r.bottom > scRect.top) { first = i; break; }
+        }
+        const start = Math.max(0, first - Math.floor(limit / 4));
+        const end = Math.min(rows.length, start + limit);
+        for (let i = start; i < end; i++) {
+            for (const td of rows[i].querySelectorAll("td[data-field]")) {
+                const field = td.getAttribute("data-field");
+                if (wanted.has(field)) bump(field, contentWidth(td) + padOf(td) + 6);
+            }
+        }
+    }
+
+    return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Roving focus for a popup menu. VB6 used native Win32 PopupMenu, where the OS
+ * supplied first-item highlight, Up/Down and Enter for free; these menus are plain
+ * <button>s in a div, so the movement has to be driven explicitly. Enter/Space are
+ * deliberately NOT handled here — a focused <button> already activates on both.
+ *
+ * mode: "first" | "last" | "next" | "prev". Returns true when focus moved.
+ */
+export function focusMenuItem(menuEl, mode) {
+    if (!menuEl) return false;
+    const items = [...menuEl.querySelectorAll("button")].filter(
+        b => !b.disabled && b.offsetParent !== null);
+    if (!items.length) return false;
+
+    const current = items.indexOf(document.activeElement);
+    let next;
+    if (mode === "first") next = 0;
+    else if (mode === "last") next = items.length - 1;
+    else if (mode === "prev") next = current <= 0 ? items.length - 1 : current - 1;
+    else next = current < 0 || current === items.length - 1 ? 0 : current + 1;
+
+    items[next].focus();
+    return true;
+}

@@ -175,6 +175,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool AllowSingleCellColumnMassEdit { get; set; }
     [Parameter] public bool AllowGrouping { get; set; }
     [Parameter] public bool AllowResizing { get; set; }
+
+    /// <summary>Best fit: double-clicking a column's resize grip sizes it to its
+    /// content, and the header menu offers "Best Fit" / "Best Fit All Columns".
+    /// Requires <see cref="AllowResizing"/> — a column with no grip has nothing to
+    /// double-click, though the menu items and the public API still work.</summary>
+    [Parameter] public bool AllowColumnAutoFit { get; set; } = true;
+
+    /// <summary>How many rows a best-fit measures, sampled around the scroll
+    /// viewport rather than from the top, so one long value far off-screen cannot
+    /// stretch the column.</summary>
+    [Parameter] public int AutoFitSampleSize { get; set; } = 50;
+
+    /// <summary>Floor for a best-fit width, in px. A column's own
+    /// <see cref="GridColumn.MinWidth"/> wins when it sets one.</summary>
+    [Parameter] public double AutoFitMinWidth { get; set; } = 40;
+
+    /// <summary>Ceiling for a best-fit width, in px. A column's own
+    /// <see cref="GridColumn.MaxWidth"/> wins when it sets one.</summary>
+    [Parameter] public double AutoFitMaxWidth { get; set; } = 800;
+
+    /// <summary>Measure real rendered text through the DOM instead of estimating from
+    /// character counts. Exact, because clipped cells still report their full
+    /// scrollWidth — but it needs the rows to be on screen. Falls back to the
+    /// character estimate automatically whenever the measurement is unavailable.</summary>
+    [Parameter] public bool AutoFitUseDomMeasurement { get; set; } = true;
+
     /// <summary>
     /// When true, text cell values that start with '=' are evaluated as
     /// row-scoped arithmetic formulas. Column formulas configured on
@@ -979,6 +1005,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? _resizingCol;
     private double _resizeStartX;
     private double _resizeStartWidth;
+
+    // Double-click on the grip is detected from two mousedowns rather than from the
+    // DOM's dblclick event. A real hand jitters a pixel or two, which resizes the
+    // column, which fires OnLayoutChanged, which makes hosts that re-key their
+    // columns rebuild the header — and a browser only fires dblclick when both
+    // clicks land on the SAME element, so the rebuilt grip never sees one. mousedown
+    // always arrives before the rebuild, so this path survives it.
+    private string? _lastGripDownField;
+    private DateTime _lastGripDownAt;
+    private const int GripDoubleClickMs = 500;
+
+    /// <summary>Movement under this many px is hand tremor, not a resize.</summary>
+    private const double GripJitterPx = 3;
+
     private TValue? _resizingRowItem;
     private int _resizingRowIndex = -1;
     private double _rowResizeStartY;
@@ -1933,6 +1973,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Right-click menus open with the first item highlighted, as the Win32
+        // popup menus they replace did.
+        if (_focusMenuPending && (_showHeaderContextMenu || _showCellContextMenu))
+        {
+            _focusMenuPending = false;
+            await FocusMenuItemAsync(
+                _showHeaderContextMenu ? _headerMenuElement : _cellMenuElement, "first");
+        }
+
         // Capture the columns container from child content
         if (firstRender)
         {
@@ -3275,6 +3324,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _cellContextMenuX = Math.Max(0, args.ClientX);
         _cellContextMenuY = Math.Max(0, args.ClientY);
         _showCellContextMenu = true;
+        OpenMenuKeyboardNav();
         _showHeaderContextMenu = false;
         _showInsertColumnSubmenu = false;
     }
@@ -8358,6 +8408,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _headerContextMenuX = e.ClientX;
         _headerContextMenuY = e.ClientY;
         _showHeaderContextMenu = true;
+        OpenMenuKeyboardNav();
         _showInsertColumnSubmenu = false;
         _showRenameColumn = false;
     }
@@ -8741,7 +8792,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var col = CurrentHeaderColumn;
         if (col == null) return;
         _renameColumnField = col.Field;
-        _renameColumnDraft = HeaderColumnDisplay(col);
+        _renameColumnDraft = "";
         _showHeaderContextMenu = false;
         _showRenameColumn = true;
         _showInsertColumnSubmenu = false;
@@ -8753,10 +8804,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var draft = _renameColumnDraft?.Trim() ?? "";
         HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
-        if (string.IsNullOrEmpty(draft))
-            _headerOverrides.Remove(field);
-        else
-            _headerOverrides[field] = draft;
+        // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
+        if (string.IsNullOrEmpty(draft)) return;
+        _headerOverrides[field] = draft;
         StateHasChanged();
         await SaveGridSettingsAsync();
         await FireLayoutChangedAsync();
@@ -8767,6 +8817,98 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _showRenameColumn = false;
         _renameColumnField = "";
         _renameColumnDraft = "";
+    }
+
+    private GridColumn? RenameColumn =>
+        string.IsNullOrWhiteSpace(_renameColumnField)
+            ? null
+            : Columns.FirstOrDefault(c => string.Equals(c.Field, _renameColumnField, StringComparison.Ordinal));
+
+    /// <summary>VB6 passes the raw column KEY as the InputBox title
+    /// (FMain.frm:2418 <c>InputBox(..., MouseCtrl.ColKey(MouseCol))</c>) — not the
+    /// caption and not a prettified form of it.</summary>
+    private string RenameColumnDialogTitle =>
+        string.IsNullOrWhiteSpace(_renameColumnField) ? "Column" : _renameColumnField;
+
+    private string RenameColumnPrompt =>
+        $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ── CONTEXT-MENU KEYBOARD NAVIGATION ─────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+    // VB6 popped these menus with the Win32 PopupMenu API, so first-item
+    // highlight, Up/Down, Enter and Escape came from the OS. These menus are
+    // <button>s in a div, so the movement has to be driven here. Enter and
+    // Space are left alone deliberately — a focused <button> already fires its
+    // click on both, and swallowing them would break activation.
+
+    private ElementReference _headerMenuElement;
+    private ElementReference _cellMenuElement;
+    private bool _focusMenuPending;
+    private bool _menuKeyHandled;
+
+    private void OpenMenuKeyboardNav()
+    {
+        _focusMenuPending = true;
+        // Seeded true so the FIRST arrow press is swallowed too — Blazor
+        // evaluates :preventDefault at render time, one keystroke behind.
+        _menuKeyHandled = true;
+    }
+
+    private async Task HandleMenuKeyDownAsync(KeyboardEventArgs e)
+    {
+        var menu = _showHeaderContextMenu ? _headerMenuElement
+                 : _showCellContextMenu ? _cellMenuElement
+                 : default;
+
+        string mode;
+        switch (e.Key)
+        {
+            case "ArrowDown": mode = "next"; break;
+            case "ArrowUp": mode = "prev"; break;
+            case "Home": mode = "first"; break;
+            case "End": mode = "last"; break;
+            case "Escape":
+                _menuKeyHandled = true;
+                CloseHeaderContextMenu();
+                CloseCellContextMenu();
+                await FocusGridHostAsync();
+                return;
+            default:
+                _menuKeyHandled = false;   // Enter / Space belong to the button
+                return;
+        }
+
+        _menuKeyHandled = true;
+        await FocusMenuItemAsync(menu, mode);
+    }
+
+    private async Task FocusMenuItemAsync(ElementReference menu, string mode)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("focusMenuItem", menu, mode);
+        }
+        catch (Exception)
+        {
+            // Without the module the menu still works by mouse and by Tab —
+            // only the arrow-key shortcut is lost.
+        }
+    }
+
+    private async Task HeaderMenuBestFitColumn()
+    {
+        var col = CurrentHeaderColumn;
+        CloseHeaderContextMenu();
+        if (col != null)
+            await AutoFitCoreAsync(new List<GridColumn> { col });
+    }
+
+    private async Task HeaderMenuBestFitAllColumns()
+    {
+        CloseHeaderContextMenu();
+        await AutoFitColumnsAsync();
     }
 
     private async Task HeaderMenuPrint()
@@ -9622,6 +9764,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
+        var now = DateTime.UtcNow;
+        var isDoubleClick = AllowColumnAutoFit
+            && _lastGripDownField != null
+            && string.Equals(_lastGripDownField, col.Field, StringComparison.Ordinal)
+            && (now - _lastGripDownAt).TotalMilliseconds <= GripDoubleClickMs;
+        _lastGripDownField = col.Field;
+        _lastGripDownAt = now;
+
+        if (isDoubleClick)
+        {
+            _lastGripDownField = null;
+            _resizingCol = null;
+            await UnregisterGridResizeCaptureAsync();
+            await AutoFitCoreAsync(new List<GridColumn> { col });
+            return;
+        }
+
         _resizingCol = col;
         _resizeStartX = e.ClientX;
 
@@ -9651,6 +9810,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var delta = clientX - _resizeStartX;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
+
+        // A deliberate drag is not half of a double-click.
+        if (Math.Abs(delta) > GripJitterPx)
+            _lastGripDownField = null;
 
         if (EventsRef?.ColumnResizing.HasDelegate == true)
         {
@@ -10742,6 +10905,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _selectedCells.Add(cell);
         }
 
+        // Make it the navigation origin too — arrow keys start from _activeCell.
+        _activeCell = cell;
+        _lastSelectedCell = cell;
+
         return InvokeAsync(StateHasChanged);
     }
 
@@ -10865,9 +11032,145 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     public Task Refresh() => RefreshAsync();
 
+    // ══════════════════════════════════════════════════════════════════════
+    // ── BEST FIT (column auto-size) ──────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════
+
+    /// <summary>Sizes every visible column to its content.</summary>
     public Task AutoFitColumnsAsync()
+        => AutoFitCoreAsync(_columnsContainer?.Columns.Where(IsColumnVisible).ToList());
+
+    /// <summary>Sizes one column to its content.</summary>
+    public Task AutoFitColumnAsync(string field)
     {
-        return Task.CompletedTask;
+        var col = _columnsContainer?.Columns.FirstOrDefault(
+            c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        return col == null ? Task.CompletedTask : AutoFitCoreAsync(new List<GridColumn> { col });
+    }
+
+    /// <summary>Double-click on the resize grip. The two mousedowns that precede a
+    /// double-click each opened a drag, so the capture is torn down first — silently,
+    /// since neither one moved the column and re-persisting them would be noise.</summary>
+    private async Task HandleResizeHandleDoubleClickAsync(GridColumn col)
+    {
+        if (!AllowColumnAutoFit)
+            return;
+
+        _resizingCol = null;
+        await UnregisterGridResizeCaptureAsync();
+        await AutoFitCoreAsync(new List<GridColumn> { col });
+    }
+
+    /// <summary>Applies best-fit widths and raises the resize / layout events ONCE for
+    /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.</summary>
+    private async Task AutoFitCoreAsync(List<GridColumn>? columns)
+    {
+        if (columns == null || columns.Count == 0)
+            return;
+
+        var targets = columns.Where(c => c != null && IsColumnVisible(c)).ToList();
+        if (targets.Count == 0)
+            return;
+
+        var sample = BuildAutoFitSample();
+        var measured = await MeasureColumnContentWidthsAsync(targets);
+
+        var changes = new List<(GridColumn Col, double Old, double New)>();
+        foreach (var col in targets)
+        {
+            var content = measured != null
+                          && col.Field != null
+                          && measured.TryGetValue(col.Field, out var px)
+                          && px > 0
+                ? px
+                : EstimateColumnWidth(col, sample);
+
+            var (min, max) = ResolveAutoFitBounds(col);
+            var width = Math.Round(Math.Clamp(content, min, max));
+
+            var old = GetColumnWidthPx(col);
+            if (Math.Abs(old - width) < 0.5)
+                continue;
+
+            changes.Add((col, old, width));
+        }
+
+        if (changes.Count == 0)
+            return;
+
+        foreach (var (col, old, width) in changes)
+        {
+            if (EventsRef?.ColumnResizing.HasDelegate == true)
+            {
+                var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
+                await EventsRef.ColumnResizing.InvokeAsync(resizing);
+                if (resizing.Cancel)
+                    continue;
+            }
+            col.RuntimeWidth = width;
+
+            if (EventsRef?.ColumnResized.HasDelegate == true)
+            {
+                await EventsRef.ColumnResized.InvokeAsync(
+                    new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width });
+            }
+        }
+
+        await SaveGridSettingsAsync();
+        await FireLayoutChangedAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>A column's own MinWidth/MaxWidth beat the grid-wide defaults; px only,
+    /// since a percentage cannot be compared against a measured pixel width.</summary>
+    private (double Min, double Max) ResolveAutoFitBounds(GridColumn col)
+    {
+        var min = TryParseWidthPx(col.MinWidth) ?? AutoFitMinWidth;
+        var max = TryParseWidthPx(col.MaxWidth) ?? AutoFitMaxWidth;
+        if (max < min) max = min;
+        return (min, max);
+    }
+
+    /// <summary>Rows to estimate from when the DOM measurement is unavailable — taken
+    /// from the rendered view (sorted, filtered, current page), not the raw DataSource.</summary>
+    private List<TValue> BuildAutoFitSample()
+    {
+        var take = Math.Max(1, AutoFitSampleSize);
+        try
+        {
+            return PagedData.Take(take).ToList();
+        }
+        catch (Exception)
+        {
+            return (DataSource?.Take(take).ToList()) ?? new List<TValue>();
+        }
+    }
+
+    private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(List<GridColumn> columns)
+    {
+        if (!AutoFitUseDomMeasurement)
+            return null;
+
+        var fields = columns
+            .Select(c => c.Field)
+            .Where(f => !string.IsNullOrEmpty(f))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (fields.Length == 0)
+            return null;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            return await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
+                "measureColumnContentWidths", _gridHostElement, fields, Math.Max(1, AutoFitSampleSize));
+        }
+        catch (Exception)
+        {
+            // Prerendering, a disposed circuit, or a grid that isn't laid out yet.
+            // EstimateColumnWidth covers every one of those.
+            return null;
+        }
     }
 
     private string ResolveExportTitle(string fallback)
