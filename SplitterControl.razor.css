@@ -97,3 +97,12 @@
 .fx-splitter-overlay-horizontal {
     cursor: row-resize;
 }
+
+.fx-splitter-shrink-primary > .fx-splitter-primary {
+    overflow: hidden;
+}
+
+.fx-splitter-disabled > .fx-splitter-bar {
+    cursor: default;
+    opacity: 0.6;
+}

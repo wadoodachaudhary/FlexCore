@@ -19,9 +19,12 @@
              aria-haspopup="listbox"
              aria-expanded="@_isOpen">
             <input class="fx-dropdown-input"
+                   @key="_editableInputGeneration"
+                   @ref="_editableInputRef"
                    disabled="@(!Enabled)"
                    tabindex="@TabIndex"
-                   value="@_editableText"
+                   maxlength="@MaxLength"
+                   value="@_editableRenderedText"
                    placeholder="@Placeholder"
                    @onfocus="HandleEditableFocus"
                    @onblur="HandleEditableBlur"
@@ -108,6 +111,10 @@
     [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
     [Parameter] public bool Editable { get; set; }
+
+    /// <summary>Native maxlength for the editable input — the browser stops further
+    /// typing at the limit, independent of server latency.</summary>
+    [Parameter] public int? MaxLength { get; set; }
     /// <summary>When editable, commit typed text on blur. This is standard combobox behavior; set false for Enter-only commit.</summary>
     [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
     [Parameter] public bool OpenOnRender { get; set; }
@@ -139,6 +146,26 @@
     private ElementReference _hostRef;
     private IJSObjectReference? _dropdownJsModule;
     private string _editableText = "";
+    private ElementReference _editableInputRef;
+
+    // Uncontrolled while typing: the DOM input renders _editableRenderedText, which stays
+    // CONSTANT while the field is focused, so a keystroke's render round-trip can never
+    // re-apply a stale value over text the user typed inside the latency window (the
+    // fast-typing data loss). Programmatic rewrites (Escape, list pick, blur restore) go
+    // through ResetEditableDomText, which bumps the input's @key so the fresh element
+    // re-applies the attribute even when the string matches the pre-typing one.
+    private string _editableRenderedText = "";
+    private int _editableInputGeneration;
+    private bool _editableRefocusPending;
+
+    private void ResetEditableDomText(string text, bool refocus)
+    {
+        _editableText = text;
+        _editableRenderedText = text;
+        _editableInputGeneration++;
+        if (refocus)
+            _editableRefocusPending = true;
+    }
     private string _typeSelectBuffer = "";
     private DateTime _typeSelectLastInputUtc = DateTime.MinValue;
     private static readonly TimeSpan TypeSelectResetDelay = TimeSpan.FromSeconds(1);
@@ -237,8 +264,8 @@
             _openOnRenderInitialized = true;
         }
 
-        if (Editable && !_editableInputFocused)
-            _editableText = EditableDisplayText;
+        if (Editable && !_editableInputFocused && _editableText != EditableDisplayText)
+            ResetEditableDomText(EditableDisplayText, refocus: false);
     }
 
     private async Task HandleButtonClick()
@@ -397,9 +424,14 @@
         }
 
         if (CommitEditableTextOnBlur)
+        {
             await PublishEditableTextAsync(_editableText);
+            _editableRenderedText = _editableText;
+        }
         else
-            _editableText = EditableDisplayText;
+        {
+            ResetEditableDomText(EditableDisplayText, refocus: false);
+        }
     }
 
     private async Task HandleEditableKeyDown(KeyboardEventArgs e)
@@ -413,6 +445,7 @@
         if (e.Key == "Enter")
         {
             await PublishEditableTextAsync(_editableText);
+            _editableRenderedText = _editableText;
             await CloseAsync();
         }
         else if (e.Key == "ArrowDown")
@@ -429,7 +462,7 @@
         }
         else if (e.Key == "Escape")
         {
-            _editableText = EditableDisplayText;
+            ResetEditableDomText(EditableDisplayText, refocus: true);
             await CloseAsync();
         }
     }
@@ -575,7 +608,7 @@
         var newValue = ConvertToValue(strVal);
         Value = newValue;
         if (Editable)
-            _editableText = GetFieldValue(item, TextFieldName);
+            ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: _editableInputFocused);
 
         if (closeAfterSelect)
         {
@@ -643,6 +676,18 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_editableRefocusPending)
+        {
+            _editableRefocusPending = false;
+            try
+            {
+                await _editableInputRef.FocusAsync(preventScroll: true);
+            }
+            catch
+            {
+            }
+        }
+
         if (_isOpen && _needsGeometryRefresh)
         {
             _needsGeometryRefresh = false;

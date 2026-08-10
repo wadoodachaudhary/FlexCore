@@ -498,12 +498,15 @@
                             </th>
                         }
                     }
+                    @{ GridColumn? prevResizeCol = null; }
                     @foreach (var col in VisibleColumns)
                     {
                         var state = GetColumnState(col.Field);
                         var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
                         var capturedField = col.Field;
                         var headerLabel = HeaderColumnDisplay(col);
+                        var leftGripCol = prevResizeCol;
+                        prevResizeCol = AllowResizing && col.AllowResizing ? col : null;
                         @* data-field CSS hook (header) — matches the data-cell hook so a
                            single rule like `[data-field="Total"]` paints both the column
                            header AND every cell underneath. *@
@@ -562,6 +565,23 @@
                                       @onmousedown:stopPropagation="true"
                                       @onclick:stopPropagation="true"
                                       @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
+                                      @ondblclick:preventDefault="true"
+                                      @ondblclick:stopPropagation="true"></span>
+                            }
+                            @* The divider's right half. Each header cell is isolation:isolate, so
+                               the previous cell's grip cannot overhang into this one — instead this
+                               cell owns a left-edge strip that resizes the PREVIOUS column, giving
+                               the divider line a hit zone on both sides like VB6/Excel. *@
+                            @if (leftGripCol != null)
+                            {
+                                var capturedPrev = leftGripCol;
+                                <span class="fx-resize-handle fx-resize-handle-prev"
+                                      draggable="false"
+                                      @onmousedown="e => StartResize(capturedPrev, e)"
+                                      @onmousedown:preventDefault="true"
+                                      @onmousedown:stopPropagation="true"
+                                      @onclick:stopPropagation="true"
+                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
                                       @ondblclick:preventDefault="true"
                                       @ondblclick:stopPropagation="true"></span>
                             }
@@ -1032,7 +1052,7 @@
              role="menu"
              tabindex="-1"
              @onkeydown="HandleMenuKeyDownAsync"
-             @onkeydown:preventDefault="_menuKeyHandled"
+             @onkeydown:preventDefault="true"
              @onkeydown:stopPropagation="true"
              style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
              @onclick:stopPropagation="true">
@@ -1081,7 +1101,7 @@
              role="menu"
              tabindex="-1"
              @onkeydown="HandleMenuKeyDownAsync"
-             @onkeydown:preventDefault="_menuKeyHandled"
+             @onkeydown:preventDefault="true"
              @onkeydown:stopPropagation="true"
              style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @onclick:stopPropagation="true">
@@ -1155,6 +1175,11 @@
                             @onclick="HeaderMenuBestFitAllColumns">
                         <span class="fx-grid-header-context-check"></span>
                         Best Fit All Columns
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuBestFitToGrid">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit to Grid
                     </button>
                 }
 

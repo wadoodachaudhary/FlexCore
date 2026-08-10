@@ -221,10 +221,25 @@ export function registerGridResizeCapture(gridRoot, dotNetRef, initialClientX = 
     let lastClientX = Number(initialClientX) || 0;
     let lastClientY = Number(initialClientY) || 0;
 
+    const content = gridRoot.querySelector(".fx-grid-content");
+
+    // Dragging a column past the viewport edge scrolls the surface in the same
+    // gesture, so the grip and the widening column never leave view.
+    const followPointer = (event) => {
+        if (!content) return;
+        const rect = content.getBoundingClientRect();
+        const margin = 24;
+        if (event.clientX > rect.right - margin)
+            content.scrollLeft += event.clientX - (rect.right - margin);
+        else if (event.clientX < rect.left + margin)
+            content.scrollLeft -= (rect.left + margin) - event.clientX;
+    };
+
     const invokeMove = (event) => {
         if (ended) return;
         lastClientX = event.clientX;
         lastClientY = event.clientY;
+        followPointer(event);
         dotNetRef.invokeMethodAsync("ContinueGridResizeFromBrowserAsync", event.clientX, event.clientY)
             .catch(() => {});
     };
@@ -1338,25 +1353,28 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
     const wanted = new Set(fields);
     const limit = Math.max(1, Number(sampleSize) || 50);
     const out = {};
-    const range = document.createRange();
 
-    const contentWidth = (el) => {
+    // Cells clip with overflow:hidden and many use flex templates, so their
+    // rendered width is whatever the current column allows — measuring that can
+    // never grow a column back. Clone into an off-screen host laid out at
+    // max-content to get the width the cell actually wants.
+    const host = document.createElement("div");
+    host.setAttribute("aria-hidden", "true");
+    host.style.cssText = "position:absolute;left:-99999px;top:0;visibility:hidden;" +
+                         "pointer-events:none;white-space:nowrap;width:max-content;";
+    gridRoot.appendChild(host);
+
+    const intrinsic = (el) => {
         if (!el) return 0;
-        try {
-            range.selectNodeContents(el);
-            const w = range.getBoundingClientRect().width;
-            // A Range collapses over replaced content (images, inputs); fall back to
-            // the element's own box so those cells are not measured as empty.
-            return w > 0 ? w : el.getBoundingClientRect().width;
-        } catch {
-            return 0;
-        }
-    };
-
-    const padOf = (el) => {
         const cs = getComputedStyle(el);
-        return (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
-             + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+        host.style.font = cs.font;
+        host.style.letterSpacing = cs.letterSpacing;
+        host.innerHTML = el.innerHTML;
+        const w = host.getBoundingClientRect().width;
+        host.innerHTML = "";
+        const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+                  + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+        return w + pad;
     };
 
     const bump = (field, w) => {
@@ -1367,44 +1385,47 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
     for (const th of gridRoot.querySelectorAll("thead th[data-field]")) {
         const field = th.getAttribute("data-field");
         if (!wanted.has(field)) continue;
-        // Measure the label, then add back the chrome that shares the header cell:
-        // sort glyph, filter icon, and the grip the user just double-clicked.
         const label = th.querySelector(".fx-header-text") || th;
         const icons = th.querySelectorAll(".fx-sort-icon, .fx-filter-icon, .fx-filter-applied-mark").length * 16;
-        bump(field, contentWidth(label) + padOf(th) + icons + 10);
+        bump(field, intrinsic(label) + icons + 18);
     }
 
-    const rows = gridRoot.querySelectorAll("tbody tr");
+    const rows = [...gridRoot.querySelectorAll("tbody tr")];
     if (rows.length) {
-        // Centre the sample on whatever is currently scrolled into view.
         const scroller = gridRoot.querySelector(".fx-grid-content") || gridRoot;
         const scRect = scroller.getBoundingClientRect();
         let first = 0;
         for (let i = 0; i < rows.length; i++) {
-            const r = rows[i].getBoundingClientRect();
-            if (r.bottom > scRect.top) { first = i; break; }
+            if (rows[i].getBoundingClientRect().bottom > scRect.top) { first = i; break; }
         }
         const start = Math.max(0, first - Math.floor(limit / 4));
         const end = Math.min(rows.length, start + limit);
+
+        // Measuring every sampled cell would mean hundreds of clones, so per column
+        // only the few longest candidates are laid out.
+        const byField = new Map();
         for (let i = start; i < end; i++) {
             for (const td of rows[i].querySelectorAll("td[data-field]")) {
                 const field = td.getAttribute("data-field");
-                if (wanted.has(field)) bump(field, contentWidth(td) + padOf(td) + 6);
+                if (!wanted.has(field)) continue;
+                if (!byField.has(field)) byField.set(field, []);
+                byField.get(field).push(td);
             }
         }
+        for (const [field, cells] of byField) {
+            cells.sort((a, b) => (b.textContent || "").length - (a.textContent || "").length);
+            for (const td of cells.slice(0, 3)) bump(field, intrinsic(td) + 6);
+        }
     }
+
+    host.remove();
+
+    const scroller = gridRoot.querySelector(".fx-grid-content") || gridRoot;
+    if (scroller && scroller.clientWidth > 0) out["__fxContainerWidth"] = scroller.clientWidth;
 
     return Object.keys(out).length ? out : null;
 }
 
-/**
- * Roving focus for a popup menu. VB6 used native Win32 PopupMenu, where the OS
- * supplied first-item highlight, Up/Down and Enter for free; these menus are plain
- * <button>s in a div, so the movement has to be driven explicitly. Enter/Space are
- * deliberately NOT handled here — a focused <button> already activates on both.
- *
- * mode: "first" | "last" | "next" | "prev". Returns true when focus moved.
- */
 export function focusMenuItem(menuEl, mode) {
     if (!menuEl) return false;
     const items = [...menuEl.querySelectorAll("button")].filter(
@@ -1420,4 +1441,24 @@ export function focusMenuItem(menuEl, mode) {
 
     items[next].focus();
     return true;
+}
+
+/**
+ * Enter/Space on a menu item. The keydown handler prevents the browser default so
+ * the first keystroke after the menu opens can never be swallowed by Blazor's
+ * render-time :preventDefault evaluation, which means activation has to be driven
+ * explicitly rather than left to the <button>.
+ */
+export function activateMenuItem(menuEl) {
+    if (!menuEl) return false;
+    const a = document.activeElement;
+    if (a && menuEl.contains(a) && !a.disabled) { a.click(); return true; }
+    return false;
+}
+
+export function measureGridAvailableWidth(gridRoot) {
+    if (!gridRoot) return 0;
+    const content = gridRoot.querySelector(".fx-grid-content");
+    const vScrollbar = content ? (content.offsetWidth - content.clientWidth) : 0;
+    return Math.max(0, gridRoot.clientWidth - vScrollbar - 2);
 }

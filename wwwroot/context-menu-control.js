@@ -61,3 +61,16 @@ export function focusMenuItem(menuEl, mode) {
     items[next].focus();
     return true;
 }
+
+/**
+ * Enter/Space on a menu item. The keydown handler prevents the browser default so
+ * the first keystroke after the menu opens can never be swallowed by Blazor's
+ * render-time :preventDefault evaluation, which means activation has to be driven
+ * explicitly rather than left to the <button>.
+ */
+export function activateMenuItem(menuEl) {
+    if (!menuEl) return false;
+    const a = document.activeElement;
+    if (a && menuEl.contains(a) && !a.disabled) { a.click(); return true; }
+    return false;
+}

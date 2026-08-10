@@ -1384,10 +1384,21 @@
 }
 
 .fx-grid.fx-grid-width-fit-columns {
-    display: inline-flex;
-    width: max-content;
+    display: flex;
+    width: 100%;
     max-width: 100%;
-    vertical-align: top;
+    contain: inline-size;
+}
+
+/* FitColumns default: the visible grid (header, rows, scrollbar) hugs the sum of
+   its columns — the vertical scrollbar sits right next to the last column instead
+   of at the far edge of the pane. The host keeps filling the pane so ancestors
+   stay stable; only the scroll surface shrinks to content. */
+.fx-grid.fx-grid-width-fit-columns > .fx-grid-content {
+    flex: 0 1 auto;
+    width: fit-content;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .fx-grid-table th,
@@ -1574,9 +1585,13 @@
 .fx-resize-handle {
     position: absolute;
     top: 0;
-    right: 0;
+    /* Straddles the divider: 6px inside the column, 5px past it. Between two
+       columns the overhang is buried by the next cell (isolation:isolate) and
+       fx-resize-handle-prev covers that side instead; on the LAST column there
+       is no next cell, so the overhang is what makes the final edge grabbable. */
+    right: -5px;
     bottom: 0;
-    width: 6px;
+    width: 11px;
     cursor: col-resize;
     z-index: 3;
     background: transparent;
@@ -1589,6 +1604,13 @@
 .fx-resize-handle:active {
     background: #3b82f6;
     opacity: 0.5;
+}
+/* Right half of the divider hit zone — lives in the FOLLOWING cell and resizes
+   the previous column (see the markup note; isolation:isolate blocks overhang). */
+.fx-resize-handle-prev {
+    left: 0;
+    right: auto;
+    width: 5px;
 }
 .fx-resize-overlay {
     position: fixed;

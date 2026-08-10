@@ -96,6 +96,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// grid first receives rows, and after sorting changes the visible row order.
     /// </summary>
     [Parameter] public bool AutoSelectFirstRow { get; set; }
+
+    /// <summary>Opens the grid with its first cell as the current cell and the grid
+    /// holding focus, so the first keystroke lands in the grid — the VSFlexGrid
+    /// behaviour, where a grid always has a current cell. Re-applied for a few
+    /// renders because rows usually arrive after the first one and other components
+    /// on the page can take focus back; it stops as soon as a cell is current.</summary>
+    [Parameter] public bool AutoFocusFirstCell { get; set; }
     /// <summary>
     /// Shows the clickable header filter icon that opens the filter popup.
     /// Disable this when the grid already renders explicit filter-bar inputs.
@@ -193,7 +200,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>Ceiling for a best-fit width, in px. A column's own
     /// <see cref="GridColumn.MaxWidth"/> wins when it sets one.</summary>
-    [Parameter] public double AutoFitMaxWidth { get; set; } = 800;
+    [Parameter] public double AutoFitMaxWidth { get; set; }
 
     /// <summary>Measure real rendered text through the DOM instead of estimating from
     /// character counts. Exact, because clipped cells still report their full
@@ -1703,20 +1710,87 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    /// <summary>A numeric column with many distinct values makes one group per value —
+    /// unusable at scale. Past 100 distinct values the groups become RANGES instead,
+    /// with "nice" 1/2/5-magnitude bounds derived from the column's min and max.
+    /// Returns null (per-value grouping) for non-numeric columns or small value sets.</summary>
+    private Func<TValue, string>? BuildNumericBucketSelector(IEnumerable<TValue> data, string field)
+    {
+        var values = new List<double>();
+        var distinct = new HashSet<double>();
+        foreach (var item in data)
+        {
+            var raw = GetPropertyValue(item, field);
+            if (raw == null || raw is DBNull)
+                continue;
+            if (raw is string || raw is bool || raw is DateTime)
+                return null;
+            double d;
+            try { d = Convert.ToDouble(raw, CultureInfo.InvariantCulture); }
+            catch { return null; }
+            values.Add(d);
+            distinct.Add(d);
+        }
+        if (values.Count == 0 || distinct.Count <= 100)
+            return null;
+
+        var min = values.Min();
+        var max = values.Max();
+        var span = max - min;
+        if (span <= 0)
+            return null;
+
+        const int targetBuckets = 12;
+        var rawStep = span / targetBuckets;
+        var magnitude = Math.Pow(10, Math.Floor(Math.Log10(rawStep)));
+        var normalized = rawStep / magnitude;
+        var nice = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+        var step = nice * magnitude;
+        var start = Math.Floor(min / step) * step;
+
+        string Label(int idx)
+        {
+            var lo = start + idx * step;
+            var hi = lo + step;
+            return $"{lo.ToString("0.###", CultureInfo.CurrentCulture)} - {hi.ToString("0.###", CultureInfo.CurrentCulture)}";
+        }
+
+        return item =>
+        {
+            var raw = GetPropertyValue(item, field);
+            if (raw == null || raw is DBNull)
+                return "(empty)";
+            var d = Convert.ToDouble(raw, CultureInfo.InvariantCulture);
+            var idx = (int)Math.Floor((d - start) / step);
+            if (idx < 0) idx = 0;
+            var maxIdx = (int)Math.Floor((max - start) / step);
+            if (idx > maxIdx) idx = maxIdx;
+            return Label(idx);
+        };
+    }
+
     private IEnumerable<GroupResult<TValue>> BuildGroups(IEnumerable<TValue> data, int level, string parentPath)
     {
         if (level >= _groupDescriptors.Count)
             return Enumerable.Empty<GroupResult<TValue>>();
 
         var gd = _groupDescriptors[level];
+        // The group KEY stays a string (it names the header and the expand-state path),
+        // but ordering below uses the raw typed value so numeric fields sort 39 < 1000
+        // instead of alphabetically.
+        var groupSortValues = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var bucketSelector = BuildNumericBucketSelector(data, gd.Field);
         var groups = data
-            .GroupBy(item => GetPropertyValue(item, gd.Field)?.ToString() ?? "(empty)")
+            .GroupBy(item => bucketSelector != null
+                ? bucketSelector(item)
+                : GetPropertyValue(item, gd.Field)?.ToString() ?? "(empty)")
             .Select(g =>
             {
                 var allItems = g.ToList();
                 var groupPath = string.IsNullOrEmpty(parentPath)
                     ? $"{gd.Field}:{g.Key}"
                     : $"{parentPath}/{gd.Field}:{g.Key}";
+                groupSortValues[groupPath] = GetPropertyValue(allItems[0], gd.Field);
                 var group = new GroupResult<TValue>
                 {
                     Field = gd.Field,
@@ -1742,8 +1816,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             .ToList();
 
         groups = GetGroupSortDirection(gd.Field) == SortDirection.Descending
-            ? groups.OrderByDescending(group => group.Key, GridSortKeyComparer.Instance).ToList()
-            : groups.OrderBy(group => group.Key, GridSortKeyComparer.Instance).ToList();
+            ? groups.OrderByDescending(group => groupSortValues.GetValueOrDefault(group.GroupPath), GridSortKeyComparer.Instance).ToList()
+            : groups.OrderBy(group => groupSortValues.GetValueOrDefault(group.GroupPath), GridSortKeyComparer.Instance).ToList();
 
         if (_expandAllGroups)
         {
@@ -1973,6 +2047,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (AutoFocusFirstCell && _autoFocusFirstCellAttempts < 3
+            && PagedData.Any() && VisibleColumns.Any())
+        {
+            _autoFocusFirstCellAttempts++;
+            if (!_activeCell.HasValue)
+                await SelectCellAsync((0, 0));
+            await FocusGridHostAsync();
+        }
+
         // Right-click menus open with the first item highlighted, as the Win32
         // popup menus they replace did.
         if (_focusMenuPending && (_showHeaderContextMenu || _showCellContextMenu))
@@ -8845,14 +8928,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private ElementReference _headerMenuElement;
     private ElementReference _cellMenuElement;
     private bool _focusMenuPending;
-    private bool _menuKeyHandled;
 
     private void OpenMenuKeyboardNav()
     {
         _focusMenuPending = true;
-        // Seeded true so the FIRST arrow press is swallowed too — Blazor
-        // evaluates :preventDefault at render time, one keystroke behind.
-        _menuKeyHandled = true;
     }
 
     private async Task HandleMenuKeyDownAsync(KeyboardEventArgs e)
@@ -8868,19 +8947,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             case "ArrowUp": mode = "prev"; break;
             case "Home": mode = "first"; break;
             case "End": mode = "last"; break;
+            case "Enter":
+            case " ":
+                await ActivateMenuItemAsync(menu);
+                return;
             case "Escape":
-                _menuKeyHandled = true;
                 CloseHeaderContextMenu();
                 CloseCellContextMenu();
                 await FocusGridHostAsync();
                 return;
             default:
-                _menuKeyHandled = false;   // Enter / Space belong to the button
                 return;
         }
 
-        _menuKeyHandled = true;
         await FocusMenuItemAsync(menu, mode);
+    }
+
+    private async Task ActivateMenuItemAsync(ElementReference menu)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("activateMenuItem", menu);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private async Task FocusMenuItemAsync(ElementReference menu, string mode)
@@ -8909,6 +9001,85 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         CloseHeaderContextMenu();
         await AutoFitColumnsAsync();
+    }
+
+    private async Task HeaderMenuBestFitToGrid()
+    {
+        CloseHeaderContextMenu();
+        await FitColumnsToGridAsync();
+    }
+
+    /// <summary>Scales every visible column proportionally so together they exactly fill the
+    /// grid's available width — unlike Best Fit, which sizes each column to its content.</summary>
+    public async Task FitColumnsToGridAsync()
+    {
+        var targets = VisibleColumns.ToList();
+        if (targets.Count == 0)
+            return;
+
+        double available = 0;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            available = await _gridJsModule.InvokeAsync<double>("measureGridAvailableWidth", _gridHostElement);
+        }
+        catch
+        {
+        }
+        if (available <= 0 && _autoFitCeilingPx > 80)
+            available = _autoFitCeilingPx;
+        if (available <= 0)
+            return;
+
+        if (ShowCheckboxColumn) available -= 50;
+        if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
+        if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
+        if (available <= targets.Count * 20)
+            return;
+
+        var current = targets.Sum(c => { var w = GetColumnWidthPx(c); return w > 0 ? w : 120d; });
+        if (current <= 0)
+            return;
+
+        var factor = available / current;
+        var assigned = 0d;
+        var changes = new List<(GridColumn Col, double Old, double New)>();
+        for (var i = 0; i < targets.Count; i++)
+        {
+            var col = targets[i];
+            var old = GetColumnWidthPx(col);
+            var basis = old > 0 ? old : 120d;
+            // last column takes the rounding remainder so the sum lands exactly on available
+            var width = i == targets.Count - 1
+                ? Math.Round(available - assigned)
+                : Math.Round(basis * factor);
+            var (min, _) = ResolveAutoFitBounds(col);
+            width = Math.Max(width, min);
+            assigned += width;
+            if (Math.Abs(old - width) >= 0.5)
+                changes.Add((col, old, width));
+        }
+        if (changes.Count == 0)
+            return;
+
+        foreach (var (col, old, width) in changes)
+        {
+            if (EventsRef?.ColumnResizing.HasDelegate == true)
+            {
+                var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
+                await EventsRef.ColumnResizing.InvokeAsync(resizing);
+                if (resizing.Cancel)
+                    continue;
+            }
+            col.RuntimeWidth = width;
+            if (EventsRef?.ColumnResized.HasDelegate == true)
+                await EventsRef.ColumnResized.InvokeAsync(
+                    new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width });
+        }
+
+        await SaveGridSettingsAsync();
+        await FireLayoutChangedAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task HeaderMenuPrint()
@@ -11126,7 +11297,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private (double Min, double Max) ResolveAutoFitBounds(GridColumn col)
     {
         var min = TryParseWidthPx(col.MinWidth) ?? AutoFitMinWidth;
-        var max = TryParseWidthPx(col.MaxWidth) ?? AutoFitMaxWidth;
+        var max = TryParseWidthPx(col.MaxWidth)
+                  ?? (AutoFitMaxWidth > 0 ? AutoFitMaxWidth : _autoFitCeilingPx);
         if (max < min) max = min;
         return (min, max);
     }
@@ -11146,6 +11318,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    private double _autoFitCeilingPx = 2000;
+    private int _autoFocusFirstCellAttempts;
+
     private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(List<GridColumn> columns)
     {
         if (!AutoFitUseDomMeasurement)
@@ -11162,8 +11337,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
-            return await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
+            var measured = await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
                 "measureColumnContentWidths", _gridHostElement, fields, Math.Max(1, AutoFitSampleSize));
+            if (measured != null && measured.TryGetValue("__fxContainerWidth", out var containerPx))
+            {
+                measured.Remove("__fxContainerWidth");
+                if (containerPx > 80) _autoFitCeilingPx = containerPx;
+            }
+            return measured;
         }
         catch (Exception)
         {

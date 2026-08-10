@@ -18,7 +18,7 @@
              role="menu"
              tabindex="-1"
              @onkeydown="HandleMenuKeyDownAsync"
-             @onkeydown:preventDefault="_menuKeyHandled"
+             @onkeydown:preventDefault="true"
              @onclick:stopPropagation="true"
              @oncontextmenu:stopPropagation="true">
             @ChildContent
@@ -41,7 +41,6 @@
     private ElementReference _menuElement;
     private IJSObjectReference? _contextMenuJsModule;
     private bool _menuOpened;
-    private bool _menuKeyHandled = true;   // seeded: swallow the first arrow too
 
     private string RootCssClass =>
         string.IsNullOrWhiteSpace(CssClass)
@@ -81,17 +80,31 @@
             case "ArrowUp": mode = "prev"; break;
             case "Home": mode = "first"; break;
             case "End": mode = "last"; break;
+            case "Enter":
+            case " ":
+                await ActivateMenuItemAsync();
+                return;
             case "Escape":
-                _menuKeyHandled = true;
                 await CloseAsync();
                 return;
             default:
-                _menuKeyHandled = false;
                 return;
         }
 
-        _menuKeyHandled = true;
         await FocusMenuItemAsync(mode);
+    }
+
+    private async Task ActivateMenuItemAsync()
+    {
+        try
+        {
+            var module = await GetContextMenuJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("activateMenuItem", _menuElement);
+        }
+        catch
+        {
+        }
     }
 
     private async Task FocusMenuItemAsync(string mode)
