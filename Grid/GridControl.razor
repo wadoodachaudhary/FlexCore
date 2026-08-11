@@ -12,11 +12,11 @@
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
-     @onfocusout="HandleGridFocusOut"
+     @onfocusout="@NonRenderingGridFocusOut"
      @oncontextmenu="HandleGridContextMenu"
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
-     @onmouseup="HandleGridMouseUp">
+     @onmouseup="@NonRenderingGridMouseUp">
 
     @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
     {
@@ -657,7 +657,7 @@
                                 class="fx-row @(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
-                                @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
+                                @onmousedown="@NonRenderingRowMouseDown(item, currentIdx)"
                                 data-ari="@currentIdx"
                                 @ondragover="(DragEventArgs e) => HandleRowReorderDragOver(item, currentIdx, e)"
                                 @ondragover:preventDefault="true"

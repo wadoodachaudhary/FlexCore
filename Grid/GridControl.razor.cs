@@ -1513,11 +1513,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>Overscan rows kept above and below the visible slice so a fast
     /// flick never outruns the render.</summary>
-    private const int WindowOverscan = 260;
+    [Parameter] public int WindowOverscanRows { get; set; } = 260;
 
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
-    private const int WindowRefreshGuardRows = WindowOverscan / 3;
+    private int WindowRefreshGuardRows => WindowOverscanRows / 3;
 
     /// <summary>First rendered ABSOLUTE row index into the paged/sorted list.</summary>
     private int _winStart;
@@ -1525,7 +1525,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Rows to render (visible + overscan). Defaults large so the FIRST
     /// paint has a full buffered window before the initial scroll callback
     /// right-sizes it to the real viewport height.</summary>
-    private int _winCount = WindowOverscan * 2;
+    private int _winCount = 520;   // resized from WindowOverscanRows after the first scroll sync
 
     /// <summary>The vertical scroll container (<c>.fx-grid-content</c>,
     /// <c>overflow:auto</c>, bounded by <see cref="Height"/>). The scroll reader
@@ -1714,7 +1714,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var firstVisible = Math.Max(0, (int)Math.Floor(scrollTop / rowH));
         var lastVisibleExclusive = firstVisible + visible;
-        var newCount = visible + WindowOverscan * 2;
+        var newCount = visible + WindowOverscanRows * 2;
         var currentEnd = _winStart + _winCount;
         var nearWindowStart = firstVisible < _winStart + WindowRefreshGuardRows;
         var nearWindowEnd = lastVisibleExclusive > currentEnd - WindowRefreshGuardRows;
@@ -1722,7 +1722,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_winCount == newCount && !nearWindowStart && !nearWindowEnd)
             return;
 
-        var newStart = Math.Max(0, firstVisible - WindowOverscan);
+        var newStart = Math.Max(0, firstVisible - WindowOverscanRows);
         if (newStart != _winStart || newCount != _winCount)
         {
             _winStart = newStart;
@@ -2302,7 +2302,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         var maxStart = Math.Max(0, pagedList.Count - _winCount);
-        _winStart = Math.Clamp(displayIndex - WindowOverscan, 0, maxStart);
+        _winStart = Math.Clamp(displayIndex - WindowOverscanRows, 0, maxStart);
         await InvokeAsync(StateHasChanged);
 
         // Keep the scrollbar in sync with the new window (a couple of rows of
@@ -3224,6 +3224,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // swallowed by HandleRowClick when _isDragSelecting is true so the
     // drag's selection survives.
 
+    // Rec 1 — mousedown/mouseup are ARMING events: they carry no visual of
+    // their own (the instant row preview is client-side JS, editors render
+    // explicitly inside TryStartBatchEdit), so their EventCallbacks are
+    // created on a non-IHandleEvent receiver and skip the implicit re-render.
+    // A physical click then costs ONE authoritative render — the click's.
+    private EventCallback<FocusEventArgs> NonRenderingGridFocusOut =>
+        EventCallback.Factory.Create<FocusEventArgs>(NonRenderingEventReceiver.Instance,
+            HandleGridFocusOut);
+
+    private EventCallback<MouseEventArgs> NonRenderingGridMouseUp =>
+        EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance,
+            (Action<MouseEventArgs>)HandleGridMouseUp);
+
+    private EventCallback<MouseEventArgs> NonRenderingRowMouseDown(TValue item, int rowIndex) =>
+        EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance,
+            (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, rowIndex, e)));
+
     private void HandleRowMouseDown(TValue item, int rowIndex, MouseEventArgs args)
     {
         if (!AllowRowDragSelection) return;
@@ -3286,7 +3303,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             if (activeCellChanged && IsBatchEditingDifferentCell(item, mouseDownColumn))
+            {
                 await CommitBatchEdit();
+                StateHasChanged();   // commit teardown must not wait for the click render
+            }
 
             SetActiveCell(resolvedRowIndex, cellIndex);
             if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
@@ -3753,6 +3773,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         finalVisibleIndex = Math.Clamp(finalVisibleIndex, 0, visible.Count - 1);
 
+        // Arm the preview-clear BEFORE the selection render below, so that
+        // render's OnAfterRender performs the handoff — arming afterwards
+        // could leave the preview stuck if no further render follows.
+        _dragPreviewClearPending = true;
+
         if (isRow && _dragAnchorItem != null)
         {
             var item = visible[finalVisibleIndex];
@@ -3776,10 +3801,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _dragAnchorRowIndex = null;
         _dragAnchorItem = default;
         ClearCellDragState();
-        // The preview stays painted until the authoritative render above has
-        // been applied — OnAfterRenderAsync clears it, so there is no
-        // unselected flash between preview and final selection.
-        _dragPreviewClearPending = true;
     }
 
     private bool _dragPreviewClearPending;
@@ -9637,7 +9658,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         // Drag-select wiring — see HandleRowMouseDown /
                         // HandleRowMouseEnter for the protocol. Keep
                         // sequence numbers monotonic alongside 71/72/73.
-                        builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
+                        builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
                         // Inline style as a belt-and-suspenders backstop —
                         // see flat path for the rationale. Wins any CSS
                         // specificity / isolation fight by spec.
@@ -9715,7 +9736,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             if (!string.IsNullOrEmpty(capturedCol.Field))
                                 builder.AddAttribute(106, "data-field", capturedCol.Field);
                             builder.AddAttribute(102, "style", col.GetCellStyle());
-                            builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
+                            builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
                             builder.AddAttribute(111, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
                             if (EnableCellContextMenu)
@@ -9906,7 +9927,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
             builder.AddAttribute(2, "style", col.GetCellStyle());
-            builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
+            builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddEventStopPropagationAttribute(9, "onmousedown", true);
             builder.AddAttribute(12, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
             if (EnableCellContextMenu)

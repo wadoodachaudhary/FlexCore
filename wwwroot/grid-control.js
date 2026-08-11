@@ -1478,6 +1478,52 @@ function gridRowsWithAri(gridRoot) {
     return [...gridRoot.querySelectorAll("tbody tr.fx-row[data-ari]")];
 }
 
+// The selected look is painted by an inline style the SERVER writes on
+// selected rows (grid cells built by RenderTreeBuilder carry no CSS scope
+// attribute, so scoped class rules cannot reach them). The client preview
+// must therefore paint the same way: an inline background. Rows that are
+// genuinely selected keep their server-written style on clear.
+function gridPreviewColor(gridRoot) {
+    const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-selected-row-bg").trim();
+    return v || "#b6c8dd";
+}
+
+function setRowPreview(tr, on, color) {
+    tr.classList.toggle("fx-drag-preview", on);
+    // Paint the CELLS as well as the row: some grids render opaque td
+    // backgrounds (the picklist), so a row-level color never shows through.
+    if (on) {
+        tr.style.backgroundColor = color;
+        for (const td of tr.children) td.style.backgroundColor = color;
+    }
+    else if (!tr.classList.contains("fx-selected")) {
+        tr.style.backgroundColor = "";
+        for (const td of tr.children) td.style.backgroundColor = "";
+    }
+}
+
+function setCellPreview(td, on, color) {
+    td.classList.toggle("fx-drag-preview-cell", on);
+    if (on) td.style.backgroundColor = color;
+    else td.style.backgroundColor = "";
+}
+
+// A plain press REPLACES the selection, so the old rows must stop looking
+// selected in the same frame — waiting for the server render leaves two
+// highlighted rows on a single-select grid for a whole round trip. The
+// server's next render rewrites the real state either way.
+function clearSelectedLook(gridRoot, exceptTr) {
+    gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected").forEach(r => {
+        if (r === exceptTr) return;
+        // The selected look can be class-driven (host ::deep rules) or inline
+        // (server row/cell styles) — remove both; the server's next render
+        // re-adds the class on rows that are genuinely still selected.
+        r.classList.remove("fx-selected");
+        r.style.backgroundColor = "";
+        for (const td of r.children) td.style.backgroundColor = "";
+    });
+}
+
 export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex, anchorField) {
     if (!gridRoot || !dotNetRef) return;
     unregisterGridDragSelection(gridRoot);
@@ -1485,16 +1531,17 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     const doc = gridRoot.ownerDocument || document;
     let lastIdx = anchorIndex, moved = false, ended = false, raf = 0, pending = null;
 
+    const previewColor = gridPreviewColor(gridRoot);
     const applyPreview = toIdx => {
         const a = Math.min(anchorIndex, toIdx), b = Math.max(anchorIndex, toIdx);
         for (const tr of gridRowsWithAri(gridRoot)) {
             const ari = +tr.getAttribute("data-ari");
             const inRange = ari >= a && ari <= b;
             if (mode === "row") {
-                tr.classList.toggle("fx-drag-preview", inRange);
+                setRowPreview(tr, inRange, previewColor);
             } else {
                 const td = tr.querySelector(`td[data-field="${CSS.escape(anchorField)}"]`);
-                if (td) td.classList.toggle("fx-drag-preview-cell", inRange);
+                if (td) setCellPreview(td, inRange, previewColor);
             }
         }
     };
@@ -1525,6 +1572,12 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
             }
             const idx = +tr.getAttribute("data-ari");
             if (idx === lastIdx) return;
+            // Entry dead-zone: 16px rows make bare edges hair-trigger — the
+            // pointer must be a few px INTO the row before it joins the range,
+            // otherwise grazing a boundary highlights one row too many.
+            const rect = tr.getBoundingClientRect();
+            if (idx > lastIdx && ev.clientY < rect.top + 3) return;
+            if (idx < lastIdx && ev.clientY > rect.bottom - 3) return;
             lastIdx = idx;
             moved = true;
             applyPreview(idx);
@@ -1541,6 +1594,7 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     doc.addEventListener("pointermove", onMove, true);
     doc.addEventListener("pointerup", onUp, true);
     gridDragSelectionBindings.set(gridRoot, { cleanup });
+    if (mode === "row") clearSelectedLook(gridRoot, null);
     applyPreview(anchorIndex);   // instant anchor feedback (click included)
 }
 
@@ -1552,8 +1606,8 @@ export function unregisterGridDragSelection(gridRoot) {
 
 export function clearGridDragPreview(gridRoot) {
     if (!gridRoot) return;
-    gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => r.classList.remove("fx-drag-preview"));
-    gridRoot.querySelectorAll(".fx-drag-preview-cell").forEach(td => td.classList.remove("fx-drag-preview-cell"));
+    gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => setRowPreview(r, false, ""));
+    gridRoot.querySelectorAll(".fx-drag-preview-cell").forEach(td => setCellPreview(td, false, ""));
 }
 
 // ── Instant row feedback ────────────────────────────────────────────────
@@ -1574,8 +1628,10 @@ export function registerGridInstantSelectionFeedback(gridRoot) {
         if (t.closest && t.closest("input, select, textarea, button")) return;
         const tr = t.closest ? t.closest("tbody tr.fx-row[data-ari]") : null;
         if (!tr || !gridRoot.contains(tr)) return;
-        gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => { if (r !== tr) r.classList.remove("fx-drag-preview"); });
-        tr.classList.add("fx-drag-preview");
+        const color = gridPreviewColor(gridRoot);
+        gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => { if (r !== tr) setRowPreview(r, false, ""); });
+        clearSelectedLook(gridRoot, tr);
+        setRowPreview(tr, true, color);
     };
     gridRoot.addEventListener("pointerdown", onDown, true);
     gridInstantFeedbackBindings.set(gridRoot, () => gridRoot.removeEventListener("pointerdown", onDown, true));
