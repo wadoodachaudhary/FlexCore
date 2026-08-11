@@ -19,6 +19,13 @@ public class GridColumnsBase : ComponentBase
 
     public IReadOnlyList<GridColumn> Columns => _columns;
 
+    private bool _columnsDirty;
+    private bool _renderArmed;
+
+    /// <summary>Bumped once per completed registration wave (see OnAfterRender).
+    /// Identifies the column-set version handed to the grid.</summary>
+    public int ColumnsGeneration { get; private set; }
+
     internal void AddColumn(GridColumn column)
     {
         if (_columns.Contains(column)) return;
@@ -38,15 +45,35 @@ public class GridColumnsBase : ComponentBase
             if (existing >= 0)
             {
                 _columns[existing] = column;
-                ParentGrid?.NotifyColumnsChanged();
+                MarkColumnsDirty();
                 return;
             }
         }
 
         _columns.Add(column);
+        MarkColumnsDirty();
+    }
+
+    // Registration no longer redraws the grid per column. The FIRST change of a
+    // wave arms exactly one guarded redraw; because columns register while the
+    // render pass is still in flight, that redraw joins the SAME wire batch and
+    // the browser receives the complete column set in one paint. OnAfterRender
+    // (post-batch) then stamps the completed generation.
+    private void MarkColumnsDirty()
+    {
+        _columnsDirty = true;
+        if (_renderArmed) return;
+        _renderArmed = true;
         ParentGrid?.NotifyColumnsChanged();
-        if (false && !string.IsNullOrWhiteSpace(DebugTag))
-            Console.WriteLine($"[GridColumnsBase:{DebugTag}] AddColumn field='{column.Field}' visible='{column.Visible}'");
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!_columnsDirty) return;
+        _columnsDirty = false;
+        _renderArmed = false;
+        ColumnsGeneration++;
+        ParentGrid?.NotifyColumnsCompleted(ColumnsGeneration);
     }
 
     /// <summary>Moves the column with field <paramref name="fromField"/> relative
@@ -77,7 +104,10 @@ public class GridColumnsBase : ComponentBase
 
         _columns.Insert(insertIdx, moving);
         var after = _columns.Select(c => c.Field).ToList();
-        return !before.SequenceEqual(after);
+        var changed = !before.SequenceEqual(after);
+        if (changed)
+            _columnsDirty = true;   // generation stamp only — caller redraws
+        return changed;
     }
 
     /// <summary>Rebuilds the column order in-place to match <paramref name="fieldsInOrder"/>.
@@ -113,6 +143,7 @@ public class GridColumnsBase : ComponentBase
         if (newList.SequenceEqual(_columns)) return false;
         _columns.Clear();
         _columns.AddRange(newList);
+        _columnsDirty = true;   // generation stamp only — caller redraws
         return true;
     }
 

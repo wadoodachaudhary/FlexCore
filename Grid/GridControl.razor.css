@@ -3569,3 +3569,12 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: #334155;
     color: #f8fafc;
 }
+
+/* Client-painted drag/click preview — identical to the selected look so the
+   server's authoritative render replaces it invisibly. */
+.fx-row.fx-drag-preview > td,
+.fx-row.fx-drag-preview .fx-cell,
+td.fx-drag-preview-cell {
+    background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
+}

@@ -1462,3 +1462,127 @@ export function measureGridAvailableWidth(gridRoot) {
     const vScrollbar = content ? (content.offsetWidth - content.clientWidth) : 0;
     return Math.max(0, gridRoot.clientWidth - vScrollbar - 2);
 }
+
+// ── Endpoint-only drag selection ─────────────────────────────────────────
+// Pointer tracking stays in the browser for the WHOLE drag: the preview is
+// painted client-side from each row's data-ari (absolute visible-row index)
+// and the server hears ONE EndDragSelectionFromBrowserAsync(mode, finalIdx,
+// moved) on release — one range computation, one SelectionChanged, one
+// render. The preview is cleared only after that authoritative render
+// (clearGridDragPreview is invoked from OnAfterRenderAsync), so there is no
+// unselected flash. The anchor row is highlighted immediately on mousedown,
+// which also gives plain clicks instant feedback before the round trip.
+const gridDragSelectionBindings = new WeakMap();
+
+function gridRowsWithAri(gridRoot) {
+    return [...gridRoot.querySelectorAll("tbody tr.fx-row[data-ari]")];
+}
+
+export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex, anchorField) {
+    if (!gridRoot || !dotNetRef) return;
+    unregisterGridDragSelection(gridRoot);
+
+    const doc = gridRoot.ownerDocument || document;
+    let lastIdx = anchorIndex, moved = false, ended = false, raf = 0, pending = null;
+
+    const applyPreview = toIdx => {
+        const a = Math.min(anchorIndex, toIdx), b = Math.max(anchorIndex, toIdx);
+        for (const tr of gridRowsWithAri(gridRoot)) {
+            const ari = +tr.getAttribute("data-ari");
+            const inRange = ari >= a && ari <= b;
+            if (mode === "row") {
+                tr.classList.toggle("fx-drag-preview", inRange);
+            } else {
+                const td = tr.querySelector(`td[data-field="${CSS.escape(anchorField)}"]`);
+                if (td) td.classList.toggle("fx-drag-preview-cell", inRange);
+            }
+        }
+    };
+
+    const finish = () => {
+        if (ended) return;
+        ended = true;
+        cleanup();
+        // Preview stays painted — the server clears it after its render.
+        dotNetRef.invokeMethodAsync("EndDragSelectionFromBrowserAsync", mode, lastIdx, moved)
+            .catch(() => clearGridDragPreview(gridRoot));
+    };
+
+    const onMove = e => {
+        pending = e;
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+            raf = 0;
+            if (ended || !pending) return;
+            const ev = pending; pending = null;
+            if ((ev.buttons & 1) === 0) { finish(); return; }
+            const el = doc.elementFromPoint(ev.clientX, ev.clientY);
+            const tr = el && el.closest ? el.closest("tbody tr.fx-row") : null;
+            if (!tr || !gridRoot.contains(tr) || !tr.hasAttribute("data-ari")) return;
+            if (mode === "cell") {
+                const td = el.closest("td");
+                if (!td || td.getAttribute("data-field") !== anchorField) return;
+            }
+            const idx = +tr.getAttribute("data-ari");
+            if (idx === lastIdx) return;
+            lastIdx = idx;
+            moved = true;
+            applyPreview(idx);
+        });
+    };
+    const onUp = () => finish();
+    const cleanup = () => {
+        doc.removeEventListener("pointermove", onMove, true);
+        doc.removeEventListener("pointerup", onUp, true);
+        if (raf) cancelAnimationFrame(raf);
+        gridDragSelectionBindings.delete(gridRoot);
+    };
+
+    doc.addEventListener("pointermove", onMove, true);
+    doc.addEventListener("pointerup", onUp, true);
+    gridDragSelectionBindings.set(gridRoot, { cleanup });
+    applyPreview(anchorIndex);   // instant anchor feedback (click included)
+}
+
+export function unregisterGridDragSelection(gridRoot) {
+    if (!gridRoot) return;
+    const b = gridDragSelectionBindings.get(gridRoot);
+    if (b) b.cleanup();
+}
+
+export function clearGridDragPreview(gridRoot) {
+    if (!gridRoot) return;
+    gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => r.classList.remove("fx-drag-preview"));
+    gridRoot.querySelectorAll(".fx-drag-preview-cell").forEach(td => td.classList.remove("fx-drag-preview-cell"));
+}
+
+// ── Instant row feedback ────────────────────────────────────────────────
+// Standing per-grid binding (registered once at grid init): a primary-button
+// pointerdown on a data row paints the row preview IMMEDIATELY, before any
+// server round trip — so the row highlight always appears first and the
+// active-cell cue (which needs a server render) follows. Modifier presses are
+// skipped (Ctrl toggles OFF / Shift ranges — a plain preview would lie), as
+// are presses on in-cell editors. The server's authoritative render replaces
+// the preview through the normal drag/click handoff.
+const gridInstantFeedbackBindings = new WeakMap();
+
+export function registerGridInstantSelectionFeedback(gridRoot) {
+    if (!gridRoot || gridInstantFeedbackBindings.has(gridRoot)) return;
+    const onDown = e => {
+        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        const t = e.target;
+        if (t.closest && t.closest("input, select, textarea, button")) return;
+        const tr = t.closest ? t.closest("tbody tr.fx-row[data-ari]") : null;
+        if (!tr || !gridRoot.contains(tr)) return;
+        gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => { if (r !== tr) r.classList.remove("fx-drag-preview"); });
+        tr.classList.add("fx-drag-preview");
+    };
+    gridRoot.addEventListener("pointerdown", onDown, true);
+    gridInstantFeedbackBindings.set(gridRoot, () => gridRoot.removeEventListener("pointerdown", onDown, true));
+}
+
+export function unregisterGridInstantSelectionFeedback(gridRoot) {
+    if (!gridRoot) return;
+    const cleanup = gridInstantFeedbackBindings.get(gridRoot);
+    if (cleanup) { cleanup(); gridInstantFeedbackBindings.delete(gridRoot); }
+}

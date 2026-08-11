@@ -658,7 +658,7 @@
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
                                 @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
-                                @onmouseenter="(MouseEventArgs e) => HandleRowMouseEnter(item, currentIdx, e)"
+                                data-ari="@currentIdx"
                                 @ondragover="(DragEventArgs e) => HandleRowReorderDragOver(item, currentIdx, e)"
                                 @ondragover:preventDefault="true"
                                 @ondrop="(DragEventArgs e) => HandleRowReorderDrop(item, currentIdx, e)"

@@ -21,13 +21,44 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _columnsContainer = container;
         _autoWidthPending = true;
         if (changed)
-            _ = InvokeAsync(StateHasChanged);
+            QueueColumnsChangedRender();
     }
 
     void IGridOwner.NotifyColumnsChanged()
     {
         _autoWidthPending = true;
-        _ = InvokeAsync(StateHasChanged);
+        QueueColumnsChangedRender();
+    }
+
+    void IGridOwner.NotifyColumnsCompleted(int generation)
+    {
+        // Post-batch bookkeeping only (see IGridOwner) — a redraw here would
+        // ship the columns in a second wire batch. Duplicate completions for
+        // the same generation are dropped.
+        if (generation == _completedColumnsGeneration)
+            return;
+        _completedColumnsGeneration = generation;
+    }
+
+    private int _completedColumnsGeneration;
+
+    // Every GridColumn registration used to queue its OWN fire-and-forget
+    // re-render, so mounting an N-column grid shipped a stack of render
+    // batches — on a slow link the header visibly assembled column by
+    // column (HHM-756). Coalesce: registrations arriving before the queued
+    // render executes share one StateHasChanged.
+    private bool _columnsChangedRenderQueued;
+
+    private void QueueColumnsChangedRender()
+    {
+        if (_columnsChangedRenderQueued)
+            return;
+        _columnsChangedRenderQueued = true;
+        _ = InvokeAsync(() =>
+        {
+            _columnsChangedRenderQueued = false;
+            StateHasChanged();
+        });
     }
 
     // ── Injectables ─────────────────────────────────────────────────────
@@ -813,7 +844,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private readonly Dictionary<string, ColumnState> _columnStates = new();
     private readonly PageState _pageState = new();
     private readonly HashSet<TValue> _selectedItems = new();
-    private readonly List<(int RowIndex, int CellIndex)> _selectedCells = new();
+    private readonly HashSet<(int RowIndex, int CellIndex)> _selectedCells = new();
     private (int RowIndex, int CellIndex)? _activeCell;
     private (int RowIndex, int CellIndex)? _pointerFillCell;
     private bool _expandAllGroups;
@@ -1102,8 +1133,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    private long _renderPassStartTimestamp;
+
     private void BeginGridRenderPass()
     {
+        _renderPassStartTimestamp = GridRenderDiagnostics.BeginPass();
+        EnsureAutoColumnWidthsBeforeRender();
         _renderPassActive = true;
         _renderVisibleColumns = null;
         _renderRowIndexLookupSource = null;
@@ -1112,6 +1147,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void EndGridRenderPass()
     {
+        GridRenderDiagnostics.EndPass(_renderPassStartTimestamp);
         _renderPassActive = false;
         _renderVisibleColumns = null;
         _renderRowIndexLookupSource = null;
@@ -2065,30 +2101,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 _showHeaderContextMenu ? _headerMenuElement : _cellMenuElement, "first");
         }
 
-        // Capture the columns container from child content
-        if (firstRender)
+        // Re-apply initial group columns now that columns are loaded. Redraw
+        // only when a group descriptor was actually added — the unconditional
+        // first-render StateHasChanged shipped a no-op batch for every grid.
+        if (firstRender && GroupColumns is { Count: > 0 } && _groupDescriptors.Count == 0)
         {
-            // Re-apply initial group columns now that columns are loaded
-            if (GroupColumns is { Count: > 0 } && _groupDescriptors.Count == 0)
+            var groupsApplied = false;
+            foreach (var colField in GroupColumns)
             {
-                foreach (var colField in GroupColumns)
+                var col = VisibleColumns.FirstOrDefault(c => c.Field == colField);
+                if (col != null && !_groupDescriptors.Any(g => g.Field == colField))
                 {
-                    var col = VisibleColumns.FirstOrDefault(c => c.Field == colField);
-                    if (col != null && !_groupDescriptors.Any(g => g.Field == colField))
+                    _groupDescriptors.Add(new GroupDescriptor
                     {
-                        _groupDescriptors.Add(new GroupDescriptor
-                        {
-                            Field = colField,
-                            HeaderText = col.DisplayHeader
-                        });
-                    }
+                        Field = colField,
+                        HeaderText = col.DisplayHeader
+                    });
+                    groupsApplied = true;
                 }
             }
-            StateHasChanged();
+            if (groupsApplied)
+                StateHasChanged();
         }
 
         // Hook once per component instance; JS side is idempotent as well.
         await EnsureGridKeyboardTrapRegisteredAsync();
+        await EnsureInstantSelectionFeedbackRegisteredAsync();
         await EnsureGridScrollSyncRegisteredAsync();
         await EnsureHeaderDragPreviewRegisteredAsync();
         await EnsureRowDragSelectionAutoScrollRegisteredAsync();
@@ -2121,6 +2159,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _autoWidthPending = false;
             if (EnsureAutoColumnWidths())
                 StateHasChanged();
+        }
+
+        // Drag-selection preview handoff: the client-painted preview is
+        // removed only AFTER the authoritative selection render has been
+        // applied, so there is never an unselected flash between them.
+        if (_dragPreviewClearPending)
+        {
+            _dragPreviewClearPending = false;
+            await ClearDragPreviewAsync();
         }
 
         await EnsureTrailingNewRowIfNeededAsync();
@@ -3199,8 +3246,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _dragAnchorItem = item;
         _dragAnchorRowIndex = ResolveRowIndex(item, rowIndex);
-        _isDragSelecting = false;   // promoted to first mouseenter
+        _isDragSelecting = false;   // promoted when the browser reports movement
         _suppressNextClickAfterDragSelect = false;
+
+        var anchorVisibleIndex = GetVisibleRowItems().IndexOf(item);
+        if (anchorVisibleIndex >= 0)
+            _ = RegisterDragSelectionCaptureAsync("row", anchorVisibleIndex, null);
 
         // Wipe any document-level text selection left over from earlier
         // interactions (or from a browser that paints a transient
@@ -3249,6 +3300,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 _cellDragAnchor = (resolvedRowIndex, cellIndex);
                 _isCellDragSelecting = false;
+                var cellAnchorVisibleIndex = GetVisibleRowItems().IndexOf(item);
+                var cellAnchorField = VisibleColumns.ElementAtOrDefault(cellIndex)?.Field;
+                if (cellAnchorVisibleIndex >= 0 && !string.IsNullOrEmpty(cellAnchorField))
+                    _ = RegisterDragSelectionCaptureAsync("cell", cellAnchorVisibleIndex, cellAnchorField);
             }
 
             var isPlainMouseDown = !args.CtrlKey && !args.MetaKey && !args.ShiftKey;
@@ -3661,33 +3716,123 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _cellDragAnchor = null;
     }
 
-    private async Task HandleCellMouseEnter(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
+    // Drag tracking runs in the browser (grid-control.js): the preview is
+    // painted client-side from data-ari attributes and the server hears ONE
+    // endpoint call on release — the old per-row/per-cell mouseenter handlers
+    // cost two renders of the whole window buffer per crossed row.
+    [JSInvokable]
+    public async Task EndDragSelectionFromBrowserAsync(string mode, int finalVisibleIndex, bool moved)
     {
-        var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        var isRow = string.Equals(mode, "row", StringComparison.Ordinal);
 
-        if (!_cellDragAnchor.HasValue)
+        if (!moved)
         {
+            // Plain click: the click event does the selecting; just disarm.
+            // The anchor preview stays painted until the CLICK's authoritative
+            // render lands (OnAfterRenderAsync clears it) — clearing here would
+            // flash the row back to unselected for a round trip on slow links.
+            if (isRow)
+            {
+                _dragAnchorItem = default;
+                _dragAnchorRowIndex = null;
+                _isDragSelecting = false;
+            }
+            else
+            {
+                ClearCellDragState();
+            }
+            _dragPreviewClearPending = true;
             return;
         }
 
-        if ((args.Buttons & 1) == 0)
+        var visible = GetVisibleRowItems();
+        if (visible.Count == 0)
         {
-            ClearCellDragState();
+            await ClearDragPreviewAsync();
             return;
         }
+        finalVisibleIndex = Math.Clamp(finalVisibleIndex, 0, visible.Count - 1);
 
-        var anchor = _cellDragAnchor.Value;
-        if (cellIndex != anchor.CellIndex)
+        if (isRow && _dragAnchorItem != null)
+        {
+            var item = visible[finalVisibleIndex];
+            // One range computation, one render, one SelectionChanged.
+            await ContinueRowDragSelectionAsync(item, ResolveRowIndex(item, finalVisibleIndex));
+        }
+        else if (!isRow && _cellDragAnchor.HasValue)
+        {
+            var anchor = _cellDragAnchor.Value;
+            var resolved = ResolveRowIndex(visible[finalVisibleIndex], finalVisibleIndex);
+            _isCellDragSelecting = true;
+            SelectSingleCellColumnDragRange(anchor.RowIndex, resolved, anchor.CellIndex);
+            _lastSelectedCell = anchor;
+            await InvokeAsync(StateHasChanged);
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
+        }
+
+        _suppressNextClickAfterDragSelect = true;
+        _suppressNextClickAfterDragSelectUntilUtc = DateTime.UtcNow.AddMilliseconds(350);
+        _isDragSelecting = false;
+        _dragAnchorRowIndex = null;
+        _dragAnchorItem = default;
+        ClearCellDragState();
+        // The preview stays painted until the authoritative render above has
+        // been applied — OnAfterRenderAsync clears it, so there is no
+        // unselected flash between preview and final selection.
+        _dragPreviewClearPending = true;
+    }
+
+    private bool _dragPreviewClearPending;
+    private DotNetObjectReference<GridControl<TValue>>? _dragDotNetRef;
+
+    private bool _instantFeedbackRegistered;
+
+    // Standing client-side binding: the pressed row highlights in the SAME
+    // frame as the pointerdown, before any server round trip — so the row
+    // paints first and the active-cell cue (server render) follows. Rows in
+    // Multiple selection mode only; JS itself skips modifier presses and
+    // in-cell editors.
+    private async Task EnsureInstantSelectionFeedbackRegisteredAsync()
+    {
+        if (_instantFeedbackRegistered)
             return;
-
-        if (resolvedRowIndex == anchor.RowIndex && !_isCellDragSelecting)
+        if (!AllowSelection || SelectionSettingsRef?.Mode == SelectionMode.Cell)
             return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement);
+            _instantFeedbackRegistered = true;
+        }
+        catch
+        {
+        }
+    }
 
-        _isCellDragSelecting = true;
-        SelectSingleCellColumnDragRange(anchor.RowIndex, resolvedRowIndex, anchor.CellIndex);
-        _lastSelectedCell = anchor;
-        await InvokeAsync(StateHasChanged);
-        await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
+    private async Task RegisterDragSelectionCaptureAsync(string mode, int anchorVisibleIndex, string? anchorField)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _dragDotNetRef ??= DotNetObjectReference.Create(this);
+            await _gridJsModule.InvokeVoidAsync("registerGridDragSelection",
+                _gridHostElement, _dragDotNetRef, mode, anchorVisibleIndex, anchorField ?? "");
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task ClearDragPreviewAsync()
+    {
+        try
+        {
+            if (_gridJsModule != null)
+                await _gridJsModule.InvokeVoidAsync("clearGridDragPreview", _gridHostElement);
+        }
+        catch
+        {
+        }
     }
 
     private bool CanStartSingleCellColumnDrag(int cellIndex)
@@ -3995,26 +4140,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             // Best-effort; the filter remains usable even if it cannot be dragged.
         }
-    }
-
-    private async Task HandleRowMouseEnter(TValue item, int rowIndex, MouseEventArgs args)
-    {
-        if (_dragAnchorItem == null) return;
-
-        // MouseEventArgs.Buttons is a bitmask of currently-held buttons;
-        // bit 0 = primary. If the user released outside any row (no
-        // mouseup landed on the grid) Buttons drops to 0 here, so we end
-        // the drag silently.
-        if ((args.Buttons & 1) == 0)
-        {
-            _dragAnchorItem = default;
-            _dragAnchorRowIndex = null;
-            _isDragSelecting = false;
-            _suppressNextClickAfterDragSelect = false;
-            return;
-        }
-
-        await ContinueRowDragSelectionAsync(item, rowIndex);
     }
 
     [JSInvokable]
@@ -9513,7 +9638,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         // HandleRowMouseEnter for the protocol. Keep
                         // sequence numbers monotonic alongside 71/72/73.
                         builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
-                        builder.AddAttribute(75, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowMouseEnter(item, resolvedRowIdx, e)));
                         // Inline style as a belt-and-suspenders backstop —
                         // see flat path for the rationale. Wins any CSS
                         // specificity / isolation fight by spec.
@@ -9593,7 +9717,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             builder.AddAttribute(102, "style", col.GetCellStyle());
                             builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
-                            builder.AddAttribute(109, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddAttribute(111, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
                             if (EnableCellContextMenu)
                             {
@@ -9785,7 +9908,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(2, "style", col.GetCellStyle());
             builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddEventStopPropagationAttribute(9, "onmousedown", true);
-            builder.AddAttribute(10, "onmouseenter", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellMouseEnter(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddAttribute(12, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
             if (EnableCellContextMenu)
             {
@@ -10617,6 +10739,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return null;
     }
 
+    // Runs at the TOP of every render pass (see the @{ } block opening the
+    // markup). Widths used to be assigned only in OnAfterRender, so the first
+    // wire batch shipped width-less columns at 0px and the width arrived in a
+    // SECOND batch — on a slow link the last column visibly materialized
+    // seconds after the rest of the header (HHM-756).
+    private void EnsureAutoColumnWidthsBeforeRender()
+    {
+        if (!_autoWidthPending)
+            return;
+        _autoWidthPending = false;
+        EnsureAutoColumnWidths();
+    }
+
     private bool EnsureAutoColumnWidths()
     {
         if (_columnsContainer == null)
@@ -11086,7 +11221,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public Task SelectCellsAsync(IEnumerable<(int RowIndex, int CellIndex)> cells)
     {
         _selectedCells.Clear();
-        _selectedCells.AddRange(cells);
+        _selectedCells.UnionWith(cells);
         return InvokeAsync(StateHasChanged);
     }
 
@@ -12000,5 +12135,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _windowSelfRef?.Dispose();
         _windowSelfRef = null;
+        _dragDotNetRef?.Dispose();
+        _dragDotNetRef = null;
     }
 }
