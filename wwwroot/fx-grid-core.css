@@ -1,0 +1,19 @@
+/* FlexKit — unscoped core styles for GridControl.
+ *
+ * Grid rows/cells are builder-rendered without Blazor scope attributes, so
+ * the scoped GridControl.razor.css can never match them. Anything the grid's
+ * client-side behaviors (drag-selection preview, multi-edit/batch edit) need
+ * must live here. grid-control.js injects this file (it sits next to it under
+ * _content/<package>/) on module load, so every consumer app gets these rules
+ * with no host wiring. Hosts theme via the --fx-grid-* variables; the
+ * fallbacks keep a bare host working. */
+
+/* Client-side drag-selection preview: painted by grid-control.js the instant
+   the pointer crosses a row, before the server's authoritative render lands.
+   Mirrors the .fx-selected look so the handoff is invisible. */
+.fx-row.fx-drag-preview > td,
+.fx-row.fx-drag-preview .fx-cell,
+td.fx-drag-preview-cell {
+    background: var(--fx-grid-selected-row-bg, #b6c8dd) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
+}

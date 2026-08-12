@@ -6,8 +6,22 @@
  *
  * One function per concern, exported as ES module bindings so the host
  * page doesn't get a global namespace dumped into it. Keep this file tiny
- * — Grid markup-side concerns go in GridControl.razor.css, not here.
+ * — unscoped grid visuals go in fx-grid-core.css (injected below), since
+ * builder-rendered grid elements carry no Blazor scope attribute and the
+ * scoped GridControl.razor.css can never match them.
  */
+
+// Self-delivered core CSS: injected from here so every consumer app gets the
+// drag/batch-edit visuals with no host wiring. Runs once per module load.
+(function ensureGridCoreStyles() {
+    const id = "fx-grid-core-styles";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = new URL("fx-grid-core.css", import.meta.url).href;
+    document.head.appendChild(link);
+})();
 
 /**
  * Focuses an <input> and selects its entire contents. Used to back the
@@ -1483,6 +1497,13 @@ function gridRowsWithAri(gridRoot) {
 // attribute, so scoped class rules cannot reach them). The client preview
 // must therefore paint the same way: an inline background. Rows that are
 // genuinely selected keep their server-written style on clear.
+// Every element the preview paints is tracked here, because Blazor's next
+// render can rewrite a row's class attribute (adding fx-selected) and wipe
+// the fx-drag-preview marker — a class-based sweep would then miss the row
+// and its JS cell paint would stick (visible after keyboard navigation
+// moves the selection away).
+const paintedPreviewEls = new Set();
+
 function gridPreviewColor(gridRoot) {
     const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-selected-row-bg").trim();
     return v || "#b6c8dd";
@@ -1494,11 +1515,18 @@ function setRowPreview(tr, on, color) {
     // backgrounds (the picklist), so a row-level color never shows through.
     if (on) {
         tr.style.backgroundColor = color;
-        for (const td of tr.children) td.style.backgroundColor = color;
+        paintedPreviewEls.add(tr);
+        for (const td of tr.children) { td.style.backgroundColor = color; paintedPreviewEls.add(td); }
     }
-    else if (!tr.classList.contains("fx-selected")) {
-        tr.style.backgroundColor = "";
-        for (const td of tr.children) td.style.backgroundColor = "";
+    else {
+        // Cell paints are JS-owned (the server never writes td backgrounds),
+        // so they must ALWAYS be cleared at handoff — a still-selected row
+        // keeps them only until keyboard navigation unselects it server-side,
+        // which rewrites the tr style but has no reason to touch the tds,
+        // leaving a stuck blue row. The tr background is server-owned for
+        // selected rows, so it keeps the fx-selected guard.
+        if (!tr.classList.contains("fx-selected")) { tr.style.backgroundColor = ""; paintedPreviewEls.delete(tr); }
+        for (const td of tr.children) { td.style.backgroundColor = ""; paintedPreviewEls.delete(td); }
     }
 }
 
@@ -1553,6 +1581,19 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
         // Preview stays painted — the server clears it after its render.
         dotNetRef.invokeMethodAsync("EndDragSelectionFromBrowserAsync", mode, lastIdx, moved)
             .catch(() => clearGridDragPreview(gridRoot));
+        // Safety-net sweep: render ordering can leave the server-side clear
+        // waiting on a render that never comes, and Blazor class-attribute
+        // diffs can strip the preview marker — after the round trip has
+        // certainly landed, wipe every tracked paint that isn't backed by a
+        // real selection (cell paints always; they are JS-owned).
+        setTimeout(() => {
+            for (const el of [...paintedPreviewEls]) {
+                const tr = el.tagName === "TR" ? el : el.closest("tr");
+                const keepTr = el.tagName === "TR" && tr && tr.classList.contains("fx-selected");
+                if (!keepTr) el.style.backgroundColor = "";
+                paintedPreviewEls.delete(el);
+            }
+        }, 1500);
     };
 
     const onMove = e => {
@@ -1608,6 +1649,15 @@ export function clearGridDragPreview(gridRoot) {
     if (!gridRoot) return;
     gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => setRowPreview(r, false, ""));
     gridRoot.querySelectorAll(".fx-drag-preview-cell").forEach(td => setCellPreview(td, false, ""));
+    // Registry sweep: rows whose preview class was wiped by a class-attribute
+    // diff still carry JS paints — clear every tracked element in this grid.
+    for (const el of [...paintedPreviewEls]) {
+        if (!gridRoot.contains(el)) continue;
+        const tr = el.tagName === "TR" ? el : el.closest("tr");
+        if (el.tagName === "TR" && tr && tr.classList.contains("fx-selected")) { paintedPreviewEls.delete(el); continue; }
+        el.style.backgroundColor = "";
+        paintedPreviewEls.delete(el);
+    }
 }
 
 // ── Instant row feedback ────────────────────────────────────────────────
