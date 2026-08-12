@@ -11,7 +11,7 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.1.25</Version>
+    <Version>0.2.1</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
