@@ -1,15 +1,29 @@
 @namespace Fx.ControlKit.Grid
+@inherits FlexControlBase
 @typeparam TValue
 @using Fx.ControlKit
 @using System.Reflection
 @using System.Globalization
+
+@{ BeginGridRenderPass(); }
 
 <div class="@GridHostCssClass"
      style="@HostStyle"
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
-     @onmouseup="HandleGridMouseUp">
+     @onfocusout="@NonRenderingGridFocusOut"
+     @oncontextmenu="HandleGridContextMenu"
+     @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
+     @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
+     @onmouseup="@NonRenderingGridMouseUp">
+
+    @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
+    {
+        <div class="fx-grid-export-status-pill" role="status" aria-live="polite">
+            @_exportStatusMessage
+        </div>
+    }
 
     @* ── Toolbar ──────────────────────────────────────────────── *@
     @* Built-in grid toolbar. Honors custom Toolbar items / ShowSearchBar. *@
@@ -26,6 +40,9 @@
             @if (ShowSearchBar)
             {
                 <div class="fx-toolbar-search">
+                    <svg class="fx-toolbar-search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                        <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+                    </svg>
                     <input type="text" placeholder="Search..."
                            @bind="SearchText" @bind:event="oninput"
                            @bind:after="ApplySearchDebounced" />
@@ -86,10 +103,10 @@
                         var capturedField = gd.Field;
                         <span class="fx-group-chip" draggable="true"
                               @ondragstart="() => StartGroupChipDrag(capturedField)"
-                              @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
-                              @oncontextmenu:preventDefault="true"
-                              @oncontextmenu:stopPropagation="true"
-                              title="Right-click for options">
+             @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
+             title="Right-click for options">
                             <span class="fx-group-chip-text">@gd.HeaderText</span>
                             <span class="fx-group-chip-remove"
                                   role="button"
@@ -100,7 +117,7 @@
                                   @onclick:stopPropagation="true"
                                   @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                                   @oncontextmenu:preventDefault="true"
-                                  @oncontextmenu:stopPropagation="true">×</span>
+                                  @oncontextmenu:stopPropagation="@EnableHeaderContextMenu">×</span>
                         </span>
                     }
                 }
@@ -250,11 +267,11 @@
                         @foreach (var col in ColumnPanelColumns)
                         {
                             var capturedCol = col;
-                            var canHide = !IsColumnVisible(col) || Columns.Count(IsColumnVisible) > 1;
+                            var canToggle = !IsColumnVisible(col) || CanHideColumn(col);
                             <label class="fx-grid-check-row">
                                 <input type="checkbox"
                                        checked="@IsColumnVisible(col)"
-                                       disabled="@(!canHide)"
+                                       disabled="@(!canToggle)"
                                        @onchange="async e => await SetColumnPanelVisibleAsync(capturedCol, e.Value is bool b && b)" />
                                 <span>@HeaderColumnDisplay(col)</span>
                             </label>
@@ -404,6 +421,7 @@
         <div class="fx-grid-content fx-grid-pivot-shell"
              style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
             <PivotControl TValue="TValue"
+                          @ref="_pivotControlRef"
                           DataSource="@FilteredData"
                           RowFields="@_pivotRowFields"
                           ColumnFields="@_pivotColumnFields"
@@ -435,12 +453,24 @@
     {
 
     @* ── Grid Table ───────────────────────────────────────────── *@
-    <div class="fx-grid-content" style="@(string.IsNullOrEmpty(Height) ? "" : (IsPagingActive ? "overflow-x:auto; overflow-y:hidden; flex:1;" : "overflow:auto; flex:1;"))">
+    @* @ref="_scrollElement" — the custom-windowing scroll reader (grid-control.js
+       registerGridWindowScroll) attaches its throttled scroll listener here. This
+       is the vertical scroll container (overflow:auto, bounded by Height) whenever
+       UseRowWindowing is active (flat, non-paged, bounded-height, non-grouped). *@
+    <div class="fx-grid-content" style="@GridContentStyle" @ref="_scrollElement">
         <table class="fx-grid-table" style="@GetTableStyle()">
 
             @* Header *@
             <thead class="fx-grid-header">
                 <tr>
+                    @if (ShowRowReorderColumn)
+                    {
+                        <th class="fx-header-cell fx-row-reorder-header-cell" style="@RowReorderColumnStyle"></th>
+                    }
+                    @if (ShowRowSelectorHandleColumn)
+                    {
+                        <th class="fx-header-cell fx-row-selector-header-cell" style="@RowSelectorHandleColumnStyle"></th>
+                    }
                     @if (ShowCheckboxColumn)
                     {
                         <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
@@ -462,18 +492,21 @@
                             <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
                                 @oncontextmenu:preventDefault="true"
-                                @oncontextmenu:stopPropagation="true"
+                                @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
                                 title="Right-click for options">
                                 <span class="fx-header-text">@HeaderColumnDisplay(gcol)</span>
                             </th>
                         }
                     }
+                    @{ GridColumn? prevResizeCol = null; }
                     @foreach (var col in VisibleColumns)
                     {
                         var state = GetColumnState(col.Field);
                         var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
                         var capturedField = col.Field;
                         var headerLabel = HeaderColumnDisplay(col);
+                        var leftGripCol = prevResizeCol;
+                        prevResizeCol = AllowResizing && col.AllowResizing ? col : null;
                         @* data-field CSS hook (header) — matches the data-cell hook so a
                            single rule like `[data-field="Total"]` paints both the column
                            header AND every cell underneath. *@
@@ -483,7 +516,7 @@
                             @onclick="() => HandleSort(col)"
                             @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                             @oncontextmenu:preventDefault="true"
-                            @oncontextmenu:stopPropagation="true"
+                            @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
                             title="@headerLabel"
                             draggable="@(headerDraggable ? "true" : "false")"
                             @ondragstart="(e => StartColumnDrag(capturedField, e))"
@@ -526,9 +559,31 @@
                             @if (AllowResizing && col.AllowResizing)
                             {
                                 <span class="fx-resize-handle"
+                                      draggable="false"
                                       @onmousedown="e => StartResize(col, e)"
+                                      @onmousedown:preventDefault="true"
                                       @onmousedown:stopPropagation="true"
-                                      @onclick:stopPropagation="true"></span>
+                                      @onclick:stopPropagation="true"
+                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
+                                      @ondblclick:preventDefault="true"
+                                      @ondblclick:stopPropagation="true"></span>
+                            }
+                            @* The divider's right half. Each header cell is isolation:isolate, so
+                               the previous cell's grip cannot overhang into this one — instead this
+                               cell owns a left-edge strip that resizes the PREVIOUS column, giving
+                               the divider line a hit zone on both sides like VB6/Excel. *@
+                            @if (leftGripCol != null)
+                            {
+                                var capturedPrev = leftGripCol;
+                                <span class="fx-resize-handle fx-resize-handle-prev"
+                                      draggable="false"
+                                      @onmousedown="e => StartResize(capturedPrev, e)"
+                                      @onmousedown:preventDefault="true"
+                                      @onmousedown:stopPropagation="true"
+                                      @onclick:stopPropagation="true"
+                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
+                                      @ondblclick:preventDefault="true"
+                                      @ondblclick:stopPropagation="true"></span>
                             }
 
                             @if (AllowColumnReorder)
@@ -568,32 +623,67 @@
                 }
                 else
                 {
-                    var rowIdx = 0;
-                    @foreach (var item in PagedData)
-                    {
-                        var currentIdx = rowIdx;
-                        var isSelected = _selectedItems.Contains(item);
-                        var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
-                        // Inline background for selected rows as a
-                        // belt-and-suspenders backstop. The scoped
-                        // .fx-row.fx-selected CSS can lose specificity
-                        // fights inside isolated batch-edit cells; an
-                        // inline style wins every battle by spec.
-                        var rowStyle = GetRowStyle(item, currentIdx, isSelected);
-                        var rowCssClass = GetRowCssClass(item, currentIdx);
-
+                    @* ── Flat (non-grouped) rows ───────────────────────
+                       Shared row template so the virtualized branch and the
+                       non-virtualized (paged / no-height) branch render
+                       byte-identical <tr> markup. `row` carries the item AND
+                       its ABSOLUTE index into PagedData: with virtualization
+                       only a subset of rows render, so a running counter would
+                       be wrong — every place that used the old loop `item` /
+                       `currentIdx` now reads `row.Item` / `row.Index`. *@
+                    RenderFragment<(TValue Item, int Index)> rowTemplate = row =>
+                    @<text>
+                        @{
+                            var item = row.Item;
+                            var currentIdx = row.Index;
+                            var isSelected = _selectedItems.Contains(item);
+                            var isCellSelectedRow = IsCellSelectionRow(item, currentIdx);
+                            var isEditingThis = _isEditing && EditSettingsRef?.Mode == EditMode.Inline && _editingRowIndex == currentIdx;
+                            // Inline background for selected rows as a
+                            // belt-and-suspenders backstop. The scoped
+                            // .fx-row.fx-selected CSS can lose specificity
+                            // fights inside isolated batch-edit cells; an
+                            // inline style wins every battle by spec.
+                            var rowStyle = GetRowStyle(item, currentIdx, isSelected);
+                            var rowCssClass = GetRowCssClass(item, currentIdx);
+                        }
                         @if (isEditingThis)
                         {
                             @RenderEditRow()
                         }
                         else
                         {
-                            <tr class="fx-row @(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected ? "fx-selected" : "") @(EnableHover ? "fx-hover" : "") @rowCssClass"
+                            <tr @key="item"
+                                class="fx-row @(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="(MouseEventArgs e) => HandleRowClick(item, currentIdx, e)"
                                 @ondblclick="() => HandleRowDblClick(item, currentIdx)"
-                                @onmousedown="(MouseEventArgs e) => HandleRowMouseDown(item, currentIdx, e)"
-                                @onmouseenter="(MouseEventArgs e) => HandleRowMouseEnter(item, currentIdx, e)"
+                                @onmousedown="@NonRenderingRowMouseDown(item, currentIdx)"
+                                data-ari="@currentIdx"
+                                @ondragover="(DragEventArgs e) => HandleRowReorderDragOver(item, currentIdx, e)"
+                                @ondragover:preventDefault="true"
+                                @ondrop="(DragEventArgs e) => HandleRowReorderDrop(item, currentIdx, e)"
+                                @ondrop:preventDefault="true"
+                                @ondragend="EndRowReorderDrag"
                                 style="@rowStyle">
+
+                                @if (ShowRowReorderColumn)
+                                {
+                                    <td class="fx-cell fx-row-reorder-cell @(CanStartRowReorder(item) ? "" : "disabled")"
+                                        style="@RowReorderColumnStyle"
+                                        draggable="@(CanStartRowReorder(item) ? "true" : "false")"
+                                        title="Drag to move row"
+                                        @onclick:stopPropagation="true"
+                                        @onmousedown:stopPropagation="true"
+                                        @ondragstart="(DragEventArgs e) => StartRowReorderDrag(item, currentIdx, e)"
+                                        @ondragend="EndRowReorderDrag">
+                                        <span class="fx-row-reorder-grip" aria-hidden="true"></span>
+                                    </td>
+                                }
+
+                                @if (ShowRowSelectorHandleColumn)
+                                {
+                                    @RenderRowSelectorHandleCell(item, currentIdx)
+                                }
 
                                 @if (ShowCheckboxColumn)
                                 {
@@ -607,7 +697,53 @@
                                 @RenderDataCells(item, currentIdx, col => col)
                             </tr>
                         }
-                        rowIdx++;
+                    </text>;
+
+                    @* Materialize the sorted/paged list ONCE per render so slicing
+                       is O(1) and SortedData isn't re-enumerated per row. *@
+                    var pagedList = PagedData as IList<TValue> ?? PagedData.ToList();
+
+                    @* ── Custom row windowing (scroll-driven) ──────────────
+                       Render only the visible slice plus overscan, bracketed by two
+                       zero-content spacer rows whose heights stand in for the
+                       un-rendered rows above and below. The scroll reader in
+                       grid-control.js reports scrollTop/clientHeight to
+                       OnGridWindowScrollAsync, which recomputes _winStart / _winCount;
+                       PrepareRowWindow clamps the offset (and resets it to the top
+                       when the list identity changes). Each row renders with its
+                       ABSOLUTE index into pagedList so selection / active-cell /
+                       batch-edit / inline-edit match all stay correct. Replaces
+                       Blazor <Virtualize>, whose IntersectionObserver did not track
+                       scrolling inside this <table>. *@
+                    @if (UseRowWindowing)
+                    {
+                        PrepareRowWindow(pagedList);
+                        var winTotal = pagedList.Count;
+                        var winStart = _winStart;
+                        var winEnd = Math.Min(winTotal, winStart + _winCount);
+
+                        @* TOP spacer — height of all rows above the window. *@
+                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
+                        </tr>
+                        @for (int wi = winStart; wi < winEnd; wi++)
+                        {
+                            @rowTemplate((pagedList[wi], wi))
+                        }
+                        @* BOTTOM spacer — height of all rows below the window. *@
+                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @* Paged / unbounded-height / grouped-off-but-no-Height grids
+                           keep the plain loop over every row — no scroll viewport to
+                           window against, so old behavior is preserved exactly. *@
+                        @for (int fi = 0; fi < pagedList.Count; fi++)
+                        {
+                            @rowTemplate((pagedList[fi], fi))
+                        }
                     }
                 }
 
@@ -639,6 +775,14 @@
                         @foreach (var aggRow in footerRows)
                         {
                             <tr class="fx-aggregate-footer-row">
+                                @if (ShowRowReorderColumn)
+                                {
+                                    <td class="fx-cell fx-aggregate-cell fx-row-reorder-cell disabled" style="@RowReorderColumnStyle"></td>
+                                }
+                                @if (ShowRowSelectorHandleColumn)
+                                {
+                                    <td class="fx-cell fx-aggregate-cell fx-row-selector-cell" style="@RowSelectorHandleColumnStyle"></td>
+                                }
                                 @if (ShowCheckboxColumn)
                                 {
                                     <td class="fx-cell fx-aggregate-cell"></td>
@@ -779,7 +923,8 @@
                 }
                 else
                 {
-                    var values = GetColumnFilterValues(_filterPopupField);
+                    var candidates = GetColumnFilterValueCandidates(_filterPopupField);
+                    var values = candidates.Select(v => v.Value).ToList();
                     var totalValueCount = GetDistinctValues(_filterPopupField).Count;
                     var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
 
@@ -792,20 +937,19 @@
                                              ValueChanged="OnTextFilterOperatorValueChanged"
                                              CssClass="fx-filter-operator-select" />
                         <input type="text"
+                               @ref="_filterConditionInputRef"
                                class="fx-filter-popup-input fx-filter-condition-input"
                                placeholder="Filter value..."
                                value="@_filterTextDraft"
-                               @oninput="OnTextFilterInput" />
+                               @oninput="OnTextFilterInput"
+                               @oninput:stopPropagation="true"
+                               @onkeydown:stopPropagation="true"
+                               @onkeyup:stopPropagation="true"
+                               @onclick:stopPropagation="true" />
                     </div>
 
-                    <div class="fx-filter-popup-search">
-                        <input type="text" class="fx-filter-popup-input"
-                               placeholder="Search list values..."
-                               value="@GetColumnFilterValueSearch(_filterPopupField)"
-                               @oninput="OnFilterValueSearchInput" />
-                        <div class="fx-filter-popup-summary">
-                            @selectedValueCount of @totalValueCount selected
-                        </div>
+                    <div class="fx-filter-popup-summary fx-filter-value-summary">
+                        @selectedValueCount of @totalValueCount selected
                     </div>
 
                     <label class="fx-filter-checkbox-item fx-filter-select-all-row">
@@ -816,14 +960,14 @@
                     </label>
 
                     <div class="fx-filter-checkbox-list">
-                        @foreach (var val in values)
+                        @foreach (var candidate in candidates)
                         {
-                            var v = val;
+                            var v = candidate.Value;
                             <label class="fx-filter-checkbox-item">
                                 <input type="checkbox"
                                        checked="@IsFilterValueChecked(_filterPopupField, v)"
                                        @onchange="e => SetFilterValueChecked(_filterPopupField, v, e.Value is bool b && b)" />
-                                <span>@GetFilterValueDisplay(v)</span>
+                                <span>@candidate.DisplayText</span>
                             </label>
                         }
                         @if (values.Count == 0)
@@ -871,7 +1015,7 @@
                             }
                             else
                             {
-                                <input type="@(col.Type == ColumnType.Number ? "number" : col.Type == ColumnType.Date ? "date" : "text")"
+                                <input type="@(col.Type == ColumnType.Number ? "number" : col.Type == ColumnType.Date ? "date" : col.Type == ColumnType.Password ? "password" : "text")"
                                        value="@GetPropertyValue(_editItem, col.Field)"
                                        disabled="@col.IsPrimaryKey"
                                        @onchange="e => SetPropertyValue(_editItem, col.Field, e.Value?.ToString())" />
@@ -896,6 +1040,53 @@
              @onmouseleave="EndGridResize"></div>
     }
 
+    @* ── Cell Context Menu (opt-in right-click on data cells) ───── *@
+    @if (_showCellContextMenu)
+    {
+        <div class="fx-grid-cell-context-backdrop"
+             @onclick="CloseCellContextMenu"
+             @oncontextmenu="CloseCellContextMenu"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-cell-context-menu"
+             @ref="_cellMenuElement"
+             role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="true"
+             @onkeydown:stopPropagation="true"
+             style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
+             @onclick:stopPropagation="true">
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextCutAsync">
+                <span>Cut</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+X</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanReadCellContext)"
+                    @onclick="CellContextCopyAsync">
+                <span>Copy</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+C</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextPasteAsync">
+                <span>Paste</span>
+                <span class="fx-grid-cell-context-shortcut">Ctrl+V</span>
+            </button>
+            <button type="button"
+                    class="fx-grid-cell-context-item"
+                    disabled="@(!CanApplyCellContextEdit)"
+                    @onclick="CellContextDeleteAsync">
+                <span>Delete</span>
+                <span class="fx-grid-cell-context-shortcut">Del</span>
+            </button>
+        </div>
+    }
+
     @* ── Header Context Menu (right-click on a column header) ────── *@
     @* Generic across all grids — see GridControl.razor.cs for handlers.
        Backdrop catches clicks/right-clicks anywhere outside and dismisses. *@
@@ -906,74 +1097,211 @@
              @oncontextmenu="CloseHeaderContextMenu"
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-header-context-menu"
+             @ref="_headerMenuElement"
+             role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="true"
+             @onkeydown:stopPropagation="true"
              style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @onclick:stopPropagation="true">
 
-            @if (AllowGrouping && (CurrentHeaderColumn?.AllowGrouping ?? false))
+            @if (HeaderContextMenuShowsColumns)
             {
-                <button type="button" class="fx-grid-header-context-item"
-                        @onclick="HeaderMenuToggleGroup">
-                    <span class="fx-grid-header-context-check">@(IsHeaderColumnGrouped ? "✓" : "")</span>
-                    Group on this column
-                </button>
+                @foreach (var col in HeaderContextMenuColumns)
+                {
+                    var capturedCol = col;
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(!CanToggleHeaderContextColumn(col))"
+                            @onclick="() => ToggleHeaderContextColumnAsync(capturedCol)">
+                        <span class="fx-grid-header-context-check">@(IsColumnVisible(col) ? "✓" : "")</span>
+                        @HeaderColumnDisplay(col)
+                    </button>
+                }
             }
-            @if (AllowGrouping)
+            else
             {
+                @if (AllowGrouping && (CurrentHeaderColumn?.AllowGrouping ?? false))
+                {
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuToggleGroup">
+                        <span class="fx-grid-header-context-check">@(IsHeaderColumnGrouped ? "✓" : "")</span>
+                        Group on this column
+                    </button>
+                }
+                @if (AllowGrouping)
+                {
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(_groupDescriptors.Count == 0)"
+                            @onclick="HeaderMenuExpandAll">
+                        <span class="fx-grid-header-context-check"></span>
+                        Expand All
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(_groupDescriptors.Count == 0)"
+                            @onclick="HeaderMenuCollapseAll">
+                        <span class="fx-grid-header-context-check"></span>
+                        Collapse All
+                    </button>
+                    <div class="fx-grid-header-context-sep"></div>
+                }
+
                 <button type="button" class="fx-grid-header-context-item"
-                        disabled="@(_groupDescriptors.Count == 0)"
-                        @onclick="HeaderMenuExpandAll">
+                        disabled="@(!CanHideHeaderColumn)"
+                        @onclick="HeaderMenuHideColumn">
                     <span class="fx-grid-header-context-check"></span>
-                    Expand All
+                    Hide this column
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
-                        disabled="@(_groupDescriptors.Count == 0)"
-                        @onclick="HeaderMenuCollapseAll">
+                        @onclick="HeaderMenuOpenChooseColumns">
                     <span class="fx-grid-header-context-check"></span>
-                    Collapse All
+                    Insert a column...
                 </button>
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuStartRename">
+                    <span class="fx-grid-header-context-check"></span>
+                    Rename this column...
+                </button>
+                @if (AllowColumnAutoFit)
+                {
+                    <div class="fx-grid-header-context-sep"></div>
+                    <button type="button" class="fx-grid-header-context-item"
+                            disabled="@(CurrentHeaderColumn == null)"
+                            @onclick="HeaderMenuBestFitColumn">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuBestFitAllColumns">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit All Columns
+                    </button>
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuBestFitToGrid">
+                        <span class="fx-grid-header-context-check"></span>
+                        Best Fit to Grid
+                    </button>
+                }
+
                 <div class="fx-grid-header-context-sep"></div>
-            }
 
-            <button type="button" class="fx-grid-header-context-item"
-                    disabled="@(!CanHideHeaderColumn)"
-                    @onclick="HeaderMenuHideColumn">
-                <span class="fx-grid-header-context-check"></span>
-                Hide this column
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuOpenChooseColumns">
-                <span class="fx-grid-header-context-check"></span>
-                Insert a column...
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuStartRename">
-                <span class="fx-grid-header-context-check"></span>
-                Rename this column...
-            </button>
-            @if (_showRenameColumn)
-            {
-                <div class="fx-grid-header-context-rename">
-                    <input type="text" class="fx-grid-header-context-rename-input"
-                           value="@_renameColumnDraft"
-                           @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
-                           @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); })" />
-                    <button type="button" class="fx-grid-header-context-rename-ok"
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuPrint">
+                    <span class="fx-grid-header-context-check"></span>
+                    Print...
+                </button>
+                <button type="button" class="fx-grid-header-context-item"
+                        @onclick="HeaderMenuSaveAs">
+                    <span class="fx-grid-header-context-check"></span>
+                    Save As...
+                </button>
+            }
+        </div>
+    }
+
+    @if (_showRenameColumn)
+    {
+        <div class="fx-grid-rename-overlay"
+             @onclick="HeaderMenuCancelRename"
+             @oncontextmenu="HeaderMenuCancelRename"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-rename-dialog" @onclick:stopPropagation="true">
+            <div class="fx-grid-rename-header">
+                <span>@RenameColumnDialogTitle</span>
+                <button type="button"
+                        class="fx-grid-rename-close"
+                        title="Close"
+                        aria-label="Close"
+                        @onclick="HeaderMenuCancelRename">x</button>
+            </div>
+            @* VB6 InputBox layout: OK over Cancel at the TOP RIGHT, the prompt to
+               their left, and a full-width entry box along the bottom. *@
+            <div class="fx-grid-rename-body">
+                <div class="fx-grid-rename-footer">
+                    <button type="button" class="fx-grid-rename-ok"
                             @onclick="HeaderMenuCommitRename">OK</button>
+                    <button type="button" class="fx-grid-rename-cancel"
+                            @onclick="HeaderMenuCancelRename">Cancel</button>
                 </div>
-            }
+                <span class="fx-grid-rename-prompt">@RenameColumnPrompt</span>
+                <input type="text"
+                       class="fx-grid-rename-input"
+                       autofocus
+                       value="@_renameColumnDraft"
+                       @oninput="@(e => _renameColumnDraft = e.Value?.ToString() ?? "")"
+                       @onkeydown="@(async e => { if (e.Key == "Enter") await HeaderMenuCommitRename(); else if (e.Key == "Escape") HeaderMenuCancelRename(); })" />
+            </div>
+        </div>
+    }
 
-            <div class="fx-grid-header-context-sep"></div>
-
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuPrint">
-                <span class="fx-grid-header-context-check"></span>
-                Print...
-            </button>
-            <button type="button" class="fx-grid-header-context-item"
-                    @onclick="HeaderMenuSaveAs">
-                <span class="fx-grid-header-context-check"></span>
-                Save As...
-            </button>
+    @* ── Print Options Dialog ─────────────────────────────────────── *@
+    @if (_showPrintOptionsDialog)
+    {
+        <div class="fx-grid-print-options-overlay"
+             @onclick="PrintOptionsCancel"
+             @oncontextmenu="PrintOptionsCancel"
+             @oncontextmenu:preventDefault="true"></div>
+        <div class="fx-grid-print-options-dialog" @onclick:stopPropagation="true">
+            <div class="fx-grid-print-options-header">
+                <span>Print Grid</span>
+                <button type="button" class="fx-grid-print-options-close"
+                        title="Close" aria-label="Close"
+                        @onclick="PrintOptionsCancel">×</button>
+            </div>
+            <div class="fx-grid-print-options-body">
+                <label class="fx-grid-print-options-field">
+                    <span>Orientation</span>
+                    <select @bind="_printOrientation">
+                        <option value="@GridPdfOrientation.Portrait">Portrait</option>
+                        <option value="@GridPdfOrientation.Landscape">Landscape</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Page size</span>
+                    <select @bind="_printPageSize">
+                        <option value="@GridPdfPageSize.Letter">Letter</option>
+                        <option value="@GridPdfPageSize.Legal">Legal</option>
+                        <option value="@GridPdfPageSize.A4">A4</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Columns</span>
+                    <select @bind="_printColumnLayout">
+                        <option value="@GridPdfColumnLayout.WrapText">Wrap text</option>
+                        <option value="@GridPdfColumnLayout.ClipText">Clip text</option>
+                        <option value="@GridPdfColumnLayout.FitColumnsToPage">Fit columns</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Grid lines</span>
+                    <span class="fx-grid-print-options-check">
+                        <input type="checkbox" @bind="_printShowGridLines" />
+                        <span>On</span>
+                    </span>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Zoom</span>
+                    <select @bind="_printZoomMode">
+                        <option value="@GridPdfZoomMode.Percent">Zoom %</option>
+                        <option value="@GridPdfZoomMode.FitToPage">Fit to page</option>
+                    </select>
+                </label>
+                <label class="fx-grid-print-options-field">
+                    <span>Zoom %</span>
+                    <input type="number"
+                           min="25"
+                           max="200"
+                           step="5"
+                           disabled="@(_printZoomMode == GridPdfZoomMode.FitToPage)"
+                           @bind="_printZoomPercent" />
+                </label>
+            </div>
+            <div class="fx-grid-print-options-footer">
+                <button type="button" class="fx-grid-print-options-ok"
+                        @onclick="PrintOptionsOk">Print</button>
+                <button type="button" class="fx-grid-print-options-cancel"
+                        @onclick="PrintOptionsCancel">Cancel</button>
+            </div>
         </div>
     }
 
@@ -1005,11 +1333,13 @@
                     @foreach (var row in _chooseColumnsRows)
                     {
                         var capturedRow = row;
-                        <div class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
+                        <div @key="capturedRow.Field"
+                             class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">
                             <input type="checkbox"
                                    checked="@row.Visible"
-                                   @onchange="() => ChooseColumnsToggle(capturedRow)"
+                                   disabled="@(!row.CanHide)"
+                                   @onchange="e => ChooseColumnsSetVisible(capturedRow, e)"
                                    @onclick:stopPropagation="true" />
                             <span class="fx-choose-columns-label">@row.Header</span>
                         </div>
@@ -1044,3 +1374,5 @@
         </div>
     }
 </div>
+
+@{ EndGridRenderPass(); }

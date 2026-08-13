@@ -148,6 +148,7 @@ public class CrystalXmlReportLoader
         string? reportIdOverride = null)
     {
         var subreportObjects = ExtractSubreportObjects(report, xmlFilePath);
+        var flexKitCustomSql = ExtractFlexKitCustomSql(report);
 
         // Strip <SubReports> blocks from the tree before any parsing. Subreports
         // are rendered separately by Crystal at runtime — we don't render them in
@@ -357,6 +358,8 @@ public class CrystalXmlReportLoader
             effectiveGroups, formulaFields);
         var sql = BuildSql(tables, tableLinks, whereSql, orderByClause, selectFields,
                             useDistinct: useDistinct);
+        if (ShouldUseFlexKitCustomSql(flexKitCustomSql, drillPath, fieldFilters))
+            sql = flexKitCustomSql;
 
         definition.Sql = sql;
         definition.Columns = columns;
@@ -432,6 +435,21 @@ public class CrystalXmlReportLoader
     // ═══════════════════════════════════════════════════════════════════
     // XML parsing helpers
     // ═══════════════════════════════════════════════════════════════════
+
+    private static string ExtractFlexKitCustomSql(XElement report)
+    {
+        return ((string?)report.Element("FlexKitReportDesigner")?.Element("Sql")?.Attribute("Query") ?? "").Trim();
+    }
+
+    private static bool ShouldUseFlexKitCustomSql(
+        string customSql,
+        IReadOnlyList<DrillDownFilter>? drillPath,
+        IReadOnlyList<ReportFieldFilter>? fieldFilters)
+    {
+        return !string.IsNullOrWhiteSpace(customSql)
+            && (drillPath == null || drillPath.Count == 0)
+            && (fieldFilters == null || fieldFilters.Count == 0);
+    }
 
     /// <summary>
     /// One Crystal table reference. <c>CommandSql</c> is non-null when the source

@@ -1,10 +1,14 @@
 @namespace Fx.ControlKit
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
 @using System.Linq.Expressions
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
 
 @if (Multiline)
 {
-    if (ValueExpression is not null)
+    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
     {
         <InputTextArea class="@ResolvedCssClass"
                        Value="@Value"
@@ -15,14 +19,68 @@
     else
     {
         <textarea class="@ResolvedCssClass"
-                  value="@Value"
-                  @onchange="OnNativeValueChanged"
+                  value="@EffectiveValue"
+                  @oninput="OnNativeInput"
+                  @onchange="OnNativeChange"
+                  @onfocus="OnInputFocus"
+                  @oncontextmenu="OpenTextContextMenuAsync"
+                  @oncontextmenu:preventDefault="UseClassicContextMenu"
+                  @oncontextmenu:stopPropagation="UseClassicContextMenu"
+                  @ref="_inputElement"
+                  @onclick:stopPropagation="true"
+                  @onmousedown:stopPropagation="true"
+                  @onkeydown:stopPropagation="true"
                   @attributes="MergedAttributes"></textarea>
     }
 }
 else
 {
-    if (ValueExpression is not null)
+    if (IsPasswordInput)
+    {
+        <div class="fx-textbox fx-textbox-password-host">
+            <input class="@ResolvedPasswordInputCssClass"
+                   value="@EffectiveValue"
+                   @oninput="OnNativeInput"
+                   @onchange="OnNativeChange"
+                   @onfocus="OnInputFocus"
+                   @oncontextmenu="OpenTextContextMenuAsync"
+                   @oncontextmenu:preventDefault="UseClassicContextMenu"
+                   @oncontextmenu:stopPropagation="UseClassicContextMenu"
+                   @ref="_inputElement"
+                   @onclick:stopPropagation="true"
+                   @onmousedown:stopPropagation="true"
+                   @onkeydown:stopPropagation="true"
+                   @attributes="MergedAttributes" />
+            <button type="button"
+                    class="fx-textbox-password-toggle"
+                    aria-label="@PasswordToggleLabel"
+                    title="@PasswordToggleLabel"
+                    aria-pressed="@_showPassword"
+                    disabled="@(!Enabled)"
+                    @onclick="TogglePasswordVisibility"
+                    @onclick:stopPropagation="true"
+                    @onmousedown:preventDefault="true"
+                    @onmousedown:stopPropagation="true">
+                @if (_showPassword)
+                {
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.7 10.7a2 2 0 0 0 2.6 2.6" />
+                        <path d="M9.9 4.2A10.6 10.6 0 0 1 12 4c5 0 8.5 4.1 10 8-.5 1.3-1.3 2.6-2.3 3.7" />
+                        <path d="M6.5 6.5C4.4 7.9 2.9 10.1 2 12c1.5 3.9 5 8 10 8 1.8 0 3.4-.5 4.8-1.3" />
+                    </svg>
+                }
+                else
+                {
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path d="M2 12s3.5-8 10-8 10 8 10 8-3.5 8-10 8S2 12 2 12z" />
+                        <circle cx="12" cy="12" r="3" />
+                    </svg>
+                }
+            </button>
+        </div>
+    }
+    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
     {
         <InputText class="@ResolvedCssClass"
                    Value="@Value"
@@ -33,10 +91,107 @@ else
     else
     {
         <input class="@ResolvedCssClass"
-               value="@Value"
-               @onchange="OnNativeValueChanged"
+               value="@EffectiveValue"
+               @oninput="OnNativeInput"
+               @onchange="OnNativeChange"
+               @onfocus="OnInputFocus"
+               @oncontextmenu="OpenTextContextMenuAsync"
+               @oncontextmenu:preventDefault="UseClassicContextMenu"
+               @oncontextmenu:stopPropagation="UseClassicContextMenu"
+               @ref="_inputElement"
+               @onclick:stopPropagation="true"
+               @onmousedown:stopPropagation="true"
+               @onkeydown:stopPropagation="true"
                @attributes="MergedAttributes" />
     }
+}
+
+@if (_showTextContextMenu)
+{
+    <div class="fx-text-context-backdrop"
+         @onclick="CloseTextContextMenu"
+         @oncontextmenu="CloseTextContextMenu"
+         @oncontextmenu:preventDefault="true"></div>
+    <div class="fx-text-context-menu"
+         style="@TextContextMenuStyle"
+         @onclick:stopPropagation="true"
+         @onmousedown:stopPropagation="true">
+        @if (HasTextContextMenuItem(TextContextMenuItems.Undo))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("undo")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("undo"))">Undo</button>
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Cut))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("cut")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("cut"))">Cut</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Copy))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("copy")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("copy"))">Copy</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Paste))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("paste")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("paste"))">Paste</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Delete))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("delete")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("delete"))">Delete</button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.Cut | TextContextMenuItems.Copy | TextContextMenuItems.Paste | TextContextMenuItems.Delete)
+            && HasTextContextMenuItem(TextContextMenuItems.SelectAll))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.SelectAll))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("selectAll")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("selectAll"))">Select All</button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.ReadingOrder | TextContextMenuItems.UnicodeOptions | TextContextMenuItems.Ime | TextContextMenuItems.Reconversion))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.ReadingOrder))
+        {
+            <button type="button"
+                    class="@(_textContextMenuState.IsRightToLeft ? "is-checked" : null)"
+                    disabled="@IsTextContextCommandDisabled("readingOrder")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("readingOrder"))">Right to left Reading order</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.UnicodeOptions))
+        {
+            <button type="button" disabled>Show Unicode control characters</button>
+            <button type="button" disabled>
+                <span>Insert Unicode control character</span>
+                <span class="fx-text-context-arrow">&gt;</span>
+            </button>
+        }
+        @if (HasAnyTextContextMenuItem(TextContextMenuItems.Ime | TextContextMenuItems.Reconversion))
+        {
+            <div class="fx-text-context-separator"></div>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Ime))
+        {
+            <button type="button"
+                    disabled="@IsTextContextCommandDisabled("ime")"
+                    @onclick="@(() => ExecuteTextContextCommandAsync("ime"))">Open IME</button>
+        }
+        @if (HasTextContextMenuItem(TextContextMenuItems.Reconversion))
+        {
+            <button type="button" disabled>Reconversion</button>
+        }
+    </div>
 }
 
 @code {
@@ -52,9 +207,86 @@ else
     [Parameter] public string InputType { get; set; } = "text";
     [Parameter] public int? Rows { get; set; }
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
+    [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
+    [Parameter] public bool UpdateOnInput { get; set; }
+    [Parameter] public Action<string?>? InputValueChanged { get; set; }
+
+    /// <summary>UNCONTROLLED mode (no JS). The rendered <c>value</c> attribute is
+    /// captured ONCE and never re-applied, so the DOM owns the text while the user
+    /// types — Blazor never rewrites the value or resets the caret, no matter how
+    /// often a parent (e.g. a grid) re-renders. Typed text is reported to the parent
+    /// via <see cref="InputValueChanged"/> / <see cref="ValueChanged"/> for commit.
+    /// Give the control a fresh <c>@key</c> per edit session so each edit re-captures
+    /// its starting value. Used by GridControl's batch cell editor to kill the
+    /// Blazor-Server controlled-input typing wobble (caret-to-0 / dropped chars).</summary>
+    [Parameter] public bool Uncontrolled { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
+    [Parameter] public bool SelectOnFocus { get; set; }
+    [Parameter] public bool UseClassicContextMenu { get; set; }
+    [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private ElementReference _inputElement;
+    private IJSObjectReference? _controlJsModule;
+    private bool _showTextContextMenu;
+    private int _textContextMenuX;
+    private int _textContextMenuY;
+    private TextContextMenuState _textContextMenuState = new();
+    private bool _suppressNextNativeInputRender;
+    private bool _showPassword;
+
+    // Uncontrolled-mode: the value rendered ONCE, then never re-applied.
+    private string? _uncontrolledValue;
+    private bool _uncontrolledInitialized;
+
+    /// <summary>The value rendered into the input. In Uncontrolled mode this is the
+    /// once-captured starting value (stable across re-renders); otherwise it tracks
+    /// the live <see cref="Value"/> as before.</summary>
+    private string? EffectiveValue => Uncontrolled ? _uncontrolledValue : Value;
+
+    private bool IsPasswordInput =>
+        !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
+
+    private string EffectiveInputType => IsPasswordInput && _showPassword ? "text" : InputType;
+
+    private string PasswordToggleLabel => _showPassword ? "Hide password" : "Show password";
+
+    protected override void OnParametersSet()
+    {
+        if (Uncontrolled && !_uncontrolledInitialized)
+        {
+            _uncontrolledValue = Value;
+            _uncontrolledInitialized = true;
+        }
+    }
+
+    protected override bool ShouldRender()
+    {
+        if (_suppressNextNativeInputRender)
+        {
+            _suppressNextNativeInputRender = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        ElementReferenceCaptured?.Invoke(_inputElement);
+
+        // Only AutoFocus seizes focus on load. SelectOnFocus must NOT auto-focus on render — otherwise a
+        // second SelectOnFocus field (e.g. Description) steals focus from the AutoFocus field (Number).
+        // SelectOnFocus still selects the text when the user actually focuses the field (OnInputFocus).
+        if (firstRender && AutoFocus)
+        {
+            var module = await GetControlJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+        }
+    }
 
     private string ResolvedCssClass
     {
@@ -68,6 +300,17 @@ else
             if (AdditionalAttributes != null && AdditionalAttributes.TryGetValue("class", out var extraClass))
                 classes.Add(extraClass?.ToString() ?? string.Empty);
             return string.Join(" ", classes.Where(c => !string.IsNullOrWhiteSpace(c)));
+        }
+    }
+
+    private string ResolvedPasswordInputCssClass
+    {
+        get
+        {
+            var classes = new List<string> { "fx-textbox-password-input" };
+            if (!string.IsNullOrWhiteSpace(ResolvedCssClass))
+                classes.Add(ResolvedCssClass);
+            return string.Join(" ", classes);
         }
     }
 
@@ -101,17 +344,164 @@ else
                 merged["rows"] = Rows.Value;
             if (!Enabled && !merged.ContainsKey("disabled"))
                 merged["disabled"] = "disabled";
-            if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
+            if (IsPasswordInput)
+                merged["type"] = EffectiveInputType;
+            else if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
                 merged["type"] = InputType;
+            if (AutoFocus && !merged.ContainsKey("autofocus"))
+                merged["autofocus"] = "autofocus";
 
             return merged;
         }
     }
+
+    private async Task OnNativeInput(ChangeEventArgs e)
+    {
+        var typed = e.Value?.ToString();
+
+        if (Uncontrolled)
+        {
+            // UNCONTROLLED (no JS): the DOM already shows exactly what the user typed
+            // and the rendered value attribute is a fixed string, so we DON'T touch
+            // Value or re-render — that is precisely what keeps the caret from
+            // jumping to 0 and the last keystroke from being reverted under a
+            // parent re-render on Blazor Server. Just report the typed text upstream.
+            InputValueChanged?.Invoke(typed);
+            _suppressNextNativeInputRender = true;
+            if (UpdateOnInput && ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(typed);
+            return;
+        }
+
+        // Controlled (default): keep the bound Value in sync with what's typed. The
+        // input is rendered controlled (value="@Value"); if we don't update Value on
+        // every keystroke, Blazor reverts the DOM to the stale model value after the
+        // first character. Commit to the parent on each keystroke only when
+        // UpdateOnInput; otherwise the parent is notified on change (blur/Enter).
+        Value = typed;
+        InputValueChanged?.Invoke(Value);
+        if (!UpdateOnInput)
+            _suppressNextNativeInputRender = true;
+        if (UpdateOnInput && ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(Value);
+    }
+
+    private Task OnNativeChange(ChangeEventArgs e) =>
+        UpdateOnInput ? Task.CompletedTask : OnNativeValueChanged(e);
 
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task OnInputFocus()
+    {
+        if (!SelectOnFocus)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("select", _inputElement);
+    }
+
+    private async Task OpenTextContextMenuAsync(MouseEventArgs e)
+    {
+        if (!UseClassicContextMenu)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            _textContextMenuState = await module.InvokeAsync<TextContextMenuState>(
+                "getTextContextMenuState", _inputElement);
+            var position = await module.InvokeAsync<TextContextMenuPosition>(
+                "positionTextContextMenu", e.ClientX, e.ClientY);
+            _textContextMenuX = (int)Math.Round(position.X);
+            _textContextMenuY = (int)Math.Round(position.Y);
+            _showTextContextMenu = true;
+        }
+        catch
+        {
+            _showTextContextMenu = false;
+        }
+    }
+
+    private void CloseTextContextMenu() => _showTextContextMenu = false;
+
+    private void TogglePasswordVisibility()
+    {
+        _suppressNextNativeInputRender = false;
+        _showPassword = !_showPassword;
+    }
+
+    private string TextContextMenuStyle => $"left:{_textContextMenuX}px;top:{_textContextMenuY}px";
+
+    private bool HasTextContextMenuItem(TextContextMenuItems item) =>
+        (ContextMenuItems & item) == item;
+
+    private bool HasAnyTextContextMenuItem(TextContextMenuItems items) =>
+        (ContextMenuItems & items) != 0;
+
+    private bool IsTextContextCommandDisabled(string command) => command switch
+    {
+        "undo" => !Enabled,
+        "cut" => !Enabled || !_textContextMenuState.HasSelection,
+        "copy" => !_textContextMenuState.HasSelection,
+        "paste" => !Enabled,
+        "delete" => !Enabled || !_textContextMenuState.HasSelection,
+        "selectAll" => !_textContextMenuState.HasValue || _textContextMenuState.AllSelected,
+        "ime" => !Enabled,
+        _ => false
+    };
+
+    private async Task ExecuteTextContextCommandAsync(string command)
+    {
+        _showTextContextMenu = false;
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            var result = await module.InvokeAsync<TextContextCommandResult>(
+                "applyTextContextCommand", _inputElement, command);
+            if (result.ValueChanged)
+            {
+                Value = result.Value;
+                if (ValueChanged.HasDelegate)
+                    await ValueChanged.InvokeAsync(Value);
+            }
+        }
+        catch
+        {
+            // Browser clipboard commands are best-effort and may be blocked by policy.
+        }
+    }
+
+    private async ValueTask<IJSObjectReference?> GetControlJsModuleAsync()
+    {
+        try
+        {
+            return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/FlexKit/textbox-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_controlJsModule != null)
+        {
+            try { await _controlJsModule.DisposeAsync(); }
+            catch { }
+        }
     }
 }

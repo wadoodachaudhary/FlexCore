@@ -31,3 +31,13 @@
     overflow-x: auto;
     overflow-y: hidden;
 }
+
+.fx-toolbar.fx-toolbar--large-tools {
+    gap: 24px;
+    padding: 12px 18px;
+    border: none;
+    border-radius: 0;
+    background: #fff;
+    min-height: 128px;
+    margin-bottom: 0;
+}

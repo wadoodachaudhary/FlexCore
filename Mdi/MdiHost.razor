@@ -1,5 +1,6 @@
 @namespace Fx.ControlKit.Mdi
 @using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Web
 
 @*
    Fx.ControlKit.Mdi.MdiHost — tab-strip MDI shell that hosts a list of
@@ -58,7 +59,31 @@
             var win = w;  // capture per-iteration for the close-button closure
             <div class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "")"
                  @onclick="() => OnTabClick(win.Id)"
+                 @oncontextmenu="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
+                 @oncontextmenu:preventDefault="@ShowTabSystemMenu"
+                 @oncontextmenu:stopPropagation="@ShowTabSystemMenu"
                  title="@win.Title">
+                @if (!string.IsNullOrEmpty(win.IconUrl))
+                {
+                    @if (ShowTabSystemMenu)
+                    {
+                        <button class="fx-mdi-tab-icon-button"
+                                type="button"
+                                title="Window menu"
+                                aria-label="Window menu"
+                                @onclick="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
+                                @onclick:stopPropagation="true"
+                                @oncontextmenu="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
+                                @oncontextmenu:preventDefault="true"
+                                @oncontextmenu:stopPropagation="true">
+                            <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" />
+                        </button>
+                    }
+                    else
+                    {
+                        <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" />
+                    }
+                }
                 <span class="fx-mdi-tab-title">@win.Title</span>
                 <button class="fx-mdi-tab-close"
                         type="button"
@@ -68,6 +93,34 @@
             </div>
         }
     </div>
+    @if (ShowTabSystemMenu && _tabSystemMenuVisible && TabSystemMenuWindow is { } menuWindow)
+    {
+        <div class="fx-mdi-system-menu-backdrop"
+             @onclick="CloseTabSystemMenu"
+             @onclick:stopPropagation="true"
+             @oncontextmenu="CloseTabSystemMenu"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="true"></div>
+        <div class="fx-mdi-system-menu"
+             style="@TabSystemMenuStyle"
+             role="menu"
+             @onclick:stopPropagation="true"
+             @oncontextmenu:stopPropagation="true">
+            <button type="button" role="menuitem" @onclick="() => RestoreTabFromSystemMenuAsync(menuWindow.Id)">Restore</button>
+            <button type="button" role="menuitem" disabled>Move</button>
+            <button type="button" role="menuitem" disabled>Size</button>
+            <button type="button" role="menuitem" @onclick="MinimizeTabFromSystemMenuAsync">Minimize</button>
+            <button type="button" role="menuitem" disabled>Maximize</button>
+            <span class="fx-mdi-system-menu-separator"></span>
+            <button type="button" role="menuitem" class="fx-mdi-system-menu-close" @onclick="() => CloseTabFromSystemMenuAsync(menuWindow.Id)">
+                <span class="fx-mdi-system-menu-close-label">
+                    <span class="fx-mdi-system-menu-close-icon" aria-hidden="true">×</span>
+                    <span>Close</span>
+                </span>
+                <span>Alt+F4</span>
+            </button>
+        </div>
+    }
     <div class="fx-mdi-panes">
         @foreach (var w in Windows)
         {
@@ -81,7 +134,9 @@
                             Value="@(BuildTitleSetter(win))"
                             IsFixed="true">
                 <div class="fx-mdi-pane" style="@(paneVisible ? "" : "display:none;")">
-                    <MdiPane @key="win.Id" Window="win" />
+                    <MdiPane @key="win.Id" Window="win"
+                             OnError="@(w => OnWindowError.InvokeAsync(w))"
+                             OnCloseRequested="@(w => OnCloseRequested.InvokeAsync(w.Id))" />
                 </div>
             </CascadingValue>
         }
@@ -114,6 +169,17 @@
     /// then removes the window from Windows and re-renders.</summary>
     [Parameter] public EventCallback<string> OnCloseRequested { get; set; }
 
+    /// <summary>When true, right-clicking a tab or clicking its icon opens the
+    /// legacy MDI system menu (Restore, Move, Size, Minimize, Maximize, Close).</summary>
+    [Parameter] public bool ShowTabSystemMenu { get; set; }
+
+    /// <summary>Raised when a hosted window's component throws (caught by the pane's
+    /// error boundary, so the circuit stays alive). The consumer can use this to clear
+    /// any persisted "restore this page" state so the failing screen isn't re-opened on
+    /// the next session. The pane itself shows a contact-support panel with a Close
+    /// button that routes through <see cref="OnCloseRequested"/>.</summary>
+    [Parameter] public EventCallback<MdiWindow> OnWindowError { get; set; }
+
     /// <summary>Optional content rendered in the pane area when no window
     /// is active (either Windows is empty OR the consumer set ActiveWindowId
     /// to null to switch to "home" while keeping tabs open behind it).
@@ -134,8 +200,22 @@
     /// owns that state.</summary>
     [Parameter] public EventCallback OnHomeRequested { get; set; }
 
+    private bool _tabSystemMenuVisible;
+    private string? _tabSystemMenuWindowId;
+    private double _tabSystemMenuX;
+    private double _tabSystemMenuY;
+
+    private MdiWindow? TabSystemMenuWindow
+        => string.IsNullOrWhiteSpace(_tabSystemMenuWindowId)
+            ? null
+            : Windows.FirstOrDefault(w => string.Equals(w.Id, _tabSystemMenuWindowId, StringComparison.Ordinal));
+
+    private string TabSystemMenuStyle
+        => $"left:{_tabSystemMenuX:0.##}px;top:{_tabSystemMenuY:0.##}px";
+
     private async Task OnTabClick(string id)
     {
+        _tabSystemMenuVisible = false;
         if (string.Equals(id, ActiveWindowId, StringComparison.Ordinal)) return;
         if (OnActivate.HasDelegate)
             await OnActivate.InvokeAsync(id);
@@ -143,12 +223,14 @@
 
     private async Task OnCloseClick(string id)
     {
+        _tabSystemMenuVisible = false;
         if (OnCloseRequested.HasDelegate)
             await OnCloseRequested.InvokeAsync(id);
     }
 
     private async Task OnHomeClick()
     {
+        _tabSystemMenuVisible = false;
         // Already on home? No-op — saves a needless StateHasChanged on the
         // consumer side.
         var alreadyHome = ActiveWindowId == null
@@ -156,6 +238,47 @@
         if (alreadyHome) return;
         if (OnHomeRequested.HasDelegate)
             await OnHomeRequested.InvokeAsync();
+    }
+
+    private async Task OpenTabSystemMenuAsync(MouseEventArgs e, MdiWindow window)
+    {
+        if (!ShowTabSystemMenu)
+            return;
+
+        _tabSystemMenuVisible = true;
+        _tabSystemMenuWindowId = window.Id;
+        _tabSystemMenuX = e.ClientX;
+        _tabSystemMenuY = e.ClientY;
+
+        if (!string.Equals(window.Id, ActiveWindowId, StringComparison.Ordinal) && OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(window.Id);
+    }
+
+    private Task CloseTabSystemMenu()
+    {
+        _tabSystemMenuVisible = false;
+        return Task.CompletedTask;
+    }
+
+    private async Task RestoreTabFromSystemMenuAsync(string id)
+    {
+        _tabSystemMenuVisible = false;
+        if (!string.Equals(id, ActiveWindowId, StringComparison.Ordinal) && OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(id);
+    }
+
+    private async Task MinimizeTabFromSystemMenuAsync()
+    {
+        _tabSystemMenuVisible = false;
+        if (OnHomeRequested.HasDelegate)
+            await OnHomeRequested.InvokeAsync();
+    }
+
+    private async Task CloseTabFromSystemMenuAsync(string id)
+    {
+        _tabSystemMenuVisible = false;
+        if (OnCloseRequested.HasDelegate)
+            await OnCloseRequested.InvokeAsync(id);
     }
 
     // Each pane needs its OWN title-setter that mutates ONLY that window's

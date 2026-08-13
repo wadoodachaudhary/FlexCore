@@ -5,6 +5,75 @@
     border-radius: 3px;
 }
 
+.fx-textbox-classic {
+    width: 100%;
+    height: 22px;
+    padding: 1px 3px;
+    border: 1px solid #7f9db9;
+    border-radius: 0;
+    background: #fff;
+    box-sizing: border-box;
+    color: #000;
+    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+}
+
+.fx-textbox-classic:focus {
+    outline: 0;
+    box-shadow: none;
+}
+
+.fx-textbox-password-host {
+    position: relative;
+    display: inline-block;
+    min-width: 0;
+    max-width: 100%;
+    vertical-align: middle;
+}
+
+.fx-textbox-password-input {
+    padding-right: 24px !important;
+}
+
+.fx-textbox-password-toggle {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 21px;
+    min-width: 21px;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid #b7b7b7;
+    border-radius: 0;
+    background: transparent;
+    color: #333;
+    cursor: pointer;
+}
+
+.fx-textbox-password-toggle:hover:not(:disabled),
+.fx-textbox-password-toggle:focus-visible:not(:disabled) {
+    background: #e8e8e8;
+    outline: none;
+}
+
+.fx-textbox-password-toggle:disabled {
+    color: #8a8a8a;
+    cursor: default;
+}
+
+.fx-textbox-password-toggle svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
 .comments-textarea {
     width: 100%;
     min-height: 200px;
@@ -15,4 +84,68 @@
 
 .tax-field-input {
     width: 120px;
+}
+
+.fx-text-context-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: transparent;
+}
+
+.fx-text-context-menu {
+    position: fixed;
+    z-index: 3001;
+    min-width: 292px;
+    padding: 6px 10px;
+    border: 1px solid #d7d7d7;
+    background: #f4f4f4;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.24);
+    color: #000;
+    font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.fx-text-context-menu button {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 100%;
+    min-height: 29px;
+    padding: 2px 58px 2px 48px;
+    border: 0;
+    background: transparent;
+    color: #000;
+    font: inherit;
+    text-align: left;
+    white-space: nowrap;
+    cursor: default;
+}
+
+.fx-text-context-menu button:hover:not(:disabled),
+.fx-text-context-menu button:focus-visible:not(:disabled) {
+    outline: 0;
+    background: #0078d7;
+    color: #fff;
+}
+
+.fx-text-context-menu button:disabled {
+    color: #9d9d9d;
+}
+
+.fx-text-context-menu button.is-checked::before {
+    content: "\2713";
+    width: 0;
+    margin-left: -28px;
+    margin-right: 20px;
+}
+
+.fx-text-context-separator {
+    height: 1px;
+    margin: 7px 8px;
+    background: #dddddd;
+}
+
+.fx-text-context-arrow {
+    margin-left: auto;
+    padding-left: 20px;
 }

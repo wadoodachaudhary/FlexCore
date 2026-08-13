@@ -1,5 +1,24 @@
 .fx-menu-dropdown {
     position: relative;
+    display: inline-block;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
+}
+
+.fx-menu-dropdown * {
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
+}
+
+.fx-menu-split {
+    display: inline-flex;
+    align-items: stretch;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
 }
 
 .fx-menu-trigger {
@@ -12,16 +31,87 @@
     font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     font-size: 11px;
     cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
+}
+
+.fx-menu-primary {
+    height: 22px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: transparent;
+    color: #0f172a;
+    padding: 0 10px;
+    font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
+    font-size: 11px;
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
 }
 
 .fx-menu-trigger:hover,
-.fx-menu-trigger.active {
+.fx-menu-trigger.active,
+.fx-menu-primary:hover {
     background: #e6eefc;
     border-color: #bcccf0;
 }
 
-.fx-menu-trigger.disabled {
+.fx-menu-trigger:focus-visible,
+.fx-menu-primary:focus-visible {
+    outline: 1px dotted #000;
+    outline-offset: -3px;
+}
+
+.fx-menu-trigger:focus:not(:focus-visible),
+.fx-menu-primary:focus:not(:focus-visible) {
+    outline: none;
+}
+
+.fx-menu-trigger.disabled,
+.fx-menu-primary.disabled {
     opacity: 0.55;
+}
+
+.fx-menu-trigger-arrow {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 3px solid transparent;
+    border-right: 3px solid transparent;
+    border-top: 4px solid currentColor;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
+}
+
+.fx-menu-trigger *,
+.fx-menu-primary *,
+.fx-menu-panel * {
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
+}
+
+.fx-menu-trigger ::deep *,
+.fx-menu-primary ::deep *,
+.fx-menu-panel ::deep * {
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
+}
+
+.fx-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1199;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
 }
 
 .fx-menu-panel {
@@ -36,4 +126,7 @@
     background: #ffffff;
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16);
     z-index: 1200;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }

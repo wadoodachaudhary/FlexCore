@@ -1,7 +1,7 @@
 /* Scoped styles for EditorControl.
  *
  * The contenteditable's children (<p>, <h2>, <h3>) are created imperatively
- * by JS (editor-control.js → hfEditor.init), which means they don't get
+ * by JS (editor-control.js → fxEditor.init), which means they don't get
  * Blazor's `b-xxxxx` scope attribute. `::deep` re-enables the cascade so the
  * block styles still hit those JS-inserted elements.
  */

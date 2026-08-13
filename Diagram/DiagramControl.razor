@@ -14,7 +14,14 @@
                             markerWidth="10" markerHeight="7"
                             refX="10" refY="3.5"
                             orient="auto" markerUnits="strokeWidth">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="@conn.StrokeColor" />
+                        @if (conn.ArrowStyle == ArrowStyle.Closed)
+                        {
+                            <polygon points="0 0, 10 3.5, 0 7" fill="@(conn.IsBroken ? "#a0a0a0" : conn.StrokeColor)" />
+                        }
+                        else
+                        {
+                            <path d="M 2 1.5 L 9 3.5 L 2 5.5" fill="none" stroke="@(conn.IsBroken ? "#a0a0a0" : conn.StrokeColor)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+                        }
                     </marker>
                 }
             }
@@ -73,9 +80,9 @@
                         <g class="fx-diagram-connector">
                             <path d="@path"
                                   fill="none"
-                                  stroke="@conn.StrokeColor"
-                                  stroke-width="@conn.StrokeWidth"
-                                  stroke-dasharray="@(conn.DashArray ?? "none")"
+                                  stroke="@(conn.IsBroken ? "#a0a0a0" : conn.StrokeColor)"
+                                  stroke-width="@(conn.IsBroken ? 1.5 : conn.StrokeWidth)"
+                                  stroke-dasharray="@(conn.IsBroken ? "3,3" : (conn.DashArray ?? "none"))"
                                   marker-end="@(conn.ShowArrow ? $"url(#arrow-{conn.Id})" : "")" />
                             @if (!string.IsNullOrWhiteSpace(conn.Label))
                             {
@@ -211,6 +218,13 @@
                             var subY = labelLines.Length > 1 ? labelY + labelLines.Length * 15 : labelY + 16;
                             @RenderSvgText(node.OffsetX, subY, "middle", node.TextColor, "fx-node-sublabel", node.SubLabel!)
                         }
+                        @if (!node.Enabled)
+                        {
+                            <image href="@CloseIconHref"
+                                   x="@F(node.OffsetX + node.Width / 2 - 10)"
+                                   y="@F(node.OffsetY - node.Height / 2 - 6)"
+                                   width="16" height="16" />
+                        }
                     </g>
                 }
             }
@@ -244,6 +258,8 @@
     [Parameter] public EventCallback<DiagramNodeClickEventArgs> NodeClicked { get; set; }
 
     private Dictionary<string, DiagramNode> _nodeMap = new();
+    private static string AssetBasePath => $"_content/{typeof(DiagramControl).Assembly.GetName().Name}";
+    private static string CloseIconHref => $"{AssetBasePath}/images/16/close.ico";
 
     private string SvgWidth => WidthPx.HasValue
         ? F(WidthPx.Value + DiagramPaddingPx * 2)

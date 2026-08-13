@@ -120,6 +120,21 @@ public class DiagramConnector
 
     /// <summary>Target connection port side.</summary>
     public DiagramPort TargetPort { get; set; } = DiagramPort.Auto;
+
+    /// <summary>Style of the arrowhead. Defaults to Open.</summary>
+    public ArrowStyle ArrowStyle { get; set; } = ArrowStyle.Open;
+
+    /// <summary>Whether this connection is broken/inactive.</summary>
+    public bool IsBroken { get; set; } = false;
+}
+
+/// <summary>
+/// Style of the connector arrowhead.
+/// </summary>
+public enum ArrowStyle
+{
+    Open,
+    Closed
 }
 
 /// <summary>

@@ -230,6 +230,7 @@ public class GroupResult<TValue>
     public string Field { get; set; } = "";
     public string HeaderText { get; set; } = "";
     public object? Key { get; set; }
+    public string DisplayText { get; set; } = "";
     public string GroupPath { get; set; } = "";
     public int Count { get; set; }
     public IEnumerable<TValue> Items { get; set; } = Enumerable.Empty<TValue>();
@@ -268,6 +269,18 @@ public class RowResizeEventArgs<TValue>
     public int RowIndex { get; set; }
     public double OldHeight { get; set; }
     public double NewHeight { get; set; }
+    public bool Cancel { get; set; }
+}
+
+/// <summary>
+/// Event args for row drag/reorder. Enabled only when GridControl.AllowRowReorder is true.
+/// </summary>
+public class RowReorderEventArgs<TValue>
+{
+    public TValue? Data { get; set; }
+    public TValue? TargetData { get; set; }
+    public int OldIndex { get; set; }
+    public int NewIndex { get; set; }
     public bool Cancel { get; set; }
 }
 

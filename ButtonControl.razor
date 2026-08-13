@@ -4,9 +4,11 @@
 {
     @* Default button — unchanged from before (existing consumers are unaffected). *@
     <button class="@ResolvedCssClass"
+            @ref="_buttonElement"
             type="@ButtonType"
             disabled="@Disabled"
             title="@Title"
+            tabindex="@TabIndex"
             style="@Style"
             @onclick="OnClick"
             @onclick:stopPropagation="StopPropagation"
@@ -25,9 +27,11 @@ else
        Closes on click-away via a full-screen backdrop button — no JavaScript. *@
     <span class="fx-button-dd-host">
         <button class="@ResolvedCssClass"
+                @ref="_buttonElement"
                 type="@ButtonType"
                 disabled="@Disabled"
                 title="@Title"
+                tabindex="@TabIndex"
                 style="@Style"
                 aria-haspopup="true"
                 aria-expanded="@_ddOpen"
@@ -59,6 +63,8 @@ else
     [Parameter] public string? IconCss { get; set; }
     [Parameter] public string? Style { get; set; }
     [Parameter] public string? Title { get; set; }
+    [Parameter] public int? TabIndex { get; set; }
+    [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
 
     /// <summary>
@@ -97,6 +103,18 @@ else
     [Parameter] public string? DropDownCssClass { get; set; }
 
     private bool _ddOpen;
+    private ElementReference _buttonElement;
+    private bool _autoFocusApplied;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!AutoFocus || _autoFocusApplied || Disabled)
+            return;
+
+        _autoFocusApplied = true;
+        try { await _buttonElement.FocusAsync(preventScroll: true); }
+        catch { /* best-effort */ }
+    }
 
     private async Task HandleDropdownClick(MouseEventArgs e)
     {

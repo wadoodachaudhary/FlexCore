@@ -22,19 +22,20 @@ public partial class GridControl<TValue>
 
     private GridOptionsPanel _activeOptionsPanel = GridOptionsPanel.None;
     private bool _themeInitialized;
-    private GridTheme _activeGridTheme = GridTheme.HomeFront;
+    private GridTheme _activeGridTheme = GridTheme.Default;
     private bool _advancedViewInitialized;
     private bool _advancedViewEnabled;
+
+    private readonly record struct FilterValueCandidate(string Value, string DisplayText);
 
     private string _columnPanelSearch = "";
     private string _pivotFieldSearch = "";
 
-    private readonly Dictionary<string, string> _columnFilterValueSearch = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numericFilterMinText = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _numericFilterMaxText = new(StringComparer.Ordinal);
     private static readonly GridThemeGalleryItem[] GridThemeGallery =
     [
-        new(GridTheme.HomeFront, "HomeFront", "Light", "#f1f3f5", "#ffffff", "#f8f9fa", "#6b8fd6"),
+        new(GridTheme.Default, "Default", "Light", "#e9e9e9", "#ffffff", "#ffffff", "#9a9a9a"),
         new(GridTheme.Vb6Windows, "VB6 Windows", "Light", "#d4d0c8", "#ffffff", "#ffffff", "#808080"),
         new(GridTheme.ExcelLightBlue, "Light Blue", "Light", "#d9eaf7", "#ffffff", "#edf7fd", "#5aa7d8"),
         new(GridTheme.ExcelLightGreen, "Light Green", "Light", "#e2f0d9", "#ffffff", "#f1f8eb", "#70ad47"),
@@ -110,6 +111,7 @@ public partial class GridControl<TValue>
             var classes = new List<string> { "fx-grid" };
             classes.Add(GridLines switch
             {
+                GridLines.Default => "fx-grid-lines-both",
                 GridLines.Both => "fx-grid-lines-both",
                 GridLines.None => "fx-grid-lines-none",
                 GridLines.Horizontal => "fx-grid-lines-horizontal",
@@ -132,6 +134,12 @@ public partial class GridControl<TValue>
                 classes.Add("fx-grid-paged");
             if (WidthMode == GridWidthMode.FitColumns && string.IsNullOrWhiteSpace(Width))
                 classes.Add("fx-grid-width-fit-columns");
+            if (!string.IsNullOrWhiteSpace(Height))
+                classes.Add("fx-grid-has-height");
+            if (ExtendVerticalScrollbarIntoHeader)
+                classes.Add("fx-grid-vscroll-header-gutter");
+            if (ShouldHideGridContentForNoVisibleColumns)
+                classes.Add("fx-grid-no-visible-columns");
             if (_pivotMode)
                 classes.Add("fx-grid-pivot-mode");
             if (!string.IsNullOrWhiteSpace(CssClass))
@@ -161,7 +169,7 @@ public partial class GridControl<TValue>
         GridTheme.ExcelMediumBlue => "fx-grid-theme-excel-medium-blue",
         GridTheme.ExcelMediumGreen => "fx-grid-theme-excel-medium-green",
         GridTheme.ExcelDarkSlate => "fx-grid-theme-excel-dark-slate",
-        _ => "fx-grid-theme-homefront"
+        _ => "fx-grid-theme-default"
     };
 
     private static IEnumerable<IGrouping<string, GridThemeGalleryItem>> ThemeGalleryGroups =>
@@ -284,23 +292,46 @@ public partial class GridControl<TValue>
         if (string.IsNullOrWhiteSpace(col.Field))
             return;
 
-        if (!visible && IsColumnVisible(col) && Columns.Count(IsColumnVisible) <= 1)
+        if (!visible && IsColumnVisible(col) && !CanHideColumn(col))
             return;
 
         _visibilityOverrides[col.Field] = visible;
 
         if (OnColumnsChosen.HasDelegate)
         {
-            var snapshot = Columns
+            var renderedColumnsByField = Columns
                 .Where(c => !string.IsNullOrWhiteSpace(c.Field))
-                .Select(c => new ChooseColumnDescriptor
-                {
-                    Field = c.Field,
-                    Header = HeaderColumnDisplay(c),
-                    Visible = string.Equals(c.Field, col.Field, StringComparison.Ordinal)
-                        ? visible
-                        : IsColumnVisible(c)
-                })
+                .GroupBy(c => c.Field, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+            var snapshot = (AvailableColumns != null
+                    ? AvailableColumns
+                        .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                        .Select(c =>
+                        {
+                            var field = c.Field;
+                            var rendered = renderedColumnsByField.GetValueOrDefault(field);
+                            return new ChooseColumnDescriptor
+                            {
+                                Field = field,
+                                Header = !string.IsNullOrWhiteSpace(c.Header)
+                                    ? c.Header
+                                    : (rendered != null ? HeaderColumnDisplay(rendered) : field),
+                                Visible = string.Equals(field, col.Field, StringComparison.Ordinal)
+                                    ? visible
+                                    : (rendered != null ? IsColumnVisible(rendered) : c.Visible)
+                            };
+                        })
+                    : Columns
+                        .Where(c => !string.IsNullOrWhiteSpace(c.Field))
+                        .Select(c => new ChooseColumnDescriptor
+                        {
+                            Field = c.Field,
+                            Header = HeaderColumnDisplay(c),
+                            Visible = string.Equals(c.Field, col.Field, StringComparison.Ordinal)
+                                ? visible
+                                : IsColumnVisible(c)
+                        }))
                 .ToList();
 
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
@@ -315,24 +346,12 @@ public partial class GridControl<TValue>
         await InvokeAsync(StateHasChanged);
     }
 
-    private void SetColumnFilterValueSearch(string field, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(field))
-            return;
-
-        var text = value ?? "";
-        if (string.IsNullOrWhiteSpace(text))
-            _columnFilterValueSearch.Remove(field);
-        else
-            _columnFilterValueSearch[field] = text;
-    }
-
     private void SeedFilterPopupDraft(string field)
     {
         var state = GetColumnState(field);
         _filterTextDraft = state.FilterValue ?? "";
-        _filterOperatorDraft = string.IsNullOrWhiteSpace(state.FilterValue)
-            ? TextFilterOperator.Contains
+        _filterOperatorDraft = _filterOperatorDraftsByField.TryGetValue(field, out var cachedOperator)
+            ? cachedOperator
             : state.FilterOperator;
         IEnumerable<string> checkedValues = state.UseCheckedFilter
             ? state.CheckedFilterValues
@@ -346,6 +365,9 @@ public partial class GridControl<TValue>
             parsed = TextFilterOperator.Contains;
 
         _filterOperatorDraft = parsed;
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = parsed;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -353,6 +375,9 @@ public partial class GridControl<TValue>
     private async Task OnTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
     {
         _filterOperatorDraft = filterOperator;
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = filterOperator;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
     }
@@ -360,17 +385,11 @@ public partial class GridControl<TValue>
     private async Task OnTextFilterInput(ChangeEventArgs e)
     {
         _filterTextDraft = e.Value?.ToString() ?? "";
+        if (_filterPopupField != null)
+            _filterOperatorDraftsByField[_filterPopupField] = _filterOperatorDraft;
+        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
-    }
-
-    private async Task OnFilterValueSearchInput(ChangeEventArgs e)
-    {
-        if (_filterPopupField == null)
-            return;
-
-        SetColumnFilterValueSearch(_filterPopupField, e.Value?.ToString());
-        await Task.CompletedTask;
     }
 
     private async Task OnFilterPopupAutoApplyChanged(ChangeEventArgs e)
@@ -442,50 +461,108 @@ public partial class GridControl<TValue>
         };
     }
 
-    private string GetColumnFilterValueSearch(string field) =>
-        _columnFilterValueSearch.TryGetValue(field, out var value) ? value : "";
-
     private bool IsCurrentFilterPopupField(string field) =>
         string.Equals(_filterPopupField, field, StringComparison.Ordinal);
 
     private bool IsNumericFilterColumn(GridColumn? col) =>
         col?.Type == ColumnType.Number;
 
-    private IReadOnlyList<string> GetColumnFilterValues(string field)
+    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field)
     {
-        return GetDistinctValues(field)
+        return GetDistinctFilterValueCandidates(field)
             .Where(v => MatchesPopupTextFilter(field, v))
-            .Where(v => MatchesColumnFilterValueSearch(v, GetColumnFilterValueSearch(field)))
             .ToList();
     }
 
-    private bool MatchesPopupTextFilter(string field, string value)
+    private bool MatchesPopupTextFilter(string field, FilterValueCandidate candidate)
     {
         if (!IsCurrentFilterPopupField(field) || string.IsNullOrWhiteSpace(_filterTextDraft))
             return true;
 
-        return PassesTextFilter(GetFilterValueDisplay(value), _filterTextDraft, _filterOperatorDraft);
+        return PassesDisplayAwareTextFilter(candidate.Value, candidate.DisplayText, _filterTextDraft, _filterOperatorDraft);
     }
 
-    private static string GetFilterValueDisplay(string value) =>
-        string.IsNullOrEmpty(value) ? "(blank)" : value;
-
-    private static bool MatchesColumnFilterValueSearch(string value, string search)
+    private IReadOnlyList<FilterValueCandidate> GetDistinctFilterValueCandidates(string field)
     {
-        if (string.IsNullOrWhiteSpace(search))
+        var col = FindColumnByField(field);
+        var candidates = new Dictionary<string, FilterValueCandidate>(StringComparer.Ordinal);
+
+        foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
+        {
+            var rawValue = GetFilterRawValue(item, field)?.ToString() ?? "";
+            var displayText = GetFilterDisplayText(item, col, rawValue);
+            var candidate = new FilterValueCandidate(
+                rawValue,
+                string.IsNullOrEmpty(displayText) ? "(blank)" : displayText);
+
+            if (!candidates.TryGetValue(rawValue, out var existing)
+                || IsBetterFilterCandidate(candidate, existing))
+            {
+                candidates[rawValue] = candidate;
+            }
+        }
+
+        return candidates.Values
+            .OrderBy(v => v.DisplayText, StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(v => v.Value, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+    }
+
+    private string GetFilterDisplayText(TValue item, GridColumn? col, string rawValue)
+    {
+        if (col == null)
+            return string.IsNullOrEmpty(rawValue) ? "" : rawValue;
+
+        var displayText = GetCellDisplayValue(item, col);
+        return string.IsNullOrWhiteSpace(displayText) ? rawValue : displayText;
+    }
+
+    private static string CombineFilterSearchText(string rawValue, string displayText)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+            return displayText;
+        if (string.IsNullOrWhiteSpace(displayText)
+            || string.Equals(rawValue, displayText, StringComparison.OrdinalIgnoreCase))
+            return rawValue;
+
+        return $"{displayText} {rawValue}";
+    }
+
+    private static bool PassesDisplayAwareTextFilter(string rawValue, string displayText, string expected, TextFilterOperator filterOperator)
+    {
+        displayText = string.IsNullOrWhiteSpace(displayText) ? rawValue : displayText;
+        if (string.Equals(rawValue, displayText, StringComparison.Ordinal))
+            return PassesTextFilter(displayText, expected, filterOperator);
+
+        return filterOperator switch
+        {
+            TextFilterOperator.DoesNotEqual =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotBeginWith =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotEndWith =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            TextFilterOperator.DoesNotContain =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                && PassesTextFilter(displayText, expected, filterOperator),
+            _ =>
+                PassesTextFilter(rawValue, expected, filterOperator)
+                || PassesTextFilter(displayText, expected, filterOperator)
+        };
+    }
+
+    private static bool IsBetterFilterCandidate(FilterValueCandidate candidate, FilterValueCandidate existing)
+    {
+        if (string.IsNullOrWhiteSpace(existing.DisplayText) || existing.DisplayText == "(blank)")
+            return true;
+        if (string.Equals(existing.DisplayText, existing.Value, StringComparison.Ordinal)
+            && !string.Equals(candidate.DisplayText, candidate.Value, StringComparison.Ordinal))
             return true;
 
-        var display = GetFilterValueDisplay(value);
-        var terms = search.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        return terms.All(term =>
-        {
-            var normalizedTerm = term.Trim('*');
-            var wantsBlank = normalizedTerm.Equals("blank", StringComparison.OrdinalIgnoreCase)
-                || normalizedTerm.Equals("(blank)", StringComparison.OrdinalIgnoreCase);
-            return wantsBlank
-                ? string.IsNullOrEmpty(value)
-                : display.Contains(normalizedTerm, StringComparison.OrdinalIgnoreCase);
-        });
+        return false;
     }
 
     private bool IsFilterValueChecked(string field, string value)
@@ -888,7 +965,7 @@ public partial class GridControl<TValue>
 
     private object? GetFilterRawValue(TValue item, string field)
     {
-        var col = Columns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        var col = FindColumnByField(field);
         return col == null ? GetPropertyValue(item, field) : ResolveCellValue(item, col);
     }
 

@@ -63,3 +63,4 @@ coverage*.info
 ## AI / editor tooling
 .claude/
 .codex-backups/
+.flexkit-sync-revert-*/

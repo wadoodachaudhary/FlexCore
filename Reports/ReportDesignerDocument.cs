@@ -25,6 +25,7 @@ public sealed class ReportDesignerDocument
     public List<ReportDesignerFilter> Filters { get; set; } = new();
     public List<ReportDesignerSubreport> Subreports { get; set; } = new();
     public List<ReportDesignerDataLink> Links { get; set; } = new();
+    public string CustomSql { get; set; } = "";
     public bool IsDirty { get; set; }
     public string StatusMessage { get; set; } = "";
 
@@ -76,6 +77,8 @@ public sealed class ReportDesignerDocument
             .ToList();
         document.Summaries = wizard.Summaries.Select(CloneSummary).ToList();
         document.Filters = wizard.Filters.Select(CloneFilter).ToList();
+        document.Links = wizard.Links.Select(CloneLink).ToList();
+        document.CustomSql = wizard.CustomSql ?? "";
 
         var displayFields = wizard.DisplayFields.Count > 0
             ? wizard.DisplayFields.ToList()
@@ -325,6 +328,18 @@ public sealed class ReportDesignerDocument
             GroupName = summary.GroupName
         };
     }
+
+    private static ReportDesignerDataLink CloneLink(ReportDesignerDataLink link)
+    {
+        return new ReportDesignerDataLink
+        {
+            LeftTable = link.LeftTable,
+            LeftField = link.LeftField,
+            RightTable = link.RightTable,
+            RightField = link.RightField,
+            JoinType = link.JoinType
+        };
+    }
 }
 
 public sealed class ReportDesignerPage
@@ -513,6 +528,8 @@ public sealed class ReportCreationWizardResult
     public List<ReportDesignerField> GroupFields { get; set; } = new();
     public List<ReportDesignerSummary> Summaries { get; set; } = new();
     public List<ReportDesignerFilter> Filters { get; set; } = new();
+    public List<ReportDesignerDataLink> Links { get; set; } = new();
+    public string CustomSql { get; set; } = "";
     public string TemplateName { get; set; } = "No Template";
 }
 
@@ -607,6 +624,7 @@ public static class ReportDesignerXmlSerializer
 
         ParseFields(root, document);
         ParseLinks(root, document);
+        ParseCustomSql(root, document);
         ParseParameters(root, document);
         ParseGroups(root, document);
         ParseSorts(root, document);
@@ -1045,12 +1063,15 @@ public static class ReportDesignerXmlSerializer
                     new XAttribute("RightTable", link.RightTable ?? ""),
                     new XAttribute("RightField", link.RightField ?? ""),
                     new XAttribute("JoinType", link.JoinType ?? ""))));
+        var sql = new XElement("Sql",
+            new XAttribute("Query", document.CustomSql ?? ""));
 
         root.Add(new XElement(MetadataElementName,
             new XAttribute("Version", "1"),
             new XAttribute("SavedUtc", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
             sections,
-            links));
+            links,
+            sql));
     }
 
     private static XElement CreateAreaElement(ReportDesignerSection section)
@@ -1327,6 +1348,12 @@ public static class ReportDesignerXmlSerializer
         }
 
         return fields;
+    }
+
+    private static void ParseCustomSql(XElement root, ReportDesignerDocument document)
+    {
+        var metadata = Child(root, MetadataElementName);
+        document.CustomSql = Attribute(metadata?.Element("Sql"), "Query") ?? "";
     }
 
     private static (string Table, string Field)? ParseCrystalFieldReference(string formulaName)

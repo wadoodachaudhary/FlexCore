@@ -3,7 +3,7 @@
 This document covers two flows:
 
 1. **Releasing a new FlexCore version** to nuget.org
-2. **Picking up a new FlexCore version** in a consumer app (e.g. HomeFrontPOC)
+2. **Picking up a new FlexCore version** in a consumer app (e.g. HomeFrontPB)
 
 ---
 
@@ -14,7 +14,7 @@ For reference — what's already configured so future steps make sense:
 - **GitHub repo**: <https://github.com/wadoodachaudhary/FlexCore> — `main` branch tracks the source
 - **NuGet package**: `FlexCore` at <https://www.nuget.org/packages/FlexCore>
 - **API key**: stored locally at `~/.flexcore-nuget-key` (chmod 600), used by the publish step below. If lost, regenerate at <https://www.nuget.org/account/apikeys> with scope **"Push new packages and package versions"** and glob `FlexCore` (or `*`).
-- **HomeFrontPOC** ([HomeFrontPOC.csproj](../HomeFront/HomeFrontPOC/HomeFrontPOC.csproj)): now references FlexCore via NuGet — no longer a `<ProjectReference>`. The FlexCore source tree under `/Users/wadood/projects/VBToCSharp/FlexCore/` is fully independent.
+- **HomeFrontPB** ([HomeFrontPB.csproj](../HomeFront/HomeFrontPB/HomeFrontPB.csproj)): now references FlexCore via NuGet — no longer a `<ProjectReference>`. The FlexCore source tree under `/Users/wadood/projects/VBToCSharp/FlexCore/` is fully independent.
 - **HomeFront (MobileSource)** ([HomeFront.csproj](../HomeFront/MobileSource/HomeFront/HomeFront.csproj)): still uses a `<ProjectReference>` for now. To switch it to NuGet, follow the consumer-upgrade steps below — they apply the same way.
 
 ---
@@ -110,7 +110,7 @@ git push --tags
 
 ## 2. Picking up a new FlexCore version in a consumer
 
-This applies to **HomeFrontPOC** and any other app that references FlexCore via `<PackageReference>`.
+This applies to **HomeFrontPB** and any other app that references FlexCore via `<PackageReference>`.
 
 ### 2.1 Bump the `PackageReference` version
 
@@ -124,14 +124,14 @@ Open the consumer's `.csproj` and change the `Version` attribute on the FlexCore
 <PackageReference Include="FlexCore" Version="0.1.1" />
 ```
 
-For HomeFrontPOC the file is [`HomeFrontPOC.csproj`](../HomeFront/HomeFrontPOC/HomeFrontPOC.csproj).
+For HomeFrontPB the file is [`HomeFrontPB.csproj`](../HomeFront/HomeFrontPB/HomeFrontPB.csproj).
 
 ### 2.2 Restore + build
 
 ```bash
-cd /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPOC
-dotnet restore HomeFrontPOC.sln
-dotnet build HomeFrontPOC.sln --no-incremental
+cd /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPB
+dotnet restore HomeFrontPB.sln
+dotnet build HomeFrontPB.sln --no-incremental
 ```
 
 The new package downloads to `~/.nuget/packages/flexcore/0.1.1/` and the build links against it.
@@ -145,23 +145,23 @@ find ~/.nuget/packages/flexcore -name "FlexCore.dll"
 Should list both `0.1.0/lib/net10.0/FlexCore.dll` and `0.1.1/lib/net10.0/FlexCore.dll`. Confirm the active build picks the new one:
 
 ```bash
-strings /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPOC/bin/Debug/net10.0/FlexCore.dll \
+strings /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPB/bin/Debug/net10.0/FlexCore.dll \
   | grep -m1 "^0\.1\.1" || echo "still on 0.1.0 — try a hard rebuild"
 ```
 
 If a stale `bin/`/`obj/` is causing trouble, nuke and rebuild:
 
 ```bash
-cd /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPOC
+cd /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPB
 rm -rf bin obj
-dotnet restore HomeFrontPOC.sln
-dotnet build HomeFrontPOC.sln --no-incremental
+dotnet restore HomeFrontPB.sln
+dotnet build HomeFrontPB.sln --no-incremental
 ```
 
 ### 2.4 Run the app
 
 ```bash
-dotnet run --project /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPOC/HomeFrontPOC.csproj
+dotnet run --project /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPB/HomeFrontPB.csproj
 ```
 
 Smoke-test the screens that exercise the FlexCore changes — `FAssembly`, `FModelDimensions`, anything using `GridControl`, etc.
@@ -200,7 +200,7 @@ echo "Done — track validation at https://www.nuget.org/packages/FlexCore/$VERS
 ```bash
 # Replace 0.1.0 with the new version everywhere it appears
 sed -i '' 's|Include="FlexCore" Version="[^"]*"|Include="FlexCore" Version="0.1.1"|' \
-    /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPOC/HomeFrontPOC.csproj
+    /Users/wadood/projects/VBToCSharp/HomeFront/HomeFrontPB/HomeFrontPB.csproj
 ```
 
 ---

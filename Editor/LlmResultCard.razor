@@ -245,7 +245,7 @@
                 // Install the global plain-text copy interceptor on first
                 // render. It's idempotent — every card calls it, only the
                 // first one actually attaches the listener.
-                await JS.InvokeVoidAsync("hfClipboard.installCopyInterceptor");
+                await JS.InvokeVoidAsync("fxClipboard.installCopyInterceptor");
             }
             catch
             {
@@ -259,7 +259,7 @@
     {
         try
         {
-            await JS.InvokeVoidAsync("hfClipboard.copyFromCard", _cardId);
+            await JS.InvokeVoidAsync("fxClipboard.copyFromCard", _cardId);
         }
         catch
         {

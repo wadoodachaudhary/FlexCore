@@ -9,7 +9,7 @@ namespace Fx.ControlKit.Grid;
 ///
 /// <para>Default for any FlexCore consumer that doesn't have a database
 /// to persist into. Apps with their own grid-layout table (HomeFront /
-/// HomeFrontPOC use <c>dbo.AppGridLayout</c>) should register a project-
+/// HomeFrontPB use <c>dbo.AppGridLayout</c>) should register a project-
 /// specific implementation instead.</para>
 ///
 /// <para>Pass the file path via the constructor — the file is created on

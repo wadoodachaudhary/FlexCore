@@ -6,7 +6,7 @@
 .fx-mled-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: transparent;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -14,12 +14,13 @@
 }
 
 .fx-mled {
-    background: #fff;
-    border-radius: 8px;
+    background: #f0f0f0;
+    border: 1px solid #7f7f7f;
+    border-radius: 0;
     min-width: 480px;
     max-width: 720px;
     width: 80vw;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 2px 7px rgba(0, 0, 0, 0.28);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -30,29 +31,35 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 16px;
-    background: #0d3b66;
-    color: #fff;
-    font-weight: 600;
-    font-size: 14px;
+    height: 27px;
+    padding: 0 0 0 8px;
+    background: #f0f0f0;
+    color: #000;
+    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font-weight: 400;
     flex-shrink: 0;
+    border-bottom: 1px solid #c7c7c7;
 }
 
 .fx-mled-close {
+    align-self: stretch;
+    width: 28px;
+    padding: 0;
     background: transparent;
     border: none;
-    color: #fff;
+    color: #000;
     font-size: 20px;
-    cursor: pointer;
-    line-height: 1;
+    cursor: default;
+    line-height: 20px;
 }
 
 .fx-mled-close:hover {
-    color: #e5e7eb;
+    background: #e81123;
+    color: #fff;
 }
 
 .fx-mled-body {
-    padding: 16px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -98,8 +105,9 @@
     justify-content: flex-end;
     gap: 8px;
     padding: 10px 16px;
-    border-top: 1px solid #e5e7eb;
+    border-top: 1px solid #c7c7c7;
     flex-shrink: 0;
+    background: #f0f0f0;
 }
 
 .fx-mled-btn {
@@ -125,4 +133,51 @@
 
 .fx-mled-btn-primary:hover {
     background: #1a65b3;
+}
+
+.fx-mled-system-menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10001;
+    border: 0;
+    background: transparent;
+}
+
+.fx-mled-system-menu {
+    position: fixed;
+    z-index: 10002;
+    min-width: 150px;
+    padding: 2px 0;
+    border: 1px solid #9a9a9a;
+    background: #f0f0f0;
+    box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
+    color: #000;
+    font: 12px "Segoe UI", Tahoma, Arial, sans-serif;
+}
+
+.fx-mled-system-menu button {
+    display: block;
+    width: 100%;
+    min-height: 24px;
+    padding: 3px 28px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+}
+
+.fx-mled-system-menu button:hover,
+.fx-mled-system-menu button:focus-visible {
+    background: #000080;
+    color: #fff;
+    outline: none;
+}
+
+.fx-mled-system-menu-separator {
+    display: block;
+    height: 1px;
+    margin: 3px 28px;
+    background: #b8b8b8;
 }

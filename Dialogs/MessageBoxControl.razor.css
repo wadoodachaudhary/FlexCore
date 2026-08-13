@@ -19,6 +19,10 @@
 .fx-msgbox {
     box-sizing: border-box;
     overflow: hidden;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-vb6 {
@@ -59,7 +63,13 @@
 }
 
 .fx-msgbox-vb6 .fx-msgbox-close:hover {
-    background: #e5e5e5;
+    background: #e81123;
+    color: #fff;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-close:focus {
+    outline: 1px dotted #000;
+    outline-offset: -4px;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-body {
@@ -68,6 +78,7 @@
     gap: 13px;
     min-height: 68px;
     padding: 13px 16px 9px 22px;
+    background: #fff;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-icon {
@@ -78,11 +89,20 @@
     font-size: 0;
 }
 
+.fx-msgbox-icon-image {
+    display: block;
+    object-fit: contain;
+}
+
 .fx-msgbox-vb6 .fx-msgbox-message {
     color: #000;
     font-size: 12px;
     line-height: 1.75;
     white-space: pre-line;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-vb6 .fx-msgbox-footer {
@@ -109,6 +129,12 @@
     border-style: inset;
 }
 
+.fx-msgbox-vb6 .fx-msgbox-btn:disabled {
+    color: #8a8a8a;
+    text-shadow: 1px 1px #fff;
+    cursor: default;
+}
+
 .fx-msgbox-vb6 .fx-msgbox-btn-primary {
     color: #000;
 }
@@ -117,6 +143,24 @@
 .fx-msgbox-vb6 .fx-msgbox-btn:focus {
     outline: 1px dotted #000;
     outline-offset: -5px;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-confirm {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 16px 8px 58px;
+    padding: 3px 6px;
+    border: 1px dotted #000;
+    color: #000;
+    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    cursor: default;
+}
+
+.fx-msgbox-vb6 .fx-msgbox-confirm input {
+    width: 13px;
+    height: 13px;
+    margin: 0;
 }
 
 .fx-msgbox-icon-warning::before,
@@ -226,6 +270,11 @@
     line-height: 1;
 }
 
+.fx-msgbox-dotnet .fx-msgbox-close:focus {
+    outline: 2px solid #fff;
+    outline-offset: 1px;
+}
+
 .fx-msgbox-dotnet .fx-msgbox-body {
     display: flex;
     align-items: flex-start;
@@ -242,6 +291,10 @@
     color: #374151;
     font-size: 14px;
     line-height: 1.5;
+    cursor: default;
+    user-select: none;
+    -webkit-user-select: none;
+    caret-color: transparent;
 }
 
 .fx-msgbox-dotnet .fx-msgbox-footer {

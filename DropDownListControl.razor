@@ -1,20 +1,61 @@
 @namespace Fx.ControlKit
 @typeparam TValue
 @typeparam TItem
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
 @using System.Globalization
+@implements IAsyncDisposable
+@inject IJSRuntime JSRuntime
 
-<div class="@HostCssClass" style="@HostStyle">
-    <button type="button"
-            class="@ButtonCssClass"
-            disabled="@(!Enabled)"
-            tabindex="@TabIndex"
-            aria-haspopup="listbox"
-            aria-expanded="@_isOpen"
-            @onclick="ToggleOpen"
-            @onkeydown="HandleButtonKeyDown">
-        <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
-        <span class="fx-dropdown-arrow" aria-hidden="true"></span>
-    </button>
+<div class="@HostCssClass" style="@HostStyle"
+     @ref="_hostRef"
+     @onclick:stopPropagation="true"
+     @onmousedown:stopPropagation="true"
+     @onkeydown:stopPropagation="true">
+    @if (Editable)
+    {
+        <div class="@ButtonCssClass"
+             role="combobox"
+             aria-haspopup="listbox"
+             aria-expanded="@_isOpen">
+            <input class="fx-dropdown-input"
+                   @key="_editableInputGeneration"
+                   @ref="_editableInputRef"
+                   disabled="@(!Enabled)"
+                   tabindex="@TabIndex"
+                   maxlength="@MaxLength"
+                   value="@_editableRenderedText"
+                   placeholder="@Placeholder"
+                   @onfocus="HandleEditableFocus"
+                   @onblur="HandleEditableBlur"
+                   @oninput="HandleEditableInput"
+                   @onkeydown="HandleEditableKeyDown"
+                   @onkeydown:stopPropagation="true" />
+            <span class="fx-dropdown-arrow" aria-hidden="true"
+                  @onmousedown="SuppressNextEditableBlurCommit"
+                  @onclick="HandleEditableArrowClick"
+                  @onclick:stopPropagation="true"></span>
+        </div>
+    }
+    else
+    {
+        <button type="button"
+                class="@ButtonCssClass"
+                disabled="@(!Enabled)"
+                tabindex="@TabIndex"
+                aria-haspopup="listbox"
+                aria-expanded="@_isOpen"
+                @onmousedown="HandleButtonMouseDown"
+                @onclick="HandleButtonClick"
+                @onkeydown="HandleButtonKeyDown"
+                @onkeydown:stopPropagation="true"
+                @onkeydown:preventDefault="@_isOpen">
+            <span class="fx-dropdown-text @PlaceholderCssClass">@DisplayText</span>
+            <span class="fx-dropdown-arrow" aria-hidden="true"
+                  @onclick="HandleArrowClick"
+                  @onclick:stopPropagation="@OpenOnArrowClickOnly"></span>
+        </button>
+    }
 
     @if (_isOpen && Enabled)
     {
@@ -24,18 +65,29 @@
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
 
-        <div class="fx-dropdown-panel" role="listbox" @onclick:stopPropagation="true">
+        <div class="fx-dropdown-panel" style="@PanelStyle" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
-                foreach (var item in DataSource)
+                var items = DataSource.ToList();
+                for (var index = 0; index < items.Count; index++)
                 {
+                    // A C# for-loop variable is ONE shared variable — lambdas must
+                    // capture a per-iteration copy or every option reports the last index.
+                    var optionIndex = index;
+                    var item = items[index];
                     var val = GetFieldValue(item, ValueFieldName);
                     var txt = GetFieldValue(item, TextFieldName);
                     var isSelected = IsSelectedValue(val);
+                    var isHighlighted = index == _highlightedIndex;
                     <button type="button"
-                            class="fx-dropdown-option @(isSelected ? "selected" : "")"
+                            class="fx-dropdown-option @(isSelected ? "selected" : "") @(isHighlighted ? "highlighted" : "")"
                             role="option"
                             aria-selected="@isSelected"
+                            @ref="_optionRefs[optionIndex]"
+                            @onkeydown="e => HandleOptionKeyDown(e, val, item)"
+                            @onkeydown:preventDefault="true"
+                            @onkeydown:stopPropagation="true"
+                            @onmouseover="() => SetHighlightedIndex(optionIndex)"
                             @onclick="() => SelectItemAsync(val, item)">
                         @txt
                     </button>
@@ -59,7 +111,27 @@
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    [Parameter] public bool Editable { get; set; }
+
+    /// <summary>Native maxlength for the editable input — the browser stops further
+    /// typing at the limit, independent of server latency.</summary>
+    [Parameter] public int? MaxLength { get; set; }
+    /// <summary>When editable, commit typed text on blur. This is standard combobox behavior; set false for Enter-only commit.</summary>
+    [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
+    [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool OpenOnRender { get; set; }
+    [Parameter] public bool OpenOnArrowClickOnly { get; set; }
+    /// <summary>
+    /// With <see cref="OpenOnArrowClickOnly"/>, a click on the BODY of a CLOSED
+    /// control still opens the list (it never closes an open one — closing stays
+    /// with the arrow / backdrop / Escape / selection). Grid batch editors use
+    /// this so the owner-standard two-click flow reads "first click shows the
+    /// arrow, the NEXT click opens" — without it, body clicks on the closed
+    /// editor were dead, because the host swallows the click before the grid
+    /// cell underneath can see it.
+    /// </summary>
+    [Parameter] public bool OpenOnClickWhenClosed { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
     /// <summary>Field settings - set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
@@ -73,15 +145,69 @@
 
     private bool _isOpen;
     private bool _openOnRenderInitialized;
+    private bool _editableInputFocused;
+    private bool _suppressNextEditableBlurCommit;
+    private bool _openUp;
+    private bool _needsGeometryRefresh;
+    private double? _panelMaxHeight;
+    private double? _panelMinWidth;
+    private bool _hasMeasuredGeometry;
+    private int _highlightedIndex = -1;
+    private bool _pendingHighlightScroll;
+    private readonly Dictionary<int, ElementReference> _optionRefs = new();
+    private ElementReference _hostRef;
+    private ElementReference _editableInputRef;
+    private bool _autoFocusApplied;
+    private IJSObjectReference? _dropdownJsModule;
+    private string _editableText = "";
 
-    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
-    private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    // Uncontrolled while typing: the DOM input renders _editableRenderedText, which stays
+    // CONSTANT while the field is focused, so a keystroke's render round-trip can never
+    // re-apply a stale value over text the user typed inside the latency window (the
+    // fast-typing data loss). Programmatic rewrites (Escape, list pick, blur restore) go
+    // through ResetEditableDomText, which bumps the input's @key so the fresh element
+    // re-applies the attribute even when the string matches the pre-typing one.
+    private string _editableRenderedText = "";
+    private int _editableInputGeneration;
+    private bool _editableRefocusPending;
+
+    private void ResetEditableDomText(string text, bool refocus)
+    {
+        _editableText = text;
+        _editableRenderedText = text;
+        _editableInputGeneration++;
+        if (refocus)
+            _editableRefocusPending = true;
+    }
+    private string _typeSelectBuffer = "";
+    private DateTime _typeSelectLastInputUtc = DateTime.MinValue;
+    private static readonly TimeSpan TypeSelectResetDelay = TimeSpan.FromSeconds(1);
+
+    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", _openUp ? "fx-dropdown-open-up" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", Editable ? "fx-dropdown-editable" : null, !Enabled ? "disabled" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string PanelStyle
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (_panelMinWidth is { } minWidth)
+            {
+                var width = minWidth.ToString("0.##", CultureInfo.InvariantCulture);
+                parts.Add($"width:{width}px");
+                parts.Add($"min-width:{width}px");
+                parts.Add($"max-width:{width}px");
+            }
+            if (_panelMaxHeight is > 0)
+                parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            return parts.Count == 0 ? string.Empty : string.Join(";", parts) + ";";
+        }
+    }
     private string HostStyle
     {
         get
         {
             var w = string.IsNullOrWhiteSpace(Width) ? CalculatedWidth() : Width;
-            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w}; flex:0 0 {w};";
+            return string.IsNullOrWhiteSpace(w) ? "" : $"width:{w};";
         }
     }
 
@@ -115,7 +241,8 @@
         }
     }
     private string PlaceholderCssClass => HasSelectedValue ? "" : "fx-dropdown-placeholder";
-    private string DisplayText => SelectedText ?? Placeholder ?? "";
+    private string DisplayText => SelectedText ?? (HasSelectedValue ? Value?.ToString() ?? "" : Placeholder ?? "");
+    private string EditableDisplayText => SelectedText ?? (HasSelectedValue ? Value?.ToString() ?? "" : "");
 
     private string? SelectedText
     {
@@ -140,14 +267,69 @@
         if (!Enabled)
         {
             _isOpen = false;
+            ResetDropdownGeometry();
             return;
         }
 
         if (OpenOnRender && !_openOnRenderInitialized)
         {
-            _isOpen = true;
+            OpenDropdown();
             _openOnRenderInitialized = true;
         }
+
+        if (Editable && !_editableInputFocused && _editableText != EditableDisplayText)
+            ResetEditableDomText(EditableDisplayText, refocus: false);
+    }
+
+    /// <summary>True while the current press STARTED on this control — set on the
+    /// button's own mousedown, consumed by <see cref="HandleButtonClick"/>.</summary>
+    private bool _pressStartedOnControl;
+
+    private void HandleButtonMouseDown()
+    {
+        _pressStartedOnControl = true;
+    }
+
+    private async Task HandleButtonClick()
+    {
+        // One press = one mousedown THEN one click. The click that CREATED a grid
+        // batch editor hit-tests against the fresh DOM, so on a fast circuit it can
+        // land on this just-mounted button — but its mousedown landed on the CELL,
+        // before this control existed. Requiring our own mousedown first keeps that
+        // creating click from instantly opening the list (the two-click standard),
+        // while a genuine second press (mousedown on the control) opens normally.
+        var pressStartedHere = _pressStartedOnControl;
+        _pressStartedOnControl = false;
+
+        if (!OpenOnArrowClickOnly)
+        {
+            await ToggleOpen();
+            return;
+        }
+
+        if (OpenOnClickWhenClosed && !_isOpen && pressStartedHere)
+            OpenDropdown();
+    }
+
+    private async Task HandleArrowClick()
+    {
+        if (!OpenOnArrowClickOnly)
+            return;
+
+        // Same press-witness rule as HandleButtonClick, but only for grid batch
+        // editors (OpenOnClickWhenClosed): with a real mouse the editor can mount
+        // MID-PRESS, and the creating press's click then hit-tests onto this arrow —
+        // toggling here would instant-open on the first click. A genuine later press
+        // put its mousedown on the control (bubbles from the arrow to the button),
+        // so the flag is set. Page-level dropdowns (no OpenOnClickWhenClosed) keep
+        // their unconditional arrow toggle — the control always existed, so their
+        // presses never need the witness.
+        var pressStartedHere = _pressStartedOnControl;
+        _pressStartedOnControl = false;
+        if (OpenOnClickWhenClosed && !pressStartedHere && !_isOpen)
+            return;
+
+        await ToggleOpen();
     }
 
     private async Task ToggleOpen()
@@ -157,8 +339,32 @@
             if (_isOpen)
                 await CloseAsync();
             else
-                _isOpen = true;
+                OpenDropdown();
         }
+    }
+
+    private void OpenDropdown()
+    {
+        if (!Enabled)
+            return;
+
+        _isOpen = true;
+        _needsGeometryRefresh = true;
+        _openUp = false;
+        _panelMaxHeight = null;
+        _panelMinWidth = null;
+        _hasMeasuredGeometry = false;
+        InitializeHighlightedIndex();
+        _pendingHighlightScroll = true;
+    }
+
+    private void ResetDropdownGeometry()
+    {
+        _openUp = false;
+        _panelMaxHeight = null;
+        _panelMinWidth = null;
+        _hasMeasuredGeometry = false;
+        _needsGeometryRefresh = false;
     }
 
     private async Task CloseAsync()
@@ -167,38 +373,312 @@
             return;
 
         _isOpen = false;
+        ResetDropdownGeometry();
+        _highlightedIndex = -1;
+        ClearTypeSelectBuffer();
         if (Closed.HasDelegate)
             await Closed.InvokeAsync();
     }
 
-    private Task HandleButtonKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    private async Task HandleButtonKeyDown(KeyboardEventArgs e)
     {
         if (!Enabled)
-            return Task.CompletedTask;
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
+            return;
 
         if (e.Key is "Enter" or " ")
         {
-            _isOpen = true;
+            if (_isOpen)
+                await CommitCurrentSelectionAsync();
+            else
+                OpenDropdown();
         }
         else if (e.Key == "Escape")
         {
-            return CloseAsync();
+            await CloseAsync();
         }
         else if (e.Key == "ArrowDown")
         {
-            _isOpen = true;
+            await MoveSelectionAsync(1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "Home")
+        {
+            await MoveSelectionToAsync(first: true);
+        }
+        else if (e.Key == "End")
+        {
+            await MoveSelectionToAsync(first: false);
+        }
+        else if (await TrySelectByTypedPrefixAsync(e))
+        {
+            return;
+        }
+    }
+
+    private async Task HandleOptionKeyDown(KeyboardEventArgs e, string strVal, TItem item)
+    {
+        if (!Enabled)
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
+            return;
+
+        if (e.Key is "Enter" or " ")
+        {
+            await CommitCurrentSelectionAsync();
+        }
+        else if (e.Key == "Escape")
+        {
+            await CloseAsync();
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            await MoveSelectionAsync(1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "Home")
+        {
+            await MoveSelectionToAsync(first: true);
+        }
+        else if (e.Key == "End")
+        {
+            await MoveSelectionToAsync(first: false);
+        }
+        else if (await TrySelectByTypedPrefixAsync(e))
+        {
+            return;
+        }
+    }
+
+    private Task HandleEditableFocus()
+    {
+        _editableInputFocused = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleEditableBlur()
+    {
+        _editableInputFocused = false;
+
+        if (_suppressNextEditableBlurCommit)
+        {
+            _suppressNextEditableBlurCommit = false;
+            return;
         }
 
+        if (CommitEditableTextOnBlur)
+        {
+            await PublishEditableTextAsync(_editableText);
+            _editableRenderedText = _editableText;
+        }
+        else
+        {
+            ResetEditableDomText(EditableDisplayText, refocus: false);
+        }
+    }
+
+    private async Task HandleEditableKeyDown(KeyboardEventArgs e)
+    {
+        if (!Enabled)
+            return;
+
+        if (await TryDelegateNavigationKeyAsync(e))
+            return;
+
+        if (e.Key == "Enter")
+        {
+            await PublishEditableTextAsync(_editableText);
+            _editableRenderedText = _editableText;
+            await CloseAsync();
+        }
+        else if (e.Key == "ArrowDown")
+        {
+            await MoveSelectionAsync(1);
+        }
+        else if (e.Key == "ArrowUp")
+        {
+            await MoveSelectionAsync(-1);
+        }
+        else if (e.Key == "F4")
+        {
+            OpenDropdown();
+        }
+        else if (e.Key == "Escape")
+        {
+            ResetEditableDomText(EditableDisplayText, refocus: true);
+            await CloseAsync();
+        }
+    }
+
+    private async Task HandleEditableArrowClick()
+    {
+        await ToggleOpen();
+        _suppressNextEditableBlurCommit = false;
+    }
+
+    private void SuppressNextEditableBlurCommit()
+    {
+        if (_editableInputFocused)
+            _suppressNextEditableBlurCommit = true;
+    }
+
+    private Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    {
+        _editableText = e.Value?.ToString() ?? "";
         return Task.CompletedTask;
+    }
+
+    private async Task<bool> TrySelectByTypedPrefixAsync(KeyboardEventArgs e)
+    {
+        if (!IsTypeSelectKey(e))
+            return false;
+
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+            return true;
+
+        var now = DateTime.UtcNow;
+        if (_typeSelectBuffer.Length > 0 && now - _typeSelectLastInputUtc > TypeSelectResetDelay)
+            _typeSelectBuffer = "";
+
+        _typeSelectLastInputUtc = now;
+        var requestedBuffer = _typeSelectBuffer + e.Key;
+        var repeatedCharacter = requestedBuffer.Length > 1
+            && requestedBuffer.All(c => char.ToUpperInvariant(c) == char.ToUpperInvariant(requestedBuffer[0]));
+
+        var matchIndex = FindTypeSelectMatchIndex(items, requestedBuffer, cycleFromCurrent: repeatedCharacter);
+        if (matchIndex < 0 && requestedBuffer.Length > 1)
+        {
+            requestedBuffer = e.Key;
+            matchIndex = FindTypeSelectMatchIndex(items, requestedBuffer, cycleFromCurrent: true);
+        }
+
+        _typeSelectBuffer = requestedBuffer;
+        if (matchIndex < 0)
+            return true;
+
+        if (_isOpen)
+        {
+            _highlightedIndex = matchIndex;
+            _pendingHighlightScroll = true;
+            return true;
+        }
+
+        await SelectItemAtAsync(items, matchIndex, keepOpen: false);
+        return true;
+    }
+
+    private static bool IsTypeSelectKey(KeyboardEventArgs e)
+    {
+        return !e.AltKey
+            && !e.CtrlKey
+            && !e.MetaKey
+            && e.Key.Length == 1
+            && !char.IsControl(e.Key[0])
+            && !char.IsWhiteSpace(e.Key[0]);
+    }
+
+    private int FindTypeSelectMatchIndex(IReadOnlyList<TItem> items, string prefix, bool cycleFromCurrent)
+    {
+        if (items.Count == 0 || string.IsNullOrEmpty(prefix))
+            return -1;
+
+        var start = 0;
+        if (cycleFromCurrent)
+        {
+            var currentIndex = _isOpen && _highlightedIndex >= 0
+                ? _highlightedIndex
+                : FindSelectedIndex(items);
+            start = currentIndex < 0 ? 0 : (currentIndex + 1) % items.Count;
+        }
+
+        for (var offset = 0; offset < items.Count; offset++)
+        {
+            var index = (start + offset) % items.Count;
+            if (ItemStartsWithTypedPrefix(items[index], prefix))
+                return index;
+        }
+
+        return -1;
+    }
+
+    private bool ItemStartsWithTypedPrefix(TItem item, string prefix)
+    {
+        var text = GetFieldValue(item, TextFieldName);
+        if (text.StartsWith(prefix, StringComparison.CurrentCultureIgnoreCase))
+            return true;
+
+        var value = GetFieldValue(item, ValueFieldName);
+        return !string.Equals(value, text, StringComparison.Ordinal)
+            && value.StartsWith(prefix, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    private void ClearTypeSelectBuffer()
+    {
+        _typeSelectBuffer = "";
+        _typeSelectLastInputUtc = DateTime.MinValue;
+    }
+
+    private async Task<bool> TryDelegateNavigationKeyAsync(KeyboardEventArgs e)
+    {
+        if (!OnKeyDown.HasDelegate)
+            return false;
+
+        var isGridNavigationKey = e.Key == "Tab"
+            || (e.Key is "ArrowLeft" or "ArrowRight"
+                && !e.AltKey
+                && !e.CtrlKey
+                && !e.MetaKey
+                && !e.ShiftKey);
+
+        if (!isGridNavigationKey)
+            return false;
+
+        await OnKeyDown.InvokeAsync(e);
+        return true;
+    }
+
+    private async Task PublishEditableTextAsync(string text)
+    {
+        _editableText = text;
+        var newValue = ConvertToValue(text);
+
+        if (object.Equals(Value, newValue))
+            return;
+
+        Value = newValue;
+
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(newValue);
+
+        if (ValueChange.HasDelegate)
+            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue });
     }
 
     private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true)
     {
+        _suppressNextEditableBlurCommit = false;
         var newValue = ConvertToValue(strVal);
         Value = newValue;
+        if (Editable)
+            ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: _editableInputFocused);
 
         if (closeAfterSelect)
+        {
             _isOpen = false;
+            ResetDropdownGeometry();
+            _highlightedIndex = -1;
+            ClearTypeSelectBuffer();
+        }
 
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
@@ -206,6 +686,234 @@
         if (ValueChange.HasDelegate)
             await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
     }
+
+    private async Task MoveSelectionAsync(int delta)
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            OpenDropdown();
+            return;
+        }
+
+        if (!_isOpen)
+            OpenDropdown();
+
+        var currentIndex = _highlightedIndex >= 0 ? _highlightedIndex : FindSelectedIndex(items);
+        var nextIndex = currentIndex < 0
+            ? (delta >= 0 ? 0 : items.Count - 1)
+            : Math.Clamp(currentIndex + delta, 0, items.Count - 1);
+
+        _highlightedIndex = nextIndex;
+        _pendingHighlightScroll = true;
+    }
+
+    private Task MoveSelectionToAsync(bool first)
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            OpenDropdown();
+            return Task.CompletedTask;
+        }
+
+        if (!_isOpen)
+            OpenDropdown();
+
+        _highlightedIndex = first ? 0 : items.Count - 1;
+        _pendingHighlightScroll = true;
+        return Task.CompletedTask;
+    }
+
+    private async Task SelectItemAtAsync(IReadOnlyList<TItem> items, int index, bool keepOpen = true)
+    {
+        var item = items[index];
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, closeAfterSelect: !keepOpen);
+        if (keepOpen)
+        {
+            OpenDropdown();
+            _highlightedIndex = index;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_editableRefocusPending)
+        {
+            _editableRefocusPending = false;
+            try
+            {
+                await _editableInputRef.FocusAsync(preventScroll: true);
+            }
+            catch
+            {
+            }
+        }
+
+        if (Editable && AutoFocus && !_autoFocusApplied && Enabled)
+        {
+            _autoFocusApplied = true;
+            try
+            {
+                await _editableInputRef.FocusAsync(preventScroll: true);
+            }
+            catch
+            {
+                // The editor can disappear while its parent grid commits.
+            }
+        }
+
+        if (_isOpen && _needsGeometryRefresh)
+        {
+            _needsGeometryRefresh = false;
+            try
+            {
+                var module = await GetDropdownJsModuleAsync();
+                if (module == null)
+                    return;
+
+                var geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                var changed = !_hasMeasuredGeometry
+                    || _openUp != geometry.OpenUp
+                    || Math.Abs((_panelMaxHeight ?? 0) - geometry.MaxHeight) > 0.5
+                    || Math.Abs((_panelMinWidth ?? 0) - geometry.MinWidth) > 0.5;
+
+                _openUp = geometry.OpenUp;
+                _panelMaxHeight = geometry.MaxHeight > 0 ? geometry.MaxHeight : null;
+                _panelMinWidth = geometry.MinWidth > 0 ? geometry.MinWidth : null;
+                _hasMeasuredGeometry = true;
+                if (changed)
+                {
+                    // Scroll on the NEXT after-render — the DOM panel does not have
+                    // the measured size yet, so scrolling now would use stale geometry.
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
+            }
+            catch
+            {
+                ResetDropdownGeometry();
+                return;
+            }
+        }
+
+        if (_isOpen && _pendingHighlightScroll && _hasMeasuredGeometry)
+        {
+            _pendingHighlightScroll = false;
+
+            // Native focus brings the option into view — no JS involved. The options
+            // carry the full keydown handling, so keyboard navigation continues to
+            // work with focus inside the panel. Skipped in editable mode: stealing
+            // focus from the text input would interrupt typing and fire blur-commit.
+            if (!Editable && _highlightedIndex >= 0 && _optionRefs.TryGetValue(_highlightedIndex, out var optionRef))
+            {
+                try
+                {
+                    await optionRef.FocusAsync();
+                }
+                catch
+                {
+                    // The element can be gone mid-render; the highlight works without the scroll.
+                }
+            }
+        }
+    }
+
+    private async ValueTask<IJSObjectReference?> GetDropdownJsModuleAsync()
+    {
+        try
+        {
+            return _dropdownJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", $"./_content/{typeof(DropDownListControl<TValue, TItem>).Assembly.GetName().Name}/dropdown-list-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_dropdownJsModule is null)
+            return;
+
+        try
+        {
+            await _dropdownJsModule.DisposeAsync();
+        }
+        catch
+        {
+            // Best effort. The browser circuit can be gone while components tear down.
+        }
+    }
+
+    private sealed class DropdownGeometry
+    {
+        public bool OpenUp { get; set; }
+        public double MaxHeight { get; set; }
+        public double Top { get; set; }
+        public double Left { get; set; }
+        public double MinWidth { get; set; }
+    }
+
+    private async Task CommitCurrentSelectionAsync()
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            await CloseAsync();
+            return;
+        }
+
+        var index = _highlightedIndex >= 0 && _highlightedIndex < items.Count
+            ? _highlightedIndex
+            : FindSelectedIndex(items);
+        if (index < 0)
+            index = 0;
+
+        var item = items[index];
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item);
+    }
+
+    private int FindSelectedIndex(IReadOnlyList<TItem> items)
+    {
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (IsSelectedValue(GetFieldValue(items[i], ValueFieldName)))
+                return i;
+        }
+
+        return -1;
+    }
+
+    // Mouse and keyboard share ONE moving highlight (_highlightedIndex): the VB6
+    // combo shows a single hot row that follows the cursor AND the arrow keys, and
+    // stays on the last-hovered option when the pointer leaves the panel. A CSS
+    // :hover approximation can't do the "stays" part — when nothing is hovered the
+    // stored highlight (seeded on the first/selected item) pops back, which reads
+    // as "it auto-selected the top item".
+    private void SetHighlightedIndex(int index)
+    {
+        if (_highlightedIndex == index)
+            return;
+
+        _highlightedIndex = index;
+    }
+
+    private void InitializeHighlightedIndex()
+    {
+        var items = GetMaterializedItems();
+        if (items.Count == 0)
+        {
+            _highlightedIndex = -1;
+            return;
+        }
+
+        var selectedIndex = FindSelectedIndex(items);
+        _highlightedIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    }
+
+    private List<TItem> GetMaterializedItems() => DataSource?.ToList() ?? new List<TItem>();
 
     private string GetFieldValue(TItem item, string field)
     {

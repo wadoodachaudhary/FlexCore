@@ -1,4 +1,8 @@
 @namespace Fx.ControlKit
+@using Microsoft.JSInterop
+@using Microsoft.AspNetCore.Components.Web
+@inject IJSRuntime JSRuntime
+@implements IAsyncDisposable
 
 @if (Visible)
 {
@@ -10,7 +14,11 @@
     <CascadingValue Value="this" IsFixed="true">
         <div class="@RootCssClass"
              style="@PositionStyle"
+             @ref="_menuElement"
              role="menu"
+             tabindex="-1"
+             @onkeydown="HandleMenuKeyDownAsync"
+             @onkeydown:preventDefault="true"
              @onclick:stopPropagation="true"
              @oncontextmenu:stopPropagation="true">
             @ChildContent
@@ -30,6 +38,10 @@
     [Parameter] public string? Style { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    private ElementReference _menuElement;
+    private IJSObjectReference? _contextMenuJsModule;
+    private bool _menuOpened;
+
     private string RootCssClass =>
         string.IsNullOrWhiteSpace(CssClass)
             ? "fx-context-menu"
@@ -38,8 +50,81 @@
     private string PositionStyle =>
         $"left:{X}px;top:{Y}px;min-width:{MinWidth}px;z-index:{ZIndex};{Style}";
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Visible)
+            return;
+
+        var module = await GetContextMenuJsModuleAsync();
+        if (module == null)
+            return;
+
+        await module.InvokeVoidAsync("positionContextMenu", _menuElement, X, Y, MinWidth, ZIndex);
+
+        // Open with the first item highlighted, as the Win32 popup menu did.
+        if (!_menuOpened)
+        {
+            _menuOpened = true;
+            await FocusMenuItemAsync("first");
+        }
+    }
+
+    // Enter and Space are left to the focused <button>'s own activation; this
+    // owns only the arrows, Home/End and Escape.
+    private async Task HandleMenuKeyDownAsync(KeyboardEventArgs e)
+    {
+        string mode;
+        switch (e.Key)
+        {
+            case "ArrowDown": mode = "next"; break;
+            case "ArrowUp": mode = "prev"; break;
+            case "Home": mode = "first"; break;
+            case "End": mode = "last"; break;
+            case "Enter":
+            case " ":
+                await ActivateMenuItemAsync();
+                return;
+            case "Escape":
+                await CloseAsync();
+                return;
+            default:
+                return;
+        }
+
+        await FocusMenuItemAsync(mode);
+    }
+
+    private async Task ActivateMenuItemAsync()
+    {
+        try
+        {
+            var module = await GetContextMenuJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("activateMenuItem", _menuElement);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task FocusMenuItemAsync(string mode)
+    {
+        try
+        {
+            var module = await GetContextMenuJsModuleAsync();
+            if (module != null)
+                await module.InvokeVoidAsync("focusMenuItem", _menuElement, mode);
+        }
+        catch
+        {
+            // Mouse and Tab still work without it.
+        }
+    }
+
     public async Task CloseAsync()
     {
+        _menuOpened = false;
+
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
 
@@ -48,4 +133,27 @@
     }
 
     internal Task RequestCloseAsync() => CloseAsync();
+
+    private async ValueTask<IJSObjectReference?> GetContextMenuJsModuleAsync()
+    {
+        try
+        {
+            return _contextMenuJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", $"./_content/{typeof(ContextMenuControl).Assembly.GetName().Name}/context-menu-control.js");
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_contextMenuJsModule != null)
+        {
+            try { await _contextMenuJsModule.DisposeAsync(); }
+            catch { }
+            _contextMenuJsModule = null;
+        }
+    }
 }

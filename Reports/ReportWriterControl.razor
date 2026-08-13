@@ -29,7 +29,7 @@
 @using System.Text.Json
 @using Microsoft.JSInterop
 @using Microsoft.AspNetCore.Components.Web
-@implements IDisposable
+@implements IAsyncDisposable
 
 @inject CrystalXmlReportLoader XmlLoader
 @inject IReportDataExecutor db
@@ -51,7 +51,7 @@
     @* Full viewer chrome — toolbar + group tree + status bar + param dialog.
        Set ShowChrome=false on the host to drop these and render the bare
        page area only (dashboards, modal previews, embedded thumbnails). *@
-    <div class="fx-rpt-viewer-container">
+    <div class="fx-rpt-viewer-container" @ref="_reportRootElement">
 
         @if (IsLoading)
         {
@@ -212,7 +212,7 @@ else
     @* Bare renderer — same content as the chrome-wrapped panel but without
        toolbar/tree/status. Hosts that want to embed the report inside their
        own UI (dashboards, modal previews) set ShowChrome=false. *@
-    <div class="fx-report-container">
+    <div class="fx-report-container" @ref="_reportRootElement">
         @RenderReportContent()
     </div>
 }
@@ -301,7 +301,11 @@ else
 
     // .NET ↔ JS bridge for row-cell click drill-down (every rendered row is clickable).
     private DotNetObjectReference<ReportWriterControl>? _dotNetRef;
+    private IJSObjectReference? _reportJsModule;
+    private ElementReference _reportRootElement;
     private bool _jsClickHandlerRegistered;
+    private static string ReportJsModulePath =>
+        $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/report-writer-control.js";
 
     // ════════════════════════════════════════════════════════════════════
     //  CHROME STATE — toolbar / status bar / group tree / param dialog
@@ -379,20 +383,49 @@ else
             }
         }
         // Attach/refresh the JS click delegator whenever content changes (tabs + pages can
-        // re-render at any time). hfAttachDrillHandler is idempotent.
+        // re-render at any time). The module helper is idempotent for this control root.
         if (_dotNetRef != null && Tabs.Count > 0 && !_jsClickHandlerRegistered)
         {
             try
             {
-                await JSRuntime.InvokeVoidAsync("hfAttachDrillHandler", _dotNetRef);
+                var module = await GetReportJsModuleAsync();
+                if (module is null) return;
+
+                await module.InvokeVoidAsync("attachDrillHandler", _reportRootElement, _dotNetRef);
                 _jsClickHandlerRegistered = true;
             }
             catch { /* JS not ready yet — will retry on next render */ }
         }
     }
 
-    public void Dispose()
+    private async ValueTask<IJSObjectReference?> GetReportJsModuleAsync()
     {
+        try
+        {
+            return _reportJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+                "import", ReportJsModulePath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_reportJsModule is not null)
+            {
+                await _reportJsModule.InvokeVoidAsync("detachDrillHandler", _reportRootElement);
+                await _reportJsModule.DisposeAsync();
+            }
+        }
+        catch
+        {
+            // Circuit teardown can dispose JS before the component.
+        }
+
         _dotNetRef?.Dispose();
         _dotNetRef = null;
     }
@@ -1483,8 +1516,7 @@ else
         // the user is now in DrillDown territory.
         if (mode != TreeNavigationMode.Group)
         {
-            try { await JSRuntime.InvokeVoidAsync("hfClearGroupHighlight"); }
-            catch { /* JS not ready — silently ignore */ }
+            await ClearReportGroupHighlightAsync();
         }
     }
 
@@ -1545,19 +1577,51 @@ else
         }
 
         if (string.IsNullOrEmpty(node.AnchorId)) return;
+        // Group mode gets scroll + active-row flash. If the helper is not
+        // available yet the click degrades to a page jump only.
+        await HighlightReportGroupAsync(node.AnchorId);
+    }
+
+    private async Task ClearReportGroupHighlightAsync()
+    {
         try
         {
-            // hfHighlightGroup = scroll + flash red. hfScrollToAnchor =
-            // just scroll. Group mode (default) gets the highlight; the
-            // DrillDown branch above already returned before this code.
-            await JSRuntime.InvokeVoidAsync("hfHighlightGroup", node.AnchorId);
+            var module = await GetReportJsModuleAsync();
+            if (module is not null)
+                await module.InvokeVoidAsync("clearGroupHighlight", _reportRootElement);
         }
         catch
         {
-            // JS module not loaded yet — fall back to plain scroll. If
-            // even that fails the click degrades to a page jump only.
-            try { await JSRuntime.InvokeVoidAsync("hfScrollToAnchor", node.AnchorId); }
-            catch { /* swallow */ }
+            // JS not ready — silently ignore.
+        }
+    }
+
+    private async Task HighlightReportGroupAsync(string anchorId)
+    {
+        try
+        {
+            var module = await GetReportJsModuleAsync();
+            if (module is not null)
+                await module.InvokeVoidAsync("highlightGroup", _reportRootElement, anchorId);
+        }
+        catch
+        {
+            // Fall back to scroll-only if the highlight path fails.
+            await ScrollReportAnchorAsync(anchorId);
+        }
+    }
+
+    private async Task ScrollReportAnchorAsync(string anchorId)
+    {
+        try
+        {
+            var module = await GetReportJsModuleAsync();
+            if (module is not null)
+                await module.InvokeVoidAsync("scrollToAnchor", _reportRootElement, anchorId);
+        }
+        catch
+        {
+            // Degrade to page jump only.
         }
     }
 

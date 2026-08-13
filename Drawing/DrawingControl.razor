@@ -1,0 +1,1397 @@
+@namespace Fx.ControlKit.Drawing
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@using System.Globalization
+@using System.IO
+@using System.Text
+@using System.Text.Json
+@using System.Threading
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@inject IJSRuntime JSRuntime
+
+@* ── DrawingControl ───────────────────────────────────────────────────────────
+   A reusable annotation surface. The background is a CELL GRID (default 1 row × 1 column with the
+   captured screenshot in cell 1,1): right-click the surface to add/remove rows or columns and to
+   paste / attach an image into the cell under the pointer. All columns are equal-sized; each
+   cell's image is independent and is scaled + centre-CROPPED to fill its cell. Shape objects
+   (Rectangle / Ellipse / Circle / Line / Arrow / Polygon / Text — each with a "+Text" bubble
+   variant) draw over the whole grid. Interaction (create / select / move / resize / edit / undo /
+   zoom / cell ops) is pure Blazor/C#; the only JavaScript is the lazily-imported
+   drawing-control.js (image-size probe, cell crop, save-time SVG→PNG rasterise). ─────────────── *@
+<div class="fx-drawing @ResolvedCssClass" style="@ResolvedStyle" id="@Id">
+
+    <div class="fx-drawing-toolbar">
+        @* Host-supplied actions FIRST (e.g. the app's Capture / Tickets / Details buttons). *@
+        @if (ToolbarExtra is not null)
+        {
+            <div class="fx-tb-group">@ToolbarExtra</div>
+            <span class="fx-tb-sep"></span>
+        }
+
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Select ? " active" : "")" title="Select / move (double-click a bubble to edit)" @onclick="@(() => SetTool(DrawingTool.Select))">
+            <span class="fx-tb-ico">@((MarkupString)IcSelect)</span><span class="fx-tb-lbl">Pointer</span>
+        </button>
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Crop ? " active" : "")" title="Crop — drag a region to keep; it replaces that cell's image (with one cell it trims the whole canvas)" @onclick="@(() => SetTool(DrawingTool.Crop))">
+            <span class="fx-tb-ico">@((MarkupString)IcCrop)</span><span class="fx-tb-lbl">Crop</span>
+        </button>
+        <button type="button" class="fx-tb-tool@(_tool == DrawingTool.Text ? " active" : "")" title="Text label" @onclick="@(() => SetTool(DrawingTool.Text))">
+            <span class="fx-tb-ico">@((MarkupString)IcText)</span><span class="fx-tb-lbl">Text</span>
+        </button>
+
+        @* Shapes split-dropdown — the button reflects the active shape; the caret opens the list. *@
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool@(IsShapeTool(_tool) ? " active" : "")" title="@ShapeName(_activeShapeTool)" @onclick="@(() => SetTool(_activeShapeTool))">
+                <span class="fx-tb-ico">@((MarkupString)ShapeIcon(_activeShapeTool))</span><span class="fx-tb-lbl">@ShapeName(_activeShapeTool)</span>
+            </button>
+            <button type="button" class="fx-tb-caretbtn" title="More shapes" @onclick="@(() => { _shapesMenuOpen = !_shapesMenuOpen; _styleOpen = false; _editOpen = false; })">▾</button>
+            @if (_shapesMenuOpen)
+            {
+                <div class="fx-tb-menu">
+                    @foreach (var t in _shapeButtons)
+                    {
+                        <button type="button" class="fx-tb-menu-item@(_tool == t.Tool ? " active" : "")" @onclick="@(() => PickShape(t.Tool))">
+                            <span class="fx-tb-menu-ico">@((MarkupString)t.Icon)@if (t.IsText){<span class="fx-tb-tbadge">T</span>}</span>
+                            <span>@t.Name</span>
+                        </button>
+                    }
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _shapesMenuOpen = false)"></div>
+            }
+        </div>
+
+        @* Insert image — into the first EMPTY grid cell (a new column is added when the grid is
+           full). Right-clicking the surface offers the same paste/attach targeted at a SPECIFIC cell. *@
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool" title="Insert an image into the first empty cell (a column is added if the grid is full). Tip: right-click a cell to paste/attach into it, or to add rows/columns."
+                    @onclick="@(() => { _imageMenuOpen = !_imageMenuOpen; _styleOpen = false; _editOpen = false; _shapesMenuOpen = false; })">
+                <span class="fx-tb-ico">@((MarkupString)IcImage)</span><span class="fx-tb-lbl">Image ▾</span>
+            </button>
+            @if (_imageMenuOpen)
+            {
+                <div class="fx-tb-menu">
+                    <label class="fx-tb-menu-item fx-tb-fileitem" title="Choose an image file to place in the next empty cell">
+                        <span class="fx-tb-menu-ico">@((MarkupString)IcImage)</span><span>From file…</span>
+                        <InputFile OnChange="OnImageFileSelected" accept="image/*" class="fx-tb-fileinput" />
+                    </label>
+                    <button type="button" class="fx-tb-menu-item" @onclick="PasteImageAsync"><span class="fx-tb-menu-ico fx-tb-glyph">⎘</span><span>Paste from clipboard</span></button>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _imageMenuOpen = false)"></div>
+            }
+        </div>
+
+        @* Style dropdown — colour + width together (saves toolbar space). *@
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool" title="Colour &amp; width" @onclick="@(() => { _styleOpen = !_styleOpen; _editOpen = false; _shapesMenuOpen = false; })">
+                <span class="fx-tb-ico"><span class="fx-tb-swatch" style="background:@_color;"></span></span><span class="fx-tb-lbl">Style ▾</span>
+            </button>
+            @if (_styleOpen)
+            {
+                <div class="fx-tb-menu fx-tb-stylemenu">
+                    <div class="fx-tb-colormenu">
+                        @foreach (var c in _palette)
+                        {
+                            <button type="button" class="fx-draw-color@(_color == c ? " active" : "")" style="background:@c;" title="@c"
+                                    @onclick="@(() => { _color = c; if (_selected is not null) _selected.Color = c; })"></button>
+                        }
+                    </div>
+                    <div class="fx-tb-widthrow">
+                        <span>Width</span>
+                        <input type="range" min="1" max="20" step="1" value="@_size"
+                               @oninput="@(e => _size = double.TryParse(e.Value?.ToString(), out var v) ? v : _size)" />
+                        <span>@(_size)px</span>
+                    </div>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _styleOpen = false)"></div>
+            }
+        </div>
+
+        @* Edit dropdown — undo / delete / clear. *@
+        <div class="fx-tb-split">
+            <button type="button" class="fx-tb-tool" title="Edit actions" @onclick="@(() => { _editOpen = !_editOpen; _styleOpen = false; _shapesMenuOpen = false; })">
+                <span class="fx-tb-ico fx-tb-glyph">⋯</span><span class="fx-tb-lbl">Edit ▾</span>
+            </button>
+            @if (_editOpen)
+            {
+                <div class="fx-tb-menu">
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_shapes.Count == 0)" @onclick="@(() => { Undo(); _editOpen = false; })"><span class="fx-tb-menu-ico fx-tb-glyph">↶</span><span>Undo (Ctrl+Z)</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_selected is null)" @onclick="@(() => { DeleteSelected(); _editOpen = false; })"><span class="fx-tb-menu-ico">@((MarkupString)IcTrash)</span><span>Delete selected</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_shapes.Count == 0)" @onclick="@(() => { ClearAll(); _editOpen = false; })"><span class="fx-tb-menu-ico fx-tb-glyph">⌫</span><span>Clear all</span></button>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _editOpen = false)"></div>
+            }
+        </div>
+
+        <span class="fx-tb-sep"></span>
+        @* Zoom group — kept LEFT of the spring so it's always visible (was wrapping off-screen on
+           the right). −/+ step, Fit re-fits the image to the viewport, then the px readout. *@
+        <div class="fx-tb-zoom">
+            <button type="button" class="fx-tb-zbtn" title="Zoom out" @onclick="ZoomOut">−</button>
+            <span class="fx-tb-zval">@($"{_zoom * 100:0}%")</span>
+            <button type="button" class="fx-tb-zbtn" title="Zoom in" @onclick="ZoomIn">+</button>
+            <button type="button" class="fx-tb-zbtn fx-tb-fit" title="Fit image to window" @onclick="FitToWindow">⤢</button>
+            @if (_imgW > 0)
+            {
+                <span class="fx-tb-dims" title="Image size in pixels">@($"{_imgW:0}×{_imgH:0} px")</span>
+            }
+        </div>
+        <span class="fx-tb-spring"></span>
+    </div>
+
+    @* Editable title bar — sits between the toolbar and the image, separate from the canvas.
+       On export the title text is stamped as a row above the image in the final PNG. *@
+    @if (ShowTitle)
+    {
+        <div class="fx-drawing-titlebar">
+            <input class="fx-drawing-title-input" type="text" placeholder="Enter title…"
+                   value="@Title" @oninput="OnTitleInput" />
+        </div>
+    }
+
+    @* Fixed height (not max-height): the fit-to-viewer zoom measures this element's client size,
+       and a content-driven height made the measurement depend on whatever was on screen at that
+       moment — the source of the "sometimes fits, sometimes runs way off" behaviour. *@
+    <div class="fx-drawing-scroll" style="@(Height is null ? null : $"height:{Height};")"
+         tabindex="0" @onkeydown="OnKeyDown" @ref="_scrollRef">
+        <div class="fx-drawing-sizer" style="@SizerStyle">
+            <div class="fx-drawing-surface" style="@SurfaceStyle">
+                @* Pixel rulers sit in the top/left GUTTER — drawn in image-px and offset by the gutter
+                   so ticks still line up with the image (which is inset by the gutter), scaling +
+                   scrolling with it. They no longer overlap the image: a gap + border separate them.
+                   Translucent + pointer-events:none. *@
+                @if (_showRulers && _imgW > 0)
+                {
+                    @((MarkupString)RulerTopHtml())
+                    @((MarkupString)RulerLeftHtml())
+                }
+
+                @* Cell grid + all annotations live in a gutter-offset, bordered box so the rulers
+                   stay outside it. Shapes/capture keep the grid's top-left as their (0,0) origin.
+                   Every cell is the same size (equal columns/rows); a cell's image is scaled and
+                   centre-cropped (object-fit: cover) to fill the cell's full dimensions. *@
+                <div class="fx-drawing-imagebox" style="@(ImageBoxStyle)width:@Px(_imgW);height:@Px(_imgH);">
+                    @if (_cellW > 0)
+                    {
+                        for (int r = 0; r < _gridRows; r++)
+                        {
+                            for (int c = 0; c < _gridCols; c++)
+                            {
+                                var cell = CellAt(r, c);
+                                var cellStyle = $"left:{Px(c * _cellW)}; top:{Px(r * _cellH)}; width:{Px(_cellW)}; height:{Px(_cellH)};";
+                                var band = BandFor(cell);   // caption strip height (0 when the cell has no title)
+                                <div class="fx-cell" style="@cellStyle">
+                                    @if (band > 0 && cell is not null)
+                                    {
+                                        @* Caption band ABOVE the image — same white box / dark centred text as the
+                                           main title bar, so it never bleeds onto the picture. Editable inline. *@
+                                        <div class="fx-cell-title" style="height:@Px(band);">
+                                            <input class="fx-cell-title-input" value="@cell.Title"
+                                                   @oninput="@(e => OnCellTitleInput(cell, e))"
+                                                   @onmousedown:stopPropagation="true"
+                                                   placeholder="Title…" />
+                                        </div>
+                                    }
+                                    @if (cell is not null)
+                                    {
+                                        <img class="fx-cell-img" src="@cell.Url" alt=""
+                                             style="top:@Px(band); height:@Px(_cellH - band);" />
+                                    }
+                                    else
+                                    {
+                                        <div class="fx-cell-empty">Right-click → Paste image here / Attach file here</div>
+                                    }
+                                </div>
+                            }
+                        }
+                    }
+
+                @foreach (var s in EnumerateShapes())
+                {
+                    var sel = ReferenceEquals(s, _selected);
+                    switch (s.BaseKind)
+                    {
+                        case DrawingTool.Rectangle: <RectangleControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Ellipse: <EllipseControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Circle: <CircleControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Line: <LineControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Arrow: <ArrowControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Polygon: <PolygonControl Shape="@s" Selected="@sel" /> break;
+                        case DrawingTool.Pen: <PolygonControl Shape="@s" Selected="@sel" /> break;   // freehand = open polyline
+                        case DrawingTool.Text: <TextControl Shape="@s" Selected="@sel" FontSize="@FontPx" /> break;
+                        case DrawingTool.Image:
+                            <img class="fx-draw-imgshape@(sel ? " selected" : "")" src="@s.ImageHref" alt="overlay"
+                                 style="position:absolute; left:@Px(s.Left); top:@Px(s.Top); width:@Px(s.AbsWidth); height:@Px(s.AbsHeight); pointer-events:none;" />
+                            break;
+                    }
+                    @* Centralised text bubble — every "+Text" geometry gets it uniformly. *@
+                    if (s.HasBubble && !ReferenceEquals(s, _editing))
+                    {
+                        <div class="fx-draw-bubble" style="@BubbleStyle(s)">
+                            @(string.IsNullOrWhiteSpace(s.Text) ? "✎ click to edit" : s.Text)
+                        </div>
+                    }
+                }
+
+                @* Corner resize handles on the selected box shape / image overlay (Pointer tool).
+                   Visual only (pointer-events:none) — the grab itself is hit-tested in C# by
+                   TryStartResize, through the same capture layer as every other interaction. *@
+                @if (_selected is not null && _tool == DrawingTool.Select && CanResize(_selected))
+                {
+                    foreach (var hp in HandlePoints(_selected))
+                    {
+                        <div class="fx-draw-handle" style="left:@Px(hp.X); top:@Px(hp.Y);"></div>
+                    }
+                }
+
+                @if (_editing is not null)
+                {
+                    @* stopPropagation keeps Backspace/Delete (and other keys) inside the editor so they
+                       edit the text instead of bubbling up to OnKeyDown and deleting the whole shape. *@
+                    <textarea class="fx-draw-editor"
+                              style="position:absolute; left:@Px(EditLeft); top:@Px(EditTop); width:@Px(EditWidth); font-size:@Px(BubbleFontPx); border-color:@_editing.Color;"
+                              @bind="_editing.Text" @bind:event="oninput" @onblur="StopEditing"
+                              @onkeydown:stopPropagation="true"
+                              @ref="_editorRef"></textarea>
+                }
+
+                @* Crop marquee — the kept region; the box-shadow dims everything outside it. *@
+                @if (_cropping && (System.Math.Abs(_cropW) > 1 || System.Math.Abs(_cropH) > 1))
+                {
+                    <div class="fx-crop-rect" style="left:@Px(CropLeft); top:@Px(CropTop); width:@Px(CropAbsW); height:@Px(CropAbsH);">
+                        <span class="fx-crop-dims">@($"{CropAbsW:0}×{CropAbsH:0}")</span>
+                    </div>
+                }
+
+                    <div class="fx-drawing-capture" style="cursor:@(_tool == DrawingTool.Select ? "default" : "crosshair");"
+                         @ref="_captureRef"
+                         @onpointerdown="OnPointerDown" @onpointermove="OnPointerMove" @onpointerup="OnPointerUp"
+                         @ondblclick="OnDoubleClick"
+                         @oncontextmenu="OnContextMenu" @oncontextmenu:preventDefault="true"></div>
+                </div>
+            </div>
+
+            @* Cell context menu — rendered OUTSIDE the zoom transform (its left/top are the
+               right-clicked point mapped to scaled coordinates) so the menu never shrinks with
+               the surface. Paste/attach target the cell under the pointer; row/column ops too. *@
+            @if (_ctxOpen)
+            {
+                <div class="fx-tb-menu fx-ctx-menu" style="left:@Px((_ctxX + Gutter) * _zoom); top:@Px((_ctxY + Gutter) * _zoom);">
+                    <button type="button" class="fx-tb-menu-item" @onclick="PasteIntoCellAsync"><span class="fx-tb-menu-ico fx-tb-glyph">⎘</span><span>Paste image here</span></button>
+                    <label class="fx-tb-menu-item fx-tb-fileitem" title="Choose an image file for this cell">
+                        <span class="fx-tb-menu-ico">@((MarkupString)IcImage)</span><span>Attach file here…</span>
+                        <InputFile OnChange="OnCellFileSelected" accept="image/*" class="fx-tb-fileinput" />
+                    </label>
+                    <div class="fx-ctx-sep"></div>
+                    <button type="button" class="fx-tb-menu-item" @onclick="AddRow"><span class="fx-tb-menu-ico fx-tb-glyph">⊞</span><span>Add row</span></button>
+                    <button type="button" class="fx-tb-menu-item" @onclick="AddColumn"><span class="fx-tb-menu-ico fx-tb-glyph">⊞</span><span>Add column</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_gridRows <= 1)" @onclick="@(() => RemoveRow(_ctxRow))"><span class="fx-tb-menu-ico fx-tb-glyph">⊟</span><span>Remove this row</span></button>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(_gridCols <= 1)" @onclick="@(() => RemoveColumn(_ctxCol))"><span class="fx-tb-menu-ico fx-tb-glyph">⊟</span><span>Remove this column</span></button>
+                    <div class="fx-ctx-sep"></div>
+                    <button type="button" class="fx-tb-menu-item" disabled="@(CellAt(_ctxRow, _ctxCol) is null)" @onclick="ClearCellImage"><span class="fx-tb-menu-ico">@((MarkupString)IcTrash)</span><span>Clear cell image</span></button>
+                </div>
+                <div class="fx-tb-backdrop" @onclick="@(() => _ctxOpen = false)" @oncontextmenu="@(() => _ctxOpen = false)" @oncontextmenu:preventDefault="true"></div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Background image (data URL or web url) the annotations are drawn over.</summary>
+    [Parameter] public string? ImageDataUrl { get; set; }
+
+    /// <summary>Fixed height of the scroll viewport (e.g. "calc(100vh - 140px)"). A stable height
+    /// is what the fit-to-viewer zoom measures against on every grid change.</summary>
+    [Parameter] public string? Height { get; set; }
+
+    /// <summary>Initial zoom (1.0 = 100%) used only until the image loads — then the control
+    /// auto-fits the image to the viewport (see <c>ApplyFitAsync</c>). Defaults to 0.8.</summary>
+    [Parameter] public double InitialZoom { get; set; } = 0.8;
+
+    /// <summary>Tool selected when the surface first loads. Defaults to <see cref="DrawingTool.Crop"/>
+    /// (trim first); a host can default to a shape (e.g. RectangleText) for annotate-first workflows.</summary>
+    [Parameter] public DrawingTool InitialTool { get; set; } = DrawingTool.Crop;
+
+    /// <summary>Host-supplied toolbar content, rendered as the FIRST group of the toolbar (e.g. an
+    /// app's modal-launch buttons). Lets the host put its actions on the same compact toolbar.</summary>
+    [Parameter] public RenderFragment? ToolbarExtra { get; set; }
+
+    /// <summary>Optional default title per grid COLUMN (index 0 = first column), stamped onto a cell
+    /// as an ordinary editable Text shape when an image first lands in it — so a capture in column 1
+    /// and a pasted image in column 2 are labelled automatically (e.g. ["HF .Net", "Legacy VB6"] for
+    /// a new-vs-legacy comparison). Being a shape, the title is movable/editable/deletable and is
+    /// flattened INTO the exported PNG. Hosts that reload existing (already-titled) images — like a
+    /// re-annotate modal — should leave this null so nothing is double-stamped.</summary>
+    [Parameter] public IReadOnlyList<string>? DefaultColumnTitles { get; set; }
+
+    /// <summary>When true, an editable title text box is shown between the toolbar and the image.
+    /// On export the title is stamped as a row above the image, making the final PNG one row taller.
+    /// The text comes from the inherited <see cref="FlexControlBase.Title"/> parameter.</summary>
+    [Parameter] public bool ShowTitle { get; set; }
+
+    /// <summary>Callback fired when the user edits the title text (two-way bind for Title).</summary>
+    [Parameter] public EventCallback<string?> TitleChanged { get; set; }
+
+    protected override string? BaseCssClass => "fx-drawing-root";
+
+    private readonly List<DrawingShape> _shapes = new();
+    private DrawingTool _tool = DrawingTool.Crop;   // Crop is the default tool (trim to area of interest first)
+    private string _color = "#ff0000";
+    private double _size = 3;
+    private double _zoom = 0.8;
+    private bool _styleOpen;   // colour + width dropdown
+    private bool _editOpen;    // undo/delete/clear dropdown
+
+    private DrawingShape? _draft, _selected, _editing;
+    private bool _moving;
+    private double _lastX, _lastY;
+    private double _anchorX, _anchorY;   // first-click point of the current draft (top-centre for ellipse/circle)
+
+    // Corner-handle resize (Select tool): drag a corner of the selected box shape; the opposite
+    // corner stays fixed. Image overlays stay aspect-locked (same as their placement drag).
+    private bool _resizing;
+    private double _fixedX, _fixedY;     // the corner that does NOT move during the resize
+    private double _resizeAspect;        // height/width lock for Image overlays; 0 = free resize
+
+    // Pen continue-window: after a stroke ends the draft is kept "pending" for ~2s so the user can
+    // resume the same freehand line from where they lifted; when the window lapses the stroke commits
+    // and a text box is opened at its end point by default.
+    private bool _penActive;             // a pointer is currently down for the pen stroke
+    private CancellationTokenSource? _penLagCts;
+    private const int PenContinueWindowMs = 2000;
+
+    // Crop marquee (surface px). Drag with the Crop tool → DoCrop replaces that CELL's image.
+    private bool _cropping;
+    private bool _cropped;   // any surface edit (crop / cell / grid change) — counts even with no shapes
+    private bool _contentEdited;   // a cell image was pasted/attached or a cell title typed this session
+                                   // (IsModified must catch these even when no vector shape was added)
+    private double _cropX, _cropY, _cropW, _cropH;
+    private double CropLeft => _cropW >= 0 ? _cropX : _cropX + _cropW;
+    private double CropTop => _cropH >= 0 ? _cropY : _cropY + _cropH;
+    private double CropAbsW => System.Math.Abs(_cropW);
+    private double CropAbsH => System.Math.Abs(_cropH);
+
+    // ── the background CELL GRID ──
+    // Row-major list of cells (index = row * _gridCols + col); a null cell is empty. Every cell is
+    // the SAME size (_cellW × _cellH, taken from the first image's natural size), so columns and
+    // rows are always equal-sized; a cell's image is scaled + centre-cropped to fill its cell.
+    // The grid is a WORKING COPY: internal edits never touch the ImageDataUrl parameter, so a
+    // parent re-render won't clobber them (same contract the old single-background copy had).
+    // A background cell image. Title is the per-cell caption shown in a band ABOVE the image
+    // (not painted over it) — seeded from DefaultColumnTitles when the image lands, then editable.
+    // Living on the cell means the caption travels with the image through add/remove row/col and
+    // survives the save/re-edit round-trip (it is serialized in the editor state).
+    private sealed class CellImg { public string Url = ""; public double NatW, NatH; public string Title = ""; }
+    private int _gridRows = 1, _gridCols = 1;
+    private List<CellImg?> _cells = new() { null };
+    private double _cellW, _cellH;
+    private string? _paramUrlSeen;
+
+    // Surface size = the whole grid (what rulers/zoom/fit/export all measure).
+    private double _imgW => _cellW > 0 ? _gridCols * _cellW : 0;
+    private double _imgH => _cellH > 0 ? _gridRows * _cellH : 0;
+
+    private CellImg? CellAt(int r, int c) =>
+        r >= 0 && r < _gridRows && c >= 0 && c < _gridCols ? _cells[r * _gridCols + c] : null;
+    private (int Row, int Col) CellFromPoint(double x, double y) => (
+        System.Math.Clamp(_cellH > 0 ? (int)(y / _cellH) : 0, 0, _gridRows - 1),
+        System.Math.Clamp(_cellW > 0 ? (int)(x / _cellW) : 0, 0, _gridCols - 1));
+
+    // Cell context menu (right-click on the surface).
+    private bool _ctxOpen;
+    private double _ctxX, _ctxY;    // right-click point (surface px)
+    private int _ctxRow, _ctxCol;   // the cell under that point
+
+    private ElementReference _editorRef, _scrollRef, _captureRef;
+    private bool _focusEditor;
+    private bool _fitPending;   // request an auto-fit after the next image-size probe
+
+    private IJSObjectReference? _module;
+
+    private static readonly string[] _palette =
+        { "#ff0000", "#0055ff", "#00aa44", "#ffcc00", "#ff6600", "#000000", "#ffffff" };
+
+    // Compact inline-SVG tool icons (stroke = currentColor via CSS; the pointer fills).
+    private const string IcSelect = "<svg viewBox='0 0 16 16'><path d='M3 2 L3 13 L6 10 L8.2 14 L10 13 L7.8 9 L12 9 Z' fill='currentColor' stroke='none'/></svg>";
+    private const string IcRect = "<svg viewBox='0 0 16 16'><rect x='2.5' y='4' width='11' height='8'/></svg>";
+    private const string IcEllipse = "<svg viewBox='0 0 16 16'><ellipse cx='8' cy='8' rx='6' ry='4'/></svg>";
+    private const string IcCircle = "<svg viewBox='0 0 16 16'><circle cx='8' cy='8' r='5.5'/></svg>";
+    private const string IcLine = "<svg viewBox='0 0 16 16'><line x1='3' y1='13' x2='13' y2='3'/></svg>";
+    private const string IcArrow = "<svg viewBox='0 0 16 16'><line x1='3' y1='13' x2='12' y2='4'/><path d='M8.5 4 L12 4 L12 7.5'/></svg>";
+    private const string IcPoly = "<svg viewBox='0 0 16 16'><polygon points='8,2 14,6.5 11.5,14 4.5,14 2,6.5'/></svg>";
+    private const string IcPen = "<svg viewBox='0 0 16 16'><path d='M2.5 13.5 L3.4 10.2 L10.8 2.8 L13.2 5.2 L5.8 12.6 Z'/><path d='M9.6 4 L12 6.4'/></svg>";
+    private const string IcText = "<svg viewBox='0 0 16 16'><path d='M3 4 L13 4 M8 4 L8 13'/></svg>";
+    private const string IcCrop = "<svg viewBox='0 0 16 16'><path d='M4.5 1 V11.5 H15 M1 4.5 H11.5 V15'/></svg>";
+    private const string IcTrash = "<svg viewBox='0 0 16 16'><path d='M3 4 H13 M6 4 V2.5 H10 V4 M4.5 4 L5 14 H11 L11.5 4'/></svg>";
+    private const string IcImage = "<svg viewBox='0 0 16 16'><rect x='2' y='3' width='12' height='10' rx='1'/><circle cx='5.6' cy='6.2' r='1.2' fill='currentColor' stroke='none'/><path d='M2.5 12 L6 8.2 L8.5 10.6 L10.5 8.6 L13.5 12'/></svg>";
+
+    private record ToolButton(DrawingTool Tool, string Icon, bool IsText, string Name, string Title);
+    private static readonly ToolButton[] _toolButtons =
+    {
+        new(DrawingTool.Select,        IcSelect,  false, "Pointer",   "Select / move (double-click a bubble to edit)"),
+        new(DrawingTool.Rectangle,     IcRect,    false, "Rectangle", "Rectangle"),
+        new(DrawingTool.RectangleText, IcRect,    true,  "Rect Text", "Rectangle with text bubble"),
+        // Ellipse / Ellipse Text + Circle / Circle Text removed from the toolbar; the enum values +
+        // renderers (EllipseControl / CircleControl) stay so any previously-saved shapes still display.
+        new(DrawingTool.Line,          IcLine,    false, "Line",      "Line"),
+        new(DrawingTool.LineText,      IcLine,    true,  "Line Text", "Line with text bubble"),
+        new(DrawingTool.Arrow,         IcArrow,   false, "Arrow",     "Arrow"),
+        new(DrawingTool.ArrowText,     IcArrow,   true,  "Arrow Text", "Arrow with text bubble"),
+        new(DrawingTool.Polygon,       IcPoly,    false, "Polygon",   "Irregular outline (click vertices, double-click to finish)"),
+        new(DrawingTool.PolygonText,   IcPoly,    true,  "Poly Text", "Irregular outline with text bubble"),
+        new(DrawingTool.Pen,           IcPen,     false, "Pen",       "Freehand pen — hold and drag to draw"),
+        new(DrawingTool.Text,          IcText,    false, "Text",      "Text label"),
+    };
+
+    // Shapes shown in the "Shapes" split-dropdown (everything except Pointer + standalone Text).
+    private static readonly ToolButton[] _shapeButtons =
+        _toolButtons.Where(t => t.Tool != DrawingTool.Select && t.Tool != DrawingTool.Text).ToArray();
+
+    private bool _shapesMenuOpen;
+    private bool _showRulers = true;
+    private DrawingTool _activeShapeTool = DrawingTool.Rectangle;   // reflected on the Shapes button
+
+    private bool _imageMenuOpen;   // toolbar Image ▾ dropdown
+
+    private static bool IsShapeTool(DrawingTool t) => t != DrawingTool.Select && t != DrawingTool.Text;
+    private string ShapeName(DrawingTool t) => _shapeButtons.FirstOrDefault(b => b.Tool == t)?.Name ?? "Shape";
+    private string ShapeIcon(DrawingTool t) => _shapeButtons.FirstOrDefault(b => b.Tool == t)?.Icon ?? IcRect;
+    private void PickShape(DrawingTool t) { _activeShapeTool = t; _shapesMenuOpen = false; SetTool(t); }
+
+    // ── Pixel rulers (built in image-px; placed inside the scaled surface) ──
+    private string RulerTopHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg class='fx-ruler' width='{Num(_imgW)}' height='16' style='position:absolute;left:{Num(Gutter)}px;top:0;pointer-events:none;z-index:1;'>");
+        sb.Append($"<rect width='{Num(_imgW)}' height='16' fill='rgba(245,245,245,0.72)'/>");
+        for (int x = 0; x <= (int)_imgW; x += 50)
+        {
+            bool major = x % 100 == 0;
+            sb.Append($"<line x1='{x}' y1='{(major ? 5 : 9)}' x2='{x}' y2='16' stroke='#999' stroke-width='1'/>");
+            if (major && x > 0) sb.Append($"<text x='{x + 2}' y='8' font-size='8' fill='#555' font-family='sans-serif'>{x}</text>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+    private string RulerLeftHtml()
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg class='fx-ruler' width='16' height='{Num(_imgH)}' style='position:absolute;left:0;top:{Num(Gutter)}px;pointer-events:none;z-index:1;'>");
+        sb.Append($"<rect width='16' height='{Num(_imgH)}' fill='rgba(245,245,245,0.72)'/>");
+        for (int y = 0; y <= (int)_imgH; y += 50)
+        {
+            bool major = y % 100 == 0;
+            sb.Append($"<line x1='{(major ? 5 : 9)}' y1='{y}' x2='16' y2='{y}' stroke='#999' stroke-width='1'/>");
+            if (major && y > 0) sb.Append($"<text x='1' y='{y + 8}' font-size='8' fill='#555' font-family='sans-serif'>{y}</text>");
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    protected override void OnInitialized()
+    {
+        _zoom = InitialZoom;
+        _tool = InitialTool;
+        if (IsShapeTool(InitialTool)) _activeShapeTool = InitialTool;   // reflect on the Shapes button
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Reset the grid only when the PARENT supplies a genuinely new image — internal edits
+        // (crop, cell paste, add row/column) change the working grid alone, so they survive
+        // parent re-renders that re-pass the same ImageDataUrl.
+        if (_paramUrlSeen != ImageDataUrl)
+        {
+            _paramUrlSeen = ImageDataUrl;
+            ResetGrid(ImageDataUrl);
+        }
+    }
+
+    // 1 row × 1 column with the (new) capture in cell (1,1) — the default surface.
+    private void ResetGrid(string? url)
+    {
+        _gridRows = 1; _gridCols = 1;
+        var cell0 = string.IsNullOrEmpty(url) ? null : new CellImg { Url = url };
+        SeedCellTitle(cell0, 0);   // e.g. "HomeFront" on a fresh capture
+        _cells = new List<CellImg?> { cell0 };
+        _cellW = _cellH = 0;   // re-derived from the image's natural size in OnAfterRenderAsync
+        _ctxOpen = false;
+        _contentEdited = false;
+    }
+
+    // Seed the host's default column title onto the cell an image just landed in — stored on the
+    // cell (CellImg.Title), so it renders in a caption band ABOVE the image (see the render loop /
+    // BuildSvg) instead of being painted over the picture. Only seeds a blank title, so re-pasting
+    // into a cell keeps whatever the user typed rather than resetting it.
+    private void SeedCellTitle(CellImg? cell, int col)
+    {
+        if (cell is null || !string.IsNullOrWhiteSpace(cell.Title)) return;
+        var titles = DefaultColumnTitles;
+        if (titles is null || col >= titles.Count) return;
+        var title = titles[col];
+        if (!string.IsNullOrWhiteSpace(title)) cell.Title = title;
+    }
+
+    // Caption-band height, in image px (scales with the cell / font). The band is reserved INSIDE
+    // the cell above the image, so it never changes the surface geometry, ruler math, or shape
+    // coordinates — the image just occupies [band, _cellH] instead of the whole cell.
+    private double CellTitleH => _cellW > 0 ? System.Math.Clamp(FontPx + 12, 26, 48) : 0;
+    private double BandFor(CellImg? cell) =>
+        cell is not null && !string.IsNullOrWhiteSpace(cell.Title) ? CellTitleH : 0;
+
+    private void OnCellTitleInput(CellImg cell, ChangeEventArgs e)
+    {
+        cell.Title = e.Value?.ToString() ?? "";
+        _contentEdited = true;
+        StateHasChanged();
+    }
+
+    private IEnumerable<DrawingShape> EnumerateShapes()
+    {
+        foreach (var s in _shapes) yield return s;
+        if (_draft is not null) yield return _draft;
+    }
+
+    // ── ruler gutter (image-px, scales with the surface) ──
+    private const double RulerStrip = 16;   // ruler thickness
+    private const double RulerGap = 6;      // clear space between the ruler and the image border
+    // Top/left space reserved for the rulers; 0 when rulers are hidden (then layout == image size).
+    private double Gutter => _showRulers && _imgW > 0 ? RulerStrip + RulerGap : 0;
+
+    // ── zoom (CSS transform on the surface; the sizer carries the scaled box so scroll works) ──
+    private string SurfaceStyle => _imgW > 0
+        ? $"transform:scale({Num(_zoom)}); transform-origin:top left; width:{Px(_imgW + Gutter)}; height:{Px(_imgH + Gutter)};"
+        : "";
+    private string SizerStyle => _imgW > 0 ? $"width:{Px((_imgW + Gutter) * _zoom)}; height:{Px((_imgH + Gutter) * _zoom)};" : "";
+    // The image+annotations box, inset by the gutter so the rulers sit outside it. In-flow (a margin,
+    // NOT absolute) so the image still gives the surface its intrinsic size — otherwise the viewport
+    // collapses at init and fit-to-window locks to the minimum zoom.
+    private string ImageBoxStyle => Gutter > 0 ? $"margin:{Px(Gutter)} 0 0 {Px(Gutter)};" : "";
+    private void ZoomIn() => _zoom = System.Math.Min(3.0, System.Math.Round(_zoom + 0.1, 2));
+    private void ZoomOut() => _zoom = System.Math.Max(0.1, System.Math.Round(_zoom - 0.1, 2));
+
+    private async Task FitToWindow() => await ApplyFitAsync();
+
+    // Fit the (unscaled) image into the scroll viewport: zoom = min(viewport/image), capped at 100%
+    // so a small screenshot isn't blown up. Reserves room for the ruler strip + scrollbar.
+    private async Task ApplyFitAsync()
+    {
+        if (_imgW <= 0 || _imgH <= 0) { _fitPending = true; return; }
+        try
+        {
+            var cs = await (await ModuleAsync()).InvokeAsync<double[]>("clientSize", _scrollRef);
+            if (cs is { Length: 2 } && cs[0] > 4 && cs[1] > 4)
+            {
+                const double pad = 16;   // sunken border + scrollbar (the ruler strip is now in Gutter)
+                double fit = System.Math.Min((cs[0] - pad) / (_imgW + Gutter), (cs[1] - pad) / (_imgH + Gutter));
+                _zoom = System.Math.Round(System.Math.Clamp(fit, 0.1, 1.0), 3);
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+
+    // ── toolbar ──
+    private void SetTool(DrawingTool t) { CommitPolygonIfAny(); CommitPenIfPending(); _cropping = false; _resizing = false; _ctxOpen = false; _tool = t; _selected = null; StopEditing(); }
+    private void DeleteSelected() { if (_selected is null) return; _shapes.Remove(_selected); _selected = null; }
+    private void ClearAll() { _shapes.Clear(); _draft = null; _selected = null; _editing = null; }
+    private void Undo() { CommitPolygonIfAny(); if (_shapes.Count > 0) { _shapes.RemoveAt(_shapes.Count - 1); _selected = null; } }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        // While a text editor is open, Backspace/Delete belong to the textarea (handled inline
+        // via stopPropagation); never let them fall through to shape deletion here.
+        if (_editing is not null) return;
+        if (e.CtrlKey && (e.Key == "z" || e.Key == "Z")) Undo();
+        else if (e.Key == "Delete" || e.Key == "Backspace") DeleteSelected();
+    }
+
+    // ── pointer interaction (all C#; offset is image px because the capture box is the
+    //    untransformed surface — the CSS scale only affects rendering, not offsetX/offsetY) ──
+    private void OnPointerDown(PointerEventArgs e)
+    {
+        double x = e.OffsetX, y = e.OffsetY;
+        _anchorX = x; _anchorY = y;   // remember the first click (ellipse/circle anchor it as top-centre)
+        // Keep the whole drag routed to the capture layer even when the cursor leaves it —
+        // makes fast shape drags lossless.
+        _ = CapturePointerAsync(e.PointerId);
+        _ctxOpen = false;
+        if (_tool == DrawingTool.Select)
+        {
+            // A corner handle of the current selection wins over re-selection, so grabbing a
+            // corner resizes instead of starting a move.
+            if (_selected is not null && CanResize(_selected) && TryStartResize(_selected, x, y)) return;
+            var hit = HitTest(x, y);
+            _selected = hit; _moving = hit is not null; _lastX = x; _lastY = y;
+            return;
+        }
+        if (_tool == DrawingTool.Crop)
+        {
+            _cropping = true; _cropX = x; _cropY = y; _cropW = 0; _cropH = 0;
+            return;
+        }
+        if (_tool == DrawingTool.Text)
+        {
+            var o = new DrawingShape { Id = NewId(), Kind = DrawingTool.Text, X = x, Y = y, Color = _color, StrokeWidth = _size };
+            _shapes.Add(o); _selected = o; BeginEditing(o);
+            // ONE text box per Text-tool activation: drop straight back to the Pointer so the
+            // click that commits the text (outside the editor) doesn't spawn another box.
+            _tool = DrawingTool.Select;
+            return;
+        }
+        if (_tool is DrawingTool.Polygon or DrawingTool.PolygonText)
+        {
+            _draft ??= new DrawingShape { Id = NewId(), Kind = _tool, Color = _color, StrokeWidth = _size };
+            _draft.Points.Add(new[] { x, y });
+            RecomputePolygonBounds(_draft);
+            return;
+        }
+        if (_tool == DrawingTool.Pen)
+        {
+            // Freehand: start a stroke; points accumulate on pointer-move, committed after the continue-window.
+            // If a recent stroke is still in its continue-window (draft kept, lag pending), resume it instead
+            // of starting a new shape so the user can keep drawing the same line from where they lifted.
+            _penLagCts?.Cancel();
+            _penActive = true;
+            if (_draft is not { Kind: DrawingTool.Pen })
+                _draft = new DrawingShape { Id = NewId(), Kind = DrawingTool.Pen, Color = _color, StrokeWidth = _size };
+            _draft.Points.Add(new[] { x, y });
+            RecomputePolygonBounds(_draft);
+            return;
+        }
+        _draft = new DrawingShape { Id = NewId(), Kind = _tool, X = x, Y = y, Width = 0, Height = 0, Color = _color, StrokeWidth = _size };
+    }
+
+    private void OnPointerMove(PointerEventArgs e)
+    {
+        double x = e.OffsetX, y = e.OffsetY;
+        if (_resizing && _selected is not null)
+        {
+            var s = _selected;
+            s.X = _fixedX; s.Width = x - _fixedX;
+            s.Y = _fixedY; s.Height = y - _fixedY;
+            if (_resizeAspect > 0)   // image overlays keep their aspect (Height follows the drag's vertical side)
+                s.Height = System.Math.Abs(s.Width) * _resizeAspect * (y >= _fixedY ? 1 : -1);
+            return;
+        }
+        if (_cropping) { _cropW = x - _cropX; _cropH = y - _cropY; return; }
+        if (_draft is { Kind: DrawingTool.Pen })
+        {
+            if (!_penActive) return;   // pen lifted (still in its continue-window) → hovering must not draw
+            // Append the point only when it moved enough — bounds the point count + per-move round-trips.
+            var last = _draft.Points[^1];
+            if (System.Math.Abs(x - last[0]) + System.Math.Abs(y - last[1]) >= 2.5)
+            {
+                _draft.Points.Add(new[] { x, y });
+                RecomputePolygonBounds(_draft);
+            }
+            return;
+        }
+        if (_draft is not null && _draft.BaseKind != DrawingTool.Polygon)
+        {
+            if (_draft.BaseKind is DrawingTool.Ellipse or DrawingTool.Circle)
+            {
+                // Top-centre anchored: the first click is the ellipse's top point. Width grows
+                // symmetrically around the click X; height grows from the click downward — so the
+                // click always sits on the ellipse outline (not at an outside corner).
+                double dx = System.Math.Abs(x - _anchorX);
+                _draft.X = _anchorX - dx;
+                _draft.Width = 2 * dx;
+                _draft.Y = _anchorY;
+                _draft.Height = y - _anchorY;
+            }
+            else
+            {
+                _draft.Width = x - _draft.X;
+                _draft.Height = y - _draft.Y;
+            }
+            return;
+        }
+        if (_moving && _selected is not null) { Translate(_selected, x - _lastX, y - _lastY); _lastX = x; _lastY = y; }
+    }
+
+    private async Task OnPointerUp(PointerEventArgs e)
+    {
+        _moving = false;
+        if (_resizing) { _resizing = false; return; }
+        if (_cropping)
+        {
+            _cropping = false;
+            double l = CropLeft, t = CropTop, w = CropAbsW, h = CropAbsH;
+            await DoCrop(l, t, w, h);
+            return;
+        }
+        if (_draft is null || _draft.BaseKind == DrawingTool.Polygon) return;
+        if (_draft.Kind == DrawingTool.Pen)
+        {
+            _penActive = false;
+            if (_draft.Points.Count < 2) { _draft = null; return; }   // discard an accidental dot
+            // Keep the stroke as a pending draft and start the continue-window. A fresh pointer-down within
+            // the window resumes it (see OnPointerDown); otherwise it commits + opens a text box at the end.
+            StartPenContinueWindow();
+            return;
+        }
+        var d = _draft; _draft = null;
+        if (System.Math.Abs(d.Width) < 4 && System.Math.Abs(d.Height) < 4) return;   // accidental click
+        _shapes.Add(d); _selected = d;
+        if (d.HasBubble) BeginEditing(d);
+    }
+
+    // Crop the CELL the marquee starts in: the dragged region (mapped through the cell's
+    // scale-and-centre-crop display) replaces that cell's image, which then re-fills the cell.
+    // With a single 1×1 grid this trims the whole canvas to the kept region (legacy behaviour):
+    // the canvas re-derives its size from the cropped image and annotations reset.
+    private async Task DoCrop(double left, double top, double w, double h)
+    {
+        if (_cellW <= 0 || w < 5 || h < 5) return;
+        var (row, col) = CellFromPoint(left + 1, top + 1);
+        var cell = CellAt(row, col);
+        if (cell is null || cell.NatW <= 0) return;
+
+        // Marquee → cell-relative, clamped to the cell.
+        double mx = System.Math.Max(0, left - col * _cellW), my = System.Math.Max(0, top - row * _cellH);
+        double mw = System.Math.Min(w, _cellW - mx), mh = System.Math.Min(h, _cellH - my);
+        if (mw < 5 || mh < 5) return;
+
+        // The cell shows a centred window of the source scaled by `scale` (cover) — map the
+        // marquee back to source pixels for the JS sub-rect crop.
+        double scale = System.Math.Max(_cellW / cell.NatW, _cellH / cell.NatH);
+        double sx = (cell.NatW - _cellW / scale) / 2 + mx / scale;
+        double sy = (cell.NatH - _cellH / scale) / 2 + my / scale;
+        try
+        {
+            var cropped = await (await ModuleAsync()).InvokeAsync<string>("cropImage", cell.Url, sx, sy, mw / scale, mh / scale);
+            if (string.IsNullOrEmpty(cropped)) return;
+            if (_gridRows == 1 && _gridCols == 1)
+            {
+                _cells[0] = new CellImg { Url = cropped };
+                _cellW = _cellH = 0;   // canvas becomes the kept region (size re-probed)
+                _shapes.Clear(); _draft = null; _selected = null; _editing = null;
+            }
+            else
+            {
+                SetCell(row, col, new CellImg { Url = cropped });
+            }
+            _cropped = true;
+            _fitPending = true;
+            _tool = DrawingTool.Select;   // crop done → ready to annotate
+            StateHasChanged();
+        }
+        catch { }
+    }
+
+    private void OnDoubleClick(MouseEventArgs e)
+    {
+        if (_tool is DrawingTool.Polygon or DrawingTool.PolygonText) { CommitPolygonIfAny(); return; }
+        var hit = HitTest(e.OffsetX, e.OffsetY);
+        if (hit is not null && hit.HasText) { _selected = hit; BeginEditing(hit); }
+    }
+
+    private void CommitPolygonIfAny()
+    {
+        if (_draft is { } p && p.BaseKind == DrawingTool.Polygon)
+        {
+            _draft = null;
+            if (p.Points.Count >= 2) { _shapes.Add(p); _selected = p; if (p.HasBubble) BeginEditing(p); }
+        }
+    }
+
+    // After a pen stroke ends, hold it as a pending draft for the continue-window. Cancelled (and the
+    // stroke resumed) by a fresh pointer-down; otherwise FinalizePenStroke fires when the window lapses.
+    private void StartPenContinueWindow()
+    {
+        _penLagCts?.Cancel();
+        var cts = _penLagCts = new CancellationTokenSource();
+        _ = PenContinueWindowAsync(cts.Token);
+    }
+
+    private async Task PenContinueWindowAsync(CancellationToken token)
+    {
+        try { await Task.Delay(PenContinueWindowMs, token); }
+        catch (TaskCanceledException) { return; }
+        if (!token.IsCancellationRequested) await InvokeAsync(FinalizePenStroke);
+    }
+
+    // Window lapsed with no resume: commit the stroke and, by default, drop a text box at its end point.
+    private void FinalizePenStroke()
+    {
+        if (_draft is not { Kind: DrawingTool.Pen } pen) return;
+        _draft = null; _penActive = false;
+        if (pen.Points.Count < 2) { StateHasChanged(); return; }
+        _shapes.Add(pen); _selected = pen;
+        var end = pen.Points[^1];
+        var label = new DrawingShape { Id = NewId(), Kind = DrawingTool.Text, X = end[0] + 4, Y = end[1] - 8, Color = _color, StrokeWidth = _size };
+        _shapes.Add(label); _selected = label;
+        BeginEditing(label);
+        StateHasChanged();
+    }
+
+    // Commit a pending pen draft without the auto text box — used when the user switches tools mid-window.
+    private void CommitPenIfPending()
+    {
+        _penLagCts?.Cancel();
+        if (_draft is { Kind: DrawingTool.Pen } pen)
+        {
+            _draft = null; _penActive = false;
+            if (pen.Points.Count >= 2) { _shapes.Add(pen); _selected = pen; }
+        }
+    }
+
+    // ── cell grid operations (context menu + toolbar Image ▾) ──
+    private void SetCell(int r, int c, CellImg? img)
+    {
+        int i = r * _gridCols + c;
+        if (i < 0 || i >= _cells.Count) return;
+        _cells[i] = img;
+        _cropped = true;
+    }
+
+    // Rows are appended at the bottom, columns at the right — the grid stays rectangular and
+    // every cell keeps its (row, col); columns/rows remain equal-sized by construction.
+    // EVERY structural change awaits ApplyFitAsync DIRECTLY: the zoom always resets so the whole
+    // grid fits the viewer (the earlier _fitPending-after-render approach was racy — Add Column
+    // could leave the old zoom and push the grid far past the viewport). The user is then free
+    // to zoom in/out manually, which grows the surface and adds scrollbars as needed.
+    private async Task AddRow()
+    {
+        for (int c = 0; c < _gridCols; c++) _cells.Add(null);
+        _gridRows++;
+        _ctxOpen = false; _cropped = true;
+        await ApplyFitAsync();
+    }
+
+    private async Task AddColumn()
+    {
+        var next = new List<CellImg?>();
+        for (int r = 0; r < _gridRows; r++)
+        {
+            for (int c = 0; c < _gridCols; c++) next.Add(_cells[r * _gridCols + c]);
+            next.Add(null);
+        }
+        _cells = next;
+        _gridCols++;
+        _ctxOpen = false; _cropped = true;
+        await ApplyFitAsync();
+    }
+
+    private async Task RemoveRow(int row)
+    {
+        if (_gridRows <= 1) return;
+        _cells.RemoveRange(row * _gridCols, _gridCols);
+        _gridRows--;
+        _ctxOpen = false; _cropped = true;
+        await ApplyFitAsync();
+    }
+
+    private async Task RemoveColumn(int col)
+    {
+        if (_gridCols <= 1) return;
+        var next = new List<CellImg?>();
+        for (int r = 0; r < _gridRows; r++)
+            for (int c = 0; c < _gridCols; c++)
+                if (c != col) next.Add(_cells[r * _gridCols + c]);
+        _cells = next;
+        _gridCols--;
+        _ctxOpen = false; _cropped = true;
+        await ApplyFitAsync();
+    }
+
+    private async Task ClearCellImage()
+    {
+        SetCell(_ctxRow, _ctxCol, null);
+        _ctxOpen = false;
+        await ApplyFitAsync();
+    }
+
+    private void OnContextMenu(MouseEventArgs e)
+    {
+        if (_cellW <= 0) return;
+        _ctxX = e.OffsetX; _ctxY = e.OffsetY;
+        (_ctxRow, _ctxCol) = CellFromPoint(_ctxX, _ctxY);
+        _imageMenuOpen = _styleOpen = _editOpen = _shapesMenuOpen = false;
+        _ctxOpen = true;
+    }
+
+    // ── corner-handle resize ──
+    // Box shapes (and image overlays) get four corner handles while selected; Line/Arrow/Polygon/
+    // Pen/Text stay move-only (their geometry isn't a simple box).
+    private static bool CanResize(DrawingShape s) =>
+        s.BaseKind is DrawingTool.Rectangle or DrawingTool.Ellipse or DrawingTool.Circle or DrawingTool.Image;
+
+    // Grab tolerance in image px — widened as the surface zooms out so the on-screen target stays usable.
+    private double HandleTol => 8 / System.Math.Max(0.15, _zoom);
+
+    private bool TryStartResize(DrawingShape s, double x, double y)
+    {
+        double l = s.Left, t = s.Top, r = l + s.AbsWidth, b = t + s.AbsHeight;
+        // (corner, opposite corner) pairs — the opposite corner anchors the resize.
+        var corners = new (double Cx, double Cy, double Fx, double Fy)[]
+            { (l, t, r, b), (r, t, l, b), (l, b, r, t), (r, b, l, t) };
+        foreach (var c in corners)
+        {
+            if (System.Math.Abs(x - c.Cx) <= HandleTol && System.Math.Abs(y - c.Cy) <= HandleTol)
+            {
+                _resizing = true; _fixedX = c.Fx; _fixedY = c.Fy;
+                _resizeAspect = s.Kind == DrawingTool.Image && s.AbsWidth > 1 ? s.AbsHeight / s.AbsWidth : 0;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static IEnumerable<(double X, double Y)> HandlePoints(DrawingShape s)
+    {
+        double l = s.Left, t = s.Top, r = l + s.AbsWidth, b = t + s.AbsHeight;
+        yield return (l, t); yield return (r, t); yield return (l, b); yield return (r, b);
+    }
+
+    // ── geometry helpers ──
+    private DrawingShape? HitTest(double x, double y)
+    {
+        for (int i = _shapes.Count - 1; i >= 0; i--)
+        {
+            var s = _shapes[i];
+            double bx = s.Left - 6, by = (s.HasBubble ? s.Top - 28 : s.Top) - 6;
+            double bw = s.AbsWidth + 12, bh = (s.HasBubble ? s.AbsHeight + 28 : s.AbsHeight) + 12;
+            if (s.Kind == DrawingTool.Text)
+            {
+                // Hit box tracks the scaled font (see FontPx) so big-canvas labels stay selectable.
+                bx = s.X - 6; by = s.Y - 6;
+                bw = System.Math.Max(140, (string.IsNullOrEmpty(s.Text) ? 6 : s.Text.Length) * FontPx * 0.62) + 12;
+                bh = FontPx * 1.5 + 12;
+            }
+            if (x >= bx && x <= bx + bw && y >= by && y <= by + bh) return s;
+        }
+        return null;
+    }
+    private void Translate(DrawingShape s, double dx, double dy)
+    {
+        s.X += dx; s.Y += dy;
+        foreach (var p in s.Points) { p[0] += dx; p[1] += dy; }
+    }
+    private void RecomputePolygonBounds(DrawingShape s)
+    {
+        if (s.Points.Count == 0) return;
+        double minX = s.Points.Min(p => p[0]), minY = s.Points.Min(p => p[1]);
+        double maxX = s.Points.Max(p => p[0]), maxY = s.Points.Max(p => p[1]);
+        s.X = minX; s.Y = minY; s.Width = maxX - minX; s.Height = maxY - minY;
+    }
+
+    // ── text sizing ──
+    // Annotation text scales with the CELL width so it stays readable relative to the shapes:
+    // on a high-DPR ~1800-3600 px capture a fixed 13-18 px font rendered vanishingly small next
+    // to the rectangles once the surface was zoom-fitted ("text too small compared to the box").
+    private double FontPx => _cellW > 0 ? System.Math.Clamp(_cellW / 70, 16, 34) : 18;
+    private double BubbleFontPx => System.Math.Round(FontPx * 0.8);
+
+    // ── bubble + inline editor positioning ──
+    // Place a "+Text" bubble in a corner of the shape that stays inside the image: prefer above-left,
+    // but flip BELOW when there's no room above (e.g. a rectangle drawn at the top edge) and right-align
+    // when it would overflow the right edge — so the label/editor is always visible (TL/TR/BL/BR).
+    private (double left, double top) BubbleAnchor(DrawingShape s)
+    {
+        var text = string.IsNullOrWhiteSpace(s.Text) ? "✎ click to edit" : s.Text;
+        double bw = System.Math.Max(40, text.Length * BubbleFontPx * 0.62 + 16);   // estimated bubble width
+        double bh = BubbleFontPx + 13;                                             // bubble height + gap
+        double sLeft = s.BubbleAtStart ? s.X : s.Left;
+        double sRight = s.BubbleAtStart ? s.X : s.Left + s.AbsWidth;
+        double sTop = s.BubbleAtStart ? s.Y : s.Top;
+        double sBottom = s.BubbleAtStart ? s.Y : s.Top + s.AbsHeight;
+
+        // vertical: above the shape if it fits, otherwise below it
+        double top = sTop - bh >= 0 ? sTop - bh : sBottom + 4;
+        if (_imgH > 0 && top + bh > _imgH) top = System.Math.Max(0, sTop - bh);
+
+        // horizontal: left-aligned to the shape, else right-aligned; finally clamped to the image
+        double left = sLeft;
+        if (_imgW > 0 && left + bw > _imgW) left = sRight - bw;
+        left = System.Math.Max(0, left);
+        if (_imgW > 0 && left + bw > _imgW) left = System.Math.Max(0, _imgW - bw);
+
+        return (left, top);
+    }
+
+    private string BubbleStyle(DrawingShape s)
+    {
+        var (left, top) = BubbleAnchor(s);
+        return $"position:absolute; left:{Px(left)}; top:{Px(top)}; pointer-events:none; " +
+               $"font-size:{Px(BubbleFontPx)}; max-width:{Px(BubbleFontPx * 26)}; " +
+               $"border-color:{s.Color}; color:{(string.IsNullOrWhiteSpace(s.Text) ? "#999" : "#222")};";
+    }
+    private void BeginEditing(DrawingShape s) { _editing = s; _focusEditor = true; }
+    private void StopEditing() { _editing = null; }
+    private double EditLeft => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.X : BubbleAnchor(_editing).left);
+    private double EditTop => _editing is null ? 0 : (_editing.Kind == DrawingTool.Text ? _editing.Y : BubbleAnchor(_editing).top);
+    // Editor box width: ~300% of the 120px min so what you type matches the committed bubble's reach;
+    // capped to the room left between the editor and the image's right edge so it never spills off
+    // the canvas when the shape sits in a right/corner area ("as much as the space allows"). Floored
+    // at the usable minimum.
+    private double EditWidth
+    {
+        get
+        {
+            const double desired = 360;
+            if (_editing is null || _imgW <= 0) return desired;
+            double avail = _imgW - EditLeft - 4;
+            return System.Math.Max(120, System.Math.Min(desired, avail));
+        }
+    }
+
+    // ── title bar ──
+    private const double TitleRowHeight = 32;
+    private const double TitleFontPx = 18;
+    private bool HasTitle => ShowTitle && !string.IsNullOrWhiteSpace(Title);
+
+    private async Task OnTitleInput(ChangeEventArgs e)
+    {
+        Title = e.Value?.ToString();
+        await TitleChanged.InvokeAsync(Title);
+    }
+
+    // ── public API ──
+    /// <summary>True once the user has actually changed the surface since it was loaded — added any
+    /// shape/text/image overlay, or cropped. A host can skip re-saving / re-syncing when this is false
+    /// (the user opened the editor but didn't edit). Reset by <see cref="LoadShapes"/>.</summary>
+    public bool IsModified => _shapes.Count > 0 || _cropped || _contentEdited;
+
+    public async Task<string> GetImageAsync()
+    {
+        if (_imgW <= 0 || _imgH <= 0) return "";
+        double titleH = HasTitle ? TitleRowHeight : 0;
+        double totalH = _imgH + titleH;
+        var mod = await ModuleAsync();
+        return await mod.InvokeAsync<string>("rasterize", BuildSvg(_imgW, totalH, titleH), _imgW, totalH);
+    }
+    public Task<string> GetShapesJsonAsync() => Task.FromResult(JsonSerializer.Serialize(_shapes));
+
+    /// <summary>Full editor state — the vector shapes AND the background cell grid (per-cell image +
+    /// caption). This is what a host should persist for a faithful RE-EDIT: <see cref="GetShapesJsonAsync"/>
+    /// alone drops every pasted cell image (they only survive into the flattened PNG), so re-opening
+    /// would lose them. Round-trips via <see cref="LoadState"/>.</summary>
+    public Task<string> GetStateJsonAsync() => Task.FromResult(JsonSerializer.Serialize(new DrawingEditorState
+    {
+        GridRows = _gridRows,
+        GridCols = _gridCols,
+        Cells = _cells.Select(c => c is null ? null : new DrawingCellState { Url = c.Url, Title = c.Title }).ToList(),
+        Shapes = _shapes.ToList()
+    }));
+
+    /// <summary>Every non-empty annotation text (text labels + "+Text" bubbles), in draw order —
+    /// e.g. to pre-fill a description from what the user wrote on the image.</summary>
+    public IReadOnlyList<string> GetShapeTexts() =>
+        _shapes.Where(s => !string.IsNullOrWhiteSpace(s.Text)).Select(s => s.Text.Trim()).ToList();
+
+    public void LoadShapes(IEnumerable<DrawingShape>? shapes)
+    {
+        _shapes.Clear();
+        if (shapes is not null) _shapes.AddRange(shapes);
+        _selected = null; _draft = null; _editing = null;
+        _cropped = false; _contentEdited = false;   // fresh load — no edits yet
+        StateHasChanged();
+    }
+
+    /// <summary>Restore a full editor state saved by <see cref="GetStateJsonAsync"/> — the cell grid
+    /// (images + captions) and the shapes. Back-compatible: a legacy value that is a bare shapes
+    /// array (JSON starting with '[') falls through to <see cref="LoadShapes"/> so old tickets still
+    /// open. Runs after OnParametersSet's ResetGrid and fully replaces the grid, so it wins.</summary>
+    public void LoadState(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) { LoadShapes(null); return; }
+        var trimmed = json.TrimStart();
+        if (trimmed.StartsWith("["))   // legacy format: a plain List<DrawingShape>
+        {
+            try { LoadShapes(JsonSerializer.Deserialize<List<DrawingShape>>(json)); }
+            catch { LoadShapes(null); }
+            return;
+        }
+        DrawingEditorState? st = null;
+        try { st = JsonSerializer.Deserialize<DrawingEditorState>(json); } catch { }
+        if (st is null) { LoadShapes(null); return; }
+
+        _gridRows = System.Math.Max(1, st.GridRows);
+        _gridCols = System.Math.Max(1, st.GridCols);
+        var cells = new List<CellImg?>();
+        foreach (var c in st.Cells ?? new())
+            cells.Add(c is null || string.IsNullOrEmpty(c.Url) ? null : new CellImg { Url = c.Url, Title = c.Title ?? "" });
+        int need = _gridRows * _gridCols;
+        while (cells.Count < need) cells.Add(null);
+        if (cells.Count > need) cells.RemoveRange(need, cells.Count - need);
+        _cells = cells;
+        _cellW = _cellH = 0;   // natural cell size re-derived from the images in OnAfterRenderAsync
+
+        _shapes.Clear();
+        if (st.Shapes is not null) _shapes.AddRange(st.Shapes);
+        _selected = null; _draft = null; _editing = null;
+        _cropped = false; _contentEdited = false;
+        StateHasChanged();
+    }
+
+    /// <summary>Serialized editor state (grid + shapes). Public so the host can persist it.</summary>
+    public sealed class DrawingEditorState
+    {
+        public int GridRows { get; set; } = 1;
+        public int GridCols { get; set; } = 1;
+        public List<DrawingCellState?> Cells { get; set; } = new();
+        public List<DrawingShape> Shapes { get; set; } = new();
+    }
+
+    /// <summary>One background cell in the serialized state: its image data URL and caption.</summary>
+    public sealed class DrawingCellState
+    {
+        public string Url { get; set; } = "";
+        public string Title { get; set; } = "";
+    }
+
+    // ── image insertion (toolbar Image ▾ = first empty cell; context menu = the clicked cell) ──
+    // Put the image in a grid cell — it is scaled + centre-cropped to the cell's full dimensions
+    // by the cell renderer, so every image displays at the same (cell) size regardless of its
+    // native resolution. Natural size is probed lazily in OnAfterRenderAsync.
+    private async Task InsertImageIntoCell(string? dataUrl, int row, int col)
+    {
+        if (string.IsNullOrEmpty(dataUrl)) return;
+        var img = new CellImg { Url = dataUrl };
+        SeedCellTitle(img, col);   // e.g. "Legacy VB6" on a clipboard paste into column 2
+        SetCell(row, col, img);
+        _contentEdited = true;
+        _ctxOpen = false;
+        _imageMenuOpen = false;
+        StateHasChanged();
+        await ApplyFitAsync();   // content change → reset zoom so the whole grid fits the viewer
+    }
+
+    // Toolbar entry point (also the public host API): first empty cell, else a new column.
+    public async Task BeginImagePlacement(string? dataUrl)
+    {
+        if (string.IsNullOrEmpty(dataUrl)) return;
+        var target = FirstEmptyCell();
+        if (target is null) { await AddColumn(); target = (0, _gridCols - 1); }
+        await InsertImageIntoCell(dataUrl, target.Value.Row, target.Value.Col);
+    }
+
+    private (int Row, int Col)? FirstEmptyCell()
+    {
+        for (int r = 0; r < _gridRows; r++)
+            for (int c = 0; c < _gridCols; c++)
+                if (CellAt(r, c) is null) return (r, c);
+        return null;
+    }
+
+    private async Task OnImageFileSelected(InputFileChangeEventArgs e)
+    {
+        _imageMenuOpen = false;
+        var url = await ReadFileAsDataUrlAsync(e);
+        await BeginImagePlacement(url);
+    }
+
+    private async Task PasteImageAsync()
+    {
+        _imageMenuOpen = false;
+        try
+        {
+            var url = await (await ModuleAsync()).InvokeAsync<string>("readClipboardImage");
+            await BeginImagePlacement(url);   // no-op on '' (nothing/denied)
+        }
+        catch { }
+    }
+
+    // Context-menu variants — target the right-clicked cell.
+    private async Task PasteIntoCellAsync()
+    {
+        try
+        {
+            var url = await (await ModuleAsync()).InvokeAsync<string>("readClipboardImage");
+            await InsertImageIntoCell(url, _ctxRow, _ctxCol);
+        }
+        catch { }
+        _ctxOpen = false;
+    }
+
+    private async Task OnCellFileSelected(InputFileChangeEventArgs e)
+    {
+        var url = await ReadFileAsDataUrlAsync(e);
+        await InsertImageIntoCell(url, _ctxRow, _ctxCol);
+        _ctxOpen = false;
+    }
+
+    private static async Task<string?> ReadFileAsDataUrlAsync(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file is null) return null;
+        try
+        {
+            await using var stream = file.OpenReadStream(25 * 1024 * 1024);   // up to ~25 MB
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+            var ct = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
+            return $"data:{ct};base64,{System.Convert.ToBase64String(ms.ToArray())}";
+        }
+        catch { return null; }
+    }
+
+    // ── SVG composition for export (C#; mirrors the on-screen cells + shapes incl. bubbles) ──
+    // titleH > 0 shifts the image content down and stamps the Title text in the top row.
+    private string BuildSvg(double w, double h, double titleH = 0)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='{N(w)}' height='{N(h)}' viewBox='0 0 {N(w)} {N(h)}'>");
+        sb.Append($"<rect x='0' y='0' width='{N(w)}' height='{N(h)}' fill='#ffffff'/>");
+        // Title row — white background, centred black text, thin separator line.
+        if (titleH > 0 && !string.IsNullOrWhiteSpace(Title))
+        {
+            sb.Append($"<text x='{N(w / 2)}' y='{N(titleH * 0.7)}' fill='#000000' font-family='Segoe UI, Tahoma, sans-serif' font-size='{N(TitleFontPx)}' font-weight='600' text-anchor='middle'>{Xml(Title)}</text>");
+            sb.Append($"<line x1='0' y1='{N(titleH)}' x2='{N(w)}' y2='{N(titleH)}' stroke='#999999' stroke-width='1'/>");
+        }
+        // Cell images — preserveAspectRatio 'slice' is SVG's object-fit:cover (scale + centre-crop
+        // clipped to the cell box), matching the on-screen renderer exactly.
+        // When a title row is present, everything shifts down by titleH.
+        for (int r = 0; r < _gridRows; r++)
+            for (int c2 = 0; c2 < _gridCols; c2++)
+            {
+                var cell = CellAt(r, c2);
+                if (cell is null) continue;
+                double cellTop = r * _cellH + titleH;
+                double band = BandFor(cell);
+                // Caption band ABOVE the image: white box + centred dark text + thin separator,
+                // matching the main title bar; the image is baked below it, never under the caption.
+                if (band > 0)
+                {
+                    sb.Append($"<rect x='{N(c2 * _cellW)}' y='{N(cellTop)}' width='{N(_cellW)}' height='{N(band)}' fill='#ffffff'/>");
+                    sb.Append($"<text x='{N(c2 * _cellW + _cellW / 2)}' y='{N(cellTop + band * 0.68)}' fill='#000000' font-family='Segoe UI, Tahoma, sans-serif' font-size='{N(TitleFontPx)}' font-weight='600' text-anchor='middle'>{Xml(cell.Title)}</text>");
+                    sb.Append($"<line x1='{N(c2 * _cellW)}' y1='{N(cellTop + band)}' x2='{N(c2 * _cellW + _cellW)}' y2='{N(cellTop + band)}' stroke='#999999' stroke-width='1'/>");
+                }
+                sb.Append($"<image x='{N(c2 * _cellW)}' y='{N(cellTop + band)}' width='{N(_cellW)}' height='{N(_cellH - band)}' preserveAspectRatio='xMidYMid slice' xlink:href=\"{cell.Url}\" href=\"{cell.Url}\" />");
+            }
+        // Cell separators when the grid has more than one cell — same clear border the screen shows.
+        if (_gridRows > 1 || _gridCols > 1)
+            for (int r = 0; r < _gridRows; r++)
+                for (int c2 = 0; c2 < _gridCols; c2++)
+                    sb.Append($"<rect x='{N(c2 * _cellW)}' y='{N(r * _cellH + titleH)}' width='{N(_cellW)}' height='{N(_cellH)}' fill='none' stroke='#666666' stroke-width='3'/>");
+        int i = 0;
+        foreach (var s in _shapes)
+        {
+            var c = s.Color; var sw = N(s.StrokeWidth); var mid = $"m{i++}";
+            switch (s.BaseKind)
+            {
+                case DrawingTool.Rectangle:
+                    sb.Append($"<rect x='{N(s.Left)}' y='{N(s.Top + titleH)}' width='{N(s.AbsWidth)}' height='{N(s.AbsHeight)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Ellipse:
+                    sb.Append($"<ellipse cx='{N(s.Cx)}' cy='{N(s.Cy + titleH)}' rx='{N(s.AbsWidth / 2)}' ry='{N(s.AbsHeight / 2)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Circle:
+                    sb.Append($"<circle cx='{N(s.Cx)}' cy='{N(s.Cy + titleH)}' r='{N(s.Radius)}' fill='none' stroke='{c}' stroke-width='{sw}'/>");
+                    break;
+                case DrawingTool.Line:
+                    sb.Append($"<line x1='{N(s.X)}' y1='{N(s.Y + titleH)}' x2='{N(s.X + s.Width)}' y2='{N(s.Y + s.Height + titleH)}' stroke='{c}' stroke-width='{sw}' stroke-linecap='round'/>");
+                    break;
+                case DrawingTool.Arrow:
+                    sb.Append($"<defs><marker id='{mid}' markerWidth='12' markerHeight='12' refX='9' refY='4' orient='auto' markerUnits='userSpaceOnUse'><path d='M0,0 L10,4 L0,8 Z' fill='{c}'/></marker></defs>");
+                    sb.Append($"<line x1='{N(s.X)}' y1='{N(s.Y + titleH)}' x2='{N(s.X + s.Width)}' y2='{N(s.Y + s.Height + titleH)}' stroke='{c}' stroke-width='{sw}' stroke-linecap='round' marker-end='url(#{mid})'/>");
+                    break;
+                case DrawingTool.Polygon:
+                case DrawingTool.Pen:   // freehand stroke exports as the same open round-joined polyline
+                    var pts = string.Join(" ", s.Points.Select(p => $"{N(p[0])},{N(p[1] + titleH)}"));
+                    sb.Append($"<polyline points='{pts}' fill='none' stroke='{c}' stroke-width='{sw}' stroke-linecap='round' stroke-linejoin='round'/>");
+                    break;
+                case DrawingTool.Text:
+                    sb.Append($"<text x='{N(s.X)}' y='{N(s.Y + FontPx - 2 + titleH)}' fill='{c}' font-family='Segoe UI, Tahoma, sans-serif' font-size='{N(FontPx)}' font-weight='600'>{Xml(s.Text)}</text>");
+                    break;
+                case DrawingTool.Image:
+                    if (!string.IsNullOrEmpty(s.ImageHref))
+                        sb.Append($"<image x='{N(s.Left)}' y='{N(s.Top + titleH)}' width='{N(s.AbsWidth)}' height='{N(s.AbsHeight)}' preserveAspectRatio='none' xlink:href=\"{s.ImageHref}\" href=\"{s.ImageHref}\" />");
+                    break;
+            }
+            if (s.HasBubble)
+            {
+                var (bx, by) = BubbleAnchor(s);   // keep the label inside the image (TL/TR/BL/BR), not always top-left
+                var t = string.IsNullOrWhiteSpace(s.Text) ? "" : s.Text;
+                var bw = System.Math.Max(40, t.Length * BubbleFontPx * 0.62 + 16);
+                var bhh = BubbleFontPx + 10;
+                sb.Append($"<rect x='{N(bx)}' y='{N(by + titleH)}' width='{N(bw)}' height='{N(bhh)}' rx='5' fill='#ffffe0' stroke='{c}' stroke-width='1.5'/>");
+                sb.Append($"<text x='{N(bx + 8)}' y='{N(by + BubbleFontPx + 2 + titleH)}' fill='#222' font-family='Segoe UI, Tahoma, sans-serif' font-size='{N(BubbleFontPx)}'>{Xml(t)}</text>");
+            }
+        }
+        sb.Append("</svg>");
+        return sb.ToString();
+    }
+
+    private static string N(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+    private static string Xml(string? s) => System.Security.SecurityElement.Escape(s ?? "") ?? "";
+    private static string Px(double v) => v.ToString(CultureInfo.InvariantCulture) + "px";
+    private static string Num(double v) => v.ToString(CultureInfo.InvariantCulture);
+    private static string NewId() => System.Guid.NewGuid().ToString("N").Substring(0, 8);
+
+    // setPointerCapture on the capture layer — fire-and-forget from OnPointerDown so drags that
+    // leave the layer (canvas-corner grow, fast moves) keep streaming pointermove/up to it.
+    private async Task CapturePointerAsync(long pointerId)
+    {
+        try { await (await ModuleAsync()).InvokeVoidAsync("capturePointer", _captureRef, pointerId); } catch { }
+    }
+
+    private async Task<IJSObjectReference> ModuleAsync() =>
+        _module ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            "import", $"./_content/{typeof(DrawingControl).Assembly.GetName().Name}/drawing-control.js");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Probe the natural pixel size of any not-yet-measured cell image (needed for the cover
+        // crop math), and derive the uniform cell size from the FIRST measured image — that sets
+        // the whole surface's geometry (every other image is cropped/scaled into that cell size).
+        bool probed = false;
+        foreach (var cell in _cells)
+        {
+            if (cell is null || cell.NatW > 0 || string.IsNullOrEmpty(cell.Url)) continue;
+            try
+            {
+                var size = await (await ModuleAsync()).InvokeAsync<double[]>("imageSize", cell.Url);
+                if (size is { Length: 2 } && size[0] > 0) { cell.NatW = size[0]; cell.NatH = size[1]; probed = true; }
+            }
+            catch { }
+        }
+        if (probed && _cellW <= 0)
+        {
+            var first = _cells.FirstOrDefault(c => c is { NatW: > 0 });
+            if (first is not null)
+            {
+                _cellW = first.NatW; _cellH = first.NatH;
+                // Cap the cell (and therefore the canvas) width: high-DPR captures and legacy
+                // already-saved 2x PNGs arrive at device resolution (e.g. 3594×1976), which made
+                // the surface enormous — huge scrollbars, ~40% fit-zoom, unreadable text. The
+                // image is cover-scaled into the capped cell; with an unchanged aspect ratio the
+                // WHOLE image stays visible, just displayed at a sane size.
+                const double maxCellW = 1920;
+                if (_cellW > maxCellW)
+                {
+                    _cellH = System.Math.Round(_cellH * (maxCellW / _cellW));
+                    _cellW = maxCellW;
+                }
+                _fitPending = true;
+            }
+        }
+        if (probed) StateHasChanged();
+        if (_fitPending && _imgW > 0)
+        {
+            _fitPending = false;
+            await ApplyFitAsync();
+        }
+        // Focus the scroll surface on first render so keyboard shortcuts (Ctrl+Z = Undo, Delete) work
+        // immediately without the user having to click the canvas first. Safe: no text editor is open yet.
+        if (firstRender && _editing is null)
+        {
+            try { await _scrollRef.FocusAsync(); } catch { }
+        }
+        if (_focusEditor && _editing is not null)
+        {
+            _focusEditor = false;
+            try { await _editorRef.FocusAsync(); } catch { }
+            // Enter = commit+close, Shift+Enter = newline (handled in JS — see attachEditorEnter).
+            try { await (await ModuleAsync()).InvokeVoidAsync("attachEditorEnter", _editorRef); } catch { }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _penLagCts?.Cancel();
+        if (_module is not null) { try { await _module.DisposeAsync(); } catch { } }
+    }
+}

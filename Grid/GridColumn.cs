@@ -11,7 +11,7 @@ public class GridColumn : ComponentBase
     [CascadingParameter] internal GridColumnsBase? Parent { get; set; }
 
     [Parameter] public string Field { get; set; } = "";
-    [Parameter] public string HeaderText { get; set; } = "";
+    [Parameter] public string? HeaderText { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? MinWidth { get; set; }
     [Parameter] public string? MaxWidth { get; set; }
@@ -26,6 +26,12 @@ public class GridColumn : ComponentBase
     /// </summary>
     [Parameter] public string? Format { get; set; }
     /// <summary>
+    /// Optional data field used as the display/search/filter text when the
+    /// stored <see cref="Field"/> value differs from the visible cell text.
+    /// The raw <see cref="Field"/> value remains the checked-filter key.
+    /// </summary>
+    [Parameter] public string? DisplayField { get; set; }
+    /// <summary>
     /// Optional per-row formula for computed cells. Supports arithmetic with
     /// column references, for example <c>[Qty] * [UnitPrice]</c> or
     /// <c>=Qty * UnitPrice</c>.
@@ -36,6 +42,7 @@ public class GridColumn : ComponentBase
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
     [Parameter] public bool AllowEditing { get; set; } = true;
+    [Parameter] public bool AllowHiding { get; set; } = true;
     /// <summary>
     /// Allows this column to participate in single-cell column drag selection
     /// even when <see cref="AllowEditing"/> is false. Use for lookup/picker
@@ -48,6 +55,7 @@ public class GridColumn : ComponentBase
     [Parameter] public ClipMode ClipMode { get; set; } = ClipMode.Clip;
     [Parameter] public string? ValidationRules { get; set; }
     [Parameter] public string? DefaultValue { get; set; }
+    [Parameter] public int? MaxLength { get; set; }
 
     /// <summary>
     /// When true, entering this column's batch-edit input pre-selects the
@@ -77,6 +85,11 @@ public class GridColumn : ComponentBase
     /// active edit cell rather than painting one on every row. Default false.
     /// </summary>
     [Parameter] public bool ShowEditButton { get; set; }
+    /// <summary>
+    /// Text rendered inside the edit button. Defaults to the legacy ellipsis
+    /// picker marker; hosts can provide command labels such as "Edit Note".
+    /// </summary>
+    [Parameter] public string EditButtonText { get; set; } = "...";
 
     /// <summary>
     /// Paints the edit button in the display cell instead of only while the
@@ -86,15 +99,54 @@ public class GridColumn : ComponentBase
     [Parameter] public bool AlwaysShowEditButton { get; set; }
 
     /// <summary>
+    /// When true, double-clicking a <see cref="ShowEditButton"/> cell raises
+    /// <see cref="GridControlEvents{T}.OnEditButtonClick"/>. Set false for
+    /// picker-only cells where users must press the visible ellipsis button
+    /// and the display cell itself should only select/focus.
+    /// </summary>
+    [Parameter] public bool OpenEditButtonOnDoubleClick { get; set; } = true;
+
+    /// <summary>
+    /// When true, a double-click on this editable cell opens the in-cell editor
+    /// before any row-level double-click handler runs.
+    /// </summary>
+    [Parameter] public bool PreferCellEditOnDoubleClick { get; set; }
+
+    /// <summary>
     /// Optional predicate for <see cref="AlwaysShowEditButton"/>. Return false
     /// for synthetic/header rows where a picker button should not be shown.
     /// </summary>
     [Parameter] public Func<object, bool>? ShowEditButtonPredicate { get; set; }
 
     /// <summary>
-    /// Optional string choices for batch-mode in-cell dropdown editing.
+    /// Optional string choices for batch-mode in-cell dropdown editing. Plain
+    /// entries use the same text for display and storage; VB6-style mapped
+    /// entries such as <c>#3;To closest</c> display the text after the semicolon
+    /// while committing the value after <c>#</c>.
     /// </summary>
     [Parameter] public IEnumerable<string>? EditOptions { get; set; }
+
+    /// <summary>
+    /// Optional row-aware choices for batch-mode in-cell dropdown editing.
+    /// Use when the available options depend on the row data. Returned entries
+    /// use the same format as <see cref="EditOptions"/>.
+    /// </summary>
+    [Parameter] public Func<object, IEnumerable<string>>? EditOptionsProvider { get; set; }
+
+    /// <summary>
+    /// Allows an <see cref="EditOptions"/> editor to accept a value that is not
+    /// already present in its option list. FlexKit renders the column as an
+    /// editable combo box while retaining the standard grid dropdown sizing,
+    /// positioning, keyboard handling, and commit behavior.
+    /// </summary>
+    [Parameter] public bool AllowCustomEditOptionValue { get; set; }
+
+    /// <summary>
+    /// For <see cref="EditOptions"/> columns, automatically open the option
+    /// list when editing starts from a click/double-click. The arrow button can
+    /// still open the list when this is false.
+    /// </summary>
+    [Parameter] public bool OpenEditOptionsOnEdit { get; set; } = true;
 
     /// <summary>Custom cell template. Context is the row data item (TValue).</summary>
     [Parameter] public RenderFragment<object>? Template { get; set; }
@@ -114,8 +166,8 @@ public class GridColumn : ComponentBase
     /// <summary>Command buttons for the column (Edit, Delete, Save, Cancel).</summary>
     [Parameter] public List<GridCommandModel>? Commands { get; set; }
 
-    /// <summary>Resolved display header — falls back to Field name.</summary>
-    public string DisplayHeader => string.IsNullOrEmpty(HeaderText) ? Field : HeaderText;
+    /// <summary>Resolved display header. Null means "use Field"; an empty string is an intentional blank header.</summary>
+    public string DisplayHeader => HeaderText ?? Field;
 
     /// <summary>The effective template (Template takes priority over ChildContent).</summary>
     public RenderFragment<object>? EffectiveTemplate => Template ?? ChildContent;
@@ -137,7 +189,8 @@ public class GridColumn : ComponentBase
             parts.Add($"width:{Width}");
         if (!string.IsNullOrEmpty(MinWidth)) parts.Add($"min-width:{MinWidth}");
         if (!string.IsNullOrEmpty(MaxWidth)) parts.Add($"max-width:{MaxWidth}");
-        parts.Add($"text-align:{TextAlign.ToString().ToLower()}");
+        var effectiveTextAlign = UsesMappedEditOptionDisplay() ? TextAlign.Left : TextAlign;
+        parts.Add($"text-align:{effectiveTextAlign.ToString().ToLower()}");
         parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");
         parts.Add("white-space:nowrap");
@@ -150,6 +203,14 @@ public class GridColumn : ComponentBase
             parts.Add("text-overflow:clip");
         }
         return string.Join(";", parts);
+    }
+
+    private bool UsesMappedEditOptionDisplay()
+    {
+        return EditOptions?.Any(option =>
+            !string.IsNullOrEmpty(option)
+            && option[0] == '#'
+            && option.IndexOf(';') > 1) == true;
     }
 
     public string GetHeaderStyle()

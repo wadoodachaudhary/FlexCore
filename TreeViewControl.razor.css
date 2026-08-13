@@ -1,13 +1,13 @@
 .fx-treeview {
     font-family: inherit;
-    font-size: 0.875rem;
+    font-size: var(--fx-font-size, 0.875rem);
     -webkit-user-select: none;
     user-select: none;
-    border: 1px solid var(--fx-tree-border, #dee2e6);
-    border-radius: 4px;
+    border: 1px solid var(--fx-border-color, #dee2e6);
+    border-radius: var(--fx-border-radius, 4px);
     padding: 4px 0;
-    background: var(--fx-tree-bg, #fff);
-    color: var(--fx-tree-color, #212529);
+    background: var(--fx-surface-color, #fff);
+    color: var(--fx-tree-node-color, #212529);
 }
 
 .fx-treeview * {
@@ -26,26 +26,26 @@
     gap: 4px;
     padding: 3px 8px;
     cursor: pointer;
-    border-radius: 3px;
+    border-radius: var(--fx-border-radius, 3px);
     margin: 1px 4px;
     min-height: 28px;
-    color: var(--fx-tree-color, #212529);
+    color: var(--fx-tree-node-color, #212529);
 }
 
 .fx-treeview-node:hover {
-    background-color: var(--fx-tree-hover-bg, #f0f4f8);
-    color: var(--fx-tree-hover-color, inherit);
+    background-color: var(--fx-tree-node-hover-bg, #f0f4f8);
+    color: var(--fx-tree-node-hover-color, inherit);
 }
 
 .fx-treeview-node-selected {
-    background-color: var(--fx-tree-selected-bg, #e2ecf7);
-    color: var(--fx-tree-selected-color, inherit);
+    background-color: var(--fx-tree-node-selected-bg, #e2ecf7);
+    color: var(--fx-tree-node-selected-color, inherit);
     font-weight: 500;
 }
 
 .fx-treeview-node-selected:hover {
-    background-color: var(--fx-tree-selected-hover-bg, #d4e3f5);
-    color: var(--fx-tree-selected-color, inherit);
+    background-color: var(--fx-tree-node-selected-bg, #d4e3f5);
+    color: var(--fx-tree-node-selected-color, inherit);
 }
 
 .fx-treeview-node-disabled {
@@ -146,7 +146,14 @@
     left: calc(var(--tree-node-left) - 8px);
     top: 8px;
     width: 9px;
-    border-top: 1px dotted var(--fx-tree-connector-color, #777);
+    height: 1px;
+    background-image: repeating-linear-gradient(
+        to right,
+        var(--fx-tree-connector-color, #777) 0 1px,
+        transparent 1px 3px
+    );
+    background-repeat: repeat-x;
+    background-size: 3px 1px;
 }
 
 .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::after {
@@ -154,8 +161,15 @@
     position: absolute;
     left: calc(var(--tree-node-left) - 8px);
     top: -8px;
+    width: 1px;
     height: 17px;
-    border-left: 1px dotted var(--fx-tree-connector-color, #777);
+    background-image: repeating-linear-gradient(
+        to bottom,
+        var(--fx-tree-connector-color, #777) 0 1px,
+        transparent 1px 3px
+    );
+    background-repeat: repeat-y;
+    background-size: 1px 3px;
 }
 
 .fx-treeview-vb6 .fx-treeview-arrow {

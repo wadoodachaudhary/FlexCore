@@ -1,7 +1,9 @@
 @namespace Fx.ControlKit
 @using Microsoft.AspNetCore.Components.Web
+@inject IJSRuntime JsRuntime
+@implements IAsyncDisposable
 
-<div class="@RootCssClass" style="@RootStyle">
+<div class="@RootCssClass" style="@RootStyle" @ref="_rootElement">
     <div class="fx-splitter-pane fx-splitter-primary" style="@PrimaryPaneStyle">
         @PrimaryContent
     </div>
@@ -9,30 +11,68 @@
             type="button"
             title="@Title"
             aria-label="@Title"
+            aria-orientation="@(Vertical ? "vertical" : "horizontal")"
+            role="separator"
             @onmousedown="BeginDrag"
             @onmousedown:preventDefault="true"
-            @onmousedown:stopPropagation="true">
+            @onmousedown:stopPropagation="true"
+            @ondblclick="ResetToDefaultAsync"
+            @onkeydown="HandleKeyDownAsync">
         <span class="fx-splitter-grip" aria-hidden="true"></span>
     </button>
-    <div class="fx-splitter-pane fx-splitter-secondary">
+    <div class="fx-splitter-pane fx-splitter-secondary" style="@SecondaryPaneStyle">
         @SecondaryContent
     </div>
     @if (_isDragging)
     {
         <div class="@OverlayCssClass"
              @onmousemove="HandleDragMove"
-             @onmouseup="EndDrag"
-             @onmouseleave="EndDrag"></div>
+             @onmouseup="EndDragAsync"
+             @onmouseleave="EndDragAsync"></div>
     }
 </div>
 
 @code {
+    /// <summary>
+    /// Pixel: <see cref="PrimarySize"/> is a width/height in px and survives a container
+    /// resize unchanged. Proportional: it is a percentage of the container, so the two panes
+    /// keep their ratio as the container grows or shrinks — pure CSS, no measurement.
+    /// </summary>
+    [Parameter] public SplitterSizeMode SizeMode { get; set; } = SplitterSizeMode.Pixel;
+
     [Parameter] public double PrimarySize { get; set; } = 240;
     [Parameter] public EventCallback<double> PrimarySizeChanged { get; set; }
+
+    /// <summary>Fires once when a drag finishes, unlike <see cref="PrimarySizeChanged"/> which
+    /// fires on every move. Persist from here so a drag is one write, not hundreds.</summary>
+    [Parameter] public EventCallback<double> OnResizeCommitted { get; set; }
+
     [Parameter] public double MinPrimarySize { get; set; } = 80;
     [Parameter] public double MaxPrimarySize { get; set; } = 1200;
+
+    /// <summary>Constraints that also accept a percentage ("25%"). When set they win over the
+    /// numeric MinPrimarySize / MaxPrimarySize, so a page states its limit the way VB6 did
+    /// (a share of the form) instead of recomputing pixels on every resize.</summary>
+    [Parameter] public string? MinPrimary { get; set; }
+    [Parameter] public string? MaxPrimary { get; set; }
+
+    /// <summary>Floor for the far pane, so dragging cannot crush it to nothing.</summary>
+    [Parameter] public string? MinSecondary { get; set; }
+
+    /// <summary>Caps the primary pane at its content's own width/height, so no empty gap
+    /// opens between the content and the bar when the bar is dragged past it.</summary>
+    [Parameter] public bool ShrinkPrimaryToContent { get; set; }
+
+    /// <summary>Size restored by double-clicking the bar; defaults to the first size seen.</summary>
+    [Parameter] public double? DefaultPrimarySize { get; set; }
+    [Parameter] public bool ResetOnDoubleClick { get; set; } = true;
+
+    /// <summary>Keyboard step in px (or percentage points in Proportional mode).</summary>
+    [Parameter] public double KeyboardStep { get; set; } = 16;
+
     [Parameter] public double SplitterSize { get; set; } = 6;
     [Parameter] public bool Vertical { get; set; } = true;
+    [Parameter] public bool Disabled { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? CssClass { get; set; }
@@ -41,25 +81,71 @@
     [Parameter] public RenderFragment? PrimaryContent { get; set; }
     [Parameter] public RenderFragment? SecondaryContent { get; set; }
 
+    private ElementReference _rootElement;
+    private IJSObjectReference? _module;
     private bool _isDragging;
     private double _dragStartPosition;
     private double _dragStartSize;
     private double _runtimePrimarySize = 240;
+    private double _containerPx;
+    private double? _defaultSize;
+
+    private bool Proportional => SizeMode == SplitterSizeMode.Proportional;
 
     protected override void OnParametersSet()
     {
         if (!_isDragging)
             _runtimePrimarySize = ClampSize(PrimarySize);
+        _defaultSize ??= DefaultPrimarySize ?? _runtimePrimarySize;
     }
+
+    // A percentage constraint cannot be resolved until the container has been measured, so
+    // measure once the element exists and re-clamp; otherwise a "60%" ceiling would not bite
+    // until the user happened to drag.
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!NeedsContainerMeasure || _isDragging)
+            return;
+
+        var measured = await MeasureContainerAsync();
+        // A container mid-layout can measure tiny for a frame; clamping against that (and
+        // worse, pushing the result out through PrimarySizeChanged) permanently crushed the
+        // pane. The render-time clamp is therefore visual only and ignores junk sizes —
+        // the owner's state is never rewritten outside a user gesture.
+        if (measured < 100)
+            return;
+
+        var changed = Math.Abs(measured - _containerPx) > 0.5;
+        _containerPx = measured;
+
+        var clamped = ClampSize(_runtimePrimarySize);
+        if (Math.Abs(clamped - _runtimePrimarySize) > 0.01)
+        {
+            _runtimePrimarySize = clamped;
+            StateHasChanged();
+        }
+        else if (changed && firstRender)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private bool NeedsContainerMeasure =>
+        Proportional
+        || MinPrimary?.Contains('%') == true
+        || MaxPrimary?.Contains('%') == true
+        || MinSecondary?.Contains('%') == true;
 
     private string RootCssClass
     {
         get
         {
             var orientation = Vertical ? "fx-splitter-vertical" : "fx-splitter-horizontal";
+            var shrink = ShrinkPrimaryToContent ? " fx-splitter-shrink-primary" : "";
+            var disabled = Disabled ? " fx-splitter-disabled" : "";
             return string.IsNullOrWhiteSpace(CssClass)
-                ? $"fx-splitter {orientation}"
-                : $"fx-splitter {orientation} {CssClass.Trim()}";
+                ? $"fx-splitter {orientation}{shrink}{disabled}"
+                : $"fx-splitter {orientation}{shrink}{disabled} {CssClass.Trim()}";
         }
     }
 
@@ -79,20 +165,48 @@
         }
     }
 
-    private string PrimaryPaneStyle =>
-        Vertical
-            ? $"flex-basis:{_runtimePrimarySize}px"
-            : $"flex-basis:{_runtimePrimarySize}px";
+    private string PrimaryPaneStyle
+    {
+        get
+        {
+            var axis = Vertical ? "width" : "height";
+            var basis = Proportional
+                ? $"{_runtimePrimarySize.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture)}%"
+                : $"{_runtimePrimarySize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px";
+
+            // ShrinkPrimaryToContent turns the size into a ceiling rather than a fixed basis,
+            // so the pane hugs its content when the content is the narrower of the two.
+            if (ShrinkPrimaryToContent)
+                return $"flex:0 1 auto;max-{axis}:{basis};min-{axis}:0";
+
+            return $"flex:0 0 {basis};min-{axis}:0";
+        }
+    }
+
+    private string SecondaryPaneStyle
+    {
+        get
+        {
+            var axis = Vertical ? "width" : "height";
+            var floor = ResolveConstraint(MinSecondary, double.NaN);
+            return double.IsNaN(floor)
+                ? $"min-{axis}:0"
+                : $"min-{axis}:{floor.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}{(Proportional ? "%" : "px")}";
+        }
+    }
 
     private string OverlayCssClass =>
         Vertical ? "fx-splitter-overlay" : "fx-splitter-overlay fx-splitter-overlay-horizontal";
 
-    private Task BeginDrag(MouseEventArgs e)
+    private async Task BeginDrag(MouseEventArgs e)
     {
+        if (Disabled)
+            return;
+
+        _containerPx = await MeasureContainerAsync();
         _isDragging = true;
         _dragStartPosition = Vertical ? e.ClientX : e.ClientY;
         _dragStartSize = _runtimePrimarySize;
-        return Task.CompletedTask;
     }
 
     private async Task HandleDragMove(MouseEventArgs e)
@@ -101,8 +215,11 @@
             return;
 
         var position = Vertical ? e.ClientX : e.ClientY;
-        var nextSize = ClampSize(_dragStartSize + position - _dragStartPosition);
-        if (Math.Abs(nextSize - _runtimePrimarySize) < 0.5)
+        var deltaPx = position - _dragStartPosition;
+        var delta = Proportional && _containerPx > 0 ? deltaPx / _containerPx * 100d : deltaPx;
+
+        var nextSize = ClampSize(_dragStartSize + delta);
+        if (Math.Abs(nextSize - _runtimePrimarySize) < 0.01)
             return;
 
         _runtimePrimarySize = nextSize;
@@ -110,16 +227,126 @@
             await PrimarySizeChanged.InvokeAsync(nextSize);
     }
 
-    private Task EndDrag(MouseEventArgs e)
+    private async Task EndDragAsync(MouseEventArgs e)
     {
+        if (!_isDragging)
+            return;
+
         _isDragging = false;
-        return Task.CompletedTask;
+        if (OnResizeCommitted.HasDelegate)
+            await OnResizeCommitted.InvokeAsync(_runtimePrimarySize);
     }
+
+    private async Task ResetToDefaultAsync()
+    {
+        if (Disabled || !ResetOnDoubleClick || _defaultSize is not { } target)
+            return;
+
+        await ApplySizeAsync(ClampSize(target));
+    }
+
+    private async Task HandleKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (Disabled)
+            return;
+
+        var back = Vertical ? "ArrowLeft" : "ArrowUp";
+        var forward = Vertical ? "ArrowRight" : "ArrowDown";
+
+        double next;
+        if (e.Key == back) next = _runtimePrimarySize - KeyboardStep;
+        else if (e.Key == forward) next = _runtimePrimarySize + KeyboardStep;
+        else if (e.Key == "Home") next = ResolveMin();
+        else if (e.Key == "End") next = ResolveMax();
+        else return;
+
+        await ApplySizeAsync(ClampSize(next));
+    }
+
+    private async Task ApplySizeAsync(double size)
+    {
+        if (Math.Abs(size - _runtimePrimarySize) < 0.01)
+            return;
+
+        _runtimePrimarySize = size;
+        if (PrimarySizeChanged.HasDelegate)
+            await PrimarySizeChanged.InvokeAsync(size);
+        if (OnResizeCommitted.HasDelegate)
+            await OnResizeCommitted.InvokeAsync(size);
+    }
+
+    /// <summary>Percentage constraints need the container's size; a plain number or "px" does
+    /// not. Proportional mode therefore reads the container once per drag. If interop is
+    /// unavailable the drag still works — it just moves in pixels for that gesture.</summary>
+    private async Task<double> MeasureContainerAsync()
+    {
+        if (!NeedsContainerMeasure)
+            return 0;
+
+        try
+        {
+            _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", "./_content/FlexKit/splitter-control.js");
+            return await _module.InvokeAsync<double>("measureSplitter", _rootElement, Vertical);
+        }
+        catch
+        {
+            return _containerPx;
+        }
+    }
+
+    private double ResolveConstraint(string? raw, double fallback)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return fallback;
+
+        var text = raw.Trim();
+        var percent = text.EndsWith("%", StringComparison.Ordinal);
+        var number = text.TrimEnd('%').Replace("px", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (!double.TryParse(number, System.Globalization.NumberStyles.Float,
+                             System.Globalization.CultureInfo.InvariantCulture, out var value))
+            return fallback;
+
+        if (percent == Proportional)
+            return value;
+
+        // A percentage given to a pixel splitter (or the reverse) is only convertible once the
+        // container has been measured; until then fall back rather than guess.
+        if (_containerPx <= 0)
+            return fallback;
+
+        return percent ? value / 100d * _containerPx : value / _containerPx * 100d;
+    }
+
+    private double ResolveMin() =>
+        ResolveConstraint(MinPrimary, Proportional ? 0 : Math.Max(0, MinPrimarySize));
+
+    private double ResolveMax() =>
+        ResolveConstraint(MaxPrimary, Proportional ? 100 : Math.Max(ResolveMin(), MaxPrimarySize));
 
     private double ClampSize(double value)
     {
-        var min = Math.Max(0, MinPrimarySize);
-        var max = Math.Max(min, MaxPrimarySize);
+        var min = ResolveMin();
+        var max = ResolveMax();
+
+        var secondaryFloor = ResolveConstraint(MinSecondary, double.NaN);
+        if (!double.IsNaN(secondaryFloor))
+        {
+            var available = Proportional ? 100d : _containerPx;
+            if (available > 0)
+                max = Math.Min(max, available - secondaryFloor);
+        }
+
+        if (max < min) max = min;
         return Math.Clamp(value > 0 ? value : min, min, max);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null)
+            return;
+
+        try { await _module.DisposeAsync(); }
+        catch { }
     }
 }

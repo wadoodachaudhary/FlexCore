@@ -3,6 +3,7 @@ namespace Fx.ControlKit.Grid;
 public enum ColumnType
 {
     Text,
+    Password,
     Number,
     Date,
     Boolean,
@@ -97,9 +98,18 @@ public enum GridWidthMode
     FitColumns
 }
 
+public enum GridRowSelectorHandleShape
+{
+    HalfButton,
+    Button,
+    CheckBox
+}
+
 public enum GridTheme
 {
-    HomeFront,
+    Default = 0,
+    [Obsolete("Use Default.")]
+    HomeFront = Default,
     Vb6Windows,
     ExcelLightBlue,
     ExcelLightGreen,

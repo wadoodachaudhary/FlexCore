@@ -1,0 +1,62 @@
+@namespace Fx.ControlKit
+
+@*
+    PanelControl — the container a GridControl expects to live in.
+
+    A grid sized with Height="100%" needs its container to be a flex column that is
+    allowed to be narrower and shorter than its contents. Without that, the container
+    grows to the grid's own content width, the grid's scroll surface never overflows,
+    and the horizontal scrollbar never appears. Header and Footer stay at their natural
+    size; the body takes the rest and clips, so the grid scrolls inside it.
+*@
+
+<div class="fx-panel @(Bordered ? "fx-panel-bordered" : "") @CssClass"
+     style="@PanelStyle"
+     @attributes="AdditionalAttributes">
+    @if (Header != null)
+    {
+        <div class="fx-panel-header">@Header</div>
+    }
+    <div class="fx-panel-body">@ChildContent</div>
+    @if (Footer != null)
+    {
+        <div class="fx-panel-footer">@Footer</div>
+    }
+</div>
+
+@code {
+    [Parameter] public RenderFragment? Header { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Footer { get; set; }
+
+    /// <summary>Draws the VB6 sunken 1px frame around the panel.</summary>
+    [Parameter] public bool Bordered { get; set; } = true;
+
+    /// <summary>How the panel shares space with its siblings; maps to the CSS flex shorthand.</summary>
+    [Parameter] public string Grow { get; set; } = "1 1 auto";
+
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? Height { get; set; }
+    [Parameter] public string? MinWidth { get; set; }
+    [Parameter] public string? MinHeight { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private string PanelStyle
+    {
+        get
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.Append("flex:").Append(Grow).Append(';');
+            if (!string.IsNullOrWhiteSpace(Width)) sb.Append("width:").Append(Width).Append(';');
+            if (!string.IsNullOrWhiteSpace(Height)) sb.Append("height:").Append(Height).Append(';');
+            // min-width/min-height default to 0, not auto: an auto minimum is what lets a flex
+            // or grid item refuse to shrink below its contents and inflate the layout instead.
+            sb.Append("min-width:").Append(string.IsNullOrWhiteSpace(MinWidth) ? "0" : MinWidth).Append(';');
+            sb.Append("min-height:").Append(string.IsNullOrWhiteSpace(MinHeight) ? "0" : MinHeight).Append(';');
+            return sb.ToString();
+        }
+    }
+}

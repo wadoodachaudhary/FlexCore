@@ -1,11 +1,18 @@
 @namespace Fx.ControlKit
 @inherits FlexControlBase
+@implements IAsyncDisposable
 @using System.Globalization
 @using System.Linq.Expressions
+@using Microsoft.JSInterop
+@inject IJSRuntime JsRuntime
 
 @if (Visible)
 {
-    <div class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes">
+    <div @ref="_hostElement"
+         class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
+         @onclick:stopPropagation="true"
+         @onmousedown:stopPropagation="true"
+         @onkeydown:stopPropagation="true">
         <div class="fx-datepicker-input-group">
             <input type="text"
                    class="fx-datepicker-input"
@@ -28,69 +35,68 @@
         {
             <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
             
-            <div class="fx-datepicker-dropdown @(_expanded ? "expanded" : "minimal")">
+            <div @ref="_dropdownElement"
+                 @key="_dropdownOpenKey"
+                 class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
                 <!-- Left Section: Main Calendar -->
                 <div class="fx-calendar-main">
-                    <!-- Nav Header -->
-                    <div class="fx-calendar-header">
-                        <button type="button" class="fx-nav-btn" @onclick="PrevMonth" title="Previous Month">◀</button>
-                        
-                        <div class="fx-header-selectors">
-                            <select value="@_viewMonth" @onchange="OnViewMonthChanged" class="fx-nav-select">
-                                @for (int m = 1; m <= 12; m++)
-                                {
-                                    <option value="@m">@CultureInfo.CurrentCulture.DateTimeFormat.GetMonthName(m)</option>
-                                }
-                            </select>
-                            
-                            <select value="@_viewYear" @onchange="OnViewYearChanged" class="fx-nav-select">
-                                @for (int y = DateTime.Today.Year - 100; y <= DateTime.Today.Year + 30; y++)
-                                {
-                                    <option value="@y">@y</option>
-                                }
-                            </select>
-                        </div>
-                        
-                        <button type="button" class="fx-nav-btn" @onclick="NextMonth" title="Next Month">▶</button>
-                        
+                    <button type="button" class="fx-nav-btn fx-nav-prev" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
+                    <button type="button" class="fx-nav-btn fx-nav-next" @onclick="NextMonth" title="Next Month" aria-label="Next month">►</button>
+
+                    @if (ShowCalendarSidebar)
+                    {
                         <button type="button" class="fx-expand-btn" @onclick="ToggleExpand" title="Toggle Sidebar">
                             @(_expanded ? "◀" : "▶")
                         </button>
-                    </div>
+                    }
 
-                    <!-- Weekdays Header -->
-                    <div class="fx-weekdays">
-                        @foreach (var dayName in GetWeekdayNames())
-                        {
-                            <span class="fx-weekday">@dayName</span>
-                        }
-                    </div>
-
-                    <!-- Days Grid -->
-                    <div class="fx-days-grid">
-                        @foreach (var date in GetDaysInGrid())
-                        {
-                            var isCurrentMonth = date.Month == _viewMonth && date.Year == _viewYear;
-                            var isSelected = Value.HasValue && date.Date == Value.Value.Date;
-                            var isToday = date.Date == DateTime.Today;
-                            var isDisabled = IsDateDisabled(date);
-                            var cellClass = string.Join(" ", new[]
+                    <div class="fx-months-viewport">
+                        <div class="fx-calendar-months-grid">
+                            @foreach (var monthStart in GetCalendarMonths())
                             {
-                                "fx-day-cell",
-                                isCurrentMonth ? "in-month" : "out-month",
-                                isSelected ? "selected" : "",
-                                isToday ? "today" : "",
-                                isDisabled ? "disabled" : ""
-                            }.Where(c => !string.IsNullOrEmpty(c)));
+                                <div class="fx-month-panel">
+                                    <div class="fx-month-title">@monthStart.ToString("MMMM yyyy", CultureInfo.CurrentCulture)</div>
 
-                            <button type="button"
-                                    class="@cellClass"
-                                    disabled="@isDisabled"
-                                    @onclick="() => SelectDay(date)">
-                                @date.Day
-                            </button>
-                        }
+                                    <div class="fx-weekdays">
+                                        @foreach (var dayName in GetWeekdayNames())
+                                        {
+                                            <span class="fx-weekday">@dayName</span>
+                                        }
+                                    </div>
+
+                                    <div class="fx-days-grid">
+                                        @foreach (var date in GetDaysInGrid(monthStart))
+                                        {
+                                            var isCurrentMonth = date.Month == monthStart.Month && date.Year == monthStart.Year;
+                                            var isSelected = Value.HasValue && date.Date == Value.Value.Date;
+                                            var isToday = date.Date == DateTime.Today;
+                                            var isDisabled = IsDateDisabled(date);
+                                            var cellClass = string.Join(" ", new[]
+                                            {
+                                                "fx-day-cell",
+                                                isCurrentMonth ? "in-month" : "out-month",
+                                                isSelected ? "selected" : "",
+                                                isToday ? "today" : "",
+                                                isDisabled ? "disabled" : ""
+                                            }.Where(c => !string.IsNullOrEmpty(c)));
+
+                                            <button type="button"
+                                                    class="@cellClass"
+                                                    disabled="@isDisabled"
+                                                    tabindex="-1"
+                                                    @onclick="() => SelectDay(date)">
+                                                <span class="fx-day-number">@date.Day</span>
+                                            </button>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
                     </div>
+
+                    <button type="button" class="fx-today-link" @onclick="() => SelectShortcut(DateTime.Today)">
+                        Today: @TodayText
+                    </button>
 
                     <!-- Optional Time Picker -->
                     @if (ShowTime)
@@ -121,7 +127,7 @@
                 </div>
 
                 <!-- Right Section: Sidebar (Expanded Mode) -->
-                @if (_expanded)
+                @if (_expanded && ShowCalendarSidebar)
                 {
                     <div class="fx-calendar-sidebar">
                         <div class="fx-sidebar-section">
@@ -193,13 +199,20 @@
     [Parameter] public bool ShowTime { get; set; }
     [Parameter] public DateTime? MinDate { get; set; }
     [Parameter] public DateTime? MaxDate { get; set; }
+    [Parameter] public bool ShowCalendarSidebar { get; set; }
 
     private string ResolvedFormat => Format ?? (ShowTime ? "MM/dd/yyyy hh:mm tt" : "MM/dd/yyyy");
     private string ResolvedPlaceholder => Placeholder ?? ResolvedFormat;
+    private string ViewMonthYearText => new DateTime(_viewYear, _viewMonth, 1).ToString("MMMM yyyy", CultureInfo.CurrentCulture);
+    private string TodayText => DateTime.Today.ToString("M/d/yyyy", CultureInfo.InvariantCulture);
 
     private string _inputText = "";
     private bool _isOpen = false;
     private bool _expanded = false;
+    private ElementReference _hostElement;
+    private ElementReference _dropdownElement;
+    private IJSObjectReference? _controlJsModule;
+    private int _dropdownOpenKey;
 
     // View State (what month/year the popup calendar is currently focused on)
     private int _viewMonth = DateTime.Today.Month;
@@ -227,6 +240,28 @@
         _decadeStart = (_viewYear / 12) * 12;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_isOpen && Enabled)
+            await PositionDropdownAsync();
+    }
+
+    private static string ControlJsModulePath =>
+        $"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js";
+
+    private async Task PositionDropdownAsync()
+    {
+        try
+        {
+            _controlJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", ControlJsModulePath);
+            await _controlJsModule.InvokeVoidAsync("positionDatePickerDropdown", _hostElement, _dropdownElement);
+        }
+        catch
+        {
+            // CSS absolute positioning remains as the no-JS fallback.
+        }
+    }
+
     private string FormatDate(DateTime date)
     {
         return date.ToString(ResolvedFormat, CultureInfo.InvariantCulture);
@@ -246,6 +281,8 @@
 
     private void OpenDropdown()
     {
+        _expanded = false;
+        _dropdownOpenKey++;
         _isOpen = true;
         var focusDate = Value ?? DateTime.Today;
         _viewMonth = focusDate.Month;
@@ -275,6 +312,9 @@
 
     private async Task OnInputBlur()
     {
+        if (_isOpen)
+            return;
+
         await ParseInputText(true);
     }
 
@@ -298,9 +338,9 @@
             return;
         }
 
-        string[] formats = ShowTime 
-            ? new[] { "MM/dd/yyyy hh:mm tt", "MM/dd/yyyy HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy", "yyyy-MM-dd" }
-            : new[] { "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "MM-dd-yyyy", "MMM d, yyyy" };
+        var formats = ShowTime
+            ? new[] { ResolvedFormat, "MM/dd/yyyy hh:mm tt", "MM/dd/yyyy HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy" }
+            : new[] { ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "MM-dd-yyyy", "MMM d, yyyy", "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy" };
 
         if (DateTime.TryParseExact(_inputText.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
         {
@@ -335,10 +375,11 @@
                 newValue = MaxDate.Value;
         }
 
+        var changed = Value != newValue;
         Value = newValue;
         _inputText = newValue.HasValue ? FormatDate(newValue.Value) : "";
 
-        if (ValueChanged.HasDelegate)
+        if (changed && ValueChanged.HasDelegate)
         {
             await ValueChanged.InvokeAsync(Value);
         }
@@ -396,13 +437,19 @@
         return new[] { "Su", "Mo", "Tu", "We", "Th", "Fr", "Sa" };
     }
 
-    private List<DateTime> GetDaysInGrid()
+    private IEnumerable<DateTime> GetCalendarMonths()
     {
-        var firstDayOfMonth = new DateTime(_viewYear, _viewMonth, 1);
-        int offset = (int)firstDayOfMonth.DayOfWeek;
-        var startDate = firstDayOfMonth.AddDays(-offset);
+        yield return new DateTime(_viewYear, _viewMonth, 1);
+    }
+
+    private List<DateTime> GetDaysInGrid(DateTime monthStart)
+    {
+        int offset = (int)monthStart.DayOfWeek;
+        var startDate = monthStart.AddDays(-offset);
+        var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
+        var visibleCellCount = Math.Clamp(((offset + daysInMonth + 6) / 7) * 7, 28, 42);
         var days = new List<DateTime>();
-        for (int i = 0; i < 42; i++)
+        for (int i = 0; i < visibleCellCount; i++)
         {
             days.Add(startDate.AddDays(i));
         }
@@ -539,5 +586,20 @@
     {
         var today = DateTime.Today;
         return today.AddDays(6 - (int)today.DayOfWeek);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_controlJsModule != null)
+        {
+            try
+            {
+                await _controlJsModule.DisposeAsync();
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
     }
 }

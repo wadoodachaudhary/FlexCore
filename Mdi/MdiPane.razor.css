@@ -11,3 +11,50 @@
     flex-direction: column;
     box-sizing: border-box;
 }
+
+/* Per-window error panel — shown by MdiErrorBoundary when a hosted form throws.
+   Fills the pane and centres a friendly contact-support message + Close button. */
+.fx-mdi-error {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 240px;
+    padding: 24px;
+    text-align: center;
+    color: #444;
+}
+
+.fx-mdi-error-icon {
+    font-size: 40px;
+    line-height: 1;
+    color: #c0392b;
+}
+
+.fx-mdi-error-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #222;
+}
+
+.fx-mdi-error-text {
+    max-width: 460px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.fx-mdi-error-btn {
+    margin-top: 6px;
+    padding: 6px 18px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid #8a8a8a;
+    border-radius: 3px;
+    background: #f0f0f0;
+}
+
+.fx-mdi-error-btn:hover {
+    background: #e2e2e2;
+}

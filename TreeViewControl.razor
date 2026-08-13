@@ -100,7 +100,7 @@
             // Text
             builder.OpenElement(18, "span");
             builder.AddAttribute(19, "class", "fx-treeview-text");
-            builder.AddContent(20, capturedNode.Text);
+            builder.AddContent(20, (MarkupString)capturedNode.Text);
             builder.CloseElement();
 
             builder.CloseElement(); // close node div

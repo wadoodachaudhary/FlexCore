@@ -327,10 +327,10 @@
     padding-top: 4px;
 }
 
-/* Active-group highlight — applied by hfHighlightGroup() when the host
-   page's tree is in TreeNavigationMode.Group (vs DrillDown). The user
-   clicks any node, the matching group-header row gets this red background
-   until another node is clicked. */
+/* Active-group highlight — applied by report-writer-control.js when the
+   tree is in TreeNavigationMode.Group (vs DrillDown). The user clicks any
+   node, the matching group-header row gets this red background until
+   another node is clicked. */
 ::deep .fx-rpt-group-header.fx-rpt-group-active td,
 ::deep tr.fx-rpt-group-active td,
 ::deep td.fx-rpt-group-active {

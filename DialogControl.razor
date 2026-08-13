@@ -5,17 +5,39 @@
 {
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
-         @onmousemove="HandleResizeMove"
-         @onmouseup="HandleResizeEnd"
-         @onmouseleave="HandleResizeEnd"
+         @onmousemove="HandleOverlayMouseMove"
+         @onmouseup="e => HandleOverlayMouseUp(e, true)"
+         @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" @onclick:stopPropagation="true">
-            <div class="fx-dialog-header">
-                <span>@Header</span>
+            <div class="fx-dialog-header"
+                 @onmousedown="HandleDragStart"
+                 @onmousedown:preventDefault="true"
+                 @onmousedown:stopPropagation="true"
+                 @oncontextmenu="HandleHeaderContextMenu"
+                 @oncontextmenu:preventDefault="true"
+                 @oncontextmenu:stopPropagation="true">
+                @if (ShowWindowIcon)
+                {
+                    <button class="fx-dialog-window-icon"
+                            type="button"
+                            title="Window menu"
+                            aria-label="Window menu"
+                            @onmousedown:preventDefault="true"
+                            @onmousedown:stopPropagation="true"
+                            @onclick="HandleWindowIconClick"
+                            @onclick:stopPropagation="true"></button>
+                }
+                <span class="fx-dialog-title">@Header</span>
                 @if (ShowCloseIcon)
                 {
-                    <button class="fx-dialog-close" type="button" @onclick="HandleClose">×</button>
+                    <button class="fx-dialog-close"
+                            type="button"
+                            title="Close"
+                            aria-label="Close"
+                            @onmousedown:stopPropagation="true"
+                            @onclick="HandleClose">×</button>
                 }
             </div>
             <div class="fx-dialog-body">
@@ -39,6 +61,34 @@
                 <span class="fx-dialog-resize-handle fx-dialog-resize-nw" @onmousedown='e => HandleResizeStart("nw", e)' @onmousedown:preventDefault="true" @onmousedown:stopPropagation="true"></span>
             }
         </div>
+        @if (_systemMenuVisible)
+        {
+            <div class="fx-dialog-system-menu-backdrop"
+                 @onclick="CloseSystemMenu"
+                 @onclick:stopPropagation="true"
+                 @oncontextmenu="CloseSystemMenu"
+                 @oncontextmenu:preventDefault="true"
+                 @oncontextmenu:stopPropagation="true"></div>
+            <div class="fx-dialog-system-menu"
+                 style="@SystemMenuStyle"
+                 role="menu"
+                 @onclick:stopPropagation="true"
+                 @oncontextmenu:stopPropagation="true">
+                <button type="button" role="menuitem" disabled>Restore</button>
+                <button type="button" role="menuitem" disabled="@(!Draggable)" @onclick="HandleSystemMenuMove">Move</button>
+                <button type="button" role="menuitem" disabled="@(!Resizable)" @onclick="CloseSystemMenu">Size</button>
+                <button type="button" role="menuitem" disabled>Minimize</button>
+                <button type="button" role="menuitem" disabled>Maximize</button>
+                <span class="fx-dialog-system-menu-separator"></span>
+                <button type="button" role="menuitem" class="fx-dialog-system-menu-close" @onclick="HandleSystemMenuClose">
+                    <span class="fx-dialog-system-menu-close-label">
+                        <span class="fx-dialog-system-menu-close-icon" aria-hidden="true">×</span>
+                        <span>Close</span>
+                    </span>
+                    <span>Alt+F4</span>
+                </button>
+            </div>
+        }
     </div>
 }
 
@@ -50,7 +100,11 @@
     [Parameter] public bool IsModal { get; set; } = true;
     [Parameter] public bool ShowCloseIcon { get; set; } = true;
     [Parameter] public bool CloseOnEscape { get; set; }
-    [Parameter] public bool Resizable { get; set; }
+    [Parameter] public bool CloseOnOverlayClick { get; set; }
+    [Parameter] public bool Draggable { get; set; } = true;
+    [Parameter] public bool ShowSystemMenu { get; set; } = true;
+    [Parameter] public bool ShowWindowIcon { get; set; }
+    [Parameter] public bool Resizable { get; set; } = true;
     [Parameter] public double MinResizeWidth { get; set; } = 320;
     [Parameter] public double MinResizeHeight { get; set; } = 160;
     [Parameter] public double MaxResizeWidth { get; set; }
@@ -63,6 +117,8 @@
     [Parameter] public EventCallback OnClose { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
     [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public EventCallback<string?> WidthChanged { get; set; }
+    [Parameter] public EventCallback<string?> HeightChanged { get; set; }
 
     private bool _isResizing;
     private string? _resizeEdge;
@@ -72,10 +128,39 @@
     private double _resizeStartHeight;
     private double? _runtimeWidth;
     private double? _runtimeHeight;
+    private bool _suppressNextOverlayClick;
+    private bool _isDragging;
+    private bool _moveArmed;
+    private double _dragStartX;
+    private double _dragStartY;
+    private double _dragStartOffsetX;
+    private double _dragStartOffsetY;
+    private double _dialogOffsetX;
+    private double _dialogOffsetY;
+    private bool _systemMenuVisible;
+    private double _systemMenuX;
+    private double _systemMenuY;
 
-    private string OverlayCssClass => _isResizing
-        ? "fx-dialog-overlay fx-dialog-overlay-resizing"
-        : "fx-dialog-overlay";
+    private string OverlayCssClass
+    {
+        get
+        {
+            var cls = "fx-dialog-overlay";
+            if (_isResizing || _isDragging)
+                cls += " fx-dialog-overlay-resizing";
+            if (_isDragging)
+                cls += " fx-dialog-overlay-dragging";
+            else if (_moveArmed)
+                cls += " fx-dialog-overlay-move-armed";
+            // Non-modal: the overlay stops dimming and stops intercepting the pointer, so
+            // the app behind stays fully interactive (VB6 non-modal .Show). During a drag
+            // or resize the -resizing class re-enables pointer capture on the overlay so
+            // the mousemove/mouseup handlers (which live on the overlay) keep tracking.
+            if (!IsModal)
+                cls += " fx-dialog-overlay-nonmodal";
+            return cls;
+        }
+    }
 
     private string DialogCssClass
     {
@@ -84,6 +169,12 @@
             var parts = new List<string> { "fx-dialog" };
             if (Resizable)
                 parts.Add("fx-dialog-resizable");
+            if (Draggable)
+                parts.Add("fx-dialog-draggable");
+            if (_isDragging)
+                parts.Add("fx-dialog-dragging");
+            else if (_moveArmed)
+                parts.Add("fx-dialog-move-armed");
             if (!string.IsNullOrWhiteSpace(CssClass))
                 parts.Add(CssClass);
             return string.Join(" ", parts);
@@ -102,35 +193,149 @@
                 parts.Add($"width:{Width}");
 
             if (_runtimeHeight.HasValue)
-                parts.Add($"height:{_runtimeHeight.Value:0.##}px");
+                parts.Add($"height:{ClampResize(_runtimeHeight.Value, MinResizeHeight, MaxResizeHeight):0.##}px");
             else if (!string.IsNullOrWhiteSpace(Height))
-                parts.Add($"height:{Height}");
+            {
+                var heightPixels = TryParsePixelValue(Height);
+                parts.Add(heightPixels.HasValue
+                    ? $"height:{ClampResize(heightPixels.Value, MinResizeHeight, MaxResizeHeight):0.##}px"
+                    : $"height:{Height}");
+            }
+
+            if (_dialogOffsetX != 0 || _dialogOffsetY != 0)
+                parts.Add($"transform:translate({_dialogOffsetX:0.##}px,{_dialogOffsetY:0.##}px)");
 
             return string.Join(";", parts);
         }
     }
 
+    private string SystemMenuStyle =>
+        $"left:{_systemMenuX:0.##}px;top:{_systemMenuY:0.##}px";
+
     private async Task HandleOverlayClick()
     {
+        if (_systemMenuVisible)
+        {
+            _systemMenuVisible = false;
+            return;
+        }
+
+        if (_suppressNextOverlayClick)
+        {
+            _suppressNextOverlayClick = false;
+            return;
+        }
+
         if (_isResizing)
             return;
 
-        if (!IsModal)
+        if (!CloseOnOverlayClick)
             return;
+
         await RequestClose();
     }
 
     private async Task HandleClose()
     {
+        _systemMenuVisible = false;
         await RequestClose();
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (_moveArmed && e.Key == "Escape")
+        {
+            _moveArmed = false;
+            return;
+        }
+
+        if (e.AltKey && string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase))
+        {
+            _systemMenuVisible = false;
+            await RequestClose();
+            return;
+        }
+
         if (CloseOnEscape && e.Key == "Escape")
         {
             await RequestClose();
         }
+    }
+
+    private Task HandleOverlayMouseMove(MouseEventArgs e)
+    {
+        if (_isDragging)
+        {
+            _dialogOffsetX = _dragStartOffsetX + e.ClientX - _dragStartX;
+            _dialogOffsetY = _dragStartOffsetY + e.ClientY - _dragStartY;
+            return Task.CompletedTask;
+        }
+
+        return HandleResizeMove(e);
+    }
+
+    private async Task HandleOverlayMouseUp(MouseEventArgs e, bool suppressOverlayClick)
+    {
+        if (_isDragging)
+        {
+            _isDragging = false;
+            if (suppressOverlayClick)
+                _suppressNextOverlayClick = true;
+            return;
+        }
+
+        await HandleResizeEnd(e, suppressOverlayClick);
+    }
+
+    private Task HandleDragStart(MouseEventArgs e)
+    {
+        if (!Draggable || e.Button != 0)
+            return Task.CompletedTask;
+
+        _systemMenuVisible = false;
+        _moveArmed = false;
+        _isDragging = true;
+        _dragStartX = e.ClientX;
+        _dragStartY = e.ClientY;
+        _dragStartOffsetX = _dialogOffsetX;
+        _dragStartOffsetY = _dialogOffsetY;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleHeaderContextMenu(MouseEventArgs e)
+        => OpenSystemMenuAt(e.ClientX, e.ClientY);
+
+    private Task HandleWindowIconClick(MouseEventArgs e)
+        => OpenSystemMenuAt(e.ClientX, e.ClientY);
+
+    private Task OpenSystemMenuAt(double x, double y)
+    {
+        if (!ShowSystemMenu)
+            return Task.CompletedTask;
+
+        _systemMenuVisible = true;
+        _systemMenuX = x;
+        _systemMenuY = y;
+        return Task.CompletedTask;
+    }
+
+    private Task CloseSystemMenu()
+    {
+        _systemMenuVisible = false;
+        return Task.CompletedTask;
+    }
+
+    private Task HandleSystemMenuMove()
+    {
+        _systemMenuVisible = false;
+        _moveArmed = Draggable;
+        return Task.CompletedTask;
+    }
+
+    private async Task HandleSystemMenuClose()
+    {
+        _systemMenuVisible = false;
+        await RequestClose();
     }
 
     private Task HandleResizeStart(string edge, MouseEventArgs e)
@@ -138,6 +343,8 @@
         if (!Resizable)
             return Task.CompletedTask;
 
+        _systemMenuVisible = false;
+        _isDragging = false;
         _isResizing = true;
         _resizeEdge = edge;
         _resizeStartX = e.ClientX;
@@ -171,11 +378,46 @@
         return Task.CompletedTask;
     }
 
-    private Task HandleResizeEnd(MouseEventArgs e)
+    private async Task HandleResizeEnd(MouseEventArgs e, bool suppressOverlayClick)
     {
+        if (!_isResizing) return;
         _isResizing = false;
         _resizeEdge = null;
-        return Task.CompletedTask;
+        if (suppressOverlayClick)
+            _suppressNextOverlayClick = true;
+
+        if (_runtimeWidth.HasValue)
+        {
+            var newWidth = $"{_runtimeWidth.Value:0.##}px";
+            Width = newWidth;
+            if (WidthChanged.HasDelegate)
+                await WidthChanged.InvokeAsync(newWidth);
+        }
+        if (_runtimeHeight.HasValue)
+        {
+            var newHeight = $"{_runtimeHeight.Value:0.##}px";
+            Height = newHeight;
+            if (HeightChanged.HasDelegate)
+                await HeightChanged.InvokeAsync(newHeight);
+        }
+    }
+
+    private bool _lastVisible;
+
+    protected override void OnParametersSet()
+    {
+        if (Visible && !_lastVisible)
+        {
+            _runtimeWidth = null;
+            _runtimeHeight = null;
+            _dialogOffsetX = 0;
+            _dialogOffsetY = 0;
+            _systemMenuVisible = false;
+            _isDragging = false;
+            _isResizing = false;
+            _moveArmed = false;
+        }
+        _lastVisible = Visible;
     }
 
     private double ResolveCurrentWidth()

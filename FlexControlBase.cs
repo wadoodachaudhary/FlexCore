@@ -24,6 +24,18 @@ public abstract class FlexControlBase : ComponentBase
     /// <summary>Optional DOM id for the root element.</summary>
     [Parameter] public string? Id { get; set; }
 
+    /// <summary>Common descriptive title for tooltips, captions, exports, and host-specific labels.</summary>
+    [Parameter] public string? Title { get; set; }
+
+    /// <summary>Application-defined metadata associated with the control.</summary>
+    [Parameter] public string? Tag { get; set; }
+
+    /// <summary>Application-defined data payload or serialized value associated with the control.</summary>
+    [Parameter] public string? Data { get; set; }
+
+    /// <summary>Optional logical FlexKit parent control.</summary>
+    [Parameter] public FlexControlBase? Parent { get; set; }
+
     /// <summary>Captures any unmatched HTML attributes passed to the component.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object>? AdditionalAttributes { get; set; }

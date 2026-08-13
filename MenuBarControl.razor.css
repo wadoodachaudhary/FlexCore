@@ -8,4 +8,13 @@
     background: #f7f9fc;
     font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     font-size: 11px;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
+}
+
+.fx-menu-bar * {
+    -webkit-user-modify: read-only;
+    caret-color: transparent;
 }

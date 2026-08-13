@@ -170,7 +170,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
         // splitter (greedy fit + word-boundary mid-paragraph splits). The C#
         // side just signals "go paginated", JS owns the slicing because only
         // it can measure rendered heights against the per-format card size.
-        await JS.InvokeVoidAsync("hfEditor.init", EditorId, dtos,
+        await JS.InvokeVoidAsync("fxEditor.init", EditorId, dtos,
             new
             {
                 paged = Paginate,
@@ -189,7 +189,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// </summary>
     public async Task<IReadOnlyList<EditorBlock>> ReadBlocksAsync()
     {
-        var raw = await JS.InvokeAsync<List<JsBlock>>("hfEditor.read", EditorId);
+        var raw = await JS.InvokeAsync<List<JsBlock>>("fxEditor.read", EditorId);
         return raw.Select(r => new EditorBlock(
             r.Id ?? string.Empty,
             ParseKind(r.Kind),
@@ -208,14 +208,14 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// </summary>
     public async Task<bool> IsDirtyAsync()
     {
-        try { return await JS.InvokeAsync<bool>("hfEditor.isDirty", EditorId); }
+        try { return await JS.InvokeAsync<bool>("fxEditor.isDirty", EditorId); }
         catch { return true; }
     }
 
     /// <summary>Returns the current selection, or <c>null</c> when collapsed.</summary>
     public async Task<EditorSelectionInfo?> GetSelectionAsync()
     {
-        var dto = await JS.InvokeAsync<JsSelection?>("hfEditor.getSelection", EditorId);
+        var dto = await JS.InvokeAsync<JsSelection?>("fxEditor.getSelection", EditorId);
         if (dto is null || string.IsNullOrWhiteSpace(dto.Text)) return null;
         return new EditorSelectionInfo(
             dto.Text.Trim(),
@@ -224,14 +224,14 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>Selects every top-level block in the editor.</summary>
-    public Task SelectAllAsync() => JS.InvokeVoidAsync("hfEditor.selectAll", EditorId).AsTask();
+    public Task SelectAllAsync() => JS.InvokeVoidAsync("fxEditor.selectAll", EditorId).AsTask();
 
     /// <summary>Clears the live browser selection owned by the editor.</summary>
-    public Task ClearSelectionAsync() => JS.InvokeVoidAsync("hfEditor.clearSelection", EditorId).AsTask();
+    public Task ClearSelectionAsync() => JS.InvokeVoidAsync("fxEditor.clearSelection", EditorId).AsTask();
 
     /// <summary>Runs a contenteditable exec-command (bold/italic/underline/strikeThrough).</summary>
     public Task ExecFormatCommandAsync(string command) =>
-        JS.InvokeVoidAsync("hfEditor.execCommand", EditorId, command).AsTask();
+        JS.InvokeVoidAsync("fxEditor.execCommand", EditorId, command).AsTask();
 
     /// <summary>
     /// Wraps the current selection in a <c>&lt;span style="property: value"&gt;</c>.
@@ -239,7 +239,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// <c>font-size</c>, and <c>font-weight</c>.
     /// </summary>
     public Task ApplyInlineStyleAsync(string property, string value) =>
-        JS.InvokeVoidAsync("hfEditor.applyInlineStyle", EditorId, property, value).AsTask();
+        JS.InvokeVoidAsync("fxEditor.applyInlineStyle", EditorId, property, value).AsTask();
 
     /// <summary>
     /// Applies a heading-like inline preset to the current selection using the
@@ -270,31 +270,31 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// top-level block the selection intersects.
     /// </summary>
     public Task ApplyBlockStyleAsync(string property, string value) =>
-        JS.InvokeVoidAsync("hfEditor.applyBlockStyle", EditorId, property, value).AsTask();
+        JS.InvokeVoidAsync("fxEditor.applyBlockStyle", EditorId, property, value).AsTask();
 
     /// <summary>Sets paragraph alignment on the intersecting blocks.</summary>
     public Task SetBlockAlignmentAsync(EditorAlignment alignment) =>
-        JS.InvokeVoidAsync("hfEditor.setBlockAlignment", EditorId, alignment.ToString().ToLowerInvariant()).AsTask();
+        JS.InvokeVoidAsync("fxEditor.setBlockAlignment", EditorId, alignment.ToString().ToLowerInvariant()).AsTask();
 
     /// <summary>Returns the caret as a (block-id, offset) pair.</summary>
     public async Task<EditorCaretInfo?> GetCaretAsync()
     {
-        var dto = await JS.InvokeAsync<JsCaret?>("hfEditor.getCaret", EditorId);
+        var dto = await JS.InvokeAsync<JsCaret?>("fxEditor.getCaret", EditorId);
         if (dto is null || string.IsNullOrWhiteSpace(dto.BlockId)) return null;
         return new EditorCaretInfo(dto.BlockId, dto.Offset);
     }
 
     /// <summary>Moves the caret to the given position.</summary>
     public Task SetCaretAsync(string blockId, int offset) =>
-        JS.InvokeVoidAsync("hfEditor.setCaret", blockId, offset).AsTask();
+        JS.InvokeVoidAsync("fxEditor.setCaret", blockId, offset).AsTask();
 
     /// <summary>Scrolls a block into view (no-op if the id isn't present).</summary>
     public Task ScrollToBlockAsync(string blockId) =>
-        JS.InvokeVoidAsync("hfEditor.scrollToBlock", blockId).AsTask();
+        JS.InvokeVoidAsync("fxEditor.scrollToBlock", blockId).AsTask();
 
     /// <summary>Scrolls the editor's owning viewport back to the top.</summary>
     public Task ScrollToTopAsync() =>
-        JS.InvokeVoidAsync("hfEditor.scrollToTop", EditorId).AsTask();
+        JS.InvokeVoidAsync("fxEditor.scrollToTop", EditorId).AsTask();
 
     /// <summary>
     /// Forces the keyed root to remount on the next render, destroying the

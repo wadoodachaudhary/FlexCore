@@ -62,13 +62,18 @@ public sealed class MdiWindow
     /// one.</summary>
     public bool IsSingleton { get; }
 
+    /// <summary>Optional tab icon (any URL or data-URI, host-agnostic; null = text-only
+    /// tab). Legacy MDI child forms carry a 16px form icon next to the caption.</summary>
+    public string? IconUrl { get; }
+
     public MdiWindow(
         string id,
         string route,
         Type pageType,
         IDictionary<string, object> parameters,
         string title,
-        bool isSingleton)
+        bool isSingleton,
+        string? iconUrl = null)
     {
         Id = id;
         Route = route;
@@ -76,5 +81,6 @@ public sealed class MdiWindow
         Parameters = parameters;
         Title = title;
         IsSingleton = isSingleton;
+        IconUrl = iconUrl;
     }
 }

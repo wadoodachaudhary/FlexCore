@@ -22,6 +22,36 @@
     background: #fff;
 }
 
+.fx-report-wizard-dialog .fx-rw-step-links::before {
+    width: 30px;
+    height: 18px;
+    left: 9px;
+    top: 12px;
+    border-top: 2px solid #000080;
+    border-bottom: 2px solid #000080;
+}
+
+.fx-report-wizard-dialog .fx-rw-step-links::after {
+    width: 8px;
+    height: 8px;
+    left: 8px;
+    top: 10px;
+    border: 2px solid #000080;
+    background: #fff;
+    box-shadow: 30px 18px 0 -2px #fff, 30px 18px 0 0 #000080;
+}
+
+.fx-report-wizard-dialog .fx-rw-step-sql::before {
+    content: "SQL";
+    left: 8px;
+    top: 12px;
+    padding: 2px 4px;
+    border: 2px solid #000080;
+    color: #000080;
+    background: #fff;
+    font: 700 11px Tahoma, "MS Sans Serif", Arial, sans-serif;
+}
+
 .fx-report-wizard-dialog .fx-rw-step-fields::before {
     inset: 9px;
     border: 2px solid #333;
@@ -178,6 +208,159 @@
 .fx-rw-filter-value {
     width: 250px;
     padding: 4px 8px;
+}
+
+.fx-rw-link-step {
+    display: grid;
+    grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
+    gap: 12px;
+}
+
+.fx-rw-link-canvas,
+.fx-rw-link-editor {
+    min-height: 0;
+    border: 2px inset #d0d0d0;
+    background: #fff;
+}
+
+.fx-rw-link-canvas {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    padding: 8px;
+}
+
+.fx-rw-link-tables {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    align-content: start;
+    gap: 10px;
+    overflow: auto;
+}
+
+.fx-rw-link-table {
+    min-width: 0;
+    border: 1px solid #888;
+    background: #fdfdfd;
+}
+
+.fx-rw-link-table header {
+    padding: 4px 6px;
+    border-bottom: 1px solid #999;
+    background: #dbe9f9;
+    color: #111;
+    font-weight: 700;
+}
+
+.fx-rw-link-table div {
+    display: flex;
+    flex-direction: column;
+    max-height: 150px;
+    overflow: auto;
+    padding: 4px 6px;
+}
+
+.fx-rw-link-table span {
+    min-height: 18px;
+    white-space: nowrap;
+}
+
+.fx-rw-link-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 58px;
+    margin-top: 8px;
+    padding: 6px;
+    border-top: 1px solid #c8c8c8;
+    color: #333;
+    overflow: auto;
+}
+
+.fx-rw-link-editor {
+    display: grid;
+    grid-template-rows: minmax(86px, 0.45fr) minmax(0, 1fr);
+}
+
+.fx-rw-link-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow: auto;
+    padding: 4px;
+    border-bottom: 1px solid #c8c8c8;
+}
+
+.fx-rw-link-list button {
+    min-height: 20px;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+}
+
+.fx-rw-link-list button.active {
+    color: #fff;
+    background: #0b66c3;
+}
+
+.fx-rw-link-list span {
+    color: #777;
+    padding: 4px;
+}
+
+.fx-rw-link-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px;
+    overflow: auto;
+}
+
+.fx-rw-link-fields label {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+}
+
+.fx-rw-sql-step {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+}
+
+.fx-rw-sql-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+}
+
+.fx-rw-sql-status {
+    color: #555;
+}
+
+.fx-rw-sql-status.ok {
+    color: #16733a;
+    font-weight: 700;
+}
+
+.fx-rw-sql-status.error {
+    color: #a22626;
+    font-weight: 700;
+}
+
+.fx-rw-sql-editor {
+    width: 100%;
+    min-height: 0;
+    resize: none;
+    border: 2px inset #d0d0d0;
+    background: #fff;
+    color: #111;
+    padding: 8px;
+    font: 12px Consolas, "Courier New", monospace;
+    line-height: 1.35;
+    white-space: pre;
 }
 
 .fx-rw-template-step {

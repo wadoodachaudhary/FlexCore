@@ -14,6 +14,7 @@ public class SidebarSection
     public string Title { get; set; } = "";
     public bool IsCollapsed { get; set; } = false;
     public List<SidebarItem> Items { get; set; } = new();
+    public bool Disabled { get; set; } = false;
 }
 
 public class SidebarItem
@@ -23,4 +24,5 @@ public class SidebarItem
     public string TaskName { get; set; } = "";
     public bool IsBold { get; set; } = false;
     public bool IsRed { get; set; } = false;
+    public bool Disabled { get; set; } = false;
 }

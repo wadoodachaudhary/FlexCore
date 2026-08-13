@@ -1,0 +1,11 @@
+@namespace Fx.ControlKit.Drawing
+@inherits DrawingObjectBase
+
+@* Ellipse annotation — a self-contained SVG so there's no cross-component SVG-namespace issue. *@
+<svg class="fx-draw-svg" style="@(BoxStyle + SelStyle)"
+     width="@Num(Shape.AbsWidth)" height="@Num(Shape.AbsHeight)" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="@Num(Shape.AbsWidth / 2)" cy="@Num(Shape.AbsHeight / 2)"
+             rx="@Num(System.Math.Max(0, Shape.AbsWidth / 2 - Shape.StrokeWidth))"
+             ry="@Num(System.Math.Max(0, Shape.AbsHeight / 2 - Shape.StrokeWidth))"
+             fill="none" stroke="@Shape.Color" stroke-width="@Num(Shape.StrokeWidth)" />
+</svg>
