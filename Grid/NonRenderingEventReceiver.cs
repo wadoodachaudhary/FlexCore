@@ -5,7 +5,7 @@ namespace Fx.ControlKit.Grid;
 /// handlers that only arm state (mousedown / mouseup), so one physical click
 /// costs ONE authoritative render (the click) instead of three. Handlers that
 /// do change the DOM on these events render explicitly.</summary>
-internal sealed class NonRenderingEventReceiver
+public sealed class NonRenderingEventReceiver
 {
     public static readonly NonRenderingEventReceiver Instance = new();
 

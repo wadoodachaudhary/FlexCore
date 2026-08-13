@@ -127,6 +127,21 @@ public class GridColumn : ComponentBase
     [Parameter] public IEnumerable<string>? EditOptions { get; set; }
 
     /// <summary>
+    /// Optional row-aware choices for batch-mode in-cell dropdown editing.
+    /// Use when the available options depend on the row data. Returned entries
+    /// use the same format as <see cref="EditOptions"/>.
+    /// </summary>
+    [Parameter] public Func<object, IEnumerable<string>>? EditOptionsProvider { get; set; }
+
+    /// <summary>
+    /// Allows an <see cref="EditOptions"/> editor to accept a value that is not
+    /// already present in its option list. FlexKit renders the column as an
+    /// editable combo box while retaining the standard grid dropdown sizing,
+    /// positioning, keyboard handling, and commit behavior.
+    /// </summary>
+    [Parameter] public bool AllowCustomEditOptionValue { get; set; }
+
+    /// <summary>
     /// For <see cref="EditOptions"/> columns, automatically open the option
     /// list when editing starts from a click/double-click. The arrow button can
     /// still open the list when this is false.

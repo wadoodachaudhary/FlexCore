@@ -1504,6 +1504,42 @@ function gridRowsWithAri(gridRoot) {
 // moves the selection away).
 const paintedPreviewEls = new Set();
 
+function muteSelectedLook(el) {
+    el.dataset.fxMuted = "1";
+    el.style.setProperty("background-color", "transparent", "important");
+    el.style.setProperty("box-shadow", "none", "important");
+    el.style.setProperty("outline", "none", "important");
+    paintedPreviewEls.add(el);
+}
+
+function unmuteSelectedLook(el) {
+    delete el.dataset.fxMuted;
+    el.style.removeProperty("background-color");
+    el.style.removeProperty("box-shadow");
+    el.style.removeProperty("outline");
+}
+
+// A muted row that must go back to LOOKING selected: the row stayed inside
+// the selection across the round trip, so Blazor emitted NO patch for it and
+// nothing server-side will repaint it. Repaint from the same CSS variable the
+// server's inline background uses; the next real state change rewrites the
+// whole style attribute and discards this.
+function restoreSelectedLook(el) {
+    delete el.dataset.fxMuted;
+    const v = getComputedStyle(el).getPropertyValue("--fx-grid-selected-row-bg").trim();
+    el.style.setProperty("background-color", v || "#b6c8dd");
+    el.style.removeProperty("box-shadow");
+    el.style.removeProperty("outline");
+}
+
+function gridCellPreviewColor(gridRoot) {
+    // Match the CLASS color multi-selected cells get after the server render
+    // (.fx-cell-selected:not(.fx-cell-active) — the grey row-shade), so the
+    // drag preview and the final selection are the same color.
+    const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-cell-selected-row-bg").trim();
+    return v || "#e8e8e8";
+}
+
 function gridPreviewColor(gridRoot) {
     const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-selected-row-bg").trim();
     return v || "#b6c8dd";
@@ -1514,26 +1550,44 @@ function setRowPreview(tr, on, color) {
     // Paint the CELLS as well as the row: some grids render opaque td
     // backgrounds (the picklist), so a row-level color never shows through.
     if (on) {
-        tr.style.backgroundColor = color;
+        if (tr.dataset.fxMuted) tr.style.setProperty("background-color", color, "important");
+        else tr.style.backgroundColor = color;
         paintedPreviewEls.add(tr);
-        for (const td of tr.children) { td.style.backgroundColor = color; paintedPreviewEls.add(td); }
+        for (const td of tr.children) {
+            if (td.dataset.fxMuted) td.style.setProperty("background-color", color, "important");
+            else td.style.backgroundColor = color;
+            paintedPreviewEls.add(td);
+        }
     }
     else {
-        // Cell paints are JS-owned (the server never writes td backgrounds),
+        // Press-muted rows leaving the drag range KEEP the mute (and stay in
+        // the registry) — un-muting here would resurrect the old selection
+        // mid-drag; the render-ack sweep settles them. Everything else:
+        // cell paints are JS-owned (the server never writes td backgrounds),
         // so they must ALWAYS be cleared at handoff — a still-selected row
         // keeps them only until keyboard navigation unselects it server-side,
         // which rewrites the tr style but has no reason to touch the tds,
         // leaving a stuck blue row. The tr background is server-owned for
         // selected rows, so it keeps the fx-selected guard.
-        if (!tr.classList.contains("fx-selected")) { tr.style.backgroundColor = ""; paintedPreviewEls.delete(tr); }
-        for (const td of tr.children) { td.style.backgroundColor = ""; paintedPreviewEls.delete(td); }
+        if (tr.dataset.fxMuted) tr.style.setProperty("background-color", "transparent", "important");
+        else if (!tr.classList.contains("fx-selected")) { tr.style.backgroundColor = ""; paintedPreviewEls.delete(tr); }
+        for (const td of tr.children) {
+            if (td.dataset.fxMuted) td.style.setProperty("background-color", "transparent", "important");
+            else { td.style.backgroundColor = ""; paintedPreviewEls.delete(td); }
+        }
     }
 }
 
 function setCellPreview(td, on, color) {
     td.classList.toggle("fx-drag-preview-cell", on);
-    if (on) td.style.backgroundColor = color;
-    else td.style.backgroundColor = "";
+    if (on) { td.style.setProperty("background-color", color, "important"); paintedPreviewEls.add(td); }
+    else if (td.dataset.fxMuted) {
+        // Press-muted cell leaving the drag range: KEEP the mute — the drag
+        // painter must not resurrect the old selection mid-drag; the
+        // render-ack sweep unmutes once the server's new selection landed.
+        td.style.setProperty("background-color", "transparent", "important");
+    }
+    else { unmuteSelectedLook(td); paintedPreviewEls.delete(td); }
 }
 
 // A plain press REPLACES the selection, so the old rows must stop looking
@@ -1543,12 +1597,12 @@ function setCellPreview(td, on, color) {
 function clearSelectedLook(gridRoot, exceptTr) {
     gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected").forEach(r => {
         if (r === exceptTr) return;
-        // The selected look can be class-driven (host ::deep rules) or inline
-        // (server row/cell styles) — remove both; the server's next render
-        // re-adds the class on rows that are genuinely still selected.
-        r.classList.remove("fx-selected");
-        r.style.backgroundColor = "";
-        for (const td of r.children) td.style.backgroundColor = "";
+        // Mute with INLINE styles only — never remove fx-selected: a row that
+        // stays selected across the round trip produces NO Blazor patch (its
+        // render output is unchanged), so a client-side class removal sticks
+        // forever and the row shows as a white gap inside the new selection.
+        muteSelectedLook(r);
+        for (const td of r.children) muteSelectedLook(td);
     });
 }
 
@@ -1559,7 +1613,7 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     const doc = gridRoot.ownerDocument || document;
     let lastIdx = anchorIndex, moved = false, ended = false, raf = 0, pending = null;
 
-    const previewColor = gridPreviewColor(gridRoot);
+    const previewColor = mode === "row" ? gridPreviewColor(gridRoot) : gridCellPreviewColor(gridRoot);
     const applyPreview = toIdx => {
         const a = Math.min(anchorIndex, toIdx), b = Math.max(anchorIndex, toIdx);
         for (const tr of gridRowsWithAri(gridRoot)) {
@@ -1586,14 +1640,11 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
         // diffs can strip the preview marker — after the round trip has
         // certainly landed, wipe every tracked paint that isn't backed by a
         // real selection (cell paints always; they are JS-owned).
-        setTimeout(() => {
-            for (const el of [...paintedPreviewEls]) {
-                const tr = el.tagName === "TR" ? el : el.closest("tr");
-                const keepTr = el.tagName === "TR" && tr && tr.classList.contains("fx-selected");
-                if (!keepTr) el.style.backgroundColor = "";
-                paintedPreviewEls.delete(el);
-            }
-        }, 1500);
+        const net = () => {
+            if (gridDragSelectionBindings.has(gridRoot)) { setTimeout(net, 800); return; }
+            sweepStalePreviewPaints(null);
+        };
+        setTimeout(net, 1500);
     };
 
     const onMove = e => {
@@ -1620,6 +1671,19 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
             if (idx > lastIdx && ev.clientY < rect.top + 3) return;
             if (idx < lastIdx && ev.clientY > rect.bottom - 3) return;
             lastIdx = idx;
+            if (!moved && mode === "cell") {
+                // First real move of a cell drag: the selection is being
+                // REPLACED, so the previous cells must stop LOOKING selected
+                // now. Mute with INLINE styles only — removing the server's
+                // classes desyncs Blazor's diff (cells kept in the new range
+                // are never re-written, leaving half-toggled artifacts). The
+                // render-ack sweep clears these inline mutes.
+                gridRoot.querySelectorAll("td.fx-cell-selected").forEach(td => muteSelectedLook(td));
+                gridRoot.querySelectorAll("tr.fx-cell-row-selected").forEach(tr => {
+                    muteSelectedLook(tr);
+                    for (const c of tr.children) muteSelectedLook(c);
+                });
+            }
             moved = true;
             applyPreview(idx);
         });
@@ -1635,8 +1699,14 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     doc.addEventListener("pointermove", onMove, true);
     doc.addEventListener("pointerup", onUp, true);
     gridDragSelectionBindings.set(gridRoot, { cleanup });
-    if (mode === "row") clearSelectedLook(gridRoot, null);
-    applyPreview(anchorIndex);   // instant anchor feedback (click included)
+    // Row mode: paint the anchor immediately — that's the instant press
+    // feedback. Cell mode: NO paint on a plain press; the preview appears only
+    // once the pointer really drags (applyPreview from onMove). Painting the
+    // anchor cell here put a foreign row-selection blue on every cell click.
+    if (mode === "row") {
+        clearSelectedLook(gridRoot, null);
+        applyPreview(anchorIndex);
+    }
 }
 
 export function unregisterGridDragSelection(gridRoot) {
@@ -1654,8 +1724,15 @@ export function clearGridDragPreview(gridRoot) {
     for (const el of [...paintedPreviewEls]) {
         if (!gridRoot.contains(el)) continue;
         const tr = el.tagName === "TR" ? el : el.closest("tr");
-        if (el.tagName === "TR" && tr && tr.classList.contains("fx-selected")) { paintedPreviewEls.delete(el); continue; }
-        el.style.backgroundColor = "";
+        if (el.tagName === "TR" && tr && tr.classList.contains("fx-selected")) {
+            // Still-selected muted row: Blazor emitted no patch for it, so
+            // the selected look must be repainted client-side.
+            if (el.dataset.fxMuted) restoreSelectedLook(el);
+            else { el.style.removeProperty("box-shadow"); el.style.removeProperty("outline"); }
+            paintedPreviewEls.delete(el);
+            continue;
+        }
+        unmuteSelectedLook(el);
         paintedPreviewEls.delete(el);
     }
 }
@@ -1670,21 +1747,84 @@ export function clearGridDragPreview(gridRoot) {
 // the preview through the normal drag/click handoff.
 const gridInstantFeedbackBindings = new WeakMap();
 
-export function registerGridInstantSelectionFeedback(gridRoot) {
+// Clear every tracked preview paint that is no longer backed by a real
+// (fx-selected) row — cell paints always, since the server never writes them.
+// Shared by the instant-feedback press, the drag-end safety net, and
+// clearGridDragPreview, so a paint can never outlive its selection no matter
+// which binding created it.
+function sweepStalePreviewPaints(exceptTr) {
+    for (const el of [...paintedPreviewEls]) {
+        if (el === exceptTr) continue;
+        const tr = el.tagName === "TR" ? el : el.closest("tr");
+        const keepTr = el.tagName === "TR" && tr && tr.classList.contains("fx-selected");
+        if (keepTr) {
+            if (el.dataset.fxMuted) restoreSelectedLook(el);
+            else { el.style.removeProperty("box-shadow"); el.style.removeProperty("outline"); }
+        }
+        else unmuteSelectedLook(el);
+        if (el !== exceptTr) paintedPreviewEls.delete(el);
+    }
+}
+
+export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false) {
     if (!gridRoot || gridInstantFeedbackBindings.has(gridRoot)) return;
+    let netTimer = 0;
     const onDown = e => {
         if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
         const t = e.target;
         if (t.closest && t.closest("input, select, textarea, button")) return;
         const tr = t.closest ? t.closest("tbody tr.fx-row[data-ari]") : null;
         if (!tr || !gridRoot.contains(tr)) return;
-        const color = gridPreviewColor(gridRoot);
-        gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => { if (r !== tr) setRowPreview(r, false, ""); });
-        clearSelectedLook(gridRoot, tr);
-        setRowPreview(tr, true, color);
+
+        if (cellMode) {
+            // The press REPLACES the cell selection: mute every old selected
+            // look in the SAME frame (inline styles only — server classes are
+            // never touched, so Blazor's diff stays coherent) and paint the
+            // pressed cell with the cell-selection color.
+            const td = t.closest ? t.closest("td") : null;
+            // 'important' priority: the single-cell-batch selected-cell rules
+            // are themselves !important, so a plain inline mute loses.
+            gridRoot.querySelectorAll("td.fx-cell-selected").forEach(c => { if (c !== td) muteSelectedLook(c); });
+            // The row shade paints EVERY td of the row directly (!important),
+            // so a muted row must mute its cells too.
+            gridRoot.querySelectorAll("tr.fx-cell-row-selected").forEach(r => {
+                if (r === tr) return;
+                muteSelectedLook(r);
+                for (const c of r.children) { if (c !== td) muteSelectedLook(c); }
+            });
+            if (td && gridRoot.contains(td)) {
+                td.style.setProperty("background-color", gridCellPreviewColor(gridRoot), "important");
+                paintedPreviewEls.add(td);
+            }
+        } else {
+            const color = gridPreviewColor(gridRoot);
+            gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => { if (r !== tr) setRowPreview(r, false, ""); });
+            // Sweep BEFORE muting: the sweep restores still-selected muted
+            // rows, so running it after clearSelectedLook would undo the
+            // press-frame clear it just applied. It still wipes stale paints
+            // whose fx-* marker a server render already rewrote.
+            sweepStalePreviewPaints(tr);
+            clearSelectedLook(gridRoot, tr);
+            setRowPreview(tr, true, color);
+        }
+
+        // Self-healing for plain-click grids (no drag capture registered, so
+        // the drag-end safety net never runs there): after the round trip has
+        // landed, wipe whatever the server did not turn into a selection.
+        clearTimeout(netTimer);
+        const net = () => {
+            // A live drag owns the paints — sweeping mid-drag un-mutes the old
+            // selection and repaints it under the user's cursor. Defer.
+            if (gridDragSelectionBindings.has(gridRoot)) { netTimer = setTimeout(net, 800); return; }
+            sweepStalePreviewPaints(null);
+        };
+        netTimer = setTimeout(net, 1500);
     };
     gridRoot.addEventListener("pointerdown", onDown, true);
-    gridInstantFeedbackBindings.set(gridRoot, () => gridRoot.removeEventListener("pointerdown", onDown, true));
+    gridInstantFeedbackBindings.set(gridRoot, () => {
+        clearTimeout(netTimer);
+        gridRoot.removeEventListener("pointerdown", onDown, true);
+    });
 }
 
 export function unregisterGridInstantSelectionFeedback(gridRoot) {

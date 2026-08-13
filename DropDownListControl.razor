@@ -45,6 +45,7 @@
                 tabindex="@TabIndex"
                 aria-haspopup="listbox"
                 aria-expanded="@_isOpen"
+                @onmousedown="HandleButtonMouseDown"
                 @onclick="HandleButtonClick"
                 @onkeydown="HandleButtonKeyDown"
                 @onkeydown:stopPropagation="true"
@@ -117,8 +118,19 @@
     [Parameter] public int? MaxLength { get; set; }
     /// <summary>When editable, commit typed text on blur. This is standard combobox behavior; set false for Enter-only commit.</summary>
     [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
+    [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool OpenOnRender { get; set; }
     [Parameter] public bool OpenOnArrowClickOnly { get; set; }
+    /// <summary>
+    /// With <see cref="OpenOnArrowClickOnly"/>, a click on the BODY of a CLOSED
+    /// control still opens the list (it never closes an open one — closing stays
+    /// with the arrow / backdrop / Escape / selection). Grid batch editors use
+    /// this so the owner-standard two-click flow reads "first click shows the
+    /// arrow, the NEXT click opens" — without it, body clicks on the closed
+    /// editor were dead, because the host swallows the click before the grid
+    /// cell underneath can see it.
+    /// </summary>
+    [Parameter] public bool OpenOnClickWhenClosed { get; set; }
     [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
@@ -144,9 +156,10 @@
     private bool _pendingHighlightScroll;
     private readonly Dictionary<int, ElementReference> _optionRefs = new();
     private ElementReference _hostRef;
+    private ElementReference _editableInputRef;
+    private bool _autoFocusApplied;
     private IJSObjectReference? _dropdownJsModule;
     private string _editableText = "";
-    private ElementReference _editableInputRef;
 
     // Uncontrolled while typing: the DOM input renders _editableRenderedText, which stays
     // CONSTANT while the field is focused, so a keystroke's render round-trip can never
@@ -268,16 +281,55 @@
             ResetEditableDomText(EditableDisplayText, refocus: false);
     }
 
+    /// <summary>True while the current press STARTED on this control — set on the
+    /// button's own mousedown, consumed by <see cref="HandleButtonClick"/>.</summary>
+    private bool _pressStartedOnControl;
+
+    private void HandleButtonMouseDown()
+    {
+        _pressStartedOnControl = true;
+    }
+
     private async Task HandleButtonClick()
     {
+        // One press = one mousedown THEN one click. The click that CREATED a grid
+        // batch editor hit-tests against the fresh DOM, so on a fast circuit it can
+        // land on this just-mounted button — but its mousedown landed on the CELL,
+        // before this control existed. Requiring our own mousedown first keeps that
+        // creating click from instantly opening the list (the two-click standard),
+        // while a genuine second press (mousedown on the control) opens normally.
+        var pressStartedHere = _pressStartedOnControl;
+        _pressStartedOnControl = false;
+
         if (!OpenOnArrowClickOnly)
+        {
             await ToggleOpen();
+            return;
+        }
+
+        if (OpenOnClickWhenClosed && !_isOpen && pressStartedHere)
+            OpenDropdown();
     }
 
     private async Task HandleArrowClick()
     {
-        if (OpenOnArrowClickOnly)
-            await ToggleOpen();
+        if (!OpenOnArrowClickOnly)
+            return;
+
+        // Same press-witness rule as HandleButtonClick, but only for grid batch
+        // editors (OpenOnClickWhenClosed): with a real mouse the editor can mount
+        // MID-PRESS, and the creating press's click then hit-tests onto this arrow —
+        // toggling here would instant-open on the first click. A genuine later press
+        // put its mousedown on the control (bubbles from the arrow to the button),
+        // so the flag is set. Page-level dropdowns (no OpenOnClickWhenClosed) keep
+        // their unconditional arrow toggle — the control always existed, so their
+        // presses never need the witness.
+        var pressStartedHere = _pressStartedOnControl;
+        _pressStartedOnControl = false;
+        if (OpenOnClickWhenClosed && !pressStartedHere && !_isOpen)
+            return;
+
+        await ToggleOpen();
     }
 
     private async Task ToggleOpen()
@@ -578,7 +630,17 @@
 
     private async Task<bool> TryDelegateNavigationKeyAsync(KeyboardEventArgs e)
     {
-        if (e.Key != "Tab" || !OnKeyDown.HasDelegate)
+        if (!OnKeyDown.HasDelegate)
+            return false;
+
+        var isGridNavigationKey = e.Key == "Tab"
+            || (e.Key is "ArrowLeft" or "ArrowRight"
+                && !e.AltKey
+                && !e.CtrlKey
+                && !e.MetaKey
+                && !e.ShiftKey);
+
+        if (!isGridNavigationKey)
             return false;
 
         await OnKeyDown.InvokeAsync(e);
@@ -685,6 +747,19 @@
             }
             catch
             {
+            }
+        }
+
+        if (Editable && AutoFocus && !_autoFocusApplied && Enabled)
+        {
+            _autoFocusApplied = true;
+            try
+            {
+                await _editableInputRef.FocusAsync(preventScroll: true);
+            }
+            catch
+            {
+                // The editor can disappear while its parent grid commits.
             }
         }
 

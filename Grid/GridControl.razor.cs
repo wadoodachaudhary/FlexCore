@@ -68,6 +68,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+    /// <summary>CssClass token for heavily-editable grids: one light grey for
+    /// every selection visual (single/multi, row/cell) instead of the
+    /// light-blue row default.</summary>
+    public const string EditableSelectionThemeCssClass = "fx-grid-editable-selection";
+
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public GridWidthMode WidthMode { get; set; } = GridWidthMode.FillAvailable;
@@ -1570,6 +1575,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// (keeps the render branch and the JS registration in lock-step, and avoids a
     /// stale <c>_scrollElement</c>).
     /// </summary>
+    /// <summary>Colspan for the two window-spacer rows. Must match the REAL
+    /// rendered column count: under table-layout:fixed with a hidden thead the
+    /// spacer is the first layout row, and an inflated colspan (the old
+    /// hardcoded 999) makes the browser split the table width across that many
+    /// phantom columns — every real cell collapses to ~0px wide.</summary>
+    private int WindowSpacerColspan =>
+        Math.Max(1, VisibleColumns.Count()
+            + (ShowRowReorderColumn ? 1 : 0)
+            + (ShowRowSelectorHandleColumn ? 1 : 0));
+
     private bool UseRowWindowing =>
         !IsPagingActive
         && !string.IsNullOrWhiteSpace(Height)
@@ -2181,8 +2196,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_pendingActiveCellScrollIntoView)
         {
             _pendingActiveCellScrollIntoView = false;
-            _pendingWindowScrollReset = false;
-            await EnsureActiveCellVisibleAsync();
+            // Never yank the viewport while a drag-selection is in progress:
+            // the active cell is still the OLD position until release, and
+            // scrolling to it mid-drag throws the user back to the previous
+            // selection.
+            if (!_isDragSelecting && !_isCellDragSelecting && !_cellDragAnchor.HasValue)
+            {
+                _pendingWindowScrollReset = false;
+                await EnsureActiveCellVisibleAsync();
+            }
         }
 
         await ResetInitialGridScrollIfNeededAsync(firstRender);
@@ -3184,12 +3206,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleRowClick(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
     {
+        if (_cellClickHandledForPress)
+        {
+            _cellClickHandledForPress = false;
+            return;
+        }
+
         if (await CommitPendingTypeAheadFromPointerAsync())
             return;
 
         // Commit any in-progress batch cell edit when clicking away
         await CommitBatchEdit();
         ClearTypeSearchBuffer();
+        _typeSearchHeaderField = null; // a row click retargets type-search to the clicked cell
         ClearKeyboardNavigationSource();
         if (mouseArgs?.ShiftKey != true)
             ClearKeyboardRangeSelectionAnchor();
@@ -3243,6 +3272,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void HandleRowMouseDown(TValue item, int rowIndex, MouseEventArgs args)
     {
+        _cellClickHandledForPress = false;
+
         if (!AllowRowDragSelection) return;
 
         // Only the primary button (Button == 0) starts a drag. Right-click
@@ -3263,9 +3294,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _dragAnchorItem = item;
         _dragAnchorRowIndex = ResolveRowIndex(item, rowIndex);
-        _isDragSelecting = false;   // promoted when the browser reports movement
+        _isDragSelecting = false;   // promoted to the first drag-extend callback
         _suppressNextClickAfterDragSelect = false;
 
+        // Drag tracking runs in the browser (grid-control.js): pointer position is
+        // sampled per animation frame and the server is called only when the hovered
+        // ROW changes, with a client-painted preview for instant feedback. The old
+        // per-<tr>/<td> mouseenter server events made a 20-row drag cost 70+ serial
+        // round-trips and stalled visibly off-LAN.
         var anchorVisibleIndex = GetVisibleRowItems().IndexOf(item);
         if (anchorVisibleIndex >= 0)
             _ = RegisterDragSelectionCaptureAsync("row", anchorVisibleIndex, null);
@@ -3281,6 +3317,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleCellMouseDown(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
+        _cellClickHandledForPress = false;
+        _pressWasOnAlreadyActiveCell = false;
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         var mouseDownColumn = VisibleColumns.ElementAtOrDefault(cellIndex);
 
@@ -3289,17 +3327,35 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var previousActiveCell = _activeCell;
             var activeCellChanged = previousActiveCell?.RowIndex != resolvedRowIndex
                 || previousActiveCell?.CellIndex != cellIndex;
+            _pressWasOnAlreadyActiveCell = !activeCellChanged;
 
             if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
                 && activeCellChanged
                 && _typeAheadBuffer.Length > 0)
             {
-                var preserveSelection = HasSingleCellBulkEditSelection();
+                var preserveSelection = HasSingleCellBulkEditSelection()
+                    && _selectedCells.Contains((resolvedRowIndex, cellIndex));
                 if (await CommitPendingSingleCellTypeAheadAsync() && preserveSelection)
                 {
                     _suppressNextPointerSelectionAfterTypeAheadCommit = true;
                     return;
                 }
+            }
+
+            // HHM-473 — MultiRow twin of the block above. VB6's grid ends an in-cell
+            // edit and fires AfterEdit (the mass-edit fan-out) whenever the editor is
+            // LEFT by ANY means, clicking included; here only Enter/Tab committed the
+            // row-selection type-over because the pointer commit lived in the CLICK
+            // handlers, which run after this mousedown has already retargeted the
+            // type-ahead and wiped the buffer. Commit on the mousedown itself, before
+            // SetActiveCell/CaptureRowSelectionTypeAheadTarget, keeping the selection
+            // (same as the pointer path in CommitPendingTypeAheadFromPointerAsync).
+            if (BatchEditBehavior != GridBatchEditBehavior.SingleCell
+                && _batchEditItem == null
+                && _typeAheadBuffer.Length > 0
+                && HasRowSelectionTypeAheadSelection())
+            {
+                await CommitPendingRowSelectionTypeAheadAsync(collapseSelection: false);
             }
 
             if (activeCellChanged && IsBatchEditingDifferentCell(item, mouseDownColumn))
@@ -3320,14 +3376,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 _cellDragAnchor = (resolvedRowIndex, cellIndex);
                 _isCellDragSelecting = false;
-                var cellAnchorVisibleIndex = GetVisibleRowItems().IndexOf(item);
-                var cellAnchorField = VisibleColumns.ElementAtOrDefault(cellIndex)?.Field;
-                if (cellAnchorVisibleIndex >= 0 && !string.IsNullOrEmpty(cellAnchorField))
-                    _ = RegisterDragSelectionCaptureAsync("cell", cellAnchorVisibleIndex, cellAnchorField);
+                var anchorVisibleIndex = GetVisibleRowItems().IndexOf(item);
+                var anchorField = VisibleColumns.ElementAtOrDefault(cellIndex)?.Field;
+                if (anchorVisibleIndex >= 0 && !string.IsNullOrEmpty(anchorField))
+                    _ = RegisterDragSelectionCaptureAsync("cell", anchorVisibleIndex, anchorField);
             }
 
             var isPlainMouseDown = !args.CtrlKey && !args.MetaKey && !args.ShiftKey;
-            if (isPlainMouseDown && CanStartSingleCellClosedDropdownEdit(mouseDownColumn))
+            if (isPlainMouseDown && CanStartSingleCellClosedDropdownEdit(mouseDownColumn, item))
             {
                 var wasBatchEditingCell = !string.IsNullOrWhiteSpace(mouseDownColumn?.Field)
                     && IsBatchEditing(item, mouseDownColumn.Field);
@@ -3338,11 +3394,42 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     await FocusGridHostAsync();
                 }
             }
-            else if (CanStartMouseDownBatchDropdownEdit(mouseDownColumn))
+            else if (isPlainMouseDown && CanStartMouseDownBatchDropdownEdit(mouseDownColumn, item))
             {
-                var started = await TryStartBatchEdit(item, resolvedRowIndex, mouseDownColumn!, args.ClientX, openDropdownOnRender: true, selectAllOnStart: true);
-                if (started)
+                // Owner standard (2026-07-30): a dropdown cell NEVER opens its list
+                // on the first click. First click = closed editor (arrow + frame),
+                // second click opens — same feel as the SingleCell branch above.
+                // This branch used to pass openDropdownOnRender:true (instant open),
+                // which also made the cell unselectable: with no isPlainMouseDown
+                // gate, even Ctrl/Shift-clicks started an edit instead of extending
+                // the multi-select.
+                var wasBatchEditingCell = !string.IsNullOrWhiteSpace(mouseDownColumn?.Field)
+                    && IsBatchEditing(item, mouseDownColumn.Field);
+                // The click belonging to this SAME press must be swallowed whole: it
+                // must not upgrade the closed editor to open (two-click feel), and it
+                // must not run SelectRow — a plain-click collapse here would wipe a
+                // multi-row selection right before a fan-out edit (select N rows,
+                // edit one ItemType, CommitBatchEdit fans out).
+                //
+                // Arm BEFORE the await, not after: TryStartBatchEdit yields (the
+                // host's OnCellEdit callback, commit, StateHasChanged), and Blazor
+                // Server delivers this press's queued CLICK during those yields.
+                // Arming afterwards loses that race and the click leg instant-opens
+                // the list — seen on FAssembly ItemType/PriceLevel, whose OnCellEdit
+                // handler widens the window, while PO Setup's bare grid won it.
+                if (!wasBatchEditingCell)
                     ArmRetargetedBatchEditClickSuppression(item, mouseDownColumn!.Field);
+                var started = await TryStartBatchEdit(item, resolvedRowIndex, mouseDownColumn!, args.ClientX, openDropdownOnRender: false, selectAllOnStart: true);
+                if (started && !wasBatchEditingCell)
+                {
+                    await FocusGridHostAsync();
+                }
+                else if (!started && !wasBatchEditingCell)
+                {
+                    // Edit never started (veto, checkbox, …) — let the click behave
+                    // normally instead of leaving a stale one-shot suppression.
+                    ClearRetargetedBatchEditClickSuppression();
+                }
             }
         }
 
@@ -3353,7 +3440,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         HandleRowMouseDown(item, rowIndex, args);
     }
 
-    private bool CanStartSingleCellClosedDropdownEdit(GridColumn? col)
+    private bool CanStartSingleCellClosedDropdownEdit(GridColumn? col, TValue item)
     {
         return SingleCellColumnMassEditEnabled
             && col != null
@@ -3363,10 +3450,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !col.IsPrimaryKey
             && !string.IsNullOrEmpty(col.Field)
             && col.Type != ColumnType.CheckBox
-            && col.EditOptions?.Any() == true;
+            && HasEditOptions(col, item);
     }
 
-    private bool CanStartMouseDownBatchDropdownEdit(GridColumn? col)
+    private bool CanStartMouseDownBatchDropdownEdit(GridColumn? col, TValue item)
     {
         if (SingleCellColumnMassEditEnabled)
             return false;
@@ -3378,7 +3465,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !col.IsPrimaryKey
             && !string.IsNullOrEmpty(col.Field)
             && col.Type != ColumnType.CheckBox
-            && col.EditOptions?.Any() == true
+            && HasEditOptions(col, item)
             && col.OpenEditOptionsOnEdit;
     }
 
@@ -3395,7 +3482,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!_suppressRetargetedBatchEditClick)
             return false;
 
-        if ((DateTime.UtcNow - _mouseStartedBatchEditUtc).TotalMilliseconds > 1000)
+        // 10s, not 1s: this one-shot is consumed by the very next click on the grid,
+        // so the TTL only matters when that click never arrives (drag released off
+        // the cell). A COLD first edit (host OnCellEdit gates, JIT, SQL warmup) can
+        // take >1s between the arming mousedown and its own click being processed —
+        // with a 1s TTL that click slipped through and instant-opened the dropdown
+        // (traced live on FAssembly ItemType). A stale 10s suppression merely
+        // swallows one later click on the same cell, which under the two-click
+        // standard is indistinguishable from normal behavior.
+        if ((DateTime.UtcNow - _mouseStartedBatchEditUtc).TotalMilliseconds > 10000)
         {
             ClearRetargetedBatchEditClickSuppression();
             return false;
@@ -3762,6 +3857,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 ClearCellDragState();
             }
             _dragPreviewClearPending = true;
+            // Force the render that consumes the pending flag: the click's own
+            // render can land BEFORE this call arrives, and with no later
+            // render the press paint would sit until the JS safety net.
+            // EXCEPT while a batch editor is mounting — the extra render
+            // consumes the dropdown's one-shot OpenOnRender before its first
+            // paint, so the list mounts closed (its own render will sweep).
+            if (_batchEditItem == null && !_batchDropdownOpenOnRender)
+                await InvokeAsync(StateHasChanged);
             return;
         }
 
@@ -3804,6 +3907,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private bool _dragPreviewClearPending;
+    // Set by the cell click leg of a press so the row click leg of the SAME
+    // press does not run selection twice.
+    private bool _cellClickHandledForPress;
+    // True while the click leg of a press runs when the pressed cell was
+    // ALREADY the active cell before the press — the EditOnActiveCellClick
+    // (second click edits) gesture reads it; mousedown itself moves
+    // _activeCell, so the click leg cannot recompute this.
+    private bool _pressWasOnAlreadyActiveCell;
+    private string? _typeSearchHeaderField;
     private DotNetObjectReference<GridControl<TValue>>? _dragDotNetRef;
 
     private bool _instantFeedbackRegistered;
@@ -3817,12 +3929,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (_instantFeedbackRegistered)
             return;
-        if (!AllowSelection || SelectionSettingsRef?.Mode == SelectionMode.Cell)
+        if (!AllowSelection)
             return;
         try
         {
             _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
-            await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement);
+            await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement,
+                SelectionSettingsRef?.Mode == SelectionMode.Cell);
             _instantFeedbackRegistered = true;
         }
         catch
@@ -4638,6 +4751,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleCellClick(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
+        _cellClickHandledForPress = true;
         if (_suppressNextPointerSelectionAfterTypeAheadCommit)
         {
             _suppressNextPointerSelectionAfterTypeAheadCommit = false;
@@ -4652,6 +4766,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         var clickedCol = VisibleColumns.ElementAtOrDefault(cellIndex);
         ClearTypeSearchBuffer();
+        _typeSearchHeaderField = null; // a cell click retargets type-search to that column
 
         if (ConsumeDragSelectClickSuppression())
         {
@@ -4671,7 +4786,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && activeCellChanged
             && _typeAheadBuffer.Length > 0)
         {
-            var preserveSelection = HasSingleCellBulkEditSelection();
+            var preserveSelection = HasSingleCellBulkEditSelection()
+                && _selectedCells.Contains((resolvedRowIndex, cellIndex));
             if (await CommitPendingSingleCellTypeAheadAsync() && preserveSelection)
             {
                 await FocusGridHostAsync();
@@ -4705,10 +4821,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && clickedCol.AllowEditing
             && !clickedCol.IsPrimaryKey
             && !string.IsNullOrEmpty(clickedCol.Field);
-        var isOptionListCell = isEditableCell && clickedCol?.EditOptions?.Any() == true;
+        var isOptionListCell = isEditableCell && HasEditOptions(clickedCol, item);
+        // Owner standard (2026-07-30): first plain click on a dropdown cell shows
+        // the CLOSED editor (arrow); only the next click opens the list. The
+        // mousedown leg placed the closed editor and armed the one-shot
+        // suppression, so the click that belongs to that same press must not
+        // upgrade it to open. A later plain click (no suppression armed) reaches
+        // the TryStartBatchEdit re-entry guard and opens. Modifier clicks never
+        // start an edit — they extend the multi-select.
         var shouldOpenEditOptionsOnEdit = isOptionListCell
             && clickedCol?.OpenEditOptionsOnEdit == true
-            && !SingleCellColumnMassEditEnabled;
+            && !SingleCellColumnMassEditEnabled
+            && isPlainCellClick
+            && !suppressMouseDownClosedDropdownOpen
+            // Never upgrade-open a cell whose editor is ALREADY placed. A genuine
+            // second press lands on the editor itself (its host swallows the click)
+            // and opens via OpenOnClickWhenClosed with the press witness — so a TD
+            // click on an editing dropdown cell can only be the SAME press that
+            // placed the editor, leaking past the one-shot suppression (e.g. its
+            // TTL expired on a cold first edit). Belt-and-braces with that TTL.
+            && !(clickedCol != null
+                 && !string.IsNullOrEmpty(clickedCol.Field)
+                 && IsBatchEditing(item, clickedCol.Field));
         var shouldOpenSelectedCellEditOptionsOnClick = SingleCellColumnMassEditEnabled
             && isOptionListCell
             && clickedCol?.OpenEditOptionsOnEdit == true
@@ -4816,6 +4950,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (isEditableCell && shouldStartEditOnClick && clickedCol?.Type != ColumnType.CheckBox)
             {
                 await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX, openDropdownOnRender: shouldOpenDropdownOnEdit, selectAllOnStart: true);
+                return;
+            }
+
+            // VB6 flexEDKbdMouse (opt-in): the press landed on the cell that
+            // was already active, so this plain click is the second click of
+            // the select-then-edit gesture.
+            if (EditSettingsRef?.EditOnActiveCellClick == true
+                && isEditableCell
+                && isPlainCellClick
+                && _pressWasOnAlreadyActiveCell
+                && !clickingActiveEditCell
+                && clickedCol?.Type != ColumnType.CheckBox)
+            {
+                await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX, selectAllOnStart: true);
                 return;
             }
 
@@ -5364,7 +5512,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // when a later click asks for OpenOnRender.
         if (IsBatchEditing(item, col.Field))
         {
-            if (openDropdownOnRender && col.EditOptions?.Any() == true && !_batchDropdownOpenOnRender)
+            if (openDropdownOnRender && HasEditOptions(col, item) && !_batchDropdownOpenOnRender)
             {
                 _batchDropdownOpenOnRender = true;
                 await InvokeAsync(StateHasChanged);
@@ -5405,7 +5553,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
         _batchEditReplaceOnFirstInput = replaceOnFirstInput;
-        _batchDropdownOpenOnRender = openDropdownOnRender && col.EditOptions?.Any() == true;
+        _batchDropdownOpenOnRender = openDropdownOnRender && HasEditOptions(col, item);
         _batchEditInputRef = default;
         // Focus every batch input after render so single-click editing is
         // immediately typeable.
@@ -5765,18 +5913,76 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private sealed record GridEditOption(string Value, string Text);
 
-    private IEnumerable<GridEditOption> GetEditOptions(GridColumn col)
+    private IEnumerable<GridEditOption> GetEditOptions(GridColumn col, object? item)
     {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in GetRawEditOptions(col, item))
+        {
+            var parsed = ParseEditOption(option);
+            if (seen.Add(parsed.Value))
+                yield return parsed;
+        }
+    }
+
+    private async Task<bool> TryOpenActiveDropDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or "NumpadEnter"))
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+        if (_isEditing || _batchEditItem != null)
+            return false;
+        if (!_activeCell.HasValue)
+            return false;
+        if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var column))
+            return false;
+        if (!HasEditOptions(column, item))
+            return false;
+
+        RememberKeyboardNavigationSource(item, rowIndex, _activeCell.Value.CellIndex);
+        var started = await TryStartBatchEdit(item, rowIndex, column, openDropdownOnRender: true);
+        if (!started || !IsActiveBatchEditSource(item, column.Field))
+            return false;
+
+        _pendingBatchEditScrollIntoView = true;
+        SyncDataSourceChangeTrackers();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    private bool HasEditOptions(GridColumn? col, object? item)
+    {
+        return col != null
+            && (col.AllowCustomEditOptionValue || GetRawEditOptions(col, item).Any());
+    }
+
+    private IEnumerable<string> GetRawEditOptions(GridColumn col, object? item)
+    {
+        if (col.EditOptionsProvider != null && item != null)
+        {
+            IEnumerable<string>? options = null;
+            try
+            {
+                options = col.EditOptionsProvider(item);
+            }
+            catch
+            {
+                options = null;
+            }
+
+            if (options != null)
+            {
+                foreach (var option in options)
+                    yield return option;
+                yield break;
+            }
+        }
+
         if (col.EditOptions == null)
             yield break;
 
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var option in col.EditOptions)
-        {
-            var item = ParseEditOption(option);
-            if (seen.Add(item.Value))
-                yield return item;
-        }
+            yield return option;
     }
 
     private static GridEditOption ParseEditOption(string? option)
@@ -5836,7 +6042,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (col?.EditOptions?.Any() != true)
             return false;
 
-        var options = GetEditOptions(col).ToList();
+        var options = GetEditOptions(col, _batchEditItem).ToList();
         if (options.Count == 0)
             return true;
 
@@ -5912,19 +6118,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var editItem = item;
         var editField = col.Field;
-        var options = col.EditOptions?.ToList();
-        if (options is { Count: > 0 })
+        var options = GetEditOptions(col, item).ToList();
+        if (options.Count > 0 || col.AllowCustomEditOptionValue)
         {
             _pendingBatchEditFocus = false;
 
             builder.OpenComponent<DropDownListControl<string, GridEditOption>>(sequence);
             builder.SetKey((editItem, editField, rowIndex));
-            builder.AddAttribute(sequence + 1, "DataSource", GetEditOptions(col).ToList());
+            builder.AddAttribute(sequence + 1, "DataSource", options);
             builder.AddAttribute(sequence + 2, "Value", _batchEditValue ?? string.Empty);
             builder.AddAttribute(sequence + 3, "ValueChanged", EventCallback.Factory.Create<string>(this, async value =>
             {
                 UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
                 await CommitBatchEdit(editItem, editField);
+                await FocusGridHostAsync();
             }));
             // +2px so the closed control covers the cell's right grid-line and
             // the arrow sits flush with the cell border (no ~2px gap). The
@@ -5935,10 +6142,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 5, "CssClass", "fx-batch-dropdown");
             builder.AddAttribute(sequence + 6, "OpenOnRender", _batchDropdownOpenOnRender);
             builder.AddAttribute(sequence + 7, "OpenOnArrowClickOnly", true);
-            builder.AddAttribute(sequence + 8, "Closed", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
+            builder.AddAttribute(sequence + 8, "Closed", EventCallback.Factory.Create(this, async () =>
+            {
+                await CommitBatchEdit(editItem, editField);
+                await FocusGridHostAsync();
+            }));
             builder.AddAttribute(sequence + 9, "OnKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
             builder.AddAttribute(sequence + 10, "TextFieldName", nameof(GridEditOption.Text));
             builder.AddAttribute(sequence + 11, "ValueFieldName", nameof(GridEditOption.Value));
+            // Owner standard two-click flow: the first click placed this editor
+            // CLOSED; the NEXT click must open it whether it lands on the arrow or
+            // the body. The host div swallows clicks before the cell underneath can
+            // upgrade, so the control itself must honor body clicks when closed.
+            builder.AddAttribute(sequence + 12, "OpenOnClickWhenClosed", true);
+            builder.AddAttribute(sequence + 13, "Editable", col.AllowCustomEditOptionValue);
+            builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
             builder.CloseComponent();
         }
         else
@@ -7085,7 +7303,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && column.AllowEditing
             && !column.IsPrimaryKey
             && column.Type != ColumnType.CheckBox
-            && column.EffectiveTemplate == null
+            && column.EditTemplate == null
             && column.Commands == null
             && !string.IsNullOrWhiteSpace(column.Field);
     }
@@ -7419,7 +7637,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
-        if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryFillSelectedCellsFromActiveCellAsync(e))
+        if (await TryInvokeActiveEditButtonAsync(e) || await TryOpenActiveDropDownAsync(e))
             return;
 
         if ((e.Key is " " or "Spacebar" or "Enter" or "NumpadEnter")
@@ -7428,7 +7646,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
-        if (await TryInvokeActiveEditButtonAsync(e))
+        if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryFillSelectedCellsFromActiveCellAsync(e))
             return;
 
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
@@ -7436,12 +7654,27 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && _typeAheadBuffer.Length > 0
             && (e.Key == "Enter" || e.Key == "NumpadEnter"))
         {
-            await CommitPendingSingleCellTypeAheadAsync();
+            await CommitPendingSingleCellTypeAheadAsync(collapseSelectionToAnchor: true);
             return;
         }
 
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryCommitSelectedRowOnEnterAsync(e))
             return;
+
+        // VB6 flexEDKbdMouse (opt-in): Enter opens the in-cell editor on the
+        // active editable cell instead of falling through to navigation.
+        if ((e.Key == "Enter" || e.Key == "NumpadEnter")
+            && EditSettingsRef?.EditOnEnterKey == true
+            && _batchEditItem == null
+            && TryGetActiveKeyboardBatchEditCell(out var enterItem, out var enterRowIndex, out var enterCol)
+            && !HasEditOptions(enterCol, enterItem))
+        {
+            if (await TryStartBatchEdit(enterItem, enterRowIndex, enterCol, selectAllOnStart: true))
+            {
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+        }
 
         if (_batchEditItem == null
             && _typeAheadBuffer.Length > 0
@@ -7972,7 +8205,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var col))
             return false;
-        if (col.EditOptions?.Any() == true)
+        if (HasEditOptions(col, item))
             return false;
         if (!IsEditableTypeAheadKey(e, col))
             return false;
@@ -8222,7 +8455,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && _selectedItems.Count > 1;
     }
 
-    private async Task<bool> CommitPendingSingleCellTypeAheadAsync()
+    private async Task<bool> CommitPendingSingleCellTypeAheadAsync(bool collapseSelectionToAnchor = false)
     {
         if (_typeAheadBuffer.Length == 0)
             return false;
@@ -8235,7 +8468,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         }
 
-        await CommitSingleCellTypeAheadAsync(item, col);
+        await CommitSingleCellTypeAheadAsync(item, col, collapseSelectionToAnchor);
         return true;
     }
 
@@ -8278,7 +8511,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             || e.Key == "+";
     }
 
-    private async Task CommitSingleCellTypeAheadAsync(TValue item, GridColumn col)
+    private async Task CommitSingleCellTypeAheadAsync(TValue item, GridColumn col, bool collapseSelectionToAnchor = false)
     {
         var field = col.Field;
         var newValue = _typeAheadBuffer;
@@ -8317,6 +8550,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         _typeAheadBuffer = "";
+
+        // VB6 gItems: an Enter-commit of a multi-cell type-over collapses the
+        // selection back to the anchor cell (where the drag started).
+        if (collapseSelectionToAnchor && _selectedCells.Count > 1 && _activeCell.HasValue)
+        {
+            _selectedCells.Clear();
+            _selectedCells.Add(_activeCell.Value);
+            _lastSelectedCell = _activeCell.Value;
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
+        }
+
         await NotifyTypeAheadChangedAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -8326,6 +8570,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
             return false;
         if (_isEditing || _batchEditItem != null)
+            return false;
+        // A typed pending value owns Enter: committing the ACTIVE cell's old
+        // value here would silently discard what the user just typed (the
+        // pending type-ahead gate right after this handles that commit).
+        if (_typeAheadBuffer.Length > 0)
             return false;
         if (!SingleCellColumnMassEditEnabled || SelectionSettingsRef?.Mode != SelectionMode.Cell)
             return false;
@@ -11888,6 +12137,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             string.Equals(column.Field, field, StringComparison.OrdinalIgnoreCase));
         if (cellIndex < 0)
             return;
+
+        // Keyboard navigation funnels here — honor the RowSelecting veto the
+        // same way the mouse path (SelectRow) does, or a consumer's cancel
+        // (e.g. an unsaved-changes prompt) can never stop an arrow-key move.
+        if (!_selectedItems.Contains(item)
+            && SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && EventsRef?.RowSelecting.HasDelegate == true)
+        {
+            var selectingArgs = new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex };
+            await EventsRef.RowSelecting.InvokeAsync(selectingArgs);
+            if (selectingArgs.Cancel)
+                return;
+        }
 
         _selectedItems.Clear();
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell)

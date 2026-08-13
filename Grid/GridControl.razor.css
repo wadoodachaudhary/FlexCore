@@ -3,6 +3,18 @@
    ═══════════════════════════════════════════════════════════════════ */
 
 /* ── Grid Container ───────────────────────────────────────────────── */
+/* Editable-grid selection theme (opt-in via GridControl.EditableSelectionThemeCssClass):
+   heavily-editable grids (Edit Item DB family) use ONE light grey for every
+   selection visual — single row, multi row, single cell, multi cell — instead
+   of the light-blue row default. */
+.fx-grid.fx-grid-editable-selection {
+    --fx-grid-selected-row-bg: #e8e8e8;
+    --fx-grid-row-selected-bg: #e8e8e8;
+    --fx-grid-cell-selected-row-bg: #e8e8e8;
+    --fx-grid-selected-cell-bg: #e8e8e8;
+    --fx-grid-selected-editable-cell-bg: #e8e8e8;
+}
+
 .fx-grid {
     --fx-grid-bg: var(--fx-surface-color, #fff);
     --fx-grid-text-color: var(--fx-text-color, #212529);
@@ -33,6 +45,9 @@
     --fx-grid-selected-editable-cell-shade: rgba(0, 0, 0, 0.04);
     --fx-grid-selected-cell-border: #6b7e8f;
     --fx-grid-active-cell-bg: transparent;
+    /* Editing-state border: a darker shade derived from the grid's own
+       row-selection color (overridable per grid/theme). */
+    --fx-grid-editing-cell-border: color-mix(in srgb, var(--fx-grid-selected-row-bg, #b6c8dd) 45%, #1f2937);
     --fx-grid-active-cell-border: #5f768b;
     --fx-grid-filter-mark-color: var(--fx-btn-bg, #0d6efd);
     --fx-grid-checkbox-accent: var(--fx-text-color, #000);
@@ -3577,4 +3592,51 @@ tr.fx-row:has(.fx-dropdown-panel) {
 td.fx-drag-preview-cell {
     background: var(--fx-grid-selected-row-bg) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
+}
+
+
+/* ── Editing-state emphasis (owner spec 2026-08-12) ─────────────────────────
+   While a cell is ACTUALLY being edited — batch editor mounted via typing
+   (after click or keyboard navigation), double-click, or BeginEditCellAsync —
+   the cell visibly changes form: the editor box is slightly ENLARGED beyond
+   the cell, has a SOLID border in a darker shade of the row-selection color,
+   and a BIGGER font. Reverts automatically when the editor unmounts (Enter /
+   Escape / click-away / navigation), because the classes disappear with it.
+   Dropdown editors keep their own layout (excluded). */
+/* Border drawn ON the cell itself as an inset ring — no positioning, no
+   overhang, nothing an ancestor can clip. Selector weight (tr context +
+   doubled class) deliberately exceeds the selected-cell ring rule
+   `tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected` (0,5,2), which
+   otherwise swallows the editing border. */
+.fx-grid ::deep tr.fx-row .fx-cell.fx-batch-editing.fx-batch-editing:not(.fx-batch-dropdown-editing),
+tr.fx-row .fx-cell.fx-batch-editing.fx-batch-editing:not(.fx-batch-dropdown-editing) {
+    box-shadow: inset 0 0 0 2px var(--fx-grid-editing-cell-border, #5f768b) !important;
+    background: #fff !important;
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing:not(.fx-batch-dropdown-editing) .fx-batch-input,
+.fx-cell.fx-batch-editing:not(.fx-batch-dropdown-editing) .fx-batch-input {
+    font-size: 1.23em;
+    padding: 0 6px;
+}
+
+/* Pending multi-cell type-ahead: the user is editing several cells at once —
+   same border/font emphasis on every pending cell (no physical enlargement;
+   these are N live table cells). */
+.fx-grid ::deep tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell,
+tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell {
+    box-shadow: inset 0 0 0 1.5px var(--fx-grid-editing-cell-border, #5f768b) !important;
+    font-size: 1.19em;
+}
+
+
+/* While the batch editor owns the cell, the … edit button would wrap under
+   the enlarged editor text (owner screenshot 2026-08-12) — hide it for the
+   duration; it returns with the normal cell on commit/cancel. */
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn,
+.fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn,
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-grid-popup-btn,
+.fx-cell.fx-batch-editing.fx-batch-editing .fx-grid-popup-btn,
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .poindex-btn,
+.fx-cell.fx-batch-editing.fx-batch-editing .poindex-btn {
+    display: none !important;
 }

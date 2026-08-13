@@ -724,7 +724,7 @@
 
                         @* TOP spacer — height of all rows above the window. *@
                         <tr aria-hidden="true" class="fx-grid-window-spacer">
-                            <td colspan="999" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
                         </tr>
                         @for (int wi = winStart; wi < winEnd; wi++)
                         {
@@ -732,7 +732,7 @@
                         }
                         @* BOTTOM spacer — height of all rows below the window. *@
                         <tr aria-hidden="true" class="fx-grid-window-spacer">
-                            <td colspan="999" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
                         </tr>
                     }
                     else
