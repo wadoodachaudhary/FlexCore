@@ -1832,3 +1832,13 @@ export function unregisterGridInstantSelectionFeedback(gridRoot) {
     const cleanup = gridInstantFeedbackBindings.get(gridRoot);
     if (cleanup) { cleanup(); gridInstantFeedbackBindings.delete(gridRoot); }
 }
+
+
+// Server-applied keystrokes during the editor's focus round-trip must reach
+// the mounted UNCONTROLLED input too — its mount snapshot predates them, and
+// the first native oninput would otherwise overwrite the bridged characters.
+export function setBatchEditorValue(input, value) {
+    if (!input) return;
+    input.value = value ?? "";
+    try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* non-text input */ }
+}

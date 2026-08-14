@@ -143,6 +143,12 @@ else
     /// value back in and Blazor reverts the DOM, wiping in-progress text (the Feedback comment
     /// box lost text when the fire-and-forget Jira sync re-rendered the page).</summary>
     [Parameter] public bool UpdateOnInput { get; set; }
+
+    /// <summary>
+    /// When &gt; 0, Tab is captured by the editor and inserts this many
+    /// spaces at the caret instead of moving focus out of the app.
+    /// </summary>
+    [Parameter] public int TabSpaces { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
@@ -257,12 +263,25 @@ else
         }
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender && TabSpaces > 0)
+        {
+            var module = await GetControlJsModuleAsync();
+            if (module != null)
+            {
+                try { await module.InvokeVoidAsync("registerTabCapture", _inputElement, TabSpaces); }
+                catch { /* circuit teardown */ }
+            }
+        }
+    }
+
     private async ValueTask<IJSObjectReference?> GetControlJsModuleAsync()
     {
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/FlexKit/textbox-control.js");
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js");
         }
         catch
         {

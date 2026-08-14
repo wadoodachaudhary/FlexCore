@@ -286,7 +286,7 @@
         try
         {
             _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/FlexKit/splitter-control.js");
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/splitter-control.js");
             return await _module.InvokeAsync<double>("measureSplitter", _rootElement, Vertical);
         }
         catch

@@ -488,7 +488,7 @@ else
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/FlexKit/textbox-control.js");
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js");
         }
         catch
         {

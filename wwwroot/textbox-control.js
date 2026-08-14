@@ -223,3 +223,16 @@ function isRightToLeft(element) {
 function toggleReadingOrder(element) {
     element.dir = isRightToLeft(element) ? "ltr" : "rtl";
 }
+
+// Multi-line editors that opt in (TabSpaces > 0): Tab inserts spaces at the
+// caret instead of moving focus out of the app.
+export function registerTabCapture(el, spaces) {
+    if (!el) return;
+    el.dataset.fxTabCapture = "1"; // tells the dialog tab loop this editor owns Tab
+    el.addEventListener("keydown", e => {
+        if (e.key !== "Tab" || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        e.preventDefault();
+        el.setRangeText(" ".repeat(spaces), el.selectionStart, el.selectionEnd, "end");
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+}

@@ -102,7 +102,10 @@ public enum GridRowSelectorHandleShape
 {
     HalfButton,
     Button,
-    CheckBox
+    CheckBox,
+    /// <summary>Passive VB6-style fixed strip: no button, no click — purely
+    /// the grey row-header look (VSFlexGrid FixedCols=1).</summary>
+    Flat
 }
 
 public enum GridTheme
