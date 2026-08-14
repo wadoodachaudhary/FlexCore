@@ -963,6 +963,54 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // has something to target.
     private ElementReference _batchEditInputRef;
 
+    // One-shot render suppression: keystrokes the DOM editor fully owns must
+    // not re-render the whole grid once per typed character (the editor's
+    // keydown EventCallback AND the same key bubbling to the grid host each
+    // schedule a render).
+    private bool _suppressNextRenderOnce;
+
+    protected override bool ShouldRender()
+    {
+        if (_suppressNextRenderOnce)
+        {
+            _suppressNextRenderOnce = false;
+            return false;
+        }
+
+        return true;
+    }
+
+    // Keys the mounted batch editor handles natively (caret editing) — the
+    // grid has no work to do for them. Enter/Escape/Tab and vertical arrows
+    // keep their grid semantics; horizontal arrows keep the leave-at-edge
+    // navigation logic.
+    private static bool IsEditorOwnedTypingKey(KeyboardEventArgs e)
+    {
+        if (e.AltKey || e.CtrlKey || e.MetaKey)
+            return false;
+
+        return e.Key.Length == 1
+            || e.Key is "Backspace" or "Delete" or "Shift";
+    }
+
+    // Bridge-applied characters (typed before the editor's focus round trip
+    // lands) must be pushed into the mounted uncontrolled input — its mount
+    // snapshot predates them, and the first native oninput would otherwise
+    // overwrite everything applied server-side.
+    private async Task PushBatchEditorDomValueAsync()
+    {
+        if (string.IsNullOrEmpty(_batchEditInputRef.Id))
+            return;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("setBatchEditorValue", _batchEditInputRef, _batchEditValue ?? string.Empty);
+        }
+        catch { /* editor unmounted mid-bridge */ }
+    }
+
     // Lazy-imported ES module from wwwroot/grid-control.js. We only
     // pay the import round-trip the first time SelectAllOnEdit fires;
     // subsequent edits reuse the module reference.
@@ -1518,7 +1566,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>Overscan rows kept above and below the visible slice so a fast
     /// flick never outruns the render.</summary>
-    [Parameter] public int WindowOverscanRows { get; set; } = 260;
+    [Parameter] public int WindowOverscanRows { get; set; } = 60;
 
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
@@ -1530,7 +1578,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Rows to render (visible + overscan). Defaults large so the FIRST
     /// paint has a full buffered window before the initial scroll callback
     /// right-sizes it to the real viewport height.</summary>
-    private int _winCount = 520;   // resized from WindowOverscanRows after the first scroll sync
+    private int _winCount = 180;   // resized from WindowOverscanRows after the first scroll sync
 
     /// <summary>The vertical scroll container (<c>.fx-grid-content</c>,
     /// <c>overflow:auto</c>, bounded by <see cref="Height"/>). The scroll reader
@@ -6575,6 +6623,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!IsActiveBatchEditSource(sourceItem, sourceField))
             return;
 
+        if (IsEditorOwnedTypingKey(e))
+        {
+            _suppressNextRenderOnce = true;
+            return;
+        }
+
         if (await TryCommitBatchEditAndExtendSelectionWithShiftArrowAsync(e))
             return;
 
@@ -6835,7 +6889,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             targetCellIndex,
             targetColumn,
             scrollIntoView: true,
-            allowSelectionOnly: true);
+            allowSelectionOnly: true,
+            requestRender: false);
     }
 
     private async Task<bool> NavigateToRelativeRowEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, int rowDelta)
@@ -6867,7 +6922,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             targetCellIndex,
             targetColumn,
             scrollIntoView: true,
-            allowSelectionOnly: true);
+            allowSelectionOnly: true,
+            requestRender: false);
     }
 
     private bool TryResolveKeyboardNavigationSource(bool backwards, out TValue item, out int rowIndex, out int cellIndex)
@@ -6955,7 +7011,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     targetRowIndex,
                     targetCellIndex,
                     targetColumn,
-                    allowSelectionOnly: true))
+                    allowSelectionOnly: true,
+                    requestRender: false))
                 return;
 
             cursorItem = targetItem;
@@ -6987,7 +7044,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     targetRowIndex,
                     targetCellIndex,
                     targetColumn,
-                    allowSelectionOnly: true))
+                    allowSelectionOnly: true,
+                    requestRender: false))
                 return;
 
             cursorItem = targetItem;
@@ -7211,7 +7269,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int cellIndex,
         GridColumn column,
         bool scrollIntoView = false,
-        bool allowSelectionOnly = false)
+        bool allowSelectionOnly = false,
+        bool requestRender = true)
     {
         if (string.IsNullOrWhiteSpace(column.Field))
             return false;
@@ -7243,7 +7302,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (allowSelectionOnly)
         {
             await FocusGridHostAsync();
-            await InvokeAsync(StateHasChanged);
+            // Keyboard navigation passes requestRender:false — the keydown
+            // handler's implicit render already covers the active-cell move;
+            // an extra explicit render doubles the wire batches per keypress
+            // (each batch is a full round trip on slow connections).
+            if (requestRender)
+                await InvokeAsync(StateHasChanged);
             return true;
         }
 
@@ -7261,18 +7325,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     return false;
 
                 await FocusGridHostAsync();
-                await InvokeAsync(StateHasChanged);
+                if (requestRender)
+                    await InvokeAsync(StateHasChanged);
                 return true;
             }
 
             _pendingBatchEditScrollIntoView = scrollIntoView;
             SyncDataSourceChangeTrackers();
-            await InvokeAsync(StateHasChanged);
+            if (requestRender)
+                await InvokeAsync(StateHasChanged);
             return true;
         }
 
         await FocusGridHostAsync();
-        await InvokeAsync(StateHasChanged);
+        if (requestRender)
+            await InvokeAsync(StateHasChanged);
         return true;
     }
 
@@ -7613,6 +7680,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        // While the batch editor owns the keyboard (mounted, focus applied),
+        // plain typing keys bubbling up from its input need no grid work.
+        if (_batchEditItem != null && !_pendingBatchEditFocus && IsEditorOwnedTypingKey(e))
+        {
+            _suppressNextRenderOnce = true;
+            return;
+        }
+
+        if (EventsRef?.OnHostKeyDown.HasDelegate == true)
+            await EventsRef.OnHostKeyDown.InvokeAsync(e);
+
         if (await TryHandleCellContextShortcutAsync(e))
             return;
 
@@ -7824,6 +7902,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 return true;
 
             UpdateBatchEditValue(_batchEditItem, _batchEditField, current[..^1]);
+            await PushBatchEditorDomValueAsync();
             await InvokeAsync(StateHasChanged);
             return true;
         }
@@ -7836,6 +7915,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             : (_batchEditValue ?? string.Empty) + e.Key;
         _pendingBatchEditSelectAll = false;
         UpdateBatchEditValue(_batchEditItem, _batchEditField, nextValue);
+        await PushBatchEditorDomValueAsync();
         await InvokeAsync(StateHasChanged);
         return true;
     }
@@ -9305,8 +9385,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>VB6 passes the raw column KEY as the InputBox title
     /// (FMain.frm:2418 <c>InputBox(..., MouseCtrl.ColKey(MouseCol))</c>) — not the
     /// caption and not a prettified form of it.</summary>
-    private string RenameColumnDialogTitle =>
-        string.IsNullOrWhiteSpace(_renameColumnField) ? "Column" : _renameColumnField;
+    private string RenameColumnDialogTitle
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_renameColumnField))
+                return "Column";
+
+            // The column's DISPLAY caption (e.g. "Community"), not the raw
+            // colkey ("Area") — QA reads the title as the column's name.
+            var col = Columns.FirstOrDefault(c =>
+                string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
+            return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
+        }
+    }
 
     private string RenameColumnPrompt =>
         $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
@@ -10291,6 +10383,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var isEmphasized = IsRowSelectorHandleEmphasized(item);
         var canShowHandle = CanShowRowSelectorHandle(item);
         var cellClass = "fx-cell fx-row-selector-cell"
+            + (RowSelectorHandleShape == GridRowSelectorHandleShape.Flat ? " fx-row-selector-cell-flat" : string.Empty)
             + (isSelected ? " fx-row-selector-selected" : string.Empty)
             + (isEmphasized ? " fx-row-selector-emphasis" : string.Empty);
 
@@ -10298,7 +10391,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         builder.AddAttribute(1, "class", cellClass);
         builder.AddAttribute(2, "style", RowSelectorHandleColumnStyle);
 
-        if (canShowHandle)
+        if (canShowHandle && RowSelectorHandleShape == GridRowSelectorHandleShape.Flat)
+        {
+            // Passive strip — the td's own class/style carry the look; no
+            // interactive handle is rendered.
+        }
+        else if (canShowHandle)
         {
             builder.OpenElement(3, "button");
             builder.AddAttribute(4, "type", "button");
@@ -11433,6 +11531,26 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _ = InvokeAsync(StateHasChanged);
             _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
         }
+    }
+
+    public Task SelectRowIndexAsync(int rowIndex)
+    {
+        SelectRow(rowIndex);
+        return Task.CompletedTask;
+    }
+
+    public Task SelectAndRevealRowAsync(TValue item)
+    {
+        var index = PagedData.ToList().IndexOf(item);
+        if (index >= 0)
+            SelectRow(index);
+        return Task.CompletedTask;
+    }
+
+    public Task SelectAndRevealRowAsync(int rowIndex)
+    {
+        SelectRow(rowIndex);
+        return Task.CompletedTask;
     }
 
     /// <summary>

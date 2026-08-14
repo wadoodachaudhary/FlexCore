@@ -423,7 +423,7 @@
         try
         {
             return _menuJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", "./_content/FlexKit/menu-control.js");
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/menu-control.js");
         }
         catch
         {

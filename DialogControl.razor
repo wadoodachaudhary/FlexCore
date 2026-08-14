@@ -1,5 +1,8 @@
 @namespace Fx.ControlKit
 @using Microsoft.AspNetCore.Components.Web
+@using Microsoft.JSInterop
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 
 @if (Visible)
 {
@@ -10,7 +13,7 @@
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
          @onkeydown="HandleKeyDown">
-        <div class="@DialogCssClass" style="@DialogStyle" @onclick:stopPropagation="true">
+        <div class="@DialogCssClass" style="@DialogStyle" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true">
             <div class="fx-dialog-header"
                  @onmousedown="HandleDragStart"
                  @onmousedown:preventDefault="true"
@@ -94,12 +97,28 @@
 
 @code {
     [Parameter] public bool Visible { get; set; }
+
+    /// <summary>
+    /// Focus the first focusable control in the dialog when it opens, so
+    /// keyboard input goes to the popup instead of the window under it.
+    /// </summary>
+    [Parameter] public bool AutoFocus { get; set; } = true;
     [Parameter] public string? Header { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool IsModal { get; set; } = true;
     [Parameter] public bool ShowCloseIcon { get; set; } = true;
     [Parameter] public bool CloseOnEscape { get; set; }
+
+    /// <summary>
+    /// When set, Escape invokes this instead of the <see cref="OnClose"/>
+    /// path — for dialogs whose ✕/close COMMITS while Escape must CANCEL.
+    /// </summary>
+    [Parameter] public EventCallback OnEscape { get; set; }
+
+    /// <summary>Ctrl+Enter requests close (the OnClose path) — the keyboard
+    /// "OK" for dialogs whose close commits.</summary>
+    [Parameter] public bool CloseOnCtrlEnter { get; set; }
     [Parameter] public bool CloseOnOverlayClick { get; set; }
     [Parameter] public bool Draggable { get; set; } = true;
     [Parameter] public bool ShowSystemMenu { get; set; } = true;
@@ -138,6 +157,12 @@
     private double _dialogOffsetX;
     private double _dialogOffsetY;
     private bool _systemMenuVisible;
+    private ElementReference _dialogElement;
+    private bool _autoFocusApplied;
+    private bool _wasVisibleForFocus;
+    private bool _keysRegisteredForShow;
+    private DotNetObjectReference<DialogControl>? _selfRef;
+    private IJSObjectReference? _focusModule;
     private double _systemMenuX;
     private double _systemMenuY;
 
@@ -256,10 +281,30 @@
             return;
         }
 
-        if (CloseOnEscape && e.Key == "Escape")
+        // Escape / Ctrl+Enter are handled by the CAPTURE-phase JS listener
+        // (registerDialogKeys) so they work even when the focused control stops
+        // keydown propagation — do not double-handle them here.
+        if (e.Key == "Escape" || (e.CtrlKey && (e.Key == "Enter" || e.Key == "NumpadEnter")))
+            return;
+
+        // Every other key is content typing — this handler fires once per
+        // keystroke anywhere in the dialog, and re-rendering the dialog (and
+        // its content fragments) per character is what makes popup editors
+        // sluggish.
+        _suppressNextRenderOnce = true;
+    }
+
+    private bool _suppressNextRenderOnce;
+
+    protected override bool ShouldRender()
+    {
+        if (_suppressNextRenderOnce)
         {
-            await RequestClose();
+            _suppressNextRenderOnce = false;
+            return false;
         }
+
+        return true;
     }
 
     private Task HandleOverlayMouseMove(MouseEventArgs e)
@@ -458,5 +503,99 @@
             await Closed.InvokeAsync();
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!Visible)
+        {
+            _autoFocusApplied = false;
+            _keysRegisteredForShow = false;
+            // The popup must yield focus back to the caller it took it from.
+            if (_wasVisibleForFocus)
+            {
+                _wasVisibleForFocus = false;
+                if (_focusModule != null)
+                {
+                    try { await _focusModule.InvokeVoidAsync("restoreFocus"); } catch { /* circuit gone */ }
+                }
+            }
+            return;
+        }
+
+        if (!_keysRegisteredForShow)
+        {
+            _keysRegisteredForShow = true;
+            try
+            {
+                _focusModule ??= await JS.InvokeAsync<IJSObjectReference>(
+                    "import", $"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await _focusModule.InvokeVoidAsync("registerDialogKeys", _dialogElement, _selfRef);
+            }
+            catch { /* prerender / circuit teardown */ }
+        }
+
+        if (_autoFocusApplied)
+            return;
+        _autoFocusApplied = true;
+        _wasVisibleForFocus = true;
+
+        try
+        {
+            _focusModule ??= await JS.InvokeAsync<IJSObjectReference>(
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
+            // AutoFocus=false hosts manage their own focus (e.g. a picklist
+            // focusing its grid) — still capture the caller so closing the
+            // dialog gives focus back.
+            if (AutoFocus)
+                await _focusModule.InvokeVoidAsync("focusFirst", _dialogElement);
+            else
+                await _focusModule.InvokeVoidAsync("captureFocus");
+        }
+        catch
+        {
+            // Prerender / circuit teardown — at minimum pull focus into the
+            // dialog so keys stop reaching the window underneath.
+            if (AutoFocus)
+            {
+                try { await _dialogElement.FocusAsync(); } catch { /* disposed */ }
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnDialogContentEscapeAsync()
+    {
+        if (_moveArmed)
+        {
+            _moveArmed = false;
+            return;
+        }
+
+        if (OnEscape.HasDelegate)
+        {
+            await OnEscape.InvokeAsync();
+            return;
+        }
+
+        if (CloseOnEscape)
+            await RequestClose();
+    }
+
+    [JSInvokable]
+    public async Task OnDialogContentCtrlEnterAsync()
+    {
+        if (CloseOnCtrlEnter)
+            await RequestClose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _selfRef?.Dispose();
+        if (_focusModule != null)
+        {
+            try { await _focusModule.DisposeAsync(); } catch { /* circuit gone */ }
+        }
     }
 }
