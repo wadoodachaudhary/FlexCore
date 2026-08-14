@@ -42,11 +42,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private int _completedColumnsGeneration;
 
-    // Every GridColumn registration used to queue its OWN fire-and-forget
-    // re-render, so mounting an N-column grid shipped a stack of render
-    // batches — on a slow link the header visibly assembled column by
-    // column (HHM-756). Coalesce: registrations arriving before the queued
-    // render executes share one StateHasChanged.
+    // Column-registration redraws share one queued render: registrations
+    // arriving before the queued render executes coalesce into a single
+    // StateHasChanged, so a grid mount ships one batch, not one per column.
     private bool _columnsChangedRenderQueued;
 
     private void QueueColumnsChangedRender()
@@ -243,7 +241,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// scrollWidth — but it needs the rows to be on screen. Falls back to the
     /// character estimate automatically whenever the measurement is unavailable.</summary>
     [Parameter] public bool AutoFitUseDomMeasurement { get; set; } = true;
-
     /// <summary>
     /// When true, text cell values that start with '=' are evaluated as
     /// row-scoped arithmetic formulas. Column formulas configured on
@@ -374,6 +371,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// list instead of the standard group/hide/rename/print command set.
     /// </summary>
     [Parameter] public bool HeaderContextMenuShowsColumns { get; set; }
+
+    /// <summary>
+    /// Optional host action exposed as Attachments in the standard column-header
+    /// menu. The selected column field is supplied so hosts can retain context.
+    /// The menu item is hidden when no handler is registered.
+    /// </summary>
+    [Parameter] public EventCallback<string> OnHeaderAttachmentsRequested { get; set; }
 
     /// <summary>
     /// Enables a lightweight Cut/Copy/Paste/Delete menu on data cells. Off by
@@ -878,6 +882,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _isDragSelecting;
     private bool _suppressNextClickAfterDragSelect;
     private DateTime _suppressNextClickAfterDragSelectUntilUtc = DateTime.MinValue;
+    // One-shot latch: a press whose click reached HandleCellClick must not ALSO
+    // run HandleRowClick. The td's onclick stopPropagation is meant to guarantee
+    // that, but it is not honored on every grid (the tr click leaks through and
+    // the second SelectRow pass un-toggles Ctrl / collapses Shift ranges).
+    // Reset on every mousedown, consumed by the leaked row click.
+    private bool _cellClickHandledForPress;
+    // True while the click leg of a press runs when the pressed cell was
+    // ALREADY the active cell before the press — the EditOnActiveCellClick
+    // (second click edits) gesture reads it; mousedown itself moves
+    // _activeCell, so the click leg cannot recompute this.
+    private bool _pressWasOnAlreadyActiveCell;
     private (int RowIndex, int CellIndex)? _cellDragAnchor;
     private bool _isCellDragSelecting;
 
@@ -919,6 +934,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private TValue? _typeSearchMatchItem;
     private string? _typeSearchMatchField;
     private bool _hasTypeSearchMatch;
+    // Owner directive 2026-08-01: clicking/sorting a column HEADER makes that
+    // column the type-search target until the user clicks a cell elsewhere.
+    private string? _typeSearchHeaderField;
 
     // Set by StartBatchEdit. Consumed by OnAfterRenderAsync after the
     // batch input exists in the DOM so a single-click edit immediately
@@ -1105,11 +1123,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // always arrives before the rebuild, so this path survives it.
     private string? _lastGripDownField;
     private DateTime _lastGripDownAt;
-    private const int GripDoubleClickMs = 500;
+    private const int GripDoubleClickMs = 700;
 
     /// <summary>Movement under this many px is hand tremor, not a resize.</summary>
-    private const double GripJitterPx = 3;
-
+    private const double GripJitterPx = 6;
     private TValue? _resizingRowItem;
     private int _resizingRowIndex = -1;
     private double _rowResizeStartY;
@@ -1603,16 +1620,38 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// scroll the container back to the top so the first paint isn't blank.</summary>
     private bool _pendingWindowScrollReset;
 
+    /// <summary>An explicit programmatic row reveal waiting for the requested row
+    /// to be present in the rendered DOM.</summary>
+    private int? _pendingRowRevealIndex;
+    private int _pendingRowRevealAttempts;
+
+    /// <summary>Real row pitch, header height and scrollport height, measured from the
+    /// DOM by <c>measureGridMetrics</c>. 0 until the first measurement succeeds, and
+    /// every consumer falls back to its old constant while that is the case.</summary>
+    private double _measuredRowHeightPx;
+    private double _measuredHeaderPx;
+    private double _measuredViewportPx;
+
+    /// <summary>Set once the metrics above hold real numbers. Cleared when the data
+    /// source changes, so a reload re-measures (font/theme/row-height can change with it).</summary>
+    private bool _gridMetricsMeasured;
+
     /// <summary>
     /// Resolved data-row height (px) used to size the spacer rows and translate
     /// scrollTop into a row index. Honors <see cref="RowHeight"/> when the consumer
-    /// sets it; otherwise 16px — the measured compact data-row height (11px font,
-    /// 1.1 line-height). Variable heights (<see cref="RowHeightSelector"/>, user
-    /// row-resize, the inline edit row) can drift from this fixed size; the
-    /// overscan absorbs minor drift.
+    /// sets it; otherwise the row pitch MEASURED from the rendered table.
+    ///
+    /// The old fallback was a hardcoded 16px, which no theme actually produces — real
+    /// grids measure ~14px, and some alternate 15.5/16. Every px of error compounds:
+    /// scrollTop÷rowHeight picks the wrong first visible row, and the top spacer
+    /// (winStart × rowHeight) then places the window at a position the real rows do not
+    /// occupy, so content shifts under the user on a window move. 16 stays as the
+    /// last-resort value for the window between first paint and first measurement.
     /// </summary>
     private double _rowHeightPx =>
-        RowHeight > 0 ? Math.Max(MinRowHeight, RowHeight) : 16;
+        RowHeight > 0
+            ? Math.Max(MinRowHeight, RowHeight)
+            : (_measuredRowHeightPx > 0 ? _measuredRowHeightPx : 16);
 
     /// <summary>
     /// Window the flat row path only where it helps and has a real scroll
@@ -2146,6 +2185,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Put the caret in the Choose Columns list as soon as it opens, so Up/Down drive the
+        // dialog straight away instead of falling through to the grid behind it.
+        if (_focusChooseColumnsList && _showChooseColumnsDialog)
+        {
+            _focusChooseColumnsList = false;
+            try { await _chooseColumnsListRef.FocusAsync(); } catch { }
+        }
+
+        // Keep the highlighted row visible as the user arrows through the list. Focusing the row
+        // makes the browser scroll it into view on BOTH edges — the manual "is it below the
+        // bottom?" maths that only ever handles scrolling DOWN is what left an upward move
+        // tucked under the top of the box.
+        if (_scrollChooseColumnsSelectionIntoView && _showChooseColumnsDialog)
+        {
+            _scrollChooseColumnsSelectionIntoView = false;
+            if (!string.IsNullOrEmpty(_chooseColumnsSelectedField)
+                && _chooseColumnsRowRefs.TryGetValue(_chooseColumnsSelectedField, out var rowRef))
+            {
+                try { await rowRef.FocusAsync(); } catch { }
+            }
+        }
+
         if (AutoFocusFirstCell && _autoFocusFirstCellAttempts < 3
             && PagedData.Any() && VisibleColumns.Any())
         {
@@ -2155,13 +2216,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await FocusGridHostAsync();
         }
 
-        // Right-click menus open with the first item highlighted, as the Win32
-        // popup menus they replace did.
-        if (_focusMenuPending && (_showHeaderContextMenu || _showCellContextMenu))
+        // Keep the open menu inside the viewport on every render — the inline
+        // Insert-a-column submenu grows it after open — then focus it so
+        // keyboard navigation is ready without preselecting a command.
+        if (_showHeaderContextMenu || _showCellContextMenu)
         {
-            _focusMenuPending = false;
-            await FocusMenuItemAsync(
-                _showHeaderContextMenu ? _headerMenuElement : _cellMenuElement, "first");
+            var menu = _showHeaderContextMenu ? _headerMenuElement : _cellMenuElement;
+            await ClampMenuIntoViewportAsync(menu);
+            if (_focusMenuPending)
+            {
+                _focusMenuPending = false;
+                await FocusMenuItemAsync(menu, "menu");
+            }
         }
 
         // Re-apply initial group columns now that columns are loaded. Redraw
@@ -2195,7 +2261,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await EnsureRowDragSelectionAutoScrollRegisteredAsync();
         await EnsureScrollbarActivityRegisteredAsync();
         await EnsureFilterPopupDragRegisteredAsync();
+        // MUST precede EnsureGridWindowScrollRegisteredAsync: registering the scroll
+        // reader fires an immediate initial sync, and that sync sizes the row window
+        // from _rowHeightPx. Measure first, or the window is sized from the 16px
+        // fallback and then re-sized — one extra full re-render — the moment the
+        // measured pitch (14px here) arrives and changes the visible-row count.
+        await EnsureGridMetricsMeasuredAsync();
         await EnsureGridWindowScrollRegisteredAsync();
+        await EnsureActiveCellScrollSyncRegisteredAsync();
 
         // Once columns have rendered for the first time after a new
         // PersistenceKey is supplied, pull the saved settings.
@@ -2258,7 +2331,89 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await ResetInitialGridScrollIfNeededAsync(firstRender);
         await ApplyPendingWindowScrollResetAsync();
         await EnsurePendingFirstRowSelectionAsync();
+        await ApplyPendingRowRevealAsync();
         await RestoreFilterPopupFocusAsync();
+    }
+
+    /// <summary>
+    /// Measure the grid's real geometry once it has rows in the DOM: the row pitch,
+    /// the sticky header's height and the scrollport height. Also publishes the header
+    /// height into CSS as <c>--fx-grid-header-h</c> so <c>scroll-padding-top</c> keeps
+    /// the browser's own scroll-into-view clear of the header.
+    ///
+    /// Runs at most once per grid: it retries each render only while no data rows have
+    /// been rendered yet (an empty grid has nothing to measure), and stops for good on
+    /// the first successful read. <see cref="ClearSelectionIfDataSourceChanged"/> clears
+    /// the flag so a data reload re-measures.
+    /// </summary>
+    private async Task EnsureGridMetricsMeasuredAsync()
+    {
+        if (_gridMetricsMeasured)
+            return;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+
+            var metrics = await _gridJsModule.InvokeAsync<GridMetrics?>(
+                "measureGridMetrics", _gridHostElement);
+
+            if (metrics is null)
+                return;
+
+            _measuredHeaderPx = metrics.HeaderPx;
+            _measuredViewportPx = metrics.ViewportPx;
+
+            // RowPx is 0 until data rows exist. Leave the flag clear so the next render
+            // re-measures, rather than locking in a header-only read of an empty grid.
+            if (metrics.RowPx > 0)
+            {
+                _measuredRowHeightPx = metrics.RowPx;
+                _gridMetricsMeasured = true;
+            }
+        }
+        catch (Exception)
+        {
+            // Best-effort. Every consumer falls back to its previous constant, so a
+            // failed measurement costs accuracy, never correctness.
+        }
+    }
+
+    /// <summary>DOM geometry returned by <c>measureGridMetrics</c> in grid-control.js.</summary>
+    private sealed record GridMetrics(double HeaderPx, double RowPx, double ViewportPx);
+
+    /// <summary>Set once <c>registerActiveCellScrollSync</c> has attached its
+    /// MutationObserver to this grid's root element.</summary>
+    private bool _activeCellScrollSyncRegistered;
+
+    /// <summary>
+    /// Attach the browser-side observer that scrolls the active row into view in
+    /// the SAME painted frame as the highlight move (see
+    /// <c>registerActiveCellScrollSync</c> in grid-control.js). Without it,
+    /// keyboard navigation shows a one-frame flicker: the highlight lands first,
+    /// the scroll correction arrives a round-trip later. The post-render pass in
+    /// <see cref="EnsureActiveCellVisibleAsync"/> stays as the fallback — when the
+    /// observer has already corrected, that pass early-outs inside its epsilon.
+    /// </summary>
+    private async Task EnsureActiveCellScrollSyncRegisteredAsync()
+    {
+        if (_activeCellScrollSyncRegistered)
+            return;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync(
+                "registerActiveCellScrollSync", _gridHostElement);
+            _activeCellScrollSyncRegistered = true;
+        }
+        catch (Exception)
+        {
+            // Best-effort. Keyboard scroll still works via the post-render pass,
+            // just one frame late.
+        }
     }
 
     /// <summary>
@@ -2321,6 +2476,42 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         catch (Exception)
         {
             // Best-effort viewport correction.
+        }
+    }
+
+    private async Task ApplyPendingRowRevealAsync()
+    {
+        if (!_pendingRowRevealIndex.HasValue)
+            return;
+
+        var displayRowIndex = _pendingRowRevealIndex.Value;
+        _pendingRowRevealIndex = null;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            var revealed = await _gridJsModule.InvokeAsync<bool>(
+                "scrollSelectedGridRowToTop",
+                _gridHostElement,
+                displayRowIndex,
+                Math.Max(0, displayRowIndex * _rowHeightPx));
+
+            if (!revealed && _pendingRowRevealAttempts < 2)
+            {
+                _pendingRowRevealAttempts++;
+                _pendingRowRevealIndex = displayRowIndex;
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            _pendingRowRevealAttempts = 0;
+        }
+        catch (Exception)
+        {
+            _pendingRowRevealAttempts = 0;
+            // Selection remains valid if the browser is disconnecting or the
+            // grid is removed before the best-effort viewport move completes.
         }
     }
 
@@ -2552,6 +2743,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private int GetKeyboardPageRowCount()
     {
+        // Measured scrollport minus the measured sticky header is the true number of
+        // rows a PageUp/PageDown should travel. The estimate below it had to guess
+        // BOTH terms — an 18px row and a 24px header allowance — and neither matches
+        // any real theme, so a page used to land the active row at an arbitrary
+        // offset from the header.
+        if (_measuredViewportPx > 0 && _rowHeightPx > 0)
+        {
+            var visiblePx = Math.Max(0, _measuredViewportPx - _measuredHeaderPx);
+            return Math.Max(1, (int)Math.Floor(visiblePx / _rowHeightPx));
+        }
+
         if (TryParsePixelSize(Height ?? string.Empty, out var heightPx))
         {
             var rowHeight = RowHeight > 0 ? RowHeight : Math.Max(18, (int)Math.Ceiling(MinRowHeight));
@@ -2897,6 +3099,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _lastSelectionDataSource = DataSource;
         _lastSelectionDataSourceSignature = signature;
         _runtimeRowHeights.Clear();
+        // A new data source can bring a different row height (RowHeightSelector, a
+        // theme swap on the host form) — re-measure instead of trusting the old pitch.
+        _gridMetricsMeasured = false;
         ClearTransientSelectionState(clearRows: true);
         _pendingFirstRowSelection = AutoSelectFirstRow;
     }
@@ -3003,6 +3208,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleSort(GridColumn col)
     {
+        // A header click "selects" that column for type-search, whether or not
+        // the click also sorts (owner directive 2026-08-01).
+        if (!string.IsNullOrEmpty(col.Field))
+            _typeSearchHeaderField = col.Field;
+
         if (!AllowSorting || !col.AllowSorting || string.IsNullOrEmpty(col.Field))
             return;
 
@@ -3301,11 +3511,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // swallowed by HandleRowClick when _isDragSelecting is true so the
     // drag's selection survives.
 
-    // Rec 1 — mousedown/mouseup are ARMING events: they carry no visual of
-    // their own (the instant row preview is client-side JS, editors render
-    // explicitly inside TryStartBatchEdit), so their EventCallbacks are
-    // created on a non-IHandleEvent receiver and skip the implicit re-render.
-    // A physical click then costs ONE authoritative render — the click's.
+    // Rec 1 — mousedown/mouseup/focusout are ARMING events: they carry no
+    // visual of their own (the instant row preview is client-side JS, editors
+    // render explicitly inside TryStartBatchEdit, commit paths render where
+    // they act), so their EventCallbacks are created on a non-IHandleEvent
+    // receiver and skip the implicit re-render. A physical click then costs
+    // ONE authoritative render — the click's.
     private EventCallback<FocusEventArgs> NonRenderingGridFocusOut =>
         EventCallback.Factory.Create<FocusEventArgs>(NonRenderingEventReceiver.Instance,
             HandleGridFocusOut);
@@ -3858,6 +4069,29 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
+    /// <summary>
+    /// HHM-473 — commits a pending row-selection type-over when the press lands on
+    /// non-cell chrome (header, group rows, empty body space, toolbar): those presses
+    /// never reach the cell handlers and don't move focus off the host, so neither
+    /// the mousedown commit in <see cref="HandleCellMouseDown"/> nor
+    /// <see cref="HandleGridFocusOut"/> fires. Data-cell presses never arrive here —
+    /// their TDs stop mousedown propagation. SingleCell grids keep their existing
+    /// flow untouched.
+    /// </summary>
+    private async Task HandleGridHostMouseDown(MouseEventArgs args)
+    {
+        if (args.Button != 0)
+            return;
+        if (BatchEditBehavior == GridBatchEditBehavior.SingleCell)
+            return;
+        if (_batchEditItem != null || _typeAheadBuffer.Length == 0)
+            return;
+        if (!HasRowSelectionTypeAheadSelection())
+            return;
+
+        await CommitPendingRowSelectionTypeAheadAsync(collapseSelection: false);
+    }
+
     private void HandleGridMouseUp(MouseEventArgs args)
     {
         // End the drag on mouseup so the cursor/visual state cannot stay
@@ -3879,143 +4113,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _cellDragAnchor = null;
     }
 
-    // Drag tracking runs in the browser (grid-control.js): the preview is
-    // painted client-side from data-ari attributes and the server hears ONE
-    // endpoint call on release — the old per-row/per-cell mouseenter handlers
-    // cost two renders of the whole window buffer per crossed row.
-    [JSInvokable]
-    public async Task EndDragSelectionFromBrowserAsync(string mode, int finalVisibleIndex, bool moved)
-    {
-        var isRow = string.Equals(mode, "row", StringComparison.Ordinal);
-
-        if (!moved)
-        {
-            // Plain click: the click event does the selecting; just disarm.
-            // The anchor preview stays painted until the CLICK's authoritative
-            // render lands (OnAfterRenderAsync clears it) — clearing here would
-            // flash the row back to unselected for a round trip on slow links.
-            if (isRow)
-            {
-                _dragAnchorItem = default;
-                _dragAnchorRowIndex = null;
-                _isDragSelecting = false;
-            }
-            else
-            {
-                ClearCellDragState();
-            }
-            _dragPreviewClearPending = true;
-            // Force the render that consumes the pending flag: the click's own
-            // render can land BEFORE this call arrives, and with no later
-            // render the press paint would sit until the JS safety net.
-            // EXCEPT while a batch editor is mounting — the extra render
-            // consumes the dropdown's one-shot OpenOnRender before its first
-            // paint, so the list mounts closed (its own render will sweep).
-            if (_batchEditItem == null && !_batchDropdownOpenOnRender)
-                await InvokeAsync(StateHasChanged);
-            return;
-        }
-
-        var visible = GetVisibleRowItems();
-        if (visible.Count == 0)
-        {
-            await ClearDragPreviewAsync();
-            return;
-        }
-        finalVisibleIndex = Math.Clamp(finalVisibleIndex, 0, visible.Count - 1);
-
-        // Arm the preview-clear BEFORE the selection render below, so that
-        // render's OnAfterRender performs the handoff — arming afterwards
-        // could leave the preview stuck if no further render follows.
-        _dragPreviewClearPending = true;
-
-        if (isRow && _dragAnchorItem != null)
-        {
-            var item = visible[finalVisibleIndex];
-            // One range computation, one render, one SelectionChanged.
-            await ContinueRowDragSelectionAsync(item, ResolveRowIndex(item, finalVisibleIndex));
-        }
-        else if (!isRow && _cellDragAnchor.HasValue)
-        {
-            var anchor = _cellDragAnchor.Value;
-            var resolved = ResolveRowIndex(visible[finalVisibleIndex], finalVisibleIndex);
-            _isCellDragSelecting = true;
-            SelectSingleCellColumnDragRange(anchor.RowIndex, resolved, anchor.CellIndex);
-            _lastSelectedCell = anchor;
-            await InvokeAsync(StateHasChanged);
-            await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
-        }
-
-        _suppressNextClickAfterDragSelect = true;
-        _suppressNextClickAfterDragSelectUntilUtc = DateTime.UtcNow.AddMilliseconds(350);
-        _isDragSelecting = false;
-        _dragAnchorRowIndex = null;
-        _dragAnchorItem = default;
-        ClearCellDragState();
-    }
-
-    private bool _dragPreviewClearPending;
-    // Set by the cell click leg of a press so the row click leg of the SAME
-    // press does not run selection twice.
-    private bool _cellClickHandledForPress;
-    // True while the click leg of a press runs when the pressed cell was
-    // ALREADY the active cell before the press — the EditOnActiveCellClick
-    // (second click edits) gesture reads it; mousedown itself moves
-    // _activeCell, so the click leg cannot recompute this.
-    private bool _pressWasOnAlreadyActiveCell;
-    private string? _typeSearchHeaderField;
-    private DotNetObjectReference<GridControl<TValue>>? _dragDotNetRef;
-
-    private bool _instantFeedbackRegistered;
-
-    // Standing client-side binding: the pressed row highlights in the SAME
-    // frame as the pointerdown, before any server round trip — so the row
-    // paints first and the active-cell cue (server render) follows. Rows in
-    // Multiple selection mode only; JS itself skips modifier presses and
-    // in-cell editors.
-    private async Task EnsureInstantSelectionFeedbackRegisteredAsync()
-    {
-        if (_instantFeedbackRegistered)
-            return;
-        if (!AllowSelection)
-            return;
-        try
-        {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
-            await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement,
-                SelectionSettingsRef?.Mode == SelectionMode.Cell);
-            _instantFeedbackRegistered = true;
-        }
-        catch
-        {
-        }
-    }
-
-    private async Task RegisterDragSelectionCaptureAsync(string mode, int anchorVisibleIndex, string? anchorField)
-    {
-        try
-        {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
-            _dragDotNetRef ??= DotNetObjectReference.Create(this);
-            await _gridJsModule.InvokeVoidAsync("registerGridDragSelection",
-                _gridHostElement, _dragDotNetRef, mode, anchorVisibleIndex, anchorField ?? "");
-        }
-        catch
-        {
-        }
-    }
-
-    private async Task ClearDragPreviewAsync()
-    {
-        try
-        {
-            if (_gridJsModule != null)
-                await _gridJsModule.InvokeVoidAsync("clearGridDragPreview", _gridHostElement);
-        }
-        catch
-        {
-        }
-    }
 
     private bool CanStartSingleCellColumnDrag(int cellIndex)
     {
@@ -4321,6 +4418,157 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         catch (Exception)
         {
             // Best-effort; the filter remains usable even if it cannot be dragged.
+        }
+    }
+
+    private async Task ClampMenuIntoViewportAsync(ElementReference menu)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("clampMenuIntoViewport", menu);
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task RegisterDragSelectionCaptureAsync(string mode, int anchorVisibleIndex, string? anchorField)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridDotNetRef ??= DotNetObjectReference.Create(this);
+            await _gridJsModule.InvokeVoidAsync("registerGridDragSelection",
+                _gridHostElement, _gridDotNetRef, mode, anchorVisibleIndex, anchorField ?? "");
+        }
+        catch
+        {
+        }
+    }
+
+    [JSInvokable]
+    public async Task ContinueCellDragSelectionFromBrowserAsync(int visibleRowIndex)
+    {
+        var anchor = _cellDragAnchor;
+        if (anchor == null) return;
+
+        var visible = GetVisibleRowItems();
+        if (visibleRowIndex < 0 || visibleRowIndex >= visible.Count) return;
+
+        var resolvedRowIndex = ResolveRowIndex(visible[visibleRowIndex], visibleRowIndex);
+        _isCellDragSelecting = true;
+        SelectSingleCellColumnDragRange(anchor.Value.RowIndex, resolvedRowIndex, anchor.Value.CellIndex);
+        await InvokeAsync(StateHasChanged);
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
+    }
+
+    [JSInvokable]
+    public async Task EndDragSelectionFromBrowserAsync(string mode, int finalVisibleIndex, bool moved)
+    {
+        var isRow = string.Equals(mode, "row", StringComparison.Ordinal);
+
+        if (!moved)
+        {
+            // Plain click: the click event does the selecting; just disarm.
+            // The anchor preview stays painted until the CLICK's authoritative
+            // render lands (OnAfterRenderAsync clears it) — clearing here would
+            // flash the row back to unselected for a round trip on slow links.
+            if (isRow)
+            {
+                _dragAnchorItem = default;
+                _dragAnchorRowIndex = null;
+                _isDragSelecting = false;
+            }
+            else
+            {
+                ClearCellDragState();
+            }
+            _dragPreviewClearPending = true;
+            // Force the render that consumes the pending flag: the click's own
+            // render can land BEFORE this call arrives, and with no later
+            // render the press paint would sit until the JS safety net.
+            // EXCEPT while a batch editor is mounting — the extra render
+            // consumes the dropdown's one-shot OpenOnRender before its first
+            // paint, so the list mounts closed (its own render will sweep).
+            if (_batchEditItem == null && !_batchDropdownOpenOnRender)
+                await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var visible = GetVisibleRowItems();
+        if (visible.Count == 0)
+        {
+            await ClearDragPreviewAsync();
+            return;
+        }
+        finalVisibleIndex = Math.Clamp(finalVisibleIndex, 0, visible.Count - 1);
+
+        // Arm the preview-clear BEFORE the selection render below, so that
+        // render's OnAfterRender performs the handoff — arming afterwards
+        // could leave the preview stuck if no further render follows.
+        _dragPreviewClearPending = true;
+
+        if (isRow && _dragAnchorItem != null)
+        {
+            var item = visible[finalVisibleIndex];
+            // One range computation, one render, one SelectionChanged.
+            await ContinueRowDragSelectionAsync(item, ResolveRowIndex(item, finalVisibleIndex));
+        }
+        else if (!isRow && _cellDragAnchor.HasValue)
+        {
+            var anchor = _cellDragAnchor.Value;
+            var resolved = ResolveRowIndex(visible[finalVisibleIndex], finalVisibleIndex);
+            _isCellDragSelecting = true;
+            SelectSingleCellColumnDragRange(anchor.RowIndex, resolved, anchor.CellIndex);
+            _lastSelectedCell = anchor;
+            await InvokeAsync(StateHasChanged);
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.MouseDrag);
+        }
+
+        _suppressNextClickAfterDragSelect = true;
+        _suppressNextClickAfterDragSelectUntilUtc = DateTime.UtcNow.AddMilliseconds(350);
+        _isDragSelecting = false;
+        _dragAnchorRowIndex = null;
+        _dragAnchorItem = default;
+        ClearCellDragState();
+    }
+
+    private bool _dragPreviewClearPending;
+    private bool _instantFeedbackRegistered;
+
+    private async Task ClearDragPreviewAsync()
+    {
+        try
+        {
+            if (_gridJsModule != null)
+                await _gridJsModule.InvokeVoidAsync("clearGridDragPreview", _gridHostElement);
+        }
+        catch
+        {
+        }
+    }
+
+    // Standing client-side binding: the pressed row highlights in the SAME
+    // frame as the pointerdown, before any server round trip — so the row
+    // paints first and the active-cell cue (server render) follows. Rows in
+    // Multiple selection mode only; JS itself skips modifier presses and
+    // in-cell editors.
+    private async Task EnsureInstantSelectionFeedbackRegisteredAsync()
+    {
+        if (_instantFeedbackRegistered)
+            return;
+        if (!AllowSelection)
+            return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement,
+                SelectionSettingsRef?.Mode == SelectionMode.Cell);
+            _instantFeedbackRegistered = true;
+        }
+        catch
+        {
         }
     }
 
@@ -5790,6 +6038,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
+    private async Task<bool> TryOpenActiveDropDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or "NumpadEnter"))
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+        if (_isEditing || _batchEditItem != null)
+            return false;
+        if (!_activeCell.HasValue)
+            return false;
+        if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var column))
+            return false;
+        if (!HasEditOptions(column, item))
+            return false;
+
+        RememberKeyboardNavigationSource(item, rowIndex, _activeCell.Value.CellIndex);
+        var started = await TryStartBatchEdit(item, rowIndex, column, openDropdownOnRender: true);
+        if (!started || !IsActiveBatchEditSource(item, column.Field))
+            return false;
+
+        _pendingBatchEditScrollIntoView = true;
+        SyncDataSourceChangeTrackers();
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
     private bool ShouldShowAlwaysEditButton(GridColumn col, TValue item)
     {
         if (!col.ShowEditButton || !col.AlwaysShowEditButton || string.IsNullOrWhiteSpace(col.Field))
@@ -5830,6 +6104,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void RenderDisplayCellContent(RenderTreeBuilder builder, int sequence, TValue item, GridColumn col, bool showActiveEditButton = false)
     {
         var text = GetCellDisplayValue(item, col);
+        var renderedText = string.IsNullOrEmpty(text) ? "\u00a0" : text;
 
         if (TryGetTypeSearchHighlight(text, item, col, out var matchedText, out var remainingText))
         {
@@ -5843,7 +6118,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (!ShouldShowAlwaysEditButton(col, item) && !ShouldShowActiveDisplayEditButton(col, item, showActiveEditButton))
         {
-            builder.AddContent(sequence, text);
+            builder.AddContent(sequence, renderedText);
             return;
         }
 
@@ -5857,7 +6132,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             builder.OpenElement(sequence + 2, "span");
             builder.AddAttribute(sequence + 3, "class", "fx-cell-action-text");
-            builder.AddContent(sequence + 4, text);
+            builder.AddContent(sequence + 4, renderedText);
             builder.CloseElement();
 
             builder.OpenElement(sequence + 5, "button");
@@ -5961,49 +6236,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private sealed record GridEditOption(string Value, string Text);
 
-    private IEnumerable<GridEditOption> GetEditOptions(GridColumn col, object? item)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var option in GetRawEditOptions(col, item))
-        {
-            var parsed = ParseEditOption(option);
-            if (seen.Add(parsed.Value))
-                yield return parsed;
-        }
-    }
-
-    private async Task<bool> TryOpenActiveDropDownAsync(KeyboardEventArgs e)
-    {
-        if (e.Key is not ("Enter" or "NumpadEnter"))
-            return false;
-        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
-            return false;
-        if (_isEditing || _batchEditItem != null)
-            return false;
-        if (!_activeCell.HasValue)
-            return false;
-        if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var column))
-            return false;
-        if (!HasEditOptions(column, item))
-            return false;
-
-        RememberKeyboardNavigationSource(item, rowIndex, _activeCell.Value.CellIndex);
-        var started = await TryStartBatchEdit(item, rowIndex, column, openDropdownOnRender: true);
-        if (!started || !IsActiveBatchEditSource(item, column.Field))
-            return false;
-
-        _pendingBatchEditScrollIntoView = true;
-        SyncDataSourceChangeTrackers();
-        await InvokeAsync(StateHasChanged);
-        return true;
-    }
-
-    private bool HasEditOptions(GridColumn? col, object? item)
-    {
-        return col != null
-            && (col.AllowCustomEditOptionValue || GetRawEditOptions(col, item).Any());
-    }
-
     private IEnumerable<string> GetRawEditOptions(GridColumn col, object? item)
     {
         if (col.EditOptionsProvider != null && item != null)
@@ -6033,6 +6265,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             yield return option;
     }
 
+    private bool HasEditOptions(GridColumn? col, object? item)
+    {
+        return col != null
+            && (col.AllowCustomEditOptionValue || GetRawEditOptions(col, item).Any());
+    }
+
+    private IEnumerable<GridEditOption> GetEditOptions(GridColumn col, object? item)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var option in GetRawEditOptions(col, item))
+        {
+            var parsed = ParseEditOption(option);
+            if (seen.Add(parsed.Value))
+                yield return parsed;
+        }
+    }
+
     private static GridEditOption ParseEditOption(string? option)
     {
         var raw = option ?? string.Empty;
@@ -6058,20 +6307,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
-    private static bool TryGetEditOptionDisplayValue(GridColumn col, object? value, out string text)
+    private bool TryGetEditOptionDisplayValue(GridColumn col, object? item, object? value, out string text)
     {
         text = string.Empty;
-        if (col.EditOptions == null)
-            return false;
 
         var raw = Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty;
-        foreach (var option in col.EditOptions)
+        foreach (var option in GetRawEditOptions(col, item))
         {
-            var item = ParseEditOption(option);
-            if (string.Equals(item.Value, raw, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(item.Text, raw, StringComparison.OrdinalIgnoreCase))
+            var parsed = ParseEditOption(option);
+            if (string.Equals(parsed.Value, raw, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(parsed.Text, raw, StringComparison.OrdinalIgnoreCase))
             {
-                text = item.Text;
+                text = parsed.Text;
                 return true;
             }
         }
@@ -6087,7 +6334,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
 
         var col = ResolveBatchEditColumn(_batchEditField);
-        if (col?.EditOptions?.Any() != true)
+        if (col == null || !HasEditOptions(col, _batchEditItem))
             return false;
 
         var options = GetEditOptions(col, _batchEditItem).ToList();
@@ -6119,6 +6366,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         UpdateBatchEditValue(_batchEditItem, _batchEditField, options[matchIndex].Value);
         await CommitBatchEdit();
+        await FocusGridHostAsync();
         await InvokeAsync(StateHasChanged);
         return true;
     }
@@ -6205,6 +6453,36 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 12, "OpenOnClickWhenClosed", true);
             builder.AddAttribute(sequence + 13, "Editable", col.AllowCustomEditOptionValue);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
+            builder.CloseComponent();
+        }
+        else if (col.Type == ColumnType.Date)
+        {
+            // Focus flows through the captured input ref like the text
+            // editor — clearing the pending-focus flag here left the editor
+            // unfocused, so typed keys hit the grid host and vanished.
+            _pendingBatchEditSelectAll = false;
+            _pendingBatchEditClientX = null;
+
+            builder.OpenComponent<DateTextControls<DateTime?>>(sequence);
+            builder.SetKey((editItem, editField, rowIndex, _batchEditGeneration));
+            builder.AddAttribute(sequence + 1, "Value", ParseBatchEditDateValue(_batchEditValue));
+            builder.AddAttribute(sequence + 2, "ValueChanged", EventCallback.Factory.Create<DateTime?>(this, async value =>
+            {
+                UpdateBatchEditValue(editItem, editField, FormatBatchEditDateValue(value));
+                await CommitBatchEdit(editItem, editField);
+                await FocusGridHostAsync();
+            }));
+            builder.AddAttribute(sequence + 3, "Format", string.IsNullOrWhiteSpace(col.Format) ? "MM/dd/yyyy" : col.Format);
+            builder.AddAttribute(sequence + 4, "CssClass", "fx-batch-datepicker");
+            builder.AddAttribute(sequence + 5, "Style", "width:100%;height:100%;display:block;");
+            builder.AddAttribute(sequence + 6, "OpenCalendarOnDoubleClick", col.OpenDateCalendarOnDoubleClick);
+            // Same uncontrolled contract as the text editor: the DOM owns the
+            // typed text; every keystroke lands in _batchEditValue so a
+            // click-away commit saves what was typed (VB6 gInsurance
+            // ValidateEdit — free typing, format on commit).
+            builder.AddAttribute(sequence + 7, "Uncontrolled", true);
+            builder.AddAttribute(sequence + 8, "InputValueChanged", (Action<string?>)(v => UpdateBatchEditValue(editItem, editField, v ?? string.Empty)));
+            builder.AddAttribute(sequence + 9, "ElementReferenceCaptured", (Action<ElementReference>)CaptureBatchEditInputRef);
             builder.CloseComponent();
         }
         else
@@ -6461,6 +6739,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ? CommitBatchEdit()
             : Task.CompletedTask;
     }
+
+    private static DateTime? ParseBatchEditDateValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return DateTime.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.None, out var current)
+            || DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out current)
+            ? current
+            : null;
+    }
+
+    private static string FormatBatchEditDateValue(DateTime? value)
+        => value.HasValue ? value.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : string.Empty;
 
     private GridColumn? ResolveBatchEditColumn(string? field)
     {
@@ -7892,7 +8184,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
 
         var col = ResolveBatchEditColumn(_batchEditField);
-        if (col == null || col.EditOptions?.Any() == true || col.Type == ColumnType.CheckBox)
+        if (col == null || HasEditOptions(col, _batchEditItem) || col.Type == ColumnType.CheckBox)
             return false;
 
         if (e.Key == "Backspace")
@@ -8050,6 +8342,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private int ResolveTypeSearchColumnIndex(IReadOnlyList<GridColumn> columns)
     {
+        // Header-clicked/sorted column wins until a later cell click retargets
+        // (owner directive 2026-08-01: type-over search follows the column
+        // whose header was clicked).
+        if (!string.IsNullOrWhiteSpace(_typeSearchHeaderField))
+        {
+            for (var i = 0; i < columns.Count; i++)
+            {
+                if (string.Equals(columns[i].Field, _typeSearchHeaderField, StringComparison.OrdinalIgnoreCase))
+                    return i;
+            }
+            _typeSearchHeaderField = null; // column hidden/removed — fall through
+        }
+
         if (_activeCell.HasValue
             && _activeCell.Value.CellIndex >= 0
             && _activeCell.Value.CellIndex < columns.Count
@@ -8647,14 +8952,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task<bool> TryFillSelectedCellsFromActiveCellAsync(KeyboardEventArgs e)
     {
+        if (_typeAheadBuffer.Length > 0)
+            return false;
+
         if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
             return false;
         if (_isEditing || _batchEditItem != null)
-            return false;
-        // A typed pending value owns Enter: committing the ACTIVE cell's old
-        // value here would silently discard what the user just typed (the
-        // pending type-ahead gate right after this handles that commit).
-        if (_typeAheadBuffer.Length > 0)
             return false;
         if (!SingleCellColumnMassEditEnabled || SelectionSettingsRef?.Mode != SelectionMode.Cell)
             return false;
@@ -8983,21 +9286,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ? null
             : Columns.FirstOrDefault(c => string.Equals(c.Field, _headerContextMenuField, StringComparison.Ordinal));
 
+    private bool IsColumnGrouped(GridColumn col) =>
+        _groupDescriptors.Any(g => string.Equals(g.Field, col.Field, StringComparison.OrdinalIgnoreCase));
+
     private bool IsHeaderColumnGrouped =>
-        !string.IsNullOrEmpty(_headerContextMenuField)
-        && _groupDescriptors.Any(g => string.Equals(g.Field, _headerContextMenuField, StringComparison.Ordinal));
+        CurrentHeaderColumn is { } col && IsColumnGrouped(col);
 
     private bool CanHideHeaderColumn
     {
         get
         {
-            if (CurrentHeaderColumn?.AllowHiding == false)
-                return false;
-            // Can't hide the last visible column — grids need at least one.
-            var visibleCount = Columns.Count(IsColumnVisible);
-            return visibleCount > 1;
+            return CurrentHeaderColumn is { } col && CanHideColumn(col);
         }
     }
+
+    private bool CanInsertHeaderColumn =>
+        CurrentHeaderColumn != null && !IsHeaderColumnGrouped;
 
     private IReadOnlyList<GridColumn> HiddenColumns =>
         Columns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();
@@ -9006,7 +9310,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         Columns.Where(c => !string.IsNullOrWhiteSpace(c.Field)).ToList();
 
     private bool CanHideColumn(GridColumn col) =>
-        col.AllowHiding && IsColumnVisible(col) && Columns.Count(IsColumnVisible) > 1;
+        col.AllowHiding
+        && IsColumnVisible(col)
+        && !IsColumnGrouped(col)
+        // Can't hide the last visible column — grids need at least one.
+        && Columns.Count(IsColumnVisible) > 1;
 
     private bool CanToggleHeaderContextColumn(GridColumn col) =>
         IsColumnVisible(col) ? CanHideColumn(col) : true;
@@ -9026,6 +9334,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return custom;
         return col.DisplayHeader;
     }
+
+    private GridColumn? RenameColumn =>
+        string.IsNullOrWhiteSpace(_renameColumnField)
+            ? null
+            : Columns.FirstOrDefault(c => string.Equals(c.Field, _renameColumnField, StringComparison.Ordinal));
+
+    /// <summary>VB6 passes the raw column KEY as the InputBox title
+    /// (FMain.frm:2418 <c>InputBox(..., MouseCtrl.ColKey(MouseCol))</c>) — not the
+    /// caption and not a prettified form of it.</summary>
+    private string RenameColumnDialogTitle
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(_renameColumnField))
+                return "Column";
+
+            // The column's DISPLAY caption (e.g. "Community"), not the raw
+            // colkey ("Area") — QA reads the title as the column's name.
+            var col = Columns.FirstOrDefault(c =>
+                string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
+            return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
+        }
+    }
+
+    private string RenameColumnPrompt =>
+        $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
 
     /// <summary>Toggles grouping on the right-clicked column.</summary>
     private async Task HeaderMenuToggleGroup()
@@ -9055,7 +9389,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var col = CurrentHeaderColumn;
         CloseHeaderContextMenu();
-        if (col == null || !CanHideHeaderColumn) return;
+        if (col == null || !CanHideColumn(col)) return;
         await SetColumnPanelVisibleAsync(col, false);
     }
 
@@ -9093,6 +9427,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private bool _showChooseColumnsDialog;
+    private ElementReference _chooseColumnsListRef;
+    private bool _focusChooseColumnsList;
+    // One ElementReference per row so the SELECTED row can be focused after a keyboard move —
+    // focusing is what scrolls it into view (natively, both directions). Indexer-style access
+    // in the markup means a new field just adds an entry.
+    private readonly Dictionary<string, ElementReference> _chooseColumnsRowRefs = new(StringComparer.Ordinal);
+    private bool _scrollChooseColumnsSelectionIntoView;
+    // Set per-keystroke so preventDefault only fires for keys we actually consume — a plain
+    // Tab still moves focus out of the list normally.
+    private bool _chooseColumnsHandledKey;
     private List<ChooseColumnRow> _chooseColumnsRows = new();
     private string _chooseColumnsSelectedField = "";
 
@@ -9111,6 +9455,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void HeaderMenuOpenChooseColumns()
     {
+        if (!CanInsertHeaderColumn)
+            return;
+
         CloseHeaderContextMenu();
         CaptureOriginalLayoutOnce();
 
@@ -9143,12 +9490,73 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 })
                 .ToList();
         }
+        _chooseColumnsRowRefs.Clear();   // refs belong to the rows of THIS open
         _chooseColumnsSelectedField = _chooseColumnsRows.FirstOrDefault()?.Field ?? "";
         _showChooseColumnsDialog = true;
+        _focusChooseColumnsList = true;   // so Up/Down work immediately, without a click first
         StateHasChanged();
     }
 
     private void ChooseColumnsSelect(string field) => _chooseColumnsSelectedField = field;
+
+    /// <summary>
+    /// Keyboard for the Choose Columns list, mirroring the legacy dialog's grid:
+    /// Up/Down move the highlight, Space ticks/unticks it, Home/End jump to the ends,
+    /// Enter is OK and Escape is Cancel. Anything we consume is reported through
+    /// <see cref="_chooseColumnsHandledKey"/> so the markup can preventDefault for
+    /// exactly those keys (and no others).
+    /// </summary>
+    private async Task ChooseColumnsKeyDown(KeyboardEventArgs e)
+    {
+        _chooseColumnsHandledKey = true;   // assume consumed; cleared in the default arm
+
+        var idx = _chooseColumnsRows.FindIndex(r => r.Field == _chooseColumnsSelectedField);
+        _scrollChooseColumnsSelectionIntoView = true;   // cleared below for keys we don't consume
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                if (_chooseColumnsRows.Count > 0)
+                    _chooseColumnsSelectedField = _chooseColumnsRows[Math.Min(idx + 1, _chooseColumnsRows.Count - 1)].Field;
+                break;
+
+            case "ArrowUp":
+                if (_chooseColumnsRows.Count > 0)
+                    _chooseColumnsSelectedField = _chooseColumnsRows[Math.Max(idx - 1, 0)].Field;
+                break;
+
+            case "Home":
+                if (_chooseColumnsRows.Count > 0)
+                    _chooseColumnsSelectedField = _chooseColumnsRows[0].Field;
+                break;
+
+            case "End":
+                if (_chooseColumnsRows.Count > 0)
+                    _chooseColumnsSelectedField = _chooseColumnsRows[^1].Field;
+                break;
+
+            case " ":
+            case "Spacebar":
+                if (idx >= 0 && _chooseColumnsRows[idx].CanHide)
+                    _chooseColumnsRows[idx].Visible = !_chooseColumnsRows[idx].Visible;
+                break;
+
+            case "Enter":
+                await ChooseColumnsOk();
+                return;
+
+            case "Escape":
+                ChooseColumnsCancel();
+                return;
+
+            default:
+                _chooseColumnsHandledKey = false;   // let Tab et al. behave normally
+                _scrollChooseColumnsSelectionIntoView = false;
+                return;
+        }
+
+        StateHasChanged();
+    }
 
     private bool ResolveChooseColumnVisible(ChooseColumnDescriptor descriptor) =>
         _visibilityOverrides.TryGetValue(descriptor.Field, out var visible)
@@ -9363,6 +9771,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
+        // Load-bearing now that the box opens empty: without it, OK straight after
+        // opening would wipe the caption the user is looking at.
         if (string.IsNullOrEmpty(draft)) return;
         _headerOverrides[field] = draft;
         StateHasChanged();
@@ -9377,40 +9787,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _renameColumnDraft = "";
     }
 
-    private GridColumn? RenameColumn =>
-        string.IsNullOrWhiteSpace(_renameColumnField)
-            ? null
-            : Columns.FirstOrDefault(c => string.Equals(c.Field, _renameColumnField, StringComparison.Ordinal));
-
-    /// <summary>VB6 passes the raw column KEY as the InputBox title
-    /// (FMain.frm:2418 <c>InputBox(..., MouseCtrl.ColKey(MouseCol))</c>) — not the
-    /// caption and not a prettified form of it.</summary>
-    private string RenameColumnDialogTitle
-    {
-        get
-        {
-            if (string.IsNullOrWhiteSpace(_renameColumnField))
-                return "Column";
-
-            // The column's DISPLAY caption (e.g. "Community"), not the raw
-            // colkey ("Area") — QA reads the title as the column's name.
-            var col = Columns.FirstOrDefault(c =>
-                string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
-            return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
-        }
-    }
-
-    private string RenameColumnPrompt =>
-        $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
-
     // ══════════════════════════════════════════════════════════════════════
     // ── CONTEXT-MENU KEYBOARD NAVIGATION ─────────────────────────────────
     // ══════════════════════════════════════════════════════════════════════
-    // VB6 popped these menus with the Win32 PopupMenu API, so first-item
-    // highlight, Up/Down, Enter and Escape came from the OS. These menus are
-    // <button>s in a div, so the movement has to be driven here. Enter and
-    // Space are left alone deliberately — a focused <button> already fires its
-    // click on both, and swallowing them would break activation.
+    // These menus are <button>s in a div, so Up/Down movement is driven here.
+    // Enter and Space are left alone deliberately — a focused <button> already
+    // fires its click on both, and swallowing them would break activation.
 
     private ElementReference _headerMenuElement;
     private ElementReference _cellMenuElement;
@@ -9581,6 +9963,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         await ExportToPdfAsync("grid-export.pdf", "", CreateCurrentPdfPrintOptions(), showCompletionStatus: false);
+    }
+
+    private async Task HeaderMenuOpenAttachments()
+    {
+        var field = _headerContextMenuField;
+        CloseHeaderContextMenu();
+        if (OnHeaderAttachmentsRequested.HasDelegate)
+            await OnHeaderAttachmentsRequested.InvokeAsync(field);
     }
 
     private async Task HeaderMenuSaveAs()
@@ -10045,7 +10435,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             var capturedCol = col;
                             var capturedItemForEdit = item;
                             var isBatchEditing = IsBatchEditing(item, col.Field);
-                            var isBatchDropdownEditing = isBatchEditing && col.EditOptions?.Any() == true;
+                            var isBatchDropdownEditing = isBatchEditing && HasEditOptions(col, item);
                             var isTypeAheadPreview = IsTypeAheadPreviewCell(item, col);
                             var isCellSelected = _selectedCells.Contains((resolvedRowIdx, capturedColIdx));
                             var isActiveCell = _activeCell.HasValue
@@ -10239,7 +10629,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var capturedColIdx = colIdx;
             var isLastDataCell = colIdx == visibleColumns.Count - 1;
             var isBatchEditing = IsBatchEditing(item, col.Field);
-            var isBatchDropdownEditing = isBatchEditing && capturedCol.EditOptions?.Any() == true;
+            var isBatchDropdownEditing = isBatchEditing && HasEditOptions(capturedCol, item);
             var isTypeAheadPreview = IsTypeAheadPreviewCell(item, col);
 
             builder.OpenElement(0, "td");
@@ -10435,7 +10825,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (isDoubleClick)
         {
-            _lastGripDownField = null;
+            _lastGripDownField = null;   // a third click starts a fresh pair
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -10472,7 +10862,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var delta = clientX - _resizeStartX;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
-        // A deliberate drag is not half of a double-click.
+        // A deliberate drag is not half of a double-click — stop the next mousedown
+        // on this grip from being read as one.
         if (Math.Abs(delta) > GripJitterPx)
             _lastGripDownField = null;
 
@@ -10496,16 +10887,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task EndResize()
     {
-        if (_resizingCol != null && EventsRef?.ColumnResized.HasDelegate == true)
+        var col = _resizingCol;
+        _resizingCol = null;
+
+        // A press that only jittered is not a resize. Bail before the events fire:
+        // the clicks of a DOUBLE-click land here, and persisting a 1px tremor makes
+        // hosts that re-key their columns rebuild the header mid-gesture.
+        var settled = col?.RuntimeWidth ?? _resizeStartWidth;
+        if (col == null || Math.Abs(settled - _resizeStartWidth) <= GripJitterPx)
+        {
+            if (col != null)
+                col.RuntimeWidth = _resizeStartWidth > 0 ? _resizeStartWidth : col.RuntimeWidth;
+            await UnregisterGridResizeCaptureAsync();
+            return;
+        }
+
+        if (EventsRef?.ColumnResized.HasDelegate == true)
         {
             await EventsRef.ColumnResized.InvokeAsync(new ResizeEventArgs
             {
-                Field = _resizingCol.Field,
+                Field = col.Field,
                 OldWidth = _resizeStartWidth,
-                NewWidth = _resizingCol.RuntimeWidth ?? _resizeStartWidth
+                NewWidth = settled
             });
         }
-        _resizingCol = null;
         await SaveGridSettingsAsync();
         await FireLayoutChangedAsync();
         await UnregisterGridResizeCaptureAsync();
@@ -11039,6 +11444,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (totalWidth <= 0)
             return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
 
+        // FitColumns keeps every column at its own width, so the table may end short of the
+        // container (slack after the last column) or run past it (the scroll surface overflows
+        // and a horizontal scrollbar appears). FillAvailable is the page's opt-in to stretch.
         var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
         return WidthMode == GridWidthMode.FitColumns
             ? $"width:{widthPx}px;min-width:{widthPx}px;max-width:none;"
@@ -11107,11 +11515,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return null;
     }
 
-    // Runs at the TOP of every render pass (see the @{ } block opening the
-    // markup). Widths used to be assigned only in OnAfterRender, so the first
-    // wire batch shipped width-less columns at 0px and the width arrived in a
-    // SECOND batch — on a slow link the last column visibly materialized
-    // seconds after the rest of the header (HHM-756).
+    // Runs at the TOP of every render pass (BeginGridRenderPass). Widths used
+    // to be assigned only in OnAfterRender, so the first wire batch shipped
+    // width-less columns at 0px and the width arrived in a SECOND batch — on a
+    // slow link the last column visibly materialized seconds after the rest of
+    // the header (HHM-756).
     private void EnsureAutoColumnWidthsBeforeRender()
     {
         if (!_autoWidthPending)
@@ -11171,7 +11579,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (val == null) return "";
 
         if (string.IsNullOrWhiteSpace(col.DisplayField)
-            && TryGetEditOptionDisplayValue(col, val, out var optionText))
+            && TryGetEditOptionDisplayValue(col, item, val, out var optionText))
             return optionText;
 
         if (!string.IsNullOrEmpty(col.Format))
@@ -11539,18 +11947,93 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return Task.CompletedTask;
     }
 
-    public Task SelectAndRevealRowAsync(TValue item)
+    /// <summary>
+    /// Selects a record and positions it at the top of the grid viewport. The
+    /// scroll position is changed before the selection render so a remote
+    /// circuit never paints the highlight at its old position first.
+    /// </summary>
+    public async Task SelectAndRevealRowAsync(TValue item, bool clearExistingSelection = false)
     {
         var index = PagedData.ToList().IndexOf(item);
-        if (index >= 0)
-            SelectRow(index);
-        return Task.CompletedTask;
+        if (index < 0)
+            return;
+
+        await SelectAndRevealRowCoreAsync(item, index, clearExistingSelection);
     }
 
-    public Task SelectAndRevealRowAsync(int rowIndex)
+    /// <summary>Selects a displayed row and positions it at the top of the viewport.</summary>
+    public async Task SelectAndRevealRowAsync(int rowIndex, bool clearExistingSelection = false)
     {
-        SelectRow(rowIndex);
-        return Task.CompletedTask;
+        var rows = PagedData as IList<TValue> ?? PagedData.ToList();
+        if (rowIndex < 0 || rowIndex >= rows.Count)
+            return;
+
+        await SelectAndRevealRowCoreAsync(rows[rowIndex], rowIndex, clearExistingSelection);
+    }
+
+    private async Task SelectAndRevealRowCoreAsync(
+        TValue item,
+        int displayRowIndex,
+        bool clearExistingSelection)
+    {
+        await EnsureGridMetricsMeasuredAsync();
+
+        // Move the browser viewport first, while the existing DOM is still on
+        // screen. The helper falls back to the absolute row offset when the
+        // target is outside the current row window and also supersedes any
+        // delayed first-paint scroll reset.
+        _initialScrollResetOnFirstRenderPending = false;
+        _initialScrollResetOnFirstDataPending = false;
+        _pendingWindowScrollReset = false;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import", GridJsModulePath);
+            await _gridJsModule.InvokeAsync<bool>(
+                "scrollSelectedGridRowToTop",
+                _gridHostElement,
+                displayRowIndex,
+                Math.Max(0, displayRowIndex * _rowHeightPx));
+        }
+        catch (Exception)
+        {
+            // Best-effort viewport positioning. Selection still completes if
+            // the browser is disconnecting or the grid has just been removed.
+        }
+
+        if (UseRowWindowing)
+        {
+            var rows = PagedData as IList<TValue> ?? PagedData.ToList();
+            var maxStart = Math.Max(0, rows.Count - _winCount);
+
+            // Include the target plus the normal lead-in buffer before moving
+            // the scrollbar. Otherwise a far-away selected row has no DOM row
+            // for the scroll reader to retain on its next render pass.
+            _winStart = Math.Clamp(displayRowIndex - WindowOverscanRows, 0, maxStart);
+            _lastWindowListSignature = ComputeWindowListSignature(rows);
+            ClearPreserveRowWindowOnNextListChange();
+            _pendingWindowScrollReset = false;
+        }
+
+        if (clearExistingSelection
+            || (SelectionSettingsRef?.Type ?? SelectionType.Single) == SelectionType.Single)
+        {
+            _selectedItems.Clear();
+        }
+
+        if (!_selectedItems.Contains(item))
+            _selectedItems.Add(item);
+
+        _lastSelectedItem = item;
+        _lastSelectedRowIndex = ResolveRowIndex(item, displayRowIndex);
+
+        // The target window and selected state are now emitted together in one
+        // render. The post-render pass only performs a small exact alignment;
+        // it does not change or repaint the selection.
+        _pendingRowRevealIndex = displayRowIndex;
+        _pendingRowRevealAttempts = 0;
+        await InvokeAsync(StateHasChanged);
+        await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
 
     /// <summary>
@@ -11599,7 +12082,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _selectedCells.Add(cell);
         }
 
-        // Make it the navigation origin too — arrow keys start from _activeCell.
+        // Make it the navigation origin too. Arrow keys start from _activeCell, so
+        // without this a programmatically selected cell is highlighted but the
+        // keyboard has nowhere to move from.
         _activeCell = cell;
         _lastSelectedCell = cell;
 
@@ -12045,10 +12530,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var width = GetColumnWidthPx(col);
             table.Columns.Add(new GridExportColumn(
-                col.DisplayHeader,
+                HeaderColumnDisplay(col),
                 format: col.Format,
                 textAlign: col.TextAlign,
-                width: width > 0 ? width : null));
+                width: width > 0 ? width : null,
+                printCellIcon: col.PrintCellIcon));
         }
 
         // Export all filtered+sorted data, not just the current page.
@@ -12504,6 +12990,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterGridWindowScroll", _scrollElement);
             }
+            if (_activeCellScrollSyncRegistered && _gridJsModule != null)
+            {
+                await _gridJsModule.InvokeVoidAsync("unregisterActiveCellScrollSync", _gridHostElement);
+            }
         }
         catch (Exception)
         {
@@ -12517,6 +13007,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _scrollbarActivityRegistered = false;
         _gridResizeCaptureRegistered = false;
         _windowScrollRegistered = false;
+        _activeCellScrollSyncRegistered = false;
 
         if (_gridJsModule != null)
         {
@@ -12536,7 +13027,5 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _windowSelfRef?.Dispose();
         _windowSelfRef = null;
-        _dragDotNetRef?.Dispose();
-        _dragDotNetRef = null;
     }
 }

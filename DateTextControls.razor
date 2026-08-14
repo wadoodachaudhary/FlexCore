@@ -1,0 +1,167 @@
+@namespace Fx.ControlKit
+@typeparam TValue
+@using System.Globalization
+@using System.Linq.Expressions
+
+<DatePickerControl Value="@CurrentDateValue"
+                   ValueChanged="OnDateValueChanged"
+                   Format="@ResolvedFormat"
+                   Placeholder="@Placeholder"
+                   CssClass="@ResolvedCssClass"
+                   Style="@Style"
+                   Enabled="@Enabled"
+                   ShowTime="@ShowTime"
+                   MinDate="@MinDate"
+                   MaxDate="@MaxDate"
+                   ShowCalendarSidebar="@ShowCalendarSidebar"
+                   ParseFormats="@ParseFormats"
+                   Culture="@Culture"
+                   ShowTriggerButton="@ShowCalendarButton"
+                   OpenCalendarOnDoubleClick="@OpenCalendarOnDoubleClick"
+                   Uncontrolled="@Uncontrolled"
+                   InputValueChanged="@InputValueChanged"
+                   ElementReferenceCaptured="@ElementReferenceCaptured"
+                   @attributes="AdditionalAttributes" />
+
+@code {
+    [Parameter] public TValue Value { get; set; } = default!;
+    [Parameter] public EventCallback<TValue> ValueChanged { get; set; }
+    [Parameter] public Expression<Func<TValue>>? ValueExpression { get; set; }
+
+    [Parameter] public string? Format { get; set; }
+    [Parameter] public IEnumerable<string>? ParseFormats { get; set; }
+    [Parameter] public CultureInfo? Culture { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string? Style { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public bool ShowTime { get; set; }
+    [Parameter] public DateTime? MinDate { get; set; }
+    [Parameter] public DateTime? MaxDate { get; set; }
+    [Parameter] public bool ShowCalendarSidebar { get; set; }
+    [Parameter] public bool ShowCalendarButton { get; set; }
+    [Parameter] public bool OpenCalendarOnDoubleClick { get; set; }
+    [Parameter] public bool Uncontrolled { get; set; }
+    [Parameter] public Action<string?>? InputValueChanged { get; set; }
+    [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private CultureInfo EffectiveCulture => Culture ?? CultureInfo.InvariantCulture;
+    private string ResolvedFormat => Format ?? (ShowTime ? "MM/dd/yyyy hh:mm tt" : "MM/dd/yyyy");
+    private DateTime? CurrentDateValue => ConvertToDate(Value);
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var classes = new List<string> { "fx-date-text-control" };
+            if (!ShowCalendarButton)
+                classes.Add("fx-date-text-no-button");
+            if (!string.IsNullOrWhiteSpace(CssClass))
+                classes.Add(CssClass);
+            return string.Join(" ", classes);
+        }
+    }
+
+    private async Task OnDateValueChanged(DateTime? value)
+    {
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(ConvertFromDate(value));
+    }
+
+    private DateTime? ConvertToDate(TValue value)
+    {
+        var raw = (object?)value;
+        if (raw is null or DBNull)
+            return null;
+
+        return raw switch
+        {
+            DateTime dateTime => dateTime,
+            DateTimeOffset dateTimeOffset => dateTimeOffset.DateTime,
+            DateOnly dateOnly => dateOnly.ToDateTime(TimeOnly.MinValue),
+            string text => ParseDateString(text),
+            _ => TryConvertDate(raw)
+        };
+    }
+
+    private DateTime? TryConvertDate(object raw)
+    {
+        try
+        {
+            return Convert.ToDateTime(raw, EffectiveCulture);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private DateTime? ParseDateString(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var formats = GetParseFormats();
+        var trimmed = text.Trim();
+        if (DateTime.TryParseExact(trimmed, formats, EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var exact))
+            return exact;
+
+        return DateTime.TryParse(trimmed, EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var parsed)
+            || DateTime.TryParse(trimmed, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out parsed)
+            || DateTime.TryParse(trimmed, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out parsed)
+            ? parsed
+            : null;
+    }
+
+    private string[] GetParseFormats()
+    {
+        var defaults = ShowTime
+            ? new[]
+            {
+                ResolvedFormat, "MM/dd/yyyy hh:mm tt", "M/d/yyyy h:mm tt",
+                "MM/dd/yyyy HH:mm", "M/d/yyyy H:mm", "yyyy-MM-dd HH:mm",
+                "yyyy-MM-ddTHH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy",
+                "M/d/yyyy", "yyyy-MM-dd", "dd-MMM-yy", "d-MMM-yy",
+                "dd-MMM-yyyy", "d-MMM-yyyy", "dd/MM/yyyy HH:mm",
+                "d/M/yyyy H:mm", "dd/MM/yyyy", "d/M/yyyy"
+            }
+            : new[]
+            {
+                ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd",
+                "MM-dd-yyyy", "M-d-yyyy", "MMM d, yyyy", "MMMM d, yyyy",
+                "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy",
+                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy"
+            };
+
+        return (ParseFormats ?? Array.Empty<string>())
+            .Concat(defaults)
+            .Where(format => !string.IsNullOrWhiteSpace(format))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private TValue ConvertFromDate(DateTime? value)
+    {
+        var targetType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+
+        if (targetType == typeof(string))
+            return (TValue)(object)(value.HasValue ? value.Value.ToString(ResolvedFormat, EffectiveCulture) : string.Empty);
+
+        if (!value.HasValue)
+            return default!;
+
+        if (targetType == typeof(DateTime))
+            return (TValue)(object)value.Value;
+
+        if (targetType == typeof(DateOnly))
+            return (TValue)(object)DateOnly.FromDateTime(value.Value);
+
+        if (targetType == typeof(DateTimeOffset))
+            return (TValue)(object)new DateTimeOffset(value.Value);
+
+        return (TValue)(object)value.Value;
+    }
+}

@@ -23,8 +23,9 @@ public sealed class NotificationService
         }
     }
 
-    /// <summary>Show an error notification (red).</summary>
-    public void Error(string message, string? detail = null, int durationMs = 0)
+    /// <summary>Show an error notification (red). Auto-closes after 10s;
+    /// pass durationMs = 0 for a sticky error that stays until dismissed.</summary>
+    public void Error(string message, string? detail = null, int durationMs = 10000)
         => Add(NotificationLevel.Error, message, detail, durationMs);
 
     /// <summary>Show a warning notification (yellow).</summary>

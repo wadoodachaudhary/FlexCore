@@ -8,7 +8,7 @@
 
 @if (Multiline)
 {
-    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
+    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu)
     {
         <InputTextArea class="@ResolvedCssClass"
                        Value="@Value"
@@ -23,6 +23,7 @@
                   @oninput="OnNativeInput"
                   @onchange="OnNativeChange"
                   @onfocus="OnInputFocus"
+                  @ondblclick="OnInputDoubleClick"
                   @oncontextmenu="OpenTextContextMenuAsync"
                   @oncontextmenu:preventDefault="UseClassicContextMenu"
                   @oncontextmenu:stopPropagation="UseClassicContextMenu"
@@ -43,6 +44,7 @@ else
                    @oninput="OnNativeInput"
                    @onchange="OnNativeChange"
                    @onfocus="OnInputFocus"
+                   @ondblclick="OnInputDoubleClick"
                    @oncontextmenu="OpenTextContextMenuAsync"
                    @oncontextmenu:preventDefault="UseClassicContextMenu"
                    @oncontextmenu:stopPropagation="UseClassicContextMenu"
@@ -80,7 +82,7 @@ else
             </button>
         </div>
     }
-    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !UseClassicContextMenu)
+    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu)
     {
         <InputText class="@ResolvedCssClass"
                    Value="@Value"
@@ -95,6 +97,7 @@ else
                @oninput="OnNativeInput"
                @onchange="OnNativeChange"
                @onfocus="OnInputFocus"
+               @ondblclick="OnInputDoubleClick"
                @oncontextmenu="OpenTextContextMenuAsync"
                @oncontextmenu:preventDefault="UseClassicContextMenu"
                @oncontextmenu:stopPropagation="UseClassicContextMenu"
@@ -222,6 +225,8 @@ else
     [Parameter] public bool Uncontrolled { get; set; }
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool SelectOnFocus { get; set; }
+    [Parameter] public bool ReplaceOnFirstInput { get; set; }
+    [Parameter] public bool SelectAllOnDoubleClick { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
@@ -280,11 +285,16 @@ else
         // Only AutoFocus seizes focus on load. SelectOnFocus must NOT auto-focus on render — otherwise a
         // second SelectOnFocus field (e.g. Description) steals focus from the AutoFocus field (Number).
         // SelectOnFocus still selects the text when the user actually focuses the field (OnInputFocus).
-        if (firstRender && AutoFocus)
+        if (firstRender && (AutoFocus || ReplaceOnFirstInput))
         {
             var module = await GetControlJsModuleAsync();
             if (module != null)
-                await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+            {
+                if (ReplaceOnFirstInput)
+                    await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+                if (AutoFocus)
+                    await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+            }
         }
     }
 
@@ -398,7 +408,23 @@ else
 
     private async Task OnInputFocus()
     {
-        if (!SelectOnFocus)
+        if (!SelectOnFocus && !ReplaceOnFirstInput)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        if (ReplaceOnFirstInput)
+            await module.InvokeVoidAsync("armReplaceOnFirstInput", _inputElement);
+
+        if (SelectOnFocus)
+            await module.InvokeVoidAsync("select", _inputElement);
+    }
+
+    private async Task OnInputDoubleClick()
+    {
+        if (!SelectAllOnDoubleClick)
             return;
 
         var module = await GetControlJsModuleAsync();

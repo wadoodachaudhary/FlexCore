@@ -281,8 +281,9 @@
                         @{ var colIdx = 0; }
                         @foreach (var col in VisibleColumns)
                         {
+                            @* No title tooltip — the floating chip read as a stuck
+                               selection next to the hover tint (owner directive 2026-08-01). *@
                             <td class="fx-treegrid-cell"
-                                title="@GetCellTitle(node.Data, col)"
                                 style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {

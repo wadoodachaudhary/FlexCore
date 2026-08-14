@@ -140,22 +140,33 @@ function resetGridScrollTargets(gridRoot) {
     }
 }
 
+function supersedeGridScrollReset(gridRoot) {
+    const generation = (gridRoot.__gridScrollResetGeneration || 0) + 1;
+    gridRoot.__gridScrollResetGeneration = generation;
+    return generation;
+}
+
 export function resetInitialGridScroll(gridRoot) {
     if (!gridRoot) return;
 
     const doc = gridRoot.ownerDocument || document;
     const win = doc.defaultView || window;
+    const generation = supersedeGridScrollReset(gridRoot);
+    const resetIfCurrent = () => {
+        if (gridRoot.__gridScrollResetGeneration === generation)
+            resetGridScrollTargets(gridRoot);
+    };
     const requestFrame = typeof win.requestAnimationFrame === "function"
         ? win.requestAnimationFrame.bind(win)
         : callback => win.setTimeout(callback, 0);
 
-    resetGridScrollTargets(gridRoot);
+    resetIfCurrent();
     requestFrame(() => {
-        resetGridScrollTargets(gridRoot);
-        requestFrame(() => resetGridScrollTargets(gridRoot));
+        resetIfCurrent();
+        requestFrame(resetIfCurrent);
     });
-    win.setTimeout(() => resetGridScrollTargets(gridRoot), 0);
-    win.setTimeout(() => resetGridScrollTargets(gridRoot), 80);
+    win.setTimeout(resetIfCurrent, 0);
+    win.setTimeout(resetIfCurrent, 80);
 }
 
 export function registerFilterPopupDrag(gridRoot) {
@@ -266,8 +277,25 @@ export function registerGridResizeCapture(gridRoot, dotNetRef, initialClientX = 
             .catch(() => {});
     };
 
+    // Keep the edge being dragged inside the scroll viewport. Without this the column grows
+    // under the splitter and the grip leaves the view, so the user is dragging something they
+    // can no longer see.
+    const keepGripVisible = (clientX) => {
+        const scroller = gridRoot.querySelector(".fx-grid-content");
+        if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+
+        const box = scroller.getBoundingClientRect();
+        const margin = 24;
+        if (clientX > box.right - margin) {
+            scroller.scrollLeft += clientX - (box.right - margin);
+        } else if (clientX < box.left + margin) {
+            scroller.scrollLeft -= (box.left + margin) - clientX;
+        }
+    };
+
     const onMouseMove = (event) => {
         event.preventDefault();
+        keepGripVisible(event.clientX);
         invokeMove(event);
     };
 
@@ -1037,6 +1065,76 @@ export function unregisterRowDragSelectionAutoScroll(gridRoot) {
     rowDragAutoScrollBindings.delete(gridRoot);
 }
 
+/**
+ * First VISIBLE pixel row inside a vertical scroll container.
+ *
+ * The column header is `position: sticky; top: 0` INSIDE the scroll container, so
+ * it paints OVER the first rows: the container's own top edge is not where the
+ * user starts seeing rows. Measuring against that edge makes a row that has
+ * slipped under the header test as "already visible", so arrowing up past the
+ * first visible row does not scroll at all — the selection lands on a row hidden
+ * behind the header, and only the NEXT arrow-up scrolls (by then one row late,
+ * with the selected row still occluded). Treat the sticky header's bottom edge as
+ * the top of the visible area instead.
+ */
+function getGridVisibleTop(bodyViewportEl, viewportTop) {
+    let visibleTop = viewportTop;
+    const headers = bodyViewportEl.querySelectorAll(".fx-grid-header-viewport, .fx-grid-header");
+    for (const header of headers) {
+        let position;
+        try {
+            position = getComputedStyle(header).position;
+        } catch (_) {
+            continue;
+        }
+        // Only a header PINNED to the top occludes rows. A header that scrolls
+        // away with the body (or one laid out above the scroll container) does not.
+        if (position !== "sticky") continue;
+
+        const headerRect = header.getBoundingClientRect();
+        if (headerRect.height <= 0) continue;
+        if (headerRect.top > viewportTop + 1) continue;
+        if (headerRect.bottom > visibleTop) visibleTop = headerRect.bottom;
+    }
+    return visibleTop;
+}
+
+/**
+ * Hide the row left straddling the first visible pixel row.
+ *
+ * The viewport height is never a whole number of rows, so after a scroll
+ * correction the row crossing the header's bottom edge is painted as a 1-3px
+ * sliver of clipped text jammed against the header -- unreadable, and it reads
+ * as the header being dirty. Nudge the scroll down by exactly that sliver so
+ * the first row below the header is always a WHOLE row.
+ *
+ * This never scrolls the active row out of view: at the point this runs the
+ * active row is flush against one edge, and hiding the straddler only moves
+ * content up. The row carrying the active cell is skipped outright.
+ */
+function snapGridTopToWholeRow(bodyViewportEl, activeCell) {
+    const visibleTop = getGridVisibleTop(
+        bodyViewportEl, bodyViewportEl.getBoundingClientRect().top);
+
+    for (const row of bodyViewportEl.querySelectorAll("tbody > tr")) {
+        if (row.classList.contains("fx-grid-window-spacer")) continue;
+
+        const rect = row.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+        // Not the straddler: entirely below the fold, or entirely behind the header.
+        if (rect.top >= visibleTop - 0.5 || rect.bottom <= visibleTop + 0.5) continue;
+
+        // Never hide the row the user is standing on.
+        if (activeCell && row.contains(activeCell)) return;
+
+        const maxScrollTop = Math.max(
+            0, bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight);
+        bodyViewportEl.scrollTop = clamp(
+            bodyViewportEl.scrollTop + (rect.bottom - visibleTop), 0, maxScrollTop);
+        return;
+    }
+}
+
 export function ensureActiveGridCellVisible(gridRoot) {
     if (!gridRoot) return;
 
@@ -1055,7 +1153,8 @@ export function ensureActiveGridCellVisible(gridRoot) {
     const outerBodyRect = bodyViewportEl.getBoundingClientRect();
     const bodyRect = {
         left: outerBodyRect.left,
-        top: outerBodyRect.top,
+        // NOT outerBodyRect.top — the sticky header covers the first rows.
+        top: getGridVisibleTop(bodyViewportEl, outerBodyRect.top),
         right: outerBodyRect.left + bodyViewportEl.clientWidth,
         bottom: outerBodyRect.top + bodyViewportEl.clientHeight
     };
@@ -1072,15 +1171,168 @@ export function ensureActiveGridCellVisible(gridRoot) {
             maxScrollLeft);
     }
 
-    if (cellRect.top < bodyRect.top + padding) {
-        bodyViewportEl.scrollTop = Math.max(0, bodyViewportEl.scrollTop - ((bodyRect.top + padding) - cellRect.top));
-    } else if (cellRect.bottom > bodyRect.bottom - padding) {
-        const maxScrollTop = bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight;
+    // Vertically, land the active row FLUSH against the sticky header (or the
+    // bottom edge) -- deliberately NOT `padding` px clear of it the way the
+    // horizontal pass does. A vertical gap is not empty space: it exposes a
+    // sliver of the NEIGHBOURING row, which looks like a squashed extra line of
+    // text against the header. The epsilon only absorbs sub-pixel rounding, so
+    // a row already flush does not re-trigger a scroll on every keystroke.
+    const maxScrollTop = Math.max(0, bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight);
+    const edgeEpsilon = 0.5;
+
+    if (cellRect.top < bodyRect.top - edgeEpsilon) {
         bodyViewportEl.scrollTop = clamp(
-            bodyViewportEl.scrollTop + (cellRect.bottom - (bodyRect.bottom - padding)),
-            0,
-            maxScrollTop);
+            bodyViewportEl.scrollTop - (bodyRect.top - cellRect.top), 0, maxScrollTop);
+        snapGridTopToWholeRow(bodyViewportEl, activeCell);
+    } else if (cellRect.bottom > bodyRect.bottom + edgeEpsilon) {
+        bodyViewportEl.scrollTop = clamp(
+            bodyViewportEl.scrollTop + (cellRect.bottom - bodyRect.bottom), 0, maxScrollTop);
+        snapGridTopToWholeRow(bodyViewportEl, activeCell);
     }
+}
+
+// ── Active-cell pre-paint viewport sync ──────────────────────────────────────
+
+const activeCellSyncBindings = new WeakMap();
+
+/**
+ * Land the keyboard-navigation scroll in the SAME painted frame as the
+ * highlight move.
+ *
+ * Without this, arrowing through rows painted in TWO steps: Blazor's DOM patch
+ * moved .fx-cell-active while the grid still sat at the OLD scroll offset — the
+ * browser happily painted that frame — and only the post-render interop call
+ * scrolled the row into view, one frame later. One row at a time that is a
+ * visible one-row-pitch jump right after the highlight moves: the per-keystroke
+ * flicker. (Mouse-wheel scrolling never enters this path, which is why it does
+ * not flicker.)
+ *
+ * A MutationObserver callback runs as a microtask BEFORE the browser's next
+ * rendering opportunity, so correcting the scroll here is the one place both
+ * changes can be composed into a single paint. Server-side C# cannot do this:
+ * by the time its post-render interop call arrives, the stale frame is already
+ * on screen. That late call is kept as the fallback — when the cell is already
+ * flush it early-outs inside the edge epsilon, so it never double-scrolls.
+ *
+ * Scroll-hijack guard: correct ONLY when the active cell moved to a DIFFERENT
+ * element (a class mutation on a cell it was not on before). Re-mutations of
+ * the same cell's class and structural patches (row windowing re-renders while
+ * the user has wheel-scrolled away from the active row) must NOT yank the
+ * viewport back to the active cell.
+ */
+export function registerActiveCellScrollSync(gridRoot) {
+    if (!gridRoot || activeCellSyncBindings.has(gridRoot)) return;
+
+    let lastActiveCell = gridRoot.querySelector(".fx-cell-active");
+
+    const observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+            if (mutation.type !== "attributes") continue;
+            const el = mutation.target;
+            if (!el.classList || !el.classList.contains("fx-cell-active")) continue;
+            if (el === lastActiveCell) return; // same cell re-styled, not a move
+            lastActiveCell = el;
+            ensureActiveGridCellVisible(gridRoot);
+            return;
+        }
+    });
+
+    observer.observe(gridRoot, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class"]
+    });
+    activeCellSyncBindings.set(gridRoot, observer);
+}
+
+export function unregisterActiveCellScrollSync(gridRoot) {
+    if (!gridRoot) return;
+    const observer = activeCellSyncBindings.get(gridRoot);
+    if (!observer) return;
+    observer.disconnect();
+    activeCellSyncBindings.delete(gridRoot);
+}
+
+/**
+ * Measure the three geometry facts neither CSS nor C# can derive for itself, and
+ * publish the header height back into CSS.
+ *
+ * WHY THIS NEEDS THE DOM (minimise-JS rule): a row's rendered pitch is the sum of
+ * font metrics, line-height, cell padding and collapsed borders, and the sticky
+ * header's height varies with theme and font. Neither is knowable server-side, and
+ * CSS cannot read one element's height into a custom property. Every consumer
+ * degrades to its previous hardcoded constant if this never runs.
+ *
+ * Returns { headerPx, rowPx, viewportPx }; rowPx is 0 when no data rows are
+ * rendered yet, which the caller treats as "not measured, try again".
+ */
+export function measureGridMetrics(gridRoot) {
+    if (!gridRoot) return null;
+
+    const bodyViewportEl = getGridVerticalViewportElement(gridRoot);
+    if (!bodyViewportEl) return null;
+
+    // SETTLED-LAYOUT GATE. A grid can render rows before it has been given its final
+    // box — behind a modal, inside a pane that has not been sized yet — and in that
+    // state both the row pitch and the header height are wrong (measured 16.5px in a
+    // transient layout where the settled values were 14px and 16px). The tell is that
+    // the scrollport is taller than the grid that contains it, which a settled layout
+    // can never be. Report "not measurable" so the caller retries on a later render
+    // instead of locking in a transient reading for the lifetime of the grid.
+    const rootHeight = gridRoot.getBoundingClientRect().height;
+    if (rootHeight <= 0 || bodyViewportEl.clientHeight > rootHeight + 1) {
+        return { headerPx: 0, rowPx: 0, viewportPx: 0 };
+    }
+
+    // How much of the scrollport's top the header occupies ONCE PINNED — which is its
+    // own height plus its `top` offset, NOT getGridVisibleTop()'s bottom-minus-top.
+    // Those differ before the first scroll: at scrollTop 0 the header still sits in
+    // normal flow, half a pixel below the padding edge (the table's collapsed border),
+    // and measuring its bottom would bake that 0.5px into a value that has to stay
+    // correct for every later scroll position.
+    let headerPx = 0;
+    for (const header of bodyViewportEl.querySelectorAll(".fx-grid-header-viewport, .fx-grid-header")) {
+        let style;
+        try {
+            style = getComputedStyle(header);
+        } catch (_) {
+            continue;
+        }
+        if (style.position !== "sticky") continue;
+
+        const rect = header.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+
+        const stickyOffset = parseFloat(style.top);
+        const occupies = rect.height + (Number.isFinite(stickyOffset) ? stickyOffset : 0);
+        if (occupies > headerPx) headerPx = occupies;
+    }
+
+    // Row PITCH, not one row's height: with border-collapse the shared border is
+    // owned by the table, so consecutive row tops are the only honest measure.
+    const tops = [];
+    for (const row of bodyViewportEl.querySelectorAll("tbody > tr")) {
+        if (row.classList.contains("fx-grid-window-spacer")) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+        tops.push(rect.top);
+        if (tops.length >= 8) break;
+    }
+
+    let rowPx = 0;
+    if (tops.length >= 2) {
+        const gaps = [];
+        for (let i = 1; i < tops.length; i++) gaps.push(tops[i] - tops[i - 1]);
+        // Median, so one odd row (inline edit row, a user-resized row) cannot skew it.
+        gaps.sort((a, b) => a - b);
+        rowPx = gaps[Math.floor(gaps.length / 2)];
+    }
+
+    // Hand the header height to CSS so `scroll-padding-top` keeps the browser's OWN
+    // scroll-into-view (focus(), scrollIntoView()) from parking a row under the header.
+    bodyViewportEl.style.setProperty("--fx-grid-header-h", `${headerPx}px`);
+
+    return { headerPx, rowPx: rowPx > 0 ? rowPx : 0, viewportPx: bodyViewportEl.clientHeight };
 }
 
 export function focusInputAtEnd(el) {
@@ -1312,6 +1564,34 @@ export function setGridScrollTop(scrollEl, top) {
     scrollEl.scrollTop = Math.max(0, Math.min(top || 0, max));
 }
 
+// Position the requested selected row directly below the sticky header. The
+// fallback offset mounts its row-window slice when that exact row is not in
+// the DOM yet; never align a stale, previously selected row instead.
+export function scrollSelectedGridRowToTop(gridRoot, rowIndex, fallbackTop) {
+    if (!gridRoot) return false;
+
+    // An explicit reveal wins over delayed first-paint reset callbacks.
+    supersedeGridScrollReset(gridRoot);
+
+    const scrollEl = getGridVerticalViewportElement(gridRoot);
+    if (!scrollEl) return false;
+
+    const selectedRow = gridRoot.querySelector(
+        `tr.fx-row[data-ari="${rowIndex}"]`);
+    if (!selectedRow) {
+        setGridScrollTop(scrollEl, fallbackTop);
+        return false;
+    }
+
+    const viewportRect = scrollEl.getBoundingClientRect();
+    const visibleTop = getGridVisibleTop(scrollEl, viewportRect.top);
+    const rowRect = selectedRow.getBoundingClientRect();
+    const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const target = scrollEl.scrollTop + rowRect.top - visibleTop;
+    scrollEl.scrollTop = Math.max(0, Math.min(target, max));
+    return true;
+}
+
 export function unregisterGridWindowScroll(scrollEl) {
     if (scrollEl && scrollEl.__gridWindowScroll) {
         scrollEl.removeEventListener("scroll", scrollEl.__gridWindowScroll);
@@ -1442,6 +1722,12 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
 
 export function focusMenuItem(menuEl, mode) {
     if (!menuEl) return false;
+
+    if (mode === "menu") {
+        requestAnimationFrame(() => menuEl?.focus({ preventScroll: true }));
+        return true;
+    }
+
     const items = [...menuEl.querySelectorAll("button")].filter(
         b => !b.disabled && b.offsetParent !== null);
     if (!items.length) return false;
@@ -1504,6 +1790,10 @@ function gridRowsWithAri(gridRoot) {
 // moves the selection away).
 const paintedPreviewEls = new Set();
 
+// Mute a previously-selected cell/row look in place. MUST be important-level
+// inline styles: several selection rules carry !important, which plain
+// inline styles lose to. The data-fx-muted marker keeps the drag painter
+// from resurrecting a muted look mid-drag.
 function muteSelectedLook(el) {
     el.dataset.fxMuted = "1";
     el.style.setProperty("background-color", "transparent", "important");
@@ -1532,6 +1822,8 @@ function restoreSelectedLook(el) {
     el.style.removeProperty("outline");
 }
 
+// The CLASS color multi-selected cells get after the server render — the
+// cell drag preview uses it so preview and final selection match.
 function gridCellPreviewColor(gridRoot) {
     // Match the CLASS color multi-selected cells get after the server render
     // (.fx-cell-selected:not(.fx-cell-active) — the grey row-shade), so the
@@ -1831,6 +2123,21 @@ export function unregisterGridInstantSelectionFeedback(gridRoot) {
     if (!gridRoot) return;
     const cleanup = gridInstantFeedbackBindings.get(gridRoot);
     if (cleanup) { cleanup(); gridInstantFeedbackBindings.delete(gridRoot); }
+}
+
+// Slide a position:fixed menu back inside the viewport (context menus opened
+// at the cursor near the right/bottom edge). Idempotent: only ever moves the
+// element up/left just enough to fit, so re-running after the menu grows
+// (inline submenu) stays stable.
+export function clampMenuIntoViewport(el, margin = 4) {
+    if (!el || !el.getBoundingClientRect) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const left = Math.max(margin, Math.min(rect.left, vw - margin - rect.width));
+    const top = Math.max(margin, Math.min(rect.top, vh - margin - rect.height));
+    if (left !== rect.left) el.style.left = `${Math.round(left)}px`;
+    if (top !== rect.top) el.style.top = `${Math.round(top)}px`;
 }
 
 

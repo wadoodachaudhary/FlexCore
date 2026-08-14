@@ -12,7 +12,9 @@
                 <div class="fx-notification-icon">
                     @switch (n.Level)
                     {
-                        case NotificationLevel.Error:   <span>&#x2716;</span> break;
+                        @* An X-shaped glyph here reads as a second close button —
+                           the error icon is an exclamation mark instead. *@
+                        case NotificationLevel.Error:   <span style="font-weight:700">!</span> break;
                         case NotificationLevel.Warning: <span>&#x26A0;</span> break;
                         case NotificationLevel.Success: <span>&#x2714;</span> break;
                         case NotificationLevel.Info:    <span>&#x2139;</span> break;
