@@ -40,9 +40,10 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: var(--fx-grid-row-selected-bg, #f0f0f0);
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
-    --fx-grid-cell-selected-row-bg: #e8e8e8;
-    --fx-grid-selected-editable-cell-bg: var(--fx-grid-selected-cell-bg);
-    --fx-grid-selected-editable-cell-shade: rgba(0, 0, 0, 0.04);
+    --fx-grid-cell-selected-row-bg: #f5f5f5;
+    --fx-grid-selected-editable-cell-bg: #fff;
+    --fx-grid-selected-editable-cell-shade: transparent;
+    --fx-grid-selected-row-active-cell-bg: #fff;
     --fx-grid-selected-cell-border: #6b7e8f;
     --fx-grid-active-cell-bg: transparent;
     /* Editing-state border: a darker shade derived from the grid's own
@@ -212,9 +213,10 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: #f0f0f0;
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
-    --fx-grid-cell-selected-row-bg: #e8e8e8;
-    --fx-grid-selected-editable-cell-bg: var(--fx-grid-selected-cell-bg);
-    --fx-grid-selected-editable-cell-shade: rgba(0, 0, 0, 0.04);
+    --fx-grid-cell-selected-row-bg: #f5f5f5;
+    --fx-grid-selected-editable-cell-bg: #fff;
+    --fx-grid-selected-editable-cell-shade: transparent;
+    --fx-grid-selected-row-active-cell-bg: #fff;
     --fx-grid-selected-cell-border: #6b7e8f;
     --fx-grid-active-cell-bg: #fff;
     --fx-grid-active-cell-border: #5f768b;
@@ -1218,6 +1220,12 @@
     overscroll-behavior: contain;
     padding-bottom: 18px;
     scroll-padding-bottom: 18px;
+    /* The column header is position:sticky INSIDE this scrollport, so it paints over
+       the first rows. Without this, the browser's own scroll-into-view (focus(),
+       scrollIntoView()) parks the target row UNDER the header. measureGridMetrics()
+       in grid-control.js publishes the real header height; 0px keeps the previous
+       behaviour if it never runs. */
+    scroll-padding-top: var(--fx-grid-header-h, 0px);
     scrollbar-gutter: auto;
 }
 
@@ -1740,6 +1748,19 @@
 .fx-cell-editable:not(.fx-batch-editing) {
     cursor: cell;
 }
+/* !important is required: the cell carries an INLINE overflow:hidden written by
+   the cell builder, which outranks any stylesheet rule. */
+.fx-grid ::deep .fx-cell:has(.fx-colorpicker),
+.fx-cell:has(.fx-colorpicker) {
+    overflow: visible !important;
+}
+.fx-grid ::deep .fx-cell:has(.fx-colorpicker-panel),
+.fx-cell:has(.fx-colorpicker-panel),
+.fx-grid ::deep tr.fx-row:has(.fx-colorpicker-panel),
+tr.fx-row:has(.fx-colorpicker-panel) {
+    position: relative;
+    z-index: 30;
+}
 .fx-grid ::deep .fx-cell:has(.fx-dropdown-host),
 .fx-cell:has(.fx-dropdown-host) {
     overflow: visible;
@@ -1751,7 +1772,6 @@ tr.fx-row:has(.fx-dropdown-panel) {
     position: relative;
     z-index: 30;
 }
-
 .fx-grid ::deep .fx-cell > .inline-edit {
     display: flex;
     align-items: center;
@@ -1851,7 +1871,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
 }
 .fx-grid ::deep .fx-cell.fx-cell-selected:not(.fx-cell-active),
 .fx-cell.fx-cell-selected:not(.fx-cell-active) {
-    background-color: var(--fx-grid-cell-selected-row-bg, #e8e8e8);
+    background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5);
 }
 .fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
 .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
@@ -2059,6 +2079,37 @@ tr.fx-row:has(.fx-dropdown-panel) {
     box-shadow: none !important;
 }
 
+.fx-batch-datepicker.fx-datepicker-host,
+.fx-grid ::deep .fx-batch-datepicker.fx-datepicker-host {
+    display: block;
+    width: 100%;
+    height: 100%;
+    font: inherit;
+}
+
+.fx-batch-datepicker .fx-datepicker-input-group,
+.fx-grid ::deep .fx-batch-datepicker .fx-datepicker-input-group {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    font: inherit;
+}
+
+.fx-batch-datepicker .fx-datepicker-input,
+.fx-grid ::deep .fx-batch-datepicker .fx-datepicker-input {
+    padding: 0 4px;
+    font: inherit;
+    line-height: inherit;
+}
+
+.fx-batch-datepicker .fx-datepicker-trigger,
+.fx-grid ::deep .fx-batch-datepicker .fx-datepicker-trigger {
+    width: 18px;
+    min-width: 18px;
+    font-size: 9px;
+}
+
 .fx-cell.fx-batch-editing ::deep .fx-textbox-password-host,
 .fx-grid ::deep .fx-cell.fx-batch-editing .fx-textbox-password-host {
     display: block;
@@ -2073,6 +2124,10 @@ tr.fx-row:has(.fx-dropdown-panel) {
     overflow: visible !important;
     line-height: normal;
     vertical-align: top;
+    /* Cells are position:relative with z-index:auto, so the NEXT cell — a later
+       positioned sibling — paints over the editor's 2px overhang and hides its
+       right border behind that cell's background. */
+    z-index: 5;
 }
 
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host,
@@ -2084,6 +2139,12 @@ tr.fx-row:has(.fx-dropdown-panel) {
        leaving a ~2px gap. max-width must allow the +2px or it would clamp the
        inline width back to 100%. The editing cell is overflow:visible so the
        overhang shows. */
+    /* Absolute so height:100% has a definite containing block. A table cell's
+       height is not definite for percentage-height children, so in flow the
+       closed control collapsed to its text height and left a gap under it. */
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100% !important;
     min-height: 0 !important;
@@ -2122,6 +2183,14 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-style: inherit !important;
     font-weight: inherit !important;
     line-height: inherit;
+}
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown .fx-dropdown-text:empty::before,
+.fx-batch-dropdown.fx-dropdown .fx-dropdown-text:empty::before {
+    /* A blank-valued cell has no text to size the closed editor, so the button
+       collapses to its 2px of borders — invisible and unclickable (seen on the
+       Attachments Classification column). A non-breaking space keeps the normal
+       one-line editor height without affecting cells that have a value. */
+    content: "\00a0";
 }
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow,
 .fx-batch-dropdown.fx-dropdown .fx-dropdown-arrow {
@@ -2905,6 +2974,17 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-weight: 600;
 }
 
+/* The list takes focus for keyboard navigation (Up/Down/Space); it is a listbox, not a
+   text field, so suppress the focus ring the browser would otherwise draw around the box. */
+.fx-choose-columns-list:focus,
+.fx-choose-columns-list:focus-visible,
+.fx-choose-columns-row:focus,
+.fx-choose-columns-row:focus-visible {
+    /* The row takes focus purely so the browser scrolls it into view; the blue
+       .selected bar is the visible cue, so no second focus ring on top of it. */
+    outline: none;
+}
+
 /* ── Choose Columns Dialog ───────────────────────────────────────────
    Mirrors the legacy VB6 "Choose Columns" dialog: a checkbox list with
    Move Up / Move Down / Show / Hide / Show All / Hide All / Restore
@@ -3084,9 +3164,10 @@ tr.fx-row:has(.fx-dropdown-panel) {
     white-space: nowrap;
 }
 .fx-grid-header-context-item:hover:not(:disabled),
-.fx-grid-header-context-item:focus:not(:disabled) {
+.fx-grid-header-context-item:focus-visible:not(:disabled) {
     background: #316ac5;
     color: #ffffff;
+    outline: none;
 }
 .fx-grid-header-context-item:disabled {
     color: #9ca3af;
@@ -3101,7 +3182,7 @@ tr.fx-row:has(.fx-dropdown-panel) {
     flex-shrink: 0;
 }
 .fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-check,
-.fx-grid-header-context-item:focus:not(:disabled) .fx-grid-header-context-check {
+.fx-grid-header-context-item:focus-visible:not(:disabled) .fx-grid-header-context-check {
     color: #ffffff;
 }
 .fx-grid-header-context-arrow {
@@ -3111,8 +3192,25 @@ tr.fx-row:has(.fx-dropdown-panel) {
     font-size: 10px;
 }
 .fx-grid-header-context-item:hover:not(:disabled) .fx-grid-header-context-arrow,
-.fx-grid-header-context-item:focus:not(:disabled) .fx-grid-header-context-arrow {
+.fx-grid-header-context-item:focus-visible:not(:disabled) .fx-grid-header-context-arrow {
     color: #ffffff;
+}
+
+/* Mouse hover owns the single visual highlight without discarding keyboard focus. */
+.fx-grid-header-context-menu:has(.fx-grid-header-context-item:hover)
+    .fx-grid-header-context-item:focus-visible:not(:hover),
+.fx-grid-cell-context-menu:has(.fx-grid-cell-context-item:hover)
+    .fx-grid-cell-context-item:focus-visible:not(:hover) {
+    background: transparent;
+    color: inherit;
+}
+.fx-grid-header-context-menu:has(.fx-grid-header-context-item:hover)
+    .fx-grid-header-context-item:focus-visible:not(:hover) .fx-grid-header-context-check {
+    color: #1f2937;
+}
+.fx-grid-header-context-menu:has(.fx-grid-header-context-item:hover)
+    .fx-grid-header-context-item:focus-visible:not(:hover) .fx-grid-header-context-arrow {
+    color: #6b7280;
 }
 .fx-grid-header-context-sep {
     height: 1px;
@@ -3175,6 +3273,26 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #000;
     font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
     user-select: none;
+}
+
+/* Taller than the viewport (long column lists) → scroll inside the menu
+   rather than run off-screen. Safe: the Insert-a-column submenu is inline,
+   not a flyout. */
+.fx-grid-header-context-menu,
+.fx-grid-cell-context-menu {
+    max-height: calc(100vh - 8px);
+    overflow-y: auto;
+}
+
+/* The menu container takes programmatic focus (tabindex=-1) for keyboard
+   navigation; the browser's :focus-visible heuristic paints a focus ring on
+   it whenever keyboard modality was recently active. Item highlight carries
+   the keyboard position — the container ring is noise. */
+.fx-grid-header-context-menu:focus,
+.fx-grid-header-context-menu:focus-visible,
+.fx-grid-cell-context-menu:focus,
+.fx-grid-cell-context-menu:focus-visible {
+    outline: none;
 }
 
 .fx-grid-cell-context-item {
@@ -3372,6 +3490,16 @@ tr.fx-row:has(.fx-dropdown-panel) {
     background: var(--fx-grid-selected-row-bg) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
 }
+
+/* Client-side drag-selection preview — painted by grid-control.js the instant the
+   pointer crosses a row, before the server's authoritative render lands. Mirrors
+   the .fx-selected look exactly so the handoff is invisible. */
+.fx-row.fx-drag-preview > td,
+.fx-row.fx-drag-preview .fx-cell,
+td.fx-drag-preview-cell {
+    background: var(--fx-grid-selected-row-bg) !important;
+    color: var(--fx-grid-selected-row-color, inherit) !important;
+}
 .fx-grid ::deep tr.fx-row.fx-selected {
     box-shadow: none !important;
     outline: none !important;
@@ -3390,11 +3518,11 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-row.fx-cell-row-selected .fx-cell,
 .fx-grid ::deep tr.fx-row.fx-cell-row-selected > td,
 .fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell {
-    background: var(--fx-grid-cell-selected-row-bg, #e8e8e8) !important;
+    background: var(--fx-grid-cell-selected-row-bg, #f5f5f5) !important;
 }
 .fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected,
 .fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected {
-    background-color: var(--fx-grid-cell-selected-row-bg, #e8e8e8) !important;
+    background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5) !important;
     box-shadow: inset 0 0 0 1px var(--fx-grid-selected-cell-border, #808080) !important;
 }
 .fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
@@ -3585,29 +3713,16 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #f8fafc;
 }
 
-/* Client-painted drag/click preview — identical to the selected look so the
-   server's authoritative render replaces it invisibly. */
-.fx-row.fx-drag-preview > td,
-.fx-row.fx-drag-preview .fx-cell,
-td.fx-drag-preview-cell {
-    background: var(--fx-grid-selected-row-bg) !important;
-    color: var(--fx-grid-selected-row-color, inherit) !important;
-}
-
 
 /* ── Editing-state emphasis (owner spec 2026-08-12) ─────────────────────────
    While a cell is ACTUALLY being edited — batch editor mounted via typing
    (after click or keyboard navigation), double-click, or BeginEditCellAsync —
-   the cell visibly changes form: the editor box is slightly ENLARGED beyond
-   the cell, has a SOLID border in a darker shade of the row-selection color,
-   and a BIGGER font. Reverts automatically when the editor unmounts (Enter /
-   Escape / click-away / navigation), because the classes disappear with it.
-   Dropdown editors keep their own layout (excluded). */
-/* Border drawn ON the cell itself as an inset ring — no positioning, no
-   overhang, nothing an ancestor can clip. Selector weight (tr context +
-   doubled class) deliberately exceeds the selected-cell ring rule
-   `tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected` (0,5,2), which
-   otherwise swallows the editing border. */
+   the cell visibly changes: an inset ring in a darker shade of the
+   row-selection color, white background, and a bigger font. Reverts when the
+   editor unmounts (Enter / Escape / click-away / navigation). Selector weight
+   (tr context + doubled class) deliberately exceeds the selected-cell ring
+   rule `tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected` (0,5,2),
+   which otherwise swallows the editing border. Dropdown editors excluded. */
 .fx-grid ::deep tr.fx-row .fx-cell.fx-batch-editing.fx-batch-editing:not(.fx-batch-dropdown-editing),
 tr.fx-row .fx-cell.fx-batch-editing.fx-batch-editing:not(.fx-batch-dropdown-editing) {
     box-shadow: inset 0 0 0 2px var(--fx-grid-editing-cell-border, #5f768b) !important;
@@ -3620,8 +3735,7 @@ tr.fx-row .fx-cell.fx-batch-editing.fx-batch-editing:not(.fx-batch-dropdown-edit
 }
 
 /* Pending multi-cell type-ahead: the user is editing several cells at once —
-   same border/font emphasis on every pending cell (no physical enlargement;
-   these are N live table cells). */
+   same border/font emphasis on every pending cell. */
 .fx-grid ::deep tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell,
 tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell {
     box-shadow: inset 0 0 0 1.5px var(--fx-grid-editing-cell-border, #5f768b) !important;

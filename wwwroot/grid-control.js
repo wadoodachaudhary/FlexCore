@@ -140,22 +140,33 @@ function resetGridScrollTargets(gridRoot) {
     }
 }
 
+function supersedeGridScrollReset(gridRoot) {
+    const generation = (gridRoot.__gridScrollResetGeneration || 0) + 1;
+    gridRoot.__gridScrollResetGeneration = generation;
+    return generation;
+}
+
 export function resetInitialGridScroll(gridRoot) {
     if (!gridRoot) return;
 
     const doc = gridRoot.ownerDocument || document;
     const win = doc.defaultView || window;
+    const generation = supersedeGridScrollReset(gridRoot);
+    const resetIfCurrent = () => {
+        if (gridRoot.__gridScrollResetGeneration === generation)
+            resetGridScrollTargets(gridRoot);
+    };
     const requestFrame = typeof win.requestAnimationFrame === "function"
         ? win.requestAnimationFrame.bind(win)
         : callback => win.setTimeout(callback, 0);
 
-    resetGridScrollTargets(gridRoot);
+    resetIfCurrent();
     requestFrame(() => {
-        resetGridScrollTargets(gridRoot);
-        requestFrame(() => resetGridScrollTargets(gridRoot));
+        resetIfCurrent();
+        requestFrame(resetIfCurrent);
     });
-    win.setTimeout(() => resetGridScrollTargets(gridRoot), 0);
-    win.setTimeout(() => resetGridScrollTargets(gridRoot), 80);
+    win.setTimeout(resetIfCurrent, 0);
+    win.setTimeout(resetIfCurrent, 80);
 }
 
 export function registerFilterPopupDrag(gridRoot) {
@@ -266,8 +277,25 @@ export function registerGridResizeCapture(gridRoot, dotNetRef, initialClientX = 
             .catch(() => {});
     };
 
+    // Keep the edge being dragged inside the scroll viewport. Without this the column grows
+    // under the splitter and the grip leaves the view, so the user is dragging something they
+    // can no longer see.
+    const keepGripVisible = (clientX) => {
+        const scroller = gridRoot.querySelector(".fx-grid-content");
+        if (!scroller || scroller.scrollWidth <= scroller.clientWidth) return;
+
+        const box = scroller.getBoundingClientRect();
+        const margin = 24;
+        if (clientX > box.right - margin) {
+            scroller.scrollLeft += clientX - (box.right - margin);
+        } else if (clientX < box.left + margin) {
+            scroller.scrollLeft -= (box.left + margin) - clientX;
+        }
+    };
+
     const onMouseMove = (event) => {
         event.preventDefault();
+        keepGripVisible(event.clientX);
         invokeMove(event);
     };
 
@@ -774,6 +802,12 @@ export function registerGridKeyboardTrap(gridRoot) {
             isGridScrollKey;
         if (!isNavigationKey) return;
 
+        // A PageControl navigation map treats each grid as one page-level Tab
+        // stop. Let its capture handler move between screen regions while the
+        // grid continues to own arrow-key navigation within the active row.
+        if (event.key === "Tab"
+            && gridRoot.closest("[data-fx-page-tab-navigation='true']")) return;
+
         if (isGridScrollKey) {
             if (event.altKey || event.shiftKey) return;
             const target = event.target instanceof Element ? event.target : null;
@@ -1037,6 +1071,76 @@ export function unregisterRowDragSelectionAutoScroll(gridRoot) {
     rowDragAutoScrollBindings.delete(gridRoot);
 }
 
+/**
+ * First VISIBLE pixel row inside a vertical scroll container.
+ *
+ * The column header is `position: sticky; top: 0` INSIDE the scroll container, so
+ * it paints OVER the first rows: the container's own top edge is not where the
+ * user starts seeing rows. Measuring against that edge makes a row that has
+ * slipped under the header test as "already visible", so arrowing up past the
+ * first visible row does not scroll at all — the selection lands on a row hidden
+ * behind the header, and only the NEXT arrow-up scrolls (by then one row late,
+ * with the selected row still occluded). Treat the sticky header's bottom edge as
+ * the top of the visible area instead.
+ */
+function getGridVisibleTop(bodyViewportEl, viewportTop) {
+    let visibleTop = viewportTop;
+    const headers = bodyViewportEl.querySelectorAll(".fx-grid-header-viewport, .fx-grid-header");
+    for (const header of headers) {
+        let position;
+        try {
+            position = getComputedStyle(header).position;
+        } catch (_) {
+            continue;
+        }
+        // Only a header PINNED to the top occludes rows. A header that scrolls
+        // away with the body (or one laid out above the scroll container) does not.
+        if (position !== "sticky") continue;
+
+        const headerRect = header.getBoundingClientRect();
+        if (headerRect.height <= 0) continue;
+        if (headerRect.top > viewportTop + 1) continue;
+        if (headerRect.bottom > visibleTop) visibleTop = headerRect.bottom;
+    }
+    return visibleTop;
+}
+
+/**
+ * Hide the row left straddling the first visible pixel row.
+ *
+ * The viewport height is never a whole number of rows, so after a scroll
+ * correction the row crossing the header's bottom edge is painted as a 1-3px
+ * sliver of clipped text jammed against the header -- unreadable, and it reads
+ * as the header being dirty. Nudge the scroll down by exactly that sliver so
+ * the first row below the header is always a WHOLE row.
+ *
+ * This never scrolls the active row out of view: at the point this runs the
+ * active row is flush against one edge, and hiding the straddler only moves
+ * content up. The row carrying the active cell is skipped outright.
+ */
+function snapGridTopToWholeRow(bodyViewportEl, activeCell) {
+    const visibleTop = getGridVisibleTop(
+        bodyViewportEl, bodyViewportEl.getBoundingClientRect().top);
+
+    for (const row of bodyViewportEl.querySelectorAll("tbody > tr")) {
+        if (row.classList.contains("fx-grid-window-spacer")) continue;
+
+        const rect = row.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+        // Not the straddler: entirely below the fold, or entirely behind the header.
+        if (rect.top >= visibleTop - 0.5 || rect.bottom <= visibleTop + 0.5) continue;
+
+        // Never hide the row the user is standing on.
+        if (activeCell && row.contains(activeCell)) return;
+
+        const maxScrollTop = Math.max(
+            0, bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight);
+        bodyViewportEl.scrollTop = clamp(
+            bodyViewportEl.scrollTop + (rect.bottom - visibleTop), 0, maxScrollTop);
+        return;
+    }
+}
+
 export function ensureActiveGridCellVisible(gridRoot) {
     if (!gridRoot) return;
 
@@ -1055,7 +1159,8 @@ export function ensureActiveGridCellVisible(gridRoot) {
     const outerBodyRect = bodyViewportEl.getBoundingClientRect();
     const bodyRect = {
         left: outerBodyRect.left,
-        top: outerBodyRect.top,
+        // NOT outerBodyRect.top — the sticky header covers the first rows.
+        top: getGridVisibleTop(bodyViewportEl, outerBodyRect.top),
         right: outerBodyRect.left + bodyViewportEl.clientWidth,
         bottom: outerBodyRect.top + bodyViewportEl.clientHeight
     };
@@ -1072,15 +1177,190 @@ export function ensureActiveGridCellVisible(gridRoot) {
             maxScrollLeft);
     }
 
-    if (cellRect.top < bodyRect.top + padding) {
-        bodyViewportEl.scrollTop = Math.max(0, bodyViewportEl.scrollTop - ((bodyRect.top + padding) - cellRect.top));
-    } else if (cellRect.bottom > bodyRect.bottom - padding) {
-        const maxScrollTop = bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight;
+    // Vertically, land the active row FLUSH against the sticky header (or the
+    // bottom edge) -- deliberately NOT `padding` px clear of it the way the
+    // horizontal pass does. A vertical gap is not empty space: it exposes a
+    // sliver of the NEIGHBOURING row, which looks like a squashed extra line of
+    // text against the header. The epsilon only absorbs sub-pixel rounding, so
+    // a row already flush does not re-trigger a scroll on every keystroke.
+    const maxScrollTop = Math.max(0, bodyViewportEl.scrollHeight - bodyViewportEl.clientHeight);
+    const edgeEpsilon = 0.5;
+
+    if (cellRect.top < bodyRect.top - edgeEpsilon) {
         bodyViewportEl.scrollTop = clamp(
-            bodyViewportEl.scrollTop + (cellRect.bottom - (bodyRect.bottom - padding)),
-            0,
-            maxScrollTop);
+            bodyViewportEl.scrollTop - (bodyRect.top - cellRect.top), 0, maxScrollTop);
+        snapGridTopToWholeRow(bodyViewportEl, activeCell);
+    } else if (cellRect.bottom > bodyRect.bottom + edgeEpsilon) {
+        bodyViewportEl.scrollTop = clamp(
+            bodyViewportEl.scrollTop + (cellRect.bottom - bodyRect.bottom), 0, maxScrollTop);
+        snapGridTopToWholeRow(bodyViewportEl, activeCell);
     }
+}
+
+// ── Active-cell pre-paint viewport sync ──────────────────────────────────────
+
+const activeCellSyncBindings = new WeakMap();
+
+/**
+ * Land the keyboard-navigation scroll in the SAME painted frame as the
+ * highlight move.
+ *
+ * Without this, arrowing through rows painted in TWO steps: Blazor's DOM patch
+ * moved .fx-cell-active while the grid still sat at the OLD scroll offset — the
+ * browser happily painted that frame — and only the post-render interop call
+ * scrolled the row into view, one frame later. One row at a time that is a
+ * visible one-row-pitch jump right after the highlight moves: the per-keystroke
+ * flicker. (Mouse-wheel scrolling never enters this path, which is why it does
+ * not flicker.)
+ *
+ * A MutationObserver callback runs as a microtask BEFORE the browser's next
+ * rendering opportunity, so correcting the scroll here is the one place both
+ * changes can be composed into a single paint. Server-side C# cannot do this:
+ * by the time its post-render interop call arrives, the stale frame is already
+ * on screen. That late call is kept as the fallback — when the cell is already
+ * flush it early-outs inside the edge epsilon, so it never double-scrolls.
+ *
+ * Scroll-hijack guard: correct ONLY when the active cell moved to a DIFFERENT
+ * element (a class mutation on a cell it was not on before). Re-mutations of
+ * the same cell's class and structural patches (row windowing re-renders while
+ * the user has wheel-scrolled away from the active row) must NOT yank the
+ * viewport back to the active cell.
+ */
+export function registerActiveCellScrollSync(gridRoot) {
+    if (!gridRoot || activeCellSyncBindings.has(gridRoot)) return;
+
+    let lastActiveCell = gridRoot.querySelector(".fx-cell-active");
+    let lastRowRevealToken = null;
+
+    const revealRequestedRow = () => {
+        const token = gridRoot.getAttribute("data-fx-row-reveal-token");
+        const rawIndex = gridRoot.getAttribute("data-fx-row-reveal-index");
+        if (!token || token === lastRowRevealToken || rawIndex === null) return false;
+
+        const rowIndex = Number.parseInt(rawIndex, 10);
+        if (!Number.isFinite(rowIndex)) return false;
+        if (!gridRoot.querySelector(`tr.fx-row[data-ari="${rowIndex}"]`)) return false;
+
+        scrollSelectedGridRowToTop(gridRoot, rowIndex, 0, true);
+        lastRowRevealToken = token;
+        return true;
+    };
+
+    const observer = new MutationObserver(mutations => {
+        // Blazor applies the row window, selected class, and reveal token in one
+        // DOM batch. MutationObserver runs before paint, so align that completed
+        // batch now instead of showing an unselected scroll first.
+        if (revealRequestedRow()) return;
+
+        for (const mutation of mutations) {
+            if (mutation.type !== "attributes") continue;
+            const el = mutation.target;
+            if (!el.classList || !el.classList.contains("fx-cell-active")) continue;
+            if (el === lastActiveCell) return; // same cell re-styled, not a move
+            lastActiveCell = el;
+            ensureActiveGridCellVisible(gridRoot);
+            return;
+        }
+    });
+
+    observer.observe(gridRoot, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["class", "data-fx-row-reveal-index", "data-fx-row-reveal-token"],
+        childList: true
+    });
+    revealRequestedRow();
+    activeCellSyncBindings.set(gridRoot, observer);
+}
+
+export function unregisterActiveCellScrollSync(gridRoot) {
+    if (!gridRoot) return;
+    const observer = activeCellSyncBindings.get(gridRoot);
+    if (!observer) return;
+    observer.disconnect();
+    activeCellSyncBindings.delete(gridRoot);
+}
+
+/**
+ * Measure the three geometry facts neither CSS nor C# can derive for itself, and
+ * publish the header height back into CSS.
+ *
+ * WHY THIS NEEDS THE DOM (minimise-JS rule): a row's rendered pitch is the sum of
+ * font metrics, line-height, cell padding and collapsed borders, and the sticky
+ * header's height varies with theme and font. Neither is knowable server-side, and
+ * CSS cannot read one element's height into a custom property. Every consumer
+ * degrades to its previous hardcoded constant if this never runs.
+ *
+ * Returns { headerPx, rowPx, viewportPx }; rowPx is 0 when no data rows are
+ * rendered yet, which the caller treats as "not measured, try again".
+ */
+export function measureGridMetrics(gridRoot) {
+    if (!gridRoot) return null;
+
+    const bodyViewportEl = getGridVerticalViewportElement(gridRoot);
+    if (!bodyViewportEl) return null;
+
+    // SETTLED-LAYOUT GATE. A grid can render rows before it has been given its final
+    // box — behind a modal, inside a pane that has not been sized yet — and in that
+    // state both the row pitch and the header height are wrong (measured 16.5px in a
+    // transient layout where the settled values were 14px and 16px). The tell is that
+    // the scrollport is taller than the grid that contains it, which a settled layout
+    // can never be. Report "not measurable" so the caller retries on a later render
+    // instead of locking in a transient reading for the lifetime of the grid.
+    const rootHeight = gridRoot.getBoundingClientRect().height;
+    if (rootHeight <= 0 || bodyViewportEl.clientHeight > rootHeight + 1) {
+        return { headerPx: 0, rowPx: 0, viewportPx: 0 };
+    }
+
+    // How much of the scrollport's top the header occupies ONCE PINNED — which is its
+    // own height plus its `top` offset, NOT getGridVisibleTop()'s bottom-minus-top.
+    // Those differ before the first scroll: at scrollTop 0 the header still sits in
+    // normal flow, half a pixel below the padding edge (the table's collapsed border),
+    // and measuring its bottom would bake that 0.5px into a value that has to stay
+    // correct for every later scroll position.
+    let headerPx = 0;
+    for (const header of bodyViewportEl.querySelectorAll(".fx-grid-header-viewport, .fx-grid-header")) {
+        let style;
+        try {
+            style = getComputedStyle(header);
+        } catch (_) {
+            continue;
+        }
+        if (style.position !== "sticky") continue;
+
+        const rect = header.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+
+        const stickyOffset = parseFloat(style.top);
+        const occupies = rect.height + (Number.isFinite(stickyOffset) ? stickyOffset : 0);
+        if (occupies > headerPx) headerPx = occupies;
+    }
+
+    // Row PITCH, not one row's height: with border-collapse the shared border is
+    // owned by the table, so consecutive row tops are the only honest measure.
+    const tops = [];
+    for (const row of bodyViewportEl.querySelectorAll("tbody > tr")) {
+        if (row.classList.contains("fx-grid-window-spacer")) continue;
+        const rect = row.getBoundingClientRect();
+        if (rect.height <= 0) continue;
+        tops.push(rect.top);
+        if (tops.length >= 8) break;
+    }
+
+    let rowPx = 0;
+    if (tops.length >= 2) {
+        const gaps = [];
+        for (let i = 1; i < tops.length; i++) gaps.push(tops[i] - tops[i - 1]);
+        // Median, so one odd row (inline edit row, a user-resized row) cannot skew it.
+        gaps.sort((a, b) => a - b);
+        rowPx = gaps[Math.floor(gaps.length / 2)];
+    }
+
+    // Hand the header height to CSS so `scroll-padding-top` keeps the browser's OWN
+    // scroll-into-view (focus(), scrollIntoView()) from parking a row under the header.
+    bodyViewportEl.style.setProperty("--fx-grid-header-h", `${headerPx}px`);
+
+    return { headerPx, rowPx: rowPx > 0 ? rowPx : 0, viewportPx: bodyViewportEl.clientHeight };
 }
 
 export function focusInputAtEnd(el) {
@@ -1312,6 +1592,41 @@ export function setGridScrollTop(scrollEl, top) {
     scrollEl.scrollTop = Math.max(0, Math.min(top || 0, max));
 }
 
+// Reveal the requested selected row directly below the sticky header. An
+// already-visible row can stay in place; the fallback offset mounts its
+// row-window slice when that exact row is not in the DOM yet.
+export function scrollSelectedGridRowToTop(gridRoot, rowIndex, fallbackTop, onlyIfNeeded = false) {
+    if (!gridRoot) return false;
+
+    // An explicit reveal wins over delayed first-paint reset callbacks.
+    supersedeGridScrollReset(gridRoot);
+
+    const scrollEl = getGridVerticalViewportElement(gridRoot);
+    if (!scrollEl) return false;
+
+    const selectedRow = gridRoot.querySelector(
+        `tr.fx-row[data-ari="${rowIndex}"]`);
+    if (!selectedRow) {
+        setGridScrollTop(scrollEl, fallbackTop);
+        return false;
+    }
+
+    const viewportRect = scrollEl.getBoundingClientRect();
+    const visibleTop = getGridVisibleTop(scrollEl, viewportRect.top);
+    const rowRect = selectedRow.getBoundingClientRect();
+    const edgeEpsilon = 0.5;
+    if (onlyIfNeeded
+        && rowRect.top >= visibleTop - edgeEpsilon
+        && rowRect.bottom <= viewportRect.bottom + edgeEpsilon) {
+        return true;
+    }
+
+    const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const target = scrollEl.scrollTop + rowRect.top - visibleTop;
+    scrollEl.scrollTop = Math.max(0, Math.min(target, max));
+    return true;
+}
+
 export function unregisterGridWindowScroll(scrollEl) {
     if (scrollEl && scrollEl.__gridWindowScroll) {
         scrollEl.removeEventListener("scroll", scrollEl.__gridWindowScroll);
@@ -1442,6 +1757,12 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
 
 export function focusMenuItem(menuEl, mode) {
     if (!menuEl) return false;
+
+    if (mode === "menu") {
+        requestAnimationFrame(() => menuEl?.focus({ preventScroll: true }));
+        return true;
+    }
+
     const items = [...menuEl.querySelectorAll("button")].filter(
         b => !b.disabled && b.offsetParent !== null);
     if (!items.length) return false;
@@ -1470,6 +1791,62 @@ export function activateMenuItem(menuEl) {
     return false;
 }
 
+// Popup openers the library itself renders, plus the ARIA declaration any host
+// template can carry. A button with none of these is not a popup opener.
+const CELL_POPUP_OPENERS =
+    ".fx-cell-edit-btn, .fx-cell-action-btn, .fx-grid-popup-btn, [aria-haspopup]:not([aria-haspopup='false'])";
+
+function isActivatableCellPopup(el) {
+    if (el.disabled === true) return false;
+    if (el.matches("[disabled], [hidden], [aria-disabled='true'], [aria-hidden='true'], [data-fx-no-enter]")) return false;
+    if (el.closest("[aria-hidden='true'], [data-fx-no-enter]")) return false;
+    const style = window.getComputedStyle(el);
+    return style.display !== "none"
+        && style.visibility !== "hidden"
+        && Number.parseFloat(style.opacity) !== 0;
+}
+
+// The fx-cell-active class is written by server renders only, and the client
+// navigation preview moves the server's active cell WITHOUT one — so the
+// caller's row/field identity resolves the cell whenever the row carries an
+// absolute index. Grouped rows have none and pass ari < 0.
+function resolveCellForPopupActivation(gridRoot, ari, field) {
+    if (Number.isInteger(ari) && ari >= 0) {
+        const row = gridRoot.querySelector(`tbody tr.fx-row[data-ari="${ari}"]`);
+        if (!row || row.closest(".fx-grid") !== gridRoot) return null;
+        return Array.from(row.children).find(td => td.getAttribute("data-field") === field) ?? null;
+    }
+    const active = Array.from(gridRoot.querySelectorAll("td.fx-cell-active"))
+        .find(td => td.closest(".fx-grid") === gridRoot);
+    return active && active.getAttribute("data-field") === field ? active : null;
+}
+
+/**
+ * Enter on the active cell activates that cell's popup opener. A host cell
+ * template is an opaque render fragment on the C# side, so the opener can only
+ * be reached as a DOM click. The opener is never guessed: an explicit
+ * data-fx-cell-popup marker is authoritative for the whole cell, and without
+ * one only a declared popup affordance is activated.
+ */
+export function activateActiveCellPopup(gridRoot, ari, field) {
+    if (!gridRoot || !field) return false;
+    const cell = resolveCellForPopupActivation(gridRoot, ari, field);
+    if (!cell) return false;
+
+    const marked = Array.from(cell.querySelectorAll("[data-fx-cell-popup]"));
+    if (marked.length) {
+        const target = marked.find(isActivatableCellPopup);
+        if (!target) return false;
+        target.click();
+        return true;
+    }
+
+    const opener = Array.from(cell.querySelectorAll(CELL_POPUP_OPENERS)).find(isActivatableCellPopup);
+    if (!opener) return false;
+    opener.click();
+    return true;
+}
+
 export function measureGridAvailableWidth(gridRoot) {
     if (!gridRoot) return 0;
     const content = gridRoot.querySelector(".fx-grid-content");
@@ -1488,6 +1865,61 @@ export function measureGridAvailableWidth(gridRoot) {
 // which also gives plain clicks instant feedback before the round trip.
 const gridDragSelectionBindings = new WeakMap();
 
+// ── Selection-paint arbiter ─────────────────────────────────────────────
+// ONE authority per grid over which client gesture currently owns the
+// selection visuals. Every client paint system (drag preview, instant press
+// feedback, keyboard navigation preview) enrolls its gesture here and every
+// deferred sweep/expiry consults it, so no system can ever treat another
+// system's LIVE gesture — or its own still-running one — as stale residue.
+//  - generation/owner: monotonically increasing gesture id + which side
+//    ("pointer"/"keyboard") started it. A sweep armed by gesture N is a
+//    no-op once gesture N+1 exists.
+//  - pointerDown: the PHYSICAL button state. A press is never stale while
+//    the button is still down, no matter how old it is (the 1.5s safety
+//    net used to fire mid-hold, un-muting the old selection under the
+//    user's finger and clearing the press paint).
+//  - cancelKeyboard: hand-off hook — a pointer gesture starting cancels a
+//    live keyboard preview in the same frame (flushing its position first).
+const gridPaintArbiters = new WeakMap();
+
+function gridPaintArbiter(gridRoot) {
+    let state = gridPaintArbiters.get(gridRoot);
+    if (!state) {
+        state = { generation: 0, owner: null, pointerDown: false, cancelKeyboard: null };
+        gridPaintArbiters.set(gridRoot, state);
+    }
+    return state;
+}
+
+function beginGridPaintGesture(gridRoot, owner) {
+    const state = gridPaintArbiter(gridRoot);
+    // A new gesture invalidates the previous one's deferred sweeps (the
+    // generation bump makes them no-ops) — so the battlefield must be swept
+    // HERE, or paints whose only cleaner was that sweep are orphaned
+    // forever. The trap: double-click on a NON-editable cell — no editor,
+    // no state change, no render ever rewrites that row, and the press's
+    // td-level inline paints (server never writes td backgrounds) survived
+    // every later gesture as a permanently selected-looking row.
+    if (state.generation > 0 && !state.pointerDown) {
+        try { sweepStalePreviewPaints(null); } catch { /* best effort */ }
+    }
+    const generation = ++state.generation;
+    if (owner === "pointer" && state.cancelKeyboard) state.cancelKeyboard();
+    state.owner = owner;
+    return generation;
+}
+
+function isCurrentGridPaintGesture(gridRoot, owner, generation) {
+    const state = gridPaintArbiter(gridRoot);
+    return state.owner === owner && state.generation === generation;
+}
+
+// True while a pointer gesture is PHYSICALLY live: button down, or the drag
+// capture still registered. Sweeps must defer, never fire, while this holds.
+function gridPointerGestureLive(gridRoot) {
+    return gridPaintArbiter(gridRoot).pointerDown || gridDragSelectionBindings.has(gridRoot);
+}
+
 function gridRowsWithAri(gridRoot) {
     return [...gridRoot.querySelectorAll("tbody tr.fx-row[data-ari]")];
 }
@@ -1504,6 +1936,10 @@ function gridRowsWithAri(gridRoot) {
 // moves the selection away).
 const paintedPreviewEls = new Set();
 
+// Mute a previously-selected cell/row look in place. MUST be important-level
+// inline styles: several selection rules carry !important, which plain
+// inline styles lose to. The data-fx-muted marker keeps the drag painter
+// from resurrecting a muted look mid-drag.
 function muteSelectedLook(el) {
     el.dataset.fxMuted = "1";
     el.style.setProperty("background-color", "transparent", "important");
@@ -1532,6 +1968,8 @@ function restoreSelectedLook(el) {
     el.style.removeProperty("outline");
 }
 
+// The CLASS color multi-selected cells get after the server render — the
+// cell drag preview uses it so preview and final selection match.
 function gridCellPreviewColor(gridRoot) {
     // Match the CLASS color multi-selected cells get after the server render
     // (.fx-cell-selected:not(.fx-cell-active) — the grey row-shade), so the
@@ -1604,6 +2042,12 @@ function clearSelectedLook(gridRoot, exceptTr) {
         muteSelectedLook(r);
         for (const td of r.children) muteSelectedLook(td);
     });
+    // CELL-mode grids carry the selected look on TD classes, not
+    // tr.fx-selected — without this the old selection survives a press or a
+    // whole drag until the release render replaces it.
+    gridRoot.querySelectorAll(
+        "tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active")
+        .forEach(td => { if (td.closest("tr") !== exceptTr) muteSelectedLook(td); });
 }
 
 export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex, anchorField) {
@@ -1612,6 +2056,10 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
 
     const doc = gridRoot.ownerDocument || document;
     let lastIdx = anchorIndex, moved = false, ended = false, raf = 0, pending = null;
+    // The drag capture is registered by the server AFTER the press that the
+    // instant-feedback binding already enrolled with the arbiter — adopt that
+    // gesture rather than starting a new one.
+    const gestureGeneration = gridPaintArbiter(gridRoot).generation;
 
     const previewColor = mode === "row" ? gridPreviewColor(gridRoot) : gridCellPreviewColor(gridRoot);
     const applyPreview = toIdx => {
@@ -1641,7 +2089,10 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
         // certainly landed, wipe every tracked paint that isn't backed by a
         // real selection (cell paints always; they are JS-owned).
         const net = () => {
-            if (gridDragSelectionBindings.has(gridRoot)) { setTimeout(net, 800); return; }
+            // A newer gesture owns the paints now — this net is obsolete.
+            if (!isCurrentGridPaintGesture(gridRoot, "pointer", gestureGeneration)) return;
+            // Never sweep while a pointer gesture is physically live.
+            if (gridPointerGestureLive(gridRoot)) { setTimeout(net, 800); return; }
             sweepStalePreviewPaints(null);
         };
         setTimeout(net, 1500);
@@ -1768,13 +2219,35 @@ function sweepStalePreviewPaints(exceptTr) {
 
 export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false) {
     if (!gridRoot || gridInstantFeedbackBindings.has(gridRoot)) return;
+    const doc = gridRoot.ownerDocument || document;
     let netTimer = 0;
     const onDown = e => {
-        if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        if (e.button !== 0) return;
+        // Track the PHYSICAL press for every primary-button pointerdown,
+        // modifier presses included: while the button is down no sweep may
+        // treat this gesture's paints/mutes as stale (a >1.5s hold used to
+        // trip the safety net mid-press, re-tinting the old selection under
+        // the user's finger and clearing the press paint).
+        const arbiter = gridPaintArbiter(gridRoot);
+        arbiter.pointerDown = true;
+        const releasePointer = () => {
+            arbiter.pointerDown = false;
+            doc.removeEventListener("pointerup", releasePointer, true);
+            doc.removeEventListener("pointercancel", releasePointer, true);
+            window.removeEventListener("blur", releasePointer);
+        };
+        doc.addEventListener("pointerup", releasePointer, true);
+        doc.addEventListener("pointercancel", releasePointer, true);
+        window.addEventListener("blur", releasePointer);
+
+        if (e.ctrlKey || e.metaKey || e.shiftKey) return;
         const t = e.target;
         if (t.closest && t.closest("input, select, textarea, button")) return;
         const tr = t.closest ? t.closest("tbody tr.fx-row[data-ari]") : null;
         if (!tr || !gridRoot.contains(tr)) return;
+        // This press owns the selection visuals now: a live keyboard preview
+        // is cancelled (its position flushed) inside beginGridPaintGesture.
+        const gestureGeneration = beginGridPaintGesture(gridRoot, "pointer");
 
         if (cellMode) {
             // The press REPLACES the cell selection: mute every old selected
@@ -1785,9 +2258,18 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
             // 'important' priority: the single-cell-batch selected-cell rules
             // are themselves !important, so a plain inline mute loses.
             gridRoot.querySelectorAll("td.fx-cell-selected").forEach(c => { if (c !== td) muteSelectedLook(c); });
-            // The row shade paints EVERY td of the row directly (!important),
-            // so a muted row must mute its cells too.
-            gridRoot.querySelectorAll("tr.fx-cell-row-selected").forEach(r => {
+            // Grids that put the row shade on the TDs (fx-cell-row-selected /
+            // fx-cell-active on td, not tr) — mute those in the press frame
+            // too, or the old row visibly survives a held press.
+            gridRoot.querySelectorAll("td.fx-cell-row-selected, td.fx-cell-active").forEach(c => {
+                if (c !== td && c.closest("tr") !== tr) muteSelectedLook(c);
+            });
+            // Row shade as server-written INLINE tr style (gItems model) or
+            // as the tr.fx-cell-row-selected class — either way it paints
+            // EVERY td of the row directly (!important), so a muted row must
+            // mute its cells too.
+            gridRoot.querySelectorAll(
+                "tbody tr.fx-row[style*='background'], tr.fx-cell-row-selected").forEach(r => {
                 if (r === tr) return;
                 muteSelectedLook(r);
                 for (const c of r.children) { if (c !== td) muteSelectedLook(c); }
@@ -1813,9 +2295,12 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
         // landed, wipe whatever the server did not turn into a selection.
         clearTimeout(netTimer);
         const net = () => {
-            // A live drag owns the paints — sweeping mid-drag un-mutes the old
+            // A newer gesture owns the paints now — this net is obsolete.
+            if (!isCurrentGridPaintGesture(gridRoot, "pointer", gestureGeneration)) return;
+            // A physically live gesture (button still down, or a drag in
+            // progress) owns its paints — sweeping now un-mutes the old
             // selection and repaints it under the user's cursor. Defer.
-            if (gridDragSelectionBindings.has(gridRoot)) { netTimer = setTimeout(net, 800); return; }
+            if (gridPointerGestureLive(gridRoot)) { netTimer = setTimeout(net, 800); return; }
             sweepStalePreviewPaints(null);
         };
         netTimer = setTimeout(net, 1500);
@@ -1833,6 +2318,21 @@ export function unregisterGridInstantSelectionFeedback(gridRoot) {
     if (cleanup) { cleanup(); gridInstantFeedbackBindings.delete(gridRoot); }
 }
 
+// Slide a position:fixed menu back inside the viewport (context menus opened
+// at the cursor near the right/bottom edge). Idempotent: only ever moves the
+// element up/left just enough to fit, so re-running after the menu grows
+// (inline submenu) stays stable.
+export function clampMenuIntoViewport(el, margin = 4) {
+    if (!el || !el.getBoundingClientRect) return;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width && !rect.height) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const left = Math.max(margin, Math.min(rect.left, vw - margin - rect.width));
+    const top = Math.max(margin, Math.min(rect.top, vh - margin - rect.height));
+    if (left !== rect.left) el.style.left = `${Math.round(left)}px`;
+    if (top !== rect.top) el.style.top = `${Math.round(top)}px`;
+}
+
 
 // Server-applied keystrokes during the editor's focus round-trip must reach
 // the mounted UNCONTROLLED input too — its mount snapshot predates them, and
@@ -1841,4 +2341,459 @@ export function setBatchEditorValue(input, value) {
     if (!input) return;
     input.value = value ?? "";
     try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* non-text input */ }
+}
+
+// ── Client-painted keyboard navigation (opt-in) ─────────────────────────────
+// Plain arrow presses move the active-cell cue INSTANTLY in the browser and
+// never reach Blazor; one debounced sync call lands the real active cell in a
+// single server render. Anything the fast path cannot prove safe (modifiers,
+// an editor input as target, grouped rows, the row-window edge, no anchor)
+// falls through untouched to the server pipeline.
+const clientNavBindings = new WeakMap();
+
+export function registerClientNavigationPreview(gridRoot, dotNetRef) {
+    if (!gridRoot) return;
+    // A circuit reconnect re-registers with a FRESH DotNetObjectReference on
+    // the same DOM element; the old listener must adopt it or every arrow is
+    // eaten by invokeMethodAsync throwing on the dead circuit's reference.
+    const existing = clientNavBindings.get(gridRoot);
+    if (existing) { existing.dotNetRef = dotNetRef; return; }
+    const binding = { dotNetRef };
+    clientNavBindings.set(gridRoot, binding);
+
+    let painted = [];
+    let navMuted = new Set();
+    let navHiddenBtns = new Set();
+    let paintedRowTr = null;
+    let pending = null;
+    let lastPreview = null;   // survives flush so a held key keeps its anchor
+    let stepsSinceFlush = 0;
+    let syncTimer = 0;
+    let syncInFlight = false;
+    let needsFinal = false;   // a previewed position exists that no FINAL sync has landed yet
+    let navGeneration = 0;    // this preview's gesture id in the paint arbiter
+    let settleGeneration = 0; // non-zero while awaiting the OBSERVED settle render
+    let settleArmedPos = null;
+    let settleTries = 0;
+    let settleTimer = 0;
+
+    // Strip only the cell-cue paints this path wrote. Shared by clearPaints
+    // and the keydown fast path, which mid-gesture keeps the row paint and
+    // the foreign-selection mutes alive.
+    const clearCuePaints = () => {
+        for (const el of painted) {
+            el.style.removeProperty("background");
+            el.style.removeProperty("box-shadow");
+        }
+        painted = [];
+    };
+
+    const clearPaints = () => {
+        clearCuePaints();
+        if (paintedRowTr) {
+            setRowPreview(paintedRowTr, false, "");
+            paintedRowTr = null;
+        }
+        // Unmute ONLY what this path muted — blanket-unmuting would resurrect
+        // selection looks the DRAG painter muted mid-gesture.
+        for (const el of navMuted) {
+            el.style.removeProperty("background-color");
+            el.style.removeProperty("box-shadow");
+            el.style.removeProperty("outline");
+        }
+        navMuted.clear();
+        for (const b of navHiddenBtns) b.style.removeProperty("display");
+        navHiddenBtns.clear();
+    };
+
+    const cancelSettle = () => {
+        settleGeneration = 0;
+        settleArmedPos = null;
+        settleTries = 0;
+        window.clearTimeout(settleTimer);
+        settleTimer = 0;
+    };
+
+    // Full preview release: drop every visual and forget the previewed
+    // position. The four operations touch disjoint state (settle vars /
+    // paint registries / the two flags), so every release site shares this
+    // exact sequence.
+    const releasePreview = () => {
+        cancelSettle();
+        clearPaints();
+        lastPreview = null;
+        needsFinal = false;
+    };
+
+    // A pointer gesture is taking over (invoked from beginGridPaintGesture).
+    // Land the un-finalized preview position SILENTLY first — same websocket,
+    // ordered ahead of the press's own server events — so the press acts on
+    // the position the user sees. The pointer gesture owns every visual from
+    // here, so no render is requested and all keyboard paints drop now.
+    const cancelKeyboardPreviewForPointer = () => {
+        const p = pending ?? (needsFinal ? lastPreview : null);
+        if (p) {
+            try {
+                binding.dotNetRef.invokeMethodAsync(
+                    "SyncActiveCellFromClientNavigationAsync", p.ari, p.cell, false).catch(() => { });
+            } catch { /* circuit down — the press path re-selects anyway */ }
+        }
+        window.clearTimeout(syncTimer);
+        syncTimer = 0;
+        pending = null;
+        stepsSinceFlush = 0;
+        releasePreview();
+    };
+    gridPaintArbiter(gridRoot).cancelKeyboard = cancelKeyboardPreviewForPointer;
+
+    // Mute every server-rendered selection look on rows other than targetTr.
+    // Shared by the keydown fast path (same-frame response) and the render
+    // observer below (server renders land AFTER the cursor moved on — a sync
+    // checkpoint render repaints a row the preview already left, so keypress-
+    // time muting alone leaves stale blue rows between renders). The
+    // effective-mute skip makes the sweep idempotent so the observer converges
+    // instead of re-triggering itself forever.
+    const isEffectivelyMuted = el =>
+        el.style.getPropertyValue("background-color") === "transparent";
+    // Nav-owned mute: same inline overrides as muteSelectedLook but WITHOUT
+    // the data-fx-muted marker / paintedPreviewEls enrollment — the drag
+    // path's post-click safety sweep RESTORES marked rows still backed by a
+    // selection class, resurrecting exactly what this path just muted.
+    const navMuteLook = el => {
+        el.style.setProperty("background-color", "transparent", "important");
+        el.style.setProperty("box-shadow", "none", "important");
+        el.style.setProperty("outline", "none", "important");
+        navMuted.add(el);
+    };
+    const muteForeignSelection = targetTr => {
+        gridRoot.querySelectorAll(
+            "tbody tr.fx-row.fx-selected, tbody tr.fx-row.fx-cell-row-selected, tbody tr.fx-row[style*=\"background\"], tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active")
+            .forEach(el => {
+                const tr = el.closest("tr");
+                if (tr === targetTr) return;
+                if (!isEffectivelyMuted(el)) navMuteLook(el);
+                // The row shade is often a SERVER-WRITTEN INLINE STYLE on the
+                // tr (gItems paint model) — mute the row AND its cells.
+                if (el.tagName === "TR") {
+                    for (const td of el.children) {
+                        if (!isEffectivelyMuted(td)) navMuteLook(td);
+                    }
+                }
+            });
+    };
+
+    // Re-assert the previewed row's paint after a server render: Blazor can
+    // replace the tr/td nodes (row windowing) or rewrite their attributes,
+    // orphaning the inline paint on detached nodes. Only writes when the
+    // current DOM is missing the paint, so the observer converges.
+    const ensurePreviewPainted = () => {
+        if (!lastPreview) return null;
+        const tr = gridRoot.querySelector(`tr.fx-row[data-ari="${lastPreview.ari}"]`);
+        if (!tr) return paintedRowTr;
+        const trBg = tr.style.backgroundColor;
+        if (tr !== paintedRowTr || !trBg || trBg === "transparent") {
+            setRowPreview(tr, true, gridPreviewColor(gridRoot));
+            paintedRowTr = tr;
+        }
+        const td = tr.cells[lastPreview.cell];
+        if (td) {
+            const bs = td.style.getPropertyValue("box-shadow");
+            if (!bs || bs === "none") paintCue(td);
+        }
+        return tr;
+    };
+
+    const paintCue = td => {
+        // Border only — the cell keeps the row-selection tint while the
+        // cursor crosses columns (owner rule: only the border moves).
+        td.style.setProperty("box-shadow", "inset 0 0 0 1px var(--fx-grid-editing-cell-border, #6b7f99)", "important");
+        painted.push(td);
+    };
+
+    const muteCue = (td, keepRowTint = false) => {
+        if (!td) return;
+        td.style.setProperty(
+            "background",
+            keepRowTint ? gridPreviewColor(gridRoot) : "transparent",
+            "important");
+        td.style.setProperty("box-shadow", "none", "important");
+        painted.push(td);
+    };
+
+    // The server-rendered active-cell position currently in the DOM. The
+    // fx-cell-active CLASS is written only by server renders (this path
+    // paints cues with inline styles, never classes), so it is an unforgeable
+    // "the server's truth reached this DOM" signal.
+    const activeCellPos = () => {
+        const td = gridRoot.querySelector("td.fx-cell-active");
+        if (!td) return null;
+        const ari = Number.parseInt(td.closest("tr")?.getAttribute("data-ari") ?? "", 10);
+        return Number.isFinite(ari) ? { ari, cell: td.cellIndex } : null;
+    };
+    const posEq = (a, b) => !!a && !!b && a.ari === b.ari && a.cell === b.cell;
+
+    // Release the preview ONLY once the settle render has been OBSERVED in
+    // the DOM — never on a blind timer. A timer release races the render
+    // batch on slow links: clearPaints un-mutes the OLD selection an instant
+    // before the new one paints (the owner-visible "jumps back" / one-row-
+    // behind trail), and every render arriving after the blind clear was
+    // unguarded. Release conditions:
+    //  - the server's fx-cell-active landed on the previewed cell (agreement:
+    //    the settle render is on screen, handoff is seamless), or
+    //  - the server's active cell visibly moved somewhere ELSE than where it
+    //    was when the settle was armed (an edge-fallthrough key or
+    //    programmatic move — server truth supersedes the preview), or
+    //  - the retry cap expired (a render that will never come: row scrolled
+    //    out of the window, lost circuit) — yield to whatever is on screen.
+    const tryReleaseSettled = () => {
+        if (!settleGeneration) return;
+        if (!lastPreview || !isCurrentGridPaintGesture(gridRoot, "keyboard", settleGeneration)) {
+            cancelSettle();
+            return;
+        }
+        if (pending || syncInFlight) return; // gesture resumed — the next final sync re-arms
+        const cur = activeCellPos();
+        if (posEq(cur, lastPreview)
+            || (cur && settleArmedPos && !posEq(cur, settleArmedPos))
+            || settleTries >= 10) {
+            releasePreview();
+            return;
+        }
+        settleTries++;
+        window.clearTimeout(settleTimer);
+        settleTimer = window.setTimeout(tryReleaseSettled, 300);
+    };
+
+    const armSettleRelease = generation => {
+        settleGeneration = generation;
+        settleTries = 0;
+        settleArmedPos = activeCellPos();
+        // The settle render may already be in the DOM (fast link) — release
+        // immediately; otherwise the render observer or the guarded retry
+        // timer performs the release the moment the render arrives.
+        tryReleaseSettled();
+    };
+
+    // final=false → mid-hold state catch-up: the server adopts the position
+    // WITHOUT rendering, so nothing repaints behind the flying cursor (the
+    // paint war between checkpoint renders and the preview was the visible
+    // "jumps back" during a held key). final=true → the settle sync: one
+    // render paints the authoritative selection, and the paints are released
+    // only when that render is OBSERVED (tryReleaseSettled).
+    const flush = final => {
+        window.clearTimeout(syncTimer);
+        syncTimer = 0;
+        // A final flush with nothing pending still re-sends the last preview
+        // when no final sync has landed it yet (needsFinal): a checkpoint
+        // flush consumes `pending`, and without this the gesture could end
+        // silently adopted but never rendered — paints parked forever.
+        const p = pending ?? ((final && needsFinal) ? lastPreview : null);
+        if (!p) return;
+        // One sync outstanding at a time: queued syncs drain as a visible
+        // selection replay after the key is released.
+        if (syncInFlight) {
+            syncTimer = window.setTimeout(() => { syncTimer = 0; flush(final); }, 80);
+            return;
+        }
+        stepsSinceFlush = 0;
+        const generation = navGeneration;
+        pending = null;
+        syncInFlight = true;
+        try {
+            binding.dotNetRef.invokeMethodAsync("SyncActiveCellFromClientNavigationAsync", p.ari, p.cell, !!final)
+                .then(adopted => {
+                    syncInFlight = false;
+                    // A newer gesture owns the visuals — its own syncs manage them.
+                    if (!isCurrentGridPaintGesture(gridRoot, "keyboard", generation)) return;
+                    if (pending) { flush(final); return; }
+                    if (final) {
+                        needsFinal = false;
+                        if (adopted === false) {
+                            // The server refused the position (guard/veto):
+                            // no settle render is coming — yield to server
+                            // truth right away.
+                            releasePreview();
+                            return;
+                        }
+                        armSettleRelease(generation);
+                        return;
+                    }
+                    // Backstop: the keydown path re-arms the trailing final
+                    // flush after every checkpoint, but if none is armed when
+                    // this checkpoint lands, arm one — an un-finalized preview
+                    // must always end in a final sync that settles.
+                    if (needsFinal && !syncTimer)
+                        syncTimer = window.setTimeout(() => { syncTimer = 0; flush(true); }, 140);
+                })
+                // lastPreview must go too or the render observer repaints
+                // what clearPaints just removed.
+                .catch(() => {
+                    syncInFlight = false;
+                    if (!isCurrentGridPaintGesture(gridRoot, "keyboard", generation)) return;
+                    releasePreview();
+                });
+        } catch {
+            syncInFlight = false;
+            releasePreview();
+        }
+    };
+
+    // Land the outstanding previewed position with a FINAL sync before a key
+    // or press falls through to the server pipeline.
+    const flushPreviewPosition = () => { if (pending || needsFinal) flush(true); };
+
+    const onKeyDown = event => {
+        // NOTE: the grid's own keyboard trap preventDefaults trusted arrows at
+        // document capture (page-scroll suppression) BEFORE this listener —
+        // defaultPrevented is NOT a foreign claim here.
+        const key = event.key;
+        const isArrow = key === "ArrowDown" || key === "ArrowUp" || key === "ArrowLeft" || key === "ArrowRight";
+        const t = event.target;
+        const inEditor = t instanceof Element && t.matches("input, select, textarea, [contenteditable='true']");
+        // An in-cell popup that owns its own arrows opts out of the fast path,
+        // which is capture-phase and would otherwise drive the grid cursor
+        // underneath it.
+        const inKeyScope = t instanceof Element && !!t.closest("[data-fx-key-scope]");
+        // An OPEN batch editor/dropdown handles arrows SERVER-side while focus
+        // stays on the grid host — the fast path must yield or it steals the
+        // dropdown's arrow keys and navigates the grid underneath it.
+        const editorOpen = !!gridRoot.querySelector("td.fx-batch-editing, td.fx-batch-dropdown-editing");
+        if (!isArrow || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || inEditor || editorOpen || inKeyScope) {
+            // The next key runs server-side: land the previewed position first
+            // (same websocket, ordered) so it acts on the right cell. Also
+            // when only needsFinal is outstanding — the final sync renders,
+            // the settle handshake releases, and the server key's own render
+            // then owns the screen (the old pending-only check left the
+            // preview fighting that render).
+            flushPreviewPosition();
+            return;
+        }
+
+        const anchor = pending ?? lastPreview;
+        let cur = anchor
+            ? gridRoot.querySelector(`tr.fx-row[data-ari="${anchor.ari}"]`)?.cells[anchor.cell]
+            : null;
+        if (!cur) cur = gridRoot.querySelector("td.fx-cell-active");
+        if (!cur) { flushPreviewPosition(); return; }
+
+        const tr = cur.closest("tr");
+        const ari = Number.parseInt(tr?.getAttribute("data-ari") ?? "", 10);
+        if (!Number.isFinite(ari)) return;
+
+        let target = null;
+        if (key === "ArrowDown" || key === "ArrowUp") {
+            const nextTr = gridRoot.querySelector(
+                `tr.fx-row[data-ari="${ari + (key === "ArrowDown" ? 1 : -1)}"]`);
+            if (!nextTr) { flushPreviewPosition(); return; } // window edge — sync first, server shifts the window
+            target = nextTr.cells[cur.cellIndex];
+        } else {
+            let td = cur;
+            do {
+                td = key === "ArrowRight" ? td.nextElementSibling : td.previousElementSibling;
+            } while (td && td.tagName !== "TD");
+            if (!td) { flushPreviewPosition(); return; } // row edge — sync first, server owns wrap rules
+            target = td;
+        }
+        if (!target) return;
+
+
+        // Enroll this preview with the paint arbiter: pointer-era safety nets
+        // become obsolete (their generation is stale) and a pointer gesture
+        // starting later cancels this preview through cancelKeyboard.
+        if (!isCurrentGridPaintGesture(gridRoot, "keyboard", navGeneration))
+            navGeneration = beginGridPaintGesture(gridRoot, "keyboard");
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        // Selection follows the active cell: move the ROW look client-side too,
+        // or it trails at the sync cadence and visibly lags a held key.
+        const newTr = target.closest("tr");
+        clearCuePaints();
+        if (paintedRowTr && paintedRowTr !== newTr) setRowPreview(paintedRowTr, false, "");
+        // Mute the old selection look in the same frame — both row-mode
+        // (tr.fx-selected) and cell-mode (row shade on TD classes) variants —
+        // tracking every muted element locally.
+        muteForeignSelection(newTr);
+        setRowPreview(newTr, true, gridPreviewColor(gridRoot));
+        paintedRowTr = newTr;
+        const oldActive = gridRoot.querySelector("td.fx-cell-active");
+        muteCue(oldActive, oldActive?.closest("tr") === newTr);
+        // The old cell's server-rendered adornments (the "..." popup button)
+        // must leave in the SAME frame as the cursor, not at the sync render.
+        if (oldActive && oldActive !== target) {
+            oldActive.querySelectorAll(
+                ".fx-cell-edit-btn, .fx-cell-action-btn, .fx-grid-popup-btn, [data-fx-cell-popup]")
+                .forEach(b => { b.style.setProperty("display", "none", "important"); navHiddenBtns.add(b); });
+        }
+        paintCue(target);
+        target.scrollIntoView({ block: "nearest", inline: "nearest" });
+
+        pending = {
+            ari: Number.parseInt(newTr.getAttribute("data-ari"), 10),
+            cell: target.cellIndex
+        };
+        lastPreview = pending;
+        needsFinal = true;
+        cancelSettle(); // the gesture resumed — a pending settle-await is void
+        // A held key resets the trailing debounce forever — flush a silent
+        // checkpoint every 20 steps so the server keeps pace with a long
+        // hold, and ALWAYS re-arm the trailing final flush afterwards: the
+        // old early-return left a hold released exactly on a checkpoint step
+        // with no trailing timer — no settle render, paints parked forever.
+        if (++stepsSinceFlush >= 20) flush(false);
+        window.clearTimeout(syncTimer);
+        syncTimer = window.setTimeout(() => { syncTimer = 0; flush(true); }, 140);
+    };
+
+    gridRoot.addEventListener("keydown", onKeyDown, true);
+
+    // Re-apply the preview paint + foreign-selection mutes after EVERY server
+    // render while a preview is live. Sync checkpoint renders land behind the
+    // cursor and repaint rows the preview already left (server classes on new
+    // nodes the keypress-time mutes never saw); on slow links those straggle
+    // long enough to show 2-3 highlighted rows at once. The observer runs as a
+    // microtask BEFORE the browser paints the render (same trick as
+    // registerActiveCellScrollSync), so the stale paint never reaches the
+    // screen. Inert whenever no preview is live (lastPreview null); both
+    // helpers only write when the DOM disagrees, so the observer's own
+    // mutations converge instead of looping.
+    const renderObserver = new MutationObserver(() => {
+        if (!lastPreview || !isCurrentGridPaintGesture(gridRoot, "keyboard", navGeneration)) return;
+        const cur = activeCellPos();
+        if (cur && !posEq(cur, lastPreview)
+            && !pending && !syncInFlight && !syncTimer && !settleGeneration) {
+            // The server moved the active cell on its own — no sync of ours
+            // is outstanding, so this is not checkpoint lag (an edge-
+            // fallthrough key or a programmatic move). Its truth supersedes
+            // the preview: release instead of fighting the render.
+            releasePreview();
+            return;
+        }
+        muteForeignSelection(ensurePreviewPainted());
+        // While a settle-await is armed, this render may BE the settle
+        // render — release in the same pre-paint microtask (seamless swap
+        // from inline preview to the server's identical selection look).
+        tryReleaseSettled();
+    });
+    renderObserver.observe(gridRoot, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class", "style"]
+    });
+
+    // Fallback take-over for presses the instant-feedback binding does not
+    // enroll with the arbiter (non-primary buttons, modifier presses, presses
+    // on editor controls or outside data rows, grids with no instant-feedback
+    // binding): land the previewed position first, then drop this path's
+    // paints in the same frame, or the drag painter (which cannot see these
+    // inline paints) leaves the previewed row tinted until mouse-up. Plain
+    // primary-button row presses never reach past the owner check — the
+    // arbiter already ran cancelKeyboardPreviewForPointer from the pointerdown.
+    gridRoot.addEventListener("mousedown", () => {
+        if (gridPaintArbiter(gridRoot).owner === "pointer") return;
+        flushPreviewPosition();
+        releasePreview();
+    }, true);
 }

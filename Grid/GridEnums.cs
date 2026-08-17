@@ -74,6 +74,14 @@ public enum SelectionMode
     Cell
 }
 
+public enum GridPerformanceMode
+{
+    ServerBaseline,
+    ServerOptimized,
+    ClientPreview,
+    ClientPreviewAndServerOptimized
+}
+
 public enum ClipMode
 {
     Clip,

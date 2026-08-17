@@ -12,23 +12,29 @@
          class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
          @onclick:stopPropagation="true"
          @onmousedown:stopPropagation="true"
+         @ondblclick:stopPropagation="true"
          @onkeydown:stopPropagation="true">
-        <div class="fx-datepicker-input-group">
+        <div class="@InputGroupClass">
             <input type="text"
                    class="fx-datepicker-input"
+                   @ref="_inputElement"
                    value="@_inputText"
                    @oninput="OnInputTextChange"
                    @onblur="OnInputBlur"
                    @onkeydown="OnInputKeyDown"
+                   @ondblclick="OnInputDoubleClick"
                    placeholder="@ResolvedPlaceholder"
                    disabled="@(!Enabled)" />
-            <button type="button"
-                    class="fx-datepicker-trigger"
-                    @onclick="ToggleDropdown"
-                    disabled="@(!Enabled)"
-                    aria-label="Toggle calendar">
-                📅
-            </button>
+            @if (ShowTriggerButton)
+            {
+                <button type="button"
+                        class="fx-datepicker-trigger"
+                        @onclick="ToggleDropdown"
+                        disabled="@(!Enabled)"
+                        aria-label="Toggle calendar">
+                    📅
+                </button>
+            }
         </div>
 
         @if (_isOpen && Enabled)
@@ -200,13 +206,38 @@
     [Parameter] public DateTime? MinDate { get; set; }
     [Parameter] public DateTime? MaxDate { get; set; }
     [Parameter] public bool ShowCalendarSidebar { get; set; }
+    [Parameter] public IEnumerable<string>? ParseFormats { get; set; }
+    [Parameter] public CultureInfo? Culture { get; set; }
+    [Parameter] public bool ShowTriggerButton { get; set; } = true;
+    [Parameter] public bool OpenCalendarOnDoubleClick { get; set; }
+
+    /// <summary>
+    /// The DOM owns the text while typing: the input renders its initial
+    /// value ONCE and parent re-renders never reset it (same contract as
+    /// TextBoxControl.Uncontrolled — the fix for typed characters being
+    /// reverted by mid-edit renders).
+    /// </summary>
+    [Parameter] public bool Uncontrolled { get; set; }
+
+    /// <summary>Raw text per keystroke, render-free (an Action, not an
+    /// EventCallback) — grid batch editors track the in-progress value here.</summary>
+    [Parameter] public Action<string?>? InputValueChanged { get; set; }
+
+    /// <summary>Hands the input element to the host (grid focus handling).</summary>
+    [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
 
     private string ResolvedFormat => Format ?? (ShowTime ? "MM/dd/yyyy hh:mm tt" : "MM/dd/yyyy");
     private string ResolvedPlaceholder => Placeholder ?? ResolvedFormat;
     private string ViewMonthYearText => new DateTime(_viewYear, _viewMonth, 1).ToString("MMMM yyyy", CultureInfo.CurrentCulture);
     private string TodayText => DateTime.Today.ToString("M/d/yyyy", CultureInfo.InvariantCulture);
+    private CultureInfo EffectiveCulture => Culture ?? CultureInfo.InvariantCulture;
+    private string InputGroupClass => ShowTriggerButton
+        ? "fx-datepicker-input-group"
+        : "fx-datepicker-input-group fx-datepicker-input-group-no-trigger";
 
     private string _inputText = "";
+    private bool _uncontrolledInitialized;
+    private ElementReference _inputElement;
     private bool _isOpen = false;
     private bool _expanded = false;
     private ElementReference _hostElement;
@@ -229,7 +260,17 @@
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
-        if (Value.HasValue)
+        if (Uncontrolled)
+        {
+            // Initial value only — a parent re-render must not wipe the text
+            // the user is typing.
+            if (!_uncontrolledInitialized)
+            {
+                _uncontrolledInitialized = true;
+                _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
+            }
+        }
+        else if (Value.HasValue)
         {
             _inputText = FormatDate(Value.Value);
         }
@@ -242,12 +283,15 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender)
+            ElementReferenceCaptured?.Invoke(_inputElement);
+
         if (_isOpen && Enabled)
             await PositionDropdownAsync();
     }
 
     private static string ControlJsModulePath =>
-        $"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js";
+        FxJsAsset.Versioned($"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js");
 
     private async Task PositionDropdownAsync()
     {
@@ -264,7 +308,7 @@
 
     private string FormatDate(DateTime date)
     {
-        return date.ToString(ResolvedFormat, CultureInfo.InvariantCulture);
+        return date.ToString(ResolvedFormat, EffectiveCulture);
     }
 
     private void ToggleDropdown()
@@ -308,6 +352,7 @@
     private void OnInputTextChange(ChangeEventArgs e)
     {
         _inputText = e.Value?.ToString() ?? "";
+        InputValueChanged?.Invoke(_inputText);
     }
 
     private async Task OnInputBlur()
@@ -330,6 +375,12 @@
         }
     }
 
+    private void OnInputDoubleClick()
+    {
+        if (OpenCalendarOnDoubleClick && Enabled)
+            OpenDropdown();
+    }
+
     private async Task ParseInputText(bool formatIfValid)
     {
         if (string.IsNullOrWhiteSpace(_inputText))
@@ -338,11 +389,9 @@
             return;
         }
 
-        var formats = ShowTime
-            ? new[] { ResolvedFormat, "MM/dd/yyyy hh:mm tt", "MM/dd/yyyy HH:mm", "yyyy-MM-dd HH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy" }
-            : new[] { ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd", "MM-dd-yyyy", "MMM d, yyyy", "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy" };
+        var formats = GetParseFormats();
 
-        if (DateTime.TryParseExact(_inputText.Trim(), formats, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
+        if (DateTime.TryParseExact(_inputText.Trim(), formats, EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var parsed))
         {
             await UpdateValue(parsed);
             if (formatIfValid)
@@ -350,7 +399,9 @@
                 _inputText = FormatDate(parsed);
             }
         }
-        else if (DateTime.TryParse(_inputText.Trim(), out var parsedFallback))
+        else if (DateTime.TryParse(_inputText.Trim(), EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedFallback)
+                 || DateTime.TryParse(_inputText.Trim(), CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out parsedFallback)
+                 || DateTime.TryParse(_inputText.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out parsedFallback))
         {
             await UpdateValue(parsedFallback);
             if (formatIfValid)
@@ -363,6 +414,33 @@
             // Revert on invalid typing
             _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
         }
+    }
+
+    private string[] GetParseFormats()
+    {
+        var defaults = ShowTime
+            ? new[]
+            {
+                ResolvedFormat, "MM/dd/yyyy hh:mm tt", "M/d/yyyy h:mm tt",
+                "MM/dd/yyyy HH:mm", "M/d/yyyy H:mm", "yyyy-MM-dd HH:mm",
+                "yyyy-MM-ddTHH:mm", "yyyy-MM-dd hh:mm tt", "MM/dd/yyyy",
+                "M/d/yyyy", "yyyy-MM-dd", "dd-MMM-yy", "d-MMM-yy",
+                "dd-MMM-yyyy", "d-MMM-yyyy", "dd/MM/yyyy HH:mm",
+                "d/M/yyyy H:mm", "dd/MM/yyyy", "d/M/yyyy"
+            }
+            : new[]
+            {
+                ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd",
+                "MM-dd-yyyy", "M-d-yyyy", "MMM d, yyyy", "MMMM d, yyyy",
+                "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy",
+                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy"
+            };
+
+        return (ParseFormats ?? Array.Empty<string>())
+            .Concat(defaults)
+            .Where(format => !string.IsNullOrWhiteSpace(format))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private async Task UpdateValue(DateTime? newValue)

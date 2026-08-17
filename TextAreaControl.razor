@@ -20,6 +20,8 @@
               @ref="_inputElement"
               @oninput="OnNativeInput"
               @onchange="OnNativeValueChanged"
+              @onfocus="OnInputFocus"
+              @ondblclick="OnInputDoubleClick"
               @oncontextmenu="OpenTextContextMenuAsync"
               @oncontextmenu:preventDefault="UseClassicContextMenu"
               @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
@@ -33,7 +35,10 @@ else
               maxlength="@MaxLength"
               disabled="@(!Enabled)"
               @ref="_inputElement"
+              @oninput="OnNativeInput"
               @onchange="OnNativeValueChanged"
+              @onfocus="OnInputFocus"
+              @ondblclick="OnInputDoubleClick"
               @oncontextmenu="OpenTextContextMenuAsync"
               @oncontextmenu:preventDefault="UseClassicContextMenu"
               @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
@@ -149,6 +154,8 @@ else
     /// spaces at the caret instead of moving focus out of the app.
     /// </summary>
     [Parameter] public int TabSpaces { get; set; }
+    [Parameter] public bool ReplaceOnFirstInput { get; set; }
+    [Parameter] public bool SelectAllOnDoubleClick { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
@@ -171,6 +178,29 @@ else
         return true;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        if (TabSpaces > 0)
+        {
+            var tabModule = await GetControlJsModuleAsync();
+            if (tabModule != null)
+            {
+                try { await tabModule.InvokeVoidAsync("registerTabCapture", _inputElement, TabSpaces); }
+                catch { /* circuit teardown */ }
+            }
+        }
+
+        if (!ReplaceOnFirstInput)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+    }
+
     private string ResolvedCssClass =>
         string.IsNullOrWhiteSpace(CssClass) ? "fx-textarea" : $"fx-textarea {CssClass}";
 
@@ -190,6 +220,26 @@ else
         Value = e.Value?.ToString();
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+    }
+
+    private async Task OnInputFocus()
+    {
+        if (!ReplaceOnFirstInput)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("armReplaceOnFirstInput", _inputElement);
+    }
+
+    private async Task OnInputDoubleClick()
+    {
+        if (!SelectAllOnDoubleClick)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module != null)
+            await module.InvokeVoidAsync("select", _inputElement);
     }
 
     private async Task OpenTextContextMenuAsync(MouseEventArgs e)
@@ -260,19 +310,6 @@ else
         catch
         {
             // Browser clipboard commands are best-effort and may be blocked by policy.
-        }
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender && TabSpaces > 0)
-        {
-            var module = await GetControlJsModuleAsync();
-            if (module != null)
-            {
-                try { await module.InvokeVoidAsync("registerTabCapture", _inputElement, TabSpaces); }
-                catch { /* circuit teardown */ }
-            }
         }
     }
 

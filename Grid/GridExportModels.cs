@@ -43,6 +43,17 @@ public enum GridPdfZoomMode
     Percent
 }
 
+/// <summary>
+/// Optional leading decoration rendered for a column's data cells in PDF output.
+/// This lets a templated grid column retain a meaningful visual cue when the
+/// template itself cannot be serialized into the document.
+/// </summary>
+public enum GridPrintCellIcon
+{
+    None,
+    IdentityCard
+}
+
 public sealed class GridPdfPrintOptions
 {
     public GridPdfOrientation Orientation { get; set; } = GridPdfOrientation.Portrait;
@@ -58,18 +69,25 @@ public sealed class GridPdfPrintOptions
 
 public sealed class GridExportColumn
 {
-    public GridExportColumn(string header, string? format = null, TextAlign textAlign = TextAlign.Left, double? width = null)
+    public GridExportColumn(
+        string header,
+        string? format = null,
+        TextAlign textAlign = TextAlign.Left,
+        double? width = null,
+        GridPrintCellIcon printCellIcon = GridPrintCellIcon.None)
     {
         Header = header;
         Format = format;
         TextAlign = textAlign;
         Width = width;
+        PrintCellIcon = printCellIcon;
     }
 
     public string Header { get; set; }
     public string? Format { get; set; }
     public TextAlign TextAlign { get; set; }
     public double? Width { get; set; }
+    public GridPrintCellIcon PrintCellIcon { get; set; }
 }
 
 public sealed class GridExportRow
@@ -167,7 +185,7 @@ public static class GridExporter
     {
         try
         {
-            var modulePath = $"./_content/{typeof(GridExporter).Assembly.GetName().Name}/grid-control.js";
+            var modulePath = FxJsAsset.Versioned($"./_content/{typeof(GridExporter).Assembly.GetName().Name}/grid-control.js");
             return await jsRuntime.InvokeAsync<IJSObjectReference>("import", modulePath);
         }
         catch
@@ -499,6 +517,9 @@ public static class GridExporter
                 : columnIndex < (row?.Values.Count ?? 0) ? ToExportString(row!.Values[columnIndex]) : string.Empty;
             var align = isHeader ? TextAlign.Left : table.Columns[columnIndex].TextAlign;
             var highlighted = !isHeader && table.HighlightColumnIndexes.Contains(columnIndex);
+            var printCellIcon = isHeader
+                ? GridPrintCellIcon.None
+                : table.Columns[columnIndex].PrintCellIcon;
 
             DrawPdfCell(
                 sb,
@@ -511,6 +532,7 @@ public static class GridExporter
                 isHeader,
                 row?.IsBold == true,
                 highlighted,
+                printCellIcon,
                 columnLayout,
                 fontSize,
                 lineHeight,
@@ -534,6 +556,7 @@ public static class GridExporter
         bool isHeader,
         bool isBold,
         bool isHighlighted,
+        GridPrintCellIcon printCellIcon,
         GridPdfColumnLayout columnLayout,
         double fontSize,
         double lineHeight,
@@ -551,7 +574,20 @@ public static class GridExporter
         if (showGridLines)
             AppendPdfBorder(sb, x, bottom, width, height);
 
-        var availableWidth = Math.Max(1, width - (paddingX * 2));
+        var iconInset = 0d;
+        if (printCellIcon != GridPrintCellIcon.None && !string.IsNullOrWhiteSpace(text))
+        {
+            var iconHeight = Math.Max(1.5, Math.Min(9, height - (paddingY * 2)));
+            iconInset = DrawPdfCellIcon(
+                sb,
+                printCellIcon,
+                x + paddingX,
+                bottom + Math.Max(0, (height - iconHeight) / 2),
+                iconHeight) + Math.Max(1, paddingX * 0.6);
+        }
+
+        var contentLeft = x + paddingX + iconInset;
+        var availableWidth = Math.Max(1, width - (paddingX * 2) - iconInset);
         var availableLines = Math.Max(1, (int)Math.Floor(Math.Max(lineHeight, height - (paddingY * 2)) / lineHeight));
         var effectiveMaxLines = Math.Min(maxWrappedLines, availableLines);
         var lines = GetPdfCellLines(text, availableWidth, fontSize, columnLayout, effectiveMaxLines);
@@ -563,14 +599,53 @@ public static class GridExporter
             var lineWidth = EstimatePdfTextWidth(line, fontSize);
             var textX = align switch
             {
-                TextAlign.Center => x + paddingX + Math.Max(0, (availableWidth - lineWidth) / 2),
+                TextAlign.Center => contentLeft + Math.Max(0, (availableWidth - lineWidth) / 2),
                 TextAlign.Right => x + width - paddingX - Math.Min(lineWidth, availableWidth),
-                _ => x + paddingX
+                _ => contentLeft
             };
 
             AppendPdfText(sb, line, textX, baseline, fontName, fontSize);
             baseline -= lineHeight;
         }
+    }
+
+    private static double DrawPdfCellIcon(
+        StringBuilder sb,
+        GridPrintCellIcon icon,
+        double x,
+        double y,
+        double height)
+    {
+        if (icon != GridPrintCellIcon.IdentityCard)
+            return 0;
+
+        var width = height * 1.35;
+        AppendPdfFilledRectangle(sb, x, y, width, height, "0.95 0.95 0.95");
+        sb.AppendLine("0.45 0.45 0.45 RG");
+        sb.AppendLine("0.35 w");
+        AppendPdfRectangle(sb, x, y, width, height, "S");
+
+        var portraitX = x + (height * 0.12);
+        var portraitY = y + (height * 0.14);
+        var portraitWidth = height * 0.34;
+        var portraitHeight = height * 0.72;
+        AppendPdfFilledRectangle(sb, portraitX, portraitY, portraitWidth, portraitHeight, "0.38 0.65 0.82");
+
+        var headSize = height * 0.16;
+        AppendPdfFilledRectangle(
+            sb,
+            portraitX + ((portraitWidth - headSize) / 2),
+            portraitY + (portraitHeight * 0.56),
+            headSize,
+            headSize,
+            "0.95 0.58 0.24");
+
+        var lineX = portraitX + portraitWidth + (height * 0.12);
+        var lineWidth = Math.Max(0.5, width - (lineX - x) - (height * 0.1));
+        var lineHeight = Math.Max(0.35, height * 0.07);
+        AppendPdfFilledRectangle(sb, lineX, y + (height * 0.58), lineWidth, lineHeight, "0.48 0.48 0.48");
+        AppendPdfFilledRectangle(sb, lineX, y + (height * 0.34), lineWidth * 0.78, lineHeight, "0.60 0.60 0.60");
+        return width;
     }
 
     private static double ComputePdfRowHeight(

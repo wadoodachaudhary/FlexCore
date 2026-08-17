@@ -18,6 +18,67 @@ export function select(element) {
     });
 }
 
+const replaceOnFirstInputState = new WeakMap();
+
+export function enableReplaceOnFirstInput(element) {
+    const state = ensureReplaceOnFirstInputState(element);
+    if (!state || state.enabled) return;
+
+    state.enabled = true;
+    element.addEventListener("focus", () => {
+        state.armed = true;
+    });
+}
+
+export function armReplaceOnFirstInput(element) {
+    const state = ensureReplaceOnFirstInputState(element);
+    if (state) {
+        state.armed = true;
+    }
+}
+
+function ensureReplaceOnFirstInputState(element) {
+    if (!element) return null;
+
+    let state = replaceOnFirstInputState.get(element);
+    if (!state) {
+        state = { armed: false, enabled: false };
+        replaceOnFirstInputState.set(element, state);
+
+        element.addEventListener("pointerdown", () => {
+            if (document.activeElement === element) {
+                state.armed = false;
+            }
+        }, true);
+
+        element.addEventListener("beforeinput", event => {
+            if (!state.armed) return;
+
+            const inputType = event.inputType || "";
+            if (inputType === "insertText" || inputType === "insertCompositionText") {
+                event.preventDefault();
+                state.armed = false;
+                replaceWholeText(element, event.data || "");
+                notifyTextChanged(element);
+                return;
+            }
+
+            if (inputType === "deleteContentBackward" || inputType === "deleteContentForward") {
+                event.preventDefault();
+                state.armed = false;
+                replaceWholeText(element, "");
+                notifyTextChanged(element);
+            }
+        });
+
+        element.addEventListener("input", () => {
+            state.armed = false;
+        });
+    }
+
+    return state;
+}
+
 export function getTextContextMenuState(element) {
     const value = getTextValue(element);
     const selection = getTextSelection(element);
@@ -144,6 +205,17 @@ function replaceSelection(element, text) {
     setTextSelection(element, caret);
 }
 
+function replaceWholeText(element, text) {
+    const maxLength = typeof element.maxLength === "number" ? element.maxLength : -1;
+    const next = maxLength >= 0 ? text.substring(0, maxLength) : text;
+    element.value = next;
+    setTextSelection(element, next.length);
+}
+
+function notifyTextChanged(element) {
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function deleteSelection(element) {
     if (!getTextContextMenuState(element).HasSelection) return;
     if (!execTextCommand("delete")) {
@@ -223,6 +295,7 @@ function isRightToLeft(element) {
 function toggleReadingOrder(element) {
     element.dir = isRightToLeft(element) ? "ltr" : "rtl";
 }
+
 
 // Multi-line editors that opt in (TabSpaces > 0): Tab inserts spaces at the
 // caret instead of moving focus out of the app.

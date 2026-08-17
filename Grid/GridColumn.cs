@@ -148,6 +148,13 @@ public class GridColumn : ComponentBase
     /// </summary>
     [Parameter] public bool OpenEditOptionsOnEdit { get; set; } = true;
 
+    /// <summary>
+    /// For <see cref="ColumnType.Date"/> columns, double-clicking the active date
+    /// text editor opens the FlexKit calendar picker. Default false so date
+    /// columns remain plain text unless the host opts in.
+    /// </summary>
+    [Parameter] public bool OpenDateCalendarOnDoubleClick { get; set; }
+
     /// <summary>Custom cell template. Context is the row data item (TValue).</summary>
     [Parameter] public RenderFragment<object>? Template { get; set; }
 
@@ -156,6 +163,13 @@ public class GridColumn : ComponentBase
 
     /// <summary>Custom edit template. Context is the row data item.</summary>
     [Parameter] public RenderFragment<object>? EditTemplate { get; set; }
+
+    /// <summary>
+    /// Optional leading icon for this column's data cells in PDF output. Use
+    /// this when the on-screen cell template contains a visual cue that should
+    /// remain visible in the printed grid.
+    /// </summary>
+    [Parameter] public GridPrintCellIcon PrintCellIcon { get; set; }
 
     /// <summary>Child content (for Template shorthand).</summary>
     [Parameter] public RenderFragment<object>? ChildContent { get; set; }

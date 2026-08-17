@@ -460,7 +460,8 @@
 /* ── Body Rows ───────────────────────────────────────────────────── */
 .fx-treegrid-row {
     cursor: pointer;
-    transition: background 0.1s;
+    /* No background transition: the 0.1s fade made the hover tint trail the
+       cursor and read as a stuck second selection (owner directive 2026-08-01). */
 }
 
 .fx-treegrid-row:focus {
@@ -806,7 +807,7 @@
     color: #fff;
 }
 .fx-treegrid-compact .fx-treegrid-row.fx-treegrid-hover:hover {
-    background: #d8e4f8 !important;
+    background: #f0f6ff !important;   /* lightened from #d8e4f8 (owner directive 2026-08-01) */
 }
 /* Selected + hovered: keep the dark blue background and white text. Without
    this, the bare hover rule above wins on background but the white text from

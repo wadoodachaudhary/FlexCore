@@ -17,10 +17,11 @@ public class EditSettings
     public bool AllowEditOnDblClick { get; set; } = true;
 
     /// <summary>
-    /// VB6 flexEDKbdMouse edit entry for list-style grids: Enter opens the
-    /// in-cell editor on the active editable cell.
+    /// VB6 flexEDKbdMouse edit entry: Enter opens the in-cell editor on the
+    /// active editable cell. Popup and dropdown cells open their popup instead
+    /// and never consult this.
     /// </summary>
-    public bool EditOnEnterKey { get; set; }
+    public bool EditOnEnterKey { get; set; } = true;
 
     /// <summary>
     /// VB6 flexEDKbdMouse edit entry: a plain click on the cell that was

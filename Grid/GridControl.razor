@@ -9,6 +9,8 @@
 
 <div class="@GridHostCssClass"
      style="@HostStyle"
+     data-fx-row-reveal-index="@(_pendingRowRevealIndex?.ToString(CultureInfo.InvariantCulture))"
+     data-fx-row-reveal-token="@(_pendingRowRevealIndex.HasValue ? _pendingRowRevealToken.ToString(CultureInfo.InvariantCulture) : null)"
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
@@ -16,6 +18,7 @@
      @oncontextmenu="HandleGridContextMenu"
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
+     @onmousedown="HandleGridHostMouseDown"
      @onmouseup="@NonRenderingGridMouseUp">
 
     @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
@@ -701,7 +704,8 @@
 
                     @* Materialize the sorted/paged list ONCE per render so slicing
                        is O(1) and SortedData isn't re-enumerated per row. *@
-                    var pagedList = PagedData as IList<TValue> ?? PagedData.ToList();
+                    var pagedList = GetBlazorServerRenderRows()
+                        ?? (PagedData as IList<TValue> ?? PagedData.ToList());
 
                     @* ── Custom row windowing (scroll-driven) ──────────────
                        Render only the visible slice plus overscan, bracketed by two
@@ -797,7 +801,7 @@
                                 @foreach (var col in VisibleColumns)
                                 {
                                     var aggCol = aggRow.Columns.FirstOrDefault(a => a.Field == col.Field);
-                                    <td class="fx-cell fx-aggregate-cell" style="@col.GetCellStyle()">
+                                    <td class="fx-cell fx-aggregate-cell" style="@GetBlazorServerRenderCellStyle(col)">
                                         @if (aggCol != null)
                                         {
                                             var key = $"{aggCol.Field}_{aggCol.Type}";
@@ -1048,13 +1052,13 @@
              @oncontextmenu="CloseCellContextMenu"
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-cell-context-menu"
+             style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
              @ref="_cellMenuElement"
              role="menu"
              tabindex="-1"
              @onkeydown="HandleMenuKeyDownAsync"
              @onkeydown:preventDefault="true"
              @onkeydown:stopPropagation="true"
-             style="left:@(_cellContextMenuX)px;top:@(_cellContextMenuY)px;"
              @onclick:stopPropagation="true">
             <button type="button"
                     class="fx-grid-cell-context-item"
@@ -1097,13 +1101,13 @@
              @oncontextmenu="CloseHeaderContextMenu"
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-header-context-menu"
+             style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @ref="_headerMenuElement"
              role="menu"
              tabindex="-1"
              @onkeydown="HandleMenuKeyDownAsync"
              @onkeydown:preventDefault="true"
              @onkeydown:stopPropagation="true"
-             style="left:@(_headerContextMenuX)px;top:@(_headerContextMenuY)px;"
              @onclick:stopPropagation="true">
 
             @if (HeaderContextMenuShowsColumns)
@@ -1153,6 +1157,7 @@
                     Hide this column
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(!CanInsertHeaderColumn)"
                         @onclick="HeaderMenuOpenChooseColumns">
                     <span class="fx-grid-header-context-check"></span>
                     Insert a column...
@@ -1195,6 +1200,15 @@
                     <span class="fx-grid-header-context-check"></span>
                     Save As...
                 </button>
+                @if (OnHeaderAttachmentsRequested.HasDelegate)
+                {
+                    <div class="fx-grid-header-context-sep"></div>
+                    <button type="button" class="fx-grid-header-context-item"
+                            @onclick="HeaderMenuOpenAttachments">
+                        <span class="fx-grid-header-context-check"></span>
+                        Attachments...
+                    </button>
+                }
             }
         </div>
     }
@@ -1329,11 +1343,30 @@
                 would like them to appear.
             </div>
             <div class="fx-choose-columns-body">
-                <div class="fx-choose-columns-list">
+                @* The list is a focusable listbox: VB6's dialog is a grid where Up/Down move the
+                   highlight and Space ticks the box. Without tabindex + its own key handler the
+                   arrows bubbled out to the GRID BEHIND the dialog and moved ITS row selection.
+                   Keys are swallowed here (preventDefault + stopPropagation) so nothing reaches
+                   the grid or scrolls the page while the dialog is up. *@
+                <div class="fx-choose-columns-list"
+                     tabindex="0"
+                     role="listbox"
+                     @ref="_chooseColumnsListRef"
+                     @onkeydown="ChooseColumnsKeyDown"
+                     @onkeydown:preventDefault="@_chooseColumnsHandledKey"
+                     @onkeydown:stopPropagation="true">
                     @foreach (var row in _chooseColumnsRows)
                     {
                         var capturedRow = row;
+                        @* tabindex -1 = programmatically focusable but out of the tab order. Focusing
+                           the selected row is what SCROLLS it into view — the browser does it natively,
+                           so no JS and no manual offset maths. Keydown still reaches the list handler
+                           above by bubbling. *@
                         <div @key="capturedRow.Field"
+                             tabindex="-1"
+                             role="option"
+                             aria-selected="@(row.Field == _chooseColumnsSelectedField)"
+                             @ref="_chooseColumnsRowRefs[capturedRow.Field]"
                              class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">
                             <input type="checkbox"

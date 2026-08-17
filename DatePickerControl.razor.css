@@ -17,6 +17,10 @@
     background: #fff;
 }
 
+.fx-datepicker-input-group-no-trigger .fx-datepicker-input {
+    padding-right: 4px;
+}
+
 .fx-datepicker-input {
     flex: 1 1 auto;
     border: none;
