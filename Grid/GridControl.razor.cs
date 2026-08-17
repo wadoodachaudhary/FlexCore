@@ -62,6 +62,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // ── Injectables ─────────────────────────────────────────────────────
     [Inject] private IJSRuntime JsRuntime { get; set; } = default!;
 
+    [CascadingParameter] private PageNavigationContext? PageNavigationContext { get; set; }
+
+    [CascadingParameter] private PopupFocusScope? PopupFocusScope { get; set; }
+
     // ── Parameters ───────────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
@@ -131,12 +135,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     [Parameter] public bool AutoSelectFirstRow { get; set; }
 
-    /// <summary>Opens the grid with its first cell as the current cell and the grid
-    /// holding focus, so the first keystroke lands in the grid — the VSFlexGrid
-    /// behaviour, where a grid always has a current cell. Re-applied for a few
-    /// renders because rows usually arrive after the first one and other components
-    /// on the page can take focus back; it stops as soon as a cell is current.</summary>
-    [Parameter] public bool AutoFocusFirstCell { get; set; }
     /// <summary>
     /// Shows the clickable header filter icon that opens the filter popup.
     /// Disable this when the grid already renders explicit filter-bar inputs.
@@ -801,6 +799,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
 
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        if (UseBlazorServerOptimization && _renderPassActive)
+            return IsCellSelectionRowFromOptimizedRenderSet(resolvedRowIndex);
+
         return _selectedCells.Any(cell => cell.RowIndex == resolvedRowIndex);
     }
 
@@ -864,6 +865,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private readonly HashSet<string> _collapsedGroupPaths = new(StringComparer.OrdinalIgnoreCase);
     private (int RowIndex, int CellIndex)? _lastSelectedCell;
     private int? _lastSelectedRowIndex;
+    private bool _popupFocusClaimed;
+    private bool _popupFocusHostFocused;
+    private bool _popupFocusApplied;
+    private bool _popupFocusTakeDomFocus;
+    // One-shot: the synthetic click that Enter fires on a template popup
+    // opener also bubbles to the cell, whose normal click path would pull
+    // focus back to this grid after the popup already took it.
+    private bool _suppressNextCellClickFromKeyActivation;
+    private DateTime _suppressNextCellClickFromKeyActivationUntilUtc = DateTime.MinValue;
 
     // Drag-select state. Mousedown on a row in SelectionType.Multiple
     // captures the anchor; mouseenter on a different row while the left
@@ -954,6 +964,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // renders that occur during the await.
     private bool _batchEditFocusInFlight;
     private bool _batchDropdownOpenOnRender;
+    // Live instance of the batch dropdown editor (captured at render). While
+    // its list is OPEN, the grid host relays list keys to it — an Enter-opened
+    // dropdown leaves DOM focus on the grid host, so its keys arrive here, not
+    // at the dropdown's own handlers. Cleared on every batch-edit teardown so
+    // a later TEXT-cell edit can never relay into a disposed instance.
+    private DropDownListControl<string, GridEditOption>? _batchDropdownEditorRef;
     private TValue? _mouseStartedBatchEditItem;
     private string? _mouseStartedBatchEditField;
     private DateTime _mouseStartedBatchEditUtc = DateTime.MinValue;
@@ -1209,6 +1225,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _renderPassStartTimestamp = GridRenderDiagnostics.BeginPass();
         EnsureAutoColumnWidthsBeforeRender();
+        PrepareBlazorServerOptimizationForRender();
         _renderPassActive = true;
         _renderVisibleColumns = null;
         _renderRowIndexLookupSource = null;
@@ -1219,6 +1236,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         GridRenderDiagnostics.EndPass(_renderPassStartTimestamp);
         _renderPassActive = false;
+        EndBlazorServerOptimizationRenderPass();
         _renderVisibleColumns = null;
         _renderRowIndexLookupSource = null;
         _renderRowIndexLookup = null;
@@ -1602,7 +1620,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// attaches here.</summary>
     private ElementReference _scrollElement;
 
-    /// <summary>Callback ref passed to the JS scroll reader.</summary>
+    /// <summary>Callback ref handed to the JS bindings that invoke back into
+    /// this grid (window scroll reader, client navigation preview).</summary>
     private DotNetObjectReference<GridControl<TValue>>? _windowSelfRef;
 
     /// <summary>True once the scroll listener has been attached for this grid.</summary>
@@ -1623,6 +1642,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>An explicit programmatic row reveal waiting for the requested row
     /// to be present in the rendered DOM.</summary>
     private int? _pendingRowRevealIndex;
+    private long _pendingRowRevealToken;
     private int _pendingRowRevealAttempts;
 
     /// <summary>Real row pitch, header height and scrollport height, measured from the
@@ -2139,6 +2159,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
             _lastSyncedGroupColumns = GroupColumns;
         }
+
+        _popupFocusClaimed = PopupFocusScope?.TryClaim(TakePopupKeyboardFocusAsync) == true;
     }
 
     // Tracks the GroupColumns reference we last synced into _groupDescriptors
@@ -2207,15 +2229,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
         }
 
-        if (AutoFocusFirstCell && _autoFocusFirstCellAttempts < 3
-            && PagedData.Any() && VisibleColumns.Any())
-        {
-            _autoFocusFirstCellAttempts++;
-            if (!_activeCell.HasValue)
-                await SelectCellAsync((0, 0));
-            await FocusGridHostAsync();
-        }
-
         // Keep the open menu inside the viewport on every render — the inline
         // Insert-a-column submenu grows it after open — then focus it so
         // keyboard navigation is ready without preselecting a command.
@@ -2253,22 +2266,43 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 StateHasChanged();
         }
 
-        // Hook once per component instance; JS side is idempotent as well.
-        await EnsureGridKeyboardTrapRegisteredAsync();
-        await EnsureInstantSelectionFeedbackRegisteredAsync();
-        await EnsureGridScrollSyncRegisteredAsync();
-        await EnsureHeaderDragPreviewRegisteredAsync();
-        await EnsureRowDragSelectionAutoScrollRegisteredAsync();
-        await EnsureScrollbarActivityRegisteredAsync();
-        await EnsureFilterPopupDragRegisteredAsync();
+        // Import once, then pipeline independent first-render hooks together. On
+        // Blazor Server, awaiting each hook serially made a newly opened picker
+        // sit unselected for one network round trip per hook.
+        if (_gridJsModule == null)
+        {
+            try
+            {
+                _gridJsModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
+                    "import", GridJsModulePath);
+            }
+            catch (Exception)
+            {
+                // Best-effort. A later render retries initialization.
+            }
+        }
+
+        if (_gridJsModule != null)
+        {
+            await Task.WhenAll(
+                EnsureGridKeyboardTrapRegisteredAsync(),
+                EnsureInstantSelectionFeedbackRegisteredAsync(),
+                EnsureGridScrollSyncRegisteredAsync(),
+                EnsureHeaderDragPreviewRegisteredAsync(),
+                EnsureRowDragSelectionAutoScrollRegisteredAsync(),
+                EnsureScrollbarActivityRegisteredAsync(),
+                EnsureFilterPopupDragRegisteredAsync(),
+                EnsureGridMetricsMeasuredAsync(),
+                EnsureActiveCellScrollSyncRegisteredAsync(),
+                EnsureClientNavigationPreviewRegisteredAsync());
+        }
+
         // MUST precede EnsureGridWindowScrollRegisteredAsync: registering the scroll
         // reader fires an immediate initial sync, and that sync sizes the row window
         // from _rowHeightPx. Measure first, or the window is sized from the 16px
         // fallback and then re-sized — one extra full re-render — the moment the
         // measured pitch (14px here) arrives and changes the visible-row count.
-        await EnsureGridMetricsMeasuredAsync();
         await EnsureGridWindowScrollRegisteredAsync();
-        await EnsureActiveCellScrollSyncRegisteredAsync();
 
         // Once columns have rendered for the first time after a new
         // PersistenceKey is supplied, pull the saved settings.
@@ -2333,6 +2367,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await EnsurePendingFirstRowSelectionAsync();
         await ApplyPendingRowRevealAsync();
         await RestoreFilterPopupFocusAsync();
+
+        if (_popupFocusClaimed && !_popupFocusApplied && PopupFocusScope?.HostFocusPassRan == true)
+            await TakePopupKeyboardFocusAsync(_popupFocusTakeDomFocus);
     }
 
     /// <summary>
@@ -2495,7 +2532,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 "scrollSelectedGridRowToTop",
                 _gridHostElement,
                 displayRowIndex,
-                Math.Max(0, displayRowIndex * _rowHeightPx));
+                Math.Max(0, displayRowIndex * _rowHeightPx),
+                true);
 
             if (!revealed && _pendingRowRevealAttempts < 2)
             {
@@ -2554,7 +2592,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         var pagedList = PagedData as IList<TValue> ?? PagedData.ToList();
-        var displayIndex = pagedList.IndexOf(item);
+        var readOnlyPagedList = pagedList as IReadOnlyList<TValue> ?? pagedList.ToList();
+        var displayIndex = TryGetBlazorServerDisplayIndex(
+            readOnlyPagedList,
+            item,
+            _activeCell.Value.RowIndex,
+            out var optimizedDisplayIndex)
+            ? optimizedDisplayIndex
+            : pagedList.IndexOf(item);
         if (displayIndex < 0)
             return;
 
@@ -2773,8 +2818,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// (not a string literal) so the FlexCore ↔ FlexKit byte-identical-
     /// source rule holds.
     /// </summary>
+    /// <remarks>Versioned per build: the module URL is not fingerprinted by
+    /// the asset pipeline, so without the cache-buster a browser can keep
+    /// executing a STALE grid-control.js forever (Safari held one across many
+    /// fixes while the fingerprinted CSS updated — fresh look, old behavior).</remarks>
     private static string GridJsModulePath =>
-        $"./_content/{typeof(GridControl<TValue>).Assembly.GetName().Name}/grid-control.js";
+        FxJsAsset.Versioned($"./_content/{typeof(GridControl<TValue>).Assembly.GetName().Name}/grid-control.js");
 
     private async ValueTask<IJSObjectReference?> GetGridJsModuleAsync()
     {
@@ -2986,6 +3035,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override void OnParametersSet()
     {
+        // Cell templates and popup hosts commonly mutate a row directly, then
+        // re-render with the same DataSource instance. That host render is the
+        // only generic notification GridControl receives, so discard cached
+        // display text while retaining the expensive row/navigation indexes.
+        InvalidateBlazorServerHostDisplayValues();
+
         var resolvedPageSize = ResolvedPageSize;
         if (_lastHostResolvedPageSize != resolvedPageSize)
         {
@@ -3011,6 +3066,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         SyncGroupDescriptorsFromParameter();
+        SyncBlazorServerOptimizationState(_lastSelectionDataSourceSignature);
 
         // A consumer that turns pivoting off (e.g. AllowPivoting bound to a
         // toggle) while the grid is still in pivot mode would otherwise strand
@@ -3195,6 +3251,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _batchEditDirty = false;
         _batchEditReplaceOnFirstInput = false;
         _batchDropdownOpenOnRender = false;
+        _batchDropdownEditorRef = null;
         ClearMouseDownClosedDropdownOpenSuppression();
         ClearBatchDropdownTypeSelectBuffer();
         _pendingBatchEditFocus = false;
@@ -4503,6 +4560,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
         finalVisibleIndex = Math.Clamp(finalVisibleIndex, 0, visible.Count - 1);
+        GridServerOptimizationDiagnostics.DragSelectionCommits++;
 
         // Arm the preview-clear BEFORE the selection render below, so that
         // render's OnAfterRender performs the handoff — arming afterwards
@@ -4547,6 +4605,76 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         catch
         {
         }
+    }
+
+    private bool _clientNavPreviewRegistered;
+
+    private async Task EnsureClientNavigationPreviewRegisteredAsync()
+    {
+        if (_clientNavPreviewRegistered || !UseClientNavigationPreview)
+            return;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _windowSelfRef ??= DotNetObjectReference.Create(this);
+            await _gridJsModule.InvokeVoidAsync("registerClientNavigationPreview", _gridHostElement, _windowSelfRef);
+            _clientNavPreviewRegistered = true;
+        }
+        catch
+        {
+        }
+    }
+
+    /// <summary>Lands a client-previewed navigation position (see
+    /// registerClientNavigationPreview) as the real active cell in one render.
+    /// The cell index arrives in DOM coordinates — handle columns included.
+    /// Returns whether the position was adopted: a <c>false</c> tells the
+    /// client no settle render is coming, so it releases its preview paints
+    /// immediately instead of waiting to observe one.</summary>
+    [JSInvokable]
+    public async Task<bool> SyncActiveCellFromClientNavigationAsync(int absoluteRowIndex, int domCellIndex, bool requestRender = true)
+    {
+        if (!UseClientNavigationPreview || _batchEditItem != null || _isEditing)
+            return false;
+
+        if (requestRender)
+            GridServerOptimizationDiagnostics.ClientNavigationFinalSyncs++;
+        else
+            GridServerOptimizationDiagnostics.ClientNavigationSilentSyncs++;
+
+        var rows = GetKeyboardNavigationRowItems();
+        if (absoluteRowIndex < 0 || absoluteRowIndex >= rows.Count)
+            return false;
+
+        var handleOffset = (ShowRowReorderColumn ? 1 : 0) + (ShowRowSelectorHandleColumn ? 1 : 0);
+        var columns = VisibleColumns.ToList();
+        var cellIndex = domCellIndex - handleOffset;
+        if (cellIndex < 0 || cellIndex >= columns.Count)
+            return false;
+
+        var column = columns[cellIndex];
+        if (!IsKeyboardNavigationTargetColumn(column))
+            return false;
+
+        var item = rows[absoluteRowIndex];
+        // Mid-hold catch-up syncs pass requestRender:false — the server adopts
+        // the position silently and only the settle sync paints, so checkpoint
+        // renders can never repaint a row behind the client cursor.
+        var adopted = await TryActivateKeyboardEditTargetAsync(
+            item,
+            ResolveRowIndex(item, absoluteRowIndex),
+            cellIndex,
+            column,
+            allowSelectionOnly: true,
+            requestRender: requestRender);
+        // A silent sync must not leave the active-cell reveal armed: the
+        // client already scrolled its preview into view, and the next render
+        // from ANY cause (a row-windowing scroll render mid-hold) would
+        // execute the stale reveal and yank the viewport back to this
+        // lagging checkpoint position — the visible "cursor jumps back".
+        if (!requestRender)
+            _pendingActiveCellScrollIntoView = false;
+        return adopted;
     }
 
     // Standing client-side binding: the pressed row highlights in the SAME
@@ -4635,8 +4763,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         await InvokeRecordDoubleClickAsync(item, rowIndex);
 
-        if (EditSettingsRef?.AllowEditing == true && EditSettingsRef.AllowEditOnDblClick)
+        // Batch mode has no row editor: cell-level dblclick handlers own batch
+        // edit entry (and stop propagation), so a dblclick reaching the ROW is
+        // one on a non-editable cell. StartEdit would only strand _isEditing —
+        // an invisible flag in Batch mode that vetoes keyboard navigation.
+        if (EditSettingsRef?.AllowEditing == true
+            && EditSettingsRef.AllowEditOnDblClick
+            && EditSettingsRef.Mode != EditMode.Batch)
+        {
             await StartEdit(item, rowIndex);
+        }
     }
 
     private async Task InvokeRecordDoubleClickAsync(TValue item, int rowIndex)
@@ -4983,6 +5119,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         TryReorderMutableDataSource(sourceItem, targetItem);
+        InvalidateBlazorServerOptimizationCaches();
 
         var finalIndex = ResolveRowIndex(sourceItem, args.NewIndex);
         if (finalIndex >= 0)
@@ -5048,6 +5185,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task HandleCellClick(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         _cellClickHandledForPress = true;
+        if (ConsumeKeyActivationClickSuppression())
+            return;
+
         if (_suppressNextPointerSelectionAfterTypeAheadCommit)
         {
             _suppressNextPointerSelectionAfterTypeAheadCommit = false;
@@ -5382,11 +5522,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _selectedCells.Add(cell);
     }
 
-    private async Task FocusGridHostAsync()
+    private async Task<bool> FocusGridHostAsync()
     {
         try
         {
             await _gridHostElement.FocusAsync(preventScroll: true);
+            return true;
         }
         catch (InvalidOperationException)
         {
@@ -5396,6 +5537,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             // Static assets/circuit teardown should not break row selection.
         }
+
+        return false;
     }
 
     /// <summary>
@@ -5403,14 +5546,75 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// row/cell selection. Consumers should call this after an external popup,
     /// dialog, or picker closes so Tab/Shift+Tab continues grid navigation
     /// instead of falling back to the browser's page-level tab order.
+    /// A grid that holds DOM focus with no active cell is keyboard-dead, so a
+    /// cursor is seeded when there is none.
     /// </summary>
-    public Task FocusGridAsync() => FocusGridHostAsync();
+    public async Task FocusGridAsync()
+    {
+        await FocusGridHostAsync();
+        if (!_activeCell.HasValue && TrySeedKeyboardActiveCell())
+            await InvokeAsync(StateHasChanged);
+    }
 
     /// <summary>
     /// Alias for <see cref="FocusGridAsync"/> that reads naturally at popup
     /// close sites.
     /// </summary>
-    public Task ResumeKeyboardNavigationAsync() => FocusGridHostAsync();
+    public Task ResumeKeyboardNavigationAsync() => FocusGridAsync();
+
+    /// <summary>
+    /// Takes the opening focus of a popup that cascaded a
+    /// <see cref="PopupFocusScope"/>. DOM focus alone leaves the grid
+    /// keyboard-dead — arrows and Enter all start from the active cell — so a
+    /// cursor is seeded too, retried on later renders while rows are missing.
+    /// </summary>
+    private async Task TakePopupKeyboardFocusAsync(bool takeDomFocus)
+    {
+        _popupFocusTakeDomFocus = takeDomFocus;
+
+        if (takeDomFocus && !_popupFocusHostFocused)
+            _popupFocusHostFocused = await FocusGridHostAsync();
+
+        var focusSettled = !takeDomFocus || _popupFocusHostFocused;
+
+        if (_activeCell.HasValue)
+        {
+            _popupFocusApplied = focusSettled;
+            return;
+        }
+
+        if (TrySeedKeyboardActiveCell())
+        {
+            _popupFocusApplied = focusSettled;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // Retry only while the grid is still empty: a grid that has rows and
+        // no keyboard-navigable column will never seed.
+        _popupFocusApplied = HasAnyData;
+    }
+
+    /// <summary>
+    /// Sets the keyboard navigation origin only — never selection, so no cell
+    /// or row is painted as picked by the user. A revealed/selected row wins
+    /// over the first row.
+    /// </summary>
+    private bool TrySeedKeyboardActiveCell()
+    {
+        var cellIndex = VisibleColumns.ToList().FindIndex(IsKeyboardNavigationTargetColumn);
+        if (cellIndex < 0)
+            return false;
+
+        var rows = PagedData as IList<TValue> ?? PagedData.ToList();
+        if (rows.Count == 0)
+            return false;
+
+        var rowIndex = _lastSelectedRowIndex ?? ResolveRowIndex(rows[0], 0);
+        _activeCell = (rowIndex, cellIndex);
+        _lastSelectedCell = _activeCell.Value;
+        return true;
+    }
 
     private void SetActiveCell(int rowIndex, int cellIndex, bool preservePointerFill = false)
     {
@@ -5481,7 +5685,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
 
-        if (TryGetHorizontalKeyboardNavigation(e, out var backwards))
+        if (TryGetHorizontalKeyboardNavigation(e, out var backwards, out var allowRowWrap))
         {
             SetActiveCell(resolvedRowIndex, cellIndex);
             RememberKeyboardNavigationSource(item, resolvedRowIndex, cellIndex);
@@ -5490,7 +5694,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
                 _selectedCells.Add((resolvedRowIndex, cellIndex));
 
-            await NavigateToAdjacentEditTargetAsync(item, resolvedRowIndex, cellIndex, backwards);
+            await NavigateToAdjacentEditTargetAsync(item, resolvedRowIndex, cellIndex, backwards, allowRowWrap);
             return;
         }
 
@@ -5522,6 +5726,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private int ResolveRowIndex(TValue item, int fallbackIndex)
     {
+        if (TryResolveBlazorServerRowIndex(item, fallbackIndex, out var optimizedIndex))
+            return optimizedIndex;
+
         if (DataSource is IList<TValue> list)
         {
             if (_renderPassActive && item is not null)
@@ -5531,6 +5738,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     return cachedIndex;
             }
 
+            GridServerOptimizationDiagnostics.BaselineIndexOfCalls++;
             var idx = list.IndexOf(item);
             if (idx >= 0)
                 return idx;
@@ -5544,6 +5752,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (ReferenceEquals(_renderRowIndexLookupSource, list) && _renderRowIndexLookup != null)
             return _renderRowIndexLookup;
 
+        GridServerOptimizationDiagnostics.BaselineRenderLookupBuilds++;
+        GridServerOptimizationDiagnostics.BaselineRenderLookupRows += list.Count;
         var lookup = new Dictionary<object, int>(Math.Max(0, list.Count));
         for (var i = 0; i < list.Count; i++)
         {
@@ -5584,7 +5794,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private List<TValue> GetVisibleRowItems()
     {
         if (_groupDescriptors.Count == 0)
-            return PagedData.ToList();
+            return GetBlazorServerNavigationRows() ?? PagedData.ToList();
 
         var result = new List<TValue>();
         void Walk(IEnumerable<GroupResult<TValue>> groups)
@@ -5605,9 +5815,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private List<TValue> GetKeyboardNavigationRowItems()
     {
-        return _groupDescriptors.Count == 0
+        var optimizedRows = GetBlazorServerNavigationRows();
+        if (optimizedRows != null)
+            return optimizedRows;
+
+        var rows = _groupDescriptors.Count == 0
             ? SortedData.ToList()
             : GetVisibleRowItems();
+        GridServerOptimizationDiagnostics.BaselineNavigationRowBuilds++;
+        GridServerOptimizationDiagnostics.BaselineNavigationRowsMaterialized += rows.Count;
+        return rows;
     }
 
     private async Task ToggleRowSelection(TValue item, int rowIndex)
@@ -6038,14 +6255,100 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
+    /// <summary>
+    /// Enter opens the popup a host cell template renders for itself. The
+    /// template's click handler is not reachable from C#, so activation is a
+    /// DOM click; the column must declare a Field, which is also what makes the
+    /// cell keyboard-reachable in the first place.
+    /// </summary>
+    private async Task<bool> TryActivateActiveCellTemplatePopupAsync(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("Enter" or "NumpadEnter"))
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+        if (_batchEditItem != null || _isEditing || !_activeCell.HasValue)
+            return false;
+
+        var column = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
+        if (column?.EffectiveTemplate == null || string.IsNullOrWhiteSpace(column.Field))
+            return false;
+
+        var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+        if (item == null)
+            return false;
+
+        // Absolute row index in the SAME list the row loop stamps as data-ari
+        // — the identity the client resolves the cell by. Grouped rows carry
+        // no data-ari, so they pass -1.
+        var renderRows = GetBlazorServerRenderRows() ?? (PagedData as IList<TValue> ?? PagedData.ToList());
+        var ari = _groupDescriptors.Count > 0 ? -1 : renderRows.IndexOf(item);
+
+        _suppressNextCellClickFromKeyActivation = true;
+        _suppressNextCellClickFromKeyActivationUntilUtc = DateTime.UtcNow.AddMilliseconds(750);
+
+        bool activated;
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            activated = await _gridJsModule.InvokeAsync<bool>(
+                "activateActiveCellPopup", _gridHostElement, ari, column.Field);
+        }
+        catch
+        {
+            // Prerender / circuit teardown: fall through to the rest of the chain.
+            _suppressNextCellClickFromKeyActivation = false;
+            return false;
+        }
+
+        if (!activated)
+        {
+            _suppressNextCellClickFromKeyActivation = false;
+            return false;
+        }
+
+        RememberKeyboardNavigationSource(item, _activeCell.Value.RowIndex, _activeCell.Value.CellIndex);
+        return true;
+    }
+
+    private bool ConsumeKeyActivationClickSuppression()
+    {
+        if (!_suppressNextCellClickFromKeyActivation)
+            return false;
+
+        _suppressNextCellClickFromKeyActivation = false;
+        return DateTime.UtcNow <= _suppressNextCellClickFromKeyActivationUntilUtc;
+    }
+
     private async Task<bool> TryOpenActiveDropDownAsync(KeyboardEventArgs e)
     {
         if (e.Key is not ("Enter" or "NumpadEnter"))
             return false;
         if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
             return false;
-        if (_isEditing || _batchEditItem != null)
+        if (_isEditing)
             return false;
+
+        // A CLOSED dropdown editor already mounted on the active cell (the
+        // two-click convention's first-click state): Enter upgrades it to the
+        // open list, exactly like the second click (owner rule — Enter on a
+        // dropdown cell opens the dropdown). An OPEN list never reaches here:
+        // the host relay in TryApplyKeyToActiveBatchDropdownAsync commits
+        // Enter first.
+        if (_batchEditItem != null)
+        {
+            if (string.IsNullOrWhiteSpace(_batchEditField) || _batchDropdownOpenOnRender)
+                return false;
+
+            var editCol = ResolveBatchEditColumn(_batchEditField);
+            if (editCol == null || !HasEditOptions(editCol, _batchEditItem))
+                return false;
+
+            _batchDropdownOpenOnRender = true;
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
         if (!_activeCell.HasValue)
             return false;
         if (!TryGetActiveKeyboardBatchEditCell(out var item, out var rowIndex, out var column))
@@ -6103,7 +6406,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void RenderDisplayCellContent(RenderTreeBuilder builder, int sequence, TValue item, GridColumn col, bool showActiveEditButton = false)
     {
-        var text = GetCellDisplayValue(item, col);
+        var text = GetBlazorServerRenderDisplayValue(item, col);
         var renderedText = string.IsNullOrEmpty(text) ? "\u00a0" : text;
 
         if (TryGetTypeSearchHighlight(text, item, col, out var matchedText, out var remainingText))
@@ -6330,6 +6633,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (_batchEditItem == null || string.IsNullOrWhiteSpace(_batchEditField))
             return false;
+
+        // While the dropdown's list is OPEN, the dropdown owns the keyboard
+        // (owner rule): arrows/Home/End move its highlighted option, Enter
+        // commits it, Escape closes without changing the value. An
+        // Enter-opened list leaves DOM focus on the grid host, so these keys
+        // land here — without the relay they fell through to cell navigation,
+        // which committed the open editor and moved the active cell. A CLOSED
+        // dropdown editor keeps grid semantics (arrows navigate away).
+        var dropdown = _batchDropdownEditorRef;
+        if (dropdown != null && await dropdown.TryHandleHostKeyDownAsync(e))
+            return true;
+
         if (!IsDropdownTypeSelectKey(e))
             return false;
 
@@ -6453,6 +6768,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 12, "OpenOnClickWhenClosed", true);
             builder.AddAttribute(sequence + 13, "Editable", col.AllowCustomEditOptionValue);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
+            builder.AddComponentReferenceCapture(sequence + 15, component =>
+                _batchDropdownEditorRef = component as DropDownListControl<string, GridEditOption>);
             builder.CloseComponent();
         }
         else if (col.Type == ColumnType.Date)
@@ -6649,6 +6966,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _batchEditDirty = false;
         _batchEditReplaceOnFirstInput = false;
         _batchDropdownOpenOnRender = false;
+        _batchDropdownEditorRef = null;
         ClearMouseDownClosedDropdownOpenSuppression();
         ClearBatchDropdownTypeSelectBuffer();
         _pendingBatchEditFocus = false;
@@ -6933,7 +7251,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 return;
         }
 
-        var isHorizontalNavigation = TryGetHorizontalKeyboardNavigation(e, out var backwards);
+        var isHorizontalNavigation = TryGetHorizontalKeyboardNavigation(e, out var backwards, out var allowRowWrap);
         var isVerticalNavigation = TryGetVerticalKeyboardNavigation(e, out var rowDelta);
         var isScrollNavigation = TryGetScrollKeyboardNavigation(e, out var scrollKey);
 
@@ -6969,7 +7287,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 else if (isVerticalNavigation)
                     await NavigateToVerticalEditTargetAsync(item, rowIndex, colIndex, rowDelta);
                 else
-                    await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards);
+                    await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards, allowRowWrap);
 
                 await FocusGridHostAsync();
             }
@@ -7005,11 +7323,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _batchEditValue = null;
             _batchEditReplaceOnFirstInput = false;
             _batchDropdownOpenOnRender = false;
+            _batchDropdownEditorRef = null;
             ClearBatchDropdownTypeSelectBuffer();
             _pendingBatchEditFocus = false;
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
             _pendingBatchEditScrollIntoView = false;
+            // The render tears down the focused input — without an explicit
+            // refocus the browser drops focus to BODY and every following
+            // arrow key scrolls the page instead of navigating (the commit
+            // path above already refocuses).
+            await FocusGridHostAsync();
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -7070,7 +7394,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
-    private async Task<bool> NavigateFromActiveCellAsync(bool backwards)
+    private async Task<bool> NavigateFromActiveCellAsync(bool backwards, bool allowRowWrap)
     {
         if (_hasLastKeyboardNavigationSource
             && _lastKeyboardNavigationItem != null
@@ -7080,7 +7404,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 _lastKeyboardNavigationItem,
                 _lastKeyboardNavigationRowIndex,
                 _lastKeyboardNavigationCellIndex,
-                backwards);
+                backwards,
+                allowRowWrap);
             return true;
         }
 
@@ -7089,7 +7414,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (!TryResolveSelectedRowNavigationSource(backwards, out var selectedItem, out var selectedRowIndex, out var selectedCellIndex))
                 return false;
 
-            await NavigateToAdjacentEditTargetAsync(selectedItem, selectedRowIndex, selectedCellIndex, backwards);
+            await NavigateToAdjacentEditTargetAsync(
+                selectedItem,
+                selectedRowIndex,
+                selectedCellIndex,
+                backwards,
+                allowRowWrap);
             return true;
         }
 
@@ -7101,7 +7431,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             item,
             _activeCell.Value.RowIndex,
             _activeCell.Value.CellIndex,
-            backwards);
+            backwards,
+            allowRowWrap);
         return true;
     }
 
@@ -7287,7 +7618,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
-    private async Task NavigateToAdjacentEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, bool backwards)
+    private async Task NavigateToAdjacentEditTargetAsync(
+        TValue currentItem,
+        int currentRowIndex,
+        int currentCellIndex,
+        bool backwards,
+        bool allowRowWrap)
     {
         var cursorItem = currentItem;
         var cursorRowIndex = currentRowIndex;
@@ -7295,7 +7631,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         // A candidate can be vetoed by OnCellEdit. If so, keep walking in
         // displayed order instead of dropping focus out of the grid.
-        while (TryFindAdjacentEditTarget(cursorItem, cursorRowIndex, cursorCellIndex, backwards,
+        while (TryFindAdjacentEditTarget(cursorItem, cursorRowIndex, cursorCellIndex, backwards, allowRowWrap,
                    out var targetItem, out var targetRowIndex, out var targetCellIndex, out var targetColumn))
         {
             if (await TryActivateKeyboardEditTargetAsync(
@@ -7312,7 +7648,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             cursorCellIndex = targetCellIndex;
         }
 
-        if (!backwards && await TryAddNewRowOnLastCellExitAsync(currentItem, currentRowIndex, currentCellIndex))
+        if (allowRowWrap
+            && !backwards
+            && await TryAddNewRowOnLastCellExitAsync(currentItem, currentRowIndex, currentCellIndex))
             return;
 
         await FocusGridHostAsync();
@@ -7394,15 +7732,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private int ResolveKeyboardDisplayRowIndex(IReadOnlyList<TValue> rows, TValue currentItem, int currentRowIndex)
     {
-        var displayRowIndex = rows.ToList().FindIndex(item =>
-            EqualityComparer<TValue>.Default.Equals(item, currentItem));
+        if (TryGetBlazorServerDisplayIndex(rows, currentItem, currentRowIndex, out var optimizedDisplayIndex))
+            return optimizedDisplayIndex;
+
+        var displayRowIndex = FindItemIndex(rows, currentItem);
         if (displayRowIndex >= 0)
             return displayRowIndex;
 
         var resolvedItem = GetItemAtResolvedRowIndex(currentRowIndex);
         return resolvedItem == null
             ? -1
-            : rows.ToList().FindIndex(item => EqualityComparer<TValue>.Default.Equals(item, resolvedItem));
+            : FindItemIndex(rows, resolvedItem);
+    }
+
+    private static int FindItemIndex(IReadOnlyList<TValue> rows, TValue item)
+    {
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (EqualityComparer<TValue>.Default.Equals(rows[i], item))
+                return i;
+        }
+
+        return -1;
     }
 
     private int ResolvePreferredKeyboardNavigationCellIndex(IReadOnlyList<GridColumn> columns, int currentCellIndex)
@@ -7430,6 +7781,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int currentRowIndex,
         int currentCellIndex,
         bool backwards,
+        bool allowRowWrap,
         out TValue targetItem,
         out int targetRowIndex,
         out int targetCellIndex,
@@ -7466,11 +7818,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (col < 0)
             {
+                if (!allowRowWrap)
+                    return false;
                 row--;
                 col = columns.Count - 1;
             }
             else if (col >= columns.Count)
             {
+                if (!allowRowWrap)
+                    return false;
                 row++;
                 col = 0;
             }
@@ -7571,7 +7927,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // row before selecting the destination row. If selection changes first,
         // CommitBatchEdit can mistake the destination row for a multi-edit
         // target and copy the old cell value into it.
-        if (_batchEditItem != null)
+        var committedEditor = _batchEditItem != null;
+        if (committedEditor)
             await CommitBatchEdit();
 
         if (IsPagingActive && _pageState.PageSize > 0)
@@ -7593,7 +7950,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (allowSelectionOnly)
         {
-            await FocusGridHostAsync();
+            // The keydown that reached this path proves focus already sits in
+            // the grid host subtree; re-focusing costs a JS interop round trip
+            // per keypress. Only needed when committing the editor just tore
+            // down the focused input.
+            if (committedEditor)
+                await FocusGridHostAsync();
             // Keyboard navigation passes requestRender:false — the keydown
             // handler's implicit render already covers the active-cell move;
             // an extra explicit render doubles the wire batches per keypress
@@ -7612,15 +7974,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var started = await TryStartBatchEdit(item, rowIndex, column);
             if (!started)
-            {
-                if (!allowSelectionOnly)
-                    return false;
-
-                await FocusGridHostAsync();
-                if (requestRender)
-                    await InvokeAsync(StateHasChanged);
-                return true;
-            }
+                return false;
 
             _pendingBatchEditScrollIntoView = scrollIntoView;
             SyncDataSourceChangeTrackers();
@@ -7675,15 +8029,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !string.IsNullOrWhiteSpace(column.Field);
     }
 
-    private static bool TryGetHorizontalKeyboardNavigation(KeyboardEventArgs e, out bool backwards)
+    private bool TryGetHorizontalKeyboardNavigation(
+        KeyboardEventArgs e,
+        out bool backwards,
+        out bool allowRowWrap)
     {
         backwards = false;
+        allowRowWrap = false;
         if (e.AltKey || e.CtrlKey || e.MetaKey)
             return false;
 
         if (e.Key == "Tab")
         {
+            if (PageNavigationContext?.HandlesTabNavigation == true)
+                return false;
             backwards = e.ShiftKey;
+            allowRowWrap = true;
             return true;
         }
 
@@ -8031,8 +8392,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if ((e.Key == "Enter" || e.Key == "NumpadEnter") && await TryCommitSelectedRowOnEnterAsync(e))
             return;
 
-        // VB6 flexEDKbdMouse (opt-in): Enter opens the in-cell editor on the
-        // active editable cell instead of falling through to navigation.
+        if (_batchEditItem == null
+            && _typeAheadBuffer.Length > 0
+            && HasRowSelectionTypeAheadSelection()
+            && IsRowSelectionTypeAheadCommitKey(e, out var commitAndStop))
+        {
+            var committed = await CommitPendingRowSelectionTypeAheadAsync();
+            if (committed && commitAndStop)
+                return;
+        }
+
+        if (await TryActivateActiveCellTemplatePopupAsync(e))
+            return;
+
+        // VB6 flexEDKbdMouse: Enter opens the in-cell editor on the active
+        // editable cell instead of falling through to navigation.
         if ((e.Key == "Enter" || e.Key == "NumpadEnter")
             && EditSettingsRef?.EditOnEnterKey == true
             && _batchEditItem == null
@@ -8046,23 +8420,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
         }
 
-        if (_batchEditItem == null
-            && _typeAheadBuffer.Length > 0
-            && HasRowSelectionTypeAheadSelection()
-            && IsRowSelectionTypeAheadCommitKey(e, out var commitAndStop))
-        {
-            var committed = await CommitPendingRowSelectionTypeAheadAsync();
-            if (committed && commitAndStop)
-                return;
-        }
-
         if (_batchEditItem == null && await TryExtendSelectionWithShiftArrowAsync(e))
             return;
 
         if ((!e.ShiftKey || e.Key == "Tab") && !ShouldPreserveKeyboardRangeAnchorForRowTypeAhead(e))
             ClearKeyboardRangeSelectionAnchor();
 
-        if (TryGetHorizontalKeyboardNavigation(e, out var backwards))
+        if (TryGetHorizontalKeyboardNavigation(e, out var backwards, out var allowRowWrap))
         {
             if (BatchEditBehavior == GridBatchEditBehavior.SingleCell
                 && _batchEditItem == null
@@ -8071,7 +8435,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await CommitPendingSingleCellTypeAheadAsync();
             }
 
-            if (await NavigateFromActiveCellAsync(backwards))
+            if (await NavigateFromActiveCellAsync(backwards, allowRowWrap))
                 return;
         }
 
@@ -8400,7 +8764,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             || (_typeAheadBuffer.Length > 0 && IsRowSelectionTypeAheadCommitKey(e, out _));
     }
 
-    private static bool IsRowSelectionTypeAheadCommitKey(KeyboardEventArgs e, out bool stopAfterCommit)
+    private bool IsRowSelectionTypeAheadCommitKey(KeyboardEventArgs e, out bool stopAfterCommit)
     {
         stopAfterCommit = false;
 
@@ -8410,7 +8774,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return true;
         }
 
-        if (TryGetHorizontalKeyboardNavigation(e, out _)
+        if (TryGetHorizontalKeyboardNavigation(e, out _, out _)
             || TryGetVerticalKeyboardNavigation(e, out _)
             || TryGetShiftArrowSelection(e, out _, out _))
         {
@@ -9071,19 +9435,39 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         if (EventsRef?.OnRecordDoubleClick.HasDelegate != true)
             return false;
-        if (_selectedItems.Count != 1)
+        if (_selectedItems.Count > 1)
             return false;
 
-        var item = _lastSelectedItem != null && _selectedItems.Contains(_lastSelectedItem)
-            ? _lastSelectedItem
-            : _selectedItems.FirstOrDefault();
+        TValue? item;
+        int rowIndex;
 
-        if (item == null)
+        if (_selectedItems.Count == 1)
+        {
+            item = _lastSelectedItem != null && _selectedItems.Contains(_lastSelectedItem)
+                ? _lastSelectedItem
+                : _selectedItems.FirstOrDefault();
+
+            if (item == null)
+                return false;
+
+            rowIndex = _lastSelectedItem != null && EqualityComparer<TValue>.Default.Equals(item, _lastSelectedItem)
+                ? _lastSelectedRowIndex ?? ResolveRowIndex(item, 0)
+                : ResolveRowIndex(item, 0);
+        }
+        else if (_activeCell.HasValue)
+        {
+            // A popup grid opened on a value that is not in the list has a
+            // keyboard cursor and no selection; Enter still commits the row
+            // under that cursor.
+            rowIndex = _activeCell.Value.RowIndex;
+            item = GetItemAtResolvedRowIndex(rowIndex);
+            if (item == null)
+                return false;
+        }
+        else
+        {
             return false;
-
-        var rowIndex = _lastSelectedItem != null && EqualityComparer<TValue>.Default.Equals(item, _lastSelectedItem)
-            ? _lastSelectedRowIndex ?? ResolveRowIndex(item, 0)
-            : ResolveRowIndex(item, 0);
+        }
 
         await InvokeRecordDoubleClickAsync(item, rowIndex);
         return true;
@@ -10340,7 +10724,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
                         builder.OpenElement(155, "td");
                         builder.AddAttribute(156, "class", "fx-cell fx-group-header-aggregate-cell");
-                        builder.AddAttribute(157, "style", CombineStyles(col.GetCellStyle(), GroupTotalTextStyle));
+                        builder.AddAttribute(157, "style", CombineStyles(GetBlazorServerRenderCellStyle(col), GroupTotalTextStyle));
 
                         if (aggCol != null)
                         {
@@ -10442,7 +10826,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 && _activeCell.Value.RowIndex == resolvedRowIdx
                                 && _activeCell.Value.CellIndex == capturedColIdx;
                             var isPointerFillCell = IsPointerFillCell(resolvedRowIdx, capturedColIdx);
-                            var showsEditableCue = CanShowEditableCellCue(capturedCol);
+                            var showsEditableCue = GetBlazorServerEditableCue(capturedCol);
                             var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
                             var activeClass = isActiveCell
                                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
@@ -10466,7 +10850,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             // Purely cosmetic — no behaviour changes hang off this.
                             if (!string.IsNullOrEmpty(capturedCol.Field))
                                 builder.AddAttribute(106, "data-field", capturedCol.Field);
-                            builder.AddAttribute(102, "style", col.GetCellStyle());
+                            builder.AddAttribute(102, "style", GetBlazorServerRenderCellStyle(col));
                             builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
                             builder.AddAttribute(111, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
@@ -10594,7 +10978,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             var aggCol = aggRow.Columns.FirstOrDefault(a => a.Field == col.Field);
                             builder.OpenElement(220, "td");
                             builder.AddAttribute(221, "class", "fx-cell fx-aggregate-cell");
-                            builder.AddAttribute(222, "style", CombineStyles(col.GetCellStyle(), GroupTotalTextStyle));
+                            builder.AddAttribute(222, "style", CombineStyles(GetBlazorServerRenderCellStyle(col), GroupTotalTextStyle));
 
                             if (aggCol != null)
                             {
@@ -10638,7 +11022,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 && _activeCell.Value.RowIndex == resolvedRowIndex
                 && _activeCell.Value.CellIndex == colIdx;
             var isPointerFillCell = IsPointerFillCell(resolvedRowIndex, colIdx);
-            var showsEditableCue = CanShowEditableCellCue(capturedCol);
+            var showsEditableCue = GetBlazorServerEditableCue(capturedCol);
             var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
             var activeClass = isActiveCell
                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
@@ -10657,7 +11041,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // data-field CSS hook — see same comment on the row-render path above.
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
-            builder.AddAttribute(2, "style", col.GetCellStyle());
+            builder.AddAttribute(2, "style", GetBlazorServerRenderCellStyle(col));
             builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddEventStopPropagationAttribute(9, "onmousedown", true);
             builder.AddAttribute(12, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
@@ -10667,7 +11051,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 builder.AddEventStopPropagationAttribute(17, "oncontextmenu", true);
             }
             if (col.ClipMode == ClipMode.EllipsisWithTooltip)
-                builder.AddAttribute(3, "title", GetCellDisplayValue(item, col));
+                builder.AddAttribute(3, "title", GetBlazorServerRenderDisplayValue(item, col));
 
             if (ShouldHandleCellDoubleClick(capturedCol))
             {
@@ -11251,18 +11635,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    private static void SetPropertyValue(object? item, string field, string? value)
+    private void SetPropertyValue(object? item, string field, string? value)
     {
         _ = SetPropertyObjectValue(item, field, value);
     }
 
-    private static bool SetPropertyObjectValue(object? item, string field, object? value)
+    private bool SetPropertyObjectValue(object? item, string field, object? value)
     {
         if (item == null || string.IsNullOrEmpty(field))
             return false;
 
         if (TrySetDictionaryValue(item, field, value))
+        {
+            InvalidateBlazorServerDisplayValue(item);
             return true;
+        }
 
         var accessor = GetPropertyAccessor(item.GetType(), field);
         if (accessor?.CanWrite != true)
@@ -11272,6 +11659,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var converted = ConvertToPropertyType(value, accessor.PropertyType);
             accessor.Setter!(item, converted);
+            InvalidateBlazorServerDisplayValue(item);
             return true;
         }
         catch
@@ -11948,9 +12336,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>
-    /// Selects a record and positions it at the top of the grid viewport. The
-    /// scroll position is changed before the selection render so a remote
-    /// circuit never paints the highlight at its old position first.
+    /// Selects a record without moving it when it is already visible. An
+    /// off-screen row is positioned at the top, with selection and browser
+    /// scroll composed into one paint.
     /// </summary>
     public async Task SelectAndRevealRowAsync(TValue item, bool clearExistingSelection = false)
     {
@@ -11961,7 +12349,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await SelectAndRevealRowCoreAsync(item, index, clearExistingSelection);
     }
 
-    /// <summary>Selects a displayed row and positions it at the top of the viewport.</summary>
+    /// <summary>Selects and reveals a displayed row without moving it when already visible.</summary>
     public async Task SelectAndRevealRowAsync(int rowIndex, bool clearExistingSelection = false)
     {
         var rows = PagedData as IList<TValue> ?? PagedData.ToList();
@@ -11978,28 +12366,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         await EnsureGridMetricsMeasuredAsync();
 
-        // Move the browser viewport first, while the existing DOM is still on
-        // screen. The helper falls back to the absolute row offset when the
-        // target is outside the current row window and also supersedes any
-        // delayed first-paint scroll reset.
+        // The target window, selection, and reveal token are rendered together.
+        // The existing browser-side MutationObserver aligns the row before that
+        // DOM update can paint; ApplyPendingRowRevealAsync remains the fallback.
         _initialScrollResetOnFirstRenderPending = false;
         _initialScrollResetOnFirstDataPending = false;
         _pendingWindowScrollReset = false;
-        try
-        {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
-            await _gridJsModule.InvokeAsync<bool>(
-                "scrollSelectedGridRowToTop",
-                _gridHostElement,
-                displayRowIndex,
-                Math.Max(0, displayRowIndex * _rowHeightPx));
-        }
-        catch (Exception)
-        {
-            // Best-effort viewport positioning. Selection still completes if
-            // the browser is disconnecting or the grid has just been removed.
-        }
 
         if (UseRowWindowing)
         {
@@ -12025,12 +12397,27 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _selectedItems.Add(item);
 
         _lastSelectedItem = item;
-        _lastSelectedRowIndex = ResolveRowIndex(item, displayRowIndex);
+        var resolvedRowIndex = ResolveRowIndex(item, displayRowIndex);
+        _lastSelectedRowIndex = resolvedRowIndex;
+
+        // Arrows and Enter start from the active cell, so a revealed row
+        // without one leaves the grid keyboard-dead.
+        var revealColumns = VisibleColumns.ToList();
+        var revealCellIndex = _activeCell.HasValue
+            && _activeCell.Value.CellIndex >= 0
+            && _activeCell.Value.CellIndex < revealColumns.Count
+                ? _activeCell.Value.CellIndex
+                : revealColumns.FindIndex(IsKeyboardNavigationTargetColumn);
+        if (revealCellIndex >= 0)
+        {
+            _activeCell = (resolvedRowIndex, revealCellIndex);
+            _lastSelectedCell = _activeCell.Value;
+        }
 
         // The target window and selected state are now emitted together in one
-        // render. The post-render pass only performs a small exact alignment;
-        // it does not change or repaint the selection.
+        // render. Changing the token also handles revealing the same row again.
         _pendingRowRevealIndex = displayRowIndex;
+        _pendingRowRevealToken++;
         _pendingRowRevealAttempts = 0;
         await InvokeAsync(StateHasChanged);
         await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
@@ -12207,7 +12594,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await InvokeAsync(StateHasChanged);
     }
 
-    public async Task RefreshAsync() => await InvokeAsync(StateHasChanged);
+    public async Task RefreshAsync()
+    {
+        InvalidateBlazorServerOptimizationCaches();
+        await InvokeAsync(StateHasChanged);
+    }
 
     public Task Refresh() => RefreshAsync();
 
@@ -12327,7 +12718,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private double _autoFitCeilingPx = 2000;
-    private int _autoFocusFirstCellAttempts;
 
     private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(List<GridColumn> columns)
     {

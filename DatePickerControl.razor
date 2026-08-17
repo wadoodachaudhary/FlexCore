@@ -291,7 +291,7 @@
     }
 
     private static string ControlJsModulePath =>
-        $"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js";
+        FxJsAsset.Versioned($"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/grid-control.js");
 
     private async Task PositionDropdownAsync()
     {

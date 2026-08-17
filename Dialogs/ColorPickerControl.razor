@@ -1,29 +1,56 @@
 @namespace Fx.ControlKit.Dialogs
-@using System.Globalization
+@inject IJSRuntime JsRuntime
+@implements IAsyncDisposable
 
 @*
     ColorPickerControl — a plain colour swatch button (no text, no arrow). Clicking it opens
-    a dropdown palette (Windows basic colours) + a hex box for a custom colour. No JS.
-    DropUp / DropAlignRight let a host near a screen edge keep the popup on-screen — the
-    panel is absolutely positioned, so a scrollable container would otherwise clip it.
-    API (Value / ValueChanged / CssClass) is unchanged.
+    a dropdown palette (Windows basic colours) + a hex box for a custom colour. JS does two
+    things only: measure the popup against its clipping ancestors, and hand focus back to
+    the keyboard host that owns the swatch.
+    data-fx-cell-popup / aria-haspopup are what make the swatch a discoverable popup opener
+    for a keyboard host; data-fx-key-scope is the opt-out honoured by the capture-phase key
+    listeners a Blazor stopPropagation cannot reach.
 *@
 
-<div class="fx-colorpicker @CssClass">
+<div class="fx-colorpicker @CssClass" @ref="_hostElement">
     <button type="button" class="fx-colorpicker-button" disabled="@(!Enabled)"
-            style="background:@Value;" title="@Value" @onclick="ToggleOpen"></button>
+            style="background:@Value;" title="@Value"
+            @ref="_buttonElement" data-fx-cell-popup
+            aria-haspopup="dialog" aria-expanded="@(_isOpen ? "true" : "false")"
+            aria-controls="@(_isOpen ? _panelId : null)"
+            @onmousedown:preventDefault="true" @onclick="ToggleOpen"></button>
 
     @if (_isOpen && Enabled)
     {
+        @* Full-viewport catcher: it sits inside the host subtree, so without the
+           propagation stops a click-away also runs the surrounding control's
+           mousedown/click handlers (a grid cell would re-select and drop a
+           multi-row selection on a cancel). *@
         <button type="button" class="fx-colorpicker-backdrop" tabindex="-1"
-                aria-label="Close colour picker" @onclick="Close"></button>
-        <div class="fx-colorpicker-panel @(DropUp ? "drop-up" : "") @(DropAlignRight ? "align-right" : "")"
-             @onclick:stopPropagation="true">
-            <div class="fx-colorpicker-palette">
-                @foreach (var color in _palette)
+                aria-label="Close colour picker" @onclick="Close"
+                @onclick:stopPropagation="true" @onmousedown:stopPropagation="true"></button>
+        <div class="fx-colorpicker-panel @(_placementMeasured ? "fx-placed" : "") @(_dropUp ? "drop-up" : "") @(_alignRight ? "align-right" : "")"
+             style="@(_maxHeight > 0 ? $"max-height:{_maxHeight.ToString("0", System.Globalization.CultureInfo.InvariantCulture)}px" : null)"
+             @ref="_panelElement" id="@_panelId" role="dialog" aria-label="Colour picker"
+             data-fx-key-scope
+             @onclick:stopPropagation="true" @onmousedown:stopPropagation="true"
+             @onkeydown="HandlePanelKeyDown" @onkeydown:stopPropagation="true">
+            @* One focus holder for all 48 cells (aria-activedescendant), not a roving tabindex. *@
+            <div class="fx-colorpicker-palette" @ref="_paletteElement"
+                 tabindex="-1" role="listbox" aria-label="Basic colours"
+                 aria-activedescendant="@($"{_paletteId}-{_cursor}")"
+                 @onkeydown="HandlePaletteKeyDown" @onkeydown:preventDefault="true">
+                @for (var i = 0; i < _palette.Length; i++)
                 {
+                    var index = i;
+                    var color = _palette[i];
+                    var isSelected = string.Equals(color, Value, StringComparison.OrdinalIgnoreCase);
                     <button type="button"
-                            class="fx-colorpicker-cell @(string.Equals(color, Value, StringComparison.OrdinalIgnoreCase) ? "selected" : "")"
+                            id="@($"{_paletteId}-{index}")"
+                            role="option"
+                            tabindex="-1"
+                            aria-selected="@(isSelected ? "true" : "false")"
+                            class="fx-colorpicker-cell @(isSelected ? "selected" : "") @(index == _cursor ? "cursor" : "")"
                             style="background:@color;"
                             title="@color"
                             @onclick="() => SelectColor(color)"></button>
@@ -31,8 +58,10 @@
             </div>
             <div class="fx-colorpicker-custom">
                 <label class="fx-colorpicker-label">Hex:</label>
+                @* Tab only — the box keeps its native caret keys and its
+                   Enter-commits-on-change. *@
                 <input type="text" class="fx-colorpicker-input" value="@Value" maxlength="7"
-                       @onchange="HandleInputChange" />
+                       @ref="_hexInput" @onchange="HandleInputChange" @onkeydown="HandleHexKeyDown" />
             </div>
         </div>
     }
@@ -44,15 +73,91 @@
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
 
-    /// <summary>Open the popup above the swatch (for hosts near the bottom of a scroll area).</summary>
+    /// <summary>Force the popup above the swatch. Unset, the side is measured on open.</summary>
     [Parameter] public bool DropUp { get; set; }
-    /// <summary>Right-align the popup to the swatch (for hosts near the right edge).</summary>
+    /// <summary>Force the popup right-aligned to the swatch. Unset, the side is measured on open.</summary>
     [Parameter] public bool DropAlignRight { get; set; }
 
     private bool _isOpen;
+    private int _cursor;
+    private bool _dropUp;
+    private bool _alignRight;
+    private bool _placementPending;
+    private bool _focusPending;
+    private bool _returnFocusPending;
+    private bool _unwatchPending;
+    private double _maxHeight;
+    private bool _placementMeasured;
+    private string _paletteId = "";
+    private string _panelId = "";
+    private ElementReference _hostElement;
+    private ElementReference _buttonElement;
+    private ElementReference _panelElement;
+    private ElementReference _paletteElement;
+    private ElementReference _hexInput;
+    private IJSObjectReference? _popupModule;
+    private DotNetObjectReference<ColorPickerControl>? _selfRef;
 
-    private void ToggleOpen() { if (Enabled) _isOpen = !_isOpen; }
-    private void Close() => _isOpen = false;
+    /// <summary>Re-measures placement after a viewport change while the popup is open.</summary>
+    [JSInvokable]
+    public Task RemeasurePlacementAsync()
+    {
+        if (!_isOpen)
+            return Task.CompletedTask;
+        _placementPending = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private const int PaletteColumns = 8;
+
+    // Versioned per build: the module URL is not fingerprinted, so without the
+    // cache-buster a browser can keep executing a STALE dialog-control.js.
+    private string PopupJsModulePath =>
+        FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
+
+    protected override void OnInitialized()
+    {
+        _paletteId = "fx-cp-" + Guid.NewGuid().ToString("N");
+        _panelId = _paletteId + "-panel";
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!Enabled)
+            Close();
+    }
+
+    private void ToggleOpen()
+    {
+        if (!Enabled)
+            return;
+        if (_isOpen)
+        {
+            Close();
+            return;
+        }
+        // The palette holds no selected index — land the cursor on the current
+        // colour when it is a palette colour, top-left otherwise.
+        _cursor = Array.FindIndex(_palette, c => string.Equals(c, Value, StringComparison.OrdinalIgnoreCase));
+        if (_cursor < 0)
+            _cursor = 0;
+        _isOpen = true;
+        _dropUp = DropUp;
+        _alignRight = DropAlignRight;
+        _placementPending = true;
+        _maxHeight = 0;
+        _placementMeasured = false;
+        _focusPending = true;
+    }
+
+    private void Close()
+    {
+        if (!_isOpen)
+            return;
+        _isOpen = false;
+        _returnFocusPending = true;
+        _unwatchPending = true;
+    }
 
     // Windows "Basic colors" palette (8 × 6), matching the VB6 Color dialog.
     private static readonly string[] _palette =
@@ -68,7 +173,7 @@
     private async Task SelectColor(string color)
     {
         Value = color;
-        _isOpen = false;
+        Close();
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(color);
     }
@@ -84,5 +189,169 @@
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(input);
         }
+    }
+
+    // Cursor movement CLAMPS at the palette edges (Windows Basic Colors model)
+    // and is preview only — nothing is written until Enter or a click.
+    private async Task HandlePaletteKeyDown(KeyboardEventArgs e)
+    {
+        var row = _cursor / PaletteColumns;
+        var col = _cursor % PaletteColumns;
+        switch (e.Key)
+        {
+            case "ArrowRight":
+                if (col < PaletteColumns - 1 && _cursor + 1 < _palette.Length) _cursor++;
+                break;
+            case "ArrowLeft":
+                if (col > 0) _cursor--;
+                break;
+            case "ArrowDown":
+                if (_cursor + PaletteColumns < _palette.Length) _cursor += PaletteColumns;
+                break;
+            case "ArrowUp":
+                if (row > 0) _cursor -= PaletteColumns;
+                break;
+            case "Home":
+                _cursor = e.CtrlKey ? 0 : row * PaletteColumns;
+                break;
+            case "End":
+                _cursor = e.CtrlKey
+                    ? _palette.Length - 1
+                    : Math.Min(row * PaletteColumns + PaletteColumns - 1, _palette.Length - 1);
+                break;
+            case "Enter":
+            case "NumpadEnter":
+                if (!e.AltKey && !e.CtrlKey && !e.MetaKey && !e.ShiftKey)
+                    await SelectColor(_palette[_cursor]);
+                break;
+            case "Tab":
+                // Palette and hex box are the panel's only two stops, so Tab and
+                // Shift+Tab both land on the other one. Moving focus explicitly
+                // is the only way: the grid's document-capture trap
+                // preventDefaults Tab whenever focus is inside the grid.
+                if (!e.AltKey && !e.CtrlKey && !e.MetaKey)
+                    await FocusAsync(_hexInput);
+                break;
+        }
+    }
+
+    private async Task HandleHexKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Tab" && !e.AltKey && !e.CtrlKey && !e.MetaKey)
+            await FocusAsync(_paletteElement);
+    }
+
+    // Escape closes without writing: the palette cursor is preview only and the
+    // hex box commits on its own change event. The element's stopPropagation is
+    // the other half — it keeps every key in the open panel out of a keyboard
+    // host underneath.
+    private void HandlePanelKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !e.AltKey && !e.CtrlKey && !e.MetaKey && !e.ShiftKey)
+            Close();
+    }
+
+    private static async Task FocusAsync(ElementReference element)
+    {
+        // preventScroll: a popup inside a scrollport is placed by the measured
+        // flip, and the browser's own focus scroll would fight it.
+        try { await element.FocusAsync(preventScroll: true); }
+        catch (JSException) { /* prerender / circuit teardown */ }
+        catch (InvalidOperationException) { /* prerender / circuit teardown */ }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_placementPending)
+        {
+            _placementPending = false;
+            try
+            {
+                var module = await GetPopupModuleAsync();
+                var placement = await module.InvokeAsync<PopupPlacement>(
+                    "measurePopupPlacement", _hostElement, _panelElement);
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await module.InvokeVoidAsync("watchPopupPlacement", _selfRef);
+                var dropUp = DropUp || placement.DropUp;
+                var alignRight = DropAlignRight || placement.AlignRight;
+                if (dropUp != _dropUp || alignRight != _alignRight || placement.MaxHeight != _maxHeight)
+                {
+                    _dropUp = dropUp;
+                    _alignRight = alignRight;
+                    _maxHeight = placement.MaxHeight;
+                }
+            }
+            catch (JSException) { /* prerender / circuit teardown */ }
+            catch (InvalidOperationException) { /* prerender / circuit teardown */ }
+
+            // Set even when measuring threw, so a JS failure cannot leave the
+            // panel permanently invisible.
+            _placementMeasured = true;
+            await InvokeAsync(StateHasChanged);
+            // Focus waits for the render that reveals the panel — focusing a
+            // visibility:hidden element does nothing.
+            return;
+        }
+
+        if (_focusPending)
+        {
+            _focusPending = false;
+            await FocusAsync(_paletteElement);
+            try
+            {
+                var module = await GetPopupModuleAsync();
+                // Anchored to the PANEL, not the wrapper: the panel unmounts on
+                // close so the guard self-removes instead of yanking focus back.
+                await module.InvokeVoidAsync("holdFocusWithin", _panelElement);
+            }
+            catch (JSException) { /* prerender / circuit teardown */ }
+            catch (InvalidOperationException) { /* prerender / circuit teardown */ }
+        }
+
+        // Runs AFTER the close render: with the panel already gone the steal
+        // guard fails its isConnected check instead of taking focus back.
+        if (_unwatchPending)
+        {
+            _unwatchPending = false;
+            try
+            {
+                if (_popupModule != null)
+                    await _popupModule.InvokeVoidAsync("unwatchPopupPlacement");
+            }
+            catch (JSException) { /* prerender / circuit teardown */ }
+            catch (InvalidOperationException) { /* prerender / circuit teardown */ }
+        }
+
+        if (_returnFocusPending)
+        {
+            _returnFocusPending = false;
+            try
+            {
+                if (_popupModule != null)
+                    await _popupModule.InvokeVoidAsync("focusPopupOwner", _buttonElement);
+            }
+            catch (JSException) { /* prerender / circuit teardown */ }
+            catch (InvalidOperationException) { /* prerender / circuit teardown */ }
+        }
+    }
+
+    private async ValueTask<IJSObjectReference> GetPopupModuleAsync() =>
+        _popupModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", PopupJsModulePath);
+
+    private sealed class PopupPlacement
+    {
+        public bool DropUp { get; set; }
+        public bool AlignRight { get; set; }
+        public double MaxHeight { get; set; }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _selfRef?.Dispose();
+        if (_popupModule == null)
+            return;
+        // Disposing while open would leave the resize listener bound to a dead ref.
+        try { await _popupModule.InvokeVoidAsync("unwatchPopupPlacement"); } catch { /* circuit gone */ }
+        try { await _popupModule.DisposeAsync(); } catch { /* circuit gone */ }
     }
 }

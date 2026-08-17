@@ -9,6 +9,8 @@
 
 <div class="@GridHostCssClass"
      style="@HostStyle"
+     data-fx-row-reveal-index="@(_pendingRowRevealIndex?.ToString(CultureInfo.InvariantCulture))"
+     data-fx-row-reveal-token="@(_pendingRowRevealIndex.HasValue ? _pendingRowRevealToken.ToString(CultureInfo.InvariantCulture) : null)"
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"
@@ -702,7 +704,8 @@
 
                     @* Materialize the sorted/paged list ONCE per render so slicing
                        is O(1) and SortedData isn't re-enumerated per row. *@
-                    var pagedList = PagedData as IList<TValue> ?? PagedData.ToList();
+                    var pagedList = GetBlazorServerRenderRows()
+                        ?? (PagedData as IList<TValue> ?? PagedData.ToList());
 
                     @* ── Custom row windowing (scroll-driven) ──────────────
                        Render only the visible slice plus overscan, bracketed by two
@@ -798,7 +801,7 @@
                                 @foreach (var col in VisibleColumns)
                                 {
                                     var aggCol = aggRow.Columns.FirstOrDefault(a => a.Field == col.Field);
-                                    <td class="fx-cell fx-aggregate-cell" style="@col.GetCellStyle()">
+                                    <td class="fx-cell fx-aggregate-cell" style="@GetBlazorServerRenderCellStyle(col)">
                                         @if (aggCol != null)
                                         {
                                             var key = $"{aggCol.Field}_{aggCol.Type}";

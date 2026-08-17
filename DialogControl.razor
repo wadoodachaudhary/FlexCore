@@ -6,6 +6,7 @@
 
 @if (Visible)
 {
+    <CascadingValue Value="@ContentFocusScope" IsFixed="true">
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
          @onmousemove="HandleOverlayMouseMove"
@@ -93,6 +94,7 @@
             </div>
         }
     </div>
+    </CascadingValue>
 }
 
 @code {
@@ -108,7 +110,7 @@
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool IsModal { get; set; } = true;
     [Parameter] public bool ShowCloseIcon { get; set; } = true;
-    [Parameter] public bool CloseOnEscape { get; set; }
+    [Parameter] public bool CloseOnEscape { get; set; } = true;
 
     /// <summary>
     /// When set, Escape invokes this instead of the <see cref="OnClose"/>
@@ -158,6 +160,8 @@
     private double _dialogOffsetY;
     private bool _systemMenuVisible;
     private ElementReference _dialogElement;
+    private PopupFocusScope? _focusScope;
+    private PopupFocusScope ContentFocusScope => _focusScope ??= new PopupFocusScope(AutoFocus);
     private bool _autoFocusApplied;
     private bool _wasVisibleForFocus;
     private bool _keysRegisteredForShow;
@@ -165,6 +169,12 @@
     private IJSObjectReference? _focusModule;
     private double _systemMenuX;
     private double _systemMenuY;
+
+    // Versioned per build: the module URL is not fingerprinted by the asset
+    // pipeline, so without the cache-buster a browser can keep executing a
+    // STALE dialog-control.js forever.
+    private string DialogJsModulePath =>
+        FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
 
     private string OverlayCssClass
     {
@@ -510,6 +520,7 @@
         if (!Visible)
         {
             _autoFocusApplied = false;
+            _focusScope = null;
             _keysRegisteredForShow = false;
             // The popup must yield focus back to the caller it took it from.
             if (_wasVisibleForFocus)
@@ -528,8 +539,7 @@
             _keysRegisteredForShow = true;
             try
             {
-                _focusModule ??= await JS.InvokeAsync<IJSObjectReference>(
-                    "import", $"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
+                _focusModule ??= await JS.InvokeAsync<IJSObjectReference>("import", DialogJsModulePath);
                 _selfRef ??= DotNetObjectReference.Create(this);
                 await _focusModule.InvokeVoidAsync("registerDialogKeys", _dialogElement, _selfRef);
             }
@@ -543,21 +553,45 @@
 
         try
         {
-            _focusModule ??= await JS.InvokeAsync<IJSObjectReference>(
-                "import", $"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
-            // AutoFocus=false hosts manage their own focus (e.g. a picklist
-            // focusing its grid) — still capture the caller so closing the
-            // dialog gives focus back.
-            if (AutoFocus)
-                await _focusModule.InvokeVoidAsync("focusFirst", _dialogElement);
-            else
+            _focusModule ??= await JS.InvokeAsync<IJSObjectReference>("import", DialogJsModulePath);
+            // The caller must be captured BEFORE anything inside the dialog
+            // takes focus, or the restore stack records the content instead.
+            if (!AutoFocus)
+            {
                 await _focusModule.InvokeVoidAsync("captureFocus");
+            }
+            else if (ContentFocusScope.HasClaim)
+            {
+                await _focusModule.InvokeVoidAsync("captureFocus");
+                // A text entry of the popup's own keeps the caret; the
+                // claimant then only prepares its keyboard state.
+                var yieldToTextEntry = false;
+                try { yieldToTextEntry = await _focusModule.InvokeAsync<bool>("hasOwnTextEntry", _dialogElement); }
+                catch { /* stale module — leave the focus to the claimant */ }
+                await ContentFocusScope.ApplyClaimedFocusAsync(!yieldToTextEntry);
+
+                // Assume held: a stale module must never undo a live claim.
+                var held = true;
+                if (!yieldToTextEntry)
+                {
+                    try { held = await _focusModule.InvokeAsync<bool>("holdFocusWithin", _dialogElement); }
+                    catch { /* stale module — the claim already took focus */ }
+                }
+
+                if (yieldToTextEntry || !held)
+                    await _focusModule.InvokeVoidAsync("focusContent", _dialogElement);
+            }
+            else
+            {
+                ContentFocusScope.MarkHostFocusPass();
+                await _focusModule.InvokeVoidAsync("focusFirst", _dialogElement);
+            }
         }
         catch
         {
             // Prerender / circuit teardown — at minimum pull focus into the
             // dialog so keys stop reaching the window underneath.
-            if (AutoFocus)
+            if (AutoFocus && !ContentFocusScope.HostFocusPassRan)
             {
                 try { await _dialogElement.FocusAsync(); } catch { /* disposed */ }
             }
@@ -595,6 +629,13 @@
         _selfRef?.Dispose();
         if (_focusModule != null)
         {
+            // Torn down while still open: the caller was pushed on the shared
+            // restore stack and nothing else will ever pop it.
+            if (_wasVisibleForFocus)
+            {
+                _wasVisibleForFocus = false;
+                try { await _focusModule.InvokeVoidAsync("restoreFocus"); } catch { /* circuit gone */ }
+            }
             try { await _focusModule.DisposeAsync(); } catch { /* circuit gone */ }
         }
     }

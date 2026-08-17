@@ -1748,6 +1748,19 @@
 .fx-cell-editable:not(.fx-batch-editing) {
     cursor: cell;
 }
+/* !important is required: the cell carries an INLINE overflow:hidden written by
+   the cell builder, which outranks any stylesheet rule. */
+.fx-grid ::deep .fx-cell:has(.fx-colorpicker),
+.fx-cell:has(.fx-colorpicker) {
+    overflow: visible !important;
+}
+.fx-grid ::deep .fx-cell:has(.fx-colorpicker-panel),
+.fx-cell:has(.fx-colorpicker-panel),
+.fx-grid ::deep tr.fx-row:has(.fx-colorpicker-panel),
+tr.fx-row:has(.fx-colorpicker-panel) {
+    position: relative;
+    z-index: 30;
+}
 .fx-grid ::deep .fx-cell:has(.fx-dropdown-host),
 .fx-cell:has(.fx-dropdown-host) {
     overflow: visible;
@@ -1759,7 +1772,6 @@ tr.fx-row:has(.fx-dropdown-panel) {
     position: relative;
     z-index: 30;
 }
-
 .fx-grid ::deep .fx-cell > .inline-edit {
     display: flex;
     align-items: center;
@@ -2112,6 +2124,10 @@ tr.fx-row:has(.fx-dropdown-panel) {
     overflow: visible !important;
     line-height: normal;
     vertical-align: top;
+    /* Cells are position:relative with z-index:auto, so the NEXT cell — a later
+       positioned sibling — paints over the editor's 2px overhang and hides its
+       right border behind that cell's background. */
+    z-index: 5;
 }
 
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host,
@@ -2123,6 +2139,12 @@ tr.fx-row:has(.fx-dropdown-panel) {
        leaving a ~2px gap. max-width must allow the +2px or it would clamp the
        inline width back to 100%. The editing cell is overflow:visible so the
        overhang shows. */
+    /* Absolute so height:100% has a definite containing block. A table cell's
+       height is not definite for percentage-height children, so in flow the
+       closed control collapsed to its text height and left a gap under it. */
+    position: absolute;
+    top: 0;
+    left: 0;
     width: 100%;
     height: 100% !important;
     min-height: 0 !important;

@@ -185,7 +185,7 @@ public static class GridExporter
     {
         try
         {
-            var modulePath = $"./_content/{typeof(GridExporter).Assembly.GetName().Name}/grid-control.js";
+            var modulePath = FxJsAsset.Versioned($"./_content/{typeof(GridExporter).Assembly.GetName().Name}/grid-control.js");
             return await jsRuntime.InvokeAsync<IJSObjectReference>("import", modulePath);
         }
         catch

@@ -1,0 +1,137 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@inject IJSRuntime JsRuntime
+@implements IAsyncDisposable
+
+<CascadingValue Value="@_navigationContext" IsFixed="false">
+    <div class="@ResolvedCssClass"
+         style="@ResolvedStyle"
+         id="@Id"
+         data-fx-page-control="true"
+         data-fx-page-tab-navigation="@(HandlesTabNavigation ? "true" : "false")"
+         @ref="_rootElement"
+         @attributes="AdditionalAttributes">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public PageNavigationGraph? NavigationGraph { get; set; }
+    [Parameter] public PageNavigationMap? NavigationMap { get; set; }
+
+    private ElementReference _rootElement;
+    private IJSObjectReference? _module;
+    private PageNavigationContext _navigationContext = new(false);
+    private string _registeredGraphSignature = string.Empty;
+    private bool _navigationRegistered;
+
+    protected override string? BaseCssClass => "fx-page-control";
+
+    private PageNavigationGraph? EffectiveNavigationGraph =>
+        NavigationGraph ?? NavigationMap?.Graph;
+
+    private bool HandlesTabNavigation =>
+        Enabled && EffectiveNavigationGraph is { Nodes.Count: > 0 };
+
+    protected override void OnParametersSet()
+    {
+        if (_navigationContext.HandlesTabNavigation != HandlesTabNavigation)
+            _navigationContext = new PageNavigationContext(HandlesTabNavigation);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        var signature = BuildGraphSignature();
+        if (signature == _registeredGraphSignature && _navigationRegistered == HandlesTabNavigation)
+            return;
+
+        try
+        {
+            _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                "import",
+                $"./_content/{typeof(PageControl).Assembly.GetName().Name}/page-control.js");
+
+            if (HandlesTabNavigation)
+            {
+                await _module.InvokeVoidAsync(
+                    "registerPageNavigationGraph",
+                    _rootElement,
+                    BuildGraphDescriptors(),
+                    EffectiveNavigationGraph!.Wrap);
+                _navigationRegistered = true;
+            }
+            else if (_navigationRegistered)
+            {
+                await _module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
+                _navigationRegistered = false;
+            }
+
+            _registeredGraphSignature = signature;
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is already gone; there is nothing left to unregister.
+        }
+    }
+
+    private object[] BuildGraphDescriptors()
+    {
+        return EffectiveNavigationGraph!.Nodes
+            .Select(node => (object)new
+            {
+                id = node.Id,
+                selector = node.Selector,
+                mode = node.Mode.ToString().ToLowerInvariant(),
+                next = node.Next,
+                previous = node.Previous,
+                shortcuts = (node.Shortcuts ?? [])
+                    .Select(shortcut => new
+                    {
+                        key = shortcut.Key,
+                        alt = shortcut.Modifiers.HasFlag(PageShortcutModifiers.Alt),
+                        control = shortcut.Modifiers.HasFlag(PageShortcutModifiers.Control),
+                        meta = shortcut.Modifiers.HasFlag(PageShortcutModifiers.Meta),
+                        shift = shortcut.Modifiers.HasFlag(PageShortcutModifiers.Shift),
+                        action = shortcut.Action.ToString().ToLowerInvariant(),
+                        allowInEditor = shortcut.AllowInEditor
+                    })
+                    .ToArray()
+            })
+            .ToArray();
+    }
+
+    private string BuildGraphSignature()
+    {
+        if (!HandlesTabNavigation)
+            return string.Empty;
+
+        return $"{EffectiveNavigationGraph!.Wrap}:{string.Join('|', EffectiveNavigationGraph.Nodes.Select(NodeSignature))}";
+    }
+
+    private static string NodeSignature(PageNavigationNode node) =>
+        $"{node.Id}:{node.Selector}:{node.Order}:{node.Next}:{node.Previous}:{node.Mode}:" +
+        string.Join(',', (node.Shortcuts ?? []).Select(shortcut =>
+            $"{shortcut.Key}:{shortcut.Modifiers}:{shortcut.Action}:{shortcut.AllowInEditor}"));
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is null)
+            return;
+
+        try
+        {
+            if (_navigationRegistered)
+                await _module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
+            await _module.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Expected when a server-side circuit closes before disposal.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The JS runtime may already be disposed during application shutdown.
+        }
+    }
+}

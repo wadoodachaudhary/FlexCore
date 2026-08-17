@@ -459,6 +459,55 @@
         }
     }
 
+    /// <summary>Keyboard relay for a host that keeps DOM focus while this
+    /// control's list is OPEN (a grid batch editor opened via Enter never moves
+    /// focus off the grid host): the host forwards list keys here so the open
+    /// list owns the keyboard — arrows/Home/End move the highlighted option,
+    /// Enter commits it, Escape closes without committing. Returns false when
+    /// the list is closed or the key is not a plain list key, letting the host
+    /// apply its own semantics.</summary>
+    public async Task<bool> TryHandleHostKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (!_isOpen || !Enabled)
+            return false;
+        if (e.AltKey || e.CtrlKey || e.MetaKey || e.ShiftKey)
+            return false;
+
+        switch (e.Key)
+        {
+            case "ArrowDown":
+                await MoveSelectionAsync(1);
+                break;
+            case "ArrowUp":
+                await MoveSelectionAsync(-1);
+                break;
+            case "Home":
+                await MoveSelectionToAsync(first: true);
+                break;
+            case "End":
+                await MoveSelectionToAsync(first: false);
+                break;
+            case "Enter":
+            case "NumpadEnter":
+                // Selecting fires ValueChanged; a grid host commits its editor
+                // there and re-renders, disposing this component — no
+                // self-render after this point.
+                await CommitCurrentSelectionAsync();
+                return true;
+            case "Escape":
+                // Close fires Closed; a grid host tears the editor down there.
+                await CloseAsync();
+                return true;
+            default:
+                return false;
+        }
+
+        // Highlight moves are invoked from the HOST's event context, so this
+        // component gets no automatic render — request one explicitly.
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
     private Task HandleEditableFocus()
     {
         _editableInputFocused = true;

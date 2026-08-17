@@ -20,6 +20,12 @@
     opacity: 0.6;
 }
 
+/* On a plain form the closed swatch is an ordinary tab stop. */
+.fx-colorpicker-button:focus-visible {
+    outline: 2px solid #000000;
+    outline-offset: 1px;
+}
+
 /* Click-away catcher so the dropdown closes without JS. */
 .fx-colorpicker-backdrop {
     position: fixed;
@@ -43,6 +49,15 @@
     background: #f0f0f0;
     border: 1px solid #8a8a8a;
     box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+    /* Paired with the measured max-height: a popup too tall for its clip box
+       scrolls rather than being cut off by the ancestor that clips it. */
+    overflow-y: auto;
+}
+
+/* The side/height are measured after the first render, so the panel must not be
+   shown at its default position first — that reads as the popup jumping. */
+.fx-colorpicker-panel:not(.fx-placed) {
+    visibility: hidden;
 }
 
 /* Open above the swatch (keeps bottom on-screen for hosts near a scroll-area bottom). */
@@ -81,6 +96,18 @@
 .fx-colorpicker-cell.selected {
     outline: 2px solid #000000;
     outline-offset: -1px;
+}
+
+/* Keyboard cursor. Inset box-shadow so it can coexist with .selected's outline;
+   the white/black pair stays legible on #000000 and #FFFFFF. */
+.fx-colorpicker-cell.cursor {
+    box-shadow: inset 0 0 0 1px #ffffff, inset 0 0 0 2px #000000;
+}
+
+/* The holder carries DOM focus; the visible cursor is the cell, not a ring here. */
+.fx-colorpicker-palette:focus,
+.fx-colorpicker-palette:focus-visible {
+    outline: none;
 }
 
 .fx-colorpicker-custom {

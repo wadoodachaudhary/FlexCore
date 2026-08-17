@@ -14,22 +14,57 @@ function pickFocusTarget(root) {
         || root;
 }
 
-export function focusFirst(root) {
-    if (!root) return;
-    const prev = document.activeElement;
-    focusReturnStack.push(prev && prev !== document.body ? prev : null);
-    pickFocusTarget(root).focus({ preventScroll: true });
-
-    // Steal guard: the control under the dialog often refocuses itself at the
-    // end of the very click that opened the popup — that async refocus lands
-    // AFTER ours and sends the keyboard back to the caller. For a short window
-    // any focus that leaves the dialog is pulled back in.
+// Steal guard: the control under the dialog often refocuses itself at the
+// end of the very click that opened the popup — that async refocus lands
+// AFTER ours and sends the keyboard back to the caller. For a short window
+// any focus that leaves the dialog is pulled back in.
+function guardFocusWithin(root, preferred) {
     const guard = () => {
         if (!root.isConnected) { document.removeEventListener("focusin", guard, true); return; }
-        if (!root.contains(document.activeElement)) pickFocusTarget(root).focus({ preventScroll: true });
+        if (root.contains(document.activeElement)) return;
+        // Recover to whatever actually held focus, not to the generic pick:
+        // a claimed grid sits behind any text input in the same dialog.
+        const target = preferred && preferred.isConnected && root.contains(preferred)
+            ? preferred
+            : pickFocusTarget(root);
+        target.focus({ preventScroll: true });
     };
     document.addEventListener("focusin", guard, true);
     setTimeout(() => document.removeEventListener("focusin", guard, true), 600);
+}
+
+export function focusFirst(root) {
+    if (!root) return;
+    captureFocus();
+    focusContent(root);
+}
+
+// Focus pass WITHOUT recording the caller — a second attempt after the caller
+// was already captured.
+export function focusContent(root) {
+    if (!root) return;
+    pickFocusTarget(root).focus({ preventScroll: true });
+    guardFocusWithin(root, null);
+}
+
+// Guard only: the dialog's content already took focus for itself. Returns
+// whether it really did — an unrendered or hidden claimant focuses nothing,
+// and FocusAsync on it raises no error.
+export function holdFocusWithin(root) {
+    if (!root) return false;
+    const claimed = root.contains(document.activeElement) ? document.activeElement : null;
+    guardFocusWithin(root, claimed);
+    return claimed != null;
+}
+
+// True when the popup carries a text entry of its own. Entries INSIDE a
+// keyboard-navigable container ([tabindex='0'], e.g. a grid host and its cell
+// editors / filter inputs) belong to that container, not to the popup.
+export function hasOwnTextEntry(root) {
+    if (!root) return false;
+    const sel = "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not(:disabled), "
+        + "textarea:not(:disabled), select:not(:disabled), [contenteditable=true]";
+    return Array.from(root.querySelectorAll(sel)).some(el => !el.closest("[tabindex='0']"));
 }
 
 
@@ -47,6 +82,94 @@ export function restoreFocus() {
     }
 }
 
+// Focus return for a popup rendered INSIDE another control: back to the
+// keyboard host that owns the opener (a grid host and the like), else to the
+// opener itself. document.activeElement at open time cannot be used for this —
+// an opener that preventDefaults its mousedown leaves it on <body> or on an
+// unrelated control that then steals the return.
+export function focusPopupOwner(opener) {
+    if (!opener) return;
+    const target = opener.parentElement?.closest("[tabindex]:not([tabindex='-1'])") || opener;
+    if (target.isConnected) {
+        try { target.focus({ preventScroll: true }); } catch { /* detached mid-close */ }
+    }
+}
+
+// Placement for a popup that is position:absolute inside its host: EVERY
+// ancestor with a non-visible overflow clips it, so the flip has to be measured
+// against the intersection of those clip rects. Measured against the viewport
+// alone the popup opens into a scroll container's overflow, where it only
+// extends that container's scrollHeight and stays invisible.
+export function measurePopupPlacement(host, panel) {
+    if (!host || !panel) return { dropUp: false, alignRight: false };
+
+    const hostRect = host.getBoundingClientRect();
+    const width = panel.offsetWidth;
+    const height = panel.offsetHeight;
+    let top = 0;
+    let left = 0;
+    let bottom = window.innerHeight || document.documentElement.clientHeight || 0;
+    let right = window.innerWidth || document.documentElement.clientWidth || 0;
+
+    for (let el = host.parentElement; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+        const style = window.getComputedStyle(el);
+        const clipsY = (style.overflowY || "").toLowerCase() !== "visible";
+        const clipsX = (style.overflowX || "").toLowerCase() !== "visible";
+        if (!clipsY && !clipsX) continue;
+        const rect = el.getBoundingClientRect();
+        if (clipsY) {
+            top = Math.max(top, rect.top);
+            bottom = Math.min(bottom, rect.bottom);
+        }
+        if (clipsX) {
+            left = Math.max(left, rect.left);
+            right = Math.min(right, rect.right);
+        }
+    }
+
+    const spaceBelow = bottom - hostRect.bottom;
+    const spaceAbove = hostRect.top - top;
+    const dropUp = spaceBelow < height && spaceAbove > spaceBelow;
+
+    // When NEITHER side fits, flipping only picks the less-bad side and the
+    // popup still overruns its clip box, where the overflow is silently cut
+    // off. Cap it to the space actually available so it scrolls instead.
+    const available = Math.floor((dropUp ? spaceAbove : spaceBelow) - 4);
+    return {
+        dropUp,
+        alignRight: hostRect.left + width > right && hostRect.right - width >= left,
+        maxHeight: height > available ? Math.max(available, 60) : 0
+    };
+}
+
+// Placement is measured once on open, so a viewport change while the popup is
+// open leaves it positioned against the old geometry. One listener per open
+// popup, coalesced to an animation frame because resize fires continuously
+// during a drag.
+let placementWatch = null;
+
+export function watchPopupPlacement(dotNetRef) {
+    unwatchPopupPlacement();
+    let queued = false;
+    const onChange = () => {
+        if (queued) return;
+        queued = true;
+        requestAnimationFrame(() => {
+            queued = false;
+            if (!placementWatch) return;
+            dotNetRef.invokeMethodAsync("RemeasurePlacementAsync").catch(() => unwatchPopupPlacement());
+        });
+    };
+    window.addEventListener("resize", onChange);
+    placementWatch = onChange;
+}
+
+export function unwatchPopupPlacement() {
+    if (!placementWatch) return;
+    window.removeEventListener("resize", placementWatch);
+    placementWatch = null;
+}
+
 // Escape / Ctrl+Enter / Tab for the dialog, listened in the CAPTURE phase so
 // they work even when the focused control stops keydown propagation
 // (TextBoxControl does, for its grid-embedded editors). The listener dies with
@@ -58,6 +181,10 @@ const DIALOG_TABBABLE =
 export function registerDialogKeys(root, dotNetRef) {
     if (!root) return;
     root.addEventListener("keydown", e => {
+        // A popup inside the dialog that owns its own keys (its own Escape /
+        // Tab) opts out — this listener is capture-phase, so a bubble-phase
+        // stopPropagation cannot reach it.
+        if (e.target instanceof Element && e.target.closest("[data-fx-key-scope]")) return;
         if (e.key === "Escape" && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
             dotNetRef.invokeMethodAsync("OnDialogContentEscapeAsync");
         } else if ((e.key === "Enter" || e.key === "NumpadEnter") && e.ctrlKey) {
