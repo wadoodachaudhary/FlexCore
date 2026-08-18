@@ -175,6 +175,18 @@ public class CellSavedArgs<TValue>
     public object? Value { get; set; }
 }
 
+/// <summary>Payload for <see cref="GridControlEvents{TValue}.CellValueTruncated"/>.</summary>
+public class CellValueTruncatedArgs<TValue>
+{
+    public TValue Data { get; set; } = default!;
+    public string ColumnName { get; set; } = "";
+    public string HeaderText { get; set; } = "";
+    /// <summary>Length of the text the user tried to paste.</summary>
+    public int PastedLength { get; set; }
+    /// <summary>The column's limit — what was actually kept.</summary>
+    public int MaxLength { get; set; }
+}
+
 /// <summary>
 /// Event args for action completion events.
 /// </summary>

@@ -318,7 +318,7 @@ else
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", $"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js");
+                "import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js"));
         }
         catch
         {
