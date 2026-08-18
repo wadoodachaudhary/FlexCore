@@ -120,4 +120,10 @@ public class GridControlEvents<TValue>
 
     // Lifecycle
     public EventCallback DataBound { get; set; }
+
+    /// <summary>A value pasted into a cell was longer than the column's MaxLength and
+    /// was clipped. The clip happens either way (the browser enforces maxlength); this
+    /// exists so the host can TELL the user instead of it being silent — the
+    /// alternative is a "String or binary data would be truncated" error on save.</summary>
+    public EventCallback<CellValueTruncatedArgs<TValue>> CellValueTruncated { get; set; }
 }

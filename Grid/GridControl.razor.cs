@@ -134,6 +134,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// grid first receives rows, and after sorting changes the visible row order.
     /// </summary>
     [Parameter] public bool AutoSelectFirstRow { get; set; }
+    /// <summary>
+    /// Optional displayed-row index to select before the grid's first visible
+    /// render. This is intended for picker dialogs that already know their
+    /// current value when they open. The default is null, preserving the
+    /// existing post-render selection path.
+    /// </summary>
+    [Parameter] public int? InitialSelectedRowIndex { get; set; }
+    /// <summary>
+    /// Gives the initial selection keyboard focus once its browser reveal has
+    /// completed. Off by default so existing hosts retain their focus behavior.
+    /// </summary>
+    [Parameter] public bool FocusInitialSelection { get; set; }
+    /// <summary>
+    /// Raises the normal selection callback for an initial seeded selection.
+    /// Picker hosts normally leave this false because the value has not changed.
+    /// </summary>
+    [Parameter] public bool NotifyInitialSelectionChanged { get; set; }
+    /// <summary>
+    /// Fires after the seeded row has been rendered and its browser reveal has
+    /// completed. Picker hosts can use this as a first-paint readiness gate.
+    /// </summary>
+    [Parameter] public EventCallback InitialSelectionReady { get; set; }
 
     /// <summary>
     /// Shows the clickable header filter icon that opens the filter popup.
@@ -206,6 +228,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// VB6-style grids can opt in when mouse click should call EditCell.
     /// </summary>
     [Parameter] public bool EditOnSingleClick { get; set; }
+    /// <summary>
+    /// Selects the transport used by generated TextBoxControl cell editors.
+    /// </summary>
+    [Parameter] public TextBoxTypingBehavior TextEditorTypingBehavior { get; set; } = TextBoxTypingBehavior.ClientBuffered;
+    /// <summary>
+    /// Overrides <see cref="TextEditorTypingBehavior"/> for hosts that switch
+    /// transport directly. Null follows <see cref="TextEditorTypingBehavior"/>.
+    /// </summary>
+    [Parameter] public bool? UseClientBufferedTextEditing { get; set; }
+
+    private bool UsesClientBufferedTextEditing =>
+        UseClientBufferedTextEditing ?? TextEditorTypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+
+    private TextBoxTypingBehavior ResolvedTextEditorTypingBehavior =>
+        UsesClientBufferedTextEditing ? TextBoxTypingBehavior.ClientBuffered : TextBoxTypingBehavior.ServerBacked;
     /// <summary>
     /// In <see cref="GridBatchEditBehavior.SingleCell"/> mode, allow Ctrl/Cmd
     /// and Shift selection across cells in one column, then commit typed
@@ -963,6 +1000,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // mounted batch editor (owner editor fix 2026-07-24) — blocks re-entry from
     // renders that occur during the await.
     private bool _batchEditFocusInFlight;
+    private long _textEditorServerInputCallbacks;
+    private long _textEditorServerValueChangedCallbacks;
+    private long _textEditorServerKeyDownCallbacks;
+    private long _textEditorServerBlurCallbacks;
+    private long _textEditorClientBufferedCommitCallbacks;
+    // Set once a client-buffered editor is proven to be dispatching typing keys,
+    // which only happens when its browser-side binding is not in place.
+    private bool _clientBufferedTypingUnattached;
     private bool _batchDropdownOpenOnRender;
     // Live instance of the batch dropdown editor (captured at render). While
     // its list is OPEN, the grid host relays list keys to it — an Enter-opened
@@ -1603,6 +1648,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// flick never outruns the render.</summary>
     [Parameter] public int WindowOverscanRows { get; set; } = 60;
 
+    /// <summary>
+    /// Minimum source row count before custom row windowing is enabled. A value
+    /// of zero preserves the existing behavior. Picker dialogs can opt in to a
+    /// threshold so short lists avoid measurement and window-registration work.
+    /// </summary>
+    [Parameter] public int MinimumRowsForWindowing { get; set; }
+
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
     private int WindowRefreshGuardRows => WindowOverscanRows / 3;
@@ -1644,6 +1696,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int? _pendingRowRevealIndex;
     private long _pendingRowRevealToken;
     private int _pendingRowRevealAttempts;
+    private bool _initialSelectionRequestCaptured;
+    private DataSourceSelectionSignature _lastInitialSelectionDataSourceSignature;
+    private int? _lastInitialSelectedRowIndex;
+    private bool _pendingInitialSelectionCell;
+    private bool _pendingInitialSelectionReady;
+    private bool _pendingInitialSelectionFocus;
+    private bool _pendingInitialSelectionNotification;
 
     /// <summary>Real row pitch, header height and scrollport height, measured from the
     /// DOM by <c>measureGridMetrics</c>. 0 until the first measurement succeeds, and
@@ -1695,9 +1754,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool UseRowWindowing =>
         !IsPagingActive
         && !string.IsNullOrWhiteSpace(Height)
+        && MeetsRowWindowingThreshold
         && !(AllowGrouping && _groupDescriptors.Count > 0)
         && !_pivotMode
         && !(ShowAsChart && ChartValueFields is { Count: > 0 });
+
+    private bool MeetsRowWindowingThreshold
+    {
+        get
+        {
+            if (MinimumRowsForWindowing <= 0)
+                return true;
+
+            var sourceCount = DataSource switch
+            {
+                ICollection<TValue> collection => collection.Count,
+                IReadOnlyCollection<TValue> readOnlyCollection => readOnlyCollection.Count,
+                _ => -1
+            };
+
+            // Unknown/lazy sources keep the established windowing path. Lists,
+            // which cover picker data, can skip it without enumeration.
+            return sourceCount < 0 || sourceCount > MinimumRowsForWindowing;
+        }
+    }
 
     /// <summary>Inline style for a spacer row's single cell — a pure height stand-in
     /// (invariant-formatted so locales with a comma decimal don't emit bad CSS).</summary>
@@ -2365,7 +2445,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await ResetInitialGridScrollIfNeededAsync(firstRender);
         await ApplyPendingWindowScrollResetAsync();
         await EnsurePendingFirstRowSelectionAsync();
+        ApplyPendingInitialSelectionCell();
         await ApplyPendingRowRevealAsync();
+        await CompleteInitialSelectionAsync();
         await RestoreFilterPopupFocusAsync();
 
         if (_popupFocusClaimed && !_popupFocusApplied && PopupFocusScope?.HostFocusPassRan == true)
@@ -2672,6 +2754,47 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         await SelectFirstVisibleRowAsync(force: false);
         await InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyPendingInitialSelectionCell()
+    {
+        if (!_pendingInitialSelectionCell)
+            return;
+
+        _pendingInitialSelectionCell = false;
+        if (!_lastSelectedRowIndex.HasValue)
+            return;
+
+        var columns = VisibleColumns.ToList();
+        var cellIndex = columns.FindIndex(IsKeyboardNavigationTargetColumn);
+        if (cellIndex < 0)
+            return;
+
+        _activeCell = (_lastSelectedRowIndex.Value, cellIndex);
+        _lastSelectedCell = _activeCell.Value;
+    }
+
+    private async Task CompleteInitialSelectionAsync()
+    {
+        if (!_pendingInitialSelectionReady || _pendingRowRevealIndex.HasValue)
+            return;
+
+        _pendingInitialSelectionReady = false;
+
+        if (_pendingInitialSelectionFocus)
+        {
+            _pendingInitialSelectionFocus = false;
+            await FocusGridHostAsync();
+        }
+
+        if (_pendingInitialSelectionNotification)
+        {
+            _pendingInitialSelectionNotification = false;
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
+        }
+
+        if (InitialSelectionReady.HasDelegate)
+            await InitialSelectionReady.InvokeAsync();
     }
 
     private bool ShouldAutoSelectFirstRow()
@@ -3067,6 +3190,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         SyncGroupDescriptorsFromParameter();
         SyncBlazorServerOptimizationState(_lastSelectionDataSourceSignature);
+        ApplyInitialSelectionIfNeeded();
 
         // A consumer that turns pivoting off (e.g. AllowPivoting bound to a
         // toggle) while the grid is still in pivot mode would otherwise strand
@@ -3077,6 +3201,70 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _pivotMode = false;
             _activeOptionsPanel = GridOptionsPanel.None;
         }
+    }
+
+    private void ApplyInitialSelectionIfNeeded()
+    {
+        if (!InitialSelectedRowIndex.HasValue)
+        {
+            _initialSelectionRequestCaptured = false;
+            _lastInitialSelectedRowIndex = null;
+            return;
+        }
+
+        var requestedIndex = InitialSelectedRowIndex.Value;
+        var signature = ComputeSelectionDataSourceSignature();
+        if (_initialSelectionRequestCaptured
+            && signature.Equals(_lastInitialSelectionDataSourceSignature)
+            && _lastInitialSelectedRowIndex == requestedIndex)
+        {
+            return;
+        }
+
+        _initialSelectionRequestCaptured = true;
+        _lastInitialSelectionDataSourceSignature = signature;
+        _lastInitialSelectedRowIndex = requestedIndex;
+        _pendingInitialSelectionReady = true;
+        _pendingInitialSelectionFocus = false;
+        _pendingInitialSelectionNotification = false;
+        _pendingInitialSelectionCell = false;
+        _pendingRowRevealIndex = null;
+        _pendingRowRevealAttempts = 0;
+
+        if (!AllowSelection)
+            return;
+
+        var displayedRows = PagedData;
+        var rows = displayedRows as IList<TValue> ?? displayedRows.ToList();
+        if (requestedIndex < 0 || requestedIndex >= rows.Count)
+            return;
+
+        var item = rows[requestedIndex];
+        _focusedGroupPath = null;
+        _selectedItems.Clear();
+        _selectedItems.Add(item);
+        _selectedCells.Clear();
+        _lastSelectedItem = item;
+        var resolvedRowIndex = ResolveRowIndex(item, requestedIndex);
+        _lastSelectedRowIndex = resolvedRowIndex < 0 ? requestedIndex : resolvedRowIndex;
+
+        _initialScrollResetOnFirstRenderPending = false;
+        _initialScrollResetOnFirstDataPending = false;
+        _pendingWindowScrollReset = false;
+
+        if (UseRowWindowing)
+        {
+            var maxStart = Math.Max(0, rows.Count - _winCount);
+            _winStart = Math.Clamp(requestedIndex - WindowOverscanRows, 0, maxStart);
+            _lastWindowListSignature = ComputeWindowListSignature(rows);
+            ClearPreserveRowWindowOnNextListChange();
+        }
+
+        _pendingInitialSelectionCell = true;
+        _pendingInitialSelectionFocus = FocusInitialSelection;
+        _pendingInitialSelectionNotification = NotifyInitialSelectionChanged;
+        _pendingRowRevealIndex = requestedIndex;
+        _pendingRowRevealToken++;
     }
 
     private void SyncPrintDefaults()
@@ -6065,6 +6253,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _batchEditField = col.Field;
         _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
+        _clientBufferedTypingUnattached = false;
         _batchEditReplaceOnFirstInput = replaceOnFirstInput;
         _batchDropdownOpenOnRender = openDropdownOnRender && HasEditOptions(col, item);
         _batchEditInputRef = default;
@@ -6804,6 +6993,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         else
         {
+            var useClientBuffer = UsesClientBufferedTextEditing;
             var inputType = GetEditorInputType(col);
             builder.SetKey(_batchEditGeneration);
             builder.OpenComponent<TextBoxControl>(sequence);
@@ -6811,17 +7001,84 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 2, "CssClass", "fx-batch-input");
             builder.AddAttribute(sequence + 3, "Value", _batchEditValue);
             // Uncontrolled: the DOM owns the text while typing so parent
-            // re-renders can't revert chars or reset the caret (no JS).
+            // re-renders cannot revert characters or reset the caret. The
+            // opt-in client buffer also keeps ordinary keys off the circuit.
             builder.AddAttribute(sequence + 15, "Uncontrolled", true);
             builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
             if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
             if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
                 builder.AddAttribute(sequence + 6, "MaxLength", col.MaxLength.Value);
-            builder.AddAttribute(sequence + 13, "InputValueChanged", (Action<string?>)(value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
-            builder.AddAttribute(sequence + 14, "ValueChanged", EventCallback.Factory.Create<string?>(this, value => UpdateBatchEditValue(editItem, editField, value ?? string.Empty)));
-            builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
-            builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, () => CommitBatchEdit(editItem, editField)));
+            builder.AddAttribute(sequence + 18, "TypingBehavior", ResolvedTextEditorTypingBehavior);
+            // The browser clips an over-long paste before the server sees it, so the
+            // editor reports the loss and the host can say so out loud.
+            if (col.MaxLength is > 0 && EventsRef?.CellValueTruncated.HasDelegate == true)
+            {
+                var truncItem = editItem;
+                var truncCol = col;
+                builder.AddAttribute(sequence + 17, "OnPasteTruncated",
+                    EventCallback.Factory.Create<(int PastedLength, int MaxLength)>(this, async info =>
+                        await EventsRef.CellValueTruncated.InvokeAsync(new CellValueTruncatedArgs<TValue>
+                        {
+                            Data = truncItem,
+                            ColumnName = truncCol.Field ?? "",
+                            HeaderText = string.IsNullOrWhiteSpace(truncCol.HeaderText) ? (truncCol.Field ?? "") : truncCol.HeaderText,
+                            PastedLength = info.PastedLength,
+                            MaxLength = info.MaxLength,
+                        })));
+            }
+            // Printable keys and Backspace/Delete stay in the browser: the editor is
+            // uncontrolled and HandleBatchEditKeyDown ignores typing keys.
+            if (!useClientBuffer)
+                builder.AddAttribute(sequence + 16, "TypingKeysStayLocal", true);
+            builder.AddAttribute(sequence + 13, "InputValueChanged", (Action<string?>)(value =>
+            {
+                if (!useClientBuffer || _clientBufferedTypingUnattached)
+                    _textEditorServerInputCallbacks++;
+                UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
+            }));
+            if (useClientBuffer)
+            {
+                builder.AddAttribute(sequence + 7, "OnKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, async e =>
+                {
+                    // An attached browser buffer never dispatches a typing key, so one
+                    // arriving here means the editor silently fell back to per-character
+                    // server events; count it as the server traffic it is.
+                    if (IsBrowserOwnedTypingKey(e))
+                    {
+                        _clientBufferedTypingUnattached = true;
+                        _textEditorServerKeyDownCallbacks++;
+                    }
+                    else
+                    {
+                        _textEditorClientBufferedCommitCallbacks++;
+                    }
+                    await HandleBatchEditKeyDown(editItem, editField, e);
+                }));
+                builder.AddAttribute(sequence + 8, "OnBlur", EventCallback.Factory.Create(this, async () =>
+                {
+                    _textEditorClientBufferedCommitCallbacks++;
+                    await CommitBatchEdit(editItem, editField);
+                }));
+            }
+            else
+            {
+                builder.AddAttribute(sequence + 14, "ValueChanged", EventCallback.Factory.Create<string?>(this, value =>
+                {
+                    _textEditorServerValueChangedCallbacks++;
+                    UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
+                }));
+                builder.AddAttribute(sequence + 7, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this, async e =>
+                {
+                    _textEditorServerKeyDownCallbacks++;
+                    await HandleBatchEditKeyDown(editItem, editField, e);
+                }));
+                builder.AddAttribute(sequence + 8, "onblur", EventCallback.Factory.Create(this, async () =>
+                {
+                    _textEditorServerBlurCallbacks++;
+                    await CommitBatchEdit(editItem, editField);
+                }));
+            }
             builder.AddAttribute(sequence + 12, "ElementReferenceCaptured", (Action<ElementReference>)CaptureBatchEditInputRef);
             builder.CloseComponent();
         }
@@ -7169,6 +7426,36 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    /// <summary>Keys an attached client-side typing buffer keeps in the browser.</summary>
+    private static bool IsBrowserOwnedTypingKey(KeyboardEventArgs e)
+    {
+        if (e.CtrlKey || e.AltKey || e.MetaKey || string.IsNullOrEmpty(e.Key))
+            return false;
+
+        return e.Key.Length == 1
+            || string.Equals(e.Key, "Backspace", StringComparison.Ordinal)
+            || string.Equals(e.Key, "Delete", StringComparison.Ordinal);
+    }
+
+    /// <summary>Returns text-editor transport counters for this grid instance.</summary>
+    public GridTextEditingDiagnosticsSnapshot GetTextEditingDiagnosticsSnapshot() =>
+        new(
+            _textEditorServerInputCallbacks,
+            _textEditorServerValueChangedCallbacks,
+            _textEditorServerKeyDownCallbacks,
+            _textEditorServerBlurCallbacks,
+            _textEditorClientBufferedCommitCallbacks);
+
+    /// <summary>Clears text-editor transport counters for this grid instance.</summary>
+    public void ResetTextEditingDiagnostics()
+    {
+        _textEditorServerInputCallbacks = 0;
+        _textEditorServerValueChangedCallbacks = 0;
+        _textEditorServerKeyDownCallbacks = 0;
+        _textEditorServerBlurCallbacks = 0;
+        _textEditorClientBufferedCommitCallbacks = 0;
+    }
+
     private void UpdateBatchEditValue(TValue item, string? field, ChangeEventArgs e)
     {
         UpdateBatchEditValue(item, field, e.Value?.ToString() ?? string.Empty);
@@ -7254,6 +7541,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var isHorizontalNavigation = TryGetHorizontalKeyboardNavigation(e, out var backwards, out var allowRowWrap);
         var isVerticalNavigation = TryGetVerticalKeyboardNavigation(e, out var rowDelta);
         var isScrollNavigation = TryGetScrollKeyboardNavigation(e, out var scrollKey);
+        var deferTabMoveToGridHost = isHorizontalNavigation
+            && e.Key == "Tab"
+            && !UsesClientBufferedTextEditing
+            && ResolveBatchEditColumn(sourceField) is { } sourceColumn
+            && !HasEditOptions(sourceColumn, sourceItem);
 
         if (isHorizontalNavigation || isVerticalNavigation || isScrollNavigation)
         {
@@ -7282,6 +7574,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (item != null && colIndex >= 0)
             {
                 RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+                // Text/date editor keydown bubbles to the grid host. Let this
+                // handler commit and preserve the source cell, then let the host
+                // perform the one Tab move. Moving here as well skips a column.
+                // Dropdown editors stop propagation, so they retain this path.
+                if (deferTabMoveToGridHost)
+                {
+                    await FocusGridHostAsync();
+                    return;
+                }
+
                 if (isScrollNavigation)
                     await NavigateByScrollKeyFromActiveCellAsync(scrollKey);
                 else if (isVerticalNavigation)

@@ -19,6 +19,7 @@ export function select(element) {
 }
 
 const replaceOnFirstInputState = new WeakMap();
+const clientBufferedTypingBindings = new WeakMap();
 
 export function enableReplaceOnFirstInput(element) {
     const state = ensureReplaceOnFirstInputState(element);
@@ -307,5 +308,169 @@ export function registerTabCapture(el, spaces) {
         e.preventDefault();
         el.setRangeText(" ".repeat(spaces), el.selectionStart, el.selectionEnd, "end");
         el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+}
+
+// Typing keys never need a server dispatch: the input is uncontrolled (the DOM
+// owns the text) and the host's keydown handler ignores them anyway, so each
+// character was paying a SignalR round trip for nothing — that is the "every
+// character struggles / pulls back" feel, and it made fast Backspace crawl.
+// Blazor listens for keydown at the document root, so stopping propagation on
+// the element itself means the event is never dispatched to .NET. Keys the grid
+// genuinely acts on (Tab/Enter/Escape/arrows/paging/F-keys, or anything with a
+// modifier) are passed straight through, untouched.
+export function suppressTypingKeyDispatch(el) {
+    if (!el || el.dataset.fxTypingKeysLocal === "1") return;
+    el.dataset.fxTypingKeysLocal = "1";
+    el.addEventListener("keydown", e => {
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
+        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete";
+        if (ownedByEditor) e.stopPropagation();
+    });
+}
+
+// Opt-in Blazor Server fast path. The browser owns ordinary text mutations and
+// sends one completed value to TextBoxControl on navigation, Enter, or blur.
+export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys) {
+    if (!el || !dotNetRef) return;
+
+    let binding = clientBufferedTypingBindings.get(el);
+    if (binding) {
+        binding.dotNetRef = dotNetRef;
+        binding.handlesNavigationKeys = !!handlesNavigationKeys;
+        return;
+    }
+
+    binding = {
+        dotNetRef,
+        handlesNavigationKeys: !!handlesNavigationKeys,
+        commitPending: false,
+        composing: false,
+        cleanup: null
+    };
+
+    const commit = (key, event) => {
+        if (binding.commitPending) return;
+        binding.commitPending = true;
+
+        try {
+            const invocation = binding.dotNetRef.invokeMethodAsync(
+                "CommitClientBufferedTypingAsync",
+                el.value ?? "",
+                key,
+                !!event?.shiftKey,
+                !!event?.ctrlKey,
+                !!event?.altKey,
+                !!event?.metaKey);
+
+            Promise.resolve(invocation)
+                .catch(() => { })
+                .finally(() => {
+                    if (el.isConnected)
+                        binding.commitPending = false;
+                });
+        } catch {
+            binding.commitPending = false;
+        }
+    };
+
+    const onKeyDown = event => {
+        if (!binding.handlesNavigationKeys || binding.composing || event.isComposing)
+            return;
+
+        const key = event.key;
+        const controlBoundaryKey = (event.ctrlKey || event.metaKey)
+            && (key === "Home" || key === "End");
+
+        // Preserve application shortcuts such as Ctrl+S; only Ctrl/Cmd+Home/End
+        // belongs to the grid's navigation contract.
+        if ((event.altKey || event.ctrlKey || event.metaKey) && !controlBoundaryKey)
+            return;
+
+        let commits = key === "Enter"
+            || key === "NumpadEnter"
+            || key === "Escape"
+            || key === "Tab"
+            || key === "ArrowUp"
+            || key === "ArrowDown"
+            || key === "PageUp"
+            || key === "PageDown"
+            || controlBoundaryKey;
+
+        const staysInEditor = key.length === 1
+            || key === "Backspace"
+            || key === "Delete"
+            || key === "ArrowLeft"
+            || key === "ArrowRight"
+            || key === "Home"
+            || key === "End";
+
+        if (!commits) {
+            if (staysInEditor)
+                event.stopPropagation();
+            return;
+        }
+
+        event.stopPropagation();
+        event.preventDefault();
+        commit(key, event);
+    };
+
+    const stopServerDispatch = event => event.stopPropagation();
+    const onBlur = event => {
+        event.stopPropagation();
+        commit("Blur", event);
+    };
+    const onCompositionStart = () => { binding.composing = true; };
+    const onCompositionEnd = () => { binding.composing = false; };
+
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("input", stopServerDispatch);
+    el.addEventListener("change", stopServerDispatch);
+    el.addEventListener("blur", onBlur);
+    el.addEventListener("compositionstart", onCompositionStart);
+    el.addEventListener("compositionend", onCompositionEnd);
+
+    binding.cleanup = () => {
+        el.removeEventListener("keydown", onKeyDown);
+        el.removeEventListener("input", stopServerDispatch);
+        el.removeEventListener("change", stopServerDispatch);
+        el.removeEventListener("blur", onBlur);
+        el.removeEventListener("compositionstart", onCompositionStart);
+        el.removeEventListener("compositionend", onCompositionEnd);
+    };
+
+    clientBufferedTypingBindings.set(el, binding);
+    el.dataset.fxClientBufferedEditor = "1";
+}
+
+export function disableClientBufferedTyping(el) {
+    if (!el) return;
+    const binding = clientBufferedTypingBindings.get(el);
+    if (binding?.cleanup)
+        binding.cleanup();
+    clientBufferedTypingBindings.delete(el);
+    delete el.dataset.fxClientBufferedEditor;
+}
+
+
+// A native paste is clipped by the maxlength attribute BEFORE any input event
+// fires, so the server can never learn that characters were dropped. This
+// listener measures the clipboard against the room left and reports the loss,
+// which is what lets a host say "pasted value was shortened" instead of the
+// user discovering it later (or hitting a database truncation error).
+export function enableMaxLengthPasteNotice(el, dotNetRef, maxLength) {
+    if (!el || el.dataset.fxPasteNotice === "1" || !(maxLength > 0)) return;
+    el.dataset.fxPasteNotice = "1";
+    el.addEventListener("paste", e => {
+        try {
+            const pasted = (e.clipboardData || window.clipboardData)?.getData("text") ?? "";
+            if (!pasted) return;
+            const selected = Math.abs((el.selectionEnd ?? 0) - (el.selectionStart ?? 0));
+            const room = maxLength - (el.value.length - selected);
+            if (pasted.length > room) {
+                dotNetRef.invokeMethodAsync("OnPasteTruncatedAsync", pasted.length, maxLength);
+            }
+        } catch { /* clipboard unavailable — the clamp still applies */ }
     });
 }

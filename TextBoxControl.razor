@@ -8,7 +8,8 @@
 
 @if (Multiline)
 {
-    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu)
+    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
+        && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
     {
         <InputTextArea class="@ResolvedCssClass"
                        Value="@Value"
@@ -22,6 +23,7 @@
                   value="@EffectiveValue"
                   @oninput="OnNativeInput"
                   @onchange="OnNativeChange"
+                  @onblur="@BlurDispatch"
                   @onfocus="OnInputFocus"
                   @ondblclick="OnInputDoubleClick"
                   @oncontextmenu="OpenTextContextMenuAsync"
@@ -30,7 +32,8 @@
                   @ref="_inputElement"
                   @onclick:stopPropagation="true"
                   @onmousedown:stopPropagation="true"
-                  @onkeydown:stopPropagation="true"
+                  @onkeydown="@KeyDownDispatch"
+                  @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
                   @attributes="MergedAttributes"></textarea>
     }
 }
@@ -43,6 +46,7 @@ else
                    value="@EffectiveValue"
                    @oninput="OnNativeInput"
                    @onchange="OnNativeChange"
+                   @onblur="@BlurDispatch"
                    @onfocus="OnInputFocus"
                    @ondblclick="OnInputDoubleClick"
                    @oncontextmenu="OpenTextContextMenuAsync"
@@ -51,7 +55,8 @@ else
                    @ref="_inputElement"
                    @onclick:stopPropagation="true"
                    @onmousedown:stopPropagation="true"
-                   @onkeydown:stopPropagation="true"
+                   @onkeydown="@KeyDownDispatch"
+                   @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
                    @attributes="MergedAttributes" />
             <button type="button"
                     class="fx-textbox-password-toggle"
@@ -82,7 +87,8 @@ else
             </button>
         </div>
     }
-    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu)
+    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
+             && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
     {
         <InputText class="@ResolvedCssClass"
                    Value="@Value"
@@ -92,10 +98,18 @@ else
     }
     else
     {
+        @* Propagation policy matches the textarea/password branches. It must stay
+           CONDITIONAL: the grid's cell editor supplies OnKeyDown, and pages rely on
+           keys bubbling from an open editor to their own handlers (FCommunities
+           Ctrl+S / Ctrl+Delete, FItems OnHostKeyDown, the grid's EditOnEnterKey and
+           "..." picker paths). The per-character cost is removed by
+           TypingKeysStayLocal instead, which drops only printable/Backspace/Delete
+           at the DOM level and leaves shortcut keys free to bubble. *@
         <input class="@ResolvedCssClass"
                value="@EffectiveValue"
                @oninput="OnNativeInput"
                @onchange="OnNativeChange"
+               @onblur="@BlurDispatch"
                @onfocus="OnInputFocus"
                @ondblclick="OnInputDoubleClick"
                @oncontextmenu="OpenTextContextMenuAsync"
@@ -104,7 +118,8 @@ else
                @ref="_inputElement"
                @onclick:stopPropagation="true"
                @onmousedown:stopPropagation="true"
-               @onkeydown:stopPropagation="true"
+               @onkeydown="@KeyDownDispatch"
+               @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
                @attributes="MergedAttributes" />
     }
 }
@@ -213,6 +228,7 @@ else
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
     [Parameter] public bool UpdateOnInput { get; set; }
     [Parameter] public Action<string?>? InputValueChanged { get; set; }
+    [Parameter] public TextBoxTypingBehavior TypingBehavior { get; set; } = TextBoxTypingBehavior.ServerBacked;
 
     /// <summary>UNCONTROLLED mode (no JS). The rendered <c>value</c> attribute is
     /// captured ONCE and never re-applied, so the DOM owns the text while the user
@@ -229,9 +245,99 @@ else
     [Parameter] public bool SelectAllOnDoubleClick { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
+    [Parameter] public EventCallback OnBlur { get; set; }
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    /// <summary>Printable keys plus Backspace/Delete are handled entirely in the
+    /// browser and never dispatched to the server. Only for UNCONTROLLED editors
+    /// whose host does not act on typing keys (the grid's in-cell editor): it
+    /// removes one SignalR round trip per character.</summary>
+    [Parameter] public bool TypingKeysStayLocal { get; set; }
+
+    /// <summary>Bound only when a host is actually listening. Blazor dispatches every
+    /// bound keydown to the server, so an always-bound handler cost one SignalR round
+    /// trip per character on every textbox in the app for a handler that did nothing.</summary>
+    private Func<KeyboardEventArgs, Task>? KeyDownDispatch
+        => OnKeyDown.HasDelegate ? OnNativeKeyDown : null;
+
+    private EventCallback<FocusEventArgs> BlurDispatch =>
+        OnBlur.HasDelegate
+            ? EventCallback.Factory.Create<FocusEventArgs>(this, OnNativeBlur)
+            : default;
+
+    /// <summary>Raised when a PASTE was clipped by MaxLength. The browser clamps
+    /// before any input event, so this is the only way a host can learn that
+    /// characters were dropped. Args: (pastedLength, maxLength).</summary>
+    [Parameter] public EventCallback<(int PastedLength, int MaxLength)> OnPasteTruncated { get; set; }
+
+    private DotNetObjectReference<TextBoxControl>? _pasteNoticeRef;
+    private DotNetObjectReference<TextBoxControl>? _clientBufferedTypingRef;
+
+    [JSInvokable]
+    public async Task OnPasteTruncatedAsync(int pastedLength, int maxLength)
+    {
+        if (OnPasteTruncated.HasDelegate)
+            await OnPasteTruncated.InvokeAsync((pastedLength, maxLength));
+    }
+
+    private async Task OnNativeKeyDown(KeyboardEventArgs e)
+    {
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+    }
+
+    private Task OnNativeBlur(FocusEventArgs _) =>
+        OnBlur.HasDelegate ? OnBlur.InvokeAsync() : Task.CompletedTask;
+
+    [JSInvokable]
+    public Task CommitClientBufferedTypingAsync(
+        string? value,
+        string key,
+        bool shiftKey,
+        bool ctrlKey,
+        bool altKey,
+        bool metaKey)
+    {
+        return InvokeAsync(async () =>
+        {
+            if (!string.Equals(key, "Escape", StringComparison.Ordinal))
+            {
+                var committedValue = value ?? string.Empty;
+                if (MaxLength is > 0 && committedValue.Length > MaxLength.Value)
+                    committedValue = committedValue[..MaxLength.Value];
+
+                Value = committedValue;
+                _uncontrolledValue = committedValue;
+                _uncontrolledInitialized = true;
+                _suppressNextNativeInputRender = true;
+                InputValueChanged?.Invoke(committedValue);
+                if (ValueChanged.HasDelegate)
+                    await ValueChanged.InvokeAsync(committedValue);
+            }
+
+            if (string.Equals(key, "Blur", StringComparison.Ordinal))
+            {
+                if (OnBlur.HasDelegate)
+                    await OnBlur.InvokeAsync();
+                return;
+            }
+
+            if (OnKeyDown.HasDelegate)
+            {
+                await OnKeyDown.InvokeAsync(new KeyboardEventArgs
+                {
+                    Key = key,
+                    ShiftKey = shiftKey,
+                    CtrlKey = ctrlKey,
+                    AltKey = altKey,
+                    MetaKey = metaKey
+                });
+            }
+        });
+    }
 
     private ElementReference _inputElement;
     private IJSObjectReference? _controlJsModule;
@@ -241,6 +347,8 @@ else
     private TextContextMenuState _textContextMenuState = new();
     private bool _suppressNextNativeInputRender;
     private bool _showPassword;
+    private bool _clientBufferedTypingAttached;
+    private bool _clientBufferedHandlesNavigationKeys;
 
     // Uncontrolled-mode: the value rendered ONCE, then never re-applied.
     private string? _uncontrolledValue;
@@ -249,7 +357,10 @@ else
     /// <summary>The value rendered into the input. In Uncontrolled mode this is the
     /// once-captured starting value (stable across re-renders); otherwise it tracks
     /// the live <see cref="Value"/> as before.</summary>
-    private string? EffectiveValue => Uncontrolled ? _uncontrolledValue : Value;
+    private bool UsesBrowserOwnedValue =>
+        Uncontrolled || TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+
+    private string? EffectiveValue => UsesBrowserOwnedValue ? _uncontrolledValue : Value;
 
     private bool IsPasswordInput =>
         !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
@@ -260,10 +371,15 @@ else
 
     protected override void OnParametersSet()
     {
-        if (Uncontrolled && !_uncontrolledInitialized)
+        if (UsesBrowserOwnedValue && !_uncontrolledInitialized)
         {
             _uncontrolledValue = Value;
             _uncontrolledInitialized = true;
+        }
+        else if (!UsesBrowserOwnedValue)
+        {
+            _uncontrolledValue = null;
+            _uncontrolledInitialized = false;
         }
     }
 
@@ -282,20 +398,67 @@ else
     {
         ElementReferenceCaptured?.Invoke(_inputElement);
 
+        var wantsClientBufferedTyping = TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+        var handlesNavigationKeys = OnKeyDown.HasDelegate;
+        var clientBindingChanged = wantsClientBufferedTyping != _clientBufferedTypingAttached
+            || (wantsClientBufferedTyping
+                && handlesNavigationKeys != _clientBufferedHandlesNavigationKeys);
+
         // Only AutoFocus seizes focus on load. SelectOnFocus must NOT auto-focus on render — otherwise a
         // second SelectOnFocus field (e.g. Description) steals focus from the AutoFocus field (Number).
         // SelectOnFocus still selects the text when the user actually focuses the field (OnInputFocus).
-        if (firstRender && (AutoFocus || ReplaceOnFirstInput))
+        var needsFirstRenderSetup = firstRender
+            && (AutoFocus || ReplaceOnFirstInput || TypingKeysStayLocal
+                || (MaxLength is > 0 && OnPasteTruncated.HasDelegate));
+        if (!needsFirstRenderSetup && !clientBindingChanged)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        if (clientBindingChanged)
         {
-            var module = await GetControlJsModuleAsync();
-            if (module != null)
+            try
             {
-                if (ReplaceOnFirstInput)
-                    await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
-                if (AutoFocus)
-                    await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+                if (wantsClientBufferedTyping)
+                {
+                    _clientBufferedTypingRef ??= DotNetObjectReference.Create(this);
+                    await module.InvokeVoidAsync(
+                        "enableClientBufferedTyping",
+                        _inputElement,
+                        _clientBufferedTypingRef,
+                        handlesNavigationKeys);
+                    _clientBufferedTypingAttached = true;
+                    _clientBufferedHandlesNavigationKeys = handlesNavigationKeys;
+                }
+                else
+                {
+                    await module.InvokeVoidAsync("disableClientBufferedTyping", _inputElement);
+                    _clientBufferedTypingAttached = false;
+                    _clientBufferedHandlesNavigationKeys = false;
+                }
+            }
+            catch
+            {
+                _clientBufferedTypingAttached = false;
             }
         }
+
+        if (!needsFirstRenderSetup)
+            return;
+
+        if (ReplaceOnFirstInput)
+            await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+        if (TypingKeysStayLocal && !wantsClientBufferedTyping)
+            await module.InvokeVoidAsync("suppressTypingKeyDispatch", _inputElement);
+        if (MaxLength is > 0 && OnPasteTruncated.HasDelegate)
+        {
+            _pasteNoticeRef ??= DotNetObjectReference.Create(this);
+            await module.InvokeVoidAsync("enableMaxLengthPasteNotice", _inputElement, _pasteNoticeRef, MaxLength.Value);
+        }
+        if (AutoFocus)
+            await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
     }
 
     private string ResolvedCssClass
@@ -369,7 +532,7 @@ else
     {
         var typed = e.Value?.ToString();
 
-        if (Uncontrolled)
+        if (UsesBrowserOwnedValue)
         {
             // UNCONTROLLED (no JS): the DOM already shows exactly what the user typed
             // and the rendered value attribute is a fixed string, so we DON'T touch
@@ -514,7 +677,7 @@ else
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", $"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js");
+                "import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js"));
         }
         catch
         {
@@ -524,6 +687,15 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        if (_clientBufferedTypingAttached && _controlJsModule != null)
+        {
+            try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }
+            catch { }
+        }
+        _clientBufferedTypingRef?.Dispose();
+        _clientBufferedTypingRef = null;
+        _pasteNoticeRef?.Dispose();
+        _pasteNoticeRef = null;
         if (_controlJsModule != null)
         {
             try { await _controlJsModule.DisposeAsync(); }
