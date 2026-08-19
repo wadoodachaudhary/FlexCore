@@ -53,11 +53,17 @@
 
         @if (_isOpen && Enabled)
         {
-            <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
-            
-            <div @ref="_dropdownElement"
+            @* The manual popover promotes this wrapper to the browser top layer.
+               It remains in Blazor's DOM tree, unlike a body portal, so normal
+               render/disposal cleanup remains safe. *@
+            <div @ref="_popupLayerElement"
                  @key="_dropdownOpenKey"
-                 class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
+                 popover="manual"
+                 class="fx-datepicker-popup-layer">
+                <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
+
+                <div @ref="_dropdownElement"
+                     class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
                 <!-- Left Section: Main Calendar -->
                 <div class="fx-calendar-main">
                     <button type="button" class="fx-nav-btn fx-nav-prev" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
@@ -206,6 +212,7 @@
                         </div>
                     </div>
                 }
+                </div>
             </div>
         }
     </div>
@@ -266,6 +273,7 @@
     private bool _isOpen = false;
     private bool _expanded = false;
     private ElementReference _hostElement;
+    private ElementReference _popupLayerElement;
     private ElementReference _dropdownElement;
     private IJSObjectReference? _controlJsModule;
     private int _dropdownOpenKey;
@@ -334,7 +342,11 @@
         try
         {
             _controlJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", ControlJsModulePath);
-            await _controlJsModule.InvokeVoidAsync("positionDatePickerDropdown", _hostElement, _dropdownElement);
+            await _controlJsModule.InvokeVoidAsync(
+                "positionDatePickerDropdown",
+                _hostElement,
+                _dropdownElement,
+                _popupLayerElement);
         }
         catch
         {
