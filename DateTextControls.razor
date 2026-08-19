@@ -21,6 +21,8 @@
                    Uncontrolled="@Uncontrolled"
                    InputValueChanged="@InputValueChanged"
                    ElementReferenceCaptured="@ElementReferenceCaptured"
+                   OnKeyDown="@OnKeyDown"
+                   CalendarButtonKeyDown="@CalendarButtonKeyDown"
                    @attributes="AdditionalAttributes" />
 
 @code {
@@ -44,6 +46,8 @@
     [Parameter] public bool Uncontrolled { get; set; }
     [Parameter] public Action<string?>? InputValueChanged { get; set; }
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> CalendarButtonKeyDown { get; set; }
 
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
@@ -133,7 +137,7 @@
                 ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd",
                 "MM-dd-yyyy", "M-d-yyyy", "MMM d, yyyy", "MMMM d, yyyy",
                 "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy",
-                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy"
+                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy", "MMddyy"
             };
 
         return (ParseFormats ?? Array.Empty<string>())

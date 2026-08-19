@@ -231,7 +231,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>
     /// Selects the transport used by generated TextBoxControl cell editors.
     /// </summary>
-    [Parameter] public TextBoxTypingBehavior TextEditorTypingBehavior { get; set; } = TextBoxTypingBehavior.ClientBuffered;
+    [Parameter] public TextBoxTypingBehavior TextEditorTypingBehavior { get; set; } = TextBoxTypingBehavior.ServerBacked;
     /// <summary>
     /// Overrides <see cref="TextEditorTypingBehavior"/> for hosts that switch
     /// transport directly. Null follows <see cref="TextEditorTypingBehavior"/>.
@@ -832,7 +832,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private bool IsCellSelectionRow(TValue item, int rowIndex)
     {
-        if (SelectionSettingsRef?.Mode != SelectionMode.Cell || _selectedCells.Count == 0)
+        // Not gated on SelectionMode.Cell: a Row-mode grid whose columns set
+        // AllowCellDragSelection really does fill _selectedCells (batch edit fans
+        // out across them), and requiring Cell mode left those rows with no
+        // selection paint at all while the selection itself was live.
+        if (_selectedCells.Count == 0)
             return false;
 
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
@@ -1159,6 +1163,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private CancellationTokenSource? _searchCts;
     private string? _exportStatusMessage;
     private int _exportStatusGeneration;
+    private string? _validationStatusMessage;
 
     // ── Grouping State ───────────────────────────────────────────────────
     private readonly List<GroupDescriptor> _groupDescriptors = new();
@@ -6989,6 +6994,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 7, "Uncontrolled", true);
             builder.AddAttribute(sequence + 8, "InputValueChanged", (Action<string?>)(v => UpdateBatchEditValue(editItem, editField, v ?? string.Empty)));
             builder.AddAttribute(sequence + 9, "ElementReferenceCaptured", (Action<ElementReference>)CaptureBatchEditInputRef);
+            builder.AddAttribute(sequence + 10, "OnKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
+            builder.AddAttribute(sequence + 11, "ShowCalendarButton", col.OpenDateCalendarOnDoubleClick);
+            builder.AddAttribute(sequence + 12, "CalendarButtonKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchDateCalendarButtonKeyDown(editItem, editField, e)));
             builder.CloseComponent();
         }
         else
@@ -7112,6 +7120,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var batchEditColumn = ResolveBatchEditColumn(field);
         var currentValue = _batchEditValue ?? "";
         var newValue = ApplyColumnMaxLength(currentValue, batchEditColumn);
+        if (batchEditColumn?.Type == ColumnType.Date)
+        {
+            if (string.IsNullOrWhiteSpace(newValue))
+            {
+                _validationStatusMessage = null;
+            }
+            else if (ParseBatchEditDateValue(newValue) is { } parsedDate)
+            {
+                // HHM-825: date cells accept compact keyboard entry (for example,
+                // 020226 or 08202026) and commit the normal formatted date value.
+                newValue = FormatBatchEditDateValue(parsedDate);
+                _validationStatusMessage = null;
+            }
+            else
+            {
+                _validationStatusMessage = "Invalid date. Use MM/DD/YYYY, MMDDYYYY, or MMDDYY.";
+            }
+        }
         if (!string.Equals(newValue, currentValue, StringComparison.Ordinal))
             _batchEditValue = newValue;
 
@@ -7320,8 +7346,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (string.IsNullOrWhiteSpace(value))
             return null;
 
-        return DateTime.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.None, out var current)
-            || DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out current)
+        var trimmed = value.Trim();
+        var compactFormats = new[] { "MMddyyyy", "MMddyy", "yyyyMMdd" };
+        if (DateTime.TryParseExact(trimmed, compactFormats, CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var compact))
+        {
+            return compact;
+        }
+
+        return DateTime.TryParse(trimmed, CultureInfo.CurrentCulture, DateTimeStyles.None, out var current)
+            || DateTime.TryParse(trimmed, CultureInfo.InvariantCulture, DateTimeStyles.None, out current)
             ? current
             : null;
     }
@@ -7638,6 +7672,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await FocusGridHostAsync();
             await InvokeAsync(StateHasChanged);
         }
+    }
+
+    private async Task HandleBatchDateCalendarButtonKeyDown(TValue sourceItem, string? sourceField, KeyboardEventArgs e)
+    {
+        if (e.Key != "Tab" || !IsActiveBatchEditSource(sourceItem, sourceField))
+            return;
+
+        _pendingBatchEditFocus = false;
+        var item = _batchEditItem;
+        var rowIndex = _batchEditRowIndex;
+        var colIndex = ResolveVisibleColumnIndex(_batchEditField);
+
+        await CommitBatchEdit();
+
+        if (item == null || rowIndex < 0 || colIndex < 0)
+        {
+            await FocusGridHostAsync();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+        await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards: false, allowRowWrap: true);
+        await FocusGridHostAsync();
     }
 
     private async Task<bool> TryCommitBatchEditAndExtendSelectionWithShiftArrowAsync(KeyboardEventArgs e)

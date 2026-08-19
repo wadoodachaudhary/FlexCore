@@ -20,22 +20,36 @@
                    @ref="_inputElement"
                    value="@_inputText"
                    @oninput="OnInputTextChange"
+                   @onfocus="HandleInputFocus"
                    @onblur="OnInputBlur"
                    @onkeydown="OnInputKeyDown"
                    @ondblclick="OnInputDoubleClick"
                    placeholder="@ResolvedPlaceholder"
+                   aria-invalid="@(_validationMessage != null ? "true" : null)"
                    disabled="@(!Enabled)" />
             @if (ShowTriggerButton)
             {
                 <button type="button"
                         class="fx-datepicker-trigger"
+                        tabindex="@(_skipCalendarButtonOnNextTab ? -1 : 0)"
                         @onclick="ToggleDropdown"
+                        @onfocus="HandleTriggerFocus"
+                        @onblur="HandleTriggerBlur"
+                        @onkeydown="HandleTriggerKeyDown"
+                        @onkeydown:preventDefault="CalendarButtonKeyDown.HasDelegate"
                         disabled="@(!Enabled)"
                         aria-label="Toggle calendar">
                     📅
                 </button>
             }
         </div>
+
+        @if (_validationMessage != null)
+        {
+            <div class="fx-datepicker-validation-pill" role="alert" aria-live="assertive">
+                @_validationMessage
+            </div>
+        }
 
         @if (_isOpen && Enabled)
         {
@@ -77,12 +91,14 @@
                                             var isSelected = Value.HasValue && date.Date == Value.Value.Date;
                                             var isToday = date.Date == DateTime.Today;
                                             var isDisabled = IsDateDisabled(date);
+                                            var isKeyboardFocused = _isOpen && date.Date == _keyboardDate.Date;
                                             var cellClass = string.Join(" ", new[]
                                             {
                                                 "fx-day-cell",
                                                 isCurrentMonth ? "in-month" : "out-month",
                                                 isSelected ? "selected" : "",
                                                 isToday ? "today" : "",
+                                                isKeyboardFocused ? "keyboard-focused" : "",
                                                 isDisabled ? "disabled" : ""
                                             }.Where(c => !string.IsNullOrEmpty(c)));
 
@@ -226,6 +242,14 @@
     /// <summary>Hands the input element to the host (grid focus handling).</summary>
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
 
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
+    /// <summary>
+    /// Handles keyboard navigation away from the calendar trigger. GridControl
+    /// uses this to commit the date editor and continue to the next cell after
+    /// the trigger has received its own Tab stop.
+    /// </summary>
+    [Parameter] public EventCallback<KeyboardEventArgs> CalendarButtonKeyDown { get; set; }
+
     private string ResolvedFormat => Format ?? (ShowTime ? "MM/dd/yyyy hh:mm tt" : "MM/dd/yyyy");
     private string ResolvedPlaceholder => Placeholder ?? ResolvedFormat;
     private string ViewMonthYearText => new DateTime(_viewYear, _viewMonth, 1).ToString("MMMM yyyy", CultureInfo.CurrentCulture);
@@ -236,6 +260,7 @@
         : "fx-datepicker-input-group fx-datepicker-input-group-no-trigger";
 
     private string _inputText = "";
+    private string? _validationMessage;
     private bool _uncontrolledInitialized;
     private ElementReference _inputElement;
     private bool _isOpen = false;
@@ -244,6 +269,10 @@
     private ElementReference _dropdownElement;
     private IJSObjectReference? _controlJsModule;
     private int _dropdownOpenKey;
+    private bool _focusInputAfterOpen;
+    private bool _tabbingToTrigger;
+    private bool _skipCalendarButtonOnNextTab;
+    private DateTime _keyboardDate = DateTime.Today;
 
     // View State (what month/year the popup calendar is currently focused on)
     private int _viewMonth = DateTime.Today.Month;
@@ -287,7 +316,14 @@
             ElementReferenceCaptured?.Invoke(_inputElement);
 
         if (_isOpen && Enabled)
+        {
+            if (_focusInputAfterOpen)
+            {
+                _focusInputAfterOpen = false;
+                try { await _inputElement.FocusAsync(preventScroll: true); } catch { }
+            }
             await PositionDropdownAsync();
+        }
     }
 
     private static string ControlJsModulePath =>
@@ -325,10 +361,13 @@
 
     private void OpenDropdown()
     {
+        _skipCalendarButtonOnNextTab = false;
         _expanded = false;
         _dropdownOpenKey++;
         _isOpen = true;
-        var focusDate = Value ?? DateTime.Today;
+        _focusInputAfterOpen = true;
+        var focusDate = ClampKeyboardDate(Value ?? DateTime.Today);
+        _keyboardDate = focusDate.Date;
         _viewMonth = focusDate.Month;
         _viewYear = focusDate.Year;
         _decadeStart = (_viewYear / 12) * 12;
@@ -351,13 +390,15 @@
 
     private void OnInputTextChange(ChangeEventArgs e)
     {
+        _skipCalendarButtonOnNextTab = false;
         _inputText = e.Value?.ToString() ?? "";
+        _validationMessage = null;
         InputValueChanged?.Invoke(_inputText);
     }
 
     private async Task OnInputBlur()
     {
-        if (_isOpen)
+        if (_isOpen || _tabbingToTrigger || _skipCalendarButtonOnNextTab)
             return;
 
         await ParseInputText(true);
@@ -365,14 +406,136 @@
 
     private async Task OnInputKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter")
+        if (Enabled
+            && ShowTriggerButton
+            && !_isOpen
+            && !_skipCalendarButtonOnNextTab
+            && e.Key == "Tab"
+            && !e.ShiftKey)
+        {
+            _tabbingToTrigger = true;
+            return;
+        }
+
+        _tabbingToTrigger = false;
+
+        if (Enabled && (string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase)
+            || (e.AltKey && e.Key == "ArrowDown")))
+        {
+            ToggleDropdown();
+            return;
+        }
+
+        if (_isOpen)
+        {
+            switch (e.Key)
+            {
+                case "ArrowLeft":
+                    MoveKeyboardDateByDays(-1);
+                    return;
+                case "ArrowRight":
+                    MoveKeyboardDateByDays(1);
+                    return;
+                case "ArrowUp":
+                    MoveKeyboardDateByDays(-7);
+                    return;
+                case "ArrowDown":
+                    MoveKeyboardDateByDays(7);
+                    return;
+                case "PageUp":
+                    MoveKeyboardDateByMonths(e.ShiftKey ? -12 : -1);
+                    return;
+                case "PageDown":
+                    MoveKeyboardDateByMonths(e.ShiftKey ? 12 : 1);
+                    return;
+                case "Home":
+                    MoveKeyboardDateByDays(-(int)_keyboardDate.DayOfWeek);
+                    return;
+                case "End":
+                    MoveKeyboardDateByDays(6 - (int)_keyboardDate.DayOfWeek);
+                    return;
+                case "Enter":
+                case "NumpadEnter":
+                case " ":
+                case "Spacebar":
+                    await SelectDay(_keyboardDate);
+                    return;
+                case "Escape":
+                    CloseDropdown();
+                    return;
+                case "Tab":
+                    CloseDropdown();
+                    break;
+            }
+        }
+
+        if (e.Key is "Enter" or "NumpadEnter")
         {
             await ParseInputText(true);
+            _skipCalendarButtonOnNextTab = _validationMessage == null;
         }
         else if (e.Key == "Escape")
         {
             CloseDropdown();
         }
+
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+    }
+
+    private void HandleTriggerFocus()
+    {
+        _tabbingToTrigger = false;
+    }
+
+    private void HandleInputFocus()
+    {
+        _skipCalendarButtonOnNextTab = false;
+    }
+
+    private async Task HandleTriggerBlur()
+    {
+        if (!_isOpen && !CalendarButtonKeyDown.HasDelegate)
+            await ParseInputText(true);
+    }
+
+    private async Task HandleTriggerKeyDown(KeyboardEventArgs e)
+    {
+        if (!Enabled)
+            return;
+
+        var isActivationKey = e.Key is "Enter" or "NumpadEnter" or " " or "Spacebar";
+        if (isActivationKey)
+        {
+            if (CalendarButtonKeyDown.HasDelegate)
+                ToggleDropdown();
+            return;
+        }
+
+        if (string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase)
+            || (e.AltKey && e.Key == "ArrowDown"))
+        {
+            ToggleDropdown();
+            return;
+        }
+
+        if (e.Key == "Escape" && _isOpen)
+        {
+            CloseDropdown();
+            try { await _inputElement.FocusAsync(preventScroll: true); } catch { }
+            return;
+        }
+
+        if (e.Key != "Tab" || !CalendarButtonKeyDown.HasDelegate)
+            return;
+
+        if (e.ShiftKey)
+        {
+            try { await _inputElement.FocusAsync(preventScroll: true); } catch { }
+            return;
+        }
+
+        await CalendarButtonKeyDown.InvokeAsync(e);
     }
 
     private void OnInputDoubleClick()
@@ -385,6 +548,7 @@
     {
         if (string.IsNullOrWhiteSpace(_inputText))
         {
+            _validationMessage = null;
             await UpdateValue(null);
             return;
         }
@@ -393,6 +557,7 @@
 
         if (DateTime.TryParseExact(_inputText.Trim(), formats, EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var parsed))
         {
+            _validationMessage = null;
             await UpdateValue(parsed);
             if (formatIfValid)
             {
@@ -403,6 +568,7 @@
                  || DateTime.TryParse(_inputText.Trim(), CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out parsedFallback)
                  || DateTime.TryParse(_inputText.Trim(), CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out parsedFallback))
         {
+            _validationMessage = null;
             await UpdateValue(parsedFallback);
             if (formatIfValid)
             {
@@ -411,8 +577,10 @@
         }
         else
         {
-            // Revert on invalid typing
-            _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
+            _validationMessage = ShowTime
+                ? "Enter a valid date and time."
+                : "Invalid date. Use MM/DD/YYYY, MMDDYYYY, or MMDDYY.";
+            // Keep the invalid text visible so the user can correct it.
         }
     }
 
@@ -433,7 +601,7 @@
                 ResolvedFormat, "MM/dd/yyyy", "M/d/yyyy", "yyyy-MM-dd",
                 "MM-dd-yyyy", "M-d-yyyy", "MMM d, yyyy", "MMMM d, yyyy",
                 "dd-MMM-yy", "d-MMM-yy", "dd-MMM-yyyy", "d-MMM-yyyy",
-                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy"
+                "dd/MM/yyyy", "d/M/yyyy", "yyyyMMdd", "MMddyyyy", "MMddyy"
             };
 
         return (ParseFormats ?? Array.Empty<string>())
@@ -445,6 +613,7 @@
 
     private async Task UpdateValue(DateTime? newValue)
     {
+        _validationMessage = null;
         if (newValue.HasValue)
         {
             if (MinDate.HasValue && newValue < MinDate.Value)
@@ -539,6 +708,34 @@
         if (MinDate.HasValue && date.Date < MinDate.Value.Date) return true;
         if (MaxDate.HasValue && date.Date > MaxDate.Value.Date) return true;
         return false;
+    }
+
+    private DateTime ClampKeyboardDate(DateTime date)
+    {
+        var clamped = date.Date;
+        if (MinDate.HasValue && clamped < MinDate.Value.Date)
+            clamped = MinDate.Value.Date;
+        if (MaxDate.HasValue && clamped > MaxDate.Value.Date)
+            clamped = MaxDate.Value.Date;
+        return clamped;
+    }
+
+    private void MoveKeyboardDateByDays(int days)
+    {
+        SetKeyboardDate(_keyboardDate.AddDays(days));
+    }
+
+    private void MoveKeyboardDateByMonths(int months)
+    {
+        SetKeyboardDate(_keyboardDate.AddMonths(months));
+    }
+
+    private void SetKeyboardDate(DateTime date)
+    {
+        _keyboardDate = ClampKeyboardDate(date);
+        _viewMonth = _keyboardDate.Month;
+        _viewYear = _keyboardDate.Year;
+        _decadeStart = (_viewYear / 12) * 12;
     }
 
     private async Task SelectDay(DateTime date)

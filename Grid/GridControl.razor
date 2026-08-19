@@ -28,6 +28,14 @@
         </div>
     }
 
+
+    @if (!string.IsNullOrWhiteSpace(_validationStatusMessage))
+    {
+        <div class="fx-grid-validation-status-pill" role="alert" aria-live="assertive">
+            @_validationStatusMessage
+        </div>
+    }
+
     @* ── Toolbar ──────────────────────────────────────────────── *@
     @* Built-in grid toolbar. Honors custom Toolbar items / ShowSearchBar. *@
     @if (ShouldRenderToolbar)
