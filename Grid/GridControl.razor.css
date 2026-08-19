@@ -107,6 +107,29 @@
     animation: fx-grid-export-pill-in 140ms ease-out;
 }
 
+.fx-grid-validation-status-pill {
+    position: fixed;
+    top: 12px;
+    right: 16px;
+    z-index: 3001;
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    max-width: min(460px, calc(100vw - 32px));
+    padding: 3px 12px;
+    border: 1px solid #b83b3b;
+    border-radius: 999px;
+    background: #fff0f0;
+    color: #8f1717;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    pointer-events: none;
+    white-space: nowrap;
+    animation: fx-grid-export-pill-in 140ms ease-out;
+}
+
 @keyframes fx-grid-export-pill-in {
     from {
         opacity: 0;
@@ -3584,6 +3607,12 @@ td.fx-drag-preview-cell {
     background: #12351c;
     border-color: #4d8a57;
     color: #d7f7dc;
+}
+
+.fx-grid.fx-grid-dark .fx-grid-validation-status-pill {
+    background: #451b1b;
+    border-color: #b95a5a;
+    color: #ffdede;
 }
 
 .fx-grid.fx-grid-dark .fx-header-cell,
