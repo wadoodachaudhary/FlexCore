@@ -1634,8 +1634,22 @@ export function unregisterGridWindowScroll(scrollEl) {
     }
 }
 
-export function positionDatePickerDropdown(hostEl, dropdownEl) {
+export function positionDatePickerDropdown(hostEl, dropdownEl, popupLayerEl) {
     if (!hostEl || !dropdownEl) return;
+
+    // A manual Popover is painted in the browser's top layer, outside every
+    // grid/table/overflow stacking context, without physically moving the
+    // Blazor-owned nodes. Older browsers simply retain the fixed-position
+    // fallback below.
+    if (popupLayerEl && typeof popupLayerEl.showPopover === "function") {
+        try {
+            if (!popupLayerEl.matches(":popover-open")) {
+                popupLayerEl.showPopover();
+            }
+        } catch {
+            // Keep the existing fixed-position fallback.
+        }
+    }
 
     const margin = 4;
     const hostRect = hostEl.getBoundingClientRect();

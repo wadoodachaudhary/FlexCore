@@ -1000,6 +1000,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // while the user is typing.
     private bool _pendingBatchEditSelectAll;
     private double? _pendingBatchEditClientX;
+    // Key events already sent to the grid host can arrive after focus has
+    // moved to the newly mounted editor. Keep accepting that in-flight burst
+    // until the editor itself reports a key; unlike the focus flag, this does
+    // not cause later renders to refocus or reselect the input.
+    private bool _batchEditHostKeyHandoffOpen;
     // True while OnAfterRenderAsync is applying focus/selection to a freshly
     // mounted batch editor (owner editor fix 2026-07-24) — blocks re-entry from
     // renders that occur during the await.
@@ -3450,6 +3455,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
         _pendingBatchEditClientX = null;
+        _batchEditHostKeyHandoffOpen = false;
         _pendingBatchEditScrollIntoView = false;
         ClearKeyboardNavigationSource();
     }
@@ -6280,6 +6286,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _pendingBatchEditFocus = true;
         _pendingBatchEditSelectAll = selectAllOnStart || (col.SelectAllOnEdit && clientX == null);
         _pendingBatchEditClientX = _pendingBatchEditSelectAll ? null : clientX;
+        _batchEditHostKeyHandoffOpen = !HasEditOptions(col, item) && col.Type != ColumnType.CheckBox;
         return true;
     }
 
@@ -7254,6 +7261,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         ClearBatchDropdownTypeSelectBuffer();
         _pendingBatchEditFocus = false;
         _pendingBatchEditSelectAll = false;
+        _batchEditHostKeyHandoffOpen = false;
         _pendingBatchEditScrollIntoView = false;
 
         if (shouldEnsureTrailingNewRow)
@@ -7550,6 +7558,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // the same keystroke (which also bubbles to the grid host's onkeydown)
         // is never applied twice (owner editor fix 2026-07-24).
         _pendingBatchEditFocus = false;
+        _batchEditHostKeyHandoffOpen = false;
 
         if (!IsActiveBatchEditSource(sourceItem, sourceField))
             return;
@@ -7664,6 +7673,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _pendingBatchEditFocus = false;
             _pendingBatchEditSelectAll = false;
             _pendingBatchEditClientX = null;
+            _batchEditHostKeyHandoffOpen = false;
             _pendingBatchEditScrollIntoView = false;
             // The render tears down the focused input — without an explicit
             // refocus the browser drops focus to BODY and every following
@@ -8695,7 +8705,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         // While the batch editor owns the keyboard (mounted, focus applied),
         // plain typing keys bubbling up from its input need no grid work.
-        if (_batchEditItem != null && !_pendingBatchEditFocus && IsEditorOwnedTypingKey(e))
+        if (_batchEditItem != null
+            && !_pendingBatchEditFocus
+            && !_batchEditHostKeyHandoffOpen
+            && IsEditorOwnedTypingKey(e))
         {
             _suppressNextRenderOnce = true;
             return;
@@ -8902,7 +8915,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (_batchEditItem == null || string.IsNullOrWhiteSpace(_batchEditField))
             return false;
-        if (!_pendingBatchEditFocus)
+        if (!_pendingBatchEditFocus && !_batchEditHostKeyHandoffOpen)
             return false;
         if (e.AltKey || e.CtrlKey || e.MetaKey)
             return false;
