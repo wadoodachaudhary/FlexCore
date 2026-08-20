@@ -4,7 +4,7 @@
     height: 28px;
     background: #f3f4f6;
     border-top: 1px solid #e5e7eb;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #4b5563;
     padding: 0 4px;
     gap: 0;
@@ -34,7 +34,7 @@
 }
 
 .fx-statusbar-icon {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     flex-shrink: 0;
 }
 

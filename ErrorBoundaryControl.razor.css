@@ -8,11 +8,11 @@
     border: 1px solid #fecaca;
     border-radius: 6px;
     color: #991b1b;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-error-icon {
-    font-size: 24px;
+    font-size: calc(24px * var(--fx-zoom, 1));
     flex-shrink: 0;
 }
 
@@ -22,7 +22,7 @@
 
 .fx-error-text p {
     margin: 4px 0 0;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     opacity: 0.8;
 }
 
@@ -32,7 +32,7 @@
     border-radius: 4px;
     background: #fff;
     cursor: pointer;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #991b1b;
     flex-shrink: 0;
 }

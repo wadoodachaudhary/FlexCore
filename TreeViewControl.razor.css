@@ -1,6 +1,6 @@
 .fx-treeview {
     font-family: inherit;
-    font-size: var(--fx-font-size, 0.875rem);
+    font-size: calc(var(--fx-font-size, 0.875rem) * var(--fx-zoom, 1));
     -webkit-user-select: none;
     user-select: none;
     border: 1px solid var(--fx-border-color, #dee2e6);
@@ -62,7 +62,7 @@
     justify-content: center;
     width: 16px;
     height: 16px;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     flex-shrink: 0;
     transition: transform 0.15s ease;
 }
@@ -91,7 +91,7 @@
     width: 16px;
     height: 16px;
     flex-shrink: 0;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-treeview-text {
@@ -107,7 +107,7 @@
     background: var(--fx-tree-bg, #fff);
     color: var(--fx-tree-vb6-color, #111);
     font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1.15;
 }
 
@@ -124,7 +124,7 @@
     border-radius: 0;
     color: var(--fx-tree-vb6-color, #111);
     cursor: default;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     white-space: nowrap;
     user-select: none;
 }
@@ -193,7 +193,7 @@
 
 .fx-treeview-vb6 .fx-treeview-arrow::before {
     content: "+";
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     line-height: 9px;
 }
 

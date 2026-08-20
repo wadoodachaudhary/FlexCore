@@ -5,7 +5,7 @@
 .fx-dropdown {
     display: inline-block;
     padding: 3px 6px;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
     background: #f7f7f7;
     border: 1px solid #c9c9c9;
     border-radius: 6px;

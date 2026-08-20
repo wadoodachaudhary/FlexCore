@@ -8,7 +8,7 @@
     border: 1px solid transparent;
     border-radius: 999px;
     padding: 0.35rem 0.75rem;
-    font-size: 0.85rem;
+    font-size: calc(0.85rem * var(--fx-zoom, 1));
     font-weight: 500;
     background: transparent;
     color: inherit;

@@ -1,7 +1,7 @@
 .fx-propertygrid {
     border: 1px solid #c0c0c0;
     background: #fff;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
 }
 
 .fx-propertygrid-table {
@@ -30,7 +30,7 @@
     padding: 3px 6px;
     border: 1px solid transparent;
     background: transparent;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     font-family: inherit;
 }
 

@@ -29,7 +29,7 @@
     border-radius: 6px;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
     color: #000;
-    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
 }
 
 .fx-dialog-overlay-resizing {
@@ -217,7 +217,7 @@
 .fx-dialog-close {
     border: none;
     background: transparent;
-    font-size: 22.5px;
+    font-size: calc(22.5px * var(--fx-zoom, 1));
     cursor: pointer;
     line-height: 1;
     color: var(--fx-dialog-header-color, inherit);
@@ -242,7 +242,7 @@
     border-bottom: 0;
     background: #f0f0f0;
     color: #8a8a8a;
-    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     font-weight: 400;
 }
 
@@ -256,7 +256,7 @@
     height: auto;
     margin: 0 -6px 0 6px;
     padding: 0;
-    font-size: 25px;
+    font-size: calc(25px * var(--fx-zoom, 1));
     line-height: 28px;
 }
 
@@ -276,7 +276,7 @@
     background: #f0f0f0;
     box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
     color: #000;
-    font: 12px "Segoe UI", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
 .fx-dialog-system-menu button {
@@ -330,7 +330,7 @@
     justify-content: center;
     width: 12px;
     height: 14px;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     font-weight: 700;
     line-height: 1;
 }

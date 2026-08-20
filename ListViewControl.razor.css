@@ -1,6 +1,6 @@
 .fx-listview {
     font-family: inherit;
-    font-size: 0.875rem;
+    font-size: calc(0.875rem * var(--fx-zoom, 1));
     border: 1px solid #dee2e6;
     border-radius: 4px;
     background: #fff;
@@ -18,7 +18,7 @@
     padding: 8px 12px;
     border-bottom: 2px solid #dee2e6;
     font-weight: 600;
-    font-size: 0.8125rem;
+    font-size: calc(0.8125rem * var(--fx-zoom, 1));
     color: #495057;
     background: #f8f9fa;
     white-space: nowrap;
@@ -64,7 +64,7 @@
     width: 16px;
     height: 16px;
     margin-right: 6px;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     flex-shrink: 0;
 }
 
@@ -74,7 +74,7 @@
     justify-content: center;
     width: 48px;
     height: 48px;
-    font-size: 32px;
+    font-size: calc(32px * var(--fx-zoom, 1));
     margin-bottom: 6px;
 }
 
@@ -84,7 +84,7 @@
     justify-content: center;
     width: 40px;
     height: 40px;
-    font-size: 28px;
+    font-size: calc(28px * var(--fx-zoom, 1));
     flex-shrink: 0;
 }
 
@@ -113,7 +113,7 @@
 }
 
 .fx-listview-subtext {
-    font-size: 0.75rem;
+    font-size: calc(0.75rem * var(--fx-zoom, 1));
     color: #6c757d;
     white-space: nowrap;
     overflow: hidden;

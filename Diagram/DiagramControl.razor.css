@@ -26,14 +26,14 @@
 }
 
 ::deep .fx-node-label {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-weight: 600;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     pointer-events: none;
 }
 
 ::deep .fx-node-sublabel {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     font-weight: 400;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     opacity: 0.85;
@@ -41,7 +41,7 @@
 }
 
 ::deep .fx-node-icon {
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
     pointer-events: none;
 }
 
@@ -58,7 +58,7 @@
 }
 
 ::deep .fx-connector-label {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     pointer-events: none;
 }

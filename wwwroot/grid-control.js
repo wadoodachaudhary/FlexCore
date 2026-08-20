@@ -787,8 +787,182 @@ export function isInputCaretAtHorizontalBoundary(target, key) {
 export function registerGridKeyboardTrap(gridRoot) {
     if (!gridRoot || gridKeyboardTrapBindings.has(gridRoot)) return;
     const doc = gridRoot.ownerDocument || document;
+    const buffersEditMountTyping = gridRoot.dataset.fxClientBufferedEditing === "true";
+    const bufferedEditEvents = new WeakSet();
+    let pendingEditTyping = null;
+    let pendingEditPump = 0;
+    let lastPressedEditCell = null;
+
+    const clearPendingEditTyping = () => {
+        pendingEditTyping = null;
+        if (pendingEditPump) {
+            window.cancelAnimationFrame(pendingEditPump);
+            pendingEditPump = 0;
+        }
+    };
+
+    const cellIdentity = cell => ({
+        row: cell?.closest("tr.fx-row")?.getAttribute("data-ari") ?? "",
+        field: cell?.getAttribute("data-field") ?? ""
+    });
+
+    const resolveCell = identity => {
+        if (!identity?.field) return null;
+        const row = Array.from(gridRoot.querySelectorAll("tr.fx-row[data-ari]"))
+            .find(candidate => candidate.getAttribute("data-ari") === identity.row);
+        return row
+            ? Array.from(row.cells).find(cell => cell.getAttribute("data-field") === identity.field) ?? null
+            : null;
+    };
+
+    const findActiveEditableCell = () => {
+        if (lastPressedEditCell && Date.now() - lastPressedEditCell.time < 2000) {
+            const pressed = resolveCell(lastPressedEditCell.identity);
+            if (pressed?.classList.contains("fx-cell-editable")) return pressed;
+        }
+        return gridRoot.querySelector("td.fx-cell-active.fx-cell-editable");
+    };
+
+    const sameCell = (cell, identity) => {
+        const current = cellIdentity(cell);
+        return current.row === identity.row && current.field === identity.field;
+    };
+
+    const deliverBufferedCommit = (input, commit, attempts = 0) => {
+        if (!input?.isConnected) return;
+        if (input.dataset.fxClientBufferedEditor !== "1" && attempts < 120) {
+            window.requestAnimationFrame(() => deliverBufferedCommit(input, commit, attempts + 1));
+            return;
+        }
+
+        input.dispatchEvent(new KeyboardEvent("keydown", {
+            key: commit.key,
+            shiftKey: commit.shiftKey,
+            ctrlKey: commit.ctrlKey,
+            altKey: commit.altKey,
+            metaKey: commit.metaKey,
+            bubbles: true,
+            cancelable: true
+        }));
+    };
+
+    const pumpPendingEditTyping = () => {
+        pendingEditPump = 0;
+        const pending = pendingEditTyping;
+        if (!pending) return;
+        if (Date.now() >= pending.expires) {
+            clearPendingEditTyping();
+            return;
+        }
+
+        const cell = findActiveEditableCell();
+        const input = cell && sameCell(cell, pending.identity)
+            ? cell.querySelector("input.fx-batch-input, textarea.fx-batch-input")
+            : null;
+        if (!input) {
+            pendingEditPump = window.requestAnimationFrame(pumpPendingEditTyping);
+            return;
+        }
+
+        input.value = pending.value;
+        input.dataset.fxUserTyped = "1";
+        try { input.focus({ preventScroll: true }); } catch { input.focus?.(); }
+        try { input.setSelectionRange(input.value.length, input.value.length); } catch { }
+
+        const commit = pending.commit;
+        clearPendingEditTyping();
+        if (commit)
+            window.requestAnimationFrame(() => deliverBufferedCommit(input, commit));
+    };
+
+    const schedulePendingEditPump = () => {
+        if (!pendingEditPump)
+            pendingEditPump = window.requestAnimationFrame(pumpPendingEditTyping);
+    };
+
+    const bufferEditMountKey = event => {
+        if (!buffersEditMountTyping || bufferedEditEvents.has(event)) return false;
+        bufferedEditEvents.add(event);
+
+        const target = event.target instanceof Element ? event.target : null;
+        if (!target || !gridRoot.contains(target) || target.matches("input, textarea, select"))
+            return false;
+        if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing)
+            return false;
+
+        const cell = findActiveEditableCell();
+        if (!cell) {
+            clearPendingEditTyping();
+            return false;
+        }
+
+        const identity = cellIdentity(cell);
+        const isCharacter = event.key.length === 1;
+        if (isCharacter) {
+            const startsBuffer = !pendingEditTyping || !sameCell(cell, pendingEditTyping.identity);
+            if (startsBuffer) {
+                pendingEditTyping = {
+                    identity,
+                    value: event.key,
+                    commit: null,
+                    expires: Date.now() + 4000
+                };
+                if (event.key === " ") event.preventDefault();
+                schedulePendingEditPump();
+                return false;
+            }
+
+            pendingEditTyping.value += event.key;
+            pendingEditTyping.expires = Date.now() + 4000;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            schedulePendingEditPump();
+            return true;
+        }
+
+        if (!pendingEditTyping || !sameCell(cell, pendingEditTyping.identity))
+            return false;
+
+        if (event.key === "Backspace" || event.key === "Delete") {
+            if (event.key === "Backspace")
+                pendingEditTyping.value = pendingEditTyping.value.slice(0, -1);
+            pendingEditTyping.expires = Date.now() + 4000;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            schedulePendingEditPump();
+            return true;
+        }
+
+        if (event.key === "Enter" || event.key === "NumpadEnter" || event.key === "Tab" || event.key === "Escape") {
+            pendingEditTyping.commit = {
+                key: event.key,
+                shiftKey: event.shiftKey,
+                ctrlKey: event.ctrlKey,
+                altKey: event.altKey,
+                metaKey: event.metaKey
+            };
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            schedulePendingEditPump();
+            return true;
+        }
+
+        return false;
+    };
+
+    const rememberPressedEditCell = event => {
+        const target = event.target instanceof Element ? event.target : null;
+        const cell = target?.closest?.("td.fx-cell-editable");
+        if (!cell || !gridRoot.contains(cell)) return;
+        lastPressedEditCell = { identity: cellIdentity(cell), time: Date.now() };
+    };
 
     const onKeyDown = (event) => {
+        if (!pendingEditTyping
+            && (event.key === "Tab" || event.key.startsWith("Arrow")))
+            lastPressedEditCell = null;
+        if (bufferEditMountKey(event)) return;
+
         const isGridScrollKey =
             event.key === "PageUp" ||
             event.key === "PageDown" ||
@@ -839,7 +1013,8 @@ export function registerGridKeyboardTrap(gridRoot) {
 
     gridRoot.addEventListener("keydown", onKeyDown, true);
     doc.addEventListener("keydown", onKeyDown, true);
-    gridKeyboardTrapBindings.set(gridRoot, { onKeyDown, doc });
+    gridRoot.addEventListener("pointerdown", rememberPressedEditCell, true);
+    gridKeyboardTrapBindings.set(gridRoot, { onKeyDown, doc, clearPendingEditTyping, rememberPressedEditCell });
 }
 
 export function unregisterGridKeyboardTrap(gridRoot) {
@@ -849,6 +1024,8 @@ export function unregisterGridKeyboardTrap(gridRoot) {
 
     gridRoot.removeEventListener("keydown", handlers.onKeyDown, true);
     handlers.doc?.removeEventListener?.("keydown", handlers.onKeyDown, true);
+    gridRoot.removeEventListener("pointerdown", handlers.rememberPressedEditCell, true);
+    handlers.clearPendingEditTyping?.();
     gridKeyboardTrapBindings.delete(gridRoot);
 }
 
@@ -1388,6 +1565,10 @@ export function selectAllInputContents(el) {
         if (typeof el.focus === "function") {
             el.focus({ preventScroll: true });
         }
+        if (el.dataset.fxUserTyped === "1"
+            || ("value" in el && el.value !== (el.getAttribute("value") ?? ""))) {
+            return;
+        }
         if (typeof el.select === "function") {
             el.select();
             return;
@@ -1408,6 +1589,11 @@ export function focusInputAtClientX(el, clientX) {
     try {
         if (typeof el.focus === "function") {
             el.focus({ preventScroll: true });
+        }
+
+        if (el.dataset.fxUserTyped === "1"
+            || el.value !== (el.getAttribute("value") ?? "")) {
+            return;
         }
 
         if (typeof el.setSelectionRange !== "function" || !("value" in el)) {
@@ -2353,8 +2539,38 @@ export function clampMenuIntoViewport(el, margin = 4) {
 // the first native oninput would otherwise overwrite the bridged characters.
 export function setBatchEditorValue(input, value) {
     if (!input) return;
+    if (input.dataset.fxUserTyped === "1"
+        || ("value" in input && input.value !== (input.getAttribute("value") ?? ""))) return;
     input.value = value ?? "";
     try { input.setSelectionRange(input.value.length, input.value.length); } catch { /* non-text input */ }
+}
+
+export function getBatchEditorValue(input) {
+    return input && typeof input.value === "string" ? input.value : "";
+}
+
+export function focusAdjacentOutsideGrid(gridRoot, backwards = false) {
+    if (!gridRoot) return false;
+    const selector = "a[href], button, input, select, textarea, [tabindex]";
+    const candidates = Array.from(document.querySelectorAll(selector)).filter(element => {
+        if (element !== gridRoot && gridRoot.contains(element)) return false;
+        if (element.disabled || element.tabIndex < 0) return false;
+        if (element.closest("[hidden], [aria-hidden='true']")) return false;
+        const style = window.getComputedStyle(element);
+        return style.display !== "none"
+            && style.visibility !== "hidden"
+            && element.getClientRects().length > 0;
+    });
+    const gridIndex = candidates.indexOf(gridRoot);
+    if (gridIndex < 0 || candidates.length < 2) return false;
+
+    let targetIndex = backwards ? gridIndex - 1 : gridIndex + 1;
+    if (targetIndex < 0) targetIndex = candidates.length - 1;
+    if (targetIndex >= candidates.length) targetIndex = 0;
+    const target = candidates[targetIndex];
+    if (!target || target === gridRoot) return false;
+    target.focus({ preventScroll: true });
+    return document.activeElement === target;
 }
 
 // ── Client-painted keyboard navigation (opt-in) ─────────────────────────────

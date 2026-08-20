@@ -6,7 +6,7 @@
     background: #fff;
     color: #202124;
     font-family: Arial, "Segoe UI", sans-serif;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-editor-lite-toolbar {
@@ -100,12 +100,12 @@
 }
 
 .fx-editor-lite-surface ::deep h2 {
-    font-size: 1.1rem;
+    font-size: calc(1.1rem * var(--fx-zoom, 1));
     font-weight: 700;
 }
 
 .fx-editor-lite-surface ::deep h3 {
-    font-size: 1rem;
+    font-size: calc(1rem * var(--fx-zoom, 1));
     font-weight: 700;
 }
 

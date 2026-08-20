@@ -2,7 +2,7 @@
 
 .fx-pivot {
     font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     border: 1px solid #aeb4bd;
     border-radius: 4px;
     background: #f7f7f7;
@@ -31,7 +31,7 @@
 .fx-pivot-builder-header {
     padding: 10px 14px;
     font-weight: 700;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #343a40;
     background: linear-gradient(to bottom, #f4f4f4, #d7d7d7);
     border-bottom: 1px solid #aeb4bd;
@@ -51,7 +51,7 @@
 .fx-pivot-field-empty {
     color: #6b7280;
     font-style: italic;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     padding: 4px 0;
 }
 
@@ -62,7 +62,7 @@
     gap: 4px;
     padding: 4px 8px;
     border-radius: 4px;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     font-weight: 500;
     cursor: grab;
     user-select: none;
@@ -87,7 +87,7 @@
 }
 
 .fx-pivot-chip-icon {
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     color: #6b7280;
 }
 
@@ -122,7 +122,7 @@
     color: inherit;
     opacity: 0.5;
     cursor: pointer;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     padding: 0 2px;
     line-height: 1;
 }
@@ -161,7 +161,7 @@
 }
 
 .fx-pivot-zone-label {
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -179,13 +179,13 @@
 
 .fx-pivot-zone-hint {
     color: #6b7280;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     font-style: italic;
 }
 
 .fx-pivot-agg-select,
 .fx-pivot-format-input {
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     padding: 1px 3px;
     border: 1px solid #aeb4bd;
     border-radius: 3px;
@@ -228,7 +228,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 .fx-pivot-filter-item label {
@@ -241,7 +241,7 @@
     padding: 3px 8px;
     border: 1px solid #aeb4bd;
     border-radius: 3px;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     background: #fff;
     min-width: 120px;
 }
@@ -259,7 +259,7 @@
 }
 
 .fx-pivot-empty-icon {
-    font-size: 43px;
+    font-size: calc(43px * var(--fx-zoom, 1));
     opacity: 0.3;
 }
 
@@ -274,7 +274,7 @@
 .fx-pivot-table thead th {
     padding: 8px 12px;
     font-weight: 600;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     text-transform: uppercase;
     letter-spacing: 0.03em;
     border: 1px solid #aeb4bd;
@@ -325,7 +325,7 @@
 
 .fx-pivot-sort {
     margin-left: 4px;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
 }
 
 /* ── Data Rows ── */
@@ -415,7 +415,7 @@
     font-weight: 700;
     color: #fff;
     text-align: left;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
 }
 
 .fx-pivot-cell-grand-value {

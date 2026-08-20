@@ -21,6 +21,39 @@ export function select(element) {
 const replaceOnFirstInputState = new WeakMap();
 const clientBufferedTypingBindings = new WeakMap();
 
+// ── Pre-attach typing shield ────────────────────────────────────────────────
+// enableClientBufferedTyping arrives one interop round-trip AFTER a
+// ClientBuffered editor renders. Keys typed in that gap used to dispatch to
+// Blazor, and the renders those dispatches trigger re-apply the stale rendered
+// value over the DOM — eating or resurrecting the first characters at WAN
+// latency. Inputs that render data-fx-cb-pending="1" are shielded from the
+// moment they exist: this document-level CAPTURE listener stops typing-key
+// keydowns from ever reaching Blazor's delegated handlers (the browser still
+// performs the native insertion, and the input/change events still flow so the
+// server's edit buffer stays in sync). Once the real buffer attaches
+// (data-fx-client-buffered-editor="1"), the per-element handlers take over and
+// this shield stands down.
+document.addEventListener("keydown", event => {
+    const t = event.target;
+    if (!t || !t.dataset
+        || t.dataset.fxCbPending !== "1"
+        || t.dataset.fxClientBufferedEditor === "1")
+        return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing)
+        return;
+    const key = event.key;
+    if (key.length === 1
+        || key === "Backspace"
+        || key === "Delete"
+        || key === "ArrowLeft"
+        || key === "ArrowRight"
+        || key === "Home"
+        || key === "End") {
+        event.stopPropagation();
+        t.dataset.fxUserTyped = "1";
+    }
+}, true);
+
 export function enableReplaceOnFirstInput(element) {
     const state = ensureReplaceOnFirstInputState(element);
     if (!state || state.enabled) return;
@@ -148,7 +181,7 @@ export async function applyTextContextCommand(element, command) {
     };
 }
 
-function getTextValue(element) {
+export function getTextValue(element) {
     return typeof element.value === "string" ? element.value : "";
 }
 
@@ -416,7 +449,11 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
         commit(key, event);
     };
 
-    const stopServerDispatch = event => event.stopPropagation();
+    const stopServerDispatch = event => {
+        event.stopPropagation();
+        if (event.type === "input")
+            el.dataset.fxUserTyped = "1";
+    };
     const onBlur = event => {
         event.stopPropagation();
         commit("Blur", event);
@@ -451,6 +488,7 @@ export function disableClientBufferedTyping(el) {
         binding.cleanup();
     clientBufferedTypingBindings.delete(el);
     delete el.dataset.fxClientBufferedEditor;
+    delete el.dataset.fxUserTyped;
 }
 
 

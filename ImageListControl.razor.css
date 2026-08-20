@@ -53,7 +53,7 @@
 
 .fx-imagelist-caption {
     text-align: center;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     color: #4b5563;
     margin-top: 4px;
     overflow: hidden;
@@ -64,13 +64,13 @@
 
 /* Size variants */
 .fx-imagelist-small .fx-imagelist-thumb { width: 32px; height: 32px; }
-.fx-imagelist-small .fx-imagelist-icon { font-size: 18px; }
+.fx-imagelist-small .fx-imagelist-icon { font-size: calc(18px * var(--fx-zoom, 1)); }
 .fx-imagelist-small .fx-imagelist-item { max-width: 60px; }
 
 .fx-imagelist-medium .fx-imagelist-thumb { width: 64px; height: 64px; }
-.fx-imagelist-medium .fx-imagelist-icon { font-size: 32px; }
+.fx-imagelist-medium .fx-imagelist-icon { font-size: calc(32px * var(--fx-zoom, 1)); }
 .fx-imagelist-medium .fx-imagelist-item { max-width: 90px; }
 
 .fx-imagelist-large .fx-imagelist-thumb { width: 128px; height: 128px; }
-.fx-imagelist-large .fx-imagelist-icon { font-size: 56px; }
+.fx-imagelist-large .fx-imagelist-icon { font-size: calc(56px * var(--fx-zoom, 1)); }
 .fx-imagelist-large .fx-imagelist-item { max-width: 150px; }

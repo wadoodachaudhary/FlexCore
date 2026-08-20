@@ -28,27 +28,27 @@
 }
 
 .fx-mdi-error-icon {
-    font-size: 40px;
+    font-size: calc(40px * var(--fx-zoom, 1));
     line-height: 1;
     color: #c0392b;
 }
 
 .fx-mdi-error-title {
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
     font-weight: 600;
     color: #222;
 }
 
 .fx-mdi-error-text {
     max-width: 460px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     line-height: 1.5;
 }
 
 .fx-mdi-error-btn {
     margin-top: 6px;
     padding: 6px 18px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     cursor: pointer;
     border: 1px solid #8a8a8a;
     border-radius: 3px;

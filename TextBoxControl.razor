@@ -285,12 +285,74 @@ else
 
     private async Task OnNativeKeyDown(KeyboardEventArgs e)
     {
+        // ClientBuffered normally sends the complete DOM value through its
+        // client listener. During the brief mount window before that listener
+        // attaches, this Blazor fallback receives the key instead; synchronize
+        // the browser-owned value before the host commits Enter/Tab/navigation.
+        if (TypingBehavior == TextBoxTypingBehavior.ClientBuffered
+            && IsClientBufferedCommitKey(e))
+        {
+            await SynchronizeClientBufferedDomValueAsync();
+        }
+
         if (OnKeyDown.HasDelegate)
             await OnKeyDown.InvokeAsync(e);
     }
 
-    private Task OnNativeBlur(FocusEventArgs _) =>
-        OnBlur.HasDelegate ? OnBlur.InvokeAsync() : Task.CompletedTask;
+    private static bool IsClientBufferedCommitKey(KeyboardEventArgs e)
+    {
+        var controlBoundaryKey = (e.CtrlKey || e.MetaKey)
+            && e.Key is "Home" or "End";
+
+        if (e.AltKey || ((e.CtrlKey || e.MetaKey) && !controlBoundaryKey))
+            return false;
+
+        return e.Key is "Enter"
+            or "NumpadEnter"
+            or "Tab"
+            or "ArrowUp"
+            or "ArrowDown"
+            or "PageUp"
+            or "PageDown"
+            || controlBoundaryKey;
+    }
+
+    private async Task OnNativeBlur(FocusEventArgs _)
+    {
+        await SynchronizeClientBufferedDomValueAsync();
+        if (OnBlur.HasDelegate)
+            await OnBlur.InvokeAsync();
+    }
+
+    private async Task SynchronizeClientBufferedDomValueAsync()
+    {
+        if (TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
+            return;
+
+        var module = await GetControlJsModuleAsync();
+        if (module == null)
+            return;
+
+        try
+        {
+            var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
+            var committedValue = value ?? string.Empty;
+            if (MaxLength is > 0 && committedValue.Length > MaxLength.Value)
+                committedValue = committedValue[..MaxLength.Value];
+
+            Value = committedValue;
+            _uncontrolledValue = committedValue;
+            _uncontrolledInitialized = true;
+            _suppressNextNativeInputRender = true;
+            InputValueChanged?.Invoke(committedValue);
+            if (ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(committedValue);
+        }
+        catch
+        {
+            // The editor may have unmounted while a navigation key was in flight.
+        }
+    }
 
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
@@ -523,6 +585,11 @@ else
                 merged["type"] = InputType;
             if (AutoFocus && !merged.ContainsKey("autofocus"))
                 merged["autofocus"] = "autofocus";
+            // Marks the input for the pre-attach typing shield in
+            // textbox-control.js: typing keys stay local from the very first
+            // render, before enableClientBufferedTyping's round trip lands.
+            if (TypingBehavior == TextBoxTypingBehavior.ClientBuffered)
+                merged["data-fx-cb-pending"] = "1";
 
             return merged;
         }
