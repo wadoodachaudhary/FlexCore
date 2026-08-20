@@ -1,7 +1,7 @@
 .fx-button {
     padding: 4px 16px;
     min-width: 75px;
-    font-size: var(--fx-font-size, 13px);
+    font-size: calc(var(--fx-font-size, 13px) * var(--fx-zoom, 1));
     border: var(--fx-btn-border, 1px solid #c9c9c9);
     border-color: var(--fx-btn-border-color);
     background: var(--fx-btn-bg, #f7f7f7);
@@ -40,7 +40,7 @@
     box-shadow: inset 1px 1px #fff, inset -1px -1px #8a8a8a;
     color: #000;
     cursor: default;
-    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     line-height: 18px;
 }
 
@@ -58,7 +58,7 @@
 
 .fx-button.mini-btn {
     padding: 2px 6px;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     background: var(--fx-surface-color, #fff);
 }
 

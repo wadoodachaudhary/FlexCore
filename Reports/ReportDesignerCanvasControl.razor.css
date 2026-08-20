@@ -20,7 +20,7 @@
     background: transparent;
     color: #111;
     font-family: Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     overflow: visible;
 }
 
@@ -72,7 +72,7 @@
     background: rgba(188, 215, 239, 0.72);
     color: #07385e;
     text-align: left;
-    font: 12px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) Tahoma, "MS Sans Serif", Arial, sans-serif;
     line-height: 1.15;
     white-space: pre-line;
     cursor: default;
@@ -117,7 +117,7 @@
     justify-content: space-between;
     pointer-events: none;
     color: rgba(32, 32, 32, 0.42);
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 .fx-rd-band-caption em {

@@ -11,7 +11,7 @@
     align-items: center;
     gap: 6px;
     padding: 8px 16px;
-    font-size: var(--fx-font-size, 13px);
+    font-size: calc(var(--fx-font-size, 13px) * var(--fx-zoom, 1));
     font-weight: 500;
     color: var(--fx-tab-color, #6b7280);
     cursor: pointer;
@@ -40,11 +40,11 @@
 }
 
 .fx-tabstrip-icon {
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-tabstrip-close {
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
     line-height: 1;
     color: #9ca3af;
     margin-left: 4px;

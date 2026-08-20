@@ -20,7 +20,7 @@
 .fx-result-badge {
     background: var(--accent, #c64b39);
     color: #fff;
-    font-size: 0.75rem;
+    font-size: calc(0.75rem * var(--fx-zoom, 1));
     font-weight: 700;
     padding: 2px 8px;
     border-radius: 999px;
@@ -34,10 +34,10 @@
     background: var(--panel-2, #f2f7f5);
     border: 1px solid var(--border, #dfcdbd);
     color: var(--ink, #1b1a16);
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
 }
 
-.fx-pill-small { font-size: 0.72rem; padding: 1px 6px; }
+.fx-pill-small { font-size: calc(0.72rem * var(--fx-zoom, 1)); padding: 1px 6px; }
 .fx-model-pill { color: var(--accent-2, #1f6f5f); }
 
 .fx-overlay-close {
@@ -45,7 +45,7 @@
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 1.1rem;
+    font-size: calc(1.1rem * var(--fx-zoom, 1));
     color: var(--muted, #5d5147);
     padding: 0 4px;
 }
@@ -87,7 +87,7 @@
     gap: 0.75rem;
     padding: 1rem 0;
     color: var(--muted, #5d5147);
-    font-size: 0.95rem;
+    font-size: calc(0.95rem * var(--fx-zoom, 1));
 }
 
 .fx-spinner {
@@ -108,7 +108,7 @@
     border: 1px solid #f5c6c0;
     border-radius: 8px;
     padding: 8px 10px;
-    font-size: 0.85rem;
+    font-size: calc(0.85rem * var(--fx-zoom, 1));
 }
 
 .fx-result-output {
@@ -116,7 +116,7 @@
     border: 1px solid var(--border, #dfcdbd);
     border-radius: 12px;
     padding: 1rem;
-    font-size: 0.95rem;
+    font-size: calc(0.95rem * var(--fx-zoom, 1));
     line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
@@ -136,7 +136,7 @@
     border: 1px solid #f0d68b;
     border-radius: 6px;
     color: #6b4e16;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
     line-height: 1.4;
 }
 .fx-result-echo-banner strong { color: #8a3a1a; }
@@ -157,7 +157,7 @@
     border: 1px solid transparent;
     border-bottom: none;
     padding: 6px 14px;
-    font-size: 0.82rem;
+    font-size: calc(0.82rem * var(--fx-zoom, 1));
     font-weight: 500;
     color: var(--muted, #5d5147);
     cursor: pointer;
@@ -198,7 +198,7 @@
 }
 
 .fx-result-original {
-    font-size: 0.8rem;
+    font-size: calc(0.8rem * var(--fx-zoom, 1));
     color: var(--muted, #5d5147);
 }
 
@@ -219,7 +219,7 @@
     border: 1px solid var(--border, #dfcdbd);
     background: var(--panel, #fffaf1);
     color: var(--ink, #1b1a16);
-    font-size: 0.8rem;
+    font-size: calc(0.8rem * var(--fx-zoom, 1));
     font-weight: 500;
     cursor: pointer;
 }

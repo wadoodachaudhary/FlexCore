@@ -11,7 +11,7 @@
     background: #fff;
     border: 1px solid #c1c7d0;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #172b4d;
     cursor: pointer;
     box-sizing: border-box;
@@ -21,7 +21,7 @@
 .fx-mscombo-btn:disabled { opacity: .6; cursor: default; }
 
 .fx-mscombo-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fx-mscombo-arrow { font-size: 10px; color: #626f86; flex: 0 0 auto; }
+.fx-mscombo-arrow { font-size: calc(10px * var(--fx-zoom, 1)); color: #626f86; flex: 0 0 auto; }
 
 /* Click-away catcher (no JS). */
 .fx-mscombo-backdrop { position: fixed; inset: 0; z-index: 1000; background: transparent; }
@@ -46,7 +46,7 @@
     align-items: center;
     gap: 8px;
     padding: 5px 8px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #172b4d;
     cursor: pointer;
     white-space: nowrap;
@@ -56,4 +56,4 @@
 .fx-mscombo-item input { cursor: pointer; margin: 0; }
 .fx-mscombo-all { font-weight: 600; }
 .fx-mscombo-sep { height: 1px; background: #ebecf0; margin: 4px 0; }
-.fx-mscombo-empty { padding: 8px; font-size: 12px; color: #626f86; }
+.fx-mscombo-empty { padding: 8px; font-size: calc(12px * var(--fx-zoom, 1)); color: #626f86; }

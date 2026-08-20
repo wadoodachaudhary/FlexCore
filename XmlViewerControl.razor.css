@@ -5,7 +5,7 @@
     height: 100%;
     background: #7ea7d1;
     color: #111827;
-    font: 12px Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
 }
 
 .fx-xmlv-outline {
@@ -39,7 +39,7 @@
     border: 0;
     border-radius: 0;
     background: #ffffff;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 .fx-xmlv ::deep .fx-xmlv-tree .fx-treeview-node {
@@ -50,7 +50,7 @@
 .fx-xmlv ::deep .fx-xmlv-icon-element-open::before {
     content: "<>";
     color: #0f5f87;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     font-weight: 700;
 }
 
@@ -132,7 +132,7 @@
     overflow: auto;
     background: #ffffff;
     color: #111827;
-    font: 12px/1.42 Consolas, "Courier New", monospace;
+    font: calc(12px * var(--fx-zoom, 1))/1.42 Consolas, "Courier New", monospace;
     tab-size: 4;
     white-space: pre;
     outline: none;

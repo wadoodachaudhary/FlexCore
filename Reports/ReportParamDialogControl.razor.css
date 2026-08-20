@@ -28,13 +28,13 @@
     justify-content: space-between;
     align-items: center;
     font-weight: 600;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-dialog-close {
     background: transparent;
     border: none;
-    font-size: 20px;
+    font-size: calc(20px * var(--fx-zoom, 1));
     line-height: 1;
     cursor: pointer;
     padding: 0 6px;
@@ -53,7 +53,7 @@
 }
 
 .fx-param-title {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #444;
     margin-bottom: 12px;
     padding-bottom: 8px;
@@ -77,13 +77,13 @@
 }
 
 .fx-param-prompt-text {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #222;
     font-weight: 500;
 }
 
 .fx-param-secondary-label {
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #555;
     font-style: normal;
 }
@@ -96,7 +96,7 @@
     padding: 5px 8px;
     border: 1px solid #b0b4ba;
     border-radius: 2px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-family: inherit;
     background: #fff;
     box-sizing: border-box;
@@ -117,7 +117,7 @@
 
 .fx-param-value-label {
     display: block;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #444;
     margin: 2px 0 2px 2px;
 }
@@ -149,7 +149,7 @@
     border: 1px solid #b0b4ba;
     border-radius: 2px;
     background: #f5f5f5;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-family: inherit;
     cursor: pointer;
 }
@@ -166,7 +166,7 @@
     border: 1px solid #ffeaa7;
     border-radius: 3px;
     color: #856404;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-dialog-footer {
@@ -184,7 +184,7 @@
     border-radius: 3px;
     background: #fff;
     cursor: pointer;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-family: inherit;
     min-width: 80px;
 }

@@ -1,11 +1,13 @@
 @namespace Fx.ControlKit
 @inherits FlexControlBase
 @inject IJSRuntime JsRuntime
+@inject IServiceProvider Services
 @implements IAsyncDisposable
 
+<CascadingValue Value="this" IsFixed="true">
 <CascadingValue Value="@_navigationContext" IsFixed="false">
     <div class="@ResolvedCssClass"
-         style="@ResolvedStyle"
+         style="@ResolvedPageStyle"
          id="@Id"
          data-fx-page-control="true"
          data-fx-page-tab-navigation="@(HandlesTabNavigation ? "true" : "false")"
@@ -14,17 +16,44 @@
         @ChildContent
     </div>
 </CascadingValue>
+</CascadingValue>
 
 @code {
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public PageNavigationGraph? NavigationGraph { get; set; }
     [Parameter] public PageNavigationMap? NavigationMap { get; set; }
 
+    /// <summary>When true (default) and a ZoomService is registered on the host,
+    /// the page handles Ctrl+&gt; / Ctrl+&lt; to zoom text in and out.</summary>
+    [Parameter] public bool EnableZoomShortcuts { get; set; } = true;
+
+    /// <summary>How the page reacts when its content is wider or taller than the
+    /// space it was given (browser zoom, text zoom, small window). Default
+    /// <see cref="PageScrollMode.Auto"/> turns each scrollbar on only when that
+    /// axis actually overflows, so content is never painted out of reach.</summary>
+    [Parameter] public PageScrollMode ScrollMode { get; set; } = PageScrollMode.Auto;
+
+    /// <summary>Optional height cap for the scroll container, e.g. "100dvh" or
+    /// "calc(100dvh - 4.5rem)". Only meaningful when the page scrolls vertically
+    /// and the host layout gives no definite height of its own.</summary>
+    [Parameter] public string? MaxHeight { get; set; }
+
+    /// <summary>Set by an enclosing PageControl. The outermost control owns the
+    /// zoom scope (CSS variable + scaled base font); nested ones inherit it —
+    /// re-declaring the em-based size would compound the factor.</summary>
+    [CascadingParameter] private PageControl? AncestorPageControl { get; set; }
+
     private ElementReference _rootElement;
     private IJSObjectReference? _module;
     private PageNavigationContext _navigationContext = new(false);
     private string _registeredGraphSignature = string.Empty;
     private bool _navigationRegistered;
+    private ZoomService? _zoomService;
+    private DotNetObjectReference<PageControl>? _zoomShortcutRef;
+    private bool _zoomShortcutsRegistered;
+    // Stable JS-registry key: element references cannot be the key because the
+    // root may already be detached (and revive as null) when unregister runs.
+    private readonly string _zoomToken = Guid.NewGuid().ToString("N");
 
     protected override string? BaseCssClass => "fx-page-control";
 
@@ -34,6 +63,64 @@
     private bool HandlesTabNavigation =>
         Enabled && EffectiveNavigationGraph is { Nodes.Count: > 0 };
 
+    private bool OwnsZoomScope => _zoomService is not null && AncestorPageControl is null;
+
+    /// <summary>
+    /// Scroll-container declarations for the current <see cref="ScrollMode"/>.
+    /// min-width/min-height:0 keep the page shrinkable when the host makes it a
+    /// flex or grid item (without them an overflowing child forces the track
+    /// wider instead of scrolling), and max-width:100% stops wide content from
+    /// pushing the page itself past the window.
+    /// </summary>
+    private string? ScrollStyle
+    {
+        get
+        {
+            if (ScrollMode == PageScrollMode.None)
+                return null;
+
+            var overflow = ScrollMode switch
+            {
+                PageScrollMode.Horizontal => "overflow-x: auto; overflow-y: hidden",
+                PageScrollMode.Vertical => "overflow-x: hidden; overflow-y: auto",
+                PageScrollMode.Both => "overflow: scroll",
+                _ => "overflow: auto"
+            };
+
+            var style = $"box-sizing: border-box; min-width: 0; min-height: 0; max-width: 100%; {overflow}";
+            return string.IsNullOrWhiteSpace(MaxHeight) ? style : $"{style}; max-height: {MaxHeight}";
+        }
+    }
+
+    // Library defaults first, the host's own Style second (so a page can still
+    // override them), the zoom scope last — it is the feature's contract.
+    private string? ResolvedPageStyle
+    {
+        get
+        {
+            var parts = new List<string>(3);
+            if (ScrollStyle is { Length: > 0 } scroll)
+                parts.Add(scroll);
+            if (ResolvedStyle is { Length: > 0 } style)
+                parts.Add(style.TrimEnd().TrimEnd(';'));
+            if (OwnsZoomScope)
+                parts.Add(_zoomService!.ZoomScopeStyle);
+
+            return parts.Count == 0 ? null : string.Join("; ", parts);
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        // Resolved lazily so PageControl still works in apps that have not
+        // registered a ZoomService (same pattern as GridControl's optional services).
+        _zoomService = Services.GetService(typeof(ZoomService)) as ZoomService;
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged += HandleZoomChanged;
+    }
+
+    private void HandleZoomChanged() => _ = InvokeAsync(StateHasChanged);
+
     protected override void OnParametersSet()
     {
         if (_navigationContext.HandlesTabNavigation != HandlesTabNavigation)
@@ -42,37 +129,84 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        try
+        {
+            await EnsureZoomShortcutRegistrationAsync();
+            await EnsureNavigationRegistrationAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is already gone; there is nothing left to register.
+        }
+    }
+
+    private async Task<IJSObjectReference> GetModuleAsync()
+    {
+        return _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+            "import",
+            FxJsAsset.Versioned($"./_content/{typeof(PageControl).Assembly.GetName().Name}/page-control.js"));
+    }
+
+    private async Task EnsureZoomShortcutRegistrationAsync()
+    {
+        var wantShortcuts = _zoomService is not null && EnableZoomShortcuts && Enabled;
+        if (wantShortcuts == _zoomShortcutsRegistered)
+            return;
+
+        var module = await GetModuleAsync();
+        if (wantShortcuts)
+        {
+            _zoomShortcutRef ??= DotNetObjectReference.Create(this);
+            await module.InvokeVoidAsync("registerPageZoomShortcuts", _rootElement, _zoomToken, _zoomShortcutRef);
+            _zoomShortcutsRegistered = true;
+        }
+        else
+        {
+            await module.InvokeVoidAsync("unregisterPageZoomShortcuts", _zoomToken);
+            _zoomShortcutsRegistered = false;
+        }
+    }
+
+    private async Task EnsureNavigationRegistrationAsync()
+    {
         var signature = BuildGraphSignature();
         if (signature == _registeredGraphSignature && _navigationRegistered == HandlesTabNavigation)
             return;
 
-        try
+        var module = await GetModuleAsync();
+        if (HandlesTabNavigation)
         {
-            _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import",
-                $"./_content/{typeof(PageControl).Assembly.GetName().Name}/page-control.js");
-
-            if (HandlesTabNavigation)
-            {
-                await _module.InvokeVoidAsync(
-                    "registerPageNavigationGraph",
-                    _rootElement,
-                    BuildGraphDescriptors(),
-                    EffectiveNavigationGraph!.Wrap);
-                _navigationRegistered = true;
-            }
-            else if (_navigationRegistered)
-            {
-                await _module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
-                _navigationRegistered = false;
-            }
-
-            _registeredGraphSignature = signature;
+            await module.InvokeVoidAsync(
+                "registerPageNavigationGraph",
+                _rootElement,
+                BuildGraphDescriptors(),
+                EffectiveNavigationGraph!.Wrap);
+            _navigationRegistered = true;
         }
-        catch (JSDisconnectedException)
+        else if (_navigationRegistered)
         {
-            // The circuit is already gone; there is nothing left to unregister.
+            await module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
+            _navigationRegistered = false;
         }
+
+        _registeredGraphSignature = signature;
+    }
+
+    [JSInvokable]
+    public Task OnZoomShortcutAsync(string direction)
+    {
+        if (_zoomService is null)
+            return Task.CompletedTask;
+
+        return InvokeAsync(() =>
+        {
+            switch (direction)
+            {
+                case "in": _zoomService.ZoomIn(); break;
+                case "out": _zoomService.ZoomOut(); break;
+                case "reset": _zoomService.Reset(); break;
+            }
+        });
     }
 
     private object[] BuildGraphDescriptors()
@@ -116,14 +250,21 @@
 
     public async ValueTask DisposeAsync()
     {
-        if (_module is null)
-            return;
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged -= HandleZoomChanged;
 
         try
         {
-            if (_navigationRegistered)
-                await _module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
-            await _module.DisposeAsync();
+            if (_module is not null)
+            {
+                // Zoom first: it unregisters by token, which stays valid after the
+                // DOM is gone, while the navigation call needs the element itself.
+                if (_zoomShortcutsRegistered)
+                    await _module.InvokeVoidAsync("unregisterPageZoomShortcuts", _zoomToken);
+                if (_navigationRegistered)
+                    await _module.InvokeVoidAsync("unregisterPageNavigation", _rootElement);
+                await _module.DisposeAsync();
+            }
         }
         catch (JSDisconnectedException)
         {
@@ -133,5 +274,7 @@
         {
             // The JS runtime may already be disposed during application shutdown.
         }
+
+        _zoomShortcutRef?.Dispose();
     }
 }

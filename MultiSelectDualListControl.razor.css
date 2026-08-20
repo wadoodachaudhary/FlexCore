@@ -3,7 +3,7 @@
     align-items: stretch;
     gap: 10px;
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-dual-pane {
@@ -14,7 +14,7 @@
 }
 
 .fx-dual-header {
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     font-weight: 600;
     color: #495057;
     margin-bottom: 4px;
@@ -27,7 +27,7 @@
     border: 1px solid #ced4da;
     border-radius: 4px;
     background: #fff;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     overflow: auto;
 }
 .fx-dual-select:focus {
@@ -44,7 +44,7 @@
 }
 
 .fx-dual-meta {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     color: #6c757d;
     margin-top: 4px;
     text-align: right;
@@ -67,7 +67,7 @@
     background: #f8f9fa;
     cursor: pointer;
     font-family: monospace;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     font-weight: 600;
 }
 .fx-dual-btn:hover:not(:disabled) {

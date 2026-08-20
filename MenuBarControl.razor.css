@@ -7,7 +7,7 @@
     border-radius: 6px;
     background: #f7f9fc;
     font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     user-select: none;
     -webkit-user-select: none;
     -webkit-user-modify: read-only;

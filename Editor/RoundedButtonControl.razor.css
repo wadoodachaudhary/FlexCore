@@ -9,7 +9,7 @@
     padding: 0.2rem 0.7rem;
     border-radius: 999px;
     border: 1px solid transparent;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
     font-weight: 600;
     cursor: pointer;
     white-space: nowrap;

@@ -33,7 +33,7 @@
 .fx-rd-property-card h3 {
     grid-column: 1 / -1;
     margin: 0 0 3px;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
 }
 
 .fx-rd-property-card label {

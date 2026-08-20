@@ -14,7 +14,7 @@
     background: #fff;
     box-sizing: border-box;
     color: #000;
-    font: 12px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
 }
 
 .fx-textbox-classic:focus {
@@ -102,7 +102,7 @@
     background: #f4f4f4;
     box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.24);
     color: #000;
-    font: 14px "Segoe UI", Tahoma, Arial, sans-serif;
+    font: calc(14px * var(--fx-zoom, 1)) "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
 .fx-text-context-menu button {

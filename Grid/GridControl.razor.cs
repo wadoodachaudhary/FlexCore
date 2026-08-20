@@ -147,6 +147,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     [Parameter] public bool FocusInitialSelection { get; set; }
     /// <summary>
+    /// When enabled, Tab on the final navigable cell and Shift+Tab on the first
+    /// move focus to the adjacent control outside the grid. Disabled by default
+    /// so existing grids retain row-wrapping behavior.
+    /// </summary>
+    [Parameter] public bool ExitGridOnTerminalTab { get; set; }
+    /// <summary>
     /// Raises the normal selection callback for an initial seeded selection.
     /// Picker hosts normally leave this false because the value has not changed.
     /// </summary>
@@ -1097,6 +1103,29 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await _gridJsModule.InvokeVoidAsync("setBatchEditorValue", _batchEditInputRef, _batchEditValue ?? string.Empty);
         }
         catch { /* editor unmounted mid-bridge */ }
+    }
+
+    private async Task SynchronizeClientBufferedBatchEditorValueAsync()
+    {
+        var editItem = _batchEditItem;
+        var editField = _batchEditField;
+        if (TextEditorTypingBehavior != TextBoxTypingBehavior.ClientBuffered
+            || editItem == null
+            || string.IsNullOrWhiteSpace(editField)
+            || string.IsNullOrEmpty(_batchEditInputRef.Id))
+            return;
+
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            var value = await _gridJsModule.InvokeAsync<string?>("getBatchEditorValue", _batchEditInputRef);
+            if (IsActiveBatchEditSource(editItem, editField))
+                UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
+        }
+        catch
+        {
+            // The click may have removed the editor while the read was in flight.
+        }
     }
 
     // Lazy-imported ES module from wwwroot/grid-control.js. We only
@@ -3875,6 +3904,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (activeCellChanged && IsBatchEditingDifferentCell(item, mouseDownColumn))
             {
+                // A different-cell mousedown precedes the ClientBuffered blur.
+                // Capture the browser-owned text before this path commits and
+                // removes the current editor.
+                await SynchronizeClientBufferedBatchEditorValueAsync();
                 await CommitBatchEdit();
                 StateHasChanged();   // commit teardown must not wait for the click render
             }
@@ -8023,8 +8056,26 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && await TryAddNewRowOnLastCellExitAsync(currentItem, currentRowIndex, currentCellIndex))
             return;
 
+        if (ExitGridOnTerminalTab
+            && allowRowWrap
+            && await FocusAdjacentOutsideGridAsync(backwards))
+            return;
+
         await FocusGridHostAsync();
         await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<bool> FocusAdjacentOutsideGridAsync(bool backwards)
+    {
+        try
+        {
+            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            return await _gridJsModule.InvokeAsync<bool>("focusAdjacentOutsideGrid", _gridHostElement, backwards);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async Task NavigateToVerticalEditTargetAsync(TValue currentItem, int currentRowIndex, int currentCellIndex, int rowDelta)

@@ -49,7 +49,7 @@
     border: 2px solid #000080;
     color: #000080;
     background: #fff;
-    font: 700 11px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font: 700 calc(11px * var(--fx-zoom, 1)) Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
 .fx-report-wizard-dialog .fx-rw-step-fields::before {
@@ -70,7 +70,7 @@
 .fx-report-wizard-dialog .fx-rw-step-summaries::before {
     content: "S";
     color: #000080;
-    font-size: 42px;
+    font-size: calc(42px * var(--fx-zoom, 1));
     font-weight: 800;
     left: 13px;
     top: 0;
@@ -117,12 +117,12 @@
 .fx-rw-dual-list {
     height: 100%;
     font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-rw-dual-list ::deep .fx-dual-header {
     color: #111;
-    font-size: 15px;
+    font-size: calc(15px * var(--fx-zoom, 1));
     font-weight: 400;
     margin-bottom: 7px;
 }
@@ -130,7 +130,7 @@
 .fx-rw-dual-list ::deep .fx-dual-select {
     border: 2px inset #d0d0d0;
     border-radius: 0;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-rw-dual-list ::deep .fx-dual-buttons {
@@ -152,7 +152,7 @@
 .fx-rw-dual-list ::deep .fx-dual-btn {
     min-width: 58px;
     min-height: 32px;
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
 }
 
 .fx-rw-dual-list ::deep .fx-dual-btn:disabled,
@@ -170,7 +170,7 @@
 .fx-rw-small-btn {
     min-height: 30px;
     padding: 4px 12px;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-rw-bottom-row,
@@ -186,7 +186,7 @@
 }
 
 .fx-rw-label {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-weight: 600;
 }
 
@@ -198,7 +198,7 @@
     border-radius: 0;
     background: #fff;
     font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-rw-select.wide {
@@ -358,7 +358,7 @@
     background: #fff;
     color: #111;
     padding: 8px;
-    font: 12px Consolas, "Courier New", monospace;
+    font: calc(12px * var(--fx-zoom, 1)) Consolas, "Courier New", monospace;
     line-height: 1.35;
     white-space: pre;
 }
@@ -378,7 +378,7 @@
 }
 
 .fx-rw-pane-title {
-    font-size: 15px;
+    font-size: calc(15px * var(--fx-zoom, 1));
 }
 
 .fx-rw-listview {
@@ -397,7 +397,7 @@
 .fx-rw-template-preview span {
     display: block;
     margin-bottom: 18px;
-    font-size: 24px;
+    font-size: calc(24px * var(--fx-zoom, 1));
     font-weight: 700;
     color: #5b789c;
 }
@@ -421,7 +421,7 @@
     grid-template-columns: 80px 1fr;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-rw-title-box {
@@ -436,5 +436,5 @@
     padding: 24px;
     border: 1px solid #b8b8b8;
     background: #fff;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }

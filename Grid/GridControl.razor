@@ -11,6 +11,7 @@
      style="@HostStyle"
      data-fx-row-reveal-index="@(_pendingRowRevealIndex?.ToString(CultureInfo.InvariantCulture))"
      data-fx-row-reveal-token="@(_pendingRowRevealIndex.HasValue ? _pendingRowRevealToken.ToString(CultureInfo.InvariantCulture) : null)"
+     data-fx-client-buffered-editing="@(TextEditorTypingBehavior == TextBoxTypingBehavior.ClientBuffered ? "true" : "false")"
      @ref="_gridHostElement"
      tabindex="0"
      @onkeydown="HandleKeyDown"

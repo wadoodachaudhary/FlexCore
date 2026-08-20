@@ -44,7 +44,7 @@
 .fx-context-menu-item-arrow {
     flex: 0 0 auto;
     margin-left: 18px;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     line-height: 1;
 }
 

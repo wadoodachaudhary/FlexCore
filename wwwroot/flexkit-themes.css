@@ -318,7 +318,7 @@
     border-color: var(--fx-input-border-color) !important;
     border-radius: var(--fx-input-radius) !important;
     font-family: var(--fx-font-family) !important;
-    font-size: var(--fx-font-size) !important;
+    font-size: calc(var(--fx-font-size) * var(--fx-zoom, 1)) !important;
 }
 
 .theme-vb input:focus, .theme-vb select:focus, .theme-vb textarea:focus,

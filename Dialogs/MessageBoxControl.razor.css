@@ -34,7 +34,7 @@
     box-shadow: 0 2px 7px rgba(0, 0, 0, 0.28);
     color: #000;
     font-family: "MS Sans Serif", Arial, Tahoma, sans-serif;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
 }
 
 .fx-msgbox-vb6 .fx-msgbox-header {
@@ -45,7 +45,7 @@
     padding: 0 5px 0 8px;
     background: #f0f0f0;
     color: #000;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     font-weight: 400;
 }
 
@@ -58,7 +58,7 @@
     color: #000;
     cursor: default;
     font-family: Arial, sans-serif;
-    font-size: 20px;
+    font-size: calc(20px * var(--fx-zoom, 1));
     line-height: 20px;
 }
 
@@ -96,7 +96,7 @@
 
 .fx-msgbox-vb6 .fx-msgbox-message {
     color: #000;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     line-height: 1.75;
     white-space: pre-line;
     cursor: default;
@@ -121,7 +121,7 @@
     background: #f0f0f0;
     color: #000;
     cursor: default;
-    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Arial, Tahoma, sans-serif;
     font-weight: 400;
 }
 
@@ -153,7 +153,7 @@
     padding: 3px 6px;
     border: 1px dotted #000;
     color: #000;
-    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Arial, Tahoma, sans-serif;
     cursor: default;
 }
 
@@ -192,7 +192,7 @@
     top: 8px;
     width: 32px;
     color: #27364a;
-    font: 700 21px Arial, sans-serif;
+    font: 700 calc(21px * var(--fx-zoom, 1)) Arial, sans-serif;
     line-height: 20px;
     text-align: center;
 }
@@ -224,7 +224,7 @@
     top: 6px;
     width: 32px;
     color: #fff;
-    font: 700 22px Arial, sans-serif;
+    font: 700 calc(22px * var(--fx-zoom, 1)) Arial, sans-serif;
     line-height: 22px;
     text-align: center;
 }
@@ -257,7 +257,7 @@
     background: #0d3b66;
     color: #fff;
     font-weight: 600;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-msgbox-dotnet .fx-msgbox-close {
@@ -266,7 +266,7 @@
     background: transparent;
     color: #fff;
     cursor: pointer;
-    font-size: 20px;
+    font-size: calc(20px * var(--fx-zoom, 1));
     line-height: 1;
 }
 
@@ -284,12 +284,12 @@
 
 .fx-msgbox-dotnet .fx-msgbox-icon {
     flex-shrink: 0;
-    font-size: 24px;
+    font-size: calc(24px * var(--fx-zoom, 1));
 }
 
 .fx-msgbox-dotnet .fx-msgbox-message {
     color: #374151;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     line-height: 1.5;
     cursor: default;
     user-select: none;
@@ -312,7 +312,7 @@
     background: #fff;
     color: #374151;
     cursor: pointer;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-weight: 500;
 }
 

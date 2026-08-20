@@ -9,7 +9,7 @@
     overflow: hidden;
     color: #111;
     font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
 }
 
 .fx-ruler::before {

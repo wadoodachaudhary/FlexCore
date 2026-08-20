@@ -3,7 +3,7 @@
     display: inline-block;
     vertical-align: middle;
     font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 .fx-datepicker-input-group {
@@ -51,7 +51,7 @@
     background: #fff0f0;
     color: #8f1717;
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     font-weight: 600;
     line-height: 1.25;
     white-space: nowrap;
@@ -70,7 +70,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
 }
 
 .fx-datepicker-trigger:hover:not(:disabled) {
@@ -201,7 +201,7 @@
     background: #e5e5e5;
     cursor: pointer;
     color: #000;
-    font: 700 10px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: 700 calc(10px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     padding: 0;
     display: flex;
     align-items: center;
@@ -272,7 +272,7 @@
     background: #efefef;
     color: #000;
     text-align: center;
-    font: 700 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: 700 calc(11px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -291,7 +291,7 @@
 }
 
 .fx-weekday {
-    font: 11px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(11px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     line-height: 14px;
 }
 
@@ -307,7 +307,7 @@
     background: transparent;
     cursor: pointer;
     position: relative;
-    font: 13px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: calc(13px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     padding: 0;
     height: 21px;
     min-height: 21px;
@@ -383,7 +383,7 @@
     color: #000;
     text-align: left;
     cursor: pointer;
-    font: 700 13px "MS Sans Serif", Tahoma, Arial, sans-serif;
+    font: 700 calc(13px * var(--fx-zoom, 1)) "MS Sans Serif", Tahoma, Arial, sans-serif;
     line-height: 17px;
     box-sizing: border-box;
 }
@@ -403,7 +403,7 @@
 }
 
 .fx-time-label {
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     font-weight: bold;
     color: #333;
 }
@@ -416,7 +416,7 @@
 
 .fx-time-select {
     font-family: inherit;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     border: 1px solid #7f9db9;
     height: 18px;
     padding: 0;
@@ -447,7 +447,7 @@
 }
 
 .fx-section-title {
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     font-weight: bold;
     color: #444;
     text-transform: uppercase;
@@ -466,7 +466,7 @@
     border: 1px solid #b0b0b0;
     background: #fff;
     cursor: pointer;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     padding: 2px;
     text-align: center;
     border-radius: 1px;
@@ -500,7 +500,7 @@
     border: 1px solid #c0c0c0;
     background: #fff;
     cursor: pointer;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     padding: 2px 0;
     text-align: center;
     border-radius: 1px;
@@ -524,7 +524,7 @@
     border: 1px solid #c0c0c0;
     background: #fff;
     cursor: pointer;
-    font-size: 8px;
+    font-size: calc(8px * var(--fx-zoom, 1));
     padding: 0 4px;
     height: 14px;
     border-radius: 1px;
@@ -540,7 +540,7 @@
     border: 1px solid #c0c0c0;
     background: #fff;
     cursor: pointer;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     padding: 2px 0;
     text-align: center;
     border-radius: 1px;

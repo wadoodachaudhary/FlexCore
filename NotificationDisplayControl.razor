@@ -1,9 +1,10 @@
 @implements IDisposable
 @inject NotificationService Notifications
+@inject IServiceProvider Services
 
 @if (_items.Count > 0)
 {
-    <div class="fx-notification-container">
+    <div class="fx-notification-container" style="@ZoomStyle">
         @foreach (var n in _items)
         {
             <div class="fx-notification fx-notification-@n.Level.ToString().ToLowerInvariant()"
@@ -42,9 +43,22 @@
 
 @code {
     private List<Notification> _items = new();
+    private ZoomService? _zoomService;
+
+    [CascadingParameter] private PageControl? AncestorPageControl { get; set; }
+
+    // Toast hosts usually live at layout level, outside any PageControl, so the
+    // container publishes the --fx-zoom scope itself when a ZoomService exists.
+    private string? ZoomStyle =>
+        _zoomService is not null && AncestorPageControl is null
+            ? _zoomService.ZoomScopeStyle
+            : null;
 
     protected override void OnInitialized()
     {
+        _zoomService = Services.GetService(typeof(ZoomService)) as ZoomService;
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged += HandleChange;
         Notifications.OnChange += HandleChange;
         Refresh();
     }
@@ -65,6 +79,8 @@
 
     public void Dispose()
     {
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged -= HandleChange;
         Notifications.OnChange -= HandleChange;
     }
 }

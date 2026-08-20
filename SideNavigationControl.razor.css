@@ -7,7 +7,7 @@
     flex-direction: column;
     box-sizing: border-box;
     font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 /* Right-docked: pad on the other side so the box hugs the content area. */

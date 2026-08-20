@@ -25,14 +25,14 @@
     background: #0d3b66;
     color: #fff;
     font-weight: 600;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 
 .fx-inputdlg-close {
     background: transparent;
     border: none;
     color: #fff;
-    font-size: 20px;
+    font-size: calc(20px * var(--fx-zoom, 1));
     cursor: pointer;
     line-height: 1;
 }
@@ -45,7 +45,7 @@
 }
 
 .fx-inputdlg-label {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #374151;
     font-weight: 500;
 }
@@ -55,7 +55,7 @@
     padding: 8px 12px;
     border: 1px solid #d1d5db;
     border-radius: 4px;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     outline: none;
     box-sizing: border-box;
 }
@@ -76,7 +76,7 @@
 .fx-inputdlg-btn {
     padding: 6px 16px;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-weight: 500;
     cursor: pointer;
     border: 1px solid #d1d5db;

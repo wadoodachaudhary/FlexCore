@@ -17,7 +17,7 @@
     background: transparent;
     cursor: pointer;
     font-family: inherit;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1.2;
     color: inherit;
     white-space: nowrap;
@@ -90,7 +90,7 @@
 }
 
 .fx-toolbar-btn-label {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1.1;
 }
 
@@ -100,7 +100,7 @@
 }
 
 .fx-toolbar-btn--large .fx-toolbar-btn-label {
-    font-size: 24px;
+    font-size: calc(24px * var(--fx-zoom, 1));
     line-height: 1.1;
 }
 
@@ -143,7 +143,7 @@
     position: absolute;
     inset: -8px 0 0 0;
     font-family: "Times New Roman", Times, serif;
-    font-size: 68px;
+    font-size: calc(68px * var(--fx-zoom, 1));
     font-weight: 700;
     line-height: 1;
     color: #000;

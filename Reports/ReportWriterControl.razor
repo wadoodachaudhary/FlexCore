@@ -74,20 +74,20 @@
             <ToolbarSeparatorControl />
 
             <ToolbarButtonControl Vertical="true" OnClick="OnClose">
-                <span style="font-size:18px;">✕</span>
+                <span style="font-size:calc(18px * var(--fx-zoom, 1));">✕</span>
                 <span class="fx-rpt-toolbar-label">Close</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
 
             <ToolbarButtonControl Vertical="true" OnClick="ChromeOnPrint">
-                <span style="font-size:18px;">🖨️</span>
+                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🖨️</span>
                 <span class="fx-rpt-toolbar-label">Print</span>
             </ToolbarButtonControl>
 
             <div class="fx-rpt-export-menu @(ExportMenuOpen ? "open" : "")">
                 <ToolbarButtonControl Vertical="true" OnClick="ToggleExportMenu">
-                    <span style="font-size:18px;">📤</span>
+                    <span style="font-size:calc(18px * var(--fx-zoom, 1));">📤</span>
                     <span class="fx-rpt-toolbar-label">Export ▾</span>
                 </ToolbarButtonControl>
                 <div class="fx-rpt-export-items">
@@ -101,7 +101,7 @@
             <ToolbarSeparatorControl />
 
             <ToolbarButtonControl Vertical="true" OnClick="ChromeOnRefresh">
-                <span style="font-size:18px;">🔄</span>
+                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🔄</span>
                 <span class="fx-rpt-toolbar-label">Refresh</span>
             </ToolbarButtonControl>
 
@@ -109,7 +109,7 @@
 
             <div class="fx-rpt-zoom-controls">
                 <ToolbarButtonControl OnClick="ChromeOnZoomOut">
-                    <span style="font-size:16px;">🔍−</span>
+                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍−</span>
                 </ToolbarButtonControl>
                 <select @bind="ZoomLevel" @bind:after="ChromeOnZoomChanged" title="Zoom Level">
                     <option value="25">25%</option>
@@ -123,7 +123,7 @@
                     <option value="-1">Fit Width</option>
                 </select>
                 <ToolbarButtonControl OnClick="ChromeOnZoomIn">
-                    <span style="font-size:16px;">🔍+</span>
+                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍+</span>
                 </ToolbarButtonControl>
             </div>
 
@@ -132,21 +132,21 @@
             <div class="fx-rpt-search-controls">
                 <input type="text" @bind="SearchText" @bind:event="oninput" placeholder="Search..." @onkeydown="ChromeOnSearchKeyDown" />
                 <ToolbarButtonControl OnClick="ChromeOnSearch">
-                    <span style="font-size:16px;">🔎</span>
+                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔎</span>
                 </ToolbarButtonControl>
             </div>
 
             <ToolbarSeparatorControl />
 
             <ToolbarButtonControl Vertical="true" OnClick="ChromeOnEditParameters">
-                <span style="font-size:18px;">⚙️</span>
+                <span style="font-size:calc(18px * var(--fx-zoom, 1));">⚙️</span>
                 <span class="fx-rpt-toolbar-label">Parameters</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
 
             <ToolbarButtonControl Vertical="true" OnClick="ToggleGroupTreePanel">
-                <span style="font-size:18px;">🌳</span>
+                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🌳</span>
                 <span class="fx-rpt-toolbar-label">@(ShowGroupTree ? "Hide Tree" : "Show Tree")</span>
             </ToolbarButtonControl>
 
@@ -174,7 +174,7 @@
             @if (ShowGroupTree)
             {
                 <div class="fx-rpt-group-tree">
-                    <strong style="font-size: 13px; display: block; margin-bottom: 8px;">Report Groups</strong>
+                    <strong style="font-size: calc(13px * var(--fx-zoom, 1)); display: block; margin-bottom: 8px;">Report Groups</strong>
                     @if (GroupTree.Any())
                     {
                         <ul>
@@ -186,7 +186,7 @@
                     }
                     else
                     {
-                        <p style="color: #999; font-size: 12px;">No groups available.</p>
+                        <p style="color: #999; font-size: calc(12px * var(--fx-zoom, 1));">No groups available.</p>
                     }
                 </div>
             }
@@ -657,7 +657,7 @@ else
                        <h3 style='color:#666;'>{reason}</h3>
                        <p><strong>Filters applied:</strong></p>
                        <ul>{string.Join("", fullPath.Select(f => $"<li>{System.Web.HttpUtility.HtmlEncode(f.Field)} = '{System.Web.HttpUtility.HtmlEncode(string.IsNullOrEmpty(f.Value) ? "(empty)" : f.Value)}'</li>"))}</ul>
-                       <p style='color:#888; font-size:12px;'>Usually means this is a &quot;leaf&quot; drill target — no child rows exist for it. Try a different tree node.</p>
+                       <p style='color:#888; font-size:calc(12px * var(--fx-zoom, 1));'>Usually means this is a &quot;leaf&quot; drill target — no child rows exist for it. Try a different tree node.</p>
                     </div>"
                 };
             }

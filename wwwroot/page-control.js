@@ -239,3 +239,81 @@ export function unregisterPageNavigation(root) {
     root.removeEventListener("keydown", onKeyDown, true);
     pageNavigationBindings.delete(root);
 }
+
+// --- Page zoom shortcuts (Ctrl+> / Ctrl+<) -------------------------------
+// One document-level listener serves every registered PageControl so a chord
+// zooms exactly once per keypress no matter how many page roots are nested.
+
+// Keyed by a stable token from the .NET side, NOT by the root element:
+// unregistration must survive the root having already left the DOM (Blazor
+// removes the DOM before the dispose-time interop call arrives, so the
+// ElementReference revives to null there).
+const pageZoomBindings = new Map();
+let pageZoomListener = null;
+
+function resolveZoomDirection(event) {
+    if (!event.ctrlKey || event.altKey || event.metaKey) return null;
+    // Ctrl+> is physically Ctrl+Shift+. on most layouts; browsers report the
+    // produced character (">") on some layouts and the base key (".") on others.
+    const key = event.key;
+    if (key === ">" || (key === "." && event.shiftKey)) return "in";
+    if (key === "<" || (key === "," && event.shiftKey)) return "out";
+    return null;
+}
+
+// Detached roots are also pruned on every touch, as self-healing for circuit
+// deaths where the unregister call never arrives at all.
+function pruneZoomBindings() {
+    for (const [token, binding] of [...pageZoomBindings]) {
+        if (!binding.root.isConnected)
+            pageZoomBindings.delete(token);
+    }
+    detachZoomListenerIfIdle();
+}
+
+function detachZoomListenerIfIdle() {
+    if (pageZoomBindings.size === 0 && pageZoomListener) {
+        document.removeEventListener("keydown", pageZoomListener, true);
+        pageZoomListener = null;
+    }
+}
+
+function resolveZoomTarget(event) {
+    let match = null;
+    let fallback = null;
+    for (const binding of pageZoomBindings.values()) {
+        if (!binding.root.isConnected) continue;
+        fallback = binding.dotNetRef;
+        if (event.target instanceof Element && binding.root.contains(event.target))
+            match = binding.dotNetRef; // later entries are inner roots — keep the innermost
+    }
+    return match ?? fallback;
+}
+
+export function registerPageZoomShortcuts(root, token, dotNetRef) {
+    if (!root || !token || !dotNetRef) return;
+    pruneZoomBindings();
+    pageZoomBindings.set(token, { root, dotNetRef });
+
+    if (pageZoomListener) return;
+    pageZoomListener = event => {
+        const direction = resolveZoomDirection(event);
+        if (!direction) return;
+
+        pruneZoomBindings();
+        const target = resolveZoomTarget(event);
+        if (!target) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        // Fire-and-forget; the circuit can drop between keydown and dispatch.
+        target.invokeMethodAsync("OnZoomShortcutAsync", direction).catch(() => { });
+    };
+    document.addEventListener("keydown", pageZoomListener, true);
+}
+
+export function unregisterPageZoomShortcuts(token) {
+    if (token)
+        pageZoomBindings.delete(token);
+    pruneZoomBindings();
+}

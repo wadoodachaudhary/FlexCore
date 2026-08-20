@@ -34,7 +34,7 @@
     min-width: 28px;
     height: 28px;
     padding: 0 8px;
-    font-size: 0.85rem;
+    font-size: calc(0.85rem * var(--fx-zoom, 1));
     line-height: 1;
     background: var(--surface, #fffaf1);
     border: 1px solid var(--border, #dfcdbd);
@@ -55,13 +55,13 @@
 
 .fx-format-control ::deep .fx-format-btn strong,
 .fx-format-control ::deep .fx-format-btn em {
-    font-size: 0.9rem;
+    font-size: calc(0.9rem * var(--fx-zoom, 1));
 }
 
 .fx-format-control ::deep .fx-format-heading-btn {
     min-width: 34px;
     padding: 0 10px;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
     font-weight: 700;
     letter-spacing: 0.02em;
 }
@@ -70,7 +70,7 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
-    font-size: 0.72rem;
+    font-size: calc(0.72rem * var(--fx-zoom, 1));
     color: var(--muted, #5d5147);
 }
 
@@ -85,7 +85,7 @@
     border: 1px solid var(--border, #dfcdbd);
     border-radius: 6px;
     padding: 3px 6px;
-    font-size: 0.78rem;
+    font-size: calc(0.78rem * var(--fx-zoom, 1));
     color: var(--ink, #1b1a16);
     cursor: pointer;
 }

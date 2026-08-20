@@ -31,7 +31,7 @@
     align-items: center;
     gap: 8px;
     padding: 9px 12px 7px;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     font-weight: 600;
     color: #44546f;
     text-transform: uppercase;
@@ -44,7 +44,7 @@
     color: #44546f;
     border-radius: 10px;
     padding: 0 8px;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 18px;
 }
 
@@ -72,7 +72,7 @@
 
 .fx-kanban-empty {
     color: #8993a4;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     text-align: center;
     padding: 14px;
     border: 1px dashed #c1c7d0;

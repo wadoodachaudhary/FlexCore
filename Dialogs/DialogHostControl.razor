@@ -1,5 +1,7 @@
 @namespace Fx.ControlKit.Dialogs
 @inject DialogService Svc
+@inject IServiceProvider Services
+@implements IDisposable
 
 @*
     Single host for the app-wide modal dialog service. Render this ONCE near the
@@ -8,14 +10,38 @@
     DialogService, so any component can `@inject IDialogService` and await
     ConfirmAsync / AlertAsync / PromptAsync. This is the FlexKit replacement for
     the browser's native confirm/alert/prompt (JS interop).
+
+    The wrapper publishes the --fx-zoom scope when the host lives OUTSIDE any
+    PageControl (the usual MainLayout placement) so service-driven dialogs zoom
+    with the rest of the app; display:contents keeps it out of the layout.
 *@
 
-<MessageBoxControl @ref="_msgBox" />
-<InputDialogControl @ref="_input" />
+<div style="@WrapperStyle">
+    <MessageBoxControl @ref="_msgBox" />
+    <InputDialogControl @ref="_input" />
+</div>
 
 @code {
     private MessageBoxControl? _msgBox;
     private InputDialogControl? _input;
+    private ZoomService? _zoomService;
+
+    [CascadingParameter] private Fx.ControlKit.PageControl? AncestorPageControl { get; set; }
+
+    private string WrapperStyle =>
+        _zoomService is not null && AncestorPageControl is null
+            ? $"display:contents; {_zoomService.ZoomScopeStyle}"
+            : "display:contents";
+
+    protected override void OnInitialized()
+    {
+        // Optional, like PageControl: hosts without a ZoomService see no change.
+        _zoomService = Services.GetService(typeof(ZoomService)) as ZoomService;
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged += HandleZoomChanged;
+    }
+
+    private void HandleZoomChanged() => _ = InvokeAsync(StateHasChanged);
 
     protected override void OnAfterRender(bool firstRender)
     {
@@ -25,5 +51,11 @@
                 (message, title, buttons) => _msgBox.ShowAsync(message, title, buttons),
                 (prompt, title, def) => _input.ShowAsync(prompt, title, def));
         }
+    }
+
+    public void Dispose()
+    {
+        if (_zoomService is not null)
+            _zoomService.OnZoomChanged -= HandleZoomChanged;
     }
 }

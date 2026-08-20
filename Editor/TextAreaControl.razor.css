@@ -10,7 +10,7 @@
     border: 1px solid #c9c9c9;
     border-radius: 4px;
     font-family: inherit;
-    font-size: 0.9rem;
+    font-size: calc(0.9rem * var(--fx-zoom, 1));
     line-height: 1.5;
     resize: vertical;
     background: #fff;

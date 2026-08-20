@@ -28,7 +28,7 @@
     border-bottom: none;
     border-top-left-radius: 4px;
     border-top-right-radius: 4px;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     cursor: pointer;
     color: #333;
 }
@@ -49,7 +49,7 @@
 .fx-report-tab-close {
     background: transparent;
     border: none;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     line-height: 1;
     padding: 0 2px;
     cursor: pointer;
@@ -86,7 +86,7 @@
     align-items: center;
     justify-content: center;
     height: 200px;
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
     color: #666;
 }
 
@@ -104,7 +104,7 @@
     align-items: center;
     justify-content: center;
     height: 200px;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     color: #999;
 }
 
@@ -132,7 +132,7 @@
        the top edge — matches Crystal Reports' tighter page chrome. */
     padding: 28px 50px;
     font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1.4;
     color: #333;
 }
@@ -157,21 +157,21 @@
 }
 
 ::deep .fx-rpt-title {
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
     font-weight: bold;
     color: #111;
     text-align: center;  /* default — inline style overrides per XML */
 }
 
 ::deep .fx-rpt-subtitle {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     color: #555;
     margin-top: 1px;
     text-align: center;  /* default — inline style overrides per XML */
 }
 
 ::deep .fx-rpt-date {
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     color: #888;
     text-align: right;
     /* Pulls the date up to share the title's row. -19px fits the smaller
@@ -187,7 +187,7 @@
 ::deep .fx-rpt-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     table-layout: fixed;
 }
 
@@ -215,7 +215,7 @@
     border-bottom: 2px solid #999;
     padding: 4px 6px;
     font-weight: bold;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     white-space: nowrap;
 }
 
@@ -252,7 +252,7 @@
    a staircase. */
 ::deep .fx-rpt-group-header td {
     font-weight: bold;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     padding: 2px 6px;
     background: transparent;
     border-bottom: none;
@@ -260,27 +260,27 @@
 
 ::deep .fx-rpt-group-header.fx-rpt-group-l0 td {
     background: #ffffff;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     padding-top: 6px;
     /* l0 = outermost — sits flush against the left edge */
 }
 
 ::deep .fx-rpt-group-header.fx-rpt-group-l1 td {
     background: #ffffff;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     padding-left: 12px;
 }
 
 ::deep .fx-rpt-group-header.fx-rpt-group-l2 td {
     background: #ffffff;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     padding-left: 24px;
     font-weight: bold;
 }
 
 ::deep .fx-rpt-group-header.fx-rpt-group-l3 td {
     background: #ffffff;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     padding-left: 36px;
     font-weight: bold;
 }
@@ -288,7 +288,7 @@
 ::deep .fx-rpt-group-header.fx-rpt-group-l4 td,
 ::deep .fx-rpt-group-header.fx-rpt-group-l5 td {
     background: #ffffff;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     padding-left: 48px;
     font-weight: normal;
 }
@@ -296,7 +296,7 @@
 ::deep .fx-rpt-group-footer td {
     background: transparent;
     padding: 2px 6px;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     border-bottom: none;
 }
 
@@ -346,7 +346,7 @@
     border-top: 2px solid #333;
     border-bottom: 2px solid #333;
     padding: 5px 6px;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 /* Page footer — reduced by ~30 % from previous values. */
@@ -356,7 +356,7 @@
     margin-top: 11px;
     padding-top: 4px;
     border-top: 1px solid #ccc;
-    font-size: 9px;
+    font-size: calc(9px * var(--fx-zoom, 1));
     color: #888;
 }
 
@@ -422,16 +422,16 @@
     position: relative;
 }
 
-.fx-rpt-toolbar-label { font-size: 11px; }
+.fx-rpt-toolbar-label { font-size: calc(11px * var(--fx-zoom, 1)); }
 
-.fx-rpt-nav { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.fx-rpt-nav { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--fx-zoom, 1)); }
 .fx-rpt-nav input {
     width: 60px;
     padding: 4px 6px;
     border: 1px solid #ced4da;
     border-radius: 4px;
     text-align: center;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 .fx-rpt-nav button {
     padding: 4px 8px;
@@ -439,7 +439,7 @@
     border-radius: 4px;
     background: #fff;
     cursor: pointer;
-    font-size: 14px;
+    font-size: calc(14px * var(--fx-zoom, 1));
 }
 .fx-rpt-nav button:hover:not(:disabled) { background: #e9ecef; }
 .fx-rpt-nav button:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -449,7 +449,7 @@
     padding: 4px 8px;
     border: 1px solid #ced4da;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     background: #fff;
 }
 
@@ -458,7 +458,7 @@
     padding: 4px 8px;
     border: 1px solid #ced4da;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     width: 160px;
 }
 
@@ -490,7 +490,7 @@
     gap: 4px;
     padding: 3px 6px;
     border-radius: 3px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     user-select: none;
 }
 .fx-rpt-tree-node:hover { background-color: #e8f0fe; }
@@ -498,7 +498,7 @@
 .fx-rpt-tree-toggle {
     width: 16px;
     text-align: center;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     color: #666;
     cursor: pointer;
 }
@@ -526,10 +526,10 @@
     border: 1px solid #ced4da;
     border-radius: 4px;
     background: #fff;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     height: 36px;
 }
-.fx-rpt-tree-mode-label { color: #495057; font-weight: 600; font-size: 11px; margin-right: 2px; }
+.fx-rpt-tree-mode-label { color: #495057; font-weight: 600; font-size: calc(11px * var(--fx-zoom, 1)); margin-right: 2px; }
 .fx-rpt-tree-mode-radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .fx-rpt-tree-mode-radio input[type=radio] { margin: 0; cursor: pointer; }
 
@@ -552,7 +552,7 @@
     background: #f0f0f0;
     border-top: 1px solid #ccc;
     padding: 4px 12px;
-    font-size: 12px;
+    font-size: calc(12px * var(--fx-zoom, 1));
     color: #555;
     display: flex;
     align-items: center;
@@ -573,7 +573,7 @@
     background: #fff;
     border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
-    font-size: 16px;
+    font-size: calc(16px * var(--fx-zoom, 1));
     font-weight: 500;
     color: #333;
 }
@@ -604,7 +604,7 @@
     border: none;
     background: transparent;
     cursor: pointer;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     text-align: left;
 }
 .fx-rpt-export-menu .fx-rpt-export-items button:hover { background: #f0f0f0; }

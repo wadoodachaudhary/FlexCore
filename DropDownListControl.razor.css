@@ -6,7 +6,7 @@
     max-width: 100%;
     vertical-align: middle;
     font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     line-height: 1.2;
 }
 

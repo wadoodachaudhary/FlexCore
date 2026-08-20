@@ -35,7 +35,7 @@
     padding: 0 0 0 8px;
     background: #f0f0f0;
     color: #000;
-    font: 12px "MS Sans Serif", Arial, Tahoma, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "MS Sans Serif", Arial, Tahoma, sans-serif;
     font-weight: 400;
     flex-shrink: 0;
     border-bottom: 1px solid #c7c7c7;
@@ -48,7 +48,7 @@
     background: transparent;
     border: none;
     color: #000;
-    font-size: 20px;
+    font-size: calc(20px * var(--fx-zoom, 1));
     cursor: default;
     line-height: 20px;
 }
@@ -68,7 +68,7 @@
 }
 
 .fx-mled-label {
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     color: #374151;
     font-weight: 500;
 }
@@ -80,7 +80,7 @@
     padding: 8px 12px;
     border: 1px solid #d1d5db;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     line-height: 1.45;
     outline: none;
     box-sizing: border-box;
@@ -94,7 +94,7 @@
 }
 
 .fx-mled-counter {
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     color: #6b7280;
     text-align: right;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -113,7 +113,7 @@
 .fx-mled-btn {
     padding: 6px 16px;
     border-radius: 4px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
     font-weight: 500;
     cursor: pointer;
     border: 1px solid #d1d5db;
@@ -152,7 +152,7 @@
     background: #f0f0f0;
     box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
     color: #000;
-    font: 12px "Segoe UI", Tahoma, Arial, sans-serif;
+    font: calc(12px * var(--fx-zoom, 1)) "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
 .fx-mled-system-menu button {

@@ -2,7 +2,7 @@
     background: #fff;
     border: 1px solid #c0c0c0;
     border-radius: 3px;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-editor-panel-title {
@@ -10,7 +10,7 @@
     background: linear-gradient(to bottom, #fafafa, #e8e8e8);
     border-bottom: 1px solid #c0c0c0;
     font-weight: 600;
-    font-size: 13px;
+    font-size: calc(13px * var(--fx-zoom, 1));
 }
 
 .fx-editor-panel-body {

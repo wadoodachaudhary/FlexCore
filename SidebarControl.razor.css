@@ -77,7 +77,7 @@
     padding: 3px 8px;
     font-family: inherit;
     font-weight: bold;
-    font-size: var(--fx-font-size, 12.5px);
+    font-size: calc(var(--fx-font-size, 12.5px) * var(--fx-zoom, 1));
     cursor: pointer;
     border-radius: var(--fx-border-radius, 0px);
     user-select: none;
@@ -120,7 +120,7 @@
     min-height: 20px;
     cursor: pointer;
     font-family: inherit;
-    font-size: var(--fx-font-size, 11px);
+    font-size: calc(var(--fx-font-size, 11px) * var(--fx-zoom, 1));
     color: var(--fx-sidebar-header-color, #3378D4);
     background: transparent;
     transition: none;
@@ -147,7 +147,7 @@
     justify-content: center;
     width: 14px;
     height: 12px;
-    font-size: 11px;
+    font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1;
     flex-shrink: 0;
     text-align: center;
@@ -162,7 +162,7 @@
 
 .explorer-section-body ::deep .fx-treeview-node {
     font-family: inherit;
-    font-size: var(--fx-font-size, 11px);
+    font-size: calc(var(--fx-font-size, 11px) * var(--fx-zoom, 1));
     color: var(--fx-sidebar-header-color, #3378D4) !important;
     background: transparent !important;
     min-height: 20px;

@@ -27,7 +27,7 @@
     border: 1px solid #dee2e6;
     background: #fff;
     cursor: pointer;
-    font-size: 10px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     color: #666;
     display: flex;
     align-items: center;
