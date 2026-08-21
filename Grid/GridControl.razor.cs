@@ -1063,6 +1063,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // schedule a render).
     private bool _suppressNextRenderOnce;
 
+    // One-shot: the editor's Enter handler committed THIS physical keypress;
+    // its bubble to the host must not re-open the editor (ServerBacked only —
+    // ClientBuffered prevents the bubble at the DOM).
+    private bool _suppressNextHostEnterEditOpen;
+
     protected override bool ShouldRender()
     {
         if (_suppressNextRenderOnce)
@@ -7676,6 +7681,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         else if (e.Key == "Enter" || e.Key == "NumpadEnter")
         {
+            // ServerBacked TEXT editors do not stop keydown propagation (pages
+            // need Ctrl+S etc. from an open editor), so THIS SAME keypress also
+            // reaches HandleKeyDown, where EditOnEnterKey would instantly
+            // re-open the editor on the just-committed cell: Enter looked like
+            // it did nothing, arrows stayed inside the editor, and every press
+            // re-committed. Arm the one-shot BEFORE any await — the host's
+            // bubbled dispatch can interleave at every await point on the
+            // circuit's sync context. ONLY for editors whose keydown actually
+            // bubbles: dropdown and date editors stop propagation, so their
+            // armed flag would never be consumed and would silently eat the
+            // user's NEXT genuine Enter. "ServerBacked" must be the editor's
+            // EFFECTIVE mode: a bulk fan-out editor is forced ServerBacked
+            // even on a ClientBuffered grid.
+            var bubblingCol = ResolveBatchEditColumn(sourceField);
+            var editorIsServerBacked =
+                ResolvedTextEditorTypingBehavior != TextBoxTypingBehavior.ClientBuffered
+                || HasSingleCellBulkEditSelection();
+            if (editorIsServerBacked
+                && bubblingCol != null
+                && !HasEditOptions(bubblingCol, sourceItem)
+                && bubblingCol.Type != ColumnType.Date)
+            {
+                _suppressNextHostEnterEditOpen = true;
+            }
             var item = _batchEditItem;
             var rowIndex = _batchEditRowIndex;
             var colIndex = ResolveVisibleColumnIndex(_batchEditField);
@@ -8754,6 +8783,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        // One-shot from the editor's Enter commit: swallow the bubbled leg of
+        // that same keypress entirely (row-commit, EditOnEnterKey, navigation).
+        // Any other key clears the flag — it can only ever apply to the very
+        // next host-observed key, which IS the bubbled Enter.
+        var suppressEnterReopen = _suppressNextHostEnterEditOpen
+            && (e.Key == "Enter" || e.Key == "NumpadEnter");
+        _suppressNextHostEnterEditOpen = false;
+        if (suppressEnterReopen)
+            return;
+
         // While the batch editor owns the keyboard (mounted, focus applied),
         // plain typing keys bubbling up from its input need no grid work.
         if (_batchEditItem != null
