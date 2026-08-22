@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 
 namespace Fx.ControlKit.Grid;
 
@@ -12,6 +13,267 @@ public partial class GridControl<TValue>
     [Parameter]
     public GridPerformanceMode PerformanceMode { get; set; } =
         GridPerformanceMode.ClientPreviewAndServerOptimized;
+
+
+    // ── Stable per-cell event callbacks ──────────────────────────────────
+    // Blazor's diff keeps an event-handler registration only when the new
+    // EventCallback compares equal to the old one. A lambda that captures loop
+    // locals allocates a FRESH closure every render, so the diff emitted a
+    // SetEventHandler edit for EVERY cell on EVERY render — measured 588,013
+    // bytes for one arrow-key move over a ~40x29 window (12 bytes with the cell
+    // handlers removed entirely). Reusing ONE delegate instance per
+    // (row item, column position) makes those frames compare equal, so they
+    // vanish from the diff and only genuinely changed cells are sent.
+    //
+    // The delegates capture NO positional values: row index and column index are
+    // per-render facts (the row index moves under in-place DataSource mutation,
+    // the column position under reorder/hide). They read a mutable context box
+    // that every render pass rewrites, and SNAPSHOT it synchronously before
+    // dispatch — the handlers are async and a later render can rewrite the box
+    // while one is parked on an await.
+    private sealed class CellHandlerContext
+    {
+        public TValue Item = default!;
+        public int RowIndexHint;
+        public int ColIndex;
+        public GridColumn Column = default!;
+    }
+
+    private sealed class RowCellHandlers
+    {
+        public CellHandlerContext[] Contexts = [];
+        public EventCallback<MouseEventArgs>[] MouseDown = [];
+        public EventCallback<MouseEventArgs>[] ContextMenu = [];
+        public EventCallback<MouseEventArgs>[] DblClick = [];
+        public EventCallback<MouseEventArgs>[] Click = [];
+        // Checkbox cells host a CheckBoxControl COMPONENT: a changed callback
+        // parameter re-renders that child component, so these churned even
+        // harder than the plain attribute handlers.
+        public EventCallback<bool>[] CheckToggle = [];
+        public EventCallback<MouseEventArgs>[] CheckMouseDown = [];
+        public EventCallback<FocusEventArgs>[] CheckFocus = [];
+        public EventCallback<KeyboardEventArgs>[] CheckKeyDown = [];
+        // "..." lookup/action button inside a display cell.
+        public EventCallback<MouseEventArgs>[] ActionClick = [];
+    }
+
+    private Dictionary<object, RowCellHandlers>? _cellHandlersCurrent;
+    private Dictionary<object, RowCellHandlers>? _cellHandlersPrevious;
+
+    // Boxed value types never hit a reference-keyed cache and would grow it
+    // without bound — same bail-out the display-value cache uses.
+    private bool CellHandlerCacheEnabled => !typeof(TValue).IsValueType;
+
+    /// <summary>
+    /// Per-render-pass generation swap. Rows that left the rendered window are
+    /// simply never promoted out of the previous generation and die on the next
+    /// swap, so the cache stays bounded to ~2 windows with no eviction policy.
+    /// </summary>
+    private void BeginCellHandlerRenderPass()
+    {
+        if (!CellHandlerCacheEnabled)
+            return;
+
+        (_cellHandlersPrevious, _cellHandlersCurrent) = (_cellHandlersCurrent, _cellHandlersPrevious);
+        _cellHandlersCurrent?.Clear();
+    }
+
+    /// <summary>
+    /// Cached mouse callbacks for one row, one entry per VISIBLE COLUMN POSITION.
+    /// A column reorder needs no invalidation: the position's context box is
+    /// rewritten with the current column/index every pass and read at invoke
+    /// time. A change in column COUNT rebuilds the row's arrays.
+    /// </summary>
+    private RowCellHandlers? GetRowCellHandlers(TValue item, int columnCount)
+    {
+        if (!CellHandlerCacheEnabled || item is null)
+            return null;
+
+        _cellHandlersCurrent ??= new Dictionary<object, RowCellHandlers>(ReferenceEqualityComparer.Instance);
+
+        if (_cellHandlersCurrent.TryGetValue(item, out var handlers))
+        {
+            if (handlers.Contexts.Length == columnCount)
+                return handlers;
+            _cellHandlersCurrent.Remove(item);
+        }
+        else if (_cellHandlersPrevious != null
+            && _cellHandlersPrevious.TryGetValue(item, out handlers)
+            && handlers.Contexts.Length == columnCount)
+        {
+            _cellHandlersCurrent[item] = handlers;   // still in the window — promote
+            return handlers;
+        }
+
+        handlers = BuildRowCellHandlers(columnCount);
+        _cellHandlersCurrent[item] = handlers;
+        return handlers;
+    }
+
+    private RowCellHandlers BuildRowCellHandlers(int columnCount)
+    {
+        var handlers = new RowCellHandlers
+        {
+            Contexts = new CellHandlerContext[columnCount],
+            MouseDown = new EventCallback<MouseEventArgs>[columnCount],
+            ContextMenu = new EventCallback<MouseEventArgs>[columnCount],
+            DblClick = new EventCallback<MouseEventArgs>[columnCount],
+            Click = new EventCallback<MouseEventArgs>[columnCount],
+            CheckToggle = new EventCallback<bool>[columnCount],
+            CheckMouseDown = new EventCallback<MouseEventArgs>[columnCount],
+            CheckFocus = new EventCallback<FocusEventArgs>[columnCount],
+            CheckKeyDown = new EventCallback<KeyboardEventArgs>[columnCount],
+            ActionClick = new EventCallback<MouseEventArgs>[columnCount],
+        };
+
+        var clickReceiver = (object)this;
+
+        for (var i = 0; i < columnCount; i++)
+        {
+            var ctx = new CellHandlerContext();
+            handlers.Contexts[i] = ctx;
+
+            handlers.MouseDown[i] = EventCallback.Factory.Create<MouseEventArgs>(
+                NonRenderingEventReceiver.Instance,
+                (MouseEventArgs e) =>
+                {
+                    var item = ctx.Item; var row = ctx.RowIndexHint; var col = ctx.ColIndex;
+                    return HandleCellMouseDown(item, row, col, e);
+                });
+
+            handlers.ContextMenu[i] = EventCallback.Factory.Create<MouseEventArgs>(
+                this,
+                (MouseEventArgs e) =>
+                {
+                    var item = ctx.Item; var row = ctx.RowIndexHint; var col = ctx.ColIndex;
+                    HandleCellContextMenu(item, row, col, e);   // void handler
+                });
+
+            handlers.DblClick[i] = EventCallback.Factory.Create<MouseEventArgs>(
+                this,
+                (MouseEventArgs e) =>
+                {
+                    var item = ctx.Item; var row = ctx.RowIndexHint; var col = ctx.Column;
+                    return HandleCellDblClick(item, row, col, e);
+                });
+
+            handlers.Click[i] = EventCallback.Factory.Create<MouseEventArgs>(
+                clickReceiver,
+                (MouseEventArgs e) =>
+                {
+                    var item = ctx.Item; var row = ctx.RowIndexHint; var col = ctx.ColIndex;
+                    return HandleCellClick(item, row, col, e);
+                });
+
+            handlers.CheckToggle[i] = EventCallback.Factory.Create<bool>(this,
+                (bool v) => { var item = ctx.Item; var col = ctx.Column; return HandleCheckboxToggle(item, col, v); });
+            handlers.CheckMouseDown[i] = EventCallback.Factory.Create<MouseEventArgs>(this,
+                (MouseEventArgs e) => { var item = ctx.Item; var row = ctx.RowIndexHint; var c = ctx.ColIndex; return HandleCheckboxMouseDown(item, row, c, e); });
+            handlers.CheckFocus[i] = EventCallback.Factory.Create<FocusEventArgs>(this,
+                (FocusEventArgs _) => { var item = ctx.Item; var row = ctx.RowIndexHint; var c = ctx.ColIndex; return ActivateCheckboxCellAsync(item, row, c, false); });
+            handlers.CheckKeyDown[i] = EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                (KeyboardEventArgs e) => { var item = ctx.Item; var row = ctx.RowIndexHint; var c = ctx.ColIndex; var col = ctx.Column; return HandleCheckboxKeyDown(item, row, c, col, e); });
+            handlers.ActionClick[i] = EventCallback.Factory.Create<MouseEventArgs>(this,
+                (MouseEventArgs _) => { var item = ctx.Item; var col = ctx.Column; return HandleEditButtonClick(item, col); });
+        }
+
+        return handlers;
+    }
+
+
+    // Row-level twin of the per-cell cache above: the <tr>'s onclick/ondblclick/
+    // onmousedown/ondragover/ondrop were also inline lambdas capturing (item,
+    // currentIdx), so they re-registered on every render for every rendered row.
+    private sealed class RowHandlerContext
+    {
+        public TValue Item = default!;
+        public int RowIndexHint;
+    }
+
+    private sealed class RowHandlerSet
+    {
+        public RowHandlerContext Context = new();
+        public EventCallback<MouseEventArgs> Click;
+        public EventCallback DblClick;
+        public EventCallback<MouseEventArgs> MouseDown;
+        public EventCallback<DragEventArgs> DragOver;
+        public EventCallback<DragEventArgs> Drop;
+    }
+
+    private Dictionary<object, RowHandlerSet>? _rowHandlersCurrent;
+    private Dictionary<object, RowHandlerSet>? _rowHandlersPrevious;
+
+    private void BeginRowHandlerRenderPass()
+    {
+        if (!CellHandlerCacheEnabled)
+            return;
+        (_rowHandlersPrevious, _rowHandlersCurrent) = (_rowHandlersCurrent, _rowHandlersPrevious);
+        _rowHandlersCurrent?.Clear();
+    }
+
+    private RowHandlerSet? GetRowHandlers(TValue item, int rowIndexHint)
+    {
+        if (!CellHandlerCacheEnabled || item is null)
+            return null;
+
+        _rowHandlersCurrent ??= new Dictionary<object, RowHandlerSet>(ReferenceEqualityComparer.Instance);
+
+        if (!_rowHandlersCurrent.TryGetValue(item, out var set))
+        {
+            if (_rowHandlersPrevious != null && _rowHandlersPrevious.TryGetValue(item, out set))
+            {
+                _rowHandlersCurrent[item] = set;
+            }
+            else
+            {
+                set = BuildRowHandlerSet();
+                _rowHandlersCurrent[item] = set;
+            }
+        }
+
+        set.Context.Item = item;
+        set.Context.RowIndexHint = rowIndexHint;
+        return set;
+    }
+
+    private RowHandlerSet BuildRowHandlerSet()
+    {
+        var set = new RowHandlerSet();
+        var ctx = set.Context;
+
+        set.Click = EventCallback.Factory.Create<MouseEventArgs>(this,
+            (MouseEventArgs e) => { var i = ctx.Item; var r = ctx.RowIndexHint; return HandleRowClick(i, r, e); });
+        set.DblClick = EventCallback.Factory.Create(this,
+            () => { var i = ctx.Item; var r = ctx.RowIndexHint; return HandleRowDblClick(i, r); });
+        set.MouseDown = EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance,
+            (Action<MouseEventArgs>)(e => { var i = ctx.Item; var r = ctx.RowIndexHint; HandleRowMouseDown(i, r, e); }));
+        set.DragOver = EventCallback.Factory.Create<DragEventArgs>(this,
+            (Action<DragEventArgs>)(e => { var i = ctx.Item; var r = ctx.RowIndexHint; HandleRowReorderDragOver(i, r, e); }));
+        set.Drop = EventCallback.Factory.Create<DragEventArgs>(this,
+            (DragEventArgs e) => { var i = ctx.Item; var r = ctx.RowIndexHint; return HandleRowReorderDrop(i, r, e); });
+        return set;
+    }
+
+    // Accessors used by the row template — each refreshes the shared context
+    // box (all five read the same values) and returns the cached callback.
+    private EventCallback<MouseEventArgs> RowClickHandler(TValue item, int rowIndex)
+        => GetRowHandlers(item, rowIndex) is { } s ? s.Click
+            : EventCallback.Factory.Create<MouseEventArgs>(this, (MouseEventArgs e) => HandleRowClick(item, rowIndex, e));
+
+    private EventCallback RowDblClickHandler(TValue item, int rowIndex)
+        => GetRowHandlers(item, rowIndex) is { } s ? s.DblClick
+            : EventCallback.Factory.Create(this, () => HandleRowDblClick(item, rowIndex));
+
+    private EventCallback<MouseEventArgs> RowMouseDownHandler(TValue item, int rowIndex)
+        => GetRowHandlers(item, rowIndex) is { } s ? s.MouseDown : NonRenderingRowMouseDown(item, rowIndex);
+
+    private EventCallback<DragEventArgs> RowDragOverHandler(TValue item, int rowIndex)
+        => GetRowHandlers(item, rowIndex) is { } s ? s.DragOver
+            : EventCallback.Factory.Create<DragEventArgs>(this, (Action<DragEventArgs>)(e => HandleRowReorderDragOver(item, rowIndex, e)));
+
+    private EventCallback<DragEventArgs> RowDropHandler(TValue item, int rowIndex)
+        => GetRowHandlers(item, rowIndex) is { } s ? s.Drop
+            : EventCallback.Factory.Create<DragEventArgs>(this, (DragEventArgs e) => HandleRowReorderDrop(item, rowIndex, e));
 
     private bool UseBlazorServerOptimization =>
         PerformanceMode is GridPerformanceMode.ServerOptimized

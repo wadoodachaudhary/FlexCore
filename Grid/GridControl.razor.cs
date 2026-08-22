@@ -1315,6 +1315,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _renderPassStartTimestamp = GridRenderDiagnostics.BeginPass();
         EnsureAutoColumnWidthsBeforeRender();
         PrepareBlazorServerOptimizationForRender();
+        BeginCellHandlerRenderPass();
+        BeginRowHandlerRenderPass();
         _renderPassActive = true;
         _renderVisibleColumns = null;
         _renderRowIndexLookupSource = null;
@@ -6643,7 +6645,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    private void RenderDisplayCellContent(RenderTreeBuilder builder, int sequence, TValue item, GridColumn col, bool showActiveEditButton = false)
+    private void RenderDisplayCellContent(RenderTreeBuilder builder, int sequence, TValue item, GridColumn col, bool showActiveEditButton = false, EventCallback<MouseEventArgs>? cachedActionClick = null)
     {
         var text = GetBlazorServerRenderDisplayValue(item, col);
         var renderedText = string.IsNullOrEmpty(text) ? "\u00a0" : text;
@@ -6680,7 +6682,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.OpenElement(sequence + 5, "button");
             builder.AddAttribute(sequence + 6, "type", "button");
             builder.AddAttribute(sequence + 7, "class", "fx-cell-action-btn fx-cell-action-ellipsis-btn");
-            builder.AddAttribute(sequence + 8, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+            builder.AddAttribute(sequence + 8, "onclick", cachedActionClick
+                ?? EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
             builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
             builder.AddAttribute(sequence + 10, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
             builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
@@ -11232,11 +11235,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 	                        builder.SetKey(item);
 	                        builder.AddAttribute(71, "class",
 	                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
-                        builder.AddAttribute(72, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, resolvedRowIdx, e)));
+                        var groupedRowHandlers = GetRowHandlers(item, resolvedRowIdx);
+                        builder.AddAttribute(72, "onclick", groupedRowHandlers?.Click
+                            ?? EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, resolvedRowIdx, e)));
                         // Drag-select wiring — see HandleRowMouseDown /
                         // HandleRowMouseEnter for the protocol. Keep
                         // sequence numbers monotonic alongside 71/72/73.
-                        builder.AddAttribute(74, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
+                        builder.AddAttribute(74, "onmousedown", groupedRowHandlers?.MouseDown
+                            ?? EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, (Action<MouseEventArgs>)(e => HandleRowMouseDown(item, resolvedRowIdx, e))));
                         // Inline style as a belt-and-suspenders backstop —
                         // see flat path for the rationale. Wins any CSS
                         // specificity / isolation fight by spec.
@@ -11275,12 +11281,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         }
 
                         // Data cells
+                        var groupedVisibleColumns = GetRenderVisibleColumns();
+                        // Same reused-delegate cache the flat path uses — see
+                        // GetRowCellHandlers. Without it the grouped path emitted a
+                        // SetEventHandler edit per cell per render.
+                        var groupedCellHandlers = GetRowCellHandlers(item, groupedVisibleColumns.Count);
                         var colIdx = 0;
-                        foreach (var col in GetRenderVisibleColumns())
+                        foreach (var col in groupedVisibleColumns)
                         {
                             var capturedColIdx = colIdx;
                             var capturedCol = col;
                             var capturedItemForEdit = item;
+                            var groupedCellCtx = groupedCellHandlers?.Contexts[capturedColIdx];
+                            if (groupedCellCtx != null)
+                            {
+                                groupedCellCtx.Item = item;
+                                groupedCellCtx.RowIndexHint = resolvedRowIdx;
+                                groupedCellCtx.ColIndex = capturedColIdx;
+                                groupedCellCtx.Column = capturedCol;
+                            }
                             var isBatchEditing = IsBatchEditing(item, col.Field);
                             var isBatchDropdownEditing = isBatchEditing && HasEditOptions(col, item);
                             var isTypeAheadPreview = IsTypeAheadPreviewCell(item, col);
@@ -11314,9 +11333,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             if (!string.IsNullOrEmpty(capturedCol.Field))
                                 builder.AddAttribute(106, "data-field", capturedCol.Field);
                             builder.AddAttribute(102, "style", GetBlazorServerRenderCellStyle(col));
-                            builder.AddAttribute(107, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
+                            builder.AddAttribute(107, "onmousedown", groupedCellHandlers != null
+                                ? groupedCellHandlers.MouseDown[capturedColIdx]
+                                : EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIdx, capturedColIdx, e)));
                             builder.AddEventStopPropagationAttribute(108, "onmousedown", true);
-                            builder.AddAttribute(111, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
+                            builder.AddAttribute(111, "oncontextmenu", groupedCellHandlers != null
+                                ? groupedCellHandlers.ContextMenu[capturedColIdx]
+                                : EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIdx, capturedColIdx, e)));
                             if (EnableCellContextMenu)
                             {
                                 builder.AddEventPreventDefaultAttribute(116, "oncontextmenu", true);
@@ -11325,10 +11348,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
                             if (ShouldHandleCellDoubleClick(capturedCol))
                             {
-                                builder.AddAttribute(104, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(capturedItemForEdit, resolvedRowIdx, capturedCol, e)));
+                                builder.AddAttribute(104, "ondblclick", groupedCellHandlers != null
+                                    ? groupedCellHandlers.DblClick[capturedColIdx]
+                                    : EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(capturedItemForEdit, resolvedRowIdx, capturedCol, e)));
                                 builder.AddEventStopPropagationAttribute(110, "ondblclick", true);
                             }
-                            builder.AddAttribute(103, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIdx, capturedColIdx, args)));
+                            builder.AddAttribute(103, "onclick", groupedCellHandlers != null
+                                ? groupedCellHandlers.Click[capturedColIdx]
+                                : EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIdx, capturedColIdx, args)));
                             builder.AddEventStopPropagationAttribute(105, "onclick", true);
 
                             if (isBatchEditing)
@@ -11366,7 +11393,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             {
                                 if (!TryGetCheckboxDisplayValue(item, col.Field, out var checkedValue))
                                 {
-                                    RenderDisplayCellContent(builder, 130, item, col, isActiveCell);
+                                    RenderDisplayCellContent(builder, 130, item, col, isActiveCell, groupedCellHandlers?.ActionClick[capturedColIdx]);
                                     builder.CloseElement();
                                     colIdx++;
                                     continue;
@@ -11384,17 +11411,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 builder.AddAttribute(133, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
                                 if (CanToggleCheckboxColumn(cbCol))
                                 {
-                                    builder.AddAttribute(134, "CheckedChanged",
-                                        EventCallback.Factory.Create<bool>(this,
+                                    builder.AddAttribute(134, "CheckedChanged", groupedCellHandlers != null
+                                        ? groupedCellHandlers.CheckToggle[capturedColIdx]
+                                        : EventCallback.Factory.Create<bool>(this,
                                             value => HandleCheckboxToggle(cbItem, cbCol, value)));
-                                    builder.AddAttribute(135, "OnMouseDown",
-                                        EventCallback.Factory.Create<MouseEventArgs>(this,
+                                    builder.AddAttribute(135, "OnMouseDown", groupedCellHandlers != null
+                                        ? groupedCellHandlers.CheckMouseDown[capturedColIdx]
+                                        : EventCallback.Factory.Create<MouseEventArgs>(this,
                                             e => HandleCheckboxMouseDown(cbItem, resolvedRowIdx, capturedColIdx, e)));
-                                    builder.AddAttribute(136, "OnFocus",
-                                        EventCallback.Factory.Create<FocusEventArgs>(this,
+                                    builder.AddAttribute(136, "OnFocus", groupedCellHandlers != null
+                                        ? groupedCellHandlers.CheckFocus[capturedColIdx]
+                                        : EventCallback.Factory.Create<FocusEventArgs>(this,
                                             _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIdx, capturedColIdx, false)));
-                                    builder.AddAttribute(137, "OnKeyDown",
-                                        EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                                    builder.AddAttribute(137, "OnKeyDown", groupedCellHandlers != null
+                                        ? groupedCellHandlers.CheckKeyDown[capturedColIdx]
+                                        : EventCallback.Factory.Create<KeyboardEventArgs>(this,
                                             e => HandleCheckboxKeyDown(cbItem, resolvedRowIdx, capturedColIdx, cbCol, e)));
                                     builder.AddAttribute(138, "StopClickPropagation", true);
                                     builder.AddAttribute(139, "StopMouseDownPropagation", true);
@@ -11469,11 +11500,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         var visibleColumns = GetRenderVisibleColumns();
+        // Reused delegate instances for this row's cells — see the comment on
+        // GetRowCellHandlers. Null for value-type TValue (falls back to inline
+        // lambdas, which is the old, diff-churning behaviour).
+        var cellHandlers = GetRowCellHandlers(item, visibleColumns.Count);
         var colIdx = 0;
         foreach (var col in visibleColumns)
         {
             var capturedCol = col;
             var capturedColIdx = colIdx;
+            // Refresh this cell's context box BEFORE the callbacks are emitted:
+            // the cached delegates read these values at invoke time.
+            var cellCtx = cellHandlers?.Contexts[capturedColIdx];
+            if (cellCtx != null)
+            {
+                cellCtx.Item = item;
+                cellCtx.RowIndexHint = resolvedRowIndex;
+                cellCtx.ColIndex = capturedColIdx;
+                cellCtx.Column = capturedCol;
+            }
             var isLastDataCell = colIdx == visibleColumns.Count - 1;
             var isBatchEditing = IsBatchEditing(item, col.Field);
             var isBatchDropdownEditing = isBatchEditing && HasEditOptions(capturedCol, item);
@@ -11505,9 +11550,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
             builder.AddAttribute(2, "style", GetBlazorServerRenderCellStyle(col));
-            builder.AddAttribute(8, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
+            builder.AddAttribute(8, "onmousedown", cellHandlers != null
+                ? cellHandlers.MouseDown[capturedColIdx]
+                : EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance, e => HandleCellMouseDown(item, resolvedRowIndex, capturedColIdx, e)));
             builder.AddEventStopPropagationAttribute(9, "onmousedown", true);
-            builder.AddAttribute(12, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
+            builder.AddAttribute(12, "oncontextmenu", cellHandlers != null
+                ? cellHandlers.ContextMenu[capturedColIdx]
+                : EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellContextMenu(item, resolvedRowIndex, capturedColIdx, e)));
             if (EnableCellContextMenu)
             {
                 builder.AddEventPreventDefaultAttribute(16, "oncontextmenu", true);
@@ -11518,10 +11567,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (ShouldHandleCellDoubleClick(capturedCol))
             {
-                builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(item, resolvedRowIndex, capturedCol, e)));
+                builder.AddAttribute(4, "ondblclick", cellHandlers != null
+                    ? cellHandlers.DblClick[capturedColIdx]
+                    : EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleCellDblClick(item, resolvedRowIndex, capturedCol, e)));
                 builder.AddEventStopPropagationAttribute(11, "ondblclick", true);
             }
-            builder.AddAttribute(5, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIndex, capturedColIdx, args)));
+            builder.AddAttribute(5, "onclick", cellHandlers != null
+                ? cellHandlers.Click[capturedColIdx]
+                : EventCallback.Factory.Create<MouseEventArgs>(this, args => HandleCellClick(item, resolvedRowIndex, capturedColIdx, args)));
             builder.AddEventStopPropagationAttribute(6, "onclick", true);
 
             if (isBatchEditing)
@@ -11558,7 +11611,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 if (!TryGetCheckboxDisplayValue(item, col.Field, out var checkedValue))
                 {
-                    RenderDisplayCellContent(builder, 30, item, col, isActiveCell);
+                    RenderDisplayCellContent(builder, 30, item, col, isActiveCell, cellHandlers?.ActionClick[capturedColIdx]);
                     builder.CloseElement();
                     colIdx++;
                     continue;
@@ -11574,17 +11627,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 builder.AddAttribute(33, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
                 if (CanToggleCheckboxColumn(cbCol))
                 {
-                    builder.AddAttribute(34, "CheckedChanged",
-                        EventCallback.Factory.Create<bool>(this,
+                    builder.AddAttribute(34, "CheckedChanged", cellHandlers != null
+                        ? cellHandlers.CheckToggle[capturedColIdx]
+                        : EventCallback.Factory.Create<bool>(this,
                             value => HandleCheckboxToggle(cbItem, cbCol, value)));
-                    builder.AddAttribute(35, "OnMouseDown",
-                        EventCallback.Factory.Create<MouseEventArgs>(this,
+                    builder.AddAttribute(35, "OnMouseDown", cellHandlers != null
+                        ? cellHandlers.CheckMouseDown[capturedColIdx]
+                        : EventCallback.Factory.Create<MouseEventArgs>(this,
                             e => HandleCheckboxMouseDown(cbItem, resolvedRowIndex, capturedColIdx, e)));
-                    builder.AddAttribute(36, "OnFocus",
-                        EventCallback.Factory.Create<FocusEventArgs>(this,
+                    builder.AddAttribute(36, "OnFocus", cellHandlers != null
+                        ? cellHandlers.CheckFocus[capturedColIdx]
+                        : EventCallback.Factory.Create<FocusEventArgs>(this,
                             _ => ActivateCheckboxCellAsync(cbItem, resolvedRowIndex, capturedColIdx, false)));
-                    builder.AddAttribute(37, "OnKeyDown",
-                        EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                    builder.AddAttribute(37, "OnKeyDown", cellHandlers != null
+                        ? cellHandlers.CheckKeyDown[capturedColIdx]
+                        : EventCallback.Factory.Create<KeyboardEventArgs>(this,
                             e => HandleCheckboxKeyDown(cbItem, resolvedRowIndex, capturedColIdx, cbCol, e)));
                     builder.AddAttribute(38, "StopClickPropagation", true);
                     builder.AddAttribute(39, "StopMouseDownPropagation", true);
@@ -11595,7 +11652,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
             else
             {
-                RenderDisplayCellContent(builder, 40, item, col, isActiveCell);
+                RenderDisplayCellContent(builder, 40, item, col, isActiveCell, cellHandlers?.ActionClick[capturedColIdx]);
             }
 
             if (AllowRowResizing && isLastDataCell)

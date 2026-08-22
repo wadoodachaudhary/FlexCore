@@ -2477,6 +2477,20 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
             if (td && gridRoot.contains(td)) {
                 td.style.setProperty("background-color", gridCellPreviewColor(gridRoot), "important");
                 paintedPreviewEls.add(td);
+                // Row-shade parity: when the grid highlights the whole selected
+                // row (server paints tr.fx-cell-row-selected > td one round trip
+                // later), paint this row's OTHER cells in the SAME press frame so
+                // the row does not visibly lag the cell. Same colour the server
+                // render uses -> flash-free; enrolled so the net/sweep clears them
+                // (then the server's fx-cell-row-selected class keeps the row lit).
+                if (gridRoot.dataset.fxRowHighlight === "true") {
+                    const rowColor = gridCellPreviewColor(gridRoot);
+                    for (const c of tr.children) {
+                        if (c === td || !c.matches || !c.matches("td")) continue;
+                        c.style.setProperty("background-color", rowColor, "important");
+                        paintedPreviewEls.add(c);
+                    }
+                }
             }
         } else {
             const color = gridPreviewColor(gridRoot);
