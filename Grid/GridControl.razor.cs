@@ -3614,6 +3614,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ClearFilter(field);
     }
 
+    /// <summary>HHM-871 — the in-header clear affordance: the "filter applied"
+    /// dot is a click-to-clear ×. Clears the column's ACTUAL filter (not just
+    /// the popup draft) and closes the popup when it is showing this field.
+    /// Component-receiver click, so the implicit render recomputes the view —
+    /// the same pipeline as the popup's Clear Filter button.</summary>
+    private void ClearFilterFromHeader(string field)
+    {
+        ClearFilter(field);
+        if (string.Equals(_filterPopupField, field, StringComparison.Ordinal))
+            _filterPopupField = null;
+    }
+
     private void ResetFilterPopupDraft(string field)
     {
         _numericFilterMinText.Remove(field);
