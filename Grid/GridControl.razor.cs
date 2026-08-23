@@ -4428,10 +4428,43 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _selectedCells.Clear();
 
-        var start = Math.Min(startRowIndex, endRowIndex);
-        var end = Math.Max(startRowIndex, endRowIndex);
-        for (var i = start; i <= end; i++)
-            _selectedCells.Add((i, cellIndex));
+        foreach (var rangeCell in EnumerateVisibleColumnCellRange(startRowIndex, endRowIndex, cellIndex))
+            _selectedCells.Add(rangeCell);
+    }
+
+    /// <summary>
+    /// Single-column cell range between two RESOLVED (DataSource-index) rows,
+    /// walked over the VISIBLE row order instead of the raw DataSource span.
+    /// The grid sorts/filters/groups the view only, so two visually adjacent
+    /// rows can sit hundreds of positions apart in DataSource order; a raw
+    /// min..max loop then swept up every row in between (a 6-row Shift+click or
+    /// drag under a sort selected 300 records). Mirrors the row-mode drag and
+    /// the keyboard Shift+arrow range, which already walk the visible rows.
+    /// Falls back to the raw span only when either end is not in the visible
+    /// set (e.g. hidden in a collapsed group), preserving the old behaviour.
+    /// </summary>
+    private IEnumerable<(int RowIndex, int CellIndex)> EnumerateVisibleColumnCellRange(
+        int anchorResolvedRowIndex, int targetResolvedRowIndex, int cellIndex)
+    {
+        var visible = GetVisibleRowItems();
+        var anchorItem = GetItemAtResolvedRowIndex(anchorResolvedRowIndex);
+        var targetItem = GetItemAtResolvedRowIndex(targetResolvedRowIndex);
+        var anchorVisibleIndex = anchorItem is null ? -1 : visible.IndexOf(anchorItem);
+        var targetVisibleIndex = targetItem is null ? -1 : visible.IndexOf(targetItem);
+
+        if (anchorVisibleIndex < 0 || targetVisibleIndex < 0)
+        {
+            var rawStart = Math.Min(anchorResolvedRowIndex, targetResolvedRowIndex);
+            var rawEnd = Math.Max(anchorResolvedRowIndex, targetResolvedRowIndex);
+            for (var i = rawStart; i <= rawEnd; i++)
+                yield return (i, cellIndex);
+            yield break;
+        }
+
+        var start = Math.Min(anchorVisibleIndex, targetVisibleIndex);
+        var end = Math.Max(anchorVisibleIndex, targetVisibleIndex);
+        for (var i = start; i <= end && i < visible.Count; i++)
+            yield return (ResolveRowIndex(visible[i], i), cellIndex);
     }
 
     private bool ConsumeDragSelectClickSuppression()
@@ -5741,11 +5774,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (!isCtrl)
                 _selectedCells.Clear();
 
-            var start = Math.Min(_lastSelectedCell.Value.RowIndex, rowIndex);
-            var end = Math.Max(_lastSelectedCell.Value.RowIndex, rowIndex);
-            for (var i = start; i <= end; i++)
+            foreach (var rangeCell in EnumerateVisibleColumnCellRange(_lastSelectedCell.Value.RowIndex, rowIndex, cellIndex))
             {
-                var rangeCell = (i, cellIndex);
                 if (!_selectedCells.Contains(rangeCell))
                     _selectedCells.Add(rangeCell);
             }
