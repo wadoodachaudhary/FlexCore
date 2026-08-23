@@ -3806,16 +3806,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // Rec 1 — mousedown/mouseup/focusout are ARMING events: they carry no
     // visual of their own (the instant row preview is client-side JS, editors
     // render explicitly inside TryStartBatchEdit, commit paths render where
-    // they act), so their EventCallbacks are created on a non-IHandleEvent
-    // receiver and skip the implicit re-render. A physical click then costs
-    // ONE authoritative render — the click's.
+    // they act), so their EventCallbacks run on a non-rendering receiver and
+    // skip the implicit re-render. A physical click then costs ONE
+    // authoritative render — the click's.
+    // Built through NonRenderingEventHandler (an IHandleEvent that forwards
+    // without StateHasChanged) and cached once per grid: a method group handed
+    // straight to EventCallback.Factory has this grid as Delegate.Target, which
+    // Blazor prefers over the supplied marker receiver — so the previous form
+    // re-rendered the whole grid on every mouseup and every (bubbling) focusout.
+    private EventCallback<FocusEventArgs>? _nonRenderingGridFocusOut;
     private EventCallback<FocusEventArgs> NonRenderingGridFocusOut =>
-        EventCallback.Factory.Create<FocusEventArgs>(NonRenderingEventReceiver.Instance,
-            HandleGridFocusOut);
+        _nonRenderingGridFocusOut ??= NonRenderingEventHandler.Create<FocusEventArgs>(HandleGridFocusOut);
 
+    private EventCallback<MouseEventArgs>? _nonRenderingGridMouseUp;
     private EventCallback<MouseEventArgs> NonRenderingGridMouseUp =>
-        EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance,
-            (Action<MouseEventArgs>)HandleGridMouseUp);
+        _nonRenderingGridMouseUp ??= NonRenderingEventHandler.Create<MouseEventArgs>(HandleGridMouseUp);
 
     private EventCallback<MouseEventArgs> NonRenderingRowMouseDown(TValue item, int rowIndex) =>
         EventCallback.Factory.Create<MouseEventArgs>(NonRenderingEventReceiver.Instance,

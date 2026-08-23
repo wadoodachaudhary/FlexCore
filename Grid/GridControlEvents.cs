@@ -14,12 +14,13 @@ public class GridControlEvents<TValue>
 {
     /// <summary>
     /// Raw grid-host keydown, fired before the grid's own keyboard handling
-    /// (and never while an in-cell editor owns the keyboard). Wire it with
-    /// <see cref="NonRenderingEventReceiver.Instance"/> AND A LAMBDA (a method
-    /// group's Delegate.Target is the page — IHandleEvent — which re-renders
-    /// per keystroke anyway), rendering explicitly
-    /// only when the handler acts — a page-receiver DOM handler re-renders
-    /// the host page once per keystroke.
+    /// (and never while an in-cell editor owns the keyboard). Build it with
+    /// <see cref="NonRenderingEventHandler.Create{T}(Func{T,Task})"/> (or the
+    /// Action overload) so it does not re-render the host page per keystroke,
+    /// and render explicitly only when the handler acts. (Passing
+    /// <see cref="NonRenderingEventReceiver.Instance"/> to
+    /// EventCallback.Factory.Create only works when the delegate's Target is
+    /// not the page — a method group or a this-only lambda renders anyway.)
     /// </summary>
     public EventCallback<KeyboardEventArgs> OnHostKeyDown { get; set; }
 
