@@ -551,7 +551,16 @@
 
                             @if (state.FilterActive)
                             {
-                                <span class="fx-filter-applied-mark" title="Filter applied" aria-label="Filter applied"></span>
+                                @* HHM-871: the passive "filter applied" dot is now a
+                                   click-to-clear badge — one click removes the column's
+                                   filter without opening the popup. *@
+                                <span class="fx-filter-clear"
+                                      role="button"
+                                      title="Filter applied — click to clear"
+                                      aria-label="Clear filter on @headerLabel"
+                                      @onmousedown:stopPropagation="true"
+                                      @onclick:stopPropagation="true"
+                                      @onclick="() => ClearFilterFromHeader(col.Field)">×</span>
                             }
 
                             @if (AllowFiltering && col.AllowFiltering && ShowHeaderFilterIcon)
