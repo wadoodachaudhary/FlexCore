@@ -1,0 +1,22 @@
+.fx-searchbox {
+    width: 100%;
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: calc(12px * var(--fx-zoom, 1));
+    line-height: 16px;
+    box-sizing: border-box;
+    background: #fff;
+    color: #000;
+}
+
+.fx-searchbox:focus {
+    outline: 0;
+    border-color: #7f9db9;
+}
+
+.fx-searchbox:disabled {
+    background: #f8f9fa;
+    color: #6c757d;
+    cursor: not-allowed;
+}
