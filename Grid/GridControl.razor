@@ -56,9 +56,14 @@
                     <svg class="fx-toolbar-search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                         <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
                     </svg>
+                    @* Uncontrolled while typing: keystrokes land in _pendingSearchText
+                       through a non-rendering callback (a bound oninput re-rendered the
+                       whole grid AND recomputed the search filter on every keystroke);
+                       the debounce commits once per pause. Value renders from the pending
+                       text so unrelated renders never repaint stale input. *@
                     <input type="text" placeholder="Search..."
-                           @bind="SearchText" @bind:event="oninput"
-                           @bind:after="ApplySearchDebounced" />
+                           value="@(_pendingSearchText ?? SearchText)"
+                           @oninput="NonRenderingSearchInput" />
                 </div>
             }
         </div>
@@ -86,6 +91,18 @@
                             @onclick:stopPropagation="true">
                         &#9881;
                     </button>
+                }
+                @if (HasAnyActiveFilter)
+                {
+                    @* HHM-871 follow-up: one-click clear of every active column /
+                       expression filter — first icon of the group bar, rendered
+                       only while a filter is applied. *@
+                    <button class="fx-group-expand-collapse-btn fx-clear-all-filters-btn"
+                            type="button"
+                            title="Clear all filters"
+                            aria-label="Clear all filters"
+                            @onclick="ClearFilteringAsync"
+                            @onclick:stopPropagation="true">✕</button>
                 }
                 @if (_groupDescriptors.Count == 0)
                 {

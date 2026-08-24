@@ -1825,13 +1825,50 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    /// <summary>Inline style for a spacer row's single cell — a pure height stand-in
-    /// (invariant-formatted so locales with a comma decimal don't emit bad CSS).</summary>
-    private static string WindowSpacerStyle(double heightPx)
+    /// <summary>Inline style for a spacer row's single cell. Besides standing in
+    /// for the un-rendered rows' height, the spacer paints an EMPTY-GRID lattice —
+    /// row lines every RowHeight px plus a hard stop at every column edge, in the
+    /// same border colors the real cells use — so a fast scroll shows the grid
+    /// fabric with rows filling in rather than a white void (HHM-867 issue 6;
+    /// VSFlexGrid paints its not-yet-drawn area the same way). Both spacers start
+    /// on a row boundary, so the lines coincide exactly with where the real rows
+    /// land. (Invariant-formatted so comma-decimal locales don't emit bad CSS.)</summary>
+    private string WindowSpacerStyle(double heightPx)
     {
         var h = heightPx < 0 ? 0 : heightPx;
-        return string.Create(CultureInfo.InvariantCulture,
+        var style = string.Create(CultureInfo.InvariantCulture,
             $"height:{h}px;padding:0;border:0");
+        var rowH = _rowHeightPx;
+        if (h <= 0 || rowH < 4)
+            return style;
+
+        const string rowLine = "var(--fx-grid-cell-border-color, #dcdcdc)";
+        const string colLine = "var(--fx-grid-cell-border-right-color, #dcdcdc)";
+        var images = new System.Text.StringBuilder();
+        images.Append(string.Create(CultureInfo.InvariantCulture,
+            $"repeating-linear-gradient(to bottom,transparent 0,transparent {rowH - 1:0.##}px,{rowLine} {rowH - 1:0.##}px,{rowLine} {rowH:0.##}px)"));
+
+        // Column separators: one non-repeating gradient with a 1px stop at each
+        // cumulative column edge. Skipped when any width is unknown — row lines
+        // alone already read as "grid", not "blank page".
+        var stops = new System.Text.StringBuilder();
+        double x = 0;
+        foreach (var col in VisibleColumns)
+        {
+            var w = GetColumnWidthPx(col);
+            if (w <= 0)
+            {
+                stops.Clear();
+                break;
+            }
+            x += w;
+            stops.Append(string.Create(CultureInfo.InvariantCulture,
+                $",transparent {x - 1:0.##}px,{colLine} {x - 1:0.##}px,{colLine} {x:0.##}px,transparent {x:0.##}px"));
+        }
+        if (stops.Length > 0)
+            images.Append(",linear-gradient(to right").Append(stops).Append(')');
+
+        return style + ";background-image:" + images;
     }
 
     /// <summary>
@@ -3679,6 +3716,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // ── Search ───────────────────────────────────────────────────────────
 
+    // Typed text is staged here by the non-rendering oninput callback and
+    // committed to SearchText once per typing pause — one filter recompute and
+    // one grid render per pause instead of one of each per keystroke.
+    private string? _pendingSearchText;
+
+    private EventCallback<ChangeEventArgs>? _nonRenderingSearchInput;
+    private EventCallback<ChangeEventArgs> NonRenderingSearchInput =>
+        _nonRenderingSearchInput ??= NonRenderingEventHandler.Create<ChangeEventArgs>(e =>
+        {
+            _pendingSearchText = e.Value?.ToString() ?? "";
+            _ = ApplySearchDebounced();
+        });
+
     private async Task ApplySearchDebounced()
     {
         _searchCts?.Cancel();
@@ -3688,11 +3738,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             await Task.Delay(300, token);
+            if (_pendingSearchText != null)
+                SearchText = _pendingSearchText;
             _pageState.CurrentPage = 1;
-            StateHasChanged();
+            await InvokeAsync(StateHasChanged);
         }
         catch (TaskCanceledException) { }
     }
+
+    /// <summary>True when any column filter or the expression filter is applied —
+    /// gates the group-bar Clear-all-filters button.</summary>
+    private bool HasAnyActiveFilter =>
+        _expressionFilterRoot != null || _columnStates.Values.Any(state => state.FilterActive);
 
     // ── Paging ───────────────────────────────────────────────────────────
 
@@ -7055,6 +7112,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // the body. The host div swallows clicks before the cell underneath can
             // upgrade, so the control itself must honor body clicks when closed.
             builder.AddAttribute(sequence + 12, "OpenOnClickWhenClosed", true);
+            // Popup sizes to the option text, not the cell: a wide column no longer
+            // drags a wide panel with it, and a narrow one no longer truncates choices.
+            builder.AddAttribute(sequence + 17, "PanelFitContentWidth", true);
             builder.AddAttribute(sequence + 13, "Editable", col.AllowCustomEditOptionValue);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
             builder.AddComponentReferenceCapture(sequence + 15, component =>
