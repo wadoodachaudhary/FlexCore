@@ -65,7 +65,7 @@
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
 
-        <div class="fx-dropdown-panel" style="@PanelStyle" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = DataSource.ToList();
@@ -196,7 +196,14 @@
         get
         {
             var parts = new List<string>();
-            if (_panelMinWidth is { } minWidth)
+            // HHM-866 issue 3 — the panel used to paint at the CELL's width and only
+            // reach its real width after measureDropdown's interop round trip (a
+            // NETWORK hop on Blazor Server), so QA saw it "open shortened, then
+            // expand". Fit-content hosts now get their width from CSS
+            // (.fx-dropdown-panel-fit: width:max-content) at the FIRST paint, and the
+            // measured width is not written back — JS geometry is still used for the
+            // near-edge open-up flip and the max-height clamp.
+            if (!PanelFitContentWidth && _panelMinWidth is { } minWidth)
             {
                 var width = minWidth.ToString("0.##", CultureInfo.InvariantCulture);
                 parts.Add($"width:{width}px");
