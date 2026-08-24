@@ -1662,8 +1662,8 @@
     top: 0;
     /* Straddles the divider: 6px inside the column, 5px past it. Between two
        columns the overhang is buried by the next cell (isolation:isolate) and
-       fx-resize-handle-prev covers that side instead; on the LAST column there
-       is no next cell, so the overhang is what makes the final edge grabbable. */
+       fx-resize-handle-prev covers that side instead; the LAST column pulls the
+       handle back inside (see below). */
     right: -5px;
     bottom: 0;
     width: 11px;
@@ -1686,6 +1686,16 @@
     left: 0;
     right: auto;
     width: 5px;
+}
+/* The final column has no following cell to bury the overhang, so its 5px would
+   land PAST the table's right edge and inflate the scroll surface — a permanent
+   ~5px horizontal scrollbar even when every column fits, i.e. the grid renders
+   narrower than its container yet still scrolls (reported on FAssembly's
+   Components grid, whose widths come from AppGridLayout). Anchor it inside: the
+   handle's right edge still coincides with the column edge, so the last divider
+   stays grabbable. */
+.fx-header-cell:last-child .fx-resize-handle {
+    right: 0;
 }
 .fx-resize-overlay {
     position: fixed;
@@ -2265,9 +2275,11 @@ tr.fx-row:has(.fx-dropdown-panel) {
     bottom: auto !important;
     left: 0 !important;
     z-index: 9999;
-    width: 100% !important;
-    min-width: 100% !important;
-    max-width: 100% !important;
+    /* Cell width only until the measure pass lands; the measured text-based
+       width arrives as an INLINE style, which must win — hence no !important. */
+    width: 100%;
+    min-width: 100%;
+    max-width: none;
     max-height: min(180px, calc(100vh - 24px));
     font-family: inherit !important;
     font-size: inherit !important;
@@ -2884,6 +2896,15 @@ tr.fx-row:has(.fx-dropdown-panel) {
 .fx-group-expand-collapse-btn:hover {
     background: #e2e8f0;
     border-color: #94a3b8;
+}
+/* HHM-871 follow-up: the group-bar Clear-all-filters button — blue like the
+   per-column filter badge, red on hover to signal removal. */
+.fx-clear-all-filters-btn {
+    color: #0d6efd;
+    font-weight: 700;
+}
+.fx-clear-all-filters-btn:hover {
+    color: #b02a37;
 }
 
 /* ── Enhanced group expand icon ───────────────────────────────── */

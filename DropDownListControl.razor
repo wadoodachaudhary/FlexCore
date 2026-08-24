@@ -120,6 +120,12 @@
     [Parameter] public bool CommitEditableTextOnBlur { get; set; } = true;
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool OpenOnRender { get; set; }
+
+    /// <summary>Size the open panel to its widest option text instead of the
+    /// host width. Grid cell editors opt in: their host is the CELL, so a wide
+    /// column otherwise forces an equally wide popup (and a narrow one truncates
+    /// the choices). Page-level dropdowns keep the classic host-width panel.</summary>
+    [Parameter] public bool PanelFitContentWidth { get; set; }
     [Parameter] public bool OpenOnArrowClickOnly { get; set; }
     /// <summary>
     /// With <see cref="OpenOnArrowClickOnly"/>, a click on the BODY of a CLOSED
@@ -822,14 +828,17 @@
                     return;
 
                 var geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                var panelWidth = PanelFitContentWidth && geometry.ContentWidth > 0
+                    ? geometry.ContentWidth
+                    : geometry.MinWidth;
                 var changed = !_hasMeasuredGeometry
                     || _openUp != geometry.OpenUp
                     || Math.Abs((_panelMaxHeight ?? 0) - geometry.MaxHeight) > 0.5
-                    || Math.Abs((_panelMinWidth ?? 0) - geometry.MinWidth) > 0.5;
+                    || Math.Abs((_panelMinWidth ?? 0) - panelWidth) > 0.5;
 
                 _openUp = geometry.OpenUp;
                 _panelMaxHeight = geometry.MaxHeight > 0 ? geometry.MaxHeight : null;
-                _panelMinWidth = geometry.MinWidth > 0 ? geometry.MinWidth : null;
+                _panelMinWidth = panelWidth > 0 ? panelWidth : null;
                 _hasMeasuredGeometry = true;
                 if (changed)
                 {
@@ -903,6 +912,7 @@
         public double Top { get; set; }
         public double Left { get; set; }
         public double MinWidth { get; set; }
+        public double ContentWidth { get; set; }
     }
 
     private async Task CommitCurrentSelectionAsync()
