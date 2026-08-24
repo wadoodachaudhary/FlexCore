@@ -1,0 +1,224 @@
+@namespace Fx.ControlKit
+@using Microsoft.AspNetCore.Components.Web
+@using System.Linq.Expressions
+@using System.Threading
+@using Fx.ControlKit.Grid
+@implements IDisposable
+
+<input @ref="_inputElement"
+       type="text"
+       class="@ResolvedCssClass"
+       value="@EffectiveValue"
+       placeholder="@Placeholder"
+       disabled="@(!Enabled)"
+       maxlength="@(MaxLength.HasValue ? MaxLength.Value : null)"
+       autofocus="@(AutoFocus ? "autofocus" : null)"
+       @oninput="@InputDispatch"
+       @onkeydown="@KeyDownDispatch"
+       @onkeyup="@KeyUpDispatch"
+       @onfocus="@FocusDispatch"
+       @onblur="@BlurDispatch"
+       @attributes="FilteredAdditionalAttributes" />
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; } = "Search...";
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public int? MaxLength { get; set; }
+    [Parameter] public int DebounceDelayMs { get; set; } = 500;
+    [Parameter] public bool AutoApply { get; set; } = true;
+
+    /// <summary>Invoked when the search text is committed (after debounce delay, or on Enter/Tab/Blur).</summary>
+    [Parameter] public EventCallback<string?> OnSearch { get; set; }
+
+    /// <summary>Invoked on raw input events with the uncommitted draft text without triggering component re-renders.</summary>
+    [Parameter] public EventCallback<string?> OnDraftChanged { get; set; }
+
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
+    [Parameter] public EventCallback<KeyboardEventArgs> OnKeyUp { get; set; }
+    [Parameter] public EventCallback<FocusEventArgs> OnFocus { get; set; }
+    [Parameter] public EventCallback<FocusEventArgs> OnBlur { get; set; }
+
+    [Parameter] public bool AutoFocus { get; set; }
+    [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public IDictionary<string, object>? AdditionalAttributes { get; set; }
+
+    private ElementReference _inputElement;
+    public ElementReference ElementRef => _inputElement;
+
+    private string? _currentValue;
+    private string? _lastCommittedValue;
+    private bool _isUserInputActive;
+    private CancellationTokenSource? _debounceCts;
+
+    private EventCallback<ChangeEventArgs>? _inputDispatch;
+    private EventCallback<ChangeEventArgs> InputDispatch =>
+        _inputDispatch ??= NonRenderingEventHandler.Create<ChangeEventArgs>(HandleNativeInput);
+
+    private EventCallback<KeyboardEventArgs> KeyDownDispatch =>
+        EventCallback.Factory.Create<KeyboardEventArgs>(this, HandleNativeKeyDown);
+
+    private EventCallback<KeyboardEventArgs> KeyUpDispatch =>
+        OnKeyUp.HasDelegate ? EventCallback.Factory.Create<KeyboardEventArgs>(this, HandleNativeKeyUp) : default;
+
+    private EventCallback<FocusEventArgs> FocusDispatch =>
+        OnFocus.HasDelegate ? EventCallback.Factory.Create<FocusEventArgs>(this, HandleNativeFocus) : default;
+
+    private EventCallback<FocusEventArgs> BlurDispatch =>
+        EventCallback.Factory.Create<FocusEventArgs>(this, HandleNativeBlur);
+
+    private string? EffectiveValue => _isUserInputActive ? _currentValue : Value;
+
+    protected override void OnParametersSet()
+    {
+        if (!_isUserInputActive || Value != _lastCommittedValue)
+        {
+            _currentValue = Value;
+            _lastCommittedValue = Value;
+        }
+    }
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+            ElementReferenceCaptured?.Invoke(_inputElement);
+    }
+
+    private void HandleNativeInput(ChangeEventArgs e)
+    {
+        var text = e.Value?.ToString() ?? string.Empty;
+        _currentValue = text;
+        _isUserInputActive = true;
+
+        if (OnDraftChanged.HasDelegate)
+            _ = OnDraftChanged.InvokeAsync(text);
+
+        if (AutoApply)
+        {
+            _debounceCts?.Cancel();
+            _debounceCts?.Dispose();
+            _debounceCts = new CancellationTokenSource();
+            var token = _debounceCts.Token;
+            _ = DebounceCommitAsync(text, DebounceDelayMs, token);
+        }
+    }
+
+    private async Task DebounceCommitAsync(string text, int delayMs, CancellationToken token)
+    {
+        try
+        {
+            if (delayMs > 0)
+                await Task.Delay(delayMs, token);
+
+            if (!token.IsCancellationRequested)
+            {
+                await InvokeAsync(() => CommitAsync(text));
+            }
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async Task CommitAsync(string? text)
+    {
+        _debounceCts?.Cancel();
+        _debounceCts?.Dispose();
+        _debounceCts = null;
+
+        _currentValue = text;
+        _lastCommittedValue = text;
+        _isUserInputActive = false;
+
+        if (ValueChanged.HasDelegate)
+            await ValueChanged.InvokeAsync(text);
+
+        if (OnSearch.HasDelegate)
+            await OnSearch.InvokeAsync(text);
+    }
+
+    private async Task HandleNativeKeyDown(KeyboardEventArgs e)
+    {
+        if (IsCommitKey(e))
+        {
+            await CommitAsync(_currentValue);
+        }
+
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+    }
+
+    private static bool IsCommitKey(KeyboardEventArgs e) =>
+        e.Key is "Enter" or "NumpadEnter" or "Tab";
+
+    private async Task HandleNativeKeyUp(KeyboardEventArgs e)
+    {
+        if (OnKeyUp.HasDelegate)
+            await OnKeyUp.InvokeAsync(e);
+    }
+
+    private async Task HandleNativeFocus(FocusEventArgs e)
+    {
+        if (OnFocus.HasDelegate)
+            await OnFocus.InvokeAsync(e);
+    }
+
+    private async Task HandleNativeBlur(FocusEventArgs e)
+    {
+        if (_debounceCts != null || _isUserInputActive)
+        {
+            await CommitAsync(_currentValue);
+        }
+
+        if (OnBlur.HasDelegate)
+            await OnBlur.InvokeAsync(e);
+    }
+
+    public async ValueTask FocusAsync(bool preventScroll = true)
+    {
+        try
+        {
+            await _inputElement.FocusAsync(preventScroll);
+        }
+        catch { }
+    }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var classes = new List<string> { "fx-searchbox" };
+            if (!string.IsNullOrWhiteSpace(CssClass))
+                classes.Add(CssClass);
+            return string.Join(" ", classes);
+        }
+    }
+
+    private IReadOnlyDictionary<string, object>? FilteredAdditionalAttributes
+    {
+        get
+        {
+            if (AdditionalAttributes == null)
+                return null;
+
+            var filtered = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in AdditionalAttributes)
+            {
+                if (!string.Equals(kv.Key, "class", StringComparison.OrdinalIgnoreCase))
+                    filtered[kv.Key] = kv.Value;
+            }
+            return filtered;
+        }
+    }
+
+    public void Dispose()
+    {
+        _debounceCts?.Cancel();
+        _debounceCts?.Dispose();
+        _debounceCts = null;
+    }
+}
