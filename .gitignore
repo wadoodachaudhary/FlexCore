@@ -64,3 +64,7 @@ coverage*.info
 .claude/
 .codex-backups/
 .flexkit-sync-revert-*/
+
+# Serilog output — never committed.
+Logs/
+*.log
