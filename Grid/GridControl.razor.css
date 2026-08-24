@@ -2267,6 +2267,22 @@ tr.fx-row:has(.fx-dropdown-panel) {
     top: 50%;
     transform: translateY(-50%);
 }
+/* HHM-866 issue 3 — content-sized cell editor panel, sized by CSS at the FIRST
+   paint. This selector must live HERE: the generic .fx-dropdown-panel-fit rule in
+   DropDownListControl.razor.css is out-specificity'd by the batch-dropdown block
+   below, which pinned the panel to the cell's width. At cell width the long
+   options wrapped, the wrapped content then drove the measure pass to clamp
+   max-height — so the list opened both narrow AND short, and only "expanded"
+   after the interop round trip (QA: "opens shortened, takes time to expand"). */
+.fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel.fx-dropdown-panel-fit,
+.fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel.fx-dropdown-panel-fit {
+    width: max-content;
+    min-width: 100%;
+    max-width: min(360px, 90vw);
+    /* Reserve the scrollbar lane so a scrolling list never covers its own text. */
+    scrollbar-gutter: stable;
+}
+
 .fx-grid ::deep .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel,
 .fx-batch-dropdown.fx-dropdown-host .fx-dropdown-panel {
     position: absolute !important;

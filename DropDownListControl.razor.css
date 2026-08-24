@@ -159,6 +159,17 @@
     box-shadow: 1px 2px 4px rgba(0, 0, 0, 0.22);
 }
 
+/* Content-sized panel (grid cell editors opt in via PanelFitContentWidth).
+   Sized by CSS so the very first paint is already correct — no interop round
+   trip, hence no visible "grows a moment later" (HHM-866 issue 3). The gutter
+   is reserved so a scrolling list never lays its scrollbar over the text. */
+.fx-dropdown-panel.fx-dropdown-panel-fit {
+    width: max-content;
+    min-width: 100%;
+    max-width: min(360px, 90vw);
+    scrollbar-gutter: stable;
+}
+
 .fx-dropdown-host.fx-dropdown-open-up .fx-dropdown-panel,
 .fx-dropdown-host.dropdown-open-up .fx-dropdown-panel {
     top: auto;
