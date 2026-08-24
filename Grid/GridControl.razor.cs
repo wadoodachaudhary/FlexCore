@@ -2050,9 +2050,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // Column separators: one non-repeating gradient with a 1px stop at each
         // cumulative column edge. Skipped when any width is unknown — row lines
         // alone already read as "grid", not "blank page".
+        //
+        // Capped by column count on purpose. This style is re-emitted on EVERY window
+        // move (the height changes), so on a 50-column grid the per-column stops made
+        // it a ~7.6 KB attribute streamed on each scroll step — the paint it was meant
+        // to speed up ended up competing with the row render for the same round trip.
+        // Wide grids keep the row lines, which carry the "grid fabric" read on their own.
         var stops = new System.Text.StringBuilder();
         double x = 0;
-        foreach (var col in VisibleColumns)
+        var columnLineBudget = VisibleColumns.Count() <= 12;
+        foreach (var col in columnLineBudget ? VisibleColumns : Enumerable.Empty<GridColumn>())
         {
             var w = GetColumnWidthPx(col);
             if (w <= 0)
