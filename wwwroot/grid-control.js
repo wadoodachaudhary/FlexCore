@@ -1757,6 +1757,12 @@ export function registerGridWindowScroll(scrollEl, dotNetRef) {
             setTimeout(fire, 32);
         } else {
             requestAnimationFrame(fire);
+            // LATCH GUARD: if the tab is hidden between scheduling and painting,
+            // that rAF callback never runs — `scheduled` would stay true and this
+            // listener would ignore every later scroll, leaving the row window
+            // frozen (the grid then shows spacer, i.e. blank, for the rest of the
+            // session). A backstop timer runs the same work if rAF did not.
+            setTimeout(() => { if (scheduled) fire(); }, 250);
         }
     };
 
