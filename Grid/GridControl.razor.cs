@@ -1805,6 +1805,205 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         && !_pivotMode
         && !(ShowAsChart && ChartValueFields is { Count: > 0 });
 
+    // ── Grouped row windowing ────────────────────────────────────────────
+    //
+    // The flat path above deliberately excludes grouped grids; before this
+    // feature a grouped grid rendered EVERY row (group headers + items +
+    // footers), so very large grouped assemblies still lagged. Grouped
+    // windowing flattens the grouped tree into a display STREAM of entries
+    // (header / item / footer, honoring collapse state), prefix-sums each
+    // entry's pixel height (headers are taller than items), and windows over
+    // that stream with the same spacer technique as the flat path. The three
+    // row emitters are shared with the recursive renderer, so markup is
+    // byte-identical either way.
+
+    /// <summary>Master switch for windowing GROUPED grids. On by default;
+    /// turn off to restore the render-every-row grouped behavior.</summary>
+    [Parameter] public bool EnableGroupedRowWindowing { get; set; } = true;
+
+    private bool UseGroupedRowWindowing =>
+        EnableGroupedRowWindowing
+        && !IsPagingActive
+        && !string.IsNullOrWhiteSpace(Height)
+        && MeetsRowWindowingThreshold
+        && AllowGrouping && _groupDescriptors.Count > 0
+        && !_pivotMode
+        && !(ShowAsChart && ChartValueFields is { Count: > 0 });
+
+    private enum GroupedEntryKind : byte { Header, Item, Footer }
+
+    private readonly struct GroupedDisplayEntry
+    {
+        public GroupedDisplayEntry(GroupedEntryKind kind, GroupResult<TValue> group, TValue? item, int level, int localIndex)
+        {
+            Kind = kind; Group = group; Item = item; Level = level; LocalIndex = localIndex;
+        }
+        public GroupedEntryKind Kind { get; }
+        public GroupResult<TValue> Group { get; }
+        public TValue? Item { get; }
+        public int Level { get; }
+        public int LocalIndex { get; }
+    }
+
+    /// <summary>Cumulative pixel heights of the grouped display stream —
+    /// prefix[i] = top of entry i; prefix[^1] = total content height. Rebuilt
+    /// with the stream on every grouped windowed render; read by the scroll
+    /// callback to translate scrollTop into an entry index.</summary>
+    private double[]? _groupedPrefixPx;
+    private int _lastGroupedStreamSignature;
+
+    /// <summary>Pixel top of the active row's stream entry, recorded by the
+    /// grouped branch of EnsureWindowedActiveRowVisibleAsync — the reveal path
+    /// uses it as its scroll fallback instead of the flat index×rowHeight.</summary>
+    private double _groupedActiveEntryTopPx = -1;
+
+    /// <summary>Measured height of a rendered group-header row (differs from the
+    /// data-row pitch). 0 until measured; the stream builder falls back to
+    /// row height + 8 so the first paint is close, then a one-time measure
+    /// corrects it.</summary>
+    private double _measuredGroupHeaderPx;
+
+    private List<GroupedDisplayEntry> BuildGroupedDisplayStream()
+    {
+        var list = new List<GroupedDisplayEntry>();
+        var heights = new List<double>();
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var headerH = _measuredGroupHeaderPx > 0 ? _measuredGroupHeaderPx : rowH + 8;
+        var footerRowCount = AggregateRows is { Count: > 0 }
+            ? AggregateRows.Count(r => r.ShowInGroupFooter)
+            : 0;
+
+        void Walk(IEnumerable<GroupResult<TValue>> groups, int level)
+        {
+            foreach (var g in groups)
+            {
+                list.Add(new GroupedDisplayEntry(GroupedEntryKind.Header, g, default, level, 0));
+                heights.Add(headerH);
+                if (g.IsCollapsed)
+                    continue;
+                var subs = g.SubGroups as ICollection<GroupResult<TValue>> ?? g.SubGroups?.ToList();
+                if (subs is { Count: > 0 })
+                {
+                    Walk(subs, level + 1);
+                }
+                else if (g.Items != null)
+                {
+                    var li = 0;
+                    foreach (var it in g.Items)
+                    {
+                        list.Add(new GroupedDisplayEntry(GroupedEntryKind.Item, g, it, level, li++));
+                        heights.Add(rowH);
+                    }
+                }
+                if (footerRowCount > 0 && g.Aggregates.Count > 0)
+                {
+                    list.Add(new GroupedDisplayEntry(GroupedEntryKind.Footer, g, default, level, 0));
+                    heights.Add(footerRowCount * rowH);
+                }
+            }
+        }
+
+        Walk(GroupedData, 0);
+
+        var prefix = new double[list.Count + 1];
+        for (var i = 0; i < list.Count; i++)
+            prefix[i + 1] = prefix[i] + heights[i];
+        _groupedPrefixPx = prefix;
+        return list;
+    }
+
+    /// <summary>Grouped twin of PrepareRowWindow: reset the window to the top
+    /// when the grouping SHAPE changes (descriptors / collapse set / stream
+    /// length), otherwise just clamp. Runs during render; mutates window
+    /// fields only.</summary>
+    private void PrepareGroupedRowWindow(int streamCount)
+    {
+        var sig = new HashCode();
+        sig.Add(streamCount);
+        foreach (var d in _groupDescriptors)
+            sig.Add(d.Field);
+        sig.Add(_collapsedGroupPaths.Count);
+        var signature = sig.ToHashCode();
+        if (signature != _lastGroupedStreamSignature)
+        {
+            _lastGroupedStreamSignature = signature;
+            if (_winStart != 0)
+            {
+                _winStart = 0;
+                _pendingWindowScrollReset = true;
+            }
+        }
+
+        if (_winCount < 1)
+            _winCount = 1;
+        var maxStart = Math.Max(0, streamCount - _winCount);
+        if (_winStart > maxStart)
+            _winStart = maxStart;
+        if (_winStart < 0)
+            _winStart = 0;
+    }
+
+    /// <summary>Index of the entry whose top is at or above <paramref name="y"/> —
+    /// binary search over the prefix array.</summary>
+    private static int GroupedEntryIndexAt(double[] prefix, double y)
+    {
+        int lo = 0, hi = prefix.Length - 1;
+        while (lo < hi)
+        {
+            var mid = (lo + hi + 1) >> 1;
+            if (prefix[mid] <= y) lo = mid; else hi = mid - 1;
+        }
+        return Math.Min(lo, prefix.Length - 2);
+    }
+
+    private RenderFragment RenderGroupedRowsWindowed() => builder =>
+    {
+        var stream = BuildGroupedDisplayStream();
+        PrepareGroupedRowWindow(stream.Count);
+        var prefix = _groupedPrefixPx!;
+        var total = stream.Count;
+        var start = _winStart;
+        var end = Math.Min(total, start + _winCount);
+        var colspan = Math.Max(1, TotalColumnCount);
+
+        // TOP spacer — pixel height of everything above the window (lattice-painted).
+        builder.OpenElement(300, "tr");
+        builder.AddAttribute(301, "aria-hidden", "true");
+        builder.AddAttribute(302, "class", "fx-grid-window-spacer");
+        builder.OpenElement(303, "td");
+        builder.AddAttribute(304, "colspan", colspan);
+        builder.AddAttribute(305, "style", WindowSpacerStyle(prefix[Math.Min(start, total)]));
+        builder.CloseElement();
+        builder.CloseElement();
+
+        for (var i = start; i < end; i++)
+        {
+            var e = stream[i];
+            switch (e.Kind)
+            {
+                case GroupedEntryKind.Header:
+                    RenderGroupHeaderRow(builder, e.Group, e.Level);
+                    break;
+                case GroupedEntryKind.Item:
+                    RenderGroupedItemRow(builder, e.Item!, e.LocalIndex);
+                    break;
+                default:
+                    RenderGroupFooterRows(builder, e.Group);
+                    break;
+            }
+        }
+
+        // BOTTOM spacer — pixel height of everything below the window.
+        builder.OpenElement(310, "tr");
+        builder.AddAttribute(311, "aria-hidden", "true");
+        builder.AddAttribute(312, "class", "fx-grid-window-spacer");
+        builder.OpenElement(313, "td");
+        builder.AddAttribute(314, "colspan", colspan);
+        builder.AddAttribute(315, "style", WindowSpacerStyle(prefix[total] - prefix[Math.Min(end, total)]));
+        builder.CloseElement();
+        builder.CloseElement();
+    };
+
     private bool MeetsRowWindowingThreshold
     {
         get
@@ -1989,6 +2188,37 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
     {
+        // Grouped windowing: entries have MIXED heights (headers taller than
+        // items), so scrollTop maps to an entry index through the prefix-summed
+        // pixel array rather than a division.
+        if (UseGroupedRowWindowing)
+        {
+            var prefixArr = _groupedPrefixPx;
+            if (prefixArr is not { Length: > 1 })
+                return;
+
+            var entryCount = prefixArr.Length - 1;
+            var firstEntry = GroupedEntryIndexAt(prefixArr, scrollTop);
+            var lastEntryExclusive = Math.Min(entryCount, GroupedEntryIndexAt(prefixArr, scrollTop + clientHeight) + 1);
+            var visibleEntries = Math.Max(1, lastEntryExclusive - firstEntry);
+            var newGroupedCount = visibleEntries + WindowOverscanRows * 2;
+            var groupedEnd = _winStart + _winCount;
+            var nearStart = firstEntry < _winStart + WindowRefreshGuardRows;
+            var nearEnd = lastEntryExclusive > groupedEnd - WindowRefreshGuardRows;
+
+            if (_winCount == newGroupedCount && !nearStart && !nearEnd)
+                return;
+
+            var newGroupedStart = Math.Max(0, firstEntry - WindowOverscanRows);
+            if (newGroupedStart != _winStart || newGroupedCount != _winCount)
+            {
+                _winStart = newGroupedStart;
+                _winCount = newGroupedCount;
+                await InvokeAsync(StateHasChanged);
+            }
+            return;
+        }
+
         if (!UseRowWindowing)
             return;
 
@@ -2574,6 +2804,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 _measuredRowHeightPx = metrics.RowPx;
                 _gridMetricsMeasured = true;
             }
+
+            // Grouped windowing sizes header entries from a real measurement; the
+            // one-time correction re-renders so the spacer math snaps exact.
+            if (UseGroupedRowWindowing && _measuredGroupHeaderPx <= 0 && _gridJsModule != null)
+            {
+                var headerRowPx = await _gridJsModule.InvokeAsync<double>(
+                    "measureGridGroupHeaderHeight", _scrollElement);
+                if (headerRowPx > 0)
+                {
+                    _measuredGroupHeaderPx = headerRowPx;
+                    StateHasChanged();
+                }
+            }
         }
         catch (Exception)
         {
@@ -2629,7 +2872,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            if (UseRowWindowing)
+            if (UseRowWindowing || UseGroupedRowWindowing)
             {
                 if (_windowScrollRegistered)
                     return;
@@ -2689,15 +2932,29 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var displayRowIndex = _pendingRowRevealIndex.Value;
         _pendingRowRevealIndex = null;
 
+        // Grouped windowing: the pending index is a flat display index, useless
+        // against the grouped stream. Move the window to the ACTIVE row first
+        // (records the entry's pixel top), and scroll by that instead of
+        // index × rowHeight. The existing retry pass then fine-tunes against
+        // the now-rendered DOM row.
+        if (UseGroupedRowWindowing)
+        {
+            _groupedActiveEntryTopPx = -1;
+            await EnsureWindowedActiveRowVisibleAsync();
+        }
+
         try
         {
             _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
                 "import", GridJsModulePath);
+            var fallbackTop = UseGroupedRowWindowing && _groupedActiveEntryTopPx >= 0
+                ? Math.Max(0, _groupedActiveEntryTopPx - 2 * _rowHeightPx)
+                : Math.Max(0, displayRowIndex * _rowHeightPx);
             var revealed = await _gridJsModule.InvokeAsync<bool>(
                 "scrollSelectedGridRowToTop",
                 _gridHostElement,
                 displayRowIndex,
-                Math.Max(0, displayRowIndex * _rowHeightPx),
+                fallbackTop,
                 true);
 
             if (!revealed && _pendingRowRevealAttempts < 2)
@@ -2749,6 +3006,36 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     private async Task EnsureWindowedActiveRowVisibleAsync()
     {
+        if (UseGroupedRowWindowing && _activeCell.HasValue)
+        {
+            var groupedItem = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
+            if (groupedItem is null)
+                return;
+            var stream = BuildGroupedDisplayStream();
+            var idx = stream.FindIndex(e => e.Kind == GroupedEntryKind.Item
+                && EqualityComparer<TValue>.Default.Equals(e.Item, groupedItem));
+            if (idx < 0)
+                return;
+            _groupedActiveEntryTopPx = _groupedPrefixPx![idx];
+            if (idx >= _winStart && idx < _winStart + _winCount)
+                return;
+            var maxEntryStart = Math.Max(0, stream.Count - _winCount);
+            _winStart = Math.Clamp(idx - WindowOverscanRows, 0, maxEntryStart);
+            await InvokeAsync(StateHasChanged);
+            var groupedTarget = Math.Max(0, _groupedPrefixPx![idx] - 2 * _rowHeightPx);
+            try
+            {
+                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
+                    "import", GridJsModulePath);
+                await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, groupedTarget);
+            }
+            catch (Exception)
+            {
+                // Best-effort; the window is already correct.
+            }
+            return;
+        }
+
         if (!UseRowWindowing || !_activeCell.HasValue)
             return;
 
@@ -11142,6 +11429,34 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         foreach (var group in groups)
         {
+            RenderGroupHeaderRow(builder, group, level);
+
+            if (!group.IsCollapsed)
+            {
+                // If this group has sub-groups, recurse
+                if (group.SubGroups.Any())
+                {
+                    builder.AddContent(60, RenderGroupedRows(group.SubGroups, level + 1));
+                }
+                else
+                {
+                    // Render actual data rows
+                    var rowIdx = 0;
+                    foreach (var item in group.Items)
+                        RenderGroupedItemRow(builder, item, rowIdx++);
+                }
+
+                RenderGroupFooterRows(builder, group);
+            }
+        }
+    };
+
+    /// <summary>The group-header &lt;tr&gt; (indents, expand icon, label, counts,
+    /// caption / column-aligned aggregates). Extracted verbatim from
+    /// RenderGroupedRows so the recursive and the WINDOWED grouped paths emit
+    /// byte-identical markup.</summary>
+    private void RenderGroupHeaderRow(RenderTreeBuilder builder, GroupResult<TValue> group, int level)
+    {
             // Group header row
             var groupHeaderClass = string.Equals(_focusedGroupPath, group.GroupPath, StringComparison.Ordinal)
                 ? "fx-group-header-row fx-group-header-focused"
@@ -11318,21 +11633,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             builder.CloseElement(); // tr
+    }
 
-            if (!group.IsCollapsed)
-            {
-                // If this group has sub-groups, recurse
-                if (group.SubGroups.Any())
-                {
-                    builder.AddContent(60, RenderGroupedRows(group.SubGroups, level + 1));
-                }
-                else
-                {
-                    // Render actual data rows
-                    var rowIdx = 0;
-                    foreach (var item in group.Items)
-                    {
-                        var currentIdx = rowIdx;
+    /// <summary>One grouped data &lt;tr&gt; — extracted verbatim from the items
+    /// loop of RenderGroupedRows (currentIdx = the row's index within its group,
+    /// which drives alt-row striping and the ResolveRowIndex fallback).</summary>
+    private void RenderGroupedItemRow(RenderTreeBuilder builder, TValue item, int currentIdx)
+    {
                         var resolvedRowIdx = ResolveRowIndex(item, currentIdx);
                         var isSelected = _selectedItems.Contains(item);
                         var isCellSelectedRow = IsCellSelectionRow(item, resolvedRowIdx);
@@ -11341,7 +11648,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 	                        builder.OpenElement(70, "tr");
 	                        builder.SetKey(item);
 	                        builder.AddAttribute(71, "class",
-	                            $"fx-row {(rowIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
+	                            $"fx-row {(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
                         var groupedRowHandlers = GetRowHandlers(item, resolvedRowIdx);
                         builder.AddAttribute(72, "onclick", groupedRowHandlers?.Click
                             ?? EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, resolvedRowIdx, e)));
@@ -11551,10 +11858,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         }
 
                         builder.CloseElement(); // tr
-                        rowIdx++;
-                    }
-                }
+    }
 
+    /// <summary>The group's footer aggregate row(s), when configured — extracted
+    /// verbatim from RenderGroupedRows.</summary>
+    private void RenderGroupFooterRows(RenderTreeBuilder builder, GroupResult<TValue> group)
+    {
                 // ── Group Footer (aggregate totals for this group) ──
                 if (AggregateRows is { Count: > 0 } && group.Aggregates.Count > 0)
                 {
@@ -11597,9 +11906,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         builder.CloseElement(); // tr
                     }
                 }
-            }
-        }
-    };
+    }
+
 
     // ── Render Data Cells (flat mode) ────────────────────────────────────
 

@@ -658,7 +658,18 @@
                 @* ── Grouped or flat rendering ─────────────────── *@
                 @if (AllowGrouping && _groupDescriptors.Count > 0)
                 {
-                    @RenderGroupedRows(GroupedData, 0)
+                    @* Grouped windowing: flatten headers/items/footers into one
+                       display stream and window over it (mixed-height prefix
+                       math); falls back to the classic render-everything
+                       recursion when windowing does not apply. *@
+                    @if (UseGroupedRowWindowing)
+                    {
+                        @RenderGroupedRowsWindowed()
+                    }
+                    else
+                    {
+                        @RenderGroupedRows(GroupedData, 0)
+                    }
                 }
                 else
                 {
