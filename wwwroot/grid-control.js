@@ -1772,6 +1772,14 @@ export function registerGridWindowScroll(scrollEl, dotNetRef) {
 // the virtualized viewport to a row that isn't currently rendered (type-search
 // hit, Home/End, PageDown) — C# has already moved the window to include that
 // row; this keeps the scrollbar position in sync. Pure geometry.
+// Height of one rendered group-header row — grouped row windowing sizes its
+// header entries from this one-time measurement (headers are taller than data
+// rows, and the spacer math needs the real pitch). Pure geometry.
+export function measureGridGroupHeaderHeight(scrollEl) {
+    const r = scrollEl && scrollEl.querySelector("tr.fx-group-header-row");
+    return r ? r.getBoundingClientRect().height : 0;
+}
+
 export function setGridScrollTop(scrollEl, top) {
     if (!scrollEl) return;
     const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
@@ -2349,6 +2357,17 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
 
     doc.addEventListener("pointermove", onMove, true);
     doc.addEventListener("pointerup", onUp, true);
+
+    // Immediate visual feedback the moment the drag capture arms (HHM-871
+    // follow-up QA complaint): the old flow painted nothing until the pointer
+    // crossed into ANOTHER row, so a cell-mode press + short drag looked dead
+    // until the server's post-mouseup render delivered the whole range at
+    // once. Paint the anchor cell now; the range then grows live under the
+    // pointer, and the render-ack sweep clears the paint if the gesture ends
+    // as a plain click that selects something else. Row-mode grids that
+    // highlight whole rows already get their press paint from the
+    // instant-feedback binding, so they are excluded.
+    if (mode === "cell" || !gridHighlightsSelectedRows(gridRoot)) applyPreview(anchorIndex);
     gridDragSelectionBindings.set(gridRoot, { cleanup });
     // Row mode: paint the anchor immediately — that's the instant press
     // feedback. Cell mode: NO paint on a plain press; the preview appears only
