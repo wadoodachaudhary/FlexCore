@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
 using Fx.ControlKit;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -1073,6 +1074,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override bool ShouldRender()
     {
+        // Row-window callbacks promise JS that a DOM acknowledgement token will
+        // be painted. A stale editor-owned one-shot suppression must never eat
+        // that authoritative render or the client scroll queue can wait forever.
+        if (_authoritativeWindowRenderPending)
+        {
+            _authoritativeWindowRenderPending = false;
+            _suppressNextRenderOnce = false;
+            return true;
+        }
+
         if (_suppressNextRenderOnce)
         {
             _suppressNextRenderOnce = false;
@@ -1316,6 +1327,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void BeginGridRenderPass()
     {
         _renderPassStartTimestamp = GridRenderDiagnostics.BeginPass();
+        if (_deferredScrollDiagnosticsPendingToken != 0)
+        {
+            _deferredScrollDiagnosticsActiveToken = _deferredScrollDiagnosticsPendingToken;
+            _deferredScrollDiagnosticsPendingToken = 0;
+            _deferredScrollRenderQueueMs = _deferredScrollRenderRequestedTimestamp == 0
+                ? 0
+                : ElapsedMilliseconds(_deferredScrollRenderRequestedTimestamp);
+            _deferredScrollGroupedBuildMs = 0;
+            _deferredScrollGroupedEntryCount = 0;
+        }
         EnsureAutoColumnWidthsBeforeRender();
         PrepareBlazorServerOptimizationForRender();
         BeginCellHandlerRenderPass();
@@ -1328,7 +1349,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void EndGridRenderPass()
     {
-        GridRenderDiagnostics.EndPass(_renderPassStartTimestamp);
+        var renderBuildMs = GridRenderDiagnostics.EndPass(_renderPassStartTimestamp);
+        if (_deferredScrollDiagnosticsActiveToken != 0)
+        {
+            _deferredScrollRenderBuildMs = renderBuildMs;
+            _deferredScrollWindowStart = _winStart;
+            _deferredScrollWindowCount = _winCount;
+            _deferredScrollWindowMode = UseGroupedRowWindowing
+                ? "grouped"
+                : UseRowWindowing ? "flat" : "none";
+            _deferredScrollDiagnosticsToken = _deferredScrollDiagnosticsActiveToken;
+            _deferredScrollDiagnosticsActiveToken = 0;
+        }
         _renderPassActive = false;
         EndBlazorServerOptimizationRenderPass();
         _renderVisibleColumns = null;
@@ -1697,11 +1729,61 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// flick never outruns the render.</summary>
     [Parameter] public int WindowOverscanRows { get; set; } = 60;
 
+    /// <summary>
+    /// Rows buffered above and below the destination for a release-only thumb
+    /// commit. The destination viewport is frozen until this render arrives, so
+    /// shipping the full live-scroll overscan only makes the release batch wider
+    /// and slower. The resolved value is never below the refresh guard and never
+    /// above <see cref="WindowOverscanRows"/>.
+    /// </summary>
+    [Parameter] public int DeferredScrollOverscanRows { get; set; } = 20;
+
     /// <summary>VB6 FlexGrid ScrollTrack. True tracks the vertical thumb live.
     /// False uses a browser-owned proxy thumb: the thumb previews locally while
     /// the committed grid viewport remains frozen, then one server call renders
     /// and applies the destination window on release.</summary>
     [Parameter] public bool ScrollTrack { get; set; } = true;
+
+    /// <summary>
+    /// Multiplier applied once to normalized vertical wheel/trackpad input when
+    /// the ScrollTrack=false proxy owns vertical scrolling. A value of 0.75
+    /// reduces travel by 25 percent without changing thumb, arrow, keyboard,
+    /// page, or horizontal scrolling. Defaults to native-equivalent travel.
+    /// </summary>
+    [Parameter] public double WheelScrollScale { get; set; } = 1d;
+
+    /// <summary>
+    /// Progressively resists wheel/trackpad movement inside the populated-edge
+    /// prefetch zone instead of arriving at the boundary at full speed. The
+    /// rendered viewport always remains inside real rows; the ordinary boundary
+    /// guard remains the final fallback if geometry is unavailable or invalid.
+    /// Evaluated only when <see cref="EnableScrollBoundaryGuard"/> is enabled.
+    /// </summary>
+    [Parameter] public bool EnableScrollBoundarySlowdown { get; set; }
+
+    /// <summary>
+    /// Prevents wheel and trackpad momentum from exposing an unrendered window
+    /// spacer while <see cref="ScrollTrack"/> is false. Motion remains live while
+    /// the requested viewport is backed by rendered rows; at the edge it pauses
+    /// on the last populated row and resumes after the next server window arrives.
+    /// Opt-in while the behavior is evaluated in the FlexCore bench.
+    /// </summary>
+    [Parameter] public bool EnableScrollBoundaryGuard { get; set; }
+
+    /// <summary>
+    /// Enables browser-local wheel-window benchmark telemetry. Off by default so
+    /// ordinary ScrollTrack=false grids do not pay animation-frame geometry
+    /// sampling costs. The Edit Model bench enables it for both guard OFF and ON
+    /// runs to keep the comparison symmetrical.
+    /// </summary>
+    [Parameter] public bool EnableScrollBoundaryTelemetry { get; set; }
+
+    /// <summary>
+    /// Bench-only delay applied to row-window callbacks. This is component scoped
+    /// (never static) and models a slow circuit/server response without affecting
+    /// another grid, circuit, or user. It does not claim to emulate bandwidth.
+    /// </summary>
+    [Parameter] public int DiagnosticWindowScrollDelayMs { get; set; }
 
     /// <summary>
     /// Minimum source row count before custom row windowing is enabled. A value
@@ -1713,6 +1795,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
     private int WindowRefreshGuardRows => WindowOverscanRows / 3;
+
+    private int DeferredScrollReleaseOverscanRows => Math.Min(
+        Math.Max(0, WindowOverscanRows),
+        Math.Max(Math.Max(0, DeferredScrollOverscanRows), Math.Max(0, WindowRefreshGuardRows)));
 
     /// <summary>First rendered ABSOLUTE row index into the paged/sorted list.</summary>
     private int _winStart;
@@ -1744,6 +1830,31 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     private long _deferredScrollCommitToken;
     private double _deferredScrollCommitTop;
+
+    /// <summary>
+    /// Echo of the latest ordinary wheel-window request that actually changed
+    /// the rendered slice. JS uses it as a DOM acknowledgement; the interop
+    /// promise can settle before Blazor has patched the corresponding rows.
+    /// </summary>
+    private long _windowScrollResponseToken;
+    private bool _authoritativeWindowRenderPending;
+
+    // Correlated release diagnostics. The values are emitted by the same render
+    // that carries the commit token, so browser telemetry can split circuit wait,
+    // server window maths, Razor tree construction, and DOM/paint time without a
+    // second diagnostic round trip.
+    private long _deferredScrollDiagnosticsPendingToken;
+    private long _deferredScrollDiagnosticsActiveToken;
+    private long _deferredScrollDiagnosticsToken;
+    private long _deferredScrollRenderRequestedTimestamp;
+    private double _deferredScrollWindowMathMs;
+    private double _deferredScrollRenderQueueMs;
+    private double _deferredScrollRenderBuildMs;
+    private double _deferredScrollGroupedBuildMs;
+    private int _deferredScrollGroupedEntryCount;
+    private int _deferredScrollWindowStart;
+    private int _deferredScrollWindowCount;
+    private string _deferredScrollWindowMode = "none";
 
     /// <summary>Fingerprint of the last rendered list. When it changes (sort,
     /// filter, or DataSource swap) the window offset resets to the top.</summary>
@@ -1885,6 +1996,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private List<GroupedDisplayEntry> BuildGroupedDisplayStream()
     {
+        var diagnosticsStart = _deferredScrollDiagnosticsActiveToken == 0
+            ? 0
+            : Stopwatch.GetTimestamp();
         var list = new List<GroupedDisplayEntry>();
         var heights = new List<double>();
         var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
@@ -1929,6 +2043,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         for (var i = 0; i < list.Count; i++)
             prefix[i + 1] = prefix[i] + heights[i];
         _groupedPrefixPx = prefix;
+        if (diagnosticsStart != 0)
+        {
+            _deferredScrollGroupedBuildMs = ElapsedMilliseconds(diagnosticsStart);
+            _deferredScrollGroupedEntryCount = list.Count;
+        }
         return list;
     }
 
@@ -1990,9 +2109,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         builder.OpenElement(300, "tr");
         builder.AddAttribute(301, "aria-hidden", "true");
         builder.AddAttribute(302, "class", "fx-grid-window-spacer");
-        builder.OpenElement(303, "td");
-        builder.AddAttribute(304, "colspan", colspan);
-        builder.AddAttribute(305, "style", WindowSpacerStyle(prefix[Math.Min(start, total)]));
+        builder.AddAttribute(303, "data-fx-window-spacer", "top");
+        builder.OpenElement(304, "td");
+        builder.AddAttribute(305, "colspan", colspan);
+        builder.AddAttribute(306, "style", WindowSpacerStyle(prefix[Math.Min(start, total)]));
         builder.CloseElement();
         builder.CloseElement();
 
@@ -2017,9 +2137,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         builder.OpenElement(310, "tr");
         builder.AddAttribute(311, "aria-hidden", "true");
         builder.AddAttribute(312, "class", "fx-grid-window-spacer");
-        builder.OpenElement(313, "td");
-        builder.AddAttribute(314, "colspan", colspan);
-        builder.AddAttribute(315, "style", WindowSpacerStyle(prefix[total] - prefix[Math.Min(end, total)]));
+        builder.AddAttribute(313, "data-fx-window-spacer", "bottom");
+        builder.OpenElement(314, "td");
+        builder.AddAttribute(315, "colspan", colspan);
+        builder.AddAttribute(316, "style", WindowSpacerStyle(prefix[total] - prefix[Math.Min(end, total)]));
         builder.CloseElement();
         builder.CloseElement();
     };
@@ -2213,11 +2334,62 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// and re-renders only when the window actually moved.
     /// </summary>
     [JSInvokable]
-    public Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
+    public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
     {
-        return UpdateGridWindow(scrollTop, clientHeight)
-            ? InvokeAsync(StateHasChanged)
-            : Task.CompletedTask;
+        await ApplyDiagnosticWindowScrollDelayAsync();
+        if (UpdateGridWindow(scrollTop, clientHeight))
+            await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>
+    /// Token-correlated scroll callback used by the boundary-guard prototype.
+    /// The original two-argument callback remains intact for source and cached-JS
+    /// compatibility; this endpoint adds direction and a DOM acknowledgement.
+    /// </summary>
+    [JSInvokable]
+    public async Task<bool> OnGridWindowScrollWithTokenAsync(
+        double scrollTop,
+        double clientHeight,
+        int scrollDirection,
+        long requestToken)
+    {
+        await ApplyDiagnosticWindowScrollDelayAsync();
+        if (!UpdateGridWindow(
+                scrollTop,
+                clientHeight,
+                scrollDirection: Math.Sign(scrollDirection)))
+            return false;
+
+        if (requestToken > 0)
+            _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
+        _authoritativeWindowRenderPending = true;
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
+    /// <summary>
+    /// Liveness recovery for a rendered window whose browser DOM token was not
+    /// observed. It always republishes an authoritative token, even when the row
+    /// slice already matches the destination. This endpoint is used only by the
+    /// bounded client watchdog, never by ordinary wheel sampling.
+    /// </summary>
+    [JSInvokable]
+    public async Task<bool> OnGridWindowScrollRecoveryAsync(
+        double scrollTop,
+        double clientHeight,
+        int scrollDirection,
+        long requestToken)
+    {
+        await ApplyDiagnosticWindowScrollDelayAsync();
+        UpdateGridWindow(
+            scrollTop,
+            clientHeight,
+            scrollDirection: Math.Sign(scrollDirection));
+        if (requestToken > 0)
+            _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
+        _authoritativeWindowRenderPending = true;
+        await InvokeAsync(StateHasChanged);
+        return true;
     }
 
     /// <summary>
@@ -2227,17 +2399,52 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// it is allowed to move the real viewport.
     /// </summary>
     [JSInvokable]
-    public Task OnGridDeferredScrollCommitAsync(double scrollTop, double clientHeight, long token)
+    public async Task OnGridDeferredScrollCommitAsync(double scrollTop, double clientHeight, long token)
     {
-        UpdateGridWindow(scrollTop, clientHeight);
+        await ApplyDiagnosticWindowScrollDelayAsync();
+        var mathStart = Stopwatch.GetTimestamp();
+        UpdateGridWindow(scrollTop, clientHeight, deferredCommit: true);
+        _deferredScrollWindowMathMs = ElapsedMilliseconds(mathStart);
         _deferredScrollCommitTop = Math.Max(0, scrollTop);
         _deferredScrollCommitToken = Math.Max(_deferredScrollCommitToken + 1, token);
-        return InvokeAsync(StateHasChanged);
+        _deferredScrollDiagnosticsPendingToken = _deferredScrollCommitToken;
+        _deferredScrollRenderRequestedTimestamp = Stopwatch.GetTimestamp();
+        _authoritativeWindowRenderPending = true;
+        await InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>Updates the flat or grouped row-window state without rendering.</summary>
-    private bool UpdateGridWindow(double scrollTop, double clientHeight)
+    private Task ApplyDiagnosticWindowScrollDelayAsync()
     {
+        var delay = Math.Clamp(DiagnosticWindowScrollDelayMs, 0, 5_000);
+        return delay == 0 ? Task.CompletedTask : Task.Delay(delay);
+    }
+
+    private static double ElapsedMilliseconds(long startTimestamp) =>
+        (Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>Updates the flat or grouped row-window state without rendering.</summary>
+    private bool UpdateGridWindow(
+        double scrollTop,
+        double clientHeight,
+        bool deferredCommit = false,
+        int scrollDirection = 0)
+    {
+        var overscanRows = deferredCommit
+            ? DeferredScrollReleaseOverscanRows
+            : Math.Max(0, WindowOverscanRows);
+        var beforeRows = overscanRows;
+        var afterRows = overscanRows;
+        if (!deferredCommit && scrollDirection != 0)
+        {
+            // Keep the exact same total row count as symmetric overscan, but put
+            // most of it in front of wheel/trackpad travel. At the defaults this
+            // is 20 rows behind and 100 ahead (reversed when travelling upward).
+            var totalOverscan = overscanRows * 2;
+            var trailingRows = Math.Clamp(WindowRefreshGuardRows, 0, totalOverscan);
+            var leadingRows = totalOverscan - trailingRows;
+            beforeRows = scrollDirection > 0 ? trailingRows : leadingRows;
+            afterRows = scrollDirection > 0 ? leadingRows : trailingRows;
+        }
         // Grouped windowing: entries have MIXED heights (headers taller than
         // items), so scrollTop maps to an entry index through the prefix-summed
         // pixel array rather than a division.
@@ -2251,7 +2458,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var firstEntry = GroupedEntryIndexAt(prefixArr, scrollTop);
             var lastEntryExclusive = Math.Min(entryCount, GroupedEntryIndexAt(prefixArr, scrollTop + clientHeight) + 1);
             var visibleEntries = Math.Max(1, lastEntryExclusive - firstEntry);
-            var newGroupedCount = visibleEntries + WindowOverscanRows * 2;
+            var newGroupedCount = visibleEntries + beforeRows + afterRows;
             var groupedEnd = _winStart + _winCount;
             var nearStart = firstEntry < _winStart + WindowRefreshGuardRows;
             var nearEnd = lastEntryExclusive > groupedEnd - WindowRefreshGuardRows;
@@ -2259,7 +2466,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (_winCount == newGroupedCount && !nearStart && !nearEnd)
                 return false;
 
-            var newGroupedStart = Math.Max(0, firstEntry - WindowOverscanRows);
+            var newGroupedStart = Math.Max(0, firstEntry - beforeRows);
             if (newGroupedStart != _winStart || newGroupedCount != _winCount)
             {
                 _winStart = newGroupedStart;
@@ -2279,7 +2486,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var firstVisible = Math.Max(0, (int)Math.Floor(scrollTop / rowH));
         var lastVisibleExclusive = firstVisible + visible;
-        var newCount = visible + WindowOverscanRows * 2;
+        var newCount = visible + beforeRows + afterRows;
         var currentEnd = _winStart + _winCount;
         var nearWindowStart = firstVisible < _winStart + WindowRefreshGuardRows;
         var nearWindowEnd = lastVisibleExclusive > currentEnd - WindowRefreshGuardRows;
@@ -2287,7 +2494,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_winCount == newCount && !nearWindowStart && !nearWindowEnd)
             return false;
 
-        var newStart = Math.Max(0, firstVisible - WindowOverscanRows);
+        var newStart = Math.Max(0, firstVisible - beforeRows);
         if (newStart != _winStart || newCount != _winCount)
         {
             _winStart = newStart;
@@ -2938,7 +3145,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     _windowSelfRef,
                     ScrollTrack,
                     _deferredScrollLaneElement,
-                    _deferredScrollThumbElement);
+                    _deferredScrollThumbElement,
+                    EnableScrollBoundaryGuard && !ScrollTrack,
+                    EnableScrollBoundaryTelemetry && !ScrollTrack,
+                    Math.Max(0, WindowOverscanRows),
+                    Math.Max(0, WindowRefreshGuardRows),
+                    _rowHeightPx <= 0 ? 16 : _rowHeightPx,
+                    double.IsFinite(WheelScrollScale)
+                        ? Math.Clamp(WheelScrollScale, 0.1d, 2d)
+                        : 1d,
+                    EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack);
                 _windowScrollRegistered = true;
             }
             else if (_windowScrollRegistered && _gridJsModule != null)

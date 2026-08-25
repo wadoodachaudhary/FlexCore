@@ -27,11 +27,12 @@ public static class GridRenderDiagnostics
 
     internal static long BeginPass() => Stopwatch.GetTimestamp();
 
-    internal static void EndPass(long startTimestamp)
+    internal static double EndPass(long startTimestamp)
     {
         RenderCount++;
         var ms = (Stopwatch.GetTimestamp() - startTimestamp) * 1000.0 / Stopwatch.Frequency;
         LastBuildMs = ms;
         TotalBuildMs += ms;
+        return ms;
     }
 }
