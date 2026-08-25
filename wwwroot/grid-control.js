@@ -1739,7 +1739,14 @@ export function registerGridWindowScroll(
     dotNetRef,
     scrollTrack = true,
     deferredLane = null,
-    deferredThumb = null) {
+    deferredThumb = null,
+    enableScrollBoundaryGuard = false,
+    enableScrollBoundaryTelemetry = false,
+    windowOverscanRows = 60,
+    refreshGuardRows = 20,
+    configuredRowHeight = 16,
+    wheelScrollScale = 1,
+    enableScrollBoundarySlowdown = false) {
     if (!scrollEl || !dotNetRef) return;
 
     // Idempotent: drop any prior listener on this element before re-binding.
@@ -1748,9 +1755,107 @@ export function registerGridWindowScroll(
     let disposed = false;
     let scheduled = false;
     let inFlight = false;
+    let activeInvocationMethod = null;
+    let activeInvocation = null;
     let pendingCommitInvocation = null;
     let pendingScrollInvocation = null;
     let lastObservedTop = scrollEl.scrollTop;
+    let nextWindowRequestToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
+    let lastWindowDomToken = nextWindowRequestToken;
+    let activeDomAckTimer = 0;
+    const domAckTimeoutMs = 1000;
+
+    const boundaryTelemetryEnabled = !!enableScrollBoundaryTelemetry;
+    const incrementCounter = name => {
+        if (!boundaryTelemetryEnabled)
+            return Number(scrollEl.dataset[name] || 0);
+        const next = Number(scrollEl.dataset[name] || 0) + 1;
+        scrollEl.dataset[name] = String(next);
+        return next;
+    };
+    if (boundaryTelemetryEnabled) {
+        scrollEl.dataset.fxWindowInvocations ||= "0";
+        scrollEl.dataset.fxWindowRenderedResponses ||= "0";
+        scrollEl.dataset.fxWindowNoRenderResponses ||= "0";
+        scrollEl.dataset.fxWindowCoalesced ||= "0";
+        scrollEl.dataset.fxWindowBoundaryInvocations ||= "0";
+        scrollEl.dataset.fxWindowNormalInvocations ||= "0";
+        scrollEl.dataset.fxWindowDomAckTimeouts ||= "0";
+        scrollEl.dataset.fxWindowLivenessRecoveries ||= "0";
+        scrollEl.dataset.fxWindowMaxInFlight = "0";
+    }
+
+    const queueState = () => ({
+        inFlight,
+        activeKind: activeInvocation?.kind || null,
+        activeTarget: activeInvocation?.target ?? null,
+        activeDirection: activeInvocation?.direction ?? 0,
+        pendingKind: pendingScrollInvocation?.kind || null,
+        pendingTarget: pendingScrollInvocation?.target ?? null
+    });
+    const cancelPendingBoundary = () => {
+        if (pendingScrollInvocation?.kind !== "boundary") return false;
+        pendingScrollInvocation = null;
+        incrementCounter("fxWindowCoalesced");
+        return true;
+    };
+
+    const clearActiveDomAckTimer = () => {
+        if (activeDomAckTimer) clearTimeout(activeDomAckTimer);
+        activeDomAckTimer = 0;
+    };
+    const completeActiveInvocation = (request, rendered, outcome) => {
+        if (activeInvocation !== request) return;
+        clearActiveDomAckTimer();
+        inFlight = false;
+        activeInvocationMethod = null;
+        activeInvocation = null;
+        try {
+            scrollEl.__gridDeferredScrollController?.onWindowRequestSettled?.(
+                request,
+                rendered,
+                outcome);
+        } finally {
+            // A controller reconciliation failure must never retain ownership of
+            // the queue. The newest pending destination still gets a chance to
+            // recover on the next pump.
+            if (!disposed && (pendingCommitInvocation || pendingScrollInvocation))
+                void pump();
+        }
+    };
+    const acknowledgeWindowDomToken = token => {
+        if (!Number.isFinite(token) || token <= 0) return;
+        lastWindowDomToken = Math.max(lastWindowDomToken, token);
+        // A server-side remount/recovery can advance beyond the token that this
+        // registration allocated. Keep future requests monotonic with the DOM
+        // acknowledgement so they can never look stale on arrival.
+        nextWindowRequestToken = Math.max(nextWindowRequestToken, token);
+        const request = activeInvocation;
+        if (request?.awaitingDom && lastWindowDomToken >= request.token)
+            completeActiveInvocation(request, true, request.invokeOutcome || "resolved");
+    };
+    const armDomAckWatchdog = request => {
+        clearActiveDomAckTimer();
+        request.awaitingDomStartedAt = performance.now();
+        activeDomAckTimer = setTimeout(() => {
+            activeDomAckTimer = 0;
+            if (disposed || activeInvocation !== request || !request.awaitingDom)
+                return;
+
+            // Mutation delivery may be skipped even though the attribute is
+            // already current. Re-read it before declaring an acknowledgement
+            // failure so the healthy path never creates a recovery request.
+            const observedToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
+            if (Number.isFinite(observedToken) && observedToken >= request.token) {
+                acknowledgeWindowDomToken(observedToken);
+                return;
+            }
+
+            incrementCounter("fxWindowDomAckTimeouts");
+            request.awaitingDom = false;
+            completeActiveInvocation(request, false, "dom-ack-timeout");
+        }, domAckTimeoutMs);
+    };
 
     const pump = async () => {
         if (disposed || inFlight || (!pendingCommitInvocation && !pendingScrollInvocation)) return;
@@ -1769,37 +1874,106 @@ export function registerGridWindowScroll(
         if (pendingCommitInvocation) pendingCommitInvocation = null;
         else pendingScrollInvocation = null;
         inFlight = true;
-        scrollEl.dataset.fxWindowInvocations = String(
-            Number(scrollEl.dataset.fxWindowInvocations || 0) + 1);
+        activeInvocation = request;
+        activeInvocationMethod = request.method;
+        const invokeStartedAt = performance.now();
+        request.telemetry?.markInvokeStarted?.(invokeStartedAt);
+        if (boundaryTelemetryEnabled) {
+            scrollEl.dataset.fxWindowInvocations = String(
+                Number(scrollEl.dataset.fxWindowInvocations || 0) + 1);
+            scrollEl.dataset.fxWindowMaxInFlight = "1";
+        }
+        if (request.kind === "boundary") incrementCounter("fxWindowBoundaryInvocations");
+        else if (request.kind !== "deferred") incrementCounter("fxWindowNormalInvocations");
+        let invokeOutcome = "resolved";
+        let invokeResult = null;
         try {
-            await dotNetRef.invokeMethodAsync(request.method, ...request.args);
+            invokeResult = await dotNetRef.invokeMethodAsync(request.method, ...request.args);
+            if (request.kind !== "deferred") {
+                incrementCounter(invokeResult === true
+                    ? "fxWindowRenderedResponses"
+                    : "fxWindowNoRenderResponses");
+            }
         } catch {
             // Best-effort — the circuit may be tearing down.
+            invokeOutcome = "rejected";
         } finally {
-            inFlight = false;
-            if (!disposed && (pendingCommitInvocation || pendingScrollInvocation)) void pump();
+            request.telemetry?.markInvokeSettled?.(performance.now(), invokeOutcome);
+            request.invokeOutcome = invokeOutcome;
+            // With the guard enabled, a rendered ordinary response is not done
+            // when its interop promise resolves. Keep the single-flight slot
+            // occupied until Blazor patches the echoed DOM token. Otherwise a
+            // queued latest target can run against C#'s new window while JS still
+            // measures the old rows, and a false/no-change result can discard the
+            // user's destination.
+            if (enableScrollBoundaryGuard
+                && request.kind !== "deferred"
+                && invokeOutcome === "resolved"
+                && invokeResult === true
+                && lastWindowDomToken < request.token) {
+                request.awaitingDom = true;
+                armDomAckWatchdog(request);
+                return;
+            }
+            completeActiveInvocation(request, invokeResult === true, invokeOutcome);
         }
     };
-    const enqueue = (method, ...args) => {
-        // Single-flight, latest-wins: retain only the newest position while a
-        // prior server window is rendering.
-        if (method === "OnGridDeferredScrollCommitAsync") {
-            // A release target supersedes every sample taken from the frozen
-            // viewport. Let an already-running sample finish, but never drain a
-            // queued old position after the destination window has rendered.
-            pendingScrollInvocation = null;
-            pendingCommitInvocation = { method, args };
-        } else {
-            // A rAF/timer scheduled just before thumb-down must not enqueue the
-            // frozen viewport behind the release commit.
-            if (scrollEl.__gridDeferredScrollController?.isFrozen()) return;
-            pendingScrollInvocation = { method, args };
-        }
+    const enqueueWindow = (
+        targetTop,
+        direction = 0,
+        kind = "normal",
+        forceDomAcknowledge = false,
+        serverDirection = direction) => {
+        // A rAF/timer scheduled just before thumb-down must not enqueue the
+        // frozen viewport behind the release commit.
+        if (scrollEl.__gridDeferredScrollController?.isFrozen()) return 0;
+
+        // A generic sample must never overwrite the latest boundary target.
+        if (pendingScrollInvocation?.kind === "boundary" && kind !== "boundary")
+            return pendingScrollInvocation.token;
+        if (pendingScrollInvocation) incrementCounter("fxWindowCoalesced");
+
+        const token = ++nextWindowRequestToken;
+        pendingScrollInvocation = {
+            method: forceDomAcknowledge
+                ? "OnGridWindowScrollRecoveryAsync"
+                : "OnGridWindowScrollWithTokenAsync",
+            args: [targetTop, scrollEl.clientHeight, Math.sign(serverDirection), token],
+            kind,
+            target: targetTop,
+            direction: Math.sign(direction),
+            token,
+            forceDomAcknowledge
+        };
+        if (forceDomAcknowledge)
+            incrementCounter("fxWindowLivenessRecoveries");
+        scrollEl.__gridDeferredScrollController?.onWindowRequestQueued?.(
+            pendingScrollInvocation);
+        void pump();
+        return token;
+    };
+    const enqueueDeferredCommit = (targetTop, token, telemetry) => {
+        // Keep telemetry entirely on the existing commit. It observes queueing
+        // and promise timing but never creates another JS interop/network call.
+        pendingScrollInvocation = null;
+        telemetry?.markEnqueued?.(inFlight, activeInvocationMethod, performance.now());
+        pendingCommitInvocation = {
+            method: "OnGridDeferredScrollCommitAsync",
+            args: [targetTop, scrollEl.clientHeight, token],
+            kind: "deferred",
+            target: targetTop,
+            direction: 0,
+            token,
+            telemetry
+        };
         void pump();
     };
     let leadPrevTop = 0;
     let leadPrevTime = 0;
     const fire = () => {
+        // A boundary-guard wheel assignment can cancel an already queued rAF.
+        // The callback itself cannot be unscheduled, so make that callback inert.
+        if (!scheduled) return;
         scheduled = false;
         if (scrollEl.__gridDeferredScrollController?.isFrozen()) return;
         // Velocity lead: an inertial swipe moves the viewport first and lets the
@@ -1815,7 +1989,14 @@ export function registerGridWindowScroll(
             const dt = now - leadPrevTime;
             if (dt > 0 && dt < 250) {
                 const velocity = (top - leadPrevTop) / dt;   // px per ms
-                const maxLead = scrollEl.clientHeight * (window.__fxLeadCap ?? 1.25);
+                const viewportLead = scrollEl.clientHeight * (window.__fxLeadCap ?? 1.25);
+                const bufferLead = Math.max(
+                    0,
+                    (Math.max(0, windowOverscanRows) - Math.max(0, refreshGuardRows))
+                    * Math.max(1, configuredRowHeight));
+                const maxLead = bufferLead > 0
+                    ? Math.min(viewportLead, bufferLead)
+                    : viewportLead;
                 // A jump bigger than a couple of viewports in one frame is a
                 // programmatic teleport (ScrollTrack commit, Home/End), not
                 // momentum: no lead.
@@ -1828,7 +2009,7 @@ export function registerGridWindowScroll(
         }
         leadPrevTop = top;
         leadPrevTime = now;
-        enqueue("OnGridWindowScrollAsync", reported, scrollEl.clientHeight);
+        enqueueWindow(reported, 0, "normal");
     };
     const onScroll = () => {
         const nextTop = scrollEl.scrollTop;
@@ -1852,6 +2033,14 @@ export function registerGridWindowScroll(
             return;
         }
         scrollEl.__gridDeferredScrollSuppressTop = null;
+        const boundarySuppressTop = scrollEl.__gridBoundaryGuardSuppressTop;
+        if (Number.isFinite(boundarySuppressTop)
+            && Math.abs(nextTop - boundarySuppressTop) <= 0.25) {
+            scrollEl.__gridBoundaryGuardSuppressTop = null;
+            scheduled = false;
+            return;
+        }
+        scrollEl.__gridBoundaryGuardSuppressTop = null;
         // Horizontal-only scrolling never changes the row window.
         if (!verticalChanged) return;
         if (scheduled) return;
@@ -1876,6 +2065,7 @@ export function registerGridWindowScroll(
     scrollEl.__gridWindowScroll = onScroll;
     scrollEl.__gridWindowScrollDisposeQueue = () => {
         disposed = true;
+        clearActiveDomAckTimer();
         pendingCommitInvocation = null;
         pendingScrollInvocation = null;
     };
@@ -1886,15 +2076,23 @@ export function registerGridWindowScroll(
             scrollEl,
             deferredLane,
             deferredThumb,
-            (targetTop, token) => enqueue(
-                "OnGridDeferredScrollCommitAsync",
-                targetTop,
-                scrollEl.clientHeight,
-                token));
+            enqueueDeferredCommit,
+            enqueueWindow,
+            queueState,
+            cancelPendingBoundary,
+            acknowledgeWindowDomToken,
+            !!enableScrollBoundaryGuard,
+            boundaryTelemetryEnabled,
+            Math.max(0, refreshGuardRows),
+            Math.max(1, configuredRowHeight),
+            Number.isFinite(Number(wheelScrollScale))
+                ? Math.max(0.1, Math.min(2, Number(wheelScrollScale)))
+                : 1,
+            !!enableScrollBoundarySlowdown);
     }
 
     // Initial window sync — viewport height is known now that we're in the DOM.
-    enqueue("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight);
+    enqueueWindow(scrollEl.scrollTop, 0, "initial");
 }
 
 /**
@@ -1903,7 +2101,21 @@ export function registerGridWindowScroll(
  * Release asks C# to render one destination window; a DOM commit token moves
  * scrollTop only after those destination rows have arrived.
  */
-function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
+function createDeferredGridScrollbar(
+    scrollEl,
+    lane,
+    thumb,
+    requestCommit,
+    requestWindow,
+    getQueueState,
+    cancelPendingBoundary,
+    acknowledgeWindowDomToken,
+    enableScrollBoundaryGuard,
+    enableScrollBoundaryTelemetry,
+    refreshGuardRows,
+    configuredRowHeight,
+    wheelScrollScale,
+    enableScrollBoundarySlowdown) {
     const gridRoot = scrollEl.closest(".fx-grid");
     if (!gridRoot || !lane || !thumb) return null;
     const upButton = lane.querySelector(".fx-grid-deferred-vscroll-up");
@@ -1926,6 +2138,1000 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
     let frozenViewportTop = scrollEl.scrollTop;
     let layoutFrame = 0;
     const minimumLaneWidth = Number.parseFloat(getComputedStyle(lane).width) || 18;
+    const telemetryByToken = new Map();
+    const longTaskEntries = [];
+    let longTaskObserver = null;
+
+    // Wheel/trackpad boundary guard. Each command is rebased from the painted
+    // viewport, progressively reduced near the populated edge, and limited to
+    // one bounded latest destination while rows arrive. The real viewport is
+    // never allowed to enter either spacer. This is opt-in while measured in
+    // FlexCore's Edit Model bench; ScrollTrack thumb semantics remain separate.
+    let desiredWheelTop = scrollEl.scrollTop;
+    let waitingAtBoundary = false;
+    let boundaryWaitStartedAt = 0;
+    let boundaryDirection = 0;
+    let lastPrefetchToken = -1;
+    let lastPrefetchDirection = 0;
+    let noProgressCount = 0;
+    let wheelBurst = null;
+    let wheelBurstFrame = 0;
+    let wheelBurstIdleTimer = 0;
+    let wheelBurstFinishTimer = 0;
+    let cachedSafeBand = null;
+    let lastWheelInputAt = 0;
+    let livenessRecoveryCount = 0;
+    let renderedNoProgressCount = 0;
+    let bestBoundaryErrorPx = Number.POSITIVE_INFINITY;
+    let resistanceActive = false;
+    let slowdownIntentActive = false;
+
+    const dataNumber = name => Number(scrollEl.dataset[name] || 0);
+    const counterSnapshot = () => ({
+        invocations: dataNumber("fxWindowInvocations"),
+        normalInvocations: dataNumber("fxWindowNormalInvocations"),
+        boundaryInvocations: dataNumber("fxWindowBoundaryInvocations"),
+        renderedResponses: dataNumber("fxWindowRenderedResponses"),
+        noRenderResponses: dataNumber("fxWindowNoRenderResponses"),
+        domAckTimeouts: dataNumber("fxWindowDomAckTimeouts"),
+        livenessRecoveries: dataNumber("fxWindowLivenessRecoveries"),
+        coalesced: dataNumber("fxWindowCoalesced")
+    });
+    const subtractSnapshot = (end, start) => {
+        const result = {};
+        for (const key of Object.keys(end)) result[key] = end[key] - start[key];
+        return result;
+    };
+    const declaredSpacerHeight = row => {
+        const cellHeight = Number.parseFloat(row?.firstElementChild?.style?.height || "");
+        return Number.isFinite(cellHeight) ? cellHeight : 0;
+    };
+    const readRenderedBand = () => {
+        const topSpacer = scrollEl.querySelector(
+            'tbody tr[data-fx-window-spacer="top"]');
+        const bottomSpacer = scrollEl.querySelector(
+            'tbody tr[data-fx-window-spacer="bottom"]');
+        if (!topSpacer || !bottomSpacer) return null;
+
+        const viewportRect = scrollEl.getBoundingClientRect();
+        const bodyTop = getGridVisibleTop(scrollEl, viewportRect.top);
+        const bodyBottom = viewportRect.top + scrollEl.clientHeight;
+        const topRect = topSpacer.getBoundingClientRect();
+        const bottomRect = bottomSpacer.getBoundingClientRect();
+        const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        const currentTop = scrollEl.scrollTop;
+        const topHasHeight = declaredSpacerHeight(topSpacer) > 0.5;
+        const bottomHasHeight = declaredSpacerHeight(bottomSpacer) > 0.5;
+        const inward = 1;
+        let safeMin = topHasHeight
+            ? currentTop + topRect.bottom - bodyTop + inward
+            : 0;
+        let safeMax = bottomHasHeight
+            ? currentTop + bottomRect.top - bodyBottom - inward
+            : maxScroll;
+        safeMin = Math.max(0, Math.min(maxScroll, safeMin));
+        safeMax = Math.max(0, Math.min(maxScroll, safeMax));
+        const invalid = safeMin > safeMax;
+        if (invalid) safeMin = safeMax = Math.max(0, Math.min(maxScroll, currentTop));
+
+        const intersection = (rect, enabled) => enabled
+            ? Math.max(0, Math.min(rect.bottom, bodyBottom) - Math.max(rect.top, bodyTop))
+            : 0;
+        const visibleSpacerPx = intersection(topRect, topHasHeight)
+            + intersection(bottomRect, bottomHasHeight);
+        return {
+            safeMin,
+            safeMax,
+            maxScroll,
+            visibleSpacerPx,
+            invalid,
+            bodyTop,
+            bodyBottom
+        };
+    };
+    const invalidateSafeBand = () => {
+        cachedSafeBand = null;
+    };
+    const readSafeBand = (force = false) => {
+        if (!force && cachedSafeBand) return cachedSafeBand;
+        const measured = readRenderedBand();
+        cachedSafeBand = measured == null
+            ? null
+            : {
+                safeMin: measured.safeMin,
+                safeMax: measured.safeMax,
+                maxScroll: measured.maxScroll,
+                invalid: measured.invalid
+            };
+        return cachedSafeBand;
+    };
+    const normalizeWheelDelta = event => {
+        const raw = Number(event.deltaY) || 0;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE)
+            return raw * Math.max(1, configuredRowHeight || 16);
+        if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE)
+            return raw * Math.max(1, scrollEl.clientHeight);
+        return raw;
+    };
+    const setBoundaryOwnedTop = top => {
+        const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        const target = Math.max(0, Math.min(max, top));
+        const before = scrollEl.scrollTop;
+        scrollEl.scrollTop = target;
+        if (Math.abs(scrollEl.scrollTop - before) > 0.25) {
+            scrollEl.__gridBoundaryGuardSuppressTop = scrollEl.scrollTop;
+            // Cancel any generic rAF sample scheduled before this guarded move.
+            scheduled = false;
+        }
+        return scrollEl.scrollTop;
+    };
+
+    const sampleWheelBurstFrame = timestamp => {
+        wheelBurstFrame = 0;
+        if (!wheelBurst || disposed) return;
+        const band = readRenderedBand();
+        const exposure = band?.visibleSpacerPx || 0;
+        const elapsed = wheelBurst.lastFrameAt == null
+            ? 0
+            : Math.max(0, timestamp - wheelBurst.lastFrameAt);
+        if ((wheelBurst.lastExposurePx || 0) > 1)
+            wheelBurst.blankDurationMs += elapsed;
+        if (exposure > 1) {
+            wheelBurst.blankFrames++;
+        }
+        wheelBurst.lastFrameAt = timestamp;
+        wheelBurst.lastExposurePx = exposure;
+        wheelBurst.sampledFrames++;
+        wheelBurst.maxVisibleSpacerPx = Math.max(
+            wheelBurst.maxVisibleSpacerPx,
+            exposure);
+        wheelBurst.hiddenDuring ||= document.hidden;
+        wheelBurstFrame = requestAnimationFrame(sampleWheelBurstFrame);
+    };
+    const ensureWheelBurstFrame = () => {
+        if (!wheelBurstFrame) wheelBurstFrame = requestAnimationFrame(sampleWheelBurstFrame);
+    };
+    const startOrUpdateWheelBurst = (event, deltaPx, rawDeltaPx) => {
+        if (!wheelBurst) {
+            wheelBurst = {
+                version: 2,
+                policyVersion: 2,
+                startedAt: performance.now(),
+                guardEnabled: !!enableScrollBoundaryGuard,
+                windowMode: scrollEl.dataset.fxWindowMode || "unknown",
+                diagnosticDelayMs: Number(scrollEl.dataset.fxWindowDiagnosticDelay || 0),
+                windowOverscanRows: Number(scrollEl.dataset.fxWindowOverscan || 0),
+                deferredOverscanRows: Number(scrollEl.dataset.fxDeferredWindowOverscan || 0),
+                wheelDeltaScale: wheelScrollScale,
+                slowdownEnabled: !!enableScrollBoundarySlowdown,
+                slowdownVersion: enableScrollBoundarySlowdown ? 2 : 0,
+                slowdownConfiguredMinimumGain: enableScrollBoundarySlowdown ? 0.25 : 1,
+                hiddenAtStart: document.hidden,
+                hiddenDuring: document.hidden,
+                wheelEvents: 0,
+                pixelModeEvents: 0,
+                lineModeEvents: 0,
+                pageModeEvents: 0,
+                totalAbsoluteRawDeltaPx: 0,
+                totalAbsoluteDeltaPx: 0,
+                totalAbsoluteViewportDeltaPx: 0,
+                slowdownEvents: 0,
+                slowdownEntries: 0,
+                minimumBoundaryGain: 1,
+                maximumIntentLagPx: 0,
+                maximumSlowdownZonePx: 0,
+                tokenCatchupPx: 0,
+                maximumTokenCatchupPx: 0,
+                maximumPendingIntentPx: 0,
+                hardClampCount: 0,
+                zeroRunwayStops: 0,
+                staleDirectionLimits: 0,
+                totalAbsoluteSlowedDeltaPx: 0,
+                directionReversals: 0,
+                lastDirection: 0,
+                clampCount: 0,
+                resumeCount: 0,
+                totalClampMs: 0,
+                maxClampMs: 0,
+                firstClampToResumeMs: null,
+                sampledFrames: 0,
+                blankFrames: 0,
+                blankDurationMs: 0,
+                maxVisibleSpacerPx: 0,
+                invalidBandCount: 0,
+                noProgressCount: 0,
+                boundaryRetries: 0,
+                droppedIntentPx: 0,
+                startCounters: counterSnapshot(),
+                lastFrameAt: null,
+                lastExposurePx: 0
+            };
+            ensureWheelBurstFrame();
+        }
+        const direction = Math.sign(deltaPx);
+        wheelBurst.wheelEvents++;
+        wheelBurst.totalAbsoluteRawDeltaPx += Math.abs(rawDeltaPx);
+        wheelBurst.totalAbsoluteDeltaPx += Math.abs(deltaPx);
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) wheelBurst.lineModeEvents++;
+        else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) wheelBurst.pageModeEvents++;
+        else wheelBurst.pixelModeEvents++;
+        if (direction && wheelBurst.lastDirection && direction !== wheelBurst.lastDirection)
+            wheelBurst.directionReversals++;
+        if (direction) wheelBurst.lastDirection = direction;
+
+        clearTimeout(wheelBurstIdleTimer);
+        wheelBurstIdleTimer = setTimeout(tryFinishWheelBurst, 260);
+    };
+    const finishBoundaryWait = now => {
+        if (!waitingAtBoundary) return;
+        waitingAtBoundary = false;
+        const duration = Math.max(0, now - boundaryWaitStartedAt);
+        if (wheelBurst) {
+            wheelBurst.resumeCount++;
+            wheelBurst.totalClampMs += duration;
+            wheelBurst.maxClampMs = Math.max(wheelBurst.maxClampMs, duration);
+            wheelBurst.firstClampToResumeMs ??= duration;
+        }
+        boundaryWaitStartedAt = 0;
+    };
+    const beginBoundaryWait = now => {
+        if (waitingAtBoundary) return;
+        waitingAtBoundary = true;
+        boundaryWaitStartedAt = now;
+        noProgressCount = 0;
+        livenessRecoveryCount = 0;
+        renderedNoProgressCount = 0;
+        bestBoundaryErrorPx = Math.abs(desiredWheelTop - scrollEl.scrollTop);
+        if (wheelBurst) wheelBurst.clampCount++;
+    };
+    const finalizeWheelBurst = () => {
+        clearTimeout(wheelBurstIdleTimer);
+        wheelBurstIdleTimer = 0;
+        clearTimeout(wheelBurstFinishTimer);
+        wheelBurstFinishTimer = 0;
+        if (!wheelBurst) return;
+        const now = performance.now();
+        if (waitingAtBoundary && boundaryWaitStartedAt > 0) {
+            const duration = now - boundaryWaitStartedAt;
+            wheelBurst.totalClampMs += duration;
+            wheelBurst.maxClampMs = Math.max(wheelBurst.maxClampMs, duration);
+        }
+        const band = readRenderedBand();
+        const requestDelta = subtractSnapshot(counterSnapshot(), wheelBurst.startCounters);
+        const detail = {
+            ...wheelBurst,
+            durationMs: now - wheelBurst.startedAt,
+            desiredTop: desiredWheelTop,
+            actualTop: scrollEl.scrollTop,
+            finalPositionErrorPx: Math.abs(desiredWheelTop - scrollEl.scrollTop),
+            safeMin: band?.safeMin ?? null,
+            safeMax: band?.safeMax ?? null,
+            finalVisibleSpacerPx: band?.visibleSpacerPx ?? null,
+            noProgressCount,
+            ...requestDelta,
+            maxInFlight: Number(scrollEl.dataset.fxWindowMaxInFlight || 0)
+        };
+        delete detail.startCounters;
+        delete detail.lastFrameAt;
+        delete detail.lastExposurePx;
+        gridRoot.__fxScrollBoundaryTelemetry = detail;
+        gridRoot.dataset.fxScrollBoundaryTelemetry = JSON.stringify(detail);
+        gridRoot.dispatchEvent(new CustomEvent("fx-grid-scroll-boundary-telemetry", {
+            detail,
+            bubbles: true,
+            composed: true
+        }));
+        wheelBurst = null;
+        if (wheelBurstFrame) cancelAnimationFrame(wheelBurstFrame);
+        wheelBurstFrame = 0;
+    };
+    function tryFinishWheelBurst() {
+        if (!wheelBurst) return;
+        if (performance.now() - wheelBurst.startedAt > 15_000) {
+            finalizeWheelBurst();
+            return;
+        }
+        const state = getQueueState?.() || {};
+        if (waitingAtBoundary || state.inFlight || state.pendingKind) {
+            wheelBurstFinishTimer = setTimeout(tryFinishWheelBurst, 50);
+            return;
+        }
+        requestAnimationFrame(() => requestAnimationFrame(finalizeWheelBurst));
+    }
+
+    const requestBoundaryWindow = (
+        target,
+        direction,
+        forced,
+        populatedEdge = scrollEl.scrollTop,
+        forceDomAcknowledge = false) => {
+        const responseToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
+        if (!forced
+            && lastPrefetchToken === responseToken
+            && lastPrefetchDirection === direction)
+            return 0;
+        lastPrefetchToken = responseToken;
+        lastPrefetchDirection = direction;
+        const globalMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        let serverTarget = Math.max(0, Math.min(globalMax, target));
+        if (enableScrollBoundarySlowdown
+            && Number.isFinite(populatedEdge)
+            && direction !== 0) {
+            // Directional windows retain refreshGuardRows behind the requested
+            // destination. Advance by only a bounded subset of that overlap so
+            // a distant flick cannot replace the DOM with a far-away window and
+            // then jump thousands of pixels when its token arrives.
+            const continuationRows = Math.max(
+                1,
+                Math.ceil(Math.max(1, refreshGuardRows || 0) / 3));
+            const maxAdvance = continuationRows * Math.max(1, configuredRowHeight || 16);
+            serverTarget = direction > 0
+                ? Math.min(serverTarget, populatedEdge + maxAdvance)
+                : Math.max(serverTarget, populatedEdge - maxAdvance);
+            serverTarget = Math.max(0, Math.min(globalMax, serverTarget));
+        }
+        return requestWindow?.(
+            serverTarget,
+            direction,
+            "boundary",
+            forceDomAcknowledge,
+            // Slowdown reduces the need for a 20-behind/100-ahead window. A
+            // symmetric 60/60 window preserves much more of the painted
+            // viewport if the user reverses before this response arrives.
+            enableScrollBoundarySlowdown ? 0 : direction) || 0;
+    };
+    const prefetchDistanceForBand = band => Math.min(
+        Math.max(0, (refreshGuardRows || 0) * Math.max(1, configuredRowHeight || 16)),
+        Math.max(0, (band.safeMax - band.safeMin) / 2));
+    const continuationDistance = () => Math.max(
+        1,
+        Math.ceil(Math.max(1, refreshGuardRows || 0) / 3))
+        * Math.max(1, configuredRowHeight || 16);
+    const mapDesiredToRenderedBand = band => {
+        const hardTarget = Math.max(
+            band.safeMin,
+            Math.min(band.safeMax, desiredWheelTop));
+        const applied = setBoundaryOwnedTop(hardTarget);
+        return {
+            applied,
+            resisted: Math.abs(applied - desiredWheelTop) > 0.5,
+            hardClamped: Math.abs(hardTarget - desiredWheelTop) > 0.5
+        };
+    };
+    const reconcileBoundaryWindow = (allowRequest = true) => {
+        if (!enableScrollBoundaryGuard) return;
+        const band = readSafeBand(true);
+        if (!band) return;
+        if (band.invalid && wheelBurst) wheelBurst.invalidBandCount++;
+        const before = scrollEl.scrollTop;
+        const direction = Math.sign(desiredWheelTop - before) || boundaryDirection;
+        const mapped = mapDesiredToRenderedBand(band);
+        let applied = mapped.applied;
+        if (slowdownIntentActive) {
+            // Leading overscan can move the new soft edge far beyond the prior
+            // viewport even when the request center advanced only a few rows.
+            // Bound the visible token-time catch-up independently so slowdown
+            // cannot turn into a large one-frame jump.
+            const maxCatchup = continuationDistance();
+            const catchupDelta = applied - before;
+            if (Math.abs(catchupDelta) > maxCatchup) {
+                const candidate = before + Math.sign(catchupDelta) * maxCatchup;
+                applied = setBoundaryOwnedTop(Math.max(
+                    band.safeMin,
+                    Math.min(band.safeMax, candidate)));
+                mapped.resisted = Math.abs(applied - desiredWheelTop) > 0.5;
+            }
+        }
+        if (wheelBurst) {
+            const catchup = Math.abs(applied - before);
+            wheelBurst.tokenCatchupPx += catchup;
+            wheelBurst.maximumTokenCatchupPx = Math.max(
+                wheelBurst.maximumTokenCatchupPx,
+                catchup);
+            wheelBurst.maximumIntentLagPx = Math.max(
+                wheelBurst.maximumIntentLagPx,
+                Math.abs(desiredWheelTop - applied));
+            wheelBurst.maximumPendingIntentPx = Math.max(
+                wheelBurst.maximumPendingIntentPx,
+                Math.abs(desiredWheelTop - applied));
+        }
+        const covered = Math.abs(applied - desiredWheelTop) <= 0.5;
+        if (covered) cancelPendingBoundary?.();
+        const state = getQueueState?.() || {};
+        if (covered && !state.inFlight && state.pendingKind !== "boundary") {
+            resistanceActive = false;
+            slowdownIntentActive = false;
+            finishBoundaryWait(performance.now());
+            return;
+        }
+        if (!covered && allowRequest) {
+            beginBoundaryWait(performance.now());
+            const direction = Math.sign(desiredWheelTop - applied) || boundaryDirection;
+            requestBoundaryWindow(desiredWheelTop, direction, true, applied);
+        }
+    };
+    const applyGuardedDelta = (deltaPx, allowSlowdown = false) => {
+        if (Math.abs(deltaPx) < 0.01) return;
+        const globalMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        const direction = Math.sign(deltaPx);
+        const useSlowdown = !!allowSlowdown
+            && !!enableScrollBoundarySlowdown
+            && !!enableScrollBoundaryGuard;
+
+        if (!useSlowdown && slowdownIntentActive && waitingAtBoundary) {
+            // A scrollbar-arrow step is an independent one-row command, not a
+            // continuation of wheel momentum. Discard any outstanding wheel
+            // lead before applying that step through the ordinary hard guard.
+            cancelPendingBoundary?.();
+            desiredWheelTop = scrollEl.scrollTop;
+            finishBoundaryWait(performance.now());
+            resistanceActive = false;
+        }
+        slowdownIntentActive = useSlowdown;
+
+        // Do not make a real reversal pay off stale, unfulfilled momentum from
+        // the opposite edge. Re-anchor to the painted viewport, then apply the
+        // reversing delta at normal gain unless it approaches the other edge.
+        if (useSlowdown
+            && waitingAtBoundary
+            && direction !== 0
+            && boundaryDirection !== 0
+            && direction !== boundaryDirection
+            && Math.abs(desiredWheelTop - scrollEl.scrollTop) > 1) {
+            cancelPendingBoundary?.();
+            desiredWheelTop = scrollEl.scrollTop;
+            finishBoundaryWait(performance.now());
+            resistanceActive = false;
+        }
+
+        let band = enableScrollBoundaryGuard ? readSafeBand() : null;
+        let effectiveDeltaPx = deltaPx;
+        let slowdownGain = 1;
+        let slowdownZone = 0;
+        let slowdownRunway = Number.POSITIVE_INFINITY;
+        if (useSlowdown && band && !band.invalid) {
+            const atGlobalEdge = direction > 0
+                ? band.safeMax >= band.maxScroll - 0.5
+                : band.safeMin <= 0.5;
+            slowdownZone = atGlobalEdge ? 0 : prefetchDistanceForBand(band);
+            slowdownRunway = direction > 0
+                ? Math.max(0, band.safeMax - scrollEl.scrollTop)
+                : Math.max(0, scrollEl.scrollTop - band.safeMin);
+            if (slowdownZone > 0.5) {
+                // Split large events at the slow-zone entrance. Travel before
+                // the zone remains at the configured 75% wheel scale; only the
+                // in-zone remainder is eased. This keeps the curve continuous—
+                // crossing the threshold by one pixel can never collapse the
+                // whole event to a seven-row step.
+                const absoluteDelta = Math.abs(deltaPx);
+                const fullSpeedPrefix = Math.min(
+                    absoluteDelta,
+                    Math.max(0, slowdownRunway - slowdownZone));
+                const inZoneInput = Math.max(0, absoluteDelta - fullSpeedPrefix);
+                const projectedRunway = Math.max(
+                    0,
+                    slowdownRunway - absoluteDelta);
+                const ratio = Math.max(
+                    0,
+                    Math.min(1, projectedRunway / slowdownZone));
+                const smooth = ratio * ratio * (3 - 2 * ratio);
+                const inZoneGain = 0.25 + 0.75 * smooth;
+                let effectiveDistance = fullSpeedPrefix + inZoneInput * inZoneGain;
+                if (inZoneInput > 0) {
+                    // The current real-row runway plus one bounded continuation
+                    // is the most a single event may retain. This leaves at most
+                    // one small latest command for the arriving window, never a
+                    // multi-window momentum backlog.
+                    effectiveDistance = Math.min(
+                        effectiveDistance,
+                        slowdownRunway + continuationDistance());
+                }
+                effectiveDeltaPx = direction * effectiveDistance;
+                slowdownGain = effectiveDistance / Math.max(0.001, absoluteDelta);
+            }
+        } else if (useSlowdown) {
+            // Geometry is temporarily unavailable: retain only one bounded
+            // latest command while requesting a fresh window. An arbitrary
+            // trackpad/page delta must not turn this fallback into serial
+            // post-input catch-up.
+            effectiveDeltaPx = direction * Math.min(
+                Math.abs(deltaPx),
+                continuationDistance());
+            slowdownGain = Math.abs(effectiveDeltaPx)
+                / Math.max(0.001, Math.abs(deltaPx));
+        }
+
+        if (useSlowdown) {
+            const queue = getQueueState?.() || {};
+            const activeDirection = Math.sign(queue.activeDirection || 0);
+            if (queue.activeKind === "boundary"
+                && activeDirection !== 0
+                && direction !== activeDirection
+                && Number.isFinite(queue.activeTarget)) {
+                // A stale opposite-direction response will replace the DOM even
+                // though the latest command is already queued behind it. Keep
+                // physical reverse travel within the symmetric window overlap
+                // that response is guaranteed to retain, so reconciliation can
+                // never snap the viewport the wrong way.
+                const rowPitch = Math.max(1, configuredRowHeight || 16);
+                const symmetricRows = Math.max(1, (refreshGuardRows || 0) * 3);
+                const inward = 1;
+                let requestedTop = scrollEl.scrollTop + effectiveDeltaPx;
+                if (activeDirection > 0 && direction < 0) {
+                    const guaranteedMin = Number(queue.activeTarget)
+                        - symmetricRows * rowPitch
+                        + inward;
+                    requestedTop = Math.max(requestedTop, guaranteedMin);
+                } else if (activeDirection < 0 && direction > 0) {
+                    const guaranteedMax = Number(queue.activeTarget)
+                        + Math.max(0, symmetricRows - 1) * rowPitch
+                        - inward;
+                    requestedTop = Math.min(requestedTop, guaranteedMax);
+                }
+                // Tiny/zero overscan configurations may provide no guaranteed
+                // overlap. In that case hold at the current row; never turn an
+                // opposite-direction command into motion the wrong way.
+                requestedTop = direction < 0
+                    ? Math.min(scrollEl.scrollTop, requestedTop)
+                    : Math.max(scrollEl.scrollTop, requestedTop);
+                const limitedDelta = requestedTop - scrollEl.scrollTop;
+                if (Math.abs(limitedDelta - effectiveDeltaPx) > 0.5) {
+                    effectiveDeltaPx = limitedDelta;
+                    slowdownGain = Math.min(
+                        slowdownGain,
+                        Math.abs(effectiveDeltaPx)
+                            / Math.max(0.001, Math.abs(deltaPx)));
+                    if (wheelBurst) wheelBurst.staleDirectionLimits++;
+                }
+            }
+        }
+
+        // Slowdown intentionally reduces the command itself. While a row window
+        // is pending, each fresh wheel/trackpad event replaces the one latest
+        // attenuated destination from the painted viewport; it does not build a
+        // hidden momentum backlog that jumps later when a token arrives.
+        const base = useSlowdown
+            ? scrollEl.scrollTop
+            : waitingAtBoundary
+                ? desiredWheelTop
+                : scrollEl.scrollTop;
+        const previousDesiredTop = desiredWheelTop;
+        desiredWheelTop = Math.max(0, Math.min(globalMax, base + effectiveDeltaPx));
+        if (direction) boundaryDirection = direction;
+
+        if (wheelBurst) {
+            wheelBurst.totalAbsoluteSlowedDeltaPx += Math.abs(effectiveDeltaPx);
+            wheelBurst.maximumSlowdownZonePx = Math.max(
+                wheelBurst.maximumSlowdownZonePx,
+                slowdownZone);
+            if (slowdownGain < 0.999) {
+                wheelBurst.slowdownEvents++;
+                if (!resistanceActive) wheelBurst.slowdownEntries++;
+                wheelBurst.minimumBoundaryGain = Math.min(
+                    wheelBurst.minimumBoundaryGain,
+                    slowdownGain);
+            }
+        }
+        resistanceActive = useSlowdown && slowdownGain < 0.999;
+
+        // A fresh wheel/trackpad destination must not inherit an exhausted
+        // recovery budget from an older in-flight response. Reset on every
+        // accepted logical movement, including sub-pixel trackpad deltas; a
+        // stale response can then count as at most the first miss, never discard
+        // a cumulatively changed destination.
+        if (waitingAtBoundary
+            && Math.abs(desiredWheelTop - previousDesiredTop) > 0.001) {
+            noProgressCount = 0;
+            livenessRecoveryCount = 0;
+            renderedNoProgressCount = 0;
+            bestBoundaryErrorPx = Math.abs(desiredWheelTop - scrollEl.scrollTop);
+        }
+
+        if (!enableScrollBoundaryGuard) {
+            const before = scrollEl.scrollTop;
+            scrollEl.scrollTop = desiredWheelTop;
+            if (wheelBurst)
+                wheelBurst.totalAbsoluteViewportDeltaPx += Math.abs(scrollEl.scrollTop - before);
+            resistanceActive = false;
+            return;
+        }
+
+        band ??= readSafeBand();
+        if (!band || (useSlowdown && band.invalid)) {
+            if (band?.invalid && wheelBurst) wheelBurst.invalidBandCount++;
+            if (useSlowdown) {
+                resistanceActive = true;
+                beginBoundaryWait(performance.now());
+                if (wheelBurst) {
+                    const pendingIntent = Math.abs(
+                        desiredWheelTop - scrollEl.scrollTop);
+                    wheelBurst.maximumIntentLagPx = Math.max(
+                        wheelBurst.maximumIntentLagPx,
+                        pendingIntent);
+                    wheelBurst.maximumPendingIntentPx = Math.max(
+                        wheelBurst.maximumPendingIntentPx,
+                        pendingIntent);
+                }
+                requestBoundaryWindow(desiredWheelTop, direction, true, scrollEl.scrollTop);
+                return;
+            }
+            const applied = setBoundaryOwnedTop(desiredWheelTop);
+            requestBoundaryWindow(desiredWheelTop, direction, true, applied);
+            return;
+        }
+        if (band.invalid && wheelBurst) wheelBurst.invalidBandCount++;
+        const before = scrollEl.scrollTop;
+        const mapped = mapDesiredToRenderedBand(band);
+        const applied = mapped.applied;
+        if (wheelBurst) {
+            const viewportDelta = Math.abs(applied - before);
+            wheelBurst.totalAbsoluteViewportDeltaPx += viewportDelta;
+            wheelBurst.maximumIntentLagPx = Math.max(
+                wheelBurst.maximumIntentLagPx,
+                Math.abs(desiredWheelTop - applied));
+            wheelBurst.maximumPendingIntentPx = Math.max(
+                wheelBurst.maximumPendingIntentPx,
+                Math.abs(desiredWheelTop - applied));
+            if (mapped.resisted) {
+                if (slowdownRunway <= 0.5 && viewportDelta <= 0.01)
+                    wheelBurst.zeroRunwayStops++;
+                if (mapped.hardClamped)
+                    wheelBurst.hardClampCount++;
+            }
+        }
+        resistanceActive ||= mapped.resisted;
+        const clamped = Math.abs(applied - desiredWheelTop) > 0.5;
+        if (clamped) {
+            beginBoundaryWait(performance.now());
+            // Bypass per-token prefetch dedupe so a queued (not active) request
+            // is always replaced with the newest wheel destination. The queue
+            // still permits only one active call plus one latest pending call.
+            requestBoundaryWindow(desiredWheelTop, direction, true, applied);
+            return;
+        }
+
+        // A reversal can bring the accumulated intent back into the already
+        // populated band before an older directional request returns. Resume
+        // immediately; any later response token is reconciled before paint and
+        // will re-enter a hold only if its new band no longer covers this target.
+        cancelPendingBoundary?.();
+        finishBoundaryWait(performance.now());
+
+        const prefetchDistance = prefetchDistanceForBand(band);
+        const nearDirectionalEdge = direction > 0
+            ? band.safeMax - applied <= prefetchDistance
+            : direction < 0 && applied - band.safeMin <= prefetchDistance;
+        const hasGlobalRunway = direction > 0
+            ? desiredWheelTop < band.maxScroll - 0.5
+            : direction < 0 && desiredWheelTop > 0.5;
+        if (nearDirectionalEdge && hasGlobalRunway) {
+            // The DOM safe edge includes a one-pixel inward clip while C# uses
+            // a strict row-guard comparison. Lead only the server prefetch by
+            // two rows so it crosses that threshold without moving the viewport
+            // or changing the user's attenuated destination.
+            const prefetchLead = 2 * Math.max(1, configuredRowHeight || 16);
+            const prefetchTarget = direction > 0
+                ? Math.min(band.maxScroll, applied + prefetchLead)
+                : Math.max(0, applied - prefetchLead);
+            requestBoundaryWindow(prefetchTarget, direction, false, applied);
+        }
+    };
+    const applyGuardedWheel = event => {
+        const rawDeltaPx = normalizeWheelDelta(event);
+        const deltaPx = rawDeltaPx * wheelScrollScale;
+        const inputAt = performance.now();
+        // Geometry freshness is a correctness rule, not a telemetry feature.
+        // Ancestor zoom/theme changes can alter row geometry without resizing
+        // the scroll element, so the first input after an idle gap remeasures
+        // the populated band even when benchmark telemetry is disabled.
+        if (inputAt - lastWheelInputAt > 260)
+            invalidateSafeBand();
+        lastWheelInputAt = inputAt;
+        if (enableScrollBoundaryTelemetry)
+            startOrUpdateWheelBurst(event, deltaPx, rawDeltaPx);
+        applyGuardedDelta(deltaPx, true);
+    };
+
+    const releaseUnrecoverableBoundaryHold = () => {
+        const unresolved = Math.abs(desiredWheelTop - scrollEl.scrollTop);
+        if (wheelBurst) wheelBurst.droppedIntentPx += unresolved;
+        cancelPendingBoundary?.();
+        desiredWheelTop = scrollEl.scrollTop;
+        finishBoundaryWait(performance.now());
+        slowdownIntentActive = false;
+        resistanceActive = false;
+    };
+    const recoverBoundaryLiveness = (request, outcome) => {
+        lastPrefetchToken = -1;
+        lastPrefetchDirection = 0;
+        invalidateSafeBand();
+        reconcileBoundaryWindow(false);
+
+        const mustRepublishDom = outcome === "dom-ack-timeout";
+        const state = getQueueState?.() || {};
+        if (!mustRepublishDom && state.pendingKind === "boundary")
+            return;
+        if (!mustRepublishDom && !waitingAtBoundary)
+            return;
+        if (livenessRecoveryCount >= 2) {
+            releaseUnrecoverableBoundaryHold();
+            return;
+        }
+
+        livenessRecoveryCount++;
+        if (wheelBurst) wheelBurst.boundaryRetries++;
+        const direction = Math.sign(desiredWheelTop - scrollEl.scrollTop)
+            || request?.direction
+            || boundaryDirection;
+        // Recovery replaces any queued sample with the latest logical target
+        // and uses an endpoint that always republishes a DOM token. It runs only
+        // after a rejected/no-progress call or a missing acknowledgement.
+        requestBoundaryWindow(
+            desiredWheelTop,
+            direction,
+            true,
+            scrollEl.scrollTop,
+            true);
+    };
+
+    const boundaryGuard = {
+        applyWheel: applyGuardedWheel,
+        applyStep(deltaPx) {
+            // A proxy-arrow click is a separate one-row command. Close any
+            // active wheel sample before applying it so arrow movement never
+            // contaminates wheel-only slowdown metrics.
+            if (wheelBurst) finalizeWheelBurst();
+            invalidateSafeBand();
+            applyGuardedDelta(deltaPx, false);
+        },
+        onWindowRequestQueued() { },
+        onWindowRequestSettled(request, rendered, outcome) {
+            if (request?.kind !== "boundary") return;
+            if (outcome !== "resolved") {
+                recoverBoundaryLiveness(request, outcome);
+                return;
+            }
+            if (!rendered) {
+                noProgressCount++;
+                if (wheelBurst) wheelBurst.noProgressCount = noProgressCount;
+                recoverBoundaryLiveness(request, "no-render");
+            } else {
+                // The DOM token can arrive before the interop promise settles.
+                // Recheck after the pump clears inFlight so a covered target can
+                // leave the clamped state and complete its telemetry burst.
+                reconcileBoundaryWindow(false);
+            }
+        },
+        onWindowToken() {
+            noProgressCount = 0;
+            reconcileBoundaryWindow();
+            const errorAfter = Math.abs(desiredWheelTop - scrollEl.scrollTop);
+            // A token proves that a render occurred, not that it advanced toward
+            // the user's destination (the recovery endpoint may republish the
+            // same slice). Compare against the best error for the whole hold,
+            // not just the preceding token; that also bounds A/B geometry
+            // oscillation where every other response looks locally better.
+            if (!waitingAtBoundary) {
+                livenessRecoveryCount = 0;
+                renderedNoProgressCount = 0;
+                bestBoundaryErrorPx = Number.POSITIVE_INFINITY;
+            } else if (errorAfter < bestBoundaryErrorPx - 0.5) {
+                bestBoundaryErrorPx = errorAfter;
+                livenessRecoveryCount = 0;
+                renderedNoProgressCount = 0;
+            } else {
+                renderedNoProgressCount++;
+                if (renderedNoProgressCount >= 2) {
+                    // A successful render token is not sufficient evidence of
+                    // progress. Bound pathological grouped-height/geometry
+                    // cycles through the same recovery budget as a lost ack.
+                    cancelPendingBoundary?.();
+                    recoverBoundaryLiveness(
+                        { direction: boundaryDirection },
+                        "rendered-no-progress");
+                }
+            }
+        },
+        reset(top = scrollEl.scrollTop) {
+            invalidateSafeBand();
+            desiredWheelTop = top;
+            finishBoundaryWait(performance.now());
+            lastPrefetchToken = -1;
+            lastPrefetchDirection = 0;
+            livenessRecoveryCount = 0;
+            renderedNoProgressCount = 0;
+            bestBoundaryErrorPx = Number.POSITIVE_INFINITY;
+            slowdownIntentActive = false;
+            resistanceActive = false;
+        },
+        syncFromViewport() {
+            if (!waitingAtBoundary) desiredWheelTop = scrollEl.scrollTop;
+        }
+    };
+
+    const roundTelemetry = value => Number.isFinite(value)
+        ? Math.round(value * 1000) / 1000
+        : null;
+    const eventTimelineTime = (event, handledAt) => {
+        const eventTime = Number(event?.timeStamp);
+        return Number.isFinite(eventTime) && eventTime >= 0 && eventTime <= handledAt + 1000
+            ? Math.min(eventTime, handledAt)
+            : handledAt;
+    };
+    const readServerMetrics = token => {
+        const markers = gridRoot.querySelectorAll(".fx-grid-deferred-scroll-server-metrics");
+        for (const marker of markers) {
+            const markerToken = Number(marker.dataset.fxToken || marker.dataset.fxDeferredScrollToken || 0);
+            if (markerToken !== token) continue;
+            const result = {};
+            for (const [key, value] of Object.entries(marker.dataset)) result[key] = value;
+            return result;
+        }
+        return null;
+    };
+    const appendLongTasks = entries => {
+        for (const entry of entries) {
+            longTaskEntries.push({
+                startTime: entry.startTime,
+                duration: entry.duration
+            });
+        }
+        const cutoff = performance.now() - 60000;
+        while (longTaskEntries.length > 0
+            && longTaskEntries[0].startTime + longTaskEntries[0].duration < cutoff) {
+            longTaskEntries.shift();
+        }
+    };
+    try {
+        if (typeof PerformanceObserver !== "undefined"
+            && PerformanceObserver.supportedEntryTypes?.includes("longtask")) {
+            longTaskObserver = new PerformanceObserver(list => appendLongTasks(list.getEntries()));
+            longTaskObserver.observe({ type: "longtask", buffered: true });
+        }
+    } catch {
+        longTaskObserver = null;
+    }
+
+    const completeTelemetry = span => {
+        if (span.finalized || !span.invokeSettled || !span.painted) return;
+        span.finalized = true;
+        if (longTaskObserver) appendLongTasks(longTaskObserver.takeRecords());
+
+        const sample = span.sample;
+        const longTasks = [];
+        let longTaskOverlap = 0;
+        for (const entry of longTaskEntries) {
+            const overlap = Math.max(0, Math.min(span.paintedAt, entry.startTime + entry.duration)
+                - Math.max(span.releaseAt, entry.startTime));
+            if (overlap <= 0) continue;
+            longTaskOverlap += overlap;
+            longTasks.push({
+                startAfterReleaseMs: roundTelemetry(entry.startTime - span.releaseAt),
+                durationMs: roundTelemetry(entry.duration),
+                overlapMs: roundTelemetry(overlap)
+            });
+        }
+        sample.longTaskSupported = !!longTaskObserver;
+        sample.longTaskCount = longTasks.length;
+        sample.longTaskOverlapMs = roundTelemetry(longTaskOverlap);
+        sample.longTasks = longTasks;
+        sample.serverMetrics = readServerMetrics(sample.token) || sample.serverMetrics;
+
+        const json = JSON.stringify(sample);
+        gridRoot.__fxDeferredScrollTelemetry = sample;
+        gridRoot.__fxDeferredScrollTelemetryJson = json;
+        gridRoot.dataset.fxDeferredScrollTelemetry = json;
+        scrollEl.__fxDeferredScrollTelemetry = sample;
+        lane.dataset.fxLastTelemetryToken = String(sample.token);
+        lane.dataset.fxLastReleaseToPaintMs = String(sample.releaseToPaintMs ?? "");
+        telemetryByToken.delete(sample.token);
+        gridRoot.dispatchEvent(new CustomEvent("fx-grid-deferred-scroll-telemetry", {
+            detail: sample,
+            bubbles: true,
+            composed: true
+        }));
+    };
+
+    const createTelemetrySpan = (token, trigger, releaseAt, handledAt, targetTop) => {
+        const sample = {
+            version: 1,
+            token,
+            trigger,
+            releaseTime: roundTelemetry(releaseAt),
+            releaseEpochTime: roundTelemetry((performance.timeOrigin || 0) + releaseAt),
+            releaseHandlerDelayMs: roundTelemetry(handledAt - releaseAt),
+            targetTop: roundTelemetry(targetTop),
+            scrollTopBefore: roundTelemetry(scrollEl.scrollTop),
+            viewportHeight: roundTelemetry(scrollEl.clientHeight),
+            invocationInFlightAtRelease: false,
+            inFlightMethodAtRelease: null,
+            queueDelayMs: null,
+            invokePromiseDurationMs: null,
+            invokeOutcome: null,
+            tokenDomMutationMs: null,
+            twoRafPaintMs: null,
+            releaseToPaintMs: null,
+            rowsPresent: null,
+            bodyRowsPresent: null,
+            spacerRowsPresent: null,
+            mutationCount: 0,
+            attributeMutationCount: 0,
+            addedNodeCount: 0,
+            removedNodeCount: 0,
+            serverMetrics: null
+        };
+        const span = {
+            sample,
+            releaseAt,
+            enqueuedAt: null,
+            invokeStartedAt: null,
+            invokeSettled: false,
+            tokenObserved: false,
+            painted: false,
+            paintedAt: null,
+            finalized: false,
+            markEnqueued(wasInFlight, activeMethod, enqueuedAt) {
+                span.enqueuedAt = enqueuedAt;
+                sample.invocationInFlightAtRelease = !!wasInFlight;
+                sample.inFlightMethodAtRelease = activeMethod || null;
+                sample.releaseToEnqueueMs = roundTelemetry(enqueuedAt - releaseAt);
+            },
+            markInvokeStarted(startedAt) {
+                span.invokeStartedAt = startedAt;
+                sample.invokeStartedTime = roundTelemetry(startedAt);
+                sample.queueDelayMs = roundTelemetry(
+                    startedAt - (span.enqueuedAt ?? releaseAt));
+            },
+            markInvokeSettled(settledAt, outcome) {
+                sample.invokeSettledTime = roundTelemetry(settledAt);
+                sample.invokePromiseDurationMs = roundTelemetry(
+                    span.invokeStartedAt == null ? 0 : settledAt - span.invokeStartedAt);
+                sample.invokeOutcome = outcome;
+                span.invokeSettled = true;
+                completeTelemetry(span);
+            }
+        };
+        telemetryByToken.set(token, span);
+        return span;
+    };
+
+    const recordTelemetryMutations = records => {
+        const span = telemetryByToken.get(latestRequestedToken);
+        if (!span || span.painted) return;
+        span.sample.mutationCount += records.length;
+        for (const record of records) {
+            if (record.type === "attributes") span.sample.attributeMutationCount++;
+            span.sample.addedNodeCount += record.addedNodes?.length || 0;
+            span.sample.removedNodeCount += record.removedNodes?.length || 0;
+        }
+    };
+
+    const observeTelemetryToken = (requestedToken, observedToken = requestedToken) => {
+        const span = telemetryByToken.get(requestedToken);
+        if (!span || span.tokenObserved) return;
+        span.tokenObserved = true;
+        const observedAt = performance.now();
+        span.sample.tokenDomMutationTime = roundTelemetry(observedAt);
+        span.sample.tokenDomMutationMs = roundTelemetry(observedAt - span.releaseAt);
+        span.sample.serverMetrics = readServerMetrics(observedToken);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (disposed || span.finalized) return;
+            const paintedAt = performance.now();
+            span.paintedAt = paintedAt;
+            span.painted = true;
+            span.sample.twoRafPaintedTime = roundTelemetry(paintedAt);
+            span.sample.twoRafPaintMs = roundTelemetry(paintedAt - observedAt);
+            span.sample.releaseToPaintMs = roundTelemetry(paintedAt - span.releaseAt);
+            span.sample.rowsPresent = scrollEl.querySelectorAll(
+                "tbody tr.fx-row:not(.fx-grid-window-spacer)").length;
+            span.sample.bodyRowsPresent = scrollEl.querySelectorAll(
+                "tbody tr:not(.fx-grid-window-spacer)").length;
+            span.sample.spacerRowsPresent = scrollEl.querySelectorAll(
+                "tbody tr.fx-grid-window-spacer").length;
+            span.sample.serverMetrics = readServerMetrics(observedToken) || span.sample.serverMetrics;
+            completeTelemetry(span);
+        }));
+    };
 
     const metrics = () => {
         const trackStart = Math.max(0, upButton?.offsetHeight || 0);
@@ -1991,7 +3197,7 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         layoutFrame = requestAnimationFrame(layout);
     };
 
-    const requestTarget = target => {
+    const requestTarget = (target, trigger = "programmatic", releaseAt = performance.now(), handledAt = performance.now()) => {
         if (commitOutstanding) return;
         const m = metrics();
         pendingTop = Math.max(0, Math.min(m.maxScroll, target));
@@ -1999,12 +3205,16 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         commitOutstanding = true;
         lane.setAttribute("aria-busy", "true");
         lane.classList.add("fx-grid-deferred-vscroll-committing");
-        requestCommit(pendingTop, ++latestRequestedToken);
+        const token = ++latestRequestedToken;
+        const telemetry = createTelemetrySpan(token, trigger, releaseAt, handledAt, pendingTop);
+        requestCommit(pendingTop, token, telemetry);
     };
 
     const finishDrag = event => {
         if (!dragging) return;
         if (event && activePointerId != null && event.pointerId !== activePointerId) return;
+        const handledAt = performance.now();
+        const releaseAt = eventTimelineTime(event, handledAt);
         dragging = false;
         lane.classList.remove("fx-grid-deferred-vscroll-dragging");
         lane.dataset.fxReleaseCommits = String(
@@ -2013,13 +3223,14 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
             try { thumb.releasePointerCapture(activePointerId); } catch { }
         }
         activePointerId = null;
-        requestTarget(pendingTop);
+        requestTarget(pendingTop, "thumb-release", releaseAt, handledAt);
     };
 
     const onThumbPointerDown = event => {
         if (event.button !== 0 || commitOutstanding) return;
         event.preventDefault();
         event.stopPropagation();
+        boundaryGuard.reset(scrollEl.scrollTop);
         const m = metrics();
         if (m.maxScroll <= 0 || m.travel <= 0) return;
         dragging = true;
@@ -2056,8 +3267,12 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         const currentTop = m.travel > 0
             ? scrollEl.scrollTop / m.maxScroll * m.travel
             : 0;
-        requestTarget(scrollEl.scrollTop
-            + (clickY < currentTop ? -scrollEl.clientHeight : scrollEl.clientHeight));
+        const handledAt = performance.now();
+        requestTarget(
+            scrollEl.scrollTop + (clickY < currentTop ? -scrollEl.clientHeight : scrollEl.clientHeight),
+            "lane-page",
+            eventTimelineTime(event, handledAt),
+            handledAt);
     };
 
     const onKeyDown = event => {
@@ -2072,12 +3287,16 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         if (target == null) return;
         event.preventDefault();
         event.stopPropagation();
-        requestTarget(target);
+        const handledAt = performance.now();
+        requestTarget(target, `key-${event.key}`, eventTimelineTime(event, handledAt), handledAt);
     };
 
     const onCommitMutation = () => {
         const token = Number(scrollEl.dataset.fxDeferredScrollToken || 0);
-        if (!token || token !== latestRequestedToken) return;
+        if (!token || token < latestRequestedToken) return;
+        const requestedToken = latestRequestedToken;
+        latestRequestedToken = Math.max(latestRequestedToken, token);
+        observeTelemetryToken(requestedToken, token);
         const target = Number(scrollEl.dataset.fxDeferredScrollTop || 0);
         const before = scrollEl.scrollTop;
         scrollEl.scrollTop = Math.max(0, Math.min(
@@ -2087,6 +3306,7 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
             : null;
         pendingTop = scrollEl.scrollTop;
         commitOutstanding = false;
+        boundaryGuard.reset(scrollEl.scrollTop);
         lane.removeAttribute("aria-busy");
         lane.classList.remove("fx-grid-deferred-vscroll-committing");
         lane.dataset.fxAppliedCommits = String(
@@ -2100,7 +3320,7 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         event.preventDefault();
         event.stopPropagation();
         if (!dragging && !commitOutstanding)
-            scrollEl.scrollTop += event.deltaY;
+            boundaryGuard.applyWheel(event);
         scrollEl.scrollLeft += event.deltaX;
     };
 
@@ -2111,7 +3331,7 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         // applying it programmatically, except while a thumb release is frozen.
         event.preventDefault();
         if (!dragging && !commitOutstanding)
-            scrollEl.scrollTop += event.deltaY;
+            boundaryGuard.applyWheel(event);
         if (Math.abs(event.deltaX) >= 0.01)
             scrollEl.scrollLeft += event.deltaX;
     };
@@ -2122,7 +3342,7 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
         if (dragging || commitOutstanding) return;
         const row = scrollEl.querySelector("tbody tr.fx-row:not(.fx-grid-window-spacer)");
         const step = Math.max(1, row?.getBoundingClientRect().height || 16);
-        scrollEl.scrollTop += direction * step;
+        boundaryGuard.applyStep(direction * step);
         lane.dataset.fxArrowScrolls = String(
             Number(lane.dataset.fxArrowScrolls || 0) + 1);
         lane.focus({ preventScroll: true });
@@ -2152,17 +3372,46 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
     upButton?.addEventListener("click", onUpClick);
     downButton?.addEventListener("click", onDownClick);
 
-    const resizeObserver = new ResizeObserver(scheduleLayout);
+    const resizeObserver = new ResizeObserver(() => {
+        invalidateSafeBand();
+        scheduleLayout();
+    });
     resizeObserver.observe(gridRoot);
     resizeObserver.observe(scrollEl);
     const mutationObserver = new MutationObserver(records => {
-        if (records.some(record => record.type === "attributes"))
+        recordTelemetryMutations(records);
+        if (records.some(record => record.type === "childList"
+            || (record.type === "attributes"
+                && record.target === scrollEl)))
+            invalidateSafeBand();
+        if (records.some(record => record.type === "attributes"
+            && record.target === scrollEl
+            && record.attributeName === "data-fx-window-scroll-token")) {
+            const responseToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
+            // Reconcile/cancel the pending latest target before releasing the
+            // queue slot held for this DOM acknowledgement.
+            try {
+                boundaryGuard.onWindowToken(responseToken);
+            } finally {
+                // A geometry/reconciliation exception must never strand the
+                // single-flight queue in awaitingDom.
+                acknowledgeWindowDomToken?.(responseToken);
+            }
+        }
+        if (records.some(record => record.type === "attributes"
+            && record.target === scrollEl
+            && (record.attributeName === "data-fx-deferred-scroll-token"
+                || record.attributeName === "data-fx-deferred-scroll-top")))
             onCommitMutation();
         scheduleLayout();
     });
     mutationObserver.observe(scrollEl, {
         attributes: true,
-        attributeFilter: ["data-fx-deferred-scroll-token", "data-fx-deferred-scroll-top"],
+        attributeFilter: [
+            "data-fx-window-scroll-token",
+            "data-fx-deferred-scroll-token",
+            "data-fx-deferred-scroll-top"
+        ],
         childList: true,
         subtree: true
     });
@@ -2180,7 +3429,16 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
             return true;
         },
         syncFromViewport() {
-            if (!dragging && !commitOutstanding) scheduleLayout();
+            if (!dragging && !commitOutstanding) {
+                boundaryGuard.syncFromViewport();
+                scheduleLayout();
+            }
+        },
+        onWindowRequestQueued(request) {
+            boundaryGuard.onWindowRequestQueued(request);
+        },
+        onWindowRequestSettled(request, rendered, outcome) {
+            boundaryGuard.onWindowRequestSettled(request, rendered, outcome);
         },
         dispose() {
             if (disposed) return;
@@ -2188,6 +3446,11 @@ function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
             if (layoutFrame) cancelAnimationFrame(layoutFrame);
             resizeObserver.disconnect();
             mutationObserver.disconnect();
+            longTaskObserver?.disconnect();
+            clearTimeout(wheelBurstIdleTimer);
+            clearTimeout(wheelBurstFinishTimer);
+            if (wheelBurstFrame) cancelAnimationFrame(wheelBurstFrame);
+            telemetryByToken.clear();
             thumb.removeEventListener("pointerdown", onThumbPointerDown);
             thumb.removeEventListener("pointermove", onThumbPointerMove);
             thumb.removeEventListener("pointerup", finishDrag);

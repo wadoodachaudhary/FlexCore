@@ -489,6 +489,12 @@
        UseRowWindowing is active (flat, non-paged, bounded-height, non-grouped). *@
     <div class="fx-grid-content"
          style="@GridContentStyle"
+         data-fx-window-scroll-token="@(_windowScrollResponseToken == 0 ? null : _windowScrollResponseToken.ToString(CultureInfo.InvariantCulture))"
+         data-fx-window-mode="@(UseGroupedRowWindowing ? "grouped" : UseRowWindowing ? "flat" : "none")"
+         data-fx-scroll-boundary-guard="@((EnableScrollBoundaryGuard && !ScrollTrack).ToString().ToLowerInvariant())"
+         data-fx-window-diagnostic-delay="@Math.Clamp(DiagnosticWindowScrollDelayMs, 0, 5_000)"
+         data-fx-window-overscan="@Math.Max(0, WindowOverscanRows)"
+         data-fx-deferred-window-overscan="@DeferredScrollReleaseOverscanRows"
          data-fx-deferred-scroll-token="@(_deferredScrollCommitToken == 0 ? null : _deferredScrollCommitToken.ToString(CultureInfo.InvariantCulture))"
          data-fx-deferred-scroll-top="@(_deferredScrollCommitToken == 0 ? null : _deferredScrollCommitTop.ToString(CultureInfo.InvariantCulture))"
          @ref="_scrollElement">
@@ -778,7 +784,7 @@
                         var winEnd = Math.Min(winTotal, winStart + _winCount);
 
                         @* TOP spacer — height of all rows above the window. *@
-                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                        <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="top">
                             <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(winStart * _rowHeightPx)"></td>
                         </tr>
                         @for (int wi = winStart; wi < winEnd; wi++)
@@ -786,7 +792,7 @@
                             @rowTemplate((pagedList[wi], wi))
                         }
                         @* BOTTOM spacer — height of all rows below the window. *@
-                        <tr aria-hidden="true" class="fx-grid-window-spacer">
+                        <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="bottom">
                             <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle((winTotal - winEnd) * _rowHeightPx)"></td>
                         </tr>
                     }
@@ -1480,6 +1486,18 @@
             </div>
         </div>
     }
-</div>
 
-@{ EndGridRenderPass(); }
+    @{ EndGridRenderPass(); }
+    <span class="fx-grid-deferred-scroll-server-metrics"
+          hidden
+          aria-hidden="true"
+          data-fx-token="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollDiagnosticsToken.ToString(CultureInfo.InvariantCulture))"
+          data-fx-window-ms="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowMathMs.ToString("0.###", CultureInfo.InvariantCulture))"
+          data-fx-render-queue-ms="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollRenderQueueMs.ToString("0.###", CultureInfo.InvariantCulture))"
+          data-fx-render-build-ms="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollRenderBuildMs.ToString("0.###", CultureInfo.InvariantCulture))"
+          data-fx-grouped-build-ms="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollGroupedBuildMs.ToString("0.###", CultureInfo.InvariantCulture))"
+          data-fx-grouped-entry-count="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollGroupedEntryCount.ToString(CultureInfo.InvariantCulture))"
+          data-fx-window-start="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowStart.ToString(CultureInfo.InvariantCulture))"
+          data-fx-window-count="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowCount.ToString(CultureInfo.InvariantCulture))"
+          data-fx-window-mode="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowMode)"></span>
+</div>
