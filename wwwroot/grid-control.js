@@ -1734,19 +1734,126 @@ export function openPrintableHtml(base64HtmlContent) {
  * An initial sync fires immediately so the window is right-sized to the real
  * viewport height on the first paint (before the user scrolls).
  */
-export function registerGridWindowScroll(scrollEl, dotNetRef) {
+export function registerGridWindowScroll(
+    scrollEl,
+    dotNetRef,
+    scrollTrack = true,
+    deferredLane = null,
+    deferredThumb = null) {
     if (!scrollEl || !dotNetRef) return;
 
     // Idempotent: drop any prior listener on this element before re-binding.
     unregisterGridWindowScroll(scrollEl);
 
+    let disposed = false;
     let scheduled = false;
+    let inFlight = false;
+    let pendingCommitInvocation = null;
+    let pendingScrollInvocation = null;
+    let lastObservedTop = scrollEl.scrollTop;
+
+    const pump = async () => {
+        if (disposed || inFlight || (!pendingCommitInvocation && !pendingScrollInvocation)) return;
+        // A live-scroll sample may already be waiting behind an in-flight call
+        // when thumb dragging begins. Drop that stale sample instead of letting
+        // it repaint the row window while the viewport is deliberately frozen.
+        // A deferred release commit is still allowed through while frozen.
+        if (!pendingCommitInvocation && scrollEl.__gridDeferredScrollController?.isFrozen()) {
+            pendingScrollInvocation = null;
+            return;
+        }
+        // A thumb release must not be overwritten by a later wheel/programmatic
+        // sample while another request is in flight. Release commits go first;
+        // ordinary scrolling retains its own latest-only slot behind them.
+        const request = pendingCommitInvocation || pendingScrollInvocation;
+        if (pendingCommitInvocation) pendingCommitInvocation = null;
+        else pendingScrollInvocation = null;
+        inFlight = true;
+        scrollEl.dataset.fxWindowInvocations = String(
+            Number(scrollEl.dataset.fxWindowInvocations || 0) + 1);
+        try {
+            await dotNetRef.invokeMethodAsync(request.method, ...request.args);
+        } catch {
+            // Best-effort — the circuit may be tearing down.
+        } finally {
+            inFlight = false;
+            if (!disposed && (pendingCommitInvocation || pendingScrollInvocation)) void pump();
+        }
+    };
+    const enqueue = (method, ...args) => {
+        // Single-flight, latest-wins: retain only the newest position while a
+        // prior server window is rendering.
+        if (method === "OnGridDeferredScrollCommitAsync") {
+            // A release target supersedes every sample taken from the frozen
+            // viewport. Let an already-running sample finish, but never drain a
+            // queued old position after the destination window has rendered.
+            pendingScrollInvocation = null;
+            pendingCommitInvocation = { method, args };
+        } else {
+            // A rAF/timer scheduled just before thumb-down must not enqueue the
+            // frozen viewport behind the release commit.
+            if (scrollEl.__gridDeferredScrollController?.isFrozen()) return;
+            pendingScrollInvocation = { method, args };
+        }
+        void pump();
+    };
+    let leadPrevTop = 0;
+    let leadPrevTime = 0;
     const fire = () => {
         scheduled = false;
-        dotNetRef.invokeMethodAsync("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight)
-            .catch(() => { /* best-effort — circuit may be tearing down */ });
+        if (scrollEl.__gridDeferredScrollController?.isFrozen()) return;
+        // Velocity lead: an inertial swipe moves the viewport first and lets the
+        // rows chase; at fling speed it crosses the overscan band faster than a
+        // round trip, so every window lands behind the finger (white for the
+        // whole momentum). Reporting the position ~150ms AHEAD along the current
+        // velocity puts the rendered window where the viewport is about to be.
+        // Slow scrolling (below ~1px/ms) reports the true position unchanged.
+        const now = performance.now();
+        const top = scrollEl.scrollTop;
+        let reported = top;
+        if (!window.__fxNoLead && leadPrevTime > 0) {
+            const dt = now - leadPrevTime;
+            if (dt > 0 && dt < 250) {
+                const velocity = (top - leadPrevTop) / dt;   // px per ms
+                const maxLead = scrollEl.clientHeight * (window.__fxLeadCap ?? 1.25);
+                // A jump bigger than a couple of viewports in one frame is a
+                // programmatic teleport (ScrollTrack commit, Home/End), not
+                // momentum: no lead.
+                if (Math.abs(velocity) > 1 && Math.abs(top - leadPrevTop) <= scrollEl.clientHeight * 2) {
+                    const lead = Math.max(-maxLead, Math.min(maxLead, velocity * (window.__fxLeadMs ?? 150)));
+                    reported = Math.max(0, Math.min(
+                        scrollEl.scrollHeight - scrollEl.clientHeight, top + lead));
+                }
+            }
+        }
+        leadPrevTop = top;
+        leadPrevTime = now;
+        enqueue("OnGridWindowScrollAsync", reported, scrollEl.clientHeight);
     };
     const onScroll = () => {
+        const nextTop = scrollEl.scrollTop;
+        if (scrollEl.__gridDeferredScrollController?.holdViewport(nextTop)) {
+            lastObservedTop = scrollEl.scrollTop;
+            return;
+        }
+        const verticalChanged = Math.abs(nextTop - lastObservedTop) > 0.25;
+        lastObservedTop = nextTop;
+        if (scrollEl.__gridDeferredScrollController)
+            scrollEl.__gridDeferredScrollController.syncFromViewport();
+        const suppressTop = scrollEl.__gridDeferredScrollSuppressTop;
+        if (Number.isFinite(suppressTop)
+            && Math.abs(nextTop - suppressTop) <= 0.25) {
+            scrollEl.__gridDeferredScrollSuppressTop = null;
+            const lane = scrollEl.__gridDeferredScrollController?.lane;
+            if (lane) {
+                lane.dataset.fxSuppressedScrolls = String(
+                    Number(lane.dataset.fxSuppressedScrolls || 0) + 1);
+            }
+            return;
+        }
+        scrollEl.__gridDeferredScrollSuppressTop = null;
+        // Horizontal-only scrolling never changes the row window.
+        if (!verticalChanged) return;
         if (scheduled) return;
         scheduled = true;
         // rAF is the smooth, battery-friendly throttle for a visible tab, but the
@@ -1767,11 +1874,338 @@ export function registerGridWindowScroll(scrollEl, dotNetRef) {
     };
 
     scrollEl.__gridWindowScroll = onScroll;
+    scrollEl.__gridWindowScrollDisposeQueue = () => {
+        disposed = true;
+        pendingCommitInvocation = null;
+        pendingScrollInvocation = null;
+    };
     scrollEl.addEventListener("scroll", onScroll, { passive: true });
 
+    if (!scrollTrack) {
+        scrollEl.__gridDeferredScrollController = createDeferredGridScrollbar(
+            scrollEl,
+            deferredLane,
+            deferredThumb,
+            (targetTop, token) => enqueue(
+                "OnGridDeferredScrollCommitAsync",
+                targetTop,
+                scrollEl.clientHeight,
+                token));
+    }
+
     // Initial window sync — viewport height is known now that we're in the DOM.
-    dotNetRef.invokeMethodAsync("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight)
-        .catch(() => { /* best-effort */ });
+    enqueue("OnGridWindowScrollAsync", scrollEl.scrollTop, scrollEl.clientHeight);
+}
+
+/**
+ * VB6 ScrollTrack=False vertical scrollbar. The proxy covers the native gutter.
+ * Its thumb previews locally while the actual grid viewport remains frozen.
+ * Release asks C# to render one destination window; a DOM commit token moves
+ * scrollTop only after those destination rows have arrived.
+ */
+function createDeferredGridScrollbar(scrollEl, lane, thumb, requestCommit) {
+    const gridRoot = scrollEl.closest(".fx-grid");
+    if (!gridRoot || !lane || !thumb) return null;
+    const upButton = lane.querySelector(".fx-grid-deferred-vscroll-up");
+    const downButton = lane.querySelector(".fx-grid-deferred-vscroll-down");
+    lane.dataset.fxDragStarts = "0";
+    lane.dataset.fxReleaseCommits = "0";
+    lane.dataset.fxAppliedCommits = "0";
+    lane.dataset.fxSuppressedScrolls = "0";
+    lane.dataset.fxArrowScrolls = "0";
+
+    let disposed = false;
+    let dragging = false;
+    let activePointerId = null;
+    let dragStartY = 0;
+    let dragStartThumbTop = 0;
+    let previewThumbTop = 0;
+    let pendingTop = scrollEl.scrollTop;
+    let latestRequestedToken = Number(scrollEl.dataset.fxDeferredScrollToken || 0);
+    let commitOutstanding = false;
+    let frozenViewportTop = scrollEl.scrollTop;
+    let layoutFrame = 0;
+    const minimumLaneWidth = Number.parseFloat(getComputedStyle(lane).width) || 18;
+
+    const metrics = () => {
+        const trackStart = Math.max(0, upButton?.offsetHeight || 0);
+        const trackEnd = Math.max(0, downButton?.offsetHeight || 0);
+        const trackHeight = Math.max(0, lane.clientHeight - trackStart - trackEnd);
+        const maxScroll = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+        // ScrollTrack=False uses the thumb as a destination preview, not as a
+        // native content-ratio indicator. Size it from the physical viewport so
+        // a shallow Components grid gets a short handle while a taller Items
+        // grid gets a longer, easier-to-grab handle. Always preserve some drag
+        // travel, even in the very shallow resizable Components viewport.
+        const viewportThumbHeight = Math.max(
+            8,
+            Math.min(96, scrollEl.clientHeight * 0.10));
+        const reservedTravel = Math.min(8, trackHeight * 0.5);
+        const thumbHeight = Math.max(
+            0,
+            Math.min(viewportThumbHeight, trackHeight - reservedTravel));
+        const travel = Math.max(0, trackHeight - thumbHeight);
+        return { trackStart, trackHeight, maxScroll, thumbHeight, travel };
+    };
+
+    const applyThumb = (top, m = metrics()) => {
+        const clamped = Math.max(0, Math.min(m.travel, top));
+        thumb.style.height = `${m.thumbHeight}px`;
+        thumb.style.transform = `translateY(${m.trackStart + clamped}px)`;
+        lane.setAttribute("aria-valuemin", "0");
+        lane.setAttribute("aria-valuemax", String(Math.round(m.maxScroll)));
+        lane.setAttribute("aria-valuenow", String(Math.round(
+            m.travel > 0 ? clamped / m.travel * m.maxScroll : 0)));
+        return clamped;
+    };
+
+    const layout = () => {
+        layoutFrame = 0;
+        if (disposed || !scrollEl.isConnected || !gridRoot.isConnected) return;
+        const rootRect = gridRoot.getBoundingClientRect();
+        const viewportRect = scrollEl.getBoundingClientRect();
+        const nativeGutterWidth = Math.max(0, scrollEl.offsetWidth - scrollEl.clientWidth);
+        lane.style.top = `${Math.max(0, viewportRect.top - rootRect.top)}px`;
+        lane.style.right = `${Math.max(0, rootRect.right - viewportRect.right)}px`;
+        lane.style.width = `${Math.max(minimumLaneWidth, nativeGutterWidth)}px`;
+        lane.style.height = `${Math.max(0, scrollEl.clientHeight)}px`;
+
+        // Consumers can populate rows after the first render. An empty first
+        // pass hides this lane; [hidden] uses display:none, so measuring it while
+        // it remains hidden returns a zero track height and permanently latches
+        // it off after rows arrive. Reveal for this synchronous measurement,
+        // then immediately reapply the real visibility decision before paint.
+        lane.hidden = false;
+        const m = metrics();
+        lane.hidden = m.maxScroll <= 0.5 || m.trackHeight <= 0;
+        if (lane.hidden) return;
+        if (dragging || commitOutstanding) {
+            previewThumbTop = applyThumb(previewThumbTop, m);
+        } else {
+            const top = m.maxScroll > 0 ? scrollEl.scrollTop / m.maxScroll * m.travel : 0;
+            previewThumbTop = applyThumb(top, m);
+        }
+    };
+    const scheduleLayout = () => {
+        if (disposed || layoutFrame) return;
+        layoutFrame = requestAnimationFrame(layout);
+    };
+
+    const requestTarget = target => {
+        if (commitOutstanding) return;
+        const m = metrics();
+        pendingTop = Math.max(0, Math.min(m.maxScroll, target));
+        frozenViewportTop = scrollEl.scrollTop;
+        commitOutstanding = true;
+        lane.setAttribute("aria-busy", "true");
+        lane.classList.add("fx-grid-deferred-vscroll-committing");
+        requestCommit(pendingTop, ++latestRequestedToken);
+    };
+
+    const finishDrag = event => {
+        if (!dragging) return;
+        if (event && activePointerId != null && event.pointerId !== activePointerId) return;
+        dragging = false;
+        lane.classList.remove("fx-grid-deferred-vscroll-dragging");
+        lane.dataset.fxReleaseCommits = String(
+            Number(lane.dataset.fxReleaseCommits || 0) + 1);
+        if (activePointerId != null && thumb.hasPointerCapture?.(activePointerId)) {
+            try { thumb.releasePointerCapture(activePointerId); } catch { }
+        }
+        activePointerId = null;
+        requestTarget(pendingTop);
+    };
+
+    const onThumbPointerDown = event => {
+        if (event.button !== 0 || commitOutstanding) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const m = metrics();
+        if (m.maxScroll <= 0 || m.travel <= 0) return;
+        dragging = true;
+        frozenViewportTop = scrollEl.scrollTop;
+        lane.dataset.fxDragStarts = String(
+            Number(lane.dataset.fxDragStarts || 0) + 1);
+        activePointerId = event.pointerId;
+        dragStartY = event.clientY;
+        dragStartThumbTop = previewThumbTop;
+        pendingTop = scrollEl.scrollTop;
+        lane.classList.add("fx-grid-deferred-vscroll-dragging");
+        thumb.setPointerCapture?.(event.pointerId);
+    };
+
+    const onThumbPointerMove = event => {
+        if (!dragging || event.pointerId !== activePointerId) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const m = metrics();
+        previewThumbTop = applyThumb(dragStartThumbTop + event.clientY - dragStartY, m);
+        pendingTop = m.travel > 0 ? previewThumbTop / m.travel * m.maxScroll : 0;
+    };
+
+    const onLanePointerDown = event => {
+        if (event.target === thumb
+            || event.target.closest?.(".fx-grid-deferred-vscroll-button")
+            || event.button !== 0
+            || commitOutstanding) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const m = metrics();
+        const rect = lane.getBoundingClientRect();
+        const clickY = event.clientY - rect.top - m.trackStart;
+        const currentTop = m.travel > 0
+            ? scrollEl.scrollTop / m.maxScroll * m.travel
+            : 0;
+        requestTarget(scrollEl.scrollTop
+            + (clickY < currentTop ? -scrollEl.clientHeight : scrollEl.clientHeight));
+    };
+
+    const onKeyDown = event => {
+        if (commitOutstanding) return;
+        let target = null;
+        if (event.key === "ArrowUp") target = scrollEl.scrollTop - 16;
+        else if (event.key === "ArrowDown") target = scrollEl.scrollTop + 16;
+        else if (event.key === "PageUp") target = scrollEl.scrollTop - scrollEl.clientHeight;
+        else if (event.key === "PageDown") target = scrollEl.scrollTop + scrollEl.clientHeight;
+        else if (event.key === "Home") target = 0;
+        else if (event.key === "End") target = scrollEl.scrollHeight;
+        if (target == null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        requestTarget(target);
+    };
+
+    const onCommitMutation = () => {
+        const token = Number(scrollEl.dataset.fxDeferredScrollToken || 0);
+        if (!token || token !== latestRequestedToken) return;
+        const target = Number(scrollEl.dataset.fxDeferredScrollTop || 0);
+        const before = scrollEl.scrollTop;
+        scrollEl.scrollTop = Math.max(0, Math.min(
+            Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight), target));
+        scrollEl.__gridDeferredScrollSuppressTop = Math.abs(scrollEl.scrollTop - before) > 0.25
+            ? scrollEl.scrollTop
+            : null;
+        pendingTop = scrollEl.scrollTop;
+        commitOutstanding = false;
+        lane.removeAttribute("aria-busy");
+        lane.classList.remove("fx-grid-deferred-vscroll-committing");
+        lane.dataset.fxAppliedCommits = String(
+            Number(lane.dataset.fxAppliedCommits || 0) + 1);
+        scheduleLayout();
+    };
+
+    const onWheel = event => {
+        // The proxy overlays the native gutter; forward wheel/trackpad motion to
+        // the real viewport so non-thumb scrolling retains its normal live path.
+        event.preventDefault();
+        event.stopPropagation();
+        if (!dragging && !commitOutstanding)
+            scrollEl.scrollTop += event.deltaY;
+        scrollEl.scrollLeft += event.deltaX;
+    };
+
+    const onViewportWheel = event => {
+        if (Math.abs(event.deltaY) < 0.01) return;
+        // overflow-y:hidden removes the native thumb so the proxy is the only
+        // vertical scrollbar. Preserve normal wheel/trackpad scrolling by
+        // applying it programmatically, except while a thumb release is frozen.
+        event.preventDefault();
+        if (!dragging && !commitOutstanding)
+            scrollEl.scrollTop += event.deltaY;
+        if (Math.abs(event.deltaX) >= 0.01)
+            scrollEl.scrollLeft += event.deltaX;
+    };
+
+    const onArrowClick = direction => event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (dragging || commitOutstanding) return;
+        const row = scrollEl.querySelector("tbody tr.fx-row:not(.fx-grid-window-spacer)");
+        const step = Math.max(1, row?.getBoundingClientRect().height || 16);
+        scrollEl.scrollTop += direction * step;
+        lane.dataset.fxArrowScrolls = String(
+            Number(lane.dataset.fxArrowScrolls || 0) + 1);
+        lane.focus({ preventScroll: true });
+    };
+    const onArrowPointerDown = event => {
+        // Keep the button press out of the grid selection and lane page-jump paths.
+        event.stopPropagation();
+    };
+    const stopCompatibilityMouse = event => event.stopPropagation();
+    const onUpClick = onArrowClick(-1);
+    const onDownClick = onArrowClick(1);
+
+    thumb.addEventListener("pointerdown", onThumbPointerDown);
+    thumb.addEventListener("pointermove", onThumbPointerMove);
+    thumb.addEventListener("pointerup", finishDrag);
+    thumb.addEventListener("pointercancel", finishDrag);
+    thumb.addEventListener("lostpointercapture", finishDrag);
+    lane.addEventListener("pointerdown", onLanePointerDown);
+    lane.addEventListener("keydown", onKeyDown);
+    lane.addEventListener("wheel", onWheel, { passive: false });
+    lane.addEventListener("mousedown", stopCompatibilityMouse);
+    lane.addEventListener("mouseup", stopCompatibilityMouse);
+    lane.addEventListener("click", stopCompatibilityMouse);
+    scrollEl.addEventListener("wheel", onViewportWheel, { passive: false });
+    upButton?.addEventListener("pointerdown", onArrowPointerDown);
+    downButton?.addEventListener("pointerdown", onArrowPointerDown);
+    upButton?.addEventListener("click", onUpClick);
+    downButton?.addEventListener("click", onDownClick);
+
+    const resizeObserver = new ResizeObserver(scheduleLayout);
+    resizeObserver.observe(gridRoot);
+    resizeObserver.observe(scrollEl);
+    const mutationObserver = new MutationObserver(records => {
+        if (records.some(record => record.type === "attributes"))
+            onCommitMutation();
+        scheduleLayout();
+    });
+    mutationObserver.observe(scrollEl, {
+        attributes: true,
+        attributeFilter: ["data-fx-deferred-scroll-token", "data-fx-deferred-scroll-top"],
+        childList: true,
+        subtree: true
+    });
+    scheduleLayout();
+
+    return {
+        lane,
+        isFrozen() {
+            return dragging || commitOutstanding;
+        },
+        holdViewport(nextTop) {
+            if (!dragging && !commitOutstanding) return false;
+            if (Math.abs(nextTop - frozenViewportTop) > 0.25)
+                scrollEl.scrollTop = frozenViewportTop;
+            return true;
+        },
+        syncFromViewport() {
+            if (!dragging && !commitOutstanding) scheduleLayout();
+        },
+        dispose() {
+            if (disposed) return;
+            disposed = true;
+            if (layoutFrame) cancelAnimationFrame(layoutFrame);
+            resizeObserver.disconnect();
+            mutationObserver.disconnect();
+            thumb.removeEventListener("pointerdown", onThumbPointerDown);
+            thumb.removeEventListener("pointermove", onThumbPointerMove);
+            thumb.removeEventListener("pointerup", finishDrag);
+            thumb.removeEventListener("pointercancel", finishDrag);
+            thumb.removeEventListener("lostpointercapture", finishDrag);
+            lane.removeEventListener("pointerdown", onLanePointerDown);
+            lane.removeEventListener("keydown", onKeyDown);
+            lane.removeEventListener("wheel", onWheel);
+            lane.removeEventListener("mousedown", stopCompatibilityMouse);
+            lane.removeEventListener("mouseup", stopCompatibilityMouse);
+            lane.removeEventListener("click", stopCompatibilityMouse);
+            scrollEl.removeEventListener("wheel", onViewportWheel);
+            upButton?.removeEventListener("pointerdown", onArrowPointerDown);
+            downButton?.removeEventListener("pointerdown", onArrowPointerDown);
+            upButton?.removeEventListener("click", onUpClick);
+            downButton?.removeEventListener("click", onDownClick);
+        }
+    };
 }
 
 // Scroll the row-windowing container to an absolute pixel offset. Used to jump
@@ -1828,10 +2262,20 @@ export function scrollSelectedGridRowToTop(gridRoot, rowIndex, fallbackTop, only
 }
 
 export function unregisterGridWindowScroll(scrollEl) {
-    if (scrollEl && scrollEl.__gridWindowScroll) {
+    if (!scrollEl) return;
+    if (scrollEl.__gridDeferredScrollController) {
+        scrollEl.__gridDeferredScrollController.dispose();
+        scrollEl.__gridDeferredScrollController = null;
+    }
+    if (scrollEl.__gridWindowScroll) {
         scrollEl.removeEventListener("scroll", scrollEl.__gridWindowScroll);
         scrollEl.__gridWindowScroll = null;
     }
+    if (scrollEl.__gridWindowScrollDisposeQueue) {
+        scrollEl.__gridWindowScrollDisposeQueue();
+        scrollEl.__gridWindowScrollDisposeQueue = null;
+    }
+    scrollEl.__gridDeferredScrollSuppressTop = null;
 }
 
 export function positionDatePickerDropdown(hostEl, dropdownEl, popupLayerEl) {

@@ -136,6 +136,8 @@ public partial class GridControl<TValue>
                 classes.Add("fx-grid-width-fit-columns");
             if (!string.IsNullOrWhiteSpace(Height))
                 classes.Add("fx-grid-has-height");
+            if (!ScrollTrack && (UseRowWindowing || UseGroupedRowWindowing))
+                classes.Add("fx-grid-scrolltrack-deferred");
             if (ExtendVerticalScrollbarIntoHeader)
                 classes.Add("fx-grid-vscroll-header-gutter");
             if (ShouldHideGridContentForNoVisibleColumns)

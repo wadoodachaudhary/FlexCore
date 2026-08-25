@@ -487,7 +487,11 @@
        registerGridWindowScroll) attaches its throttled scroll listener here. This
        is the vertical scroll container (overflow:auto, bounded by Height) whenever
        UseRowWindowing is active (flat, non-paged, bounded-height, non-grouped). *@
-    <div class="fx-grid-content" style="@GridContentStyle" @ref="_scrollElement">
+    <div class="fx-grid-content"
+         style="@GridContentStyle"
+         data-fx-deferred-scroll-token="@(_deferredScrollCommitToken == 0 ? null : _deferredScrollCommitToken.ToString(CultureInfo.InvariantCulture))"
+         data-fx-deferred-scroll-top="@(_deferredScrollCommitToken == 0 ? null : _deferredScrollCommitTop.ToString(CultureInfo.InvariantCulture))"
+         @ref="_scrollElement">
         <table class="fx-grid-table" style="@GetTableStyle()">
 
             @* Header *@
@@ -864,6 +868,29 @@
             }
         </table>
     </div>
+    @if (!ScrollTrack && (UseRowWindowing || UseGroupedRowWindowing))
+    {
+        @* Browser-owned proxy: Blazor owns the nodes, JS owns only geometry and
+           pointer state. That keeps the render tree stable while the thumb can
+           preview without dispatching a Blazor event on every pointer move. *@
+        <div class="fx-grid-deferred-vscroll"
+             role="scrollbar"
+             aria-orientation="vertical"
+             aria-label="Vertical grid scroll"
+             tabindex="0"
+             @ref="_deferredScrollLaneElement">
+            <button type="button"
+                    class="fx-grid-deferred-vscroll-button fx-grid-deferred-vscroll-up"
+                    aria-label="Scroll up"
+                    tabindex="-1"><span aria-hidden="true"></span></button>
+            <div class="fx-grid-deferred-vscroll-thumb"
+                 @ref="_deferredScrollThumbElement"></div>
+            <button type="button"
+                    class="fx-grid-deferred-vscroll-button fx-grid-deferred-vscroll-down"
+                    aria-label="Scroll down"
+                    tabindex="-1"><span aria-hidden="true"></span></button>
+        </div>
+    }
     }   @* /else (table render — closes ShowAsChart branch above) *@
 
     @* ── Pager ────────────────────────────────────────────────── *@

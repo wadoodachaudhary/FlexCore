@@ -685,6 +685,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (string.IsNullOrEmpty(Height))
                 return string.Empty;
 
+            if (!ScrollTrack && (UseRowWindowing || UseGroupedRowWindowing))
+                return "overflow-x:auto; overflow-y:hidden; flex:1;";
+
             return IsPagingActive
                 ? "overflow-x:auto; overflow-y:hidden; flex:1;"
                 : "overflow:auto; flex:1;";
@@ -1694,6 +1697,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// flick never outruns the render.</summary>
     [Parameter] public int WindowOverscanRows { get; set; } = 60;
 
+    /// <summary>VB6 FlexGrid ScrollTrack. True tracks the vertical thumb live.
+    /// False uses a browser-owned proxy thumb: the thumb previews locally while
+    /// the committed grid viewport remains frozen, then one server call renders
+    /// and applies the destination window on release.</summary>
+    [Parameter] public bool ScrollTrack { get; set; } = true;
+
     /// <summary>
     /// Minimum source row count before custom row windowing is enabled. A value
     /// of zero preserves the existing behavior. Picker dialogs can opt in to a
@@ -1717,6 +1726,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <c>overflow:auto</c>, bounded by <see cref="Height"/>). The scroll reader
     /// attaches here.</summary>
     private ElementReference _scrollElement;
+    private ElementReference _deferredScrollLaneElement;
+    private ElementReference _deferredScrollThumbElement;
 
     /// <summary>Callback ref handed to the JS bindings that invoke back into
     /// this grid (window scroll reader, client navigation preview).</summary>
@@ -1724,6 +1735,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>True once the scroll listener has been attached for this grid.</summary>
     private bool _windowScrollRegistered;
+
+    /// <summary>
+    /// Release-only scrollbar handoff. JS previews the proxy thumb without
+    /// touching scrollTop, then asks C# to render the destination slice. These
+    /// attributes are emitted with that render; the JS MutationObserver commits
+    /// scrollTop only after the real destination rows are in the DOM.
+    /// </summary>
+    private long _deferredScrollCommitToken;
+    private double _deferredScrollCommitTop;
 
     /// <summary>Fingerprint of the last rendered list. When it changes (sort,
     /// filter, or DataSource swap) the window offset resets to the top.</summary>
@@ -2193,7 +2213,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// and re-renders only when the window actually moved.
     /// </summary>
     [JSInvokable]
-    public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
+    public Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
+    {
+        return UpdateGridWindow(scrollTop, clientHeight)
+            ? InvokeAsync(StateHasChanged)
+            : Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Final position from a ScrollTrack=false proxy-thumb drag. Unlike the
+    /// ordinary scroll callback, this always renders: even if the destination
+    /// is inside the current overscan window, JS needs a new commit token before
+    /// it is allowed to move the real viewport.
+    /// </summary>
+    [JSInvokable]
+    public Task OnGridDeferredScrollCommitAsync(double scrollTop, double clientHeight, long token)
+    {
+        UpdateGridWindow(scrollTop, clientHeight);
+        _deferredScrollCommitTop = Math.Max(0, scrollTop);
+        _deferredScrollCommitToken = Math.Max(_deferredScrollCommitToken + 1, token);
+        return InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Updates the flat or grouped row-window state without rendering.</summary>
+    private bool UpdateGridWindow(double scrollTop, double clientHeight)
     {
         // Grouped windowing: entries have MIXED heights (headers taller than
         // items), so scrollTop maps to an entry index through the prefix-summed
@@ -2202,7 +2245,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var prefixArr = _groupedPrefixPx;
             if (prefixArr is not { Length: > 1 })
-                return;
+                return false;
 
             var entryCount = prefixArr.Length - 1;
             var firstEntry = GroupedEntryIndexAt(prefixArr, scrollTop);
@@ -2214,20 +2257,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var nearEnd = lastEntryExclusive > groupedEnd - WindowRefreshGuardRows;
 
             if (_winCount == newGroupedCount && !nearStart && !nearEnd)
-                return;
+                return false;
 
             var newGroupedStart = Math.Max(0, firstEntry - WindowOverscanRows);
             if (newGroupedStart != _winStart || newGroupedCount != _winCount)
             {
                 _winStart = newGroupedStart;
                 _winCount = newGroupedCount;
-                await InvokeAsync(StateHasChanged);
+                return true;
             }
-            return;
+            return false;
         }
 
         if (!UseRowWindowing)
-            return;
+            return false;
 
         var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
         var visible = (int)Math.Ceiling(clientHeight / rowH);
@@ -2242,15 +2285,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var nearWindowEnd = lastVisibleExclusive > currentEnd - WindowRefreshGuardRows;
 
         if (_winCount == newCount && !nearWindowStart && !nearWindowEnd)
-            return;
+            return false;
 
         var newStart = Math.Max(0, firstVisible - WindowOverscanRows);
         if (newStart != _winStart || newCount != _winCount)
         {
             _winStart = newStart;
             _winCount = newCount;
-            await InvokeAsync(StateHasChanged);
+            return true;
         }
+
+        return false;
     }
 
     // ── Grouped Data ─────────────────────────────────────────────────────
@@ -2888,7 +2933,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     "import", GridJsModulePath);
                 _windowSelfRef ??= DotNetObjectReference.Create(this);
                 await _gridJsModule.InvokeVoidAsync(
-                    "registerGridWindowScroll", _scrollElement, _windowSelfRef);
+                    "registerGridWindowScroll",
+                    _scrollElement,
+                    _windowSelfRef,
+                    ScrollTrack,
+                    _deferredScrollLaneElement,
+                    _deferredScrollThumbElement);
                 _windowScrollRegistered = true;
             }
             else if (_windowScrollRegistered && _gridJsModule != null)
