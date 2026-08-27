@@ -209,7 +209,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// represents the complete filtered result, not only the currently rendered
     /// row window or current page.
     /// </summary>
-    [Parameter] public bool ShowRowCountInFooter { get; set; } = true;
+    [Parameter] public bool ShowRowCountInFooter { get; set; } = false;
     /// <summary>
     /// Field that receives multi-row type-ahead when no row-selection gesture
     /// has captured an editable target column. Kept as the compatibility
