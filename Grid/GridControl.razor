@@ -452,7 +452,7 @@
              style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
             <PivotControl TValue="TValue"
                           @ref="_pivotControlRef"
-                          DataSource="@FilteredData"
+                          DataSource="@PivotData"
                           RowFields="@_pivotRowFields"
                           ColumnFields="@_pivotColumnFields"
                           ValueFields="@_pivotValueFields"
@@ -491,6 +491,8 @@
          style="@GridContentStyle"
          data-fx-window-scroll-token="@(_windowScrollResponseToken == 0 ? null : _windowScrollResponseToken.ToString(CultureInfo.InvariantCulture))"
          data-fx-window-mode="@(UseGroupedRowWindowing ? "grouped" : UseRowWindowing ? "flat" : "none")"
+         data-fx-performance-mode="@PerformanceMode"
+         data-fx-configured-row-height="@_rowHeightPx.ToString(CultureInfo.InvariantCulture)"
          data-fx-scroll-boundary-guard="@((EnableScrollBoundaryGuard && !ScrollTrack).ToString().ToLowerInvariant())"
          data-fx-window-diagnostic-delay="@Math.Clamp(DiagnosticWindowScrollDelayMs, 0, 5_000)"
          data-fx-window-overscan="@Math.Max(0, WindowOverscanRows)"
@@ -899,12 +901,20 @@
     }
     }   @* /else (table render — closes ShowAsChart branch above) *@
 
+    @if (ShowRowCountInFooter && !IsPagingActive)
+    {
+        <small class="fx-grid-row-count fx-grid-row-count-text">@GridRowCountText</small>
+    }
+
     @* ── Pager ────────────────────────────────────────────────── *@
     @if (IsPagingActive)
     {
         <div class="fx-grid-pager">
             <div class="fx-pager-info">
-                @(_pageState.TotalRecords) items
+                @if (ShowRowCountInFooter)
+                {
+                    <small class="fx-grid-row-count-text">@GridRowCountText</small>
+                }
             </div>
             <div class="fx-pager-nav">
                 <button class="fx-pager-btn" tabindex="-1" disabled="@(_pageState.CurrentPage <= 1)" @onclick="() => GoToPage(1)">⟨⟨</button>

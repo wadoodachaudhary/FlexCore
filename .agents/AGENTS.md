@@ -21,15 +21,14 @@ These rules apply universally when coding, building, and debugging within the Ho
 
 ## 4. Sync Policy & Multi-Target Builds
 - **FlexKit ↔ FlexCore**: Do not mirror automatically. Sync between FlexKit and FlexCore only when explicitly requested; when requested, only project metadata (.csproj) and VCS (.git) may differ.
-- **HomeFront ↔ HomeFrontPB**: Mirror migrated form fixes between both host applications.
+- **HomeFront Focus**: Primary focus is solely on HomeFront (`MobileSource/HomeFront`). No more updates to HomeFrontPB.
   - HomeFront path: `Components/Pages/Migrated/F*.razor`
-  - HomeFrontPB path: `Components/Pages/F*.razor`
-- **Build Checks**: After editing FlexKit, run non-incremental builds (`dotnet build --no-incremental`) on both `HomeFront.sln` and `HomeFrontPB.sln` to catch compile regressions early. Rebuild `FlexCore.Showcase.sln` after FlexCore edits.
-- **Documentation**: Keep both `CLAUDE.md` files current.
+- **Build Checks**: After editing FlexKit, run non-incremental builds (`dotnet build --no-incremental`) on `HomeFront.sln` to catch compile regressions early. Rebuild `FlexCore.Showcase.sln` after FlexCore edits.
+- **Documentation**: Keep `CLAUDE.md` current.
 
 ## 5. App Status & General Scope
-- **Active App**: `HomeFrontPB` is active.
-- **Archived App**: `HomeFrontPOC` is archived; do not modify, build, or deploy it.
+- **Active App**: `HomeFront` (`MobileSource/HomeFront`) is the active app.
+- **Discontinued/Archived Apps**: `HomeFrontPB` is frozen/discontinued; `HomeFrontPOC` is archived. Do not modify, build, or deploy them.
 - **Namespaces**: Keep namespaces unified under `Fx.ControlKit.*` and CSS classes prefixed with `fx-*`.
 
 ## 6. Security, SQL & DB State

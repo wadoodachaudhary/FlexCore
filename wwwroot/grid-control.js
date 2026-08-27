@@ -1746,7 +1746,8 @@ export function registerGridWindowScroll(
     refreshGuardRows = 20,
     configuredRowHeight = 16,
     wheelScrollScale = 1,
-    enableScrollBoundarySlowdown = false) {
+    enableScrollBoundarySlowdown = false,
+    enableAdaptiveWheelScrollPacing = false) {
     if (!scrollEl || !dotNetRef) return;
 
     // Idempotent: drop any prior listener on this element before re-binding.
@@ -1790,6 +1791,9 @@ export function registerGridWindowScroll(
         activeKind: activeInvocation?.kind || null,
         activeTarget: activeInvocation?.target ?? null,
         activeDirection: activeInvocation?.direction ?? 0,
+        activeToken: activeInvocation?.token ?? 0,
+        activeEnqueuedAt: activeInvocation?.enqueuedAt ?? null,
+        activeInvokeStartedAt: activeInvocation?.invokeStartedAt ?? null,
         pendingKind: pendingScrollInvocation?.kind || null,
         pendingTarget: pendingScrollInvocation?.target ?? null
     });
@@ -1823,7 +1827,10 @@ export function registerGridWindowScroll(
                 void pump();
         }
     };
-    const acknowledgeWindowDomToken = token => {
+    const acknowledgeWindowDomToken = (
+        token,
+        observedAt = performance.now(),
+        recoveredByWatchdog = false) => {
         if (!Number.isFinite(token) || token <= 0) return;
         lastWindowDomToken = Math.max(lastWindowDomToken, token);
         // A server-side remount/recovery can advance beyond the token that this
@@ -1831,6 +1838,13 @@ export function registerGridWindowScroll(
         // acknowledgement so they can never look stale on arrival.
         nextWindowRequestToken = Math.max(nextWindowRequestToken, token);
         const request = activeInvocation;
+        if (request
+            && token >= request.token
+            && !Number.isFinite(request.domTokenObservedAt)) {
+            request.domTokenObservedAt = observedAt;
+            request.domTokenObservedToken = token;
+            request.domTokenRecoveredByWatchdog = recoveredByWatchdog;
+        }
         if (request?.awaitingDom && lastWindowDomToken >= request.token)
             completeActiveInvocation(request, true, request.invokeOutcome || "resolved");
     };
@@ -1847,7 +1861,7 @@ export function registerGridWindowScroll(
             // failure so the healthy path never creates a recovery request.
             const observedToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
             if (Number.isFinite(observedToken) && observedToken >= request.token) {
-                acknowledgeWindowDomToken(observedToken);
+                acknowledgeWindowDomToken(observedToken, performance.now(), true);
                 return;
             }
 
@@ -1877,6 +1891,15 @@ export function registerGridWindowScroll(
         activeInvocation = request;
         activeInvocationMethod = request.method;
         const invokeStartedAt = performance.now();
+        request.invokeStartedAt = invokeStartedAt;
+        try {
+            scrollEl.__gridDeferredScrollController?.onWindowRequestStarted?.(
+                request,
+                invokeStartedAt);
+        } catch {
+            // Adaptive measurement is observational. A geometry read must never
+            // retain the single-flight queue before the real interop begins.
+        }
         request.telemetry?.markInvokeStarted?.(invokeStartedAt);
         if (boundaryTelemetryEnabled) {
             scrollEl.dataset.fxWindowInvocations = String(
@@ -1943,6 +1966,7 @@ export function registerGridWindowScroll(
             target: targetTop,
             direction: Math.sign(direction),
             token,
+            enqueuedAt: performance.now(),
             forceDomAcknowledge
         };
         if (forceDomAcknowledge)
@@ -2088,7 +2112,8 @@ export function registerGridWindowScroll(
             Number.isFinite(Number(wheelScrollScale))
                 ? Math.max(0.1, Math.min(2, Number(wheelScrollScale)))
                 : 1,
-            !!enableScrollBoundarySlowdown);
+            !!enableScrollBoundarySlowdown,
+            !!enableAdaptiveWheelScrollPacing);
     }
 
     // Initial window sync — viewport height is known now that we're in the DOM.
@@ -2115,7 +2140,8 @@ function createDeferredGridScrollbar(
     refreshGuardRows,
     configuredRowHeight,
     wheelScrollScale,
-    enableScrollBoundarySlowdown) {
+    enableScrollBoundarySlowdown,
+    enableAdaptiveWheelScrollPacing) {
     const gridRoot = scrollEl.closest(".fx-grid");
     if (!gridRoot || !lane || !thumb) return null;
     const upButton = lane.querySelector(".fx-grid-deferred-vscroll-up");
@@ -2158,13 +2184,261 @@ function createDeferredGridScrollbar(
     let wheelBurstFrame = 0;
     let wheelBurstIdleTimer = 0;
     let wheelBurstFinishTimer = 0;
+    let wheelBurstGeneration = 0;
     let cachedSafeBand = null;
     let lastWheelInputAt = 0;
     let livenessRecoveryCount = 0;
+    let settledBoundaryFailureCount = 0;
     let renderedNoProgressCount = 0;
     let bestBoundaryErrorPx = Number.POSITIVE_INFINITY;
     let resistanceActive = false;
     let slowdownIntentActive = false;
+
+    // Adaptive pacing is deliberately grid-local. Every successful boundary
+    // window tells us both how many painted pixels it supplied and how long the
+    // browser -> circuit -> render -> DOM-token path took. The next completed
+    // gesture starts with a px/ms ceiling. Lower measured capacity changes the
+    // refill rate immediately without discarding existing credit; increases
+    // wait for the next gesture. Each event is
+    // limited by its real elapsed time, so a high-frequency trackpad and a mouse
+    // wheel obey the same rate. Excess is discarded, never delayed momentum.
+    const adaptivePacingEnabled = !!enableAdaptiveWheelScrollPacing
+        && !!enableScrollBoundaryGuard
+        && !!enableScrollBoundarySlowdown;
+    const adaptiveLatencyWindow = [];
+    const adaptiveAdvanceWindow = [];
+    let adaptiveLatencySamples = 0;
+    let adaptiveLearnedRatePxPerMs = null;
+    let adaptivePendingRatePxPerMs = null;
+    let adaptiveBurstRatePxPerMs = null;
+    let adaptiveRateEpoch = 0;
+    let adaptiveLastCongestionToken = null;
+    let adaptiveBurstCongested = false;
+    let adaptiveCongestionSamples = 0;
+    let adaptiveIncreaseSamples = 0;
+    // Keep diagnostic cadence estimates separate for pixel, line, and page
+    // input. Pacing itself uses wall-time capacity credit, so device labeling
+    // never determines whether an isolated mouse notch remains responsive.
+    const adaptiveCadenceByModeMs = [16, 50, 50];
+    let adaptiveCadenceMs = adaptiveCadenceByModeMs[0];
+
+    const adaptiveInitialEventCapPx = () => {
+        const pitch = Math.max(1, configuredRowHeight || 16);
+        const viewportRows = Math.max(1, scrollEl.clientHeight / pitch);
+        return Math.max(1, Math.min(7, Math.floor(viewportRows * 0.20))) * pitch;
+    };
+    const adaptiveRateCreditCapacityPx = () => Math.min(
+        adaptiveInitialEventCapPx(),
+        2 * Math.max(1, configuredRowHeight || 16));
+    const adaptiveRateCreditPx = [
+        adaptiveRateCreditCapacityPx(),
+        adaptiveRateCreditCapacityPx()
+    ];
+    const adaptiveRateCreditUpdatedAt = [performance.now(), performance.now()];
+    const adaptiveRawFractionPx = [0, 0];
+    const adaptiveMaximumRatePxPerMs = () => adaptiveInitialEventCapPx() / 50;
+    const adaptiveInitialRatePxPerMs = () => {
+        const pitch = Math.max(1, configuredRowHeight || 16);
+        const continuationRows = Math.max(
+            1,
+            Math.ceil(Math.max(1, refreshGuardRows || 0) / 3));
+        const diagnosticDelay = Math.max(
+            0,
+            Number(scrollEl.dataset.fxWindowDiagnosticDelay || 0));
+        // Before the first measured response, budget one conservative supply
+        // step over a 150ms service horizon (or the controlled bench delay plus
+        // 100ms). This avoids exhausting a 20-row guard during cold start.
+        const provisionalHorizonMs = Math.max(150, diagnosticDelay + 100);
+        return Math.min(
+            adaptiveMaximumRatePxPerMs(),
+            0.75 * continuationRows * pitch / provisionalHorizonMs);
+    };
+    const adaptivePercentile = (values, fraction) => {
+        if (!values.length) return null;
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)];
+    };
+    const quantizeAdaptiveRateDown = value => {
+        const positive = Math.max(Number.EPSILON, value);
+        const roundedDown = Math.floor(positive * 1_000_000) / 1_000_000;
+        return roundedDown > 0 ? roundedDown : positive;
+    };
+    const adaptiveResolvedRate = () => Math.min(
+        adaptiveMaximumRatePxPerMs(),
+        adaptiveLearnedRatePxPerMs ?? adaptiveInitialRatePxPerMs());
+    const promoteAdaptiveRateForBurst = () => {
+        if (!adaptivePacingEnabled) {
+            adaptiveBurstRatePxPerMs = null;
+            return;
+        }
+        if (Number.isFinite(adaptivePendingRatePxPerMs)) {
+            adaptiveLearnedRatePxPerMs = adaptivePendingRatePxPerMs;
+            adaptivePendingRatePxPerMs = null;
+            adaptiveRateEpoch++;
+        }
+        adaptiveBurstRatePxPerMs = adaptiveResolvedRate();
+        adaptiveBurstCongested = false;
+        lane.dataset.fxAdaptiveWheelRatePxPerMs = String(adaptiveBurstRatePxPerMs);
+    };
+    const lowerCurrentAdaptiveRate = (next, boundedCongestionStep = true) => {
+        if (!Number.isFinite(next)
+            || !Number.isFinite(adaptiveBurstRatePxPerMs)
+            || next >= adaptiveBurstRatePxPerMs) return;
+        // Only verified no-progress congestion lowers a gesture in progress.
+        // Ramp it by one half per distinct response; measured positive capacity
+        // is staged intact for the next physical gesture.
+        adaptiveBurstRatePxPerMs = boundedCongestionStep
+            ? Math.max(next, adaptiveBurstRatePxPerMs * 0.50)
+            : next;
+        lane.dataset.fxAdaptiveWheelRatePxPerMs = String(adaptiveBurstRatePxPerMs);
+        if (wheelBurst) wheelBurst.adaptiveImmediateDecreases++;
+    };
+    const stageAdaptiveRate = candidate => {
+        if (!adaptivePacingEnabled || !Number.isFinite(candidate)) return;
+        const next = Math.min(
+            adaptiveMaximumRatePxPerMs(),
+            quantizeAdaptiveRateDown(candidate));
+        if (!Number.isFinite(adaptiveLearnedRatePxPerMs)) {
+            adaptivePendingRatePxPerMs = Number.isFinite(adaptivePendingRatePxPerMs)
+                ? Math.min(adaptivePendingRatePxPerMs, next)
+                : next;
+            adaptiveIncreaseSamples = 0;
+            lowerCurrentAdaptiveRate(next, false);
+            return;
+        }
+        if (next < adaptiveLearnedRatePxPerMs * 0.90) {
+            adaptivePendingRatePxPerMs = Number.isFinite(adaptivePendingRatePxPerMs)
+                ? Math.min(adaptivePendingRatePxPerMs, next)
+                : next;
+            adaptiveIncreaseSamples = 0;
+            lowerCurrentAdaptiveRate(next, false);
+            return;
+        }
+        if (next > adaptiveLearnedRatePxPerMs * 1.15) {
+            adaptiveIncreaseSamples++;
+            if (adaptiveIncreaseSamples >= 3) {
+                const increasedRate = Math.min(
+                    next,
+                    adaptiveLearnedRatePxPerMs * 1.10);
+                // A fast decrease observed earlier in this gesture is sticky
+                // until promotion. Later optimistic samples must not overwrite
+                // it before the next gesture gets a chance to use it.
+                adaptivePendingRatePxPerMs = Number.isFinite(adaptivePendingRatePxPerMs)
+                    ? Math.min(adaptivePendingRatePxPerMs, increasedRate)
+                    : increasedRate;
+                adaptiveIncreaseSamples = 0;
+            }
+        } else {
+            adaptiveIncreaseSamples = 0;
+        }
+    };
+    const stageAdaptiveCongestionDecrease = (requestToken, direction = 0) => {
+        if (!adaptivePacingEnabled
+            || (Number.isFinite(requestToken)
+                && requestToken === adaptiveLastCongestionToken))
+            return;
+        adaptiveLastCongestionToken = Number.isFinite(requestToken)
+            ? requestToken
+            : adaptiveLastCongestionToken;
+        adaptiveCongestionSamples++;
+        const current = adaptiveBurstRatePxPerMs
+            ?? adaptiveLearnedRatePxPerMs
+            ?? adaptiveInitialRatePxPerMs();
+        const next = current * 0.50;
+        // A no-progress response has no positive supply measurement from which
+        // to learn a durable cap. Slow this gesture, but leave the learned/next
+        // rate untouched; the next successful window will provide real A/L.
+        lowerCurrentAdaptiveRate(next);
+        adaptiveBurstCongested = true;
+        const observedAt = performance.now();
+        if (direction === 0) {
+            adaptiveRateCreditPx[0] = adaptiveRateCreditPx[1] = 0;
+            adaptiveRawFractionPx[0] = adaptiveRawFractionPx[1] = 0;
+            adaptiveRateCreditUpdatedAt[0] = adaptiveRateCreditUpdatedAt[1] = observedAt;
+        } else {
+            const creditIndex = direction > 0 ? 1 : 0;
+            adaptiveRateCreditPx[creditIndex] = 0;
+            adaptiveRawFractionPx[creditIndex] = 0;
+            adaptiveRateCreditUpdatedAt[creditIndex] = observedAt;
+        }
+    };
+    const recordAdaptiveBoundaryCapacity = request => {
+        if (!adaptivePacingEnabled
+            || request?.kind !== "boundary"
+            || request.forceDomAcknowledge
+            || !Number.isFinite(request.enqueuedAt)
+            || !Number.isFinite(request.adaptiveSafeEdgeBefore)
+            || !request.adaptiveDirection) return;
+        const band = readSafeBand(true);
+        if (!band || band.invalid) return;
+        if ((request.adaptiveDirection > 0 && band.safeMax >= band.maxScroll - 0.5)
+            || (request.adaptiveDirection < 0 && band.safeMin <= 0.5))
+            return;
+        if (!Number.isFinite(request.adaptiveStartedAt)
+            || !Number.isFinite(request.domTokenObservedAt)
+            || request.domTokenObservedToken !== request.token
+            || request.domTokenRecoveredByWatchdog) return;
+        const latencyMs = Math.max(
+            1,
+            request.domTokenObservedAt - request.adaptiveStartedAt);
+        const safeEdgeAfter = request.adaptiveDirection > 0
+            ? band.safeMax
+            : band.safeMin;
+        const advancePx = request.adaptiveDirection > 0
+            ? safeEdgeAfter - request.adaptiveSafeEdgeBefore
+            : request.adaptiveSafeEdgeBefore - safeEdgeAfter;
+        if (!Number.isFinite(advancePx)) return;
+        const suppliedPx = Math.max(0, advancePx);
+        const minimumMeaningfulSupplyPx = Math.max(1, configuredRowHeight || 16);
+        if (suppliedPx < minimumMeaningfulSupplyPx) {
+            if (waitingAtBoundary
+                && request.adaptiveDirection
+                    === (Math.sign(desiredWheelTop - scrollEl.scrollTop)
+                        || boundaryDirection))
+                stageAdaptiveCongestionDecrease(
+                    request.token,
+                    request.adaptiveDirection);
+            return;
+        }
+
+        adaptiveLatencyWindow.push(latencyMs);
+        adaptiveAdvanceWindow.push(suppliedPx);
+        if (adaptiveLatencyWindow.length > 8) adaptiveLatencyWindow.shift();
+        if (adaptiveAdvanceWindow.length > 8) adaptiveAdvanceWindow.shift();
+        adaptiveLatencySamples++;
+        const latencyP95 = adaptivePercentile(adaptiveLatencyWindow, 0.95);
+        const advanceP10 = adaptivePercentile(adaptiveAdvanceWindow, 0.10);
+        const safeRate = 0.75 * advanceP10 / latencyP95;
+        stageAdaptiveRate(safeRate);
+        if (adaptiveBurstCongested) {
+            const recoveredRate = Math.min(
+                adaptiveMaximumRatePxPerMs(),
+                safeRate,
+                adaptiveLearnedRatePxPerMs ?? safeRate);
+            if (Number.isFinite(recoveredRate)
+                && recoveredRate > adaptiveBurstRatePxPerMs) {
+                adaptiveBurstRatePxPerMs = recoveredRate;
+                lane.dataset.fxAdaptiveWheelRatePxPerMs = String(recoveredRate);
+                const creditIndex = request.adaptiveDirection > 0 ? 1 : 0;
+                adaptiveRateCreditPx[creditIndex] = Math.max(
+                    adaptiveRateCreditPx[creditIndex],
+                    Math.min(
+                        adaptiveRateCreditCapacityPx(),
+                        suppliedPx,
+                        0.5 * Math.max(1, configuredRowHeight || 16)));
+                if (wheelBurst) wheelBurst.adaptiveCongestionRecoveries++;
+            }
+            adaptiveBurstCongested = false;
+        }
+
+        lane.dataset.fxAdaptiveWheelLatencyMs = String(
+            Math.round(latencyMs * 1000) / 1000);
+        lane.dataset.fxAdaptiveWheelAdvancePx = String(
+            Math.round(suppliedPx * 1000) / 1000);
+        lane.dataset.fxAdaptiveWheelCandidateRate = String(
+            Math.round(safeRate * 10000) / 10000);
+    };
+    promoteAdaptiveRateForBurst();
 
     const dataNumber = name => Number(scrollEl.dataset[name] || 0);
     const counterSnapshot = () => ({
@@ -2291,14 +2565,47 @@ function createDeferredGridScrollbar(
     const ensureWheelBurstFrame = () => {
         if (!wheelBurstFrame) wheelBurstFrame = requestAnimationFrame(sampleWheelBurstFrame);
     };
-    const startOrUpdateWheelBurst = (event, deltaPx, rawDeltaPx) => {
+    const onDocumentVisibilityChange = () => {
+        if (wheelBurst && document.hidden) wheelBurst.hiddenDuring = true;
+    };
+    if (enableScrollBoundaryTelemetry)
+        document.addEventListener("visibilitychange", onDocumentVisibilityChange);
+    const startOrUpdateWheelBurst = (
+        event,
+        deltaPx,
+        rawDeltaPx,
+        inputAt,
+        startsNewGesture) => {
         if (!wheelBurst) {
+            const startBand = readSafeBand();
+            const startDirection = Math.sign(deltaPx);
             wheelBurst = {
-                version: 2,
-                policyVersion: 2,
-                startedAt: performance.now(),
+                version: 3,
+                policyVersion: 5,
+                startedAt: inputAt,
+                firstInputAt: inputAt,
+                lastInputAt: inputAt,
+                physicalGestures: 1,
+                adaptiveRateChanges: 0,
+                adaptiveRateEpochAtStart: adaptiveRateEpoch,
+                adaptiveRateEpochAtEnd: adaptiveRateEpoch,
+                firstDirection: startDirection,
+                replayKind: scrollEl.dataset.fxWheelReplayKind || null,
+                replayVersion: Number(scrollEl.dataset.fxWheelReplayVersion || 0) || null,
+                replayRun: scrollEl.dataset.fxWheelReplayRun || null,
+                replayExpectedEvents: Number(
+                    scrollEl.dataset.fxWheelReplayExpectedEvents || 0) || null,
+                replayExpectedRawPx: Number(
+                    scrollEl.dataset.fxWheelReplayExpectedRawPx || 0) || null,
+                startingScrollTop: scrollEl.scrollTop,
+                startingDirectionalRunwayPx: startBand && startDirection > 0
+                    ? Math.max(0, startBand.safeMax - scrollEl.scrollTop)
+                    : startBand && startDirection < 0
+                        ? Math.max(0, scrollEl.scrollTop - startBand.safeMin)
+                        : null,
                 guardEnabled: !!enableScrollBoundaryGuard,
                 windowMode: scrollEl.dataset.fxWindowMode || "unknown",
+                performanceMode: scrollEl.dataset.fxPerformanceMode || "unknown",
                 diagnosticDelayMs: Number(scrollEl.dataset.fxWindowDiagnosticDelay || 0),
                 windowOverscanRows: Number(scrollEl.dataset.fxWindowOverscan || 0),
                 deferredOverscanRows: Number(scrollEl.dataset.fxDeferredWindowOverscan || 0),
@@ -2306,6 +2613,36 @@ function createDeferredGridScrollbar(
                 slowdownEnabled: !!enableScrollBoundarySlowdown,
                 slowdownVersion: enableScrollBoundarySlowdown ? 2 : 0,
                 slowdownConfiguredMinimumGain: enableScrollBoundarySlowdown ? 0.25 : 1,
+                adaptivePacingEnabled,
+                adaptivePacingVersion: adaptivePacingEnabled ? 3 : 0,
+                adaptiveLatencySamplesAtStart: adaptiveLatencySamples,
+                adaptiveCalibrationPhaseAtStart: !adaptivePacingEnabled
+                    ? "off"
+                    : adaptiveLatencySamples >= 3
+                        && Number.isFinite(adaptiveLearnedRatePxPerMs)
+                        ? "steady"
+                        : "warming",
+                adaptiveBurstRatePxPerMs,
+                adaptiveBurstRateRowsPerSecond: adaptiveBurstRatePxPerMs == null
+                    ? null
+                    : adaptiveBurstRatePxPerMs * 1000
+                        / Math.max(1, configuredRowHeight || 16),
+                adaptiveMaximumEventPx: adaptivePacingEnabled
+                    ? adaptiveInitialEventCapPx()
+                    : null,
+                adaptiveRateCreditCapacityPx: adaptivePacingEnabled
+                    ? adaptiveRateCreditCapacityPx()
+                    : null,
+                adaptiveRateHits: 0,
+                adaptiveRateLimitedInputPx: 0,
+                adaptiveImmediateDecreases: 0,
+                adaptiveCongestionRecoveries: 0,
+                adaptiveMinimumEventAllowancePx: null,
+                adaptiveMaximumEventAllowancePx: 0,
+                viewportHeightPx: scrollEl.clientHeight,
+                configuredRowHeightPx: Math.max(1, configuredRowHeight || 16),
+                zoomFactor: Number.parseFloat(
+                    getComputedStyle(gridRoot).getPropertyValue("--fx-zoom")) || 1,
                 hiddenAtStart: document.hidden,
                 hiddenDuring: document.hidden,
                 wheelEvents: 0,
@@ -2314,6 +2651,7 @@ function createDeferredGridScrollbar(
                 pageModeEvents: 0,
                 totalAbsoluteRawDeltaPx: 0,
                 totalAbsoluteDeltaPx: 0,
+                totalAbsolutePacedDeltaPx: 0,
                 totalAbsoluteViewportDeltaPx: 0,
                 slowdownEvents: 0,
                 slowdownEntries: 0,
@@ -2347,6 +2685,27 @@ function createDeferredGridScrollbar(
                 lastExposurePx: 0
             };
             ensureWheelBurstFrame();
+        } else if (startsNewGesture) {
+            wheelBurst.physicalGestures++;
+            if (wheelBurst.adaptiveRateEpochAtEnd !== adaptiveRateEpoch)
+                wheelBurst.adaptiveRateChanges++;
+        }
+        wheelBurst.lastInputAt = inputAt;
+        wheelBurst.adaptiveRateEpochAtEnd = adaptiveRateEpoch;
+        const activeRateRowsPerSecond = adaptiveBurstRatePxPerMs == null
+            ? null
+            : adaptiveBurstRatePxPerMs * 1000
+                / Math.max(1, configuredRowHeight || 16);
+        if (activeRateRowsPerSecond != null) {
+            wheelBurst.adaptiveMinimumRateRowsPerSecond =
+                wheelBurst.adaptiveMinimumRateRowsPerSecond == null
+                    ? activeRateRowsPerSecond
+                    : Math.min(
+                        wheelBurst.adaptiveMinimumRateRowsPerSecond,
+                        activeRateRowsPerSecond);
+            wheelBurst.adaptiveMaximumRateRowsPerSecond = Math.max(
+                wheelBurst.adaptiveMaximumRateRowsPerSecond || 0,
+                activeRateRowsPerSecond);
         }
         const direction = Math.sign(deltaPx);
         wheelBurst.wheelEvents++;
@@ -2360,6 +2719,9 @@ function createDeferredGridScrollbar(
         if (direction) wheelBurst.lastDirection = direction;
 
         clearTimeout(wheelBurstIdleTimer);
+        clearTimeout(wheelBurstFinishTimer);
+        wheelBurstFinishTimer = 0;
+        wheelBurstGeneration++;
         wheelBurstIdleTimer = setTimeout(tryFinishWheelBurst, 260);
     };
     const finishBoundaryWait = now => {
@@ -2380,6 +2742,7 @@ function createDeferredGridScrollbar(
         boundaryWaitStartedAt = now;
         noProgressCount = 0;
         livenessRecoveryCount = 0;
+        settledBoundaryFailureCount = 0;
         renderedNoProgressCount = 0;
         bestBoundaryErrorPx = Math.abs(desiredWheelTop - scrollEl.scrollTop);
         if (wheelBurst) wheelBurst.clampCount++;
@@ -2401,6 +2764,17 @@ function createDeferredGridScrollbar(
         const detail = {
             ...wheelBurst,
             durationMs: now - wheelBurst.startedAt,
+            inputDurationMs: Math.max(
+                0,
+                wheelBurst.lastInputAt - wheelBurst.firstInputAt),
+            averageInputIntervalMs: wheelBurst.wheelEvents > 1
+                ? (wheelBurst.lastInputAt - wheelBurst.firstInputAt)
+                    / (wheelBurst.wheelEvents - 1)
+                : null,
+            adaptiveAcceptedInputRatio: wheelBurst.totalAbsoluteDeltaPx > 0
+                ? wheelBurst.totalAbsolutePacedDeltaPx
+                    / wheelBurst.totalAbsoluteDeltaPx
+                : 1,
             desiredTop: desiredWheelTop,
             actualTop: scrollEl.scrollTop,
             finalPositionErrorPx: Math.abs(desiredWheelTop - scrollEl.scrollTop),
@@ -2408,6 +2782,35 @@ function createDeferredGridScrollbar(
             safeMax: band?.safeMax ?? null,
             finalVisibleSpacerPx: band?.visibleSpacerPx ?? null,
             noProgressCount,
+            adaptiveLearnedRatePxPerMs,
+            adaptiveLearnedRateRowsPerSecond: adaptiveLearnedRatePxPerMs == null
+                ? null
+                : adaptiveLearnedRatePxPerMs * 1000
+                    / Math.max(1, configuredRowHeight || 16),
+            adaptivePendingRatePxPerMs,
+            adaptivePendingRateRowsPerSecond: adaptivePendingRatePxPerMs == null
+                ? null
+                : adaptivePendingRatePxPerMs * 1000
+                    / Math.max(1, configuredRowHeight || 16),
+            adaptiveNextRateRowsPerSecond: (adaptivePendingRatePxPerMs
+                ?? adaptiveLearnedRatePxPerMs
+                ?? adaptiveBurstRatePxPerMs) == null
+                ? null
+                : (adaptivePendingRatePxPerMs
+                    ?? adaptiveLearnedRatePxPerMs
+                    ?? adaptiveBurstRatePxPerMs) * 1000
+                        / Math.max(1, configuredRowHeight || 16),
+            adaptiveCadenceMs,
+            adaptiveLatencyP95Ms: adaptivePercentile(adaptiveLatencyWindow, 0.95),
+            adaptiveAdvanceP10Px: adaptivePercentile(adaptiveAdvanceWindow, 0.10),
+            adaptiveLatencySamples,
+            adaptiveCongestionSamples,
+            adaptiveCalibrationPhase: !adaptivePacingEnabled
+                ? "off"
+                : adaptiveLatencySamples >= 3
+                    && Number.isFinite(adaptiveLearnedRatePxPerMs)
+                    ? "steady"
+                    : "warming",
             ...requestDelta,
             maxInFlight: Number(scrollEl.dataset.fxWindowMaxInFlight || 0)
         };
@@ -2436,7 +2839,11 @@ function createDeferredGridScrollbar(
             wheelBurstFinishTimer = setTimeout(tryFinishWheelBurst, 50);
             return;
         }
-        requestAnimationFrame(() => requestAnimationFrame(finalizeWheelBurst));
+        const generation = wheelBurstGeneration;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (wheelBurst && generation === wheelBurstGeneration)
+                finalizeWheelBurst();
+        }));
     }
 
     const requestBoundaryWindow = (
@@ -2478,7 +2885,9 @@ function createDeferredGridScrollbar(
             // Slowdown reduces the need for a 20-behind/100-ahead window. A
             // symmetric 60/60 window preserves much more of the painted
             // viewport if the user reverses before this response arrives.
-            enableScrollBoundarySlowdown ? 0 : direction) || 0;
+            forceDomAcknowledge
+                ? direction
+                : enableScrollBoundarySlowdown ? 0 : direction) || 0;
     };
     const prefetchDistanceForBand = band => Math.min(
         Math.max(0, (refreshGuardRows || 0) * Math.max(1, configuredRowHeight || 16)),
@@ -2499,9 +2908,9 @@ function createDeferredGridScrollbar(
         };
     };
     const reconcileBoundaryWindow = (allowRequest = true) => {
-        if (!enableScrollBoundaryGuard) return;
+        if (!enableScrollBoundaryGuard) return false;
         const band = readSafeBand(true);
-        if (!band) return;
+        if (!band) return false;
         if (band.invalid && wheelBurst) wheelBurst.invalidBandCount++;
         const before = scrollEl.scrollTop;
         const direction = Math.sign(desiredWheelTop - before) || boundaryDirection;
@@ -2542,16 +2951,17 @@ function createDeferredGridScrollbar(
             resistanceActive = false;
             slowdownIntentActive = false;
             finishBoundaryWait(performance.now());
-            return;
+            return true;
         }
         if (!covered && allowRequest) {
             beginBoundaryWait(performance.now());
             const direction = Math.sign(desiredWheelTop - applied) || boundaryDirection;
             requestBoundaryWindow(desiredWheelTop, direction, true, applied);
         }
+        return true;
     };
     const applyGuardedDelta = (deltaPx, allowSlowdown = false) => {
-        if (Math.abs(deltaPx) < 0.01) return;
+        if (Math.abs(deltaPx) < 0.0001) return;
         const globalMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
         const direction = Math.sign(deltaPx);
         const useSlowdown = !!allowSlowdown
@@ -2714,17 +3124,16 @@ function createDeferredGridScrollbar(
         }
         resistanceActive = useSlowdown && slowdownGain < 0.999;
 
-        // A fresh wheel/trackpad destination must not inherit an exhausted
-        // recovery budget from an older in-flight response. Reset on every
-        // accepted logical movement, including sub-pixel trackpad deltas; a
-        // stale response can then count as at most the first miss, never discard
-        // a cumulatively changed destination.
+        // A fresh input can replace the latest destination, but it must not
+        // reset the hold-wide recovery budget. Continuous wheel/trackpad input
+        // used to starve the two-attempt escape forever at a populated edge.
+        // Rebase the error comparison to the new target; only a later measured
+        // DOM/window improvement may reset the actual liveness counters.
         if (waitingAtBoundary
             && Math.abs(desiredWheelTop - previousDesiredTop) > 0.001) {
             noProgressCount = 0;
-            livenessRecoveryCount = 0;
-            renderedNoProgressCount = 0;
-            bestBoundaryErrorPx = Math.abs(desiredWheelTop - scrollEl.scrollTop);
+            bestBoundaryErrorPx = Math.abs(
+                desiredWheelTop - scrollEl.scrollTop);
         }
 
         if (!enableScrollBoundaryGuard) {
@@ -2818,17 +3227,94 @@ function createDeferredGridScrollbar(
     };
     const applyGuardedWheel = event => {
         const rawDeltaPx = normalizeWheelDelta(event);
-        const deltaPx = rawDeltaPx * wheelScrollScale;
+        const scaledDeltaPx = rawDeltaPx * wheelScrollScale;
         const inputAt = performance.now();
+        const inputMode = Math.max(
+            0,
+            Math.min(2, Math.trunc(Number(event.deltaMode) || 0)));
         // Geometry freshness is a correctness rule, not a telemetry feature.
         // Ancestor zoom/theme changes can alter row geometry without resizing
         // the scroll element, so the first input after an idle gap remeasures
         // the populated band even when benchmark telemetry is disabled.
-        if (inputAt - lastWheelInputAt > 260)
+        const idleGap = inputAt - lastWheelInputAt;
+        const startsNewGesture = lastWheelInputAt <= 0 || idleGap > 260;
+        if (startsNewGesture) {
             invalidateSafeBand();
-        lastWheelInputAt = inputAt;
+            // Adaptive behavior is independent of diagnostic telemetry. A
+            // staged rate always becomes active at a real input-gesture gap.
+            promoteAdaptiveRateForBurst();
+        } else if (idleGap >= 1) {
+            adaptiveCadenceByModeMs[inputMode] =
+                0.80 * adaptiveCadenceByModeMs[inputMode]
+                + 0.20 * Math.min(160, idleGap);
+        }
+        adaptiveCadenceMs = adaptiveCadenceByModeMs[inputMode];
         if (enableScrollBoundaryTelemetry)
-            startOrUpdateWheelBurst(event, deltaPx, rawDeltaPx);
+            startOrUpdateWheelBurst(
+                event,
+                scaledDeltaPx,
+                rawDeltaPx,
+                inputAt,
+                startsNewGesture);
+
+        let deltaPx = scaledDeltaPx;
+        if (adaptivePacingEnabled && Number.isFinite(adaptiveBurstRatePxPerMs)) {
+            // Refill a small capacity-credit bucket using real wall time. Its
+            // 1-2 row depth keeps isolated mouse notches responsive without
+            // letting sustained high-frequency trackpad input exceed the
+            // measured window-delivery rate. This is capacity credit, not input
+            // debt: unused wheel distance is discarded and never replayed.
+            const creditIndex = deltaPx > 0 ? 1 : 0;
+            const creditElapsedMs = Math.max(
+                0,
+                inputAt - adaptiveRateCreditUpdatedAt[creditIndex]);
+            const creditCapacityPx = adaptiveRateCreditCapacityPx();
+            const accumulatedRequestPx = Math.abs(deltaPx)
+                + adaptiveRawFractionPx[creditIndex];
+            const requestedDistancePx = accumulatedRequestPx >= 0.01
+                ? accumulatedRequestPx
+                : 0;
+            adaptiveRawFractionPx[creditIndex] = requestedDistancePx > 0
+                ? 0
+                : accumulatedRequestPx;
+            adaptiveRateCreditPx[creditIndex] = Math.min(
+                creditCapacityPx,
+                adaptiveRateCreditPx[creditIndex]
+                    + adaptiveBurstRatePxPerMs * creditElapsedMs);
+            adaptiveRateCreditUpdatedAt[creditIndex] = inputAt;
+            let allowedDistance = Math.min(
+                requestedDistancePx,
+                adaptiveInitialEventCapPx(),
+                adaptiveRateCreditPx[creditIndex]);
+            // Keep sub-visual capacity as credit instead of spending it on a
+            // scrollTop write that the browser may quantize back to zero.
+            if (allowedDistance > 0 && allowedDistance < 0.01)
+                allowedDistance = 0;
+            adaptiveRateCreditPx[creditIndex] = Math.max(
+                0,
+                adaptiveRateCreditPx[creditIndex] - allowedDistance);
+            if (wheelBurst) {
+                wheelBurst.adaptiveMinimumEventAllowancePx =
+                    wheelBurst.adaptiveMinimumEventAllowancePx == null
+                        ? allowedDistance
+                        : Math.min(
+                            wheelBurst.adaptiveMinimumEventAllowancePx,
+                            allowedDistance);
+                wheelBurst.adaptiveMaximumEventAllowancePx = Math.max(
+                    wheelBurst.adaptiveMaximumEventAllowancePx,
+                    allowedDistance);
+            }
+            if (allowedDistance < Math.abs(deltaPx)) {
+                if (wheelBurst && Math.abs(deltaPx) - allowedDistance > 0.0001) {
+                    wheelBurst.adaptiveRateHits++;
+                    wheelBurst.adaptiveRateLimitedInputPx +=
+                        Math.abs(deltaPx) - allowedDistance;
+                }
+            }
+            deltaPx = Math.sign(deltaPx) * allowedDistance;
+        }
+        if (wheelBurst) wheelBurst.totalAbsolutePacedDeltaPx += Math.abs(deltaPx);
+        lastWheelInputAt = inputAt;
         applyGuardedDelta(deltaPx, true);
     };
 
@@ -2848,11 +3334,19 @@ function createDeferredGridScrollbar(
         reconcileBoundaryWindow(false);
 
         const mustRepublishDom = outcome === "dom-ack-timeout";
+        const failedBoundarySettlement = outcome === "rejected"
+            || outcome === "no-render";
         const state = getQueueState?.() || {};
-        if (!mustRepublishDom && state.pendingKind === "boundary")
-            return;
         if (!mustRepublishDom && !waitingAtBoundary)
             return;
+        if (!mustRepublishDom && state.pendingKind === "boundary") {
+            // Give one newer latest-target request its normal chance to run.
+            // If boundary calls keep settling unsuccessfully, however, that
+            // perpetually refreshed pending slot must not starve recovery.
+            if (!failedBoundarySettlement || settledBoundaryFailureCount < 2)
+                return;
+            cancelPendingBoundary?.();
+        }
         if (livenessRecoveryCount >= 2) {
             releaseUnrecoverableBoundaryHold();
             return;
@@ -2860,14 +3354,17 @@ function createDeferredGridScrollbar(
 
         livenessRecoveryCount++;
         if (wheelBurst) wheelBurst.boundaryRetries++;
-        const direction = Math.sign(desiredWheelTop - scrollEl.scrollTop)
-            || request?.direction
-            || boundaryDirection;
+        const missingGeometry = outcome === "rendered-no-geometry";
+        const direction = missingGeometry
+            ? 0
+            : Math.sign(desiredWheelTop - scrollEl.scrollTop)
+                || request?.direction
+                || boundaryDirection;
         // Recovery replaces any queued sample with the latest logical target
         // and uses an endpoint that always republishes a DOM token. It runs only
         // after a rejected/no-progress call or a missing acknowledgement.
         requestBoundaryWindow(
-            desiredWheelTop,
+            missingGeometry ? scrollEl.scrollTop : desiredWheelTop,
             direction,
             true,
             scrollEl.scrollTop,
@@ -2881,25 +3378,71 @@ function createDeferredGridScrollbar(
             // active wheel sample before applying it so arrow movement never
             // contaminates wheel-only slowdown metrics.
             if (wheelBurst) finalizeWheelBurst();
+            lastWheelInputAt = 0;
             invalidateSafeBand();
             applyGuardedDelta(deltaPx, false);
         },
-        onWindowRequestQueued() { },
+        onWindowRequestStarted(request, startedAt) {
+            if (!adaptivePacingEnabled
+                || request?.kind !== "boundary"
+                || request.forceDomAcknowledge) return;
+            const band = readSafeBand(true);
+            const direction = Math.sign(request.direction || 0);
+            if (!band || band.invalid || direction === 0) return;
+            request.adaptiveStartedAt = startedAt;
+            request.adaptiveDirection = direction;
+            request.adaptiveSafeEdgeBefore = direction > 0
+                ? band.safeMax
+                : band.safeMin;
+        },
         onWindowRequestSettled(request, rendered, outcome) {
-            if (request?.kind !== "boundary") return;
-            if (outcome !== "resolved") {
-                recoverBoundaryLiveness(request, outcome);
-                return;
+            if (request?.kind === "deferred") return;
+            try {
+                if (rendered && outcome === "resolved")
+                    recordAdaptiveBoundaryCapacity(request);
+                else if (request?.kind === "boundary"
+                    && Number.isFinite(request.adaptiveStartedAt)
+                    && !request.forceDomAcknowledge
+                    && waitingAtBoundary
+                    && Math.sign(request.adaptiveDirection || 0)
+                        === (Math.sign(desiredWheelTop - scrollEl.scrollTop)
+                            || boundaryDirection))
+                    stageAdaptiveCongestionDecrease(
+                        request.token,
+                        request.adaptiveDirection);
+            } catch {
+                // Pacing is observational; guard recovery below is authoritative.
             }
-            if (!rendered) {
-                noProgressCount++;
-                if (wheelBurst) wheelBurst.noProgressCount = noProgressCount;
-                recoverBoundaryLiveness(request, "no-render");
-            } else {
-                // The DOM token can arrive before the interop promise settles.
-                // Recheck after the pump clears inFlight so a covered target can
-                // leave the clamped state and complete its telemetry burst.
-                reconcileBoundaryWindow(false);
+            if (request?.kind === "boundary") {
+                if (outcome !== "resolved") {
+                    settledBoundaryFailureCount++;
+                    recoverBoundaryLiveness(request, outcome);
+                    return;
+                }
+                if (!rendered) {
+                    settledBoundaryFailureCount++;
+                    noProgressCount++;
+                    if (wheelBurst) wheelBurst.noProgressCount = noProgressCount;
+                    recoverBoundaryLiveness(request, "no-render");
+                    return;
+                }
+                settledBoundaryFailureCount = 0;
+            }
+
+            // The DOM token can arrive before the interop promise settles.
+            // Recheck after every non-deferred window request, not only a
+            // boundary request: an older normal/initial response can cover the
+            // target and cancel the queued boundary while it is still active.
+            // Once that normal request settles, this is the only place that can
+            // finish the hold or restore its recovery invariant.
+            const measured = reconcileBoundaryWindow(false);
+            const state = getQueueState?.() || {};
+            if (waitingAtBoundary
+                && !state.inFlight
+                && state.pendingKind !== "boundary") {
+                recoverBoundaryLiveness(
+                    request,
+                    measured ? "rendered-uncovered" : "rendered-no-geometry");
             }
         },
         onWindowToken() {
@@ -2933,14 +3476,19 @@ function createDeferredGridScrollbar(
             }
         },
         reset(top = scrollEl.scrollTop) {
+            cancelPendingBoundary?.();
             invalidateSafeBand();
             desiredWheelTop = top;
             finishBoundaryWait(performance.now());
+            boundaryDirection = 0;
             lastPrefetchToken = -1;
             lastPrefetchDirection = 0;
+            noProgressCount = 0;
             livenessRecoveryCount = 0;
+            settledBoundaryFailureCount = 0;
             renderedNoProgressCount = 0;
             bestBoundaryErrorPx = Number.POSITIVE_INFINITY;
+            lastWheelInputAt = 0;
             slowdownIntentActive = false;
             resistanceActive = false;
         },
@@ -3325,7 +3873,10 @@ function createDeferredGridScrollbar(
     };
 
     const onViewportWheel = event => {
-        if (Math.abs(event.deltaY) < 0.01) return;
+        const verticalDelta = Number(event.deltaY);
+        const minimumDelta = adaptivePacingEnabled ? Number.EPSILON : 0.01;
+        if (!Number.isFinite(verticalDelta)
+            || Math.abs(verticalDelta) < minimumDelta) return;
         // overflow-y:hidden removes the native thumb so the proxy is the only
         // vertical scrollbar. Preserve normal wheel/trackpad scrolling by
         // applying it programmatically, except while a thumb release is frozen.
@@ -3388,6 +3939,7 @@ function createDeferredGridScrollbar(
             && record.target === scrollEl
             && record.attributeName === "data-fx-window-scroll-token")) {
             const responseToken = Number(scrollEl.dataset.fxWindowScrollToken || 0);
+            const tokenObservedAt = performance.now();
             // Reconcile/cancel the pending latest target before releasing the
             // queue slot held for this DOM acknowledgement.
             try {
@@ -3395,7 +3947,7 @@ function createDeferredGridScrollbar(
             } finally {
                 // A geometry/reconciliation exception must never strand the
                 // single-flight queue in awaitingDom.
-                acknowledgeWindowDomToken?.(responseToken);
+                acknowledgeWindowDomToken?.(responseToken, tokenObservedAt);
             }
         }
         if (records.some(record => record.type === "attributes"
@@ -3434,8 +3986,8 @@ function createDeferredGridScrollbar(
                 scheduleLayout();
             }
         },
-        onWindowRequestQueued(request) {
-            boundaryGuard.onWindowRequestQueued(request);
+        onWindowRequestStarted(request, startedAt) {
+            boundaryGuard.onWindowRequestStarted(request, startedAt);
         },
         onWindowRequestSettled(request, rendered, outcome) {
             boundaryGuard.onWindowRequestSettled(request, rendered, outcome);
@@ -3447,6 +3999,7 @@ function createDeferredGridScrollbar(
             resizeObserver.disconnect();
             mutationObserver.disconnect();
             longTaskObserver?.disconnect();
+            document.removeEventListener("visibilitychange", onDocumentVisibilityChange);
             clearTimeout(wheelBurstIdleTimer);
             clearTimeout(wheelBurstFinishTimer);
             if (wheelBurstFrame) cancelAnimationFrame(wheelBurstFrame);
