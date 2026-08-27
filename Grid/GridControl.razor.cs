@@ -205,6 +205,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // vertically by ~32 px, which reads as visual "shaking" mid-drag.
     [Parameter] public bool ShowSelectionInfoBar { get; set; }
     /// <summary>
+    /// Shows a compact logical row count at the bottom of the grid. The count
+    /// represents the complete filtered result, not only the currently rendered
+    /// row window or current page.
+    /// </summary>
+    [Parameter] public bool ShowRowCountInFooter { get; set; } = true;
+    /// <summary>
     /// Field that receives multi-row type-ahead when no row-selection gesture
     /// has captured an editable target column. Kept as the compatibility
     /// fallback for hosts that explicitly want the older fixed-target behavior.
@@ -1304,7 +1310,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             : (PageButtonCount > 0 ? PageButtonCount : 5);
 
     private bool IsPagingActive =>
-        _pageState.PageSize > 0
+        !_pivotMode
+        && _pageState.PageSize > 0
         && _pageState.TotalRecords > _pageState.PageSize
         && (AllowPaging || (AutoPageRowThreshold > 0 && _pageState.TotalRecords > AutoPageRowThreshold));
 
@@ -1714,6 +1721,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    private IEnumerable<TValue> PivotData
+    {
+        get
+        {
+            var data = FilteredData.ToList();
+            _pageState.TotalRecords = data.Count;
+            return data;
+        }
+    }
+
+    private string GridRowCountText => _pageState.TotalRecords == 1
+        ? "1 row"
+        : $"{_pageState.TotalRecords:N0} rows";
+
     // ── Custom row windowing (flat, bounded-height path) ─────────────────
     //
     // Replaces Blazor's <Virtualize>. Its IntersectionObserver did NOT track
@@ -1762,6 +1783,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool EnableScrollBoundarySlowdown { get; set; }
 
     /// <summary>
+    /// Learns a browser-local per-grid wheel rate from the safe-edge pixels each
+    /// row-window response supplies and its end-to-end DOM acknowledgement time.
+    /// A viewport-sized provisional cap is used until measured; the learned
+    /// pixels-per-millisecond rate is applied using the real event interval.
+    /// Lower measured capacity immediately limits credit refill and becomes the
+    /// next gesture's learned rate; increases wait for a later gesture. Verified
+    /// no-progress congestion may halve only the current rate. Requires boundary
+    /// guard and slowdown.
+    /// </summary>
+    [Parameter] public bool EnableAdaptiveWheelScrollPacing { get; set; }
+
+    /// <summary>
     /// Prevents wheel and trackpad momentum from exposing an unrendered window
     /// spacer while <see cref="ScrollTrack"/> is false. Motion remains live while
     /// the requested viewport is backed by rendered rows; at the edge it pauses
@@ -1795,6 +1828,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
     private int WindowRefreshGuardRows => WindowOverscanRows / 3;
+
+    /// <summary>
+    /// Small, bounded slice advance used only after the browser has proved that
+    /// the normal near-edge heuristic made no visible progress.
+    /// </summary>
+    private int BoundaryRecoveryStepRows =>
+        Math.Max(1, (Math.Max(1, WindowRefreshGuardRows) + 2) / 3);
 
     private int DeferredScrollReleaseOverscanRows => Math.Min(
         Math.Max(0, WindowOverscanRows),
@@ -2384,7 +2424,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         UpdateGridWindow(
             scrollTop,
             clientHeight,
-            scrollDirection: Math.Sign(scrollDirection));
+            scrollDirection: Math.Sign(scrollDirection),
+            forceRecenter: true);
         if (requestToken > 0)
             _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
         _authoritativeWindowRenderPending = true;
@@ -2427,14 +2468,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         double scrollTop,
         double clientHeight,
         bool deferredCommit = false,
-        int scrollDirection = 0)
+        int scrollDirection = 0,
+        bool forceRecenter = false)
     {
         var overscanRows = deferredCommit
             ? DeferredScrollReleaseOverscanRows
             : Math.Max(0, WindowOverscanRows);
         var beforeRows = overscanRows;
         var afterRows = overscanRows;
-        if (!deferredCommit && scrollDirection != 0)
+        if (!deferredCommit && !forceRecenter && scrollDirection != 0)
         {
             // Keep the exact same total row count as symmetric overscan, but put
             // most of it in front of wheel/trackpad travel. At the defaults this
@@ -2463,10 +2505,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var nearStart = firstEntry < _winStart + WindowRefreshGuardRows;
             var nearEnd = lastEntryExclusive > groupedEnd - WindowRefreshGuardRows;
 
-            if (_winCount == newGroupedCount && !nearStart && !nearEnd)
+            if (!forceRecenter && _winCount == newGroupedCount && !nearStart && !nearEnd)
                 return false;
 
             var newGroupedStart = Math.Max(0, firstEntry - beforeRows);
+            if (forceRecenter && scrollDirection != 0)
+            {
+                var maxGroupedStart = Math.Max(0, entryCount - newGroupedCount);
+                // Recovery is a progress nudge, not a full recenter around the
+                // requested row. Limit churn to the same small continuation the
+                // browser retains, especially for wide production grids.
+                newGroupedStart = Math.Clamp(
+                    _winStart + Math.Sign(scrollDirection) * BoundaryRecoveryStepRows,
+                    0,
+                    maxGroupedStart);
+            }
             if (newGroupedStart != _winStart || newGroupedCount != _winCount)
             {
                 _winStart = newGroupedStart;
@@ -2491,10 +2544,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var nearWindowStart = firstVisible < _winStart + WindowRefreshGuardRows;
         var nearWindowEnd = lastVisibleExclusive > currentEnd - WindowRefreshGuardRows;
 
-        if (_winCount == newCount && !nearWindowStart && !nearWindowEnd)
+        if (!forceRecenter && _winCount == newCount && !nearWindowStart && !nearWindowEnd)
             return false;
 
         var newStart = Math.Max(0, firstVisible - beforeRows);
+        if (forceRecenter && scrollDirection != 0)
+        {
+            // PagedData established this count on the authoritative render.
+            // Reuse it here so a recovery does not re-enumerate/re-sort a wide,
+            // fully materialized production grid before it can unstick itself.
+            var maxStart = Math.Max(0, _pageState.TotalRecords - newCount);
+            // Move only a bounded continuation. Recentring directly on the
+            // requested row can replace 60+ rows at once and recreate the very
+            // render stall this recovery is intended to escape.
+            newStart = Math.Clamp(
+                _winStart + Math.Sign(scrollDirection) * BoundaryRecoveryStepRows,
+                0,
+                maxStart);
+        }
         if (newStart != _winStart || newCount != _winCount)
         {
             _winStart = newStart;
@@ -3154,7 +3221,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     double.IsFinite(WheelScrollScale)
                         ? Math.Clamp(WheelScrollScale, 0.1d, 2d)
                         : 1d,
-                    EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack);
+                    EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack,
+                    EnableAdaptiveWheelScrollPacing
+                        && EnableScrollBoundarySlowdown
+                        && EnableScrollBoundaryGuard
+                        && !ScrollTrack);
                 _windowScrollRegistered = true;
             }
             else if (_windowScrollRegistered && _gridJsModule != null)
