@@ -69,7 +69,7 @@
     border-radius: var(--fx-border-radius, 4px);
     background: var(--fx-grid-bg);
     font-family: var(--fx-grid-font-family, "MS Sans Serif", Tahoma, Arial, sans-serif);
-    font-size: calc(var(--fx-grid-font-size, calc(var(--fx-font-size, 10px) - 1px)) * var(--fx-zoom, 1));
+    font-size: calc(var(--fx-grid-font-size, var(--fx-font-size, 10px)) * var(--fx-zoom, 1));
     line-height: 1.1;
     color: var(--fx-grid-text-color);
     overflow: hidden;
