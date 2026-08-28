@@ -4452,6 +4452,14 @@ function gridCellPreviewColor(gridRoot) {
     return v || "#e8e8e8";
 }
 
+// The border the committed selection draws (GridControl.razor.css — the
+// `.fx-cell-active` rule's `inset 0 0 0 1px var(--fx-grid-selected-cell-border)`).
+// The drag band reuses it so the mouse-up handoff is invisible.
+function gridCellPreviewBorderColor(gridRoot) {
+    const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-selected-cell-border").trim();
+    return v || "#6b7e8f";
+}
+
 function gridPreviewColor(gridRoot) {
     const v = getComputedStyle(gridRoot).getPropertyValue("--fx-grid-selected-row-bg").trim();
     return v || "#b6c8dd";
@@ -4490,14 +4498,33 @@ function setRowPreview(tr, on, color) {
     }
 }
 
-function setCellPreview(td, on, color) {
+function setCellPreview(td, on, color, edges, borderColor) {
     td.classList.toggle("fx-drag-preview-cell", on);
-    if (on) { td.style.setProperty("background-color", color, "important"); paintedPreviewEls.add(td); }
+    if (on) {
+        td.style.setProperty("background-color", color, "important");
+        // Outline the swept band WHILE the pointer moves. Drawn as one rectangle
+        // down the column, not a ring per cell: the table is border-collapse:
+        // collapse, so interior horizontal edges would double into a rung every
+        // row. Only the band's first row gets a top edge and only its last row a
+        // bottom edge. Inset shadow, never `border` — a real border changes box
+        // geometry and shifts text on the 16px-row grids. Inline + important
+        // because muteSelectedLook writes an inline box-shadow:none that outranks
+        // any stylesheet rule.
+        if (edges) {
+            const c = borderColor || "#6b7e8f";
+            const parts = [`inset 1px 0 0 0 ${c}`, `inset -1px 0 0 0 ${c}`];
+            if (edges === "top" || edges === "both") parts.push(`inset 0 1px 0 0 ${c}`);
+            if (edges === "bottom" || edges === "both") parts.push(`inset 0 -1px 0 0 ${c}`);
+            td.style.setProperty("box-shadow", parts.join(", "), "important");
+        }
+        paintedPreviewEls.add(td);
+    }
     else if (td.dataset.fxMuted) {
         // Press-muted cell leaving the drag range: KEEP the mute — the drag
         // painter must not resurrect the old selection mid-drag; the
         // render-ack sweep unmutes once the server's new selection landed.
         td.style.setProperty("background-color", "transparent", "important");
+        td.style.setProperty("box-shadow", "none", "important");
     }
     else { unmuteSelectedLook(td); paintedPreviewEls.delete(td); }
 }
@@ -4536,6 +4563,9 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     const gestureGeneration = gridPaintArbiter(gridRoot).generation;
 
     const previewColor = mode === "row" ? gridPreviewColor(gridRoot) : gridCellPreviewColor(gridRoot);
+    // Resolved once per gesture: getComputedStyle inside the move handler would
+    // force a layout read on every frame of the drag.
+    const previewBorder = gridCellPreviewBorderColor(gridRoot);
     const applyPreview = toIdx => {
         const a = Math.min(anchorIndex, toIdx), b = Math.max(anchorIndex, toIdx);
         for (const tr of gridRowsWithAri(gridRoot)) {
@@ -4545,7 +4575,8 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
                 setRowPreview(tr, inRange, previewColor);
             } else {
                 const td = tr.querySelector(`td[data-field="${CSS.escape(anchorField)}"]`);
-                if (td) setCellPreview(td, inRange, previewColor);
+                const edges = !inRange ? "" : (a === b ? "both" : ari === a ? "top" : ari === b ? "bottom" : "middle");
+                if (td) setCellPreview(td, inRange, previewColor, edges, previewBorder);
             }
         }
     };
