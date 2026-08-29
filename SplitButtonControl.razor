@@ -1,0 +1,99 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-split-button-host @(Disabled ? "fx-split-button-disabled" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    <button type="button"
+            class="fx-split-button-main"
+            disabled="@Disabled"
+            @onclick="HandleMainClick">
+        @if (!string.IsNullOrEmpty(IconCss))
+        {
+            <span class="@IconCss fx-split-button-icon"></span>
+        }
+        @if (!string.IsNullOrEmpty(Text))
+        {
+            <span>@Text</span>
+        }
+        else
+        {
+            @ChildContent
+        }
+    </button>
+    <button type="button"
+            class="fx-split-button-toggle"
+            disabled="@Disabled"
+            aria-haspopup="true"
+            aria-expanded="@_menuOpen"
+            @onclick="ToggleMenu">
+        <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14">
+            <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+        </svg>
+    </button>
+
+    @if (_menuOpen && !Disabled)
+    {
+        <div class="fx-split-button-backdrop" @onclick="CloseMenu"></div>
+        <div class="fx-split-button-dropdown" @onclick:stopPropagation="true">
+            @if (Items != null)
+            {
+                @foreach (var item in Items)
+                {
+                    <button type="button"
+                            class="fx-split-button-item @(item.Disabled ? "disabled" : "")"
+                            disabled="@item.Disabled"
+                            @onclick="() => HandleItemClick(item)">
+                        @if (!string.IsNullOrEmpty(item.IconCss))
+                        {
+                            <span class="@item.IconCss"></span>
+                        }
+                        <span>@item.Text</span>
+                    </button>
+                }
+            }
+            @MenuContent
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? MenuContent { get; set; }
+    [Parameter] public IList<SplitButtonItem>? Items { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+    [Parameter] public EventCallback OnClick { get; set; }
+    [Parameter] public EventCallback<SplitButtonItem> OnItemClick { get; set; }
+
+    private bool _menuOpen = false;
+
+    private async Task HandleMainClick()
+    {
+        if (Disabled) return;
+        if (OnClick.HasDelegate)
+        {
+            await OnClick.InvokeAsync();
+        }
+    }
+
+    private void ToggleMenu()
+    {
+        if (Disabled) return;
+        _menuOpen = !_menuOpen;
+    }
+
+    private void CloseMenu()
+    {
+        _menuOpen = false;
+    }
+
+    private async Task HandleItemClick(SplitButtonItem item)
+    {
+        if (item.Disabled) return;
+        _menuOpen = false;
+        if (OnItemClick.HasDelegate)
+        {
+            await OnItemClick.InvokeAsync(item);
+        }
+    }
+}

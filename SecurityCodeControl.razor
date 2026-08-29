@@ -1,0 +1,85 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-security-code-host @(Disabled ? "disabled" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    @for (var i = 0; i < Length; i++)
+    {
+        var idx = i;
+        var charVal = idx < (_code?.Length ?? 0) ? _code![idx].ToString() : "";
+        <input type="@(Type == SecurityCodeType.Numeric ? "tel" : "text")"
+               class="fx-security-code-cell"
+               maxlength="1"
+               disabled="@Disabled"
+               value="@charVal"
+               @oninput="@(e => HandleInput(idx, e))"
+               @onkeydown="@(e => HandleKeyDown(idx, e))" />
+    }
+</div>
+
+@code {
+    public enum SecurityCodeType { Numeric, AlphaNumeric }
+
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public int Length { get; set; } = 6;
+    [Parameter] public SecurityCodeType Type { get; set; } = SecurityCodeType.Numeric;
+    [Parameter] public EventCallback<string> OnComplete { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    private string _code = "";
+
+    protected override void OnParametersSet()
+    {
+        _code = Value ?? "";
+    }
+
+    private async Task HandleInput(int index, ChangeEventArgs e)
+    {
+        var inputStr = e.Value?.ToString() ?? "";
+        if (string.IsNullOrEmpty(inputStr))
+        {
+            RemoveChar(index);
+        }
+        else
+        {
+            var c = inputStr.Last();
+            if (Type == SecurityCodeType.Numeric && !char.IsDigit(c))
+            {
+                return;
+            }
+
+            var chars = _code.PadRight(Length, ' ').ToCharArray();
+            chars[index] = c;
+            _code = new string(chars).TrimEnd();
+        }
+
+        Value = _code;
+        if (ValueChanged.HasDelegate)
+        {
+            await ValueChanged.InvokeAsync(_code);
+        }
+
+        if (_code.Length == Length && !_code.Contains(' ') && OnComplete.HasDelegate)
+        {
+            await OnComplete.InvokeAsync(_code);
+        }
+    }
+
+    private void RemoveChar(int index)
+    {
+        if (index < _code.Length)
+        {
+            var chars = _code.ToCharArray();
+            chars[index] = ' ';
+            _code = new string(chars).TrimEnd();
+        }
+    }
+
+    private void HandleKeyDown(int index, KeyboardEventArgs e)
+    {
+        if (e.Key == "Backspace" && index < _code.Length)
+        {
+            RemoveChar(index);
+        }
+    }
+}

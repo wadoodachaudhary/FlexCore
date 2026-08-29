@@ -1,0 +1,81 @@
+.fx-carousel {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    border-radius: 8px;
+    background-color: #1e293b;
+    box-sizing: border-box;
+}
+
+.fx-carousel-inner {
+    position: relative;
+    width: 100%;
+    overflow: hidden;
+    min-height: 200px;
+}
+
+::deep .fx-carousel-item {
+    display: none;
+    width: 100%;
+    animation: fx-fade-in 0.3s ease-in-out;
+}
+
+::deep .fx-carousel-item.active {
+    display: block;
+}
+
+@keyframes fx-fade-in {
+    from { opacity: 0.4; }
+    to { opacity: 1; }
+}
+
+.fx-carousel-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0, 0, 0, 0.4);
+    color: #ffffff;
+    border: none;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 2;
+    transition: background 0.2s ease;
+}
+
+.fx-carousel-btn:hover {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+.fx-carousel-prev { left: 12px; }
+.fx-carousel-next { right: 12px; }
+
+.fx-carousel-indicators {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+}
+
+.fx-carousel-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1px solid #ffffff;
+    background: rgba(255, 255, 255, 0.4);
+    cursor: pointer;
+    padding: 0;
+}
+
+.fx-carousel-indicator.active {
+    background: #ffffff;
+    width: 22px;
+    border-radius: 5px;
+}

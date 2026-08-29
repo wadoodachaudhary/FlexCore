@@ -1,0 +1,30 @@
+.fx-security-code-host {
+    display: inline-flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.fx-security-code-cell {
+    width: 42px;
+    height: 48px;
+    font-size: 1.25rem;
+    font-weight: 700;
+    text-align: center;
+    border: 2px solid #cbd5e1;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #1e293b;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.fx-security-code-cell:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.fx-security-code-host.disabled .fx-security-code-cell {
+    background-color: #f1f5f9;
+    cursor: not-allowed;
+    opacity: 0.7;
+}

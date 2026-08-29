@@ -25,6 +25,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             QueueColumnsChangedRender();
     }
 
+    void IGridOwner.UnregisterColumnsContainer(GridColumnsBase container)
+    {
+        // On a @key swap the NEW container has already overwritten the field in
+        // this same batch — the dying container's late call must not clobber it.
+        if (!ReferenceEquals(_columnsContainer, container))
+            return;
+
+        _columnsContainer = null;
+        _autoWidthPending = true;
+        QueueColumnsChangedRender();
+    }
+
     void IGridOwner.NotifyColumnsChanged()
     {
         _autoWidthPending = true;
@@ -50,6 +62,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void QueueColumnsChangedRender()
     {
+        // VB6 Redraw = flexRDNone: between BeginUpdate and EndUpdate the grid's
+        // COLUMN-driven self-renders are held. This is the ONLY gated channel —
+        // input, selection, batch-edit and virtualization renders go through
+        // EventCallback / direct InvokeAsync(StateHasChanged) and never pass
+        // here, so the two historical render-suppression regressions (typed
+        // chars committed blank; dead multi-select) cannot recur through this.
+        if (_columnUpdateDepth > 0)
+            return;
+
         if (_columnsChangedRenderQueued)
             return;
         _columnsChangedRenderQueued = true;
@@ -58,6 +79,149 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _columnsChangedRenderQueued = false;
             StateHasChanged();
         });
+    }
+
+    // ── In-place column mutation (VB6 Redraw = flexRDNone … flexRDBuffered) ──
+    // Wrap a column-set swap in BeginUpdate/EndUpdateAsync and the whole
+    // teardown-free mutation ships as ONE wire batch / one visible paint:
+    //
+    //     grid.BeginUpdate();
+    //     _layout = Layouts[name];                    // host state drives the foreach
+    //     await grid.EndUpdateAsync(_layout.Fields);  // adds/removes converge, order applied
+    //
+    // Line-for-line VB6 ports can use the bare pair; prefer the exception-safe
+    //     await using (grid.SuspendRedraw(_layout.Fields)) { _layout = …; }
+    // A bare BeginUpdate MUST be balanced (try/finally): a leaked depth keeps
+    // suppressing column renders until the grid is disposed.
+
+    private int _columnUpdateDepth;
+    private List<string>? _pendingColumnOrder;
+    private TaskCompletionSource? _columnUpdateFlushTcs;
+
+    /// <summary>Suspends column-driven grid renders (VB6 <c>Redraw = flexRDNone</c>).
+    /// Nesting counts like VB6 Redraw pairs; only the outermost EndUpdateAsync flushes.</summary>
+    public void BeginUpdate() => _columnUpdateDepth++;
+
+    /// <summary>Ends a BeginUpdate window (VB6 <c>Redraw = flexRDBuffered</c>): re-renders
+    /// ChildContent once so added/removed GridColumns converge in place, applies
+    /// <paramref name="finalColumnOrder"/> (new fields otherwise APPEND — Blazor gives the
+    /// registration protocol no order information), and completes when the batch carrying
+    /// the final column set has rendered. Unbalanced calls at depth 0 are a no-op.</summary>
+    public async Task EndUpdateAsync(IEnumerable<string>? finalColumnOrder = null)
+    {
+        if (_columnUpdateDepth == 0)
+            return;
+
+        _columnUpdateDepth--;
+        if (_columnUpdateDepth > 0)
+            return;
+
+        _pendingColumnOrder = finalColumnOrder?.ToList();
+        // A stale editor one-shot must not eat the flush render (and with it the
+        // completion below).
+        _suppressNextRenderOnce = false;
+        _autoWidthPending = true;
+        _columnUpdateFlushTcs ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var flushed = _columnUpdateFlushTcs.Task;
+        QueueColumnsChangedRender();
+        await flushed;
+    }
+
+    /// <summary>Exception-safe wrapper over BeginUpdate/EndUpdateAsync:
+    /// <c>await using (grid.SuspendRedraw(fields)) { …mutate… }</c>.</summary>
+    public ColumnUpdateScope SuspendRedraw(IEnumerable<string>? finalColumnOrder = null)
+        => new(this, finalColumnOrder);
+
+    public sealed class ColumnUpdateScope : IAsyncDisposable
+    {
+        private readonly GridControl<TValue> _grid;
+        private readonly IEnumerable<string>? _order;
+        public ColumnUpdateScope(GridControl<TValue> grid, IEnumerable<string>? order)
+        {
+            _grid = grid;
+            _order = order;
+            _grid.BeginUpdate();
+        }
+        public ValueTask DisposeAsync() => new(_grid.EndUpdateAsync(_order));
+    }
+
+    // Runs at the top of every render pass (BeginGridRenderPass), BEFORE the
+    // pass reads the column list — so the paint that shows a converged column
+    // set already shows it ordered, with positional selection state cleared and
+    // instance-keyed caches invalidated. Doing this in NotifyColumnsCompleted
+    // instead would be too late: completion fires AFTER the paint (post-ack on
+    // Blazor Server) with no render allowed from it.
+    private void SyncPendingColumnStructure()
+    {
+        var container = _columnsContainer;
+        if (container == null)
+            return;
+
+        // Apply the target order only once the column set has actually CONVERGED
+        // to it. The flush pass renders the grid markup BEFORE its ChildContent
+        // re-executes, so at this hook's first run the container still holds the
+        // OUTGOING fields — reordering against those scrambles mid-transition
+        // (measured: L1->L2 painted Code,Sku,Price,Vendor). Once every pending
+        // field is registered, reorder in the pass about to paint it.
+        if (_pendingColumnOrder != null)
+        {
+            var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var col in container.Columns)
+                if (!string.IsNullOrEmpty(col.Field))
+                    live.Add(col.Field);
+
+            var converged = true;
+            foreach (var field in _pendingColumnOrder)
+                if (!live.Contains(field)) { converged = false; break; }
+
+            if (converged)
+            {
+                container.ReorderColumns(_pendingColumnOrder);
+                _pendingColumnOrder = null;
+            }
+        }
+
+        if (container.TakeShapeChanged())
+        {
+            // _selectedCells/_activeCell/_batchEditRowIndex are POSITIONAL
+            // (RowIndex, CellIndex into VisibleColumns): an added or removed
+            // column silently retargets them at a DIFFERENT field — mass-edit
+            // fan-out would write the wrong column. Clear cells, keep rows.
+            ClearTransientSelectionState(clearRows: false);
+            PruneColumnStatesToCurrentFields(container);
+            InvalidateBlazorServerOptimizationCaches();
+        }
+        else if (container.TakeInstanceReplaced())
+        {
+            // Same Field, new instance: position and selection are unaffected,
+            // but _optimizedDisplayValueCache is keyed by GridColumn IDENTITY —
+            // stale-instance entries would serve old cell text and leak.
+            InvalidateBlazorServerOptimizationCaches();
+        }
+    }
+
+    // A removed column's ColumnState would keep its sort/filter transforming the
+    // view forever (and permanently disable the flat-untransformed fast path) —
+    // a ghost the old @key teardown never produced. Hidden columns keep state:
+    // pruning keys on membership, not visibility.
+    private void PruneColumnStatesToCurrentFields(GridColumnsBase container)
+    {
+        if (_columnStates.Count == 0)
+            return;
+
+        var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var col in container.Columns)
+            if (!string.IsNullOrEmpty(col.Field))
+                live.Add(col.Field);
+
+        List<string>? dead = null;
+        foreach (var key in _columnStates.Keys)
+            if (!live.Contains(key))
+                (dead ??= new List<string>()).Add(key);
+
+        if (dead != null)
+            foreach (var key in dead)
+                _columnStates.Remove(key);
     }
 
     // ── Injectables ─────────────────────────────────────────────────────
@@ -147,6 +311,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// completed. Off by default so existing hosts retain their focus behavior.
     /// </summary>
     [Parameter] public bool FocusInitialSelection { get; set; }
+    /// <summary>
+    /// Controls Tab and Shift+Tab while focus is in a grid cell. The default
+    /// traverses visible grid cells and wraps between rows. PageControl mode
+    /// delegates both keys to an enclosing PageControl navigation graph.
+    /// </summary>
+    [Parameter] public GridTabNavigationMode TabNavigationMode { get; set; } = GridTabNavigationMode.WrapRows;
+    /// <summary>Tab order slot for the grid host element. Null uses the natural document order.</summary>
+    [Parameter] public int? HostTabIndex { get; set; }
+    /// <summary>
+    /// When the grid host receives keyboard focus before any cell is active,
+    /// seed the first visible cell so arrows, Tab, and type-to-edit work immediately.
+    /// </summary>
+    [Parameter] public bool SeedActiveCellOnHostFocus { get; set; }
     /// <summary>
     /// When enabled, Tab on the final navigable cell and Shift+Tab on the first
     /// move focus to the adjacent control outside the grid. Disabled by default
@@ -913,6 +1090,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private readonly HashSet<TValue> _selectedItems = new();
     private readonly HashSet<(int RowIndex, int CellIndex)> _selectedCells = new();
     private (int RowIndex, int CellIndex)? _activeCell;
+
+    private async Task HandleHostFocusSeed(FocusEventArgs _)
+    {
+        if (!SeedActiveCellOnHostFocus || _activeCell != null)
+            return;
+
+        var firstRow = PagedData.FirstOrDefault();
+        if (firstRow == null)
+            return;
+
+        var firstColumn = VisibleColumns.FirstOrDefault(column => !string.IsNullOrEmpty(column.Field));
+        if (firstColumn == null)
+            return;
+
+        await SelectProgrammaticCellAsync(firstRow, firstColumn.Field);
+        await InvokeAsync(StateHasChanged);
+    }
+
     private (int RowIndex, int CellIndex)? _pointerFillCell;
     private bool _expandAllGroups;
     private bool _allGroupsCollapsed;
@@ -1093,6 +1288,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_suppressNextRenderOnce)
         {
             _suppressNextRenderOnce = false;
+            // A pending EndUpdateAsync flush rides ordinary renders; suppressing
+            // one here could stall the awaiting host until the next unrelated
+            // render (typing keys deliberately produce no further grid render).
+            if (_columnUpdateFlushTcs != null)
+                return true;
             return false;
         }
 
@@ -1134,7 +1334,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var editItem = _batchEditItem;
         var editField = _batchEditField;
-        if (TextEditorTypingBehavior != TextBoxTypingBehavior.ClientBuffered
+        if (ResolvedTextEditorTypingBehavior != TextBoxTypingBehavior.ClientBuffered
+            || HasSingleCellBulkEditSelection()
             || editItem == null
             || string.IsNullOrWhiteSpace(editField)
             || string.IsNullOrEmpty(_batchEditInputRef.Id))
@@ -1344,12 +1545,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _deferredScrollGroupedBuildMs = 0;
             _deferredScrollGroupedEntryCount = 0;
         }
+        SyncPendingColumnStructure();
         EnsureAutoColumnWidthsBeforeRender();
         PrepareBlazorServerOptimizationForRender();
         BeginCellHandlerRenderPass();
         BeginRowHandlerRenderPass();
         _renderPassActive = true;
         _renderVisibleColumns = null;
+        ClearPassViewMemos();
         _renderRowIndexLookupSource = null;
         _renderRowIndexLookup = null;
     }
@@ -1410,8 +1613,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public IReadOnlyList<GridColumn> Columns =>
         _columnsContainer?.Columns ?? Array.Empty<GridColumn>();
 
-    private bool AllRowsSelected =>
-        PagedData.Any() && PagedData.All(item => _selectedItems.Contains(item));
+    private bool AllRowsSelected
+    {
+        get
+        {
+            var rows = _renderPassActive ? GetPassFlatRows() : _passFlatRows;
+            if (rows != null)
+                return rows.Count > 0 && rows.All(item => _selectedItems.Contains(item));
+            return PagedData.Any() && PagedData.All(item => _selectedItems.Contains(item));
+        }
+    }
 
     private bool ShouldHideGridContentForNoVisibleColumns =>
         !VisibleColumns.Any()
@@ -1448,10 +1659,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    private bool HasAnyData =>
-        AllowGrouping && _groupDescriptors.Count > 0
-            ? GroupedData.Any()
-            : PagedData.Any();
+    private bool HasAnyData
+    {
+        get
+        {
+            if (AllowGrouping && _groupDescriptors.Count > 0)
+            {
+                if (_renderPassActive || _passGroups != null)
+                    return GetPassGroups().Count > 0;
+                return GroupedData.Any();
+            }
+            if (_renderPassActive || _passFlatRows != null)
+                return GetPassFlatRows().Count > 0;
+            return PagedData.Any();
+        }
+    }
 
     // ── Data Pipeline: DataSource → Filter → Search → Sort → Page ────────
 
@@ -1721,6 +1943,83 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    // ── Per-pass view memos ─────────────────────────────────────────────
+    // The pipeline getters above are DEFERRED LINQ with side effects; before
+    // these memos one render pass evaluated the full DataSource→Filter→Sort
+    // (→Group) chain 3-4 times (body row list, HasAnyData, footer aggregates,
+    // select-all header state — and a grouped windowed pass rebuilt the whole
+    // group tree twice). Cleared at BeginGridRenderPass; deliberately KEPT
+    // after the pass so OnAfterRender consumers read the just-rendered state.
+    private List<TValue>? _passSortedRows;
+    private IList<TValue>? _passFlatRows;
+    private List<GroupResult<TValue>>? _passGroups;
+    private List<GroupedDisplayEntry>? _passGroupedStream;
+
+    private void ClearPassViewMemos()
+    {
+        _passSortedRows = null;
+        _passFlatRows = null;
+        _passGroups = null;
+        _passGroupedStream = null;
+    }
+
+    /// <summary>Filter+sort, materialized once per render pass.
+    /// (A cross-render snapshot was tried here and REVERTED 2026-08-28: reusing
+    /// the same list instance across authoritative window renders made a fast
+    /// fling's white-gap settle in >4s instead of ~1.1s on the 50k bench —
+    /// mechanism unidentified. Re-attempt only with the fling scenario in the
+    /// bench suite.)</summary>
+    private List<TValue> GetPassSortedRows()
+        => _passSortedRows ??= SortedData.ToList();
+
+    /// <summary>The flat body row list for this pass (server fast path, else
+    /// filter+sort+page). Also performs PagedData's TotalRecords/paging
+    /// side effects exactly once — and, unlike the old getter chain, never
+    /// enumerates the sorted view twice (Count() + ToList() both fully
+    /// executed the deferred OrderBy).</summary>
+    private IList<TValue> GetPassFlatRows()
+    {
+        if (_passFlatRows != null)
+            return _passFlatRows;
+
+        var fast = GetBlazorServerRenderRows();
+        if (fast != null)
+        {
+            _pageState.TotalRecords = fast.Count;
+            return _passFlatRows = fast;
+        }
+
+        var sorted = GetPassSortedRows();
+        _pageState.TotalRecords = sorted.Count;
+        EnsureCurrentPageInRange();
+        if (!IsPagingActive)
+            return _passFlatRows = sorted;
+
+        return _passFlatRows = sorted
+            .Skip((_pageState.CurrentPage - 1) * _pageState.PageSize)
+            .Take(_pageState.PageSize)
+            .ToList();
+    }
+
+    /// <summary>The group tree for this pass, built once from the sorted memo.</summary>
+    private List<GroupResult<TValue>> GetPassGroups()
+    {
+        if (_passGroups != null)
+            return _passGroups;
+
+        if (_groupDescriptors.Count == 0)
+            return _passGroups = new List<GroupResult<TValue>>();
+
+        var data = GetPassSortedRows();
+        _pageState.TotalRecords = data.Count;
+        return _passGroups = BuildGroups(data, 0, "").ToList();
+    }
+
+    /// <summary>The flattened grouped display stream (and its pixel prefix
+    /// array) for this pass, built once.</summary>
+    private List<GroupedDisplayEntry> GetPassGroupedStream()
+        => _passGroupedStream ??= BuildGroupedDisplayStream();
+
     private IEnumerable<TValue> PivotData
     {
         get
@@ -1747,8 +2046,39 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // has no Blazor equivalent (the geometry exception to minimize-JS).
 
     /// <summary>Overscan rows kept above and below the visible slice so a fast
-    /// flick never outruns the render.</summary>
+    /// flick never outruns the render. Acts as the CEILING when
+    /// <see cref="WindowOverscanCellBudget"/> is active.</summary>
     [Parameter] public int WindowOverscanRows { get; set; } = 60;
+
+    /// <summary>Per-side overscan budget in CELLS (rows × visible columns). The
+    /// per-step build/wire cost of a window shift tracks cells, not rows — a
+    /// 6-column grid and a 29-column grid should not both render 60 extra rows
+    /// per side. Effective overscan = clamp(budget / visibleColumns,
+    /// min(15, WindowOverscanRows), WindowOverscanRows), so narrow grids keep
+    /// their full row overscan (the ceiling) and wide grids shrink toward a
+    /// 15-row floor. 0 disables the budget (pure row-based overscan).</summary>
+    [Parameter] public int WindowOverscanCellBudget { get; set; } = 900;
+
+    /// <summary>The overscan actually used by the window math, the refresh
+    /// guard and the JS controller registration, after the cell budget.</summary>
+    private int EffectiveWindowOverscanRows
+    {
+        get
+        {
+            var baseRows = Math.Max(0, WindowOverscanRows);
+            var budget = WindowOverscanCellBudget;
+            if (budget <= 0 || baseRows == 0)
+                return baseRows;
+
+            var cols = 0;
+            foreach (var _ in VisibleColumns) cols++;
+            if (cols <= 0)
+                return baseRows;
+
+            var floor = Math.Min(15, baseRows);
+            return Math.Clamp(budget / cols, floor, baseRows);
+        }
+    }
 
     /// <summary>
     /// Rows buffered above and below the destination for a release-only thumb
@@ -1827,7 +2157,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>Only refresh the row window after scrolling close to the
     /// buffered edge; this avoids a Blazor render for every row of scroll.</summary>
-    private int WindowRefreshGuardRows => WindowOverscanRows / 3;
+    private int WindowRefreshGuardRows => EffectiveWindowOverscanRows / 3;
 
     /// <summary>
     /// Small, bounded slice advance used only after the browser has proved that
@@ -1837,7 +2167,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         Math.Max(1, (Math.Max(1, WindowRefreshGuardRows) + 2) / 3);
 
     private int DeferredScrollReleaseOverscanRows => Math.Min(
-        Math.Max(0, WindowOverscanRows),
+        Math.Max(0, EffectiveWindowOverscanRows),
         Math.Max(Math.Max(0, DeferredScrollOverscanRows), Math.Max(0, WindowRefreshGuardRows)));
 
     /// <summary>First rendered ABSOLUTE row index into the paged/sorted list.</summary>
@@ -2077,7 +2407,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
         }
 
-        Walk(GroupedData, 0);
+        Walk(GetPassGroups(), 0);
 
         var prefix = new double[list.Count + 1];
         for (var i = 0; i < list.Count; i++)
@@ -2137,7 +2467,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private RenderFragment RenderGroupedRowsWindowed() => builder =>
     {
-        var stream = BuildGroupedDisplayStream();
+        var stream = GetPassGroupedStream();
         PrepareGroupedRowWindow(stream.Count);
         var prefix = _groupedPrefixPx!;
         var total = stream.Count;
@@ -2227,6 +2557,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var images = new System.Text.StringBuilder();
         images.Append(string.Create(CultureInfo.InvariantCulture,
             $"repeating-linear-gradient(to bottom,transparent 0,transparent {rowH - 1:0.##}px,{rowLine} {rowH - 1:0.##}px,{rowLine} {rowH:0.##}px)"));
+
+        // Skeleton banding UNDER the lattice lines: a faint alternate-row shade
+        // so an outrun window reads as "rows loading", not ruled empty space.
+        // rgba over a token'd color so it works on any host background; the
+        // fx-grid-core.css shimmer overlay animates on top of this.
+        const string band = "var(--fx-grid-skeleton-band, rgba(0, 0, 0, 0.035))";
+        images.Append(string.Create(CultureInfo.InvariantCulture,
+            $",repeating-linear-gradient(to bottom,transparent 0,transparent {rowH:0.##}px,{band} {rowH:0.##}px,{band} {2 * rowH:0.##}px)"));
 
         // Column separators: one non-repeating gradient with a 1px stop at each
         // cumulative column edge. Skipped when any width is unknown — row lines
@@ -2376,9 +2714,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
     {
+        // The delay models DATA/BUILD cost, so it belongs on the rendered path
+        // only. Paying it before the O(1) window math made every guard-band
+        // no-op occupy the JS single-flight slot for the full delay — in-band
+        // scrolling was hard-capped at ~1/(delay+RTT) Hz for nothing.
+        if (!UpdateGridWindow(scrollTop, clientHeight))
+            return;
         await ApplyDiagnosticWindowScrollDelayAsync();
-        if (UpdateGridWindow(scrollTop, clientHeight))
-            await InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged);
     }
 
     /// <summary>
@@ -2393,13 +2736,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
-        await ApplyDiagnosticWindowScrollDelayAsync();
+        // Delay only when this sample actually shifts the window (see the
+        // two-argument overload above): a no-op must settle at RTT speed so the
+        // single-flight queue keeps draining while the user scrolls in-band.
         if (!UpdateGridWindow(
                 scrollTop,
                 clientHeight,
                 scrollDirection: Math.Sign(scrollDirection)))
             return false;
 
+        await ApplyDiagnosticWindowScrollDelayAsync();
         if (requestToken > 0)
             _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
         _authoritativeWindowRenderPending = true;
@@ -2420,12 +2766,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
-        await ApplyDiagnosticWindowScrollDelayAsync();
         UpdateGridWindow(
             scrollTop,
             clientHeight,
             scrollDirection: Math.Sign(scrollDirection),
             forceRecenter: true);
+        // Recovery always renders, so the delay stays on this path — after the
+        // window math, like the ordinary sampling endpoints.
+        await ApplyDiagnosticWindowScrollDelayAsync();
         if (requestToken > 0)
             _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
         _authoritativeWindowRenderPending = true;
@@ -2442,10 +2790,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnGridDeferredScrollCommitAsync(double scrollTop, double clientHeight, long token)
     {
-        await ApplyDiagnosticWindowScrollDelayAsync();
         var mathStart = Stopwatch.GetTimestamp();
         UpdateGridWindow(scrollTop, clientHeight, deferredCommit: true);
         _deferredScrollWindowMathMs = ElapsedMilliseconds(mathStart);
+        // A proxy-thumb commit always renders; delay after the math so the
+        // diagnostics keep timing the window math alone.
+        await ApplyDiagnosticWindowScrollDelayAsync();
         _deferredScrollCommitTop = Math.Max(0, scrollTop);
         _deferredScrollCommitToken = Math.Max(_deferredScrollCommitToken + 1, token);
         _deferredScrollDiagnosticsPendingToken = _deferredScrollCommitToken;
@@ -2473,7 +2823,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var overscanRows = deferredCommit
             ? DeferredScrollReleaseOverscanRows
-            : Math.Max(0, WindowOverscanRows);
+            : EffectiveWindowOverscanRows;
         var beforeRows = overscanRows;
         var afterRows = overscanRows;
         if (!deferredCommit && !forceRecenter && scrollDirection != 0)
@@ -2926,6 +3276,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // EndUpdateAsync completion: the queued column flush (and any follow-up
+        // wave renders it triggered) have all executed once the queue latch is
+        // clear — the batch that painted the final column set is on the wire.
+        if (_columnUpdateFlushTcs != null && _columnUpdateDepth == 0 && !_columnsChangedRenderQueued)
+        {
+            _pendingColumnOrder = null;
+            var flushTcs = _columnUpdateFlushTcs;
+            _columnUpdateFlushTcs = null;
+            flushTcs.TrySetResult();
+        }
+
         // Put the caret in the Choose Columns list as soon as it opens, so Up/Down drive the
         // dialog straight away instead of falling through to the grid behind it.
         if (_focusChooseColumnsList && _showChooseColumnsDialog)
@@ -3043,7 +3404,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ReapplyAfterRebuildIfNeeded();
         }
 
-        if (_autoWidthPending)
+        if (_autoWidthPending && _columnUpdateDepth == 0)
         {
             _autoWidthPending = false;
             if (EnsureAutoColumnWidths())
@@ -3194,14 +3555,56 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// the grid later leaves the windowed configuration (e.g. paging turned on or
     /// grouping applied). The JS export is idempotent, so a repeat call is safe.
     /// </summary>
+    private bool _lastRegisteredScrollTrack = true;
+    private bool _lastRegisteredBoundaryGuard;
+    private bool _lastRegisteredBoundarySlowdown;
+    private bool _lastRegisteredAdaptivePacing;
+    private double _lastRegisteredWheelScale = 1d;
+    // Geometry inputs the JS controller captures at registration time. These
+    // became RUNTIME-dynamic with the cell budget (overscan/guard follow the
+    // visible column count) and with row-height self-measurement — without them
+    // in the comparison, Choose Columns halving a grid left JS running the old
+    // guard math against a new window (the "stale scroll config" audit gap).
+    private int _lastRegisteredOverscanRows = -1;
+    private int _lastRegisteredGuardRows = -1;
+    private double _lastRegisteredRowHeight = -1;
+
     private async Task EnsureGridWindowScrollRegisteredAsync()
     {
         try
         {
             if (UseRowWindowing || UseGroupedRowWindowing)
             {
+                var effectiveWheelScale = double.IsFinite(WheelScrollScale)
+                    ? Math.Clamp(WheelScrollScale, 0.1d, 2d)
+                    : 1d;
+
+                var effectiveRowHeight = Math.Round(_rowHeightPx <= 0 ? 16 : _rowHeightPx);
+
                 if (_windowScrollRegistered)
-                    return;
+                {
+                    bool configChanged = _lastRegisteredScrollTrack != ScrollTrack
+                        || _lastRegisteredBoundaryGuard != (EnableScrollBoundaryGuard && !ScrollTrack)
+                        || _lastRegisteredBoundarySlowdown != (EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack)
+                        || _lastRegisteredAdaptivePacing != (EnableAdaptiveWheelScrollPacing && EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack)
+                        || Math.Abs(_lastRegisteredWheelScale - effectiveWheelScale) > 0.001
+                        || _lastRegisteredOverscanRows != Math.Max(0, EffectiveWindowOverscanRows)
+                        || _lastRegisteredGuardRows != Math.Max(0, WindowRefreshGuardRows)
+                        || Math.Abs(_lastRegisteredRowHeight - effectiveRowHeight) > 0.5;
+
+                    if (!configChanged)
+                        return;
+
+                    // Never rebind mid-flight: registerGridWindowScroll disposes the
+                    // deferred controller and the in-flight invocation queue, which
+                    // would orphan an outstanding DOM-ack token. Ensure runs on every
+                    // render, so a skipped rebind retries as soon as the pipeline is
+                    // quiet.
+                    if (_authoritativeWindowRenderPending
+                        || _deferredScrollDiagnosticsPendingToken != 0
+                        || _deferredScrollDiagnosticsActiveToken != 0)
+                        return;
+                }
 
                 _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
                     "import", GridJsModulePath);
@@ -3215,17 +3618,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     _deferredScrollThumbElement,
                     EnableScrollBoundaryGuard && !ScrollTrack,
                     EnableScrollBoundaryTelemetry && !ScrollTrack,
-                    Math.Max(0, WindowOverscanRows),
+                    Math.Max(0, EffectiveWindowOverscanRows),
                     Math.Max(0, WindowRefreshGuardRows),
                     _rowHeightPx <= 0 ? 16 : _rowHeightPx,
-                    double.IsFinite(WheelScrollScale)
-                        ? Math.Clamp(WheelScrollScale, 0.1d, 2d)
-                        : 1d,
+                    effectiveWheelScale,
                     EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack,
                     EnableAdaptiveWheelScrollPacing
                         && EnableScrollBoundarySlowdown
                         && EnableScrollBoundaryGuard
                         && !ScrollTrack);
+
+                _lastRegisteredScrollTrack = ScrollTrack;
+                _lastRegisteredBoundaryGuard = EnableScrollBoundaryGuard && !ScrollTrack;
+                _lastRegisteredBoundarySlowdown = EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack;
+                _lastRegisteredAdaptivePacing = EnableAdaptiveWheelScrollPacing && EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack;
+                _lastRegisteredWheelScale = effectiveWheelScale;
+                _lastRegisteredOverscanRows = Math.Max(0, EffectiveWindowOverscanRows);
+                _lastRegisteredGuardRows = Math.Max(0, WindowRefreshGuardRows);
+                _lastRegisteredRowHeight = effectiveRowHeight;
                 _windowScrollRegistered = true;
             }
             else if (_windowScrollRegistered && _gridJsModule != null)
@@ -3364,7 +3774,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (idx >= _winStart && idx < _winStart + _winCount)
                 return;
             var maxEntryStart = Math.Max(0, stream.Count - _winCount);
-            _winStart = Math.Clamp(idx - WindowOverscanRows, 0, maxEntryStart);
+            _winStart = Math.Clamp(idx - EffectiveWindowOverscanRows, 0, maxEntryStart);
             await InvokeAsync(StateHasChanged);
             var groupedTarget = Math.Max(0, _groupedPrefixPx![idx] - 2 * _rowHeightPx);
             try
@@ -3404,7 +3814,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         var maxStart = Math.Max(0, pagedList.Count - _winCount);
-        _winStart = Math.Clamp(displayIndex - WindowOverscanRows, 0, maxStart);
+        _winStart = Math.Clamp(displayIndex - EffectiveWindowOverscanRows, 0, maxStart);
         await InvokeAsync(StateHasChanged);
 
         // Keep the scrollbar in sync with the new window (a couple of rows of
@@ -3969,7 +4379,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (UseRowWindowing)
         {
             var maxStart = Math.Max(0, rows.Count - _winCount);
-            _winStart = Math.Clamp(requestedIndex - WindowOverscanRows, 0, maxStart);
+            _winStart = Math.Clamp(requestedIndex - EffectiveWindowOverscanRows, 0, maxStart);
             _lastWindowListSignature = ComputeWindowListSignature(rows);
             ClearPreserveRowWindowOnNextListChange();
         }
@@ -7787,7 +8197,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         else
         {
-            var useClientBuffer = UsesClientBufferedTextEditing;
+            // A multi-selection type-ahead owns fan-out on the server. Treating
+            // its transient editor as client-buffered makes the browser wait for
+            // an editor that deliberately is not mounted and drops the rapid
+            // characters after the first one.
+            var bulkFanOut = HasSingleCellBulkEditSelection();
+            var effectiveTypingBehavior = bulkFanOut
+                ? TextBoxTypingBehavior.ServerBacked
+                : ResolvedTextEditorTypingBehavior;
+            var useClientBuffer = effectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered;
             var inputType = GetEditorInputType(col);
             builder.SetKey(_batchEditGeneration);
             builder.OpenComponent<TextBoxControl>(sequence);
@@ -7803,7 +8221,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
             if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
                 builder.AddAttribute(sequence + 6, "MaxLength", col.MaxLength.Value);
-            builder.AddAttribute(sequence + 18, "TypingBehavior", ResolvedTextEditorTypingBehavior);
+            builder.AddAttribute(sequence + 18, "TypingBehavior", effectiveTypingBehavior);
             // The browser clips an over-long paste before the server sees it, so the
             // editor reports the loss and the host can say so out loud.
             if (col.MaxLength is > 0 && EventsRef?.CellValueTruncated.HasDelegate == true)
@@ -9232,7 +9650,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (e.Key == "Tab")
         {
-            if (PageNavigationContext?.HandlesTabNavigation == true)
+            if (TabNavigationMode == GridTabNavigationMode.PageControl)
                 return false;
             backwards = e.ShiftKey;
             allowRowWrap = true;
@@ -13660,7 +14078,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // Include the target plus the normal lead-in buffer before moving
             // the scrollbar. Otherwise a far-away selected row has no DOM row
             // for the scroll reader to retain on its next render pass.
-            _winStart = Math.Clamp(displayRowIndex - WindowOverscanRows, 0, maxStart);
+            _winStart = Math.Clamp(displayRowIndex - EffectiveWindowOverscanRows, 0, maxStart);
             _lastWindowListSignature = ComputeWindowListSignature(rows);
             ClearPreserveRowWindowOnNextListChange();
             _pendingWindowScrollReset = false;
@@ -14625,6 +15043,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     public async ValueTask DisposeAsync()
     {
+        // Never leave a host awaiting EndUpdateAsync on a dead circuit, and
+        // never let a leaked BeginUpdate depth outlive the component.
+        _columnUpdateDepth = 0;
+        _columnUpdateFlushTcs?.TrySetResult();
+        _columnUpdateFlushTcs = null;
+
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;

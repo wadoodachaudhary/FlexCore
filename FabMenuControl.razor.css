@@ -1,0 +1,108 @@
+.fx-fab-host {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    z-index: 1050;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    box-sizing: border-box;
+}
+
+.fx-fab-trigger {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background-color: #2563eb;
+    color: #ffffff;
+    border: none;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.2s ease, background-color 0.15s ease;
+    z-index: 1052;
+}
+
+.fx-fab-trigger:hover:not(:disabled) {
+    background-color: #1d4ed8;
+    transform: scale(1.05);
+}
+
+.fx-fab-trigger-icon {
+    display: inline-flex;
+    transition: transform 0.2s ease;
+}
+
+.fx-fab-open .fx-fab-trigger-icon {
+    transform: rotate(45deg);
+}
+
+.fx-fab-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.25);
+    z-index: 1049;
+}
+
+.fx-fab-actions {
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+    align-items: flex-end;
+    z-index: 1052;
+    animation: fx-fab-slide 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes fx-fab-slide {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fx-fab-action-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.fx-fab-action-label {
+    background: #ffffff;
+    color: #1e293b;
+    padding: 0.25rem 0.65rem;
+    border-radius: 4px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+    white-space: nowrap;
+}
+
+.fx-fab-action-btn {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: none;
+    color: #ffffff;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.fx-fab-action-btn:hover {
+    transform: scale(1.1);
+}
+
+.fx-fab-color-primary { background-color: #2563eb; }
+.fx-fab-color-success { background-color: #16a34a; }
+.fx-fab-color-danger { background-color: #dc2626; }
+.fx-fab-color-warning { background-color: #d97706; }
+.fx-fab-color-info { background-color: #0284c7; }
+.fx-fab-color-secondary { background-color: #64748b; }
+.fx-fab-color-dark { background-color: #1e293b; }

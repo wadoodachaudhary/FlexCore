@@ -1,0 +1,70 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-timespan-picker @(Disabled ? "disabled" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    @if (ShowDays)
+    {
+        <div class="fx-timespan-segment">
+            <input type="number" class="fx-timespan-input" min="0" value="@_days" disabled="@Disabled" @onchange="e => UpdateDays(e.Value)" />
+            <span class="fx-timespan-unit">d</span>
+        </div>
+    }
+    <div class="fx-timespan-segment">
+        <input type="number" class="fx-timespan-input" min="0" max="23" value="@_hours" disabled="@Disabled" @onchange="e => UpdateHours(e.Value)" />
+        <span class="fx-timespan-unit">h</span>
+    </div>
+    <div class="fx-timespan-segment">
+        <input type="number" class="fx-timespan-input" min="0" max="59" value="@_minutes" disabled="@Disabled" @onchange="e => UpdateMinutes(e.Value)" />
+        <span class="fx-timespan-unit">m</span>
+    </div>
+    @if (ShowSeconds)
+    {
+        <div class="fx-timespan-segment">
+            <input type="number" class="fx-timespan-input" min="0" max="59" value="@_seconds" disabled="@Disabled" @onchange="e => UpdateSeconds(e.Value)" />
+            <span class="fx-timespan-unit">s</span>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public TimeSpan? Value { get; set; }
+    [Parameter] public EventCallback<TimeSpan?> ValueChanged { get; set; }
+    [Parameter] public bool ShowDays { get; set; } = false;
+    [Parameter] public bool ShowSeconds { get; set; } = false;
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    private int _days;
+    private int _hours;
+    private int _minutes;
+    private int _seconds;
+
+    protected override void OnParametersSet()
+    {
+        if (Value.HasValue)
+        {
+            _days = Value.Value.Days;
+            _hours = Value.Value.Hours;
+            _minutes = Value.Value.Minutes;
+            _seconds = Value.Value.Seconds;
+        }
+        else
+        {
+            _days = _hours = _minutes = _seconds = 0;
+        }
+    }
+
+    private async Task Commit()
+    {
+        var ts = new TimeSpan(_days, _hours, _minutes, _seconds);
+        Value = ts;
+        if (ValueChanged.HasDelegate)
+        {
+            await ValueChanged.InvokeAsync(ts);
+        }
+    }
+
+    private async Task UpdateDays(object? val) { if (int.TryParse(val?.ToString(), out var d)) { _days = Math.Max(0, d); await Commit(); } }
+    private async Task UpdateHours(object? val) { if (int.TryParse(val?.ToString(), out var h)) { _hours = Math.Clamp(h, 0, 23); await Commit(); } }
+    private async Task UpdateMinutes(object? val) { if (int.TryParse(val?.ToString(), out var m)) { _minutes = Math.Clamp(m, 0, 59); await Commit(); } }
+    private async Task UpdateSeconds(object? val) { if (int.TryParse(val?.ToString(), out var s)) { _seconds = Math.Clamp(s, 0, 59); await Commit(); } }
+}

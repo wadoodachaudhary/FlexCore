@@ -1,0 +1,81 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-fab-host @(_open ? "fx-fab-open" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    @if (_open)
+    {
+        <div class="fx-fab-backdrop" @onclick="Toggle"></div>
+        <div class="fx-fab-actions">
+            @if (Items != null)
+            {
+                @foreach (var item in Items)
+                {
+                    <div class="fx-fab-action-row">
+                        @if (!string.IsNullOrEmpty(item.Title))
+                        {
+                            <span class="fx-fab-action-label">@item.Title</span>
+                        }
+                        <button type="button"
+                                class="fx-fab-action-btn fx-fab-color-@item.Color.ToString().ToLowerInvariant()"
+                                title="@item.Title"
+                                @onclick="() => HandleItemClick(item)">
+                            @if (!string.IsNullOrEmpty(item.IconCss))
+                            {
+                                <span class="@item.IconCss"></span>
+                            }
+                            else
+                            {
+                                <span>•</span>
+                            }
+                        </button>
+                    </div>
+                }
+            }
+            @ChildContent
+        </div>
+    }
+
+    <button type="button"
+            class="fx-fab-trigger @(Disabled ? "disabled" : "")"
+            disabled="@Disabled"
+            title="@Title"
+            aria-expanded="@_open"
+            @onclick="Toggle">
+        <span class="fx-fab-trigger-icon">
+            @if (!string.IsNullOrEmpty(IconCss))
+            {
+                <span class="@IconCss"></span>
+            }
+            else
+            {
+                <svg viewBox="0 0 20 20" fill="currentColor" width="22" height="22">
+                    <path fill-rule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clip-rule="evenodd"/>
+                </svg>
+            }
+        </span>
+    </button>
+</div>
+
+@code {
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public IList<FabMenuItem>? Items { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    private bool _open = false;
+
+    private void Toggle()
+    {
+        if (Disabled) return;
+        _open = !_open;
+    }
+
+    private async Task HandleItemClick(FabMenuItem item)
+    {
+        _open = false;
+        if (item.OnClick.HasDelegate)
+        {
+            await item.OnClick.InvokeAsync();
+        }
+    }
+}

@@ -1,0 +1,79 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-barcode @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    <svg viewBox="0 0 @SvgWidth @SvgHeight" width="@WidthString" height="@HeightString" shape-rendering="crispEdges">
+        <rect width="@SvgWidth" height="@SvgHeight" fill="@BackgroundColor" />
+        @foreach (var bar in _bars)
+        {
+            <rect x="@bar.X" y="5" width="@bar.W" height="50" fill="@ForegroundColor" />
+        }
+        @if (ShowText)
+        {
+            @((MarkupString)$"<text x=\"{SvgWidth / 2}\" y=\"66\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"11\" font-weight=\"600\" fill=\"{ForegroundColor}\">{Value}</text>")
+        }
+    </svg>
+</div>
+
+@code {
+    private record Bar(int X, int W);
+
+    [Parameter] public string Value { get; set; } = "FLEX-12345";
+    [Parameter] public bool ShowText { get; set; } = true;
+    [Parameter] public string ForegroundColor { get; set; } = "#000000";
+    [Parameter] public string BackgroundColor { get; set; } = "#ffffff";
+    [Parameter] public int BarHeight { get; set; } = 50;
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? Height { get; set; }
+
+    private readonly List<Bar> _bars = new();
+    private int SvgWidth => Math.Max(120, _bars.Count > 0 ? _bars.Last().X + _bars.Last().W + 10 : 120);
+    private int SvgHeight => ShowText ? 72 : 55;
+
+    private string WidthString => string.IsNullOrEmpty(Width) ? $"{SvgWidth}px" : Width;
+    private string HeightString => string.IsNullOrEmpty(Height) ? $"{SvgHeight}px" : Height;
+
+    protected override void OnParametersSet()
+    {
+        GenerateBars();
+    }
+
+    private void GenerateBars()
+    {
+        _bars.Clear();
+        var x = 10;
+        var text = (Value ?? "FLEX").ToUpperInvariant();
+
+        // Start guard
+        _bars.Add(new Bar(x, 2)); x += 3;
+        _bars.Add(new Bar(x, 1)); x += 3;
+
+        foreach (var ch in text)
+        {
+            var charCode = (int)ch;
+            var pattern = (charCode % 7) switch
+            {
+                0 => new[] { 1, 2, 1, 3 },
+                1 => new[] { 2, 1, 2, 2 },
+                2 => new[] { 3, 1, 1, 2 },
+                3 => new[] { 1, 1, 3, 2 },
+                4 => new[] { 2, 2, 1, 1 },
+                5 => new[] { 1, 3, 1, 2 },
+                _ => new[] { 2, 1, 1, 3 }
+            };
+
+            for (int i = 0; i < pattern.Length; i++)
+            {
+                if (i % 2 == 0)
+                {
+                    _bars.Add(new Bar(x, pattern[i]));
+                }
+                x += pattern[i] + 1;
+            }
+        }
+
+        // Stop guard
+        _bars.Add(new Bar(x, 1)); x += 3;
+        _bars.Add(new Bar(x, 2));
+    }
+}

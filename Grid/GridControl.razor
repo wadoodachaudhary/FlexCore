@@ -11,10 +11,12 @@
      style="@HostStyle"
      data-fx-row-reveal-index="@(_pendingRowRevealIndex?.ToString(CultureInfo.InvariantCulture))"
      data-fx-row-reveal-token="@(_pendingRowRevealIndex.HasValue ? _pendingRowRevealToken.ToString(CultureInfo.InvariantCulture) : null)"
-     data-fx-client-buffered-editing="@(TextEditorTypingBehavior == TextBoxTypingBehavior.ClientBuffered ? "true" : "false")"
+     data-fx-grid-tab-navigation="@(TabNavigationMode == GridTabNavigationMode.PageControl ? "page-control" : "wrap-rows")"
+     data-fx-client-buffered-editing="@(UsesClientBufferedTextEditing ? "true" : "false")"
      data-fx-row-highlight="@(HighlightSelectedRows ? "true" : "false")"
      @ref="_gridHostElement"
-     tabindex="0"
+     tabindex="@(HostTabIndex ?? 0)"
+     @onfocus="HandleHostFocusSeed"
      @onkeydown="HandleKeyDown"
      @onfocusout="@NonRenderingGridFocusOut"
      @oncontextmenu="HandleGridContextMenu"
@@ -470,7 +472,7 @@
         <div class="fx-grid-content fx-grid-chart-content"
              style="@(string.IsNullOrEmpty(Height) ? "" : "overflow:auto; flex:1;")">
             <Fx.ControlKit.Charts.ChartControl
-                DataSource="@PagedData"
+                DataSource="@GetPassFlatRows()"
                 ValueFields="@ChartValueFields"
                 ValueLabels="@ChartValueLabels"
                 LabelField="@(ChartLabelField ?? VisibleColumns.FirstOrDefault()?.Field)"
@@ -680,7 +682,7 @@
                     }
                     else
                     {
-                        @RenderGroupedRows(GroupedData, 0)
+                        @RenderGroupedRows(GetPassGroups(), 0)
                     }
                 }
                 else
@@ -763,8 +765,7 @@
 
                     @* Materialize the sorted/paged list ONCE per render so slicing
                        is O(1) and SortedData isn't re-enumerated per row. *@
-                    var pagedList = GetBlazorServerRenderRows()
-                        ?? (PagedData as IList<TValue> ?? PagedData.ToList());
+                    var pagedList = GetPassFlatRows();
 
                     @* ── Custom row windowing (scroll-driven) ──────────────
                        Render only the visible slice plus overscan, bracketed by two
@@ -832,7 +833,7 @@
                 var footerRows = AggregateRows.Where(r => r.ShowInFooter).ToList();
                 if (footerRows.Count > 0)
                 {
-                    var allItems = SortedData.ToList();
+                    var allItems = GetPassSortedRows();
                     var footerAggs = ComputeAggregates(allItems);
                     <tfoot class="fx-grid-footer">
                         @foreach (var aggRow in footerRows)

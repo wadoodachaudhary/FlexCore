@@ -1,0 +1,45 @@
+.fx-timespan-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 0.25rem 0.5rem;
+    background: #ffffff;
+}
+
+.fx-timespan-segment {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+.fx-timespan-input {
+    width: 36px;
+    border: none;
+    background: transparent;
+    text-align: center;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #1e293b;
+    outline: none;
+    -moz-appearance: textfield;
+}
+
+.fx-timespan-input::-webkit-outer-spin-button,
+.fx-timespan-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.fx-timespan-unit {
+    font-size: 0.75rem;
+    color: #64748b;
+    font-weight: 500;
+}
+
+.fx-timespan-picker.disabled {
+    background-color: #f1f5f9;
+    opacity: 0.6;
+    pointer-events: none;
+}

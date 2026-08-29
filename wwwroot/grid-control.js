@@ -896,6 +896,18 @@ export function registerGridKeyboardTrap(gridRoot) {
             return false;
         }
 
+        // Multi-select type-ahead intentionally does not mount one editor: the
+        // server fans each key out to every selected row/cell. Buffering that
+        // mount window would therefore retain every character after the first
+        // until expiry and make rapid bulk edits appear to accept one letter.
+        const bulkSelection =
+            gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected, tbody tr.fx-row.fx-cell-row-selected").length > 1
+            || gridRoot.querySelectorAll("tbody td.fx-cell-selected").length > 1;
+        if (bulkSelection) {
+            clearPendingEditTyping();
+            return false;
+        }
+
         const identity = cellIdentity(cell);
         const isCharacter = event.key.length === 1;
         if (isCharacter) {
@@ -976,11 +988,11 @@ export function registerGridKeyboardTrap(gridRoot) {
             isGridScrollKey;
         if (!isNavigationKey) return;
 
-        // A PageControl navigation map treats each grid as one page-level Tab
-        // stop. Let its capture handler move between screen regions while the
-        // grid continues to own arrow-key navigation within the active row.
+        // Only an explicitly delegated grid is one PageControl Tab stop. The
+        // default wrap-rows grid keeps Tab inside its cells even when nested in
+        // a PageControl navigation graph.
         if (event.key === "Tab"
-            && gridRoot.closest("[data-fx-page-tab-navigation='true']")) return;
+            && gridRoot.dataset.fxGridTabNavigation === "page-control") return;
 
         if (isGridScrollKey) {
             if (event.altKey || event.shiftKey) return;

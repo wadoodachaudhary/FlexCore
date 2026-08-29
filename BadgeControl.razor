@@ -1,0 +1,53 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<span class="@ResolvedBadgeCss" style="@Style" @attributes="AdditionalAttributes">
+    @if (!string.IsNullOrEmpty(Text))
+    {
+        @Text
+    }
+    else
+    {
+        @ChildContent
+    }
+</span>
+
+@code {
+    [Parameter] public string? Text { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public BadgeVariant Variant { get; set; } = BadgeVariant.Primary;
+    [Parameter] public BadgeSize Size { get; set; } = BadgeSize.Medium;
+    [Parameter] public bool IsPill { get; set; } = true;
+    [Parameter] public bool IsDot { get; set; } = false;
+
+    private string ResolvedBadgeCss
+    {
+        get
+        {
+            var variantClass = Variant switch
+            {
+                BadgeVariant.Primary => "fx-badge-primary",
+                BadgeVariant.Secondary => "fx-badge-secondary",
+                BadgeVariant.Success => "fx-badge-success",
+                BadgeVariant.Danger => "fx-badge-danger",
+                BadgeVariant.Warning => "fx-badge-warning",
+                BadgeVariant.Info => "fx-badge-info",
+                BadgeVariant.Light => "fx-badge-light",
+                BadgeVariant.Dark => "fx-badge-dark",
+                _ => "fx-badge-primary"
+            };
+
+            var sizeClass = Size switch
+            {
+                BadgeSize.Small => "fx-badge-sm",
+                BadgeSize.Large => "fx-badge-lg",
+                _ => "fx-badge-md"
+            };
+
+            var pillClass = IsPill ? "fx-badge-pill" : "";
+            var dotClass = IsDot ? "fx-badge-dot" : "";
+
+            return $"fx-badge {variantClass} {sizeClass} {pillClass} {dotClass} {CssClass}".Trim();
+        }
+    }
+}

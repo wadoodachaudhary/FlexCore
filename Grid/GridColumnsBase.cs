@@ -8,7 +8,7 @@ namespace Fx.ControlKit.Grid;
 /// Acts as a CascadingValue so columns can register themselves.
 /// Also registers itself with the parent GridControl via cascading parameter.
 /// </summary>
-public class GridColumnsBase : ComponentBase
+public class GridColumnsBase : ComponentBase, IDisposable
 {
     private readonly List<GridColumn> _columns = new();
 
@@ -21,6 +21,25 @@ public class GridColumnsBase : ComponentBase
 
     private bool _columnsDirty;
     private bool _renderArmed;
+    private bool _disposed;
+
+    // Wave-scoped change flags, consumed by the grid's pre-render structure
+    // sync (SyncPendingColumnStructure). "Shape" = a column was ADDED or
+    // REMOVED (positional cell state must be cleared — CellIndex would silently
+    // retarget); "instance" = a same-Field REPLACEMENT (only instance-keyed
+    // caches need invalidating; position and selection are unaffected).
+    private bool _shapeChanged;
+    private bool _instanceReplaced;
+
+    internal bool TakeShapeChanged()
+    {
+        var v = _shapeChanged; _shapeChanged = false; return v;
+    }
+
+    internal bool TakeInstanceReplaced()
+    {
+        var v = _instanceReplaced; _instanceReplaced = false; return v;
+    }
 
     /// <summary>Bumped once per completed registration wave (see OnAfterRender).
     /// Identifies the column-set version handed to the grid.</summary>
@@ -44,14 +63,44 @@ public class GridColumnsBase : ComponentBase
                 string.Equals(c.Field, column.Field, StringComparison.OrdinalIgnoreCase));
             if (existing >= 0)
             {
+                // Carry the user's drag-resize forward — the replacing instance
+                // starts with a null RuntimeWidth and silently reset the column.
+                column.RuntimeWidth ??= _columns[existing].RuntimeWidth;
                 _columns[existing] = column;
+                _instanceReplaced = true;
                 MarkColumnsDirty();
                 return;
             }
         }
 
         _columns.Add(column);
+        _shapeChanged = true;
         MarkColumnsDirty();
+    }
+
+    /// <summary>Reference-only removal, called from GridColumn.Dispose. A
+    /// dedup-replaced instance (same Field, no longer in the list) no-ops here,
+    /// whichever order Blazor runs the init and the dispose in. Silent while
+    /// the container itself is being torn down (@key swap) — the dying list
+    /// must not arm renders.</summary>
+    internal void RemoveColumn(GridColumn column)
+    {
+        if (_disposed)
+            return;
+
+        var idx = _columns.IndexOf(column);   // reference equality — no overrides on GridColumn
+        if (idx < 0)
+            return;
+
+        _columns.RemoveAt(idx);
+        _shapeChanged = true;
+        MarkColumnsDirty();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        ParentGrid?.UnregisterColumnsContainer(this);
     }
 
     // Registration no longer redraws the grid per column. The FIRST change of a

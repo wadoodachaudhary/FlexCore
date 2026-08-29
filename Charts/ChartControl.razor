@@ -160,6 +160,27 @@
                 case ChartType.StackedArea:
                     @RenderLineArea()
                     break;
+                case ChartType.Candlestick:
+                case ChartType.Ohlc:
+                case ChartType.HighLow:
+                    @RenderFinancialChart()
+                    break;
+                case ChartType.Bullet:
+                    @RenderBullet()
+                    break;
+                case ChartType.RangeBar:
+                case ChartType.RangeColumn:
+                case ChartType.RangeArea:
+                    @RenderRangeChart()
+                    break;
+                case ChartType.Sankey:
+                    @RenderSankey()
+                    break;
+                case ChartType.LinearGauge:
+                case ChartType.ArcGauge:
+                case ChartType.RadialGauge:
+                    @RenderAdvancedGauges()
+                    break;
                 default:
                     @RenderBarChart()
                     break;
@@ -1511,6 +1532,301 @@
 
                 @SvgText(F(fcx), F(y + segH / 2 + 4), pts[idx].Label,
                     anchor: "middle", fontSize: "11", fill: "white", fontWeight: "500")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Financial Charts (Candlestick, Ohlc, HighLow)
+
+    private RenderFragment RenderFinancialChart() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+        var pts = _effectiveSeries[0].DataPoints;
+
+        double svgW = 600, svgH = 320;
+        double padL = 50, padR = 20, padT = 30, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        double minVal = pts.Min(p => p.Low);
+        double maxVal = pts.Max(p => p.High);
+        if (minVal == maxVal) { maxVal += 1; minVal -= 1; }
+        double range = maxVal - minVal;
+
+        int n = pts.Count;
+        double slotW = plotW / n;
+        double candleW = Math.Min(24, slotW * 0.65);
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "320px");" xmlns="http://www.w3.org/2000/svg">
+
+            <!-- Grid & Y-Axis Ticks -->
+            @for (int i = 0; i <= 4; i++)
+            {
+                double tickVal = minVal + (range * i / 4.0);
+                double y = padT + plotH - (plotH * (tickVal - minVal) / range);
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(padL + plotW)" y2="@F(y)" stroke="#e5e7eb" stroke-dasharray="3,3" />
+                @SvgText(F(padL - 8), F(y + 4), F1(tickVal), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            @for (int i = 0; i < n; i++)
+            {
+                var p = pts[i];
+                double cx = padL + i * slotW + slotW / 2.0;
+                double yHigh = padT + plotH - (plotH * (p.High - minVal) / range);
+                double yLow = padT + plotH - (plotH * (p.Low - minVal) / range);
+                double yOpen = padT + plotH - (plotH * (p.Open - minVal) / range);
+                double yClose = padT + plotH - (plotH * (p.Close - minVal) / range);
+
+                bool isBullish = p.Close >= p.Open;
+                string candleColor = isBullish ? "#16a34a" : "#dc2626";
+
+                if (Type == ChartType.Candlestick)
+                {
+                    double bodyTop = Math.Min(yOpen, yClose);
+                    double bodyHeight = Math.Max(2, Math.Abs(yClose - yOpen));
+
+                    <!-- High-Low Wick -->
+                    <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="@candleColor" stroke-width="1.5" />
+                    <!-- Real Body -->
+                    <rect x="@F(cx - candleW / 2)" y="@F(bodyTop)" width="@F(candleW)" height="@F(bodyHeight)"
+                          fill="@(isBullish ? "#22c55e" : "#ef4444")" stroke="@candleColor" stroke-width="1" rx="1">
+                        <title>@p.Label&#10;Open: @p.Open&#10;High: @p.High&#10;Low: @p.Low&#10;Close: @p.Close</title>
+                    </rect>
+                }
+                else if (Type == ChartType.Ohlc)
+                {
+                    <!-- High-Low Line -->
+                    <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="@candleColor" stroke-width="1.5" />
+                    <!-- Left Open Tick -->
+                    <line x1="@F(cx - candleW / 2)" y1="@F(yOpen)" x2="@F(cx)" y2="@F(yOpen)" stroke="@candleColor" stroke-width="1.5" />
+                    <!-- Right Close Tick -->
+                    <line x1="@F(cx)" y1="@F(yClose)" x2="@F(cx + candleW / 2)" y2="@F(yClose)" stroke="@candleColor" stroke-width="1.5" />
+                }
+                else // HighLow
+                {
+                    <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="#2563eb" stroke-width="2.5" />
+                }
+
+                @SvgText(F(cx), F(padT + plotH + 16), Truncate(p.Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Bullet Chart
+
+    private RenderFragment RenderBullet() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+        var pts = _effectiveSeries[0].DataPoints;
+
+        double svgW = 600, svgH = Math.Max(120, pts.Count * 60.0);
+        double padL = 100, padR = 40, padT = 20, padB = 20;
+        double plotW = svgW - padL - padR;
+
+        double maxVal = pts.Max(p => Math.Max(p.Actual, p.Target)) * 1.2;
+        if (maxVal <= 0) maxVal = 100;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? $"{svgH}px");" xmlns="http://www.w3.org/2000/svg">
+
+            @for (int i = 0; i < pts.Count; i++)
+            {
+                var p = pts[i];
+                double y = padT + i * 50;
+                double h = 28;
+
+                <!-- Background Qualitative Ranges (Bad: 60%, Satisfactory: 85%, Good: 100%) -->
+                <rect x="@F(padL)" y="@F(y)" width="@F(plotW)" height="@F(h)" fill="#f1f5f9" rx="2" />
+                <rect x="@F(padL)" y="@F(y)" width="@F(plotW * 0.85)" height="@F(h)" fill="#e2e8f0" rx="2" />
+                <rect x="@F(padL)" y="@F(y)" width="@F(plotW * 0.60)" height="@F(h)" fill="#cbd5e1" rx="2" />
+
+                <!-- Actual Value Bar (Dark) -->
+                double actualW = (p.Actual / maxVal) * plotW;
+                <rect x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="#1e293b" rx="1">
+                    <title>@p.Label: Actual=@p.Actual, Target=@p.Target</title>
+                </rect>
+
+                <!-- Target Line (Red) -->
+                double targetX = padL + (p.Target / maxVal) * plotW;
+                <line x1="@F(targetX)" y1="@F(y + 2)" x2="@F(targetX)" y2="@F(y + h - 2)" stroke="#dc2626" stroke-width="3" />
+
+                <!-- Label -->
+                @SvgText(F(padL - 10), F(y + h / 2 + 4), p.Label, anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Range Charts (RangeBar, RangeColumn, RangeArea)
+
+    private RenderFragment RenderRangeChart() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+        var pts = _effectiveSeries[0].DataPoints;
+
+        double svgW = 600, svgH = 300;
+        double padL = 60, padR = 20, padT = 30, padB = 40;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        double minVal = pts.Min(p => p.Value);
+        double maxVal = pts.Max(p => p.Value2 ?? p.Value);
+        if (minVal == maxVal) { maxVal += 10; minVal -= 10; }
+        double range = maxVal - minVal;
+
+        int n = pts.Count;
+        double slotW = plotW / n;
+        double barW = slotW * 0.6;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+
+            <!-- Grid -->
+            @for (int i = 0; i <= 4; i++)
+            {
+                double tickVal = minVal + (range * i / 4.0);
+                double y = padT + plotH - (plotH * (tickVal - minVal) / range);
+                <line x1="@F(padL)" y1="@F(y)" x2="@F(padL + plotW)" y2="@F(y)" stroke="#e5e7eb" stroke-dasharray="3,3" />
+                @SvgText(F(padL - 8), F(y + 4), F0(tickVal), anchor: "end", fontSize: "10", fill: "#6b7280")
+            }
+
+            @for (int i = 0; i < n; i++)
+            {
+                var p = pts[i];
+                double cx = padL + i * slotW + slotW / 2.0;
+                double valMin = p.Value;
+                double valMax = p.Value2 ?? p.Value;
+                double yTop = padT + plotH - (plotH * (valMax - minVal) / range);
+                double yBot = padT + plotH - (plotH * (valMin - minVal) / range);
+                double barH = Math.Max(3, yBot - yTop);
+
+                <rect x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
+                      fill="#3b82f6" opacity="0.85" rx="3">
+                    <title>@p.Label: @valMin - @valMax</title>
+                </rect>
+
+                @SvgText(F(cx), F(padT + plotH + 16), Truncate(p.Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Sankey Flow Diagram
+
+    private RenderFragment RenderSankey() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
+        var pts = _effectiveSeries[0].DataPoints;
+
+        double svgW = 650, svgH = 340;
+        double padL = 80, padR = 80, padT = 30, padB = 30;
+        double plotW = svgW - padL - padR;
+        double plotH = svgH - padT - padB;
+
+        var sources = pts.Select(p => p.Source).Distinct().ToList();
+        var targets = pts.Select(p => p.Destination).Where(d => !string.IsNullOrEmpty(d)).Distinct().ToList();
+        if (targets.Count == 0) targets = new List<string> { "Target" };
+
+        double totalFlow = pts.Sum(p => p.Value);
+        if (totalFlow <= 0) totalFlow = 1;
+
+        double srcY = padT;
+        double tgtY = padT;
+        double nodeW = 16;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "340px");" xmlns="http://www.w3.org/2000/svg">
+
+            @foreach (var pt in pts)
+            {
+                double flowH = Math.Max(8, (pt.Value / totalFlow) * (plotH * 0.8));
+                double x1 = padL + nodeW;
+                double x2 = padL + plotW - nodeW;
+                double y1 = srcY;
+                double y2 = tgtY;
+
+                double cp1X = x1 + (x2 - x1) * 0.5;
+                double cp2X = x2 - (x2 - x1) * 0.5;
+
+                <!-- Smooth Flow Ribbon -->
+                <path d="M @F(x1) @F(y1) C @F(cp1X) @F(y1), @F(cp2X) @F(y2), @F(x2) @F(y2) L @F(x2) @F(y2 + flowH) C @F(cp2X) @F(y2 + flowH), @F(cp1X) @F(y1 + flowH), @F(x1) @F(y1 + flowH) Z"
+                      fill="#60a5fa" fill-opacity="0.45" stroke="#3b82f6" stroke-width="0.5">
+                    <title>@pt.Source → @pt.Destination: @pt.Value</title>
+                </path>
+
+                <!-- Source Node -->
+                <rect x="@F(padL)" y="@F(srcY)" width="@F(nodeW)" height="@F(flowH)" fill="#2563eb" rx="2" />
+                @SvgText(F(padL - 8), F(srcY + flowH / 2 + 4), pt.Source, anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
+
+                <!-- Target Node -->
+                <rect x="@F(padL + plotW - nodeW)" y="@F(tgtY)" width="@F(nodeW)" height="@F(flowH)" fill="#0284c7" rx="2" />
+                @SvgText(F(padL + plotW + 8), F(tgtY + flowH / 2 + 4), pt.Destination, anchor: "start", fontSize: "11", fill: "#1e293b", fontWeight: "600")
+
+                srcY += flowH + 10;
+                tgtY += flowH + 10;
+            }
+        </svg>
+    };
+
+    #endregion
+
+    #region Render — Advanced Gauges (Radial, Arc, Linear)
+
+    private RenderFragment RenderAdvancedGauges() => __builder =>
+    {
+        double val = _effectiveSeries.Count > 0 && _effectiveSeries[0].DataPoints.Count > 0 ? _effectiveSeries[0].DataPoints[0].Value : 75;
+        double min = 0;
+        double max = 100;
+        double pct = Math.Clamp((val - min) / (max - min), 0, 1);
+
+        double svgW = 320, svgH = Type == ChartType.LinearGauge ? 100 : 260;
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? $"{svgH}px");" xmlns="http://www.w3.org/2000/svg">
+
+            @if (Type == ChartType.LinearGauge)
+            {
+                double barX = 40, barY = 40, barW = 240, barH = 18;
+                <rect x="@F(barX)" y="@F(barY)" width="@F(barW)" height="@F(barH)" fill="#e2e8f0" rx="9" />
+                <rect x="@F(barX)" y="@F(barY)" width="@F(barW * pct)" height="@F(barH)" fill="#2563eb" rx="9" />
+                @SvgText(F(barX + barW / 2), F(barY - 12), $"{val:F1}%", anchor: "middle", fontSize: "16", fill: "#1e293b", fontWeight: "bold")
+            }
+            else // Radial / Arc Gauge
+            {
+                double cx = svgW / 2.0;
+                double cy = svgH * 0.65;
+                double r = 85;
+                double startAngle = -140 * Math.PI / 180.0;
+                double totalAngle = 280 * Math.PI / 180.0;
+                double currentAngle = startAngle + totalAngle * pct;
+
+                double needleLen = r * 0.85;
+                double nx = cx + needleLen * Math.Cos(currentAngle);
+                double ny = cy + needleLen * Math.Sin(currentAngle);
+
+                <!-- Gauge Background Arc Track -->
+                <circle cx="@F(cx)" cy="@F(cy)" r="@F(r)" fill="none" stroke="#e2e8f0" stroke-width="16"
+                        stroke-dasharray="@F(2 * Math.PI * r * 0.77) @F(2 * Math.PI * r)" stroke-linecap="round"
+                        transform="rotate(130 @F(cx) @F(cy))" />
+
+                <!-- Gauge Active Value Arc Track -->
+                <circle cx="@F(cx)" cy="@F(cy)" r="@F(r)" fill="none" stroke="#2563eb" stroke-width="16"
+                        stroke-dasharray="@F(2 * Math.PI * r * 0.77 * pct) @F(2 * Math.PI * r)" stroke-linecap="round"
+                        transform="rotate(130 @F(cx) @F(cy))" />
+
+                <!-- Needle -->
+                <line x1="@F(cx)" y1="@F(cy)" x2="@F(nx)" y2="@F(ny)" stroke="#dc2626" stroke-width="3.5" />
+                <circle cx="@F(cx)" cy="@F(cy)" r="6" fill="#1e293b" />
+
+                <!-- Value Display -->
+                @SvgText(F(cx), F(cy + 40), $"{val:F1}", anchor: "middle", fontSize: "22", fill: "#1e293b", fontWeight: "bold")
             }
         </svg>
     };

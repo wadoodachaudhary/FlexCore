@@ -1,0 +1,51 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-rating @(ReadOnly ? "fx-rating-readonly" : "") @(Disabled ? "fx-rating-disabled" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    @for (var i = 1; i <= MaxStars; i++)
+    {
+        var starIndex = i;
+        var isFilled = starIndex <= (_hoverIndex > 0 ? _hoverIndex : Value);
+        <button type="button"
+                class="fx-rating-item @(isFilled ? "fx-rating-filled" : "fx-rating-empty")"
+                disabled="@(ReadOnly || Disabled)"
+                @onclick="() => SelectRating(starIndex)"
+                @onmouseenter="() => HoverRating(starIndex)"
+                @onmouseleave="ClearHover">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>
+            </svg>
+        </button>
+    }
+</div>
+
+@code {
+    [Parameter] public int Value { get; set; }
+    [Parameter] public EventCallback<int> ValueChanged { get; set; }
+    [Parameter] public int MaxStars { get; set; } = 5;
+    [Parameter] public bool ReadOnly { get; set; } = false;
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    private int _hoverIndex = 0;
+
+    private async Task SelectRating(int rating)
+    {
+        if (ReadOnly || Disabled) return;
+        Value = rating;
+        if (ValueChanged.HasDelegate)
+        {
+            await ValueChanged.InvokeAsync(rating);
+        }
+    }
+
+    private void HoverRating(int rating)
+    {
+        if (ReadOnly || Disabled) return;
+        _hoverIndex = rating;
+    }
+
+    private void ClearHover()
+    {
+        _hoverIndex = 0;
+    }
+}

@@ -1,0 +1,62 @@
+@namespace Fx.ControlKit
+@implements IDisposable
+
+<div class="fx-accordion-item @(Expanded ? "fx-accordion-expanded" : "") @(Disabled ? "fx-accordion-disabled" : "")">
+    <button type="button"
+            class="fx-accordion-header"
+            disabled="@Disabled"
+            aria-expanded="@Expanded"
+            @onclick="Toggle">
+        @if (HeaderContent != null)
+        {
+            @HeaderContent
+        }
+        else
+        {
+            @if (!string.IsNullOrEmpty(IconCss))
+            {
+                <span class="@IconCss fx-accordion-icon"></span>
+            }
+            <span class="fx-accordion-title">@Title</span>
+        }
+        <span class="fx-accordion-arrow" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd"/>
+            </svg>
+        </span>
+    </button>
+    @if (Expanded)
+    {
+        <div class="fx-accordion-body" role="region">
+            @ChildContent
+        </div>
+    }
+</div>
+
+@code {
+    [CascadingParameter] private AccordionControl? Parent { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+    [Parameter] public bool InitiallyExpanded { get; set; } = false;
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    public bool Expanded => Parent?.IsExpanded(this) ?? false;
+
+    protected override void OnInitialized()
+    {
+        Parent?.RegisterItem(this);
+    }
+
+    private void Toggle()
+    {
+        if (Disabled) return;
+        Parent?.ToggleItem(this);
+    }
+
+    public void Dispose()
+    {
+        Parent?.UnregisterItem(this);
+    }
+}

@@ -1,0 +1,26 @@
+@namespace Fx.ControlKit
+@implements IDisposable
+
+@if (Active)
+{
+    <div class="fx-carousel-item active">
+        @ChildContent
+    </div>
+}
+
+@code {
+    [CascadingParameter] private CarouselControl? Parent { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    public bool Active => Parent?.IsActive(this) ?? false;
+
+    protected override void OnInitialized()
+    {
+        Parent?.RegisterItem(this);
+    }
+
+    public void Dispose()
+    {
+        Parent?.UnregisterItem(this);
+    }
+}

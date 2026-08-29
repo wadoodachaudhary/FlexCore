@@ -6,7 +6,7 @@ namespace Fx.ControlKit.Grid;
 /// Defines a column in the GridControl. Equivalent to SyncFusion's GridColumn.
 /// Configured as a child component of GridColumns.
 /// </summary>
-public class GridColumn : ComponentBase
+public class GridColumn : ComponentBase, IDisposable
 {
     [CascadingParameter] internal GridColumnsBase? Parent { get; set; }
 
@@ -39,6 +39,8 @@ public class GridColumn : ComponentBase
     [Parameter] public string? Formula { get; set; }
     [Parameter] public bool Visible { get; set; } = true;
     [Parameter] public bool IsPrimaryKey { get; set; }
+    [Parameter] public bool IsFrozen { get; set; }
+    [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
     [Parameter] public bool AllowEditing { get; set; } = true;
@@ -194,6 +196,17 @@ public class GridColumn : ComponentBase
         Parent?.AddColumn(this);
     }
 
+    // Unregisters from the container, so a host foreach can REMOVE columns in
+    // place — until now the only way to shrink or swap the column set was a
+    // @key teardown of the whole GridColumnsBase (VSFlexGrid parity gap: VB6
+    // mutated ColHidden/ColWidth on a live grid). Removal is by INSTANCE
+    // reference inside RemoveColumn, so the dedup-replace case (same Field,
+    // new instance — the old instance disposes later) stays a no-op.
+    public void Dispose()
+    {
+        Parent?.RemoveColumn(this);
+    }
+
     public string GetCellStyle()
     {
         var parts = new List<string>();
@@ -208,6 +221,12 @@ public class GridColumn : ComponentBase
         parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");
         parts.Add("white-space:nowrap");
+        if (IsFrozen)
+        {
+            parts.Add("position:sticky");
+            parts.Add(FrozenPosition == FrozenColumnPosition.Right ? "right:0;z-index:2" : "left:0;z-index:2");
+            parts.Add("background-color:inherit");
+        }
         if (ClipMode == ClipMode.Ellipsis || ClipMode == ClipMode.EllipsisWithTooltip)
         {
             parts.Add("text-overflow:ellipsis");
@@ -235,6 +254,11 @@ public class GridColumn : ComponentBase
         else if (!string.IsNullOrEmpty(Width))
             parts.Add($"width:{Width}");
         parts.Add($"text-align:{HeaderTextAlign.ToString().ToLower()}");
+        if (IsFrozen)
+        {
+            parts.Add("position:sticky");
+            parts.Add(FrozenPosition == FrozenColumnPosition.Right ? "right:0;z-index:3" : "left:0;z-index:3");
+        }
         return string.Join(";", parts);
     }
 }

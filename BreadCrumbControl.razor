@@ -1,0 +1,43 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<nav aria-label="breadcrumb" class="fx-breadcrumb-nav @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    <ol class="fx-breadcrumb">
+        @if (Items != null)
+        {
+            @for (var i = 0; i < Items.Count; i++)
+            {
+                var item = Items[i];
+                var isLast = i == Items.Count - 1;
+                <li class="fx-breadcrumb-item @(isLast ? "active" : "") @(item.Disabled ? "disabled" : "")">
+                    @if (!isLast && !string.IsNullOrEmpty(item.Href) && !item.Disabled)
+                    {
+                        <a href="@item.Href" class="fx-breadcrumb-link">
+                            @if (!string.IsNullOrEmpty(item.IconCss))
+                            {
+                                <span class="@item.IconCss fx-breadcrumb-icon"></span>
+                            }
+                            <span>@item.Text</span>
+                        </a>
+                    }
+                    else
+                    {
+                        <span class="fx-breadcrumb-text">
+                            @if (!string.IsNullOrEmpty(item.IconCss))
+                            {
+                                <span class="@item.IconCss fx-breadcrumb-icon"></span>
+                            }
+                            <span>@item.Text</span>
+                        </span>
+                    }
+                </li>
+            }
+        }
+        @ChildContent
+    </ol>
+</nav>
+
+@code {
+    [Parameter] public IList<BreadCrumbItem>? Items { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

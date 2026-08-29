@@ -17,3 +17,38 @@ td.fx-drag-preview-cell {
     background: var(--fx-grid-selected-row-bg, #b6c8dd) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
 }
+
+/* Window-spacer skeleton shimmer: a soft highlight sweeping the outrun region
+   (the spacer already paints a row/column lattice + alternate-row banding from
+   WindowSpacerStyle) so pending rows read as LOADING, not empty. Pure overlay —
+   pointer-transparent, aria-hidden region, removed the moment real rows render
+   over it. Disabled for reduced-motion users. */
+.fx-grid-window-spacer > td {
+    position: relative;
+    overflow: hidden;
+}
+
+.fx-grid-window-spacer > td::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(100deg,
+        transparent 30%,
+        var(--fx-grid-skeleton-shimmer, rgba(255, 255, 255, 0.55)) 50%,
+        transparent 70%);
+    background-size: 220% 100%;
+    animation: fx-spacer-shimmer 1.3s linear infinite;
+}
+
+@keyframes fx-spacer-shimmer {
+    from { background-position: 160% 0; }
+    to   { background-position: -60% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .fx-grid-window-spacer > td::after {
+        animation: none;
+        background: none;
+    }
+}
