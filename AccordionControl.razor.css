@@ -1,0 +1,69 @@
+.fx-accordion {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+    background-color: #ffffff;
+    display: flex;
+    flex-direction: column;
+}
+
+::deep .fx-accordion-item {
+    border-bottom: 1px solid #e2e8f0;
+}
+
+::deep .fx-accordion-item:last-child {
+    border-bottom: none;
+}
+
+::deep .fx-accordion-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.15rem;
+    background-color: #ffffff;
+    border: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #1e293b;
+    text-align: left;
+    transition: background-color 0.15s ease;
+}
+
+::deep .fx-accordion-header:hover:not(:disabled) {
+    background-color: #f8fafc;
+}
+
+::deep .fx-accordion-title {
+    flex-grow: 1;
+}
+
+::deep .fx-accordion-icon {
+    margin-right: 0.5rem;
+}
+
+::deep .fx-accordion-arrow {
+    display: inline-flex;
+    align-items: center;
+    transition: transform 0.2s ease;
+    color: #64748b;
+}
+
+::deep .fx-accordion-expanded > .fx-accordion-header .fx-accordion-arrow {
+    transform: rotate(180deg);
+}
+
+::deep .fx-accordion-body {
+    padding: 1rem 1.15rem;
+    background-color: #ffffff;
+    color: #334155;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    border-top: 1px solid #f1f5f9;
+}
+
+::deep .fx-accordion-disabled .fx-accordion-header {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

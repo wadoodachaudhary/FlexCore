@@ -1,0 +1,67 @@
+.fx-card {
+    background-color: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    box-sizing: border-box;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.fx-card-elevation-1 { box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1); }
+.fx-card-elevation-2 { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1); }
+.fx-card-elevation-3 { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1); }
+
+.fx-card-header {
+    padding: 0.85rem 1.15rem;
+    border-bottom: 1px solid #f1f5f9;
+    background-color: #ffffff;
+}
+
+.fx-card-title {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #1e293b;
+}
+
+.fx-card-subtitle {
+    margin: 0.25rem 0 0 0;
+    font-size: 0.8rem;
+    font-weight: 400;
+    color: #64748b;
+}
+
+.fx-card-image img {
+    width: 100%;
+    height: auto;
+    display: block;
+    object-fit: cover;
+}
+
+.fx-card-body {
+    padding: 1rem 1.15rem;
+    flex-grow: 1;
+    color: #334155;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.fx-card-footer {
+    padding: 0.75rem 1.15rem;
+    border-top: 1px solid #f1f5f9;
+    background-color: #fafafa;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.fx-card-group {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1rem;
+    width: 100%;
+}

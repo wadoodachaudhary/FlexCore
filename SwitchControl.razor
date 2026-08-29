@@ -1,0 +1,43 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<label class="fx-switch-host @(Disabled ? "fx-switch-disabled" : "") @CssClass" style="@Style">
+    <input type="checkbox"
+           class="fx-switch-input"
+           checked="@Checked"
+           disabled="@Disabled"
+           @onchange="HandleChange"
+           @attributes="AdditionalAttributes" />
+    <span class="fx-switch-track">
+        <span class="fx-switch-thumb"></span>
+    </span>
+    @if (!string.IsNullOrEmpty(Label))
+    {
+        <span class="fx-switch-label">@Label</span>
+    }
+    else if (ChildContent != null)
+    {
+        <span class="fx-switch-label">@ChildContent</span>
+    }
+</label>
+
+@code {
+    [Parameter] public bool Checked { get; set; }
+    [Parameter] public EventCallback<bool> CheckedChanged { get; set; }
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public bool Disabled { get; set; } = false;
+
+    private async Task HandleChange(ChangeEventArgs e)
+    {
+        if (Disabled) return;
+        if (e.Value is bool val)
+        {
+            Checked = val;
+            if (CheckedChanged.HasDelegate)
+            {
+                await CheckedChanged.InvokeAsync(val);
+            }
+        }
+    }
+}

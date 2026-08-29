@@ -1,0 +1,14 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="fx-timeline @(Orientation == TimelineOrientation.Horizontal ? "fx-timeline-horizontal" : "fx-timeline-vertical") fx-timeline-pos-@Position.ToString().ToLowerInvariant() @CssClass" style="@Style" @attributes="AdditionalAttributes">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public TimelineOrientation Orientation { get; set; } = TimelineOrientation.Vertical;
+    [Parameter] public TimelinePosition Position { get; set; } = TimelinePosition.Left;
+}

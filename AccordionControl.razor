@@ -1,0 +1,51 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="fx-accordion @CssClass" style="@Style" @attributes="AdditionalAttributes">
+        @ChildContent
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public bool Multiple { get; set; } = false;
+
+    private readonly HashSet<AccordionItemControl> _expandedItems = new();
+
+    internal bool IsExpanded(AccordionItemControl item) => _expandedItems.Contains(item);
+
+    internal void ToggleItem(AccordionItemControl item)
+    {
+        if (_expandedItems.Contains(item))
+        {
+            _expandedItems.Remove(item);
+        }
+        else
+        {
+            if (!Multiple)
+            {
+                _expandedItems.Clear();
+            }
+            _expandedItems.Add(item);
+        }
+        StateHasChanged();
+    }
+
+    internal void RegisterItem(AccordionItemControl item)
+    {
+        if (item.InitiallyExpanded && !_expandedItems.Contains(item))
+        {
+            if (!Multiple && _expandedItems.Count > 0)
+            {
+                _expandedItems.Clear();
+            }
+            _expandedItems.Add(item);
+        }
+    }
+
+    internal void UnregisterItem(AccordionItemControl item)
+    {
+        _expandedItems.Remove(item);
+    }
+}

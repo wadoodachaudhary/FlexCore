@@ -23,6 +23,12 @@ public enum SortDirection
     Descending
 }
 
+public enum FrozenColumnPosition
+{
+    Left,
+    Right
+}
+
 public enum FilterType
 {
     FilterBar,
@@ -80,6 +86,18 @@ public enum GridPerformanceMode
     ServerOptimized,
     ClientPreview,
     ClientPreviewAndServerOptimized
+}
+
+/// <summary>Controls whether Tab stays within the grid or is delegated to an enclosing PageControl.</summary>
+public enum GridTabNavigationMode
+{
+    /// <summary>
+    /// Tab moves right and wraps to the first column of the next row;
+    /// Shift+Tab moves left and wraps to the last column of the previous row.
+    /// </summary>
+    WrapRows,
+    /// <summary>Tab and Shift+Tab are left to an enclosing PageControl navigation graph.</summary>
+    PageControl
 }
 
 public enum ClipMode

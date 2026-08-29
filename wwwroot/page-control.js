@@ -199,6 +199,15 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
 
         if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
 
+        // GridControl owns Tab by default. A grid participates as one page-level
+        // stop only when it explicitly delegates Tab to PageControl.
+        const sourceGrid = event.target instanceof Element
+            ? event.target.closest("[data-fx-grid-tab-navigation]")
+            : null;
+        if (sourceGrid
+            && root.contains(sourceGrid)
+            && sourceGrid.dataset.fxGridTabNavigation !== "page-control") return;
+
         const currentIndex = resolveCurrentIndex(graph.targets, root.ownerDocument.activeElement);
         const direction = event.shiftKey ? -1 : 1;
         const currentTarget = currentIndex >= 0 ? graph.targets[currentIndex] : null;

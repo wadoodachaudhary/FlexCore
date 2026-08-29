@@ -1,0 +1,61 @@
+.fx-switch-host {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: #1e293b;
+    position: relative;
+    box-sizing: border-box;
+}
+
+.fx-switch-input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+    pointer-events: none;
+}
+
+.fx-switch-track {
+    width: 38px;
+    height: 22px;
+    background-color: #cbd5e1;
+    border-radius: 12px;
+    position: relative;
+    transition: background-color 0.2s ease;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.fx-switch-thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    background-color: #ffffff;
+    border-radius: 50%;
+    transition: transform 0.2s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.fx-switch-input:checked + .fx-switch-track {
+    background-color: #2563eb;
+}
+
+.fx-switch-input:checked + .fx-switch-track .fx-switch-thumb {
+    transform: translateX(16px);
+}
+
+.fx-switch-input:focus-visible + .fx-switch-track {
+    outline: 2px solid #2563eb;
+    outline-offset: 2px;
+}
+
+.fx-switch-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

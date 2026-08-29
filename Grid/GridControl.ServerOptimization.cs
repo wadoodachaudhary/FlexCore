@@ -290,8 +290,21 @@ public partial class GridControl<TValue>
     private Dictionary<object, int>? _optimizedRowIndexLookup;
     private List<TValue>? _optimizedNavigationRows;
     private HashSet<int>? _optimizedRenderSelectedCellRows;
-    private readonly Dictionary<object, Dictionary<GridColumn, string>> _optimizedDisplayValueCache =
+    // Display strings, bounded to ~2 rendered windows by the same per-render
+    // generation swap the cell-handler caches use above: rows that leave the
+    // window are never promoted out of the previous generation and die on the
+    // next swap. Before this, a single dictionary with no eviction accumulated
+    // every row visited by an uninterrupted scroll (~1.5KB/row, per circuit).
+    private Dictionary<object, Dictionary<GridColumn, string>> _displayValuesCurrent =
         new(ReferenceEqualityComparer.Instance);
+    private Dictionary<object, Dictionary<GridColumn, string>> _displayValuesPrevious =
+        new(ReferenceEqualityComparer.Instance);
+
+    private void ClearDisplayValueGenerations()
+    {
+        _displayValuesCurrent.Clear();
+        _displayValuesPrevious.Clear();
+    }
     private Dictionary<GridColumn, string>? _optimizedRenderColumnStyles;
     private Dictionary<GridColumn, bool>? _optimizedRenderEditableCues;
 
@@ -316,7 +329,7 @@ public partial class GridControl<TValue>
         _optimizedDataCount = GetCurrentDataSourceCount();
         _optimizedRowIndexLookup = null;
         _optimizedNavigationRows = null;
-        _optimizedDisplayValueCache.Clear();
+        ClearDisplayValueGenerations();
     }
 
     private void PrepareBlazorServerOptimizationForRender()
@@ -326,12 +339,16 @@ public partial class GridControl<TValue>
             return;
 
         EnsureOptimizedDataSourceIdentity();
+        (_displayValuesPrevious, _displayValuesCurrent) = (_displayValuesCurrent, _displayValuesPrevious);
+        _displayValuesCurrent.Clear();
         _optimizedRenderColumnStyles = new();
         _optimizedRenderEditableCues = new();
     }
 
     private void EndBlazorServerOptimizationRenderPass()
     {
+        GridServerOptimizationDiagnostics.DisplayValueCacheRows =
+            _displayValuesCurrent.Count + _displayValuesPrevious.Count;
         _optimizedRenderSelectedCellRows = null;
         _optimizedRenderColumnStyles = null;
         _optimizedRenderEditableCues = null;
@@ -346,7 +363,7 @@ public partial class GridControl<TValue>
         _optimizedRowIndexLookup = null;
         _optimizedNavigationRows = null;
         _optimizedRenderSelectedCellRows = null;
-        _optimizedDisplayValueCache.Clear();
+        ClearDisplayValueGenerations();
         _optimizedRenderColumnStyles = null;
         _optimizedRenderEditableCues = null;
     }
@@ -360,7 +377,7 @@ public partial class GridControl<TValue>
         _optimizedDataCount = GetCurrentDataSourceCount();
         _optimizedRowIndexLookup = null;
         _optimizedNavigationRows = null;
-        _optimizedDisplayValueCache.Clear();
+        ClearDisplayValueGenerations();
     }
 
     private int GetCurrentDataSourceCount() => DataSource switch
@@ -383,7 +400,7 @@ public partial class GridControl<TValue>
         _optimizedDataCount = count;
         _optimizedRowIndexLookup = null;
         _optimizedNavigationRows = null;
-        _optimizedDisplayValueCache.Clear();
+        ClearDisplayValueGenerations();
     }
 
     private bool IsFlatUntransformedServerView =>
@@ -567,10 +584,17 @@ public partial class GridControl<TValue>
             return GetCellDisplayValue(item, column);
         }
 
-        if (!_optimizedDisplayValueCache.TryGetValue(item, out var rowValues))
+        if (!_displayValuesCurrent.TryGetValue(item, out var rowValues))
         {
-            rowValues = new();
-            _optimizedDisplayValueCache[item] = rowValues;
+            if (_displayValuesPrevious.TryGetValue(item, out rowValues))
+            {
+                _displayValuesCurrent[item] = rowValues;   // still in the window — promote
+            }
+            else
+            {
+                rowValues = new();
+                _displayValuesCurrent[item] = rowValues;
+            }
         }
 
         if (rowValues.TryGetValue(column, out var cachedValue))
@@ -588,12 +612,18 @@ public partial class GridControl<TValue>
     private void InvalidateBlazorServerDisplayValue(object? item)
     {
         if (UseBlazorServerOptimization && item != null && !item.GetType().IsValueType)
-            _optimizedDisplayValueCache.Remove(item);
+        {
+            // Both generations: a promoted entry is REFERENCED from both until
+            // the next swap — removing from one would leave a resurrectable
+            // stale entry serving old cell text after an edit.
+            _displayValuesCurrent.Remove(item);
+            _displayValuesPrevious.Remove(item);
+        }
     }
 
     private void InvalidateBlazorServerHostDisplayValues()
     {
         if (UseBlazorServerOptimization)
-            _optimizedDisplayValueCache.Clear();
+            ClearDisplayValueGenerations();
     }
 }

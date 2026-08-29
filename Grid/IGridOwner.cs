@@ -6,6 +6,12 @@ namespace Fx.ControlKit.Grid;
 internal interface IGridOwner
 {
     void RegisterColumnsContainer(GridColumnsBase container);
+
+    /// <summary>Raised from GridColumnsBase.Dispose. Reference-checked by the
+    /// implementation: on a @key swap the NEW container has already overwritten
+    /// the registration in the same batch, so the dying container's call is a
+    /// no-op; only a columns block removed with NO replacement clears it.</summary>
+    void UnregisterColumnsContainer(GridColumnsBase container);
     void NotifyColumnsChanged();
 
     /// <summary>Raised once per completed column-registration wave, AFTER the

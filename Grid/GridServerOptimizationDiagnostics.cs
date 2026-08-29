@@ -23,6 +23,9 @@ public static class GridServerOptimizationDiagnostics
     public static long BaselineDisplayValueBuilds;
     public static long DisplayValueCacheHits;
     public static long DisplayValueCacheMisses;
+    // Gauge, not a counter: rows currently retained across the two display-value
+    // generations (bounded ≈ 2 rendered windows). Stamped at end of render pass.
+    public static long DisplayValueCacheRows;
     public static long BaselineColumnStyleBuilds;
     public static long ColumnStyleCacheHits;
     public static long ColumnStyleCacheMisses;
@@ -51,6 +54,7 @@ public static class GridServerOptimizationDiagnostics
         BaselineDisplayValueBuilds = 0;
         DisplayValueCacheHits = 0;
         DisplayValueCacheMisses = 0;
+        DisplayValueCacheRows = 0;
         BaselineColumnStyleBuilds = 0;
         ColumnStyleCacheHits = 0;
         ColumnStyleCacheMisses = 0;

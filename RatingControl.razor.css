@@ -1,0 +1,39 @@
+.fx-rating {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.fx-rating-item {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    margin: 0;
+    cursor: pointer;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.1s ease, color 0.15s ease;
+}
+
+.fx-rating-item:not(:disabled):hover {
+    transform: scale(1.15);
+}
+
+.fx-rating-filled {
+    color: #f59e0b;
+}
+
+.fx-rating-empty {
+    color: #cbd5e1;
+}
+
+.fx-rating-readonly .fx-rating-item {
+    cursor: default;
+}
+
+.fx-rating-disabled {
+    opacity: 0.6;
+    pointer-events: none;
+}

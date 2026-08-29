@@ -1,0 +1,50 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="@ResolvedSkeletonCss" style="@ResolvedSkeletonStyle" @attributes="AdditionalAttributes"></div>
+
+@code {
+    [Parameter] public SkeletonVariant Variant { get; set; } = SkeletonVariant.Text;
+    [Parameter] public SkeletonAnimation Animation { get; set; } = SkeletonAnimation.Pulse;
+    [Parameter] public string? Width { get; set; }
+    [Parameter] public string? Height { get; set; }
+
+    private string ResolvedSkeletonCss
+    {
+        get
+        {
+            var variantClass = Variant switch
+            {
+                SkeletonVariant.Circular => "fx-skeleton-circular",
+                SkeletonVariant.Rectangular => "fx-skeleton-rectangular",
+                _ => "fx-skeleton-text"
+            };
+
+            var animationClass = Animation switch
+            {
+                SkeletonAnimation.Wave => "fx-skeleton-wave",
+                SkeletonAnimation.None => "fx-skeleton-none",
+                _ => "fx-skeleton-pulse"
+            };
+
+            return $"fx-skeleton {variantClass} {animationClass} {CssClass}".Trim();
+        }
+    }
+
+    private string ResolvedSkeletonStyle
+    {
+        get
+        {
+            var style = Style ?? "";
+            if (!string.IsNullOrEmpty(Width))
+            {
+                style += $"; width: {Width}";
+            }
+            if (!string.IsNullOrEmpty(Height))
+            {
+                style += $"; height: {Height}";
+            }
+            return style.TrimStart(';');
+        }
+    }
+}

@@ -1,0 +1,40 @@
+@namespace Fx.ControlKit
+
+<div class="fx-timeline-item fx-timeline-item-point-@PointColor.ToString().ToLowerInvariant()">
+    <div class="fx-timeline-axis">
+        <div class="fx-timeline-point">
+            @if (PointContent != null)
+            {
+                @PointContent
+            }
+            else if (!string.IsNullOrEmpty(IconCss))
+            {
+                <span class="@IconCss"></span>
+            }
+        </div>
+        <div class="fx-timeline-line"></div>
+    </div>
+    <div class="fx-timeline-content-host">
+        @if (!string.IsNullOrEmpty(Time))
+        {
+            <div class="fx-timeline-time">@Time</div>
+        }
+        @if (!string.IsNullOrEmpty(Title))
+        {
+            <div class="fx-timeline-title">@Title</div>
+        }
+        <div class="fx-timeline-body">
+            @ChildContent
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private TimelineControl? Parent { get; set; }
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public string? Time { get; set; }
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public BadgeVariant PointColor { get; set; } = BadgeVariant.Primary;
+    [Parameter] public RenderFragment? PointContent { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

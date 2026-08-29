@@ -1,0 +1,53 @@
+.fx-skeleton {
+    background-color: #e2e8f0;
+    position: relative;
+    overflow: hidden;
+    display: block;
+    box-sizing: border-box;
+}
+
+.fx-skeleton-text {
+    height: 1.2em;
+    border-radius: 4px;
+    margin-bottom: 0.5em;
+    width: 100%;
+}
+
+.fx-skeleton-circular {
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+}
+
+.fx-skeleton-rectangular {
+    border-radius: 4px;
+    width: 100%;
+    height: 120px;
+}
+
+.fx-skeleton-pulse {
+    animation: fx-skeleton-pulse-anim 1.5s ease-in-out 0.5s infinite;
+}
+
+@keyframes fx-skeleton-pulse-anim {
+    0% { opacity: 1; }
+    50% { opacity: 0.4; }
+    100% { opacity: 1; }
+}
+
+.fx-skeleton-wave::after {
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.5), transparent);
+    content: "";
+    position: absolute;
+    transform: translateX(-100%);
+    bottom: 0;
+    left: 0;
+    right: 0;
+    top: 0;
+    animation: fx-skeleton-wave-anim 1.6s linear 0.5s infinite;
+}
+
+@keyframes fx-skeleton-wave-anim {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}

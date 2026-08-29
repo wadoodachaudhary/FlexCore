@@ -1,0 +1,10 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+
+<div class="fx-card-group @CssClass" style="@Style" @attributes="AdditionalAttributes">
+    @ChildContent
+</div>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

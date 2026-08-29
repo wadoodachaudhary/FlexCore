@@ -16,10 +16,14 @@ public enum ChartType
     DotPlot,
     // Multivariate
     Radar,
-    // Single value / KPI
-    Gauge, KpiCard,
-    // Project
-    Gantt,
+    // Single value / KPI & Gauges
+    Gauge, KpiCard, LinearGauge, ArcGauge, RadialGauge, Bullet,
+    // Financial
+    Candlestick, Ohlc, HighLow,
+    // Range intervals
+    RangeBar, RangeColumn, RangeArea,
+    // Flow & Project
+    Sankey, Gantt,
     // Statistical
     Waterfall, Pareto,
     // Combination
