@@ -1,0 +1,61 @@
+@namespace Fx.ControlKit.Grid
+@typeparam TItem
+@typeparam TValue
+
+<div class="fx-dropdown-grid @CssClass @(Disabled ? "fx-disabled" : "") @(_isOpen ? "fx-open" : "")" style="@ComputedContainerStyle" @ref="_containerRef">
+    <div class="fx-dropdown-grid-input-wrap" @onclick="ToggleDropdown">
+        <input type="text"
+               class="fx-dropdown-grid-input form-control form-control-sm"
+               value="@DisplayText"
+               placeholder="@Placeholder"
+               readonly
+               disabled="@Disabled"
+               tabindex="@(Disabled ? -1 : 0)" />
+        
+        @if (AllowClear && HasValue && !Disabled && !ReadOnly)
+        {
+            <button type="button" class="fx-dropdown-grid-clear-btn" @onclick:stopPropagation="true" @onclick="ClearValue" title="Clear">✕</button>
+        }
+        <span class="fx-dropdown-grid-arrow" aria-hidden="true">▼</span>
+    </div>
+
+    @if (_isOpen)
+    {
+        <div class="fx-dropdown-grid-popup shadow" style="@ComputedPopupStyle" @onclick:stopPropagation="true">
+            @if (ShowSearch)
+            {
+                <div class="fx-dropdown-grid-search-bar p-1 border-bottom bg-light">
+                    <input type="text"
+                           class="form-control form-control-sm"
+                           placeholder="@(SearchPlaceholder ?? "Search...")"
+                           value="@_searchText"
+                           @oninput="OnSearchInput"
+                           autofocus />
+                </div>
+            }
+            <div class="fx-dropdown-grid-body" style="@($"height: {PopupHeight}; max-height: {PopupHeight}; overflow: hidden;")">
+                <GridControl @ref="_gridRef"
+                             TValue="TItem"
+                             DataSource="@FilteredDataSource"
+                             Height="100%"
+                             RowHeight="@RowHeight"
+                             AllowPaging="@AllowPaging"
+                             PageSize="@PageSize"
+                             AllowSorting="true"
+                             AllowSelection="true"
+                             Density="GridDensity.Compact"
+                             ShowRowCountInFooter="false"
+                             ShowSearchBar="false"
+                             SearchText="@_searchText"
+                             OnRowSelected="@OnGridRowSelected">
+                    <GridColumnsBase>
+                        @if (Columns != null)
+                        {
+                            @Columns
+                        }
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        </div>
+    }
+</div>

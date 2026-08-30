@@ -119,6 +119,9 @@ public partial class GridControl<TValue>
                 _ => ""
             });
 
+            if (Density == GridDensity.Compact)
+                classes.Add("fx-grid-density-compact");
+
             if (ShouldRenderGridOptionsRail)
                 classes.Add("fx-grid-options-rail-on");
             if (ShouldRenderGridOptionsRail && _activeOptionsPanel != GridOptionsPanel.None)
@@ -352,9 +355,13 @@ public partial class GridControl<TValue>
     {
         var state = GetColumnState(field);
         _filterTextDraft = state.FilterValue ?? "";
+        _secondFilterTextDraft = state.SecondFilterValue ?? "";
         _filterOperatorDraft = _filterOperatorDraftsByField.TryGetValue(field, out var cachedOperator)
             ? cachedOperator
             : state.FilterOperator;
+        _secondFilterOperatorDraft = state.SecondFilterOperator;
+        _filterLogicalOperatorDraft = state.LogicalFilterOperator;
+        _blankRowFilterDraft = state.BlankRowFilter;
         IEnumerable<string> checkedValues = state.UseCheckedFilter
             ? state.CheckedFilterValues
             : GetDistinctValues(field);
@@ -394,6 +401,36 @@ public partial class GridControl<TValue>
             await ApplyFilterPopupAsync(close: false);
     }
 
+    private async Task OnSecondTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
+    {
+        _secondFilterOperatorDraft = filterOperator;
+        if (_filterPopupAutoApply && _filterPopupField != null)
+            await ApplyFilterPopupAsync(close: false);
+    }
+
+    private async Task OnSecondTextFilterInput(ChangeEventArgs e)
+    {
+        _secondFilterTextDraft = e.Value?.ToString() ?? "";
+        if (_filterPopupAutoApply && _filterPopupField != null)
+            await ApplyFilterPopupAsync(close: false);
+    }
+
+    private async Task OnFilterLogicalOperatorChanged(LogicalFilterOperator op)
+    {
+        _filterLogicalOperatorDraft = op;
+        if (_filterPopupAutoApply && _filterPopupField != null)
+            await ApplyFilterPopupAsync(close: false);
+    }
+
+    private async Task SetBlankRowFilterDraft(BlankRowFilterMode mode)
+    {
+        _blankRowFilterDraft = mode;
+        if (_filterPopupAutoApply && _filterPopupField != null)
+            await ApplyFilterPopupAsync(close: false);
+        else
+            StateHasChanged();
+    }
+
     private async Task OnFilterPopupAutoApplyChanged(ChangeEventArgs e)
     {
         _filterPopupAutoApply = e.Value is bool value && value;
@@ -408,6 +445,11 @@ public partial class GridControl<TValue>
             return;
 
         await ApplyFilter(field, _filterTextDraft, _filterOperatorDraft);
+        var state = GetColumnState(field);
+        state.SecondFilterValue = string.IsNullOrWhiteSpace(_secondFilterTextDraft) ? null : _secondFilterTextDraft;
+        state.SecondFilterOperator = _secondFilterOperatorDraft;
+        state.LogicalFilterOperator = _filterLogicalOperatorDraft;
+        state.BlankRowFilter = _blankRowFilterDraft;
         CommitCheckedFilterDraft(field);
 
         if (close)
@@ -444,6 +486,12 @@ public partial class GridControl<TValue>
         TextFilterOperator.DoesNotEndWith => "Does Not End With",
         TextFilterOperator.Contains => "Contains",
         TextFilterOperator.DoesNotContain => "Does Not Contain",
+        TextFilterOperator.GreaterThan => "Greater Than",
+        TextFilterOperator.GreaterThanOrEqual => "Greater Than or Equal",
+        TextFilterOperator.LessThan => "Less Than",
+        TextFilterOperator.LessThanOrEqual => "Less Than or Equal",
+        TextFilterOperator.IsEmpty => "Is Blank / Empty",
+        TextFilterOperator.IsNotEmpty => "Is Not Blank / Empty",
         _ => "Choose One"
     };
 
@@ -459,6 +507,12 @@ public partial class GridControl<TValue>
             TextFilterOperator.EndsWith => actual.EndsWith(expected, comparison),
             TextFilterOperator.DoesNotEndWith => !actual.EndsWith(expected, comparison),
             TextFilterOperator.DoesNotContain => !actual.Contains(expected, comparison),
+            TextFilterOperator.IsEmpty => string.IsNullOrWhiteSpace(actual),
+            TextFilterOperator.IsNotEmpty => !string.IsNullOrWhiteSpace(actual),
+            TextFilterOperator.GreaterThan when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum > eNum,
+            TextFilterOperator.GreaterThanOrEqual when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum >= eNum,
+            TextFilterOperator.LessThan when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum < eNum,
+            TextFilterOperator.LessThanOrEqual when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum <= eNum,
             TextFilterOperator.ChooseOne or TextFilterOperator.Contains or _ => actual.Contains(expected, comparison)
         };
     }

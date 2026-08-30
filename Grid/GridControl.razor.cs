@@ -284,6 +284,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool AllowSorting { get; set; }
     [Parameter] public bool AllowMultiSorting { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    /// <summary>
+    /// When enabled, column filter popups render dual condition inputs (Condition 1 + AND/OR + Condition 2)
+    /// for advanced filtering. Default is false (single condition).
+    /// </summary>
+    [Parameter] public bool EnableAdvancedFilterPopup { get; set; }
+    /// <summary>
+    /// When enabled, column filter popups include quick filters for (Blanks) and (Non-Blanks) rows.
+    /// Default is false.
+    /// </summary>
+    [Parameter] public bool EnableBlankRowFilter { get; set; }
     [Parameter] public int PageSize { get; set; } = 50;
     [Parameter] public int[] PageSizes { get; set; } = [25, 50, 100, 200];
     [Parameter] public int PageButtonCount { get; set; } = 5;
@@ -1391,6 +1401,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private double _filterPopupY;
     private string _filterTextDraft = "";
     private TextFilterOperator _filterOperatorDraft = TextFilterOperator.Contains;
+    private string _secondFilterTextDraft = "";
+    private TextFilterOperator _secondFilterOperatorDraft = TextFilterOperator.Contains;
+    private LogicalFilterOperator _filterLogicalOperatorDraft = LogicalFilterOperator.And;
+    private BlankRowFilterMode _blankRowFilterDraft = BlankRowFilterMode.All;
     private bool _filterPopupAutoApply = true;
     private HashSet<string> _filterCheckedDraft = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TextFilterOperator> _filterOperatorDraftsByField = new(StringComparer.Ordinal);
@@ -1511,7 +1525,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             : (PageButtonCount > 0 ? PageButtonCount : 5);
 
     private bool IsPagingActive =>
-        !_pivotMode
+        !UsesItemsProvider
+        && !_pivotMode
         && _pageState.PageSize > 0
         && _pageState.TotalRecords > _pageState.PageSize
         && (AllowPaging || (AutoPageRowThreshold > 0 && _pageState.TotalRecords > AutoPageRowThreshold));
@@ -1637,6 +1652,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int TotalColumnCount =>
         VisibleColumns.Count()
         + (ShowCheckboxColumn ? 1 : 0)
+        + (HasDetailTemplate ? 1 : 0)
         + (ShowRowReorderColumn ? 1 : 0)
         + (ShowRowSelectorHandleColumn ? 1 : 0)
         + GroupedPlaceholderCount;
@@ -1663,6 +1679,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            if (UsesItemsProvider)
+                return _providerTotalCount > 0 || _providerWindowItems.Count > 0;
+
             if (AllowGrouping && _groupDescriptors.Count > 0)
             {
                 if (_renderPassActive || _passGroups != null)
@@ -1681,6 +1700,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            if (UsesItemsProvider)
+                return _providerWindowItems;
+
             var data = DataSource ?? Enumerable.Empty<TValue>();
 
             // Apply column filters
@@ -1689,15 +1711,48 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 var colField = kvp.Key;
                 var state = kvp.Value;
 
-                if (!string.IsNullOrEmpty(state.FilterValue))
+                if (!string.IsNullOrEmpty(state.FilterValue)
+                    || !string.IsNullOrEmpty(state.SecondFilterValue)
+                    || state.FilterOperator == TextFilterOperator.IsEmpty
+                    || state.FilterOperator == TextFilterOperator.IsNotEmpty
+                    || (EnableBlankRowFilter && state.BlankRowFilter != BlankRowFilterMode.All))
                 {
-                    var filterVal = state.FilterValue;
+                    var filterVal = state.FilterValue ?? "";
+                    var op1 = state.FilterOperator;
+                    var filterVal2 = state.SecondFilterValue ?? "";
+                    var op2 = state.SecondFilterOperator;
+                    var logic = state.LogicalFilterOperator;
+                    var blankMode = state.BlankRowFilter;
                     var col = FindColumnByField(colField);
                     data = data.Where(item =>
                     {
                         var rawVal = GetFilterRawValue(item, colField)?.ToString() ?? "";
                         var displayText = GetFilterDisplayText(item, col, rawVal);
-                        return PassesDisplayAwareTextFilter(rawVal, displayText, filterVal, state.FilterOperator);
+
+                        if (EnableBlankRowFilter && blankMode != BlankRowFilterMode.All)
+                        {
+                            bool isBlank = string.IsNullOrWhiteSpace(rawVal) && string.IsNullOrWhiteSpace(displayText);
+                            if (blankMode == BlankRowFilterMode.BlanksOnly && !isBlank)
+                                return false;
+                            if (blankMode == BlankRowFilterMode.NonBlanksOnly && isBlank)
+                                return false;
+                        }
+
+                        if (!string.IsNullOrEmpty(filterVal) || op1 == TextFilterOperator.IsEmpty || op1 == TextFilterOperator.IsNotEmpty)
+                        {
+                            bool cond1 = PassesDisplayAwareTextFilter(rawVal, displayText, filterVal, op1);
+                            if (EnableAdvancedFilterPopup && (!string.IsNullOrEmpty(filterVal2) || op2 == TextFilterOperator.IsEmpty || op2 == TextFilterOperator.IsNotEmpty))
+                            {
+                                bool cond2 = PassesDisplayAwareTextFilter(rawVal, displayText, filterVal2, op2);
+                                bool overall = logic == LogicalFilterOperator.And ? (cond1 && cond2) : (cond1 || cond2);
+                                if (!overall) return false;
+                            }
+                            else
+                            {
+                                if (!cond1) return false;
+                            }
+                        }
+                        return true;
                     });
                 }
 
@@ -1726,6 +1781,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 data = data.Where(PassesExpressionFilter);
             }
 
+            // Apply in-header and advanced column filters.
+            if (_simpleColumnFilters.Count > 0 || _columnAdvancedFilters.Count > 0 || _columnCheckboxFilters.Count > 0)
+            {
+                data = data.Where(PassesColumnFilters);
+            }
+
             // Apply global search
             if (!string.IsNullOrEmpty(SearchText))
             {
@@ -1746,6 +1807,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            // Provider rows already satisfy the provider-neutral query
+            // descriptor. Re-sorting only the loaded range would be incorrect.
+            if (UsesItemsProvider)
+                return _providerWindowItems;
+
             var data = FilteredData;
             var sortedCol = _columnStates.FirstOrDefault(kvp => kvp.Value.SortDirection.HasValue);
             if (sortedCol.Key != null)
@@ -1930,6 +1996,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            if (UsesItemsProvider)
+            {
+                _pageState.TotalRecords = Math.Max(0, _providerTotalCount);
+                return _providerWindowItems;
+            }
+
             var data = SortedData;
             _pageState.TotalRecords = data.Count();
             EnsureCurrentPageInRange();
@@ -1981,6 +2053,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (_passFlatRows != null)
             return _passFlatRows;
+
+        if (UsesItemsProvider)
+        {
+            _pageState.TotalRecords = Math.Max(0, _providerTotalCount);
+            return _passFlatRows = _providerWindowItems as IList<TValue>
+                ?? _providerWindowItems.ToList();
+        }
 
         var fast = GetBlazorServerRenderRows();
         if (fast != null)
@@ -2295,14 +2374,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// phantom columns — every real cell collapses to ~0px wide.</summary>
     private int WindowSpacerColspan =>
         Math.Max(1, VisibleColumns.Count()
+            + (ShowCheckboxColumn ? 1 : 0)
+            + (HasDetailTemplate ? 1 : 0)
             + (ShowRowReorderColumn ? 1 : 0)
             + (ShowRowSelectorHandleColumn ? 1 : 0));
 
     private bool UseRowWindowing =>
         !IsPagingActive
         && !string.IsNullOrWhiteSpace(Height)
-        && MeetsRowWindowingThreshold
-        && !(AllowGrouping && _groupDescriptors.Count > 0)
+        && (UsesItemsProvider || MeetsRowWindowingThreshold)
+        && (UsesItemsProvider || !(AllowGrouping && _groupDescriptors.Count > 0))
         && !_pivotMode
         && !(ShowAsChart && ChartValueFields is { Count: > 0 });
 
@@ -2323,7 +2404,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool EnableGroupedRowWindowing { get; set; } = true;
 
     private bool UseGroupedRowWindowing =>
-        EnableGroupedRowWindowing
+        !UsesItemsProvider
+        && EnableGroupedRowWindowing
         && !IsPagingActive
         && !string.IsNullOrWhiteSpace(Height)
         && MeetsRowWindowingThreshold
@@ -2519,6 +2601,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            if (UsesItemsProvider)
+                return true;
+
             if (MinimumRowsForWindowing <= 0)
                 return true;
 
@@ -2714,6 +2799,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
     {
+        if (UsesItemsProvider)
+        {
+            if (await LoadProviderWindowForScrollAsync(scrollTop, clientHeight)
+                != ProviderScrollLoadStatus.Loaded)
+                return;
+            await ApplyDiagnosticWindowScrollDelayAsync();
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
         // The delay models DATA/BUILD cost, so it belongs on the rendered path
         // only. Paying it before the O(1) window math made every guard-band
         // no-op occupy the JS single-flight slot for the full delay — in-band
@@ -2736,6 +2831,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
+        if (UsesItemsProvider)
+        {
+            if (await LoadProviderWindowForScrollAsync(
+                    scrollTop,
+                    clientHeight,
+                    scrollDirection: Math.Sign(scrollDirection))
+                != ProviderScrollLoadStatus.Loaded)
+                return false;
+
+            await ApplyDiagnosticWindowScrollDelayAsync();
+            if (requestToken > 0)
+                _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
+            _authoritativeWindowRenderPending = true;
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
         // Delay only when this sample actually shifts the window (see the
         // two-argument overload above): a no-op must settle at RTT speed so the
         // single-flight queue keeps draining while the user scrolls in-band.
@@ -2766,6 +2878,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
+        if (UsesItemsProvider)
+        {
+            // Recovery must always republish a DOM acknowledgement. It only
+            // replaces the painted range when the new provider range succeeds.
+            var status = await LoadProviderWindowForScrollAsync(
+                scrollTop,
+                clientHeight,
+                scrollDirection: Math.Sign(scrollDirection),
+                forceRecenter: true);
+            if (status == ProviderScrollLoadStatus.Failed)
+                return false;
+            await ApplyDiagnosticWindowScrollDelayAsync();
+            if (requestToken > 0)
+                _windowScrollResponseToken = Math.Max(_windowScrollResponseToken + 1, requestToken);
+            _authoritativeWindowRenderPending = true;
+            await InvokeAsync(StateHasChanged);
+            return true;
+        }
+
         UpdateGridWindow(
             scrollTop,
             clientHeight,
@@ -2791,8 +2922,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public async Task OnGridDeferredScrollCommitAsync(double scrollTop, double clientHeight, long token)
     {
         var mathStart = Stopwatch.GetTimestamp();
-        UpdateGridWindow(scrollTop, clientHeight, deferredCommit: true);
-        _deferredScrollWindowMathMs = ElapsedMilliseconds(mathStart);
+        if (UsesItemsProvider)
+        {
+            var status = await LoadProviderWindowForScrollAsync(
+                scrollTop,
+                clientHeight,
+                deferredCommit: true);
+            _deferredScrollWindowMathMs = ElapsedMilliseconds(mathStart);
+            if (status == ProviderScrollLoadStatus.Failed)
+                return;
+        }
+        else
+        {
+            UpdateGridWindow(scrollTop, clientHeight, deferredCommit: true);
+            _deferredScrollWindowMathMs = ElapsedMilliseconds(mathStart);
+        }
         // A proxy-thumb commit always renders; delay after the math so the
         // diagnostics keep timing the window math alone.
         await ApplyDiagnosticWindowScrollDelayAsync();
@@ -3286,6 +3430,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _columnUpdateFlushTcs = null;
             flushTcs.TrySetResult();
         }
+
+        // Provider loading starts only after ChildContent registered its columns,
+        // so the first request includes the complete searchable field set.
+        await EnsureItemsProviderLoadedAsync();
 
         // Put the caret in the Choose Columns list as soon as it opens, so Up/Down drive the
         // dialog straight away instead of falling through to the grid behind it.
@@ -4282,6 +4430,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override void OnParametersSet()
     {
+        ValidateItemsProviderConfiguration();
+
         // Cell templates and popup hosts commonly mutate a row directly, then
         // re-render with the same DataSource instance. That host render is the
         // only generic notification GridControl receives, so discard cached
@@ -4622,6 +4772,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
 
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+
         _pendingFirstRowSelection = false;
         await SelectFirstVisibleRowAsync(force: true);
     }
@@ -4650,6 +4803,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = value });
+
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
     }
 
     private void ToggleFilterPopup(string field, MouseEventArgs e)
@@ -4712,7 +4868,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var state = GetColumnState(field);
             _filterTextDraft = "";
+            _secondFilterTextDraft = "";
             _filterOperatorDraft = state.FilterOperator;
+            _secondFilterOperatorDraft = state.SecondFilterOperator;
+            _filterLogicalOperatorDraft = state.LogicalFilterOperator;
+            _blankRowFilterDraft = BlankRowFilterMode.All;
             _filterCheckedDraft = new HashSet<string>(GetDistinctValues(field), StringComparer.Ordinal);
         }
     }
@@ -4720,7 +4880,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private static void ResetColumnFilterState(ColumnState state)
     {
         state.FilterValue = null;
+        state.SecondFilterValue = null;
         state.FilterOperator = TextFilterOperator.Contains;
+        state.SecondFilterOperator = TextFilterOperator.Contains;
+        state.LogicalFilterOperator = LogicalFilterOperator.And;
+        state.BlankRowFilter = BlankRowFilterMode.All;
         state.CheckedFilterValues.Clear();
         state.UseCheckedFilter = false;
         state.CheckedNumericRangeKeys.Clear();
@@ -4740,7 +4904,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         ClearExpressionFilterState();
         _filterPopupField = null;
         _filterTextDraft = "";
+        _secondFilterTextDraft = "";
         _filterOperatorDraft = TextFilterOperator.Contains;
+        _secondFilterOperatorDraft = TextFilterOperator.Contains;
+        _filterLogicalOperatorDraft = LogicalFilterOperator.And;
+        _blankRowFilterDraft = BlankRowFilterMode.All;
         _filterOperatorDraftsByField.Clear();
         _filterCheckedDraft.Clear();
         _pageState.CurrentPage = 1;
@@ -4782,7 +4950,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (_pendingSearchText != null)
                 SearchText = _pendingSearchText;
             _pageState.CurrentPage = 1;
-            await InvokeAsync(StateHasChanged);
+            if (UsesItemsProvider)
+                await ReloadItemsAsync();
+            else
+                await InvokeAsync(StateHasChanged);
         }
         catch (TaskCanceledException) { }
     }
@@ -7156,6 +7327,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (rowIndex < 0)
             return default;
+
+        if (UsesItemsProvider)
+        {
+            var localIndex = rowIndex - _providerWindowStart;
+            return localIndex >= 0 && localIndex < _providerWindowItems.Count
+                ? _providerWindowItems[localIndex]
+                : default;
+        }
 
         if (DataSource is IList<TValue> list && rowIndex < list.Count)
             return list[rowIndex];
@@ -15052,6 +15231,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _searchCts?.Cancel();
         _searchCts?.Dispose();
         _searchCts = null;
+
+        DisposeItemsProviderState();
 
         try
         {

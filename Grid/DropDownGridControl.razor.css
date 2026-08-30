@@ -1,0 +1,53 @@
+.fx-dropdown-grid {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.fx-dropdown-grid-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+}
+
+.fx-dropdown-grid-input {
+    cursor: pointer;
+    background-color: #fff;
+    padding-right: 44px;
+}
+
+.fx-dropdown-grid-clear-btn {
+    position: absolute;
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    padding: 0 4px;
+    font-size: 0.75rem;
+    color: #999;
+    cursor: pointer;
+}
+
+.fx-dropdown-grid-clear-btn:hover {
+    color: #333;
+}
+
+.fx-dropdown-grid-arrow {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 0.60rem;
+    color: #666;
+    pointer-events: none;
+}
+
+.fx-dropdown-grid.fx-disabled .fx-dropdown-grid-input {
+    background-color: #e9ecef;
+    cursor: not-allowed;
+}
+
+.fx-dropdown-grid-popup {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+}
