@@ -1,0 +1,119 @@
+@namespace Fx.ControlKit
+
+<div class="fx-data-filter @CssClass">
+    @RenderGroup(RootGroup, null)
+</div>
+
+@code {
+    RenderFragment RenderGroup(FilterGroup group, FilterGroup? parentGroup) => @<div class="fx-filter-group p-2 my-1 border rounded bg-light">
+        <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+            <div class="d-flex align-items-center gap-2">
+                <div class="btn-group btn-group-sm" role="group">
+                    <button type="button"
+                            class="btn btn-sm @(group.LogicalOperator == LogicalFilterOperator.And ? "btn-primary" : "btn-outline-primary")"
+                            style="font-size: 0.70rem; padding: 1px 6px;"
+                            @onclick="() => SetGroupOperator(group, LogicalFilterOperator.And)">
+                        AND
+                    </button>
+                    <button type="button"
+                            class="btn btn-sm @(group.LogicalOperator == LogicalFilterOperator.Or ? "btn-primary" : "btn-outline-primary")"
+                            style="font-size: 0.70rem; padding: 1px 6px;"
+                            @onclick="() => SetGroupOperator(group, LogicalFilterOperator.Or)">
+                        OR
+                    </button>
+                </div>
+                <button type="button"
+                        class="btn btn-sm btn-outline-success"
+                        style="font-size: 0.70rem; padding: 1px 6px;"
+                        @onclick="() => AddCondition(group)">
+                    + Condition
+                </button>
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary"
+                        style="font-size: 0.70rem; padding: 1px 6px;"
+                        @onclick="() => AddSubGroup(group)">
+                    + Group
+                </button>
+            </div>
+
+            @if (parentGroup != null)
+            {
+                <button type="button"
+                        class="btn btn-sm btn-outline-danger"
+                        style="font-size: 0.65rem; padding: 0 4px;"
+                        @onclick="() => RemoveSubGroup(parentGroup, group)">
+                    ✕ Remove Group
+                </button>
+            }
+        </div>
+
+        <!-- Conditions List -->
+        <div class="fx-filter-conditions d-flex flex-column gap-1 ms-2">
+            @foreach (var condition in group.Conditions)
+            {
+                <div class="d-flex align-items-center gap-1">
+                    <!-- Field Selector -->
+                    <select class="form-select form-select-sm py-0 ps-1 pe-3"
+                            style="font-size: 0.70rem; height: 22px; width: 130px;"
+                            value="@condition.Field"
+                            @onchange="@(e => OnConditionFieldChanged(condition, e.Value?.ToString()))">
+                        @foreach (var f in Properties)
+                        {
+                            <option value="@f.Property">@(f.Title ?? f.Property)</option>
+                        }
+                    </select>
+
+                    <!-- Operator Selector -->
+                    <select class="form-select form-select-sm py-0 ps-1 pe-3"
+                            style="font-size: 0.70rem; height: 22px; width: 140px;"
+                            value="@condition.Operator"
+                            @onchange="@(e => OnConditionOperatorChanged(condition, e.Value?.ToString()))">
+                        <option value="@GridFilterOperator.Equals">Equals</option>
+                        <option value="@GridFilterOperator.NotEquals">Not Equals</option>
+                        <option value="@GridFilterOperator.Contains">Contains</option>
+                        <option value="@GridFilterOperator.DoesNotContain">Does Not Contain</option>
+                        <option value="@GridFilterOperator.StartsWith">Starts With</option>
+                        <option value="@GridFilterOperator.EndsWith">Ends With</option>
+                        <option value="@GridFilterOperator.GreaterThan">Greater Than</option>
+                        <option value="@GridFilterOperator.GreaterThanOrEquals">Greater Than or Equal</option>
+                        <option value="@GridFilterOperator.LessThan">Less Than</option>
+                        <option value="@GridFilterOperator.LessThanOrEquals">Less Than or Equal</option>
+                        <option value="@GridFilterOperator.IsNull">Is Null</option>
+                        <option value="@GridFilterOperator.IsNotNull">Is Not Null</option>
+                        <option value="@GridFilterOperator.IsEmpty">Is Empty</option>
+                        <option value="@GridFilterOperator.IsNotEmpty">Is Not Empty</option>
+                    </select>
+
+                    <!-- Value Input -->
+                    @if (condition.Operator is not GridFilterOperator.IsNull and not GridFilterOperator.IsNotNull and not GridFilterOperator.IsEmpty and not GridFilterOperator.IsNotEmpty)
+                    {
+                        <input type="text"
+                               class="form-control form-control-sm py-0 px-2"
+                               style="font-size: 0.70rem; height: 22px; width: 160px;"
+                               placeholder="Filter value..."
+                               value="@condition.Value"
+                               @oninput="@(e => OnConditionValueChanged(condition, e.Value?.ToString()))" />
+                    }
+
+                    <button type="button"
+                            class="btn btn-sm btn-link text-danger p-0 ms-1"
+                            style="font-size: 0.75rem; text-decoration: none;"
+                            @onclick="() => RemoveCondition(group, condition)">
+                        ✕
+                    </button>
+                </div>
+            }
+        </div>
+
+        <!-- Subgroups -->
+        @if (group.Groups.Count > 0)
+        {
+            <div class="fx-filter-subgroups ms-3 mt-1">
+                @foreach (var sub in group.Groups)
+                {
+                    @RenderGroup(sub, group)
+                }
+            </div>
+        }
+    </div>;
+}

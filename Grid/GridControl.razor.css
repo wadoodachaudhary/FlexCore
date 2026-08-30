@@ -827,6 +827,80 @@
     --fx-grid-cell-border-right-color: var(--fx-grid-table-border-color);
 }
 
+/* ── Density Modes ────────────────────────────────────────────────── */
+.fx-grid-density-compact {
+    --fx-grid-font-size: 9px;
+}
+.fx-grid-density-compact .fx-cell,
+.fx-grid-density-compact .fx-header-cell {
+    padding-top: 1px;
+    padding-bottom: 1px;
+}
+
+/* ── In-Header Filter Row ─────────────────────────────────────────── */
+.fx-filter-row {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #ced4da;
+}
+.fx-filter-cell {
+    padding: 2px 4px;
+    background-color: #f4f5f7;
+    border-right: 1px solid #e0e0e0;
+    font-weight: normal;
+}
+.fx-grid-filter-input-wrap {
+    width: 100%;
+}
+.fx-grid-filter-input {
+    border: 1px solid #ccc;
+    border-radius: 2px;
+    background-color: #fff;
+}
+.fx-grid-filter-input:focus {
+    border-color: #0d6efd;
+    outline: none;
+    box-shadow: 0 0 0 1px #0d6efd;
+}
+
+/* ── Master-Detail Expansion ──────────────────────────────────────── */
+.fx-detail-expand-header-cell,
+.fx-detail-expand-cell {
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
+    text-align: center;
+    padding: 0;
+}
+.fx-detail-expand-btn,
+.fx-expand-all-btn {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.70rem;
+    line-height: 1;
+    color: #495057;
+}
+.fx-detail-expand-btn:hover,
+.fx-expand-all-btn:hover {
+    color: #0d6efd;
+}
+.fx-detail-row {
+    background-color: #fdfdfd;
+}
+.fx-detail-cell {
+    padding: 8px 12px;
+    background-color: #f8f9fa;
+    border-bottom: 2px solid #dee2e6;
+}
+
+/* ── Multi-Column Sorting Index Badge ─────────────────────────────── */
+.fx-sort-index {
+    border-radius: 4px;
+    font-size: 0.60rem;
+    padding: 1px 4px;
+    vertical-align: middle;
+}
+
 /* ── Toolbar ──────────────────────────────────────────────────────── */
 .fx-grid-toolbar {
     display: flex;
@@ -1703,31 +1777,35 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 12px;
-    min-width: 12px;
-    height: 12px;
-    font-size: calc(9px * var(--fx-zoom, 1));
+    width: 14px;
+    min-width: 14px;
+    height: 14px;
+    font-size: calc(10px * var(--fx-zoom, 1));
     line-height: 1;
     margin-left: 4px;
-    color: #2c7a7b;
+    color: #495057;
     cursor: pointer;
     padding: 0;
     border-radius: 2px;
     position: relative;
     vertical-align: middle;
-    opacity: 0;
-    pointer-events: none;
+    opacity: 0.75;
+    pointer-events: auto;
+    transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 .fx-header-cell:hover .fx-filter-icon,
-.fx-header-cell:focus-within .fx-filter-icon {
+.fx-header-cell:focus-within .fx-filter-icon,
+.fx-filter-icon:hover,
+.fx-filter-icon.active {
     opacity: 1;
-    pointer-events: auto;
+    color: #0d6efd;
+    background: #eef5ff;
 }
 .fx-filter-icon-default::before {
     content: "";
     position: absolute;
-    top: 1px;
-    left: 1px;
+    top: 2px;
+    left: 2px;
     width: 7px;
     height: 7px;
     border: 1.4px solid currentColor;
@@ -1737,8 +1815,8 @@
 .fx-filter-icon-default::after {
     content: "";
     position: absolute;
-    top: 8px;
-    left: 7px;
+    top: 9px;
+    left: 8px;
     width: 5px;
     height: 1.4px;
     background: currentColor;
@@ -1749,11 +1827,6 @@
 .fx-filter-icon-custom {
     width: auto;
     min-width: 10px;
-}
-.fx-filter-icon:hover,
-.fx-filter-icon.active {
-    color: #0d6efd;
-    background: #eef5ff;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -2633,8 +2706,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     border: 2px solid #64748b;
     border-radius: 7px;
     box-shadow: 0 14px 34px rgba(15, 23, 42, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.9) inset;
-    width: 340px;
-    max-height: min(420px, calc(100vh - 16px));
+    width: 360px;
+    max-height: min(560px, calc(100vh - 16px));
     display: flex;
     flex-direction: column;
     overflow: hidden;

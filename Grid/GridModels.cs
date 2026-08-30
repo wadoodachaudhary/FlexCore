@@ -16,8 +16,16 @@ public class ColumnState
     public decimal? NumericFilterMin { get; set; }
     public decimal? NumericFilterMax { get; set; }
     public bool UseNumericBoundsFilter { get; set; }
+    public string? SecondFilterValue { get; set; }
+    public TextFilterOperator SecondFilterOperator { get; set; } = TextFilterOperator.Contains;
+    public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
+    public BlankRowFilterMode BlankRowFilter { get; set; } = BlankRowFilterMode.All;
     public bool FilterActive =>
         !string.IsNullOrEmpty(FilterValue)
+        || !string.IsNullOrEmpty(SecondFilterValue)
+        || FilterOperator == TextFilterOperator.IsEmpty
+        || FilterOperator == TextFilterOperator.IsNotEmpty
+        || BlankRowFilter != BlankRowFilterMode.All
         || UseCheckedFilter
         || UseNumericRangeFilter
         || UseNumericBoundsFilter;

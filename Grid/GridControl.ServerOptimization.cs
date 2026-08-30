@@ -408,6 +408,9 @@ public partial class GridControl<TValue>
         && string.IsNullOrEmpty(SearchText)
         && _expressionFilterRoot == null
         && !_columnStates.Values.Any(state => state.SortDirection.HasValue || state.FilterActive)
+        && _simpleColumnFilters.Count == 0
+        && _columnAdvancedFilters.Count == 0
+        && _columnCheckboxFilters.Count == 0
         && !IsPagingActive;
 
     private bool TryResolveBlazorServerRowIndex(TValue item, int fallbackIndex, out int rowIndex)

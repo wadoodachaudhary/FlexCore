@@ -176,6 +176,33 @@ public class GridColumn : ComponentBase, IDisposable
     /// <summary>Child content (for Template shorthand).</summary>
     [Parameter] public RenderFragment<object>? ChildContent { get; set; }
 
+    /// <summary>Per-column filter mode override.</summary>
+    [Parameter] public GridFilterMode? FilterMode { get; set; }
+
+    /// <summary>Custom filter template for this column.</summary>
+    [Parameter] public RenderFragment<GridColumn>? FilterTemplate { get; set; }
+
+    /// <summary>Active filter value for in-header or popup filtering.</summary>
+    [Parameter] public object? FilterValue { get; set; }
+
+    /// <summary>Second filter value for 2-condition popup filtering.</summary>
+    [Parameter] public object? SecondFilterValue { get; set; }
+
+    /// <summary>Primary filter operator.</summary>
+    [Parameter] public GridFilterOperator FilterOperator { get; set; } = GridFilterOperator.Contains;
+
+    /// <summary>Secondary filter operator for 2-condition popup filtering.</summary>
+    [Parameter] public GridFilterOperator SecondFilterOperator { get; set; } = GridFilterOperator.Contains;
+
+    /// <summary>Logical operator between first and second filter conditions.</summary>
+    [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
+
+    /// <summary>Custom footer cell template.</summary>
+    [Parameter] public RenderFragment<object>? FooterTemplate { get; set; }
+
+    /// <summary>Custom group header template.</summary>
+    [Parameter] public RenderFragment<object>? GroupHeaderTemplate { get; set; }
+
     /// <summary>Per-column filter settings override.</summary>
     [Parameter] public FilterSettings? FilterSettings { get; set; }
 

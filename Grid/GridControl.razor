@@ -525,6 +525,17 @@
                                              StopMouseDownPropagation="true" />
                         </th>
                     }
+                    @if (HasDetailTemplate)
+                    {
+                        <th class="fx-header-cell fx-detail-expand-header-cell" style="width:36px; min-width:36px; text-align:center;">
+                            @if (ShowExpandAll && ExpandMode == GridExpandMode.Multiple)
+                            {
+                                <button type="button" class="fx-expand-all-btn btn btn-sm btn-link p-0 text-decoration-none" style="font-size:0.75rem; width:20px; height:20px; color:inherit;" @onclick="ToggleExpandAll">
+                                    @(AllRowsExpanded ? "▼" : "▶")
+                                </button>
+                            }
+                        </th>
+                    }
                     @if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
                     {
                         @foreach (var gcol in GroupedLayoutColumns)
@@ -578,6 +589,10 @@
                             @if (AllowSorting && col.AllowSorting && state.SortDirection.HasValue)
                             {
                                 <span class="fx-sort-icon">@(state.SortDirection == SortDirection.Ascending ? "▲" : "▼")</span>
+                                @if (ShowMultiColumnSortingIndex && GetSortPriorityIndex(capturedField) is int sortPriority)
+                                {
+                                    <span class="fx-sort-index badge bg-secondary text-white ms-1" style="font-size:0.60rem; padding:1px 3px;">@sortPriority</span>
+                                }
                             }
 
                             @if (state.FilterActive)
@@ -660,6 +675,52 @@
                     }
                 </tr>
 
+                @if (FilterMode is GridFilterMode.Simple or GridFilterMode.SimpleWithMenu or GridFilterMode.Excel)
+                {
+                    <tr class="fx-filter-row">
+                        @if (ShowRowReorderColumn) { <th class="fx-filter-cell"></th> }
+                        @if (ShowRowSelectorHandleColumn) { <th class="fx-filter-cell"></th> }
+                        @if (ShowCheckboxColumn) { <th class="fx-filter-cell"></th> }
+                        @if (HasDetailTemplate) { <th class="fx-filter-cell"></th> }
+                        @foreach (var col in VisibleColumns)
+                        {
+                            var fCol = col;
+                            <th class="fx-filter-cell" style="@fCol.GetHeaderStyle()">
+                                @if (fCol.AllowFiltering)
+                                {
+                                    @if (fCol.FilterTemplate != null)
+                                    {
+                                        @fCol.FilterTemplate(fCol)
+                                    }
+                                    else
+                                    {
+                                        <div class="fx-grid-filter-input-wrap d-flex align-items-center gap-1">
+                                            <input type="text"
+                                                   class="fx-grid-filter-input form-control form-control-sm py-0 px-1"
+                                                   style="font-size:0.70rem; height:20px;"
+                                                   placeholder="Filter..."
+                                                   value="@GetColumnFilterValue(fCol.Field)"
+                                                   @oninput="@(e => OnColumnFilterInput(fCol.Field, e.Value?.ToString()))"
+                                                   @oninput:stopPropagation="true"
+                                                   @onkeydown:stopPropagation="true"
+                                                   @onkeyup:stopPropagation="true"
+                                                   @onclick:stopPropagation="true"
+                                                   @onfocus:stopPropagation="true" />
+                                            @if (!string.IsNullOrEmpty(GetColumnFilterValue(fCol.Field)))
+                                            {
+                                                <button type="button"
+                                                        class="btn btn-sm btn-link p-0 text-muted"
+                                                        style="font-size:0.65rem;"
+                                                        @onclick="@(() => ClearColumnFilter(fCol.Field))"
+                                                        @onclick:stopPropagation="true">✕</button>
+                                            }
+                                        </div>
+                                    }
+                                }
+                            </th>
+                        }
+                    </tr>
+                }
             </thead>
 
             @* Body *@
@@ -670,7 +731,7 @@
                 }
 
                 @* ── Grouped or flat rendering ─────────────────── *@
-                @if (AllowGrouping && _groupDescriptors.Count > 0)
+                @if (!UsesItemsProvider && AllowGrouping && _groupDescriptors.Count > 0)
                 {
                     @* Grouped windowing: flatten headers/items/footers into one
                        display stream and window over it (mixed-height prefix
@@ -717,7 +778,7 @@
                         }
                         else
                         {
-                            <tr @key="item"
+                            <tr @key="GetRowRenderKey(item)"
                                 class="fx-row @(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "") @(isSelected && HighlightSelectedRows ? "fx-selected" : "") @(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "") @(EnableHover ? "fx-hover" : "") @(ShowRowReorderColumn && _rowReorderDragTargetIndex == ResolveRowIndex(item, currentIdx) ? "fx-row-reorder-target" : "") @rowCssClass"
                                 @onclick="@RowClickHandler(item, currentIdx)"
                                 @ondblclick="@RowDblClickHandler(item, currentIdx)"
@@ -758,8 +819,26 @@
                                     </td>
                                 }
 
+                                @if (HasDetailTemplate)
+                                {
+                                    <td class="fx-cell fx-detail-expand-cell" style="width:36px; min-width:36px; text-align:center;" @onclick:stopPropagation="true">
+                                        <button type="button" class="fx-detail-expand-btn btn btn-sm btn-link p-0 text-decoration-none" style="font-size:0.75rem; width:20px; height:20px; color:inherit;" @onclick="() => ToggleRowExpand(item)">
+                                            @(IsRowExpanded(item) ? "▼" : "▶")
+                                        </button>
+                                    </td>
+                                }
+
                                 @RenderDataCells(item, currentIdx, col => col)
                             </tr>
+
+                            @if (HasDetailTemplate && IsRowExpanded(item))
+                            {
+                                <tr class="fx-detail-row" @key="@($"{item?.GetHashCode()}_detail")">
+                                    <td colspan="@WindowSpacerColspan" class="fx-detail-cell p-2 bg-light border-bottom">
+                                        @DetailTemplate!(item)
+                                    </td>
+                                </tr>
+                            }
                         }
                     </text>;
 
@@ -779,7 +858,28 @@
                        batch-edit / inline-edit match all stay correct. Replaces
                        Blazor <Virtualize>, whose IntersectionObserver did not track
                        scrolling inside this <table>. *@
-                    @if (UseRowWindowing)
+                    @if (UsesItemsProvider)
+                    {
+                        @* Provider rows are already the requested window. Their
+                           render indices are absolute positions in the complete
+                           query, while spacers represent all unfetched rows. *@
+                        var providerTotal = Math.Max(0, _providerTotalCount);
+                        var providerStart = Math.Min(_providerWindowStart, providerTotal);
+                        var providerItems = _providerWindowItems;
+                        var providerEnd = Math.Min(providerTotal, providerStart + providerItems.Count);
+
+                        <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="top">
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(providerStart * _rowHeightPx)"></td>
+                        </tr>
+                        @for (int pi = 0; pi < providerItems.Count; pi++)
+                        {
+                            @rowTemplate((providerItems[pi], providerStart + pi))
+                        }
+                        <tr aria-hidden="true" class="fx-grid-window-spacer" data-fx-window-spacer="bottom">
+                            <td colspan="@WindowSpacerColspan" style="@WindowSpacerStyle(Math.Max(0, providerTotal - providerEnd) * _rowHeightPx)"></td>
+                        </tr>
+                    }
+                    else if (UseRowWindowing)
                     {
                         PrepareRowWindow(pagedList);
                         var winTotal = pagedList.Count;
@@ -828,7 +928,7 @@
             </tbody>
 
             @* ── Grid Footer (aggregates across all data) ──────── *@
-            @if (AggregateRows is { Count: > 0 })
+            @if (!UsesItemsProvider && AggregateRows is { Count: > 0 })
             {
                 var footerRows = AggregateRows.Where(r => r.ShowInFooter).ToList();
                 if (footerRows.Count > 0)
@@ -1022,6 +1122,30 @@
                     var values = candidates.Select(v => v.Value).ToList();
                     var totalValueCount = GetDistinctValues(_filterPopupField).Count;
                     var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
+                    @if (EnableBlankRowFilter)
+                    {
+                        <div class="fx-filter-blank-row-bar d-flex align-items-center gap-1 mb-2 p-1 bg-light border rounded" style="font-size: 0.72rem;">
+                            <span class="text-muted fw-bold me-1">Blanks:</span>
+                            <button type="button"
+                                    class="btn btn-sm py-0 px-2 @(_blankRowFilterDraft == BlankRowFilterMode.All ? "btn-primary" : "btn-outline-secondary")"
+                                    style="font-size: 0.68rem; height: 20px;"
+                                    @onclick="() => SetBlankRowFilterDraft(BlankRowFilterMode.All)">
+                                All
+                            </button>
+                            <button type="button"
+                                    class="btn btn-sm py-0 px-2 @(_blankRowFilterDraft == BlankRowFilterMode.BlanksOnly ? "btn-primary" : "btn-outline-secondary")"
+                                    style="font-size: 0.68rem; height: 20px;"
+                                    @onclick="() => SetBlankRowFilterDraft(BlankRowFilterMode.BlanksOnly)">
+                                Blanks Only
+                            </button>
+                            <button type="button"
+                                    class="btn btn-sm py-0 px-2 @(_blankRowFilterDraft == BlankRowFilterMode.NonBlanksOnly ? "btn-primary" : "btn-outline-secondary")"
+                                    style="font-size: 0.68rem; height: 20px;"
+                                    @onclick="() => SetBlankRowFilterDraft(BlankRowFilterMode.NonBlanksOnly)">
+                                Non-Blanks
+                            </button>
+                        </div>
+                    }
 
                     <div class="fx-filter-condition">
                         <DropDownListControl TValue="TextFilterOperator" TItem="TextFilterOperatorChoice"
@@ -1042,6 +1166,45 @@
                                @onkeyup:stopPropagation="true"
                                @onclick:stopPropagation="true" />
                     </div>
+
+                    @if (EnableAdvancedFilterPopup)
+                    {
+                        <div class="fx-filter-logical-operator d-flex align-items-center justify-content-center gap-3 my-1">
+                            <label class="form-check-label small mb-0 d-flex align-items-center gap-1" style="font-size: 0.72rem; cursor: pointer;">
+                                <input type="radio"
+                                       name="fx-filter-logic-@_filterPopupField"
+                                       checked="@(_filterLogicalOperatorDraft == LogicalFilterOperator.And)"
+                                       @onchange="() => OnFilterLogicalOperatorChanged(LogicalFilterOperator.And)" />
+                                <span class="fw-bold">AND</span>
+                            </label>
+                            <label class="form-check-label small mb-0 d-flex align-items-center gap-1" style="font-size: 0.72rem; cursor: pointer;">
+                                <input type="radio"
+                                       name="fx-filter-logic-@_filterPopupField"
+                                       checked="@(_filterLogicalOperatorDraft == LogicalFilterOperator.Or)"
+                                       @onchange="() => OnFilterLogicalOperatorChanged(LogicalFilterOperator.Or)" />
+                                <span class="fw-bold">OR</span>
+                            </label>
+                        </div>
+
+                        <div class="fx-filter-condition fx-filter-second-condition mb-2">
+                            <DropDownListControl TValue="TextFilterOperator" TItem="TextFilterOperatorChoice"
+                                                 DataSource="@TextFilterOperatorChoices"
+                                                 TextFieldName="Text"
+                                                 ValueFieldName="Value"
+                                                 Value="@_secondFilterOperatorDraft"
+                                                 ValueChanged="OnSecondTextFilterOperatorValueChanged"
+                                                 CssClass="fx-filter-operator-select" />
+                            <input type="text"
+                                   class="fx-filter-popup-input fx-filter-condition-input"
+                                   placeholder="Second filter value..."
+                                   value="@_secondFilterTextDraft"
+                                   @oninput="OnSecondTextFilterInput"
+                                   @oninput:stopPropagation="true"
+                                   @onkeydown:stopPropagation="true"
+                                   @onkeyup:stopPropagation="true"
+                                   @onclick:stopPropagation="true" />
+                        </div>
+                    }
 
                     <div class="fx-filter-popup-summary fx-filter-value-summary">
                         @selectedValueCount of @totalValueCount selected

@@ -46,7 +46,20 @@ public enum TextFilterOperator
     EndsWith,
     DoesNotEndWith,
     Contains,
-    DoesNotContain
+    DoesNotContain,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+    IsEmpty,
+    IsNotEmpty
+}
+
+public enum BlankRowFilterMode
+{
+    All,
+    BlanksOnly,
+    NonBlanksOnly
 }
 
 public enum EditMode
@@ -183,4 +196,52 @@ public enum AggregateType
     Count,
     Min,
     Max
+}
+
+public enum GridFilterMode
+{
+    None,
+    Simple,
+    SimpleWithMenu,
+    Advanced,
+    CheckBoxList,
+    Excel
+}
+
+public enum GridDensity
+{
+    Default,
+    Compact
+}
+
+public enum GridExpandMode
+{
+    Single,
+    Multiple
+}
+
+public enum LogicalFilterOperator
+{
+    And,
+    Or
+}
+
+public enum GridFilterOperator
+{
+    Equals,
+    NotEquals,
+    LessThan,
+    LessThanOrEquals,
+    GreaterThan,
+    GreaterThanOrEquals,
+    Contains,
+    DoesNotContain,
+    StartsWith,
+    EndsWith,
+    IsNull,
+    IsNotNull,
+    IsEmpty,
+    IsNotEmpty,
+    In,
+    NotIn
 }
