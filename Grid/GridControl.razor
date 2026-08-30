@@ -700,10 +700,19 @@
                                                    style="font-size:0.70rem; height:20px;"
                                                    placeholder="Filter..."
                                                    value="@GetColumnFilterValue(fCol.Field)"
-                                                   @oninput="@(e => OnColumnFilterInput(fCol.Field, e.Value?.ToString()))" />
+                                                   @oninput="@(e => OnColumnFilterInput(fCol.Field, e.Value?.ToString()))"
+                                                   @oninput:stopPropagation="true"
+                                                   @onkeydown:stopPropagation="true"
+                                                   @onkeyup:stopPropagation="true"
+                                                   @onclick:stopPropagation="true"
+                                                   @onfocus:stopPropagation="true" />
                                             @if (!string.IsNullOrEmpty(GetColumnFilterValue(fCol.Field)))
                                             {
-                                                <button type="button" class="btn btn-sm btn-link p-0 text-muted" style="font-size:0.65rem;" @onclick="() => ClearColumnFilter(fCol.Field)">✕</button>
+                                                <button type="button"
+                                                        class="btn btn-sm btn-link p-0 text-muted"
+                                                        style="font-size:0.65rem;"
+                                                        @onclick="@(() => ClearColumnFilter(fCol.Field))"
+                                                        @onclick:stopPropagation="true">✕</button>
                                             }
                                         </div>
                                     }
