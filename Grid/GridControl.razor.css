@@ -1643,7 +1643,7 @@
     /* HHM-871 (owner-directed deviation): header text remains larger than the
        computed GridControl body font. Tune per grid/app with
        --fx-grid-header-font-size. */
-    font-size: calc(var(--fx-grid-header-font-size, 12.5px) * var(--fx-zoom, 1));
+    font-size: calc(var(--fx-grid-header-font-size, 10.5px) * var(--fx-zoom, 1));
     background: #fff;
     background: var(--fx-grid-header-bg, #fff);
     border: 1px solid var(--fx-grid-header-border-color);
@@ -4062,4 +4062,18 @@ td.fx-row-selector-cell-flat {
 .fx-grid ::deep td.fx-row-selector-cell-flat.fx-row-selector-emphasis,
 td.fx-row-selector-cell-flat.fx-row-selector-emphasis {
     background: linear-gradient(#fdf6d8, #f0e6b0) !important;
+}
+
+/* Opt-in VB6 flat-cell focus. Grid lines remain visible, but selecting or
+   editing a cell does not draw a second inset border around its contents. */
+.fx-grid.fx-grid-flat-cell-focus ::deep .fx-cell.fx-cell-active,
+.fx-grid.fx-grid-flat-cell-focus ::deep .fx-cell.fx-cell-selected,
+.fx-grid.fx-grid-flat-cell-focus ::deep .fx-cell.fx-batch-editing,
+.fx-grid.fx-grid-flat-cell-focus ::deep .fx-cell.fx-typeahead-preview-cell,
+.fx-grid.fx-grid-flat-cell-focus .fx-cell.fx-cell-active,
+.fx-grid.fx-grid-flat-cell-focus .fx-cell.fx-cell-selected,
+.fx-grid.fx-grid-flat-cell-focus .fx-cell.fx-batch-editing,
+.fx-grid.fx-grid-flat-cell-focus .fx-cell.fx-typeahead-preview-cell {
+    outline: none !important;
+    box-shadow: none !important;
 }

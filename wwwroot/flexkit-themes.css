@@ -7,7 +7,8 @@
 :root {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     --fx-font-size: 11px;
-    --fx-bg-color: #d4d0c8;
+    --fx-bg-color: #e6e6e6;
+    --fx-form-bg: #e6e6e6;
     --fx-surface-color: #ffffff;
     --fx-text-color: #000000;
     --fx-text-muted: #808080;
@@ -15,12 +16,12 @@
     --fx-border-radius: 0px;
 
     /* Buttons */
-    --fx-btn-bg: #d4d0c8;
+    --fx-btn-bg: #e6e6e6;
     --fx-btn-color: #000000;
     --fx-btn-border: 1px solid;
     --fx-btn-border-color: #ffffff #404040 #404040 #ffffff;
     --fx-btn-radius: 0px;
-    --fx-btn-hover-bg: #d4d0c8;
+    --fx-btn-hover-bg: #e6e6e6;
     --fx-btn-hover-border: 1px solid;
     --fx-btn-hover-border-color: #ffffff #404040 #404040 #ffffff;
     --fx-btn-active-bg: #b6b2aa;
@@ -36,7 +37,7 @@
     --fx-input-focus-shadow: none;
 
     /* Grid */
-    --fx-grid-header-bg: #d4d0c8;
+    --fx-grid-header-bg: #e6e6e6;
     --fx-grid-header-color: #000000;
     --fx-grid-header-border: 1px solid;
     --fx-grid-header-border-color: #ffffff #808080 #808080 #ffffff;
@@ -63,7 +64,7 @@
     --fx-sidebar-item-active-color: #eafefe;
 
     /* Tabs */
-    --fx-tab-bg: #d4d0c8;
+    --fx-tab-bg: #e6e6e6;
     --fx-tab-color: #000000;
     --fx-tab-border: 1px solid #808080;
     --fx-tab-active-bg: #ffffff;
@@ -71,7 +72,7 @@
     --fx-tab-active-border-color: #000080;
 
     /* Dialogs */
-    --fx-dialog-bg: #d4d0c8;
+    --fx-dialog-bg: #e6e6e6;
     --fx-dialog-header-bg: #000080;
     --fx-dialog-header-color: #ffffff;
     --fx-dialog-border: 2px solid #ffffff;
@@ -85,19 +86,20 @@
 .theme-vb {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
     --fx-font-size: 11px;
-    --fx-bg-color: #d4d0c8;
+    --fx-bg-color: #e6e6e6;
+    --fx-form-bg: #e6e6e6;
     --fx-surface-color: #ffffff;
     --fx-text-color: #000000;
     --fx-text-muted: #808080;
     --fx-border-color: #808080;
     --fx-border-radius: 0px;
 
-    --fx-btn-bg: #d4d0c8;
+    --fx-btn-bg: #e6e6e6;
     --fx-btn-color: #000000;
     --fx-btn-border: 1px solid;
     --fx-btn-border-color: #ffffff #404040 #404040 #ffffff;
     --fx-btn-radius: 0px;
-    --fx-btn-hover-bg: #d4d0c8;
+    --fx-btn-hover-bg: #e6e6e6;
     --fx-btn-hover-border: 1px solid;
     --fx-btn-hover-border-color: #ffffff #404040 #404040 #ffffff;
     --fx-btn-active-bg: #b6b2aa;
@@ -111,7 +113,7 @@
     --fx-input-focus-border: 1px solid #000000;
     --fx-input-focus-shadow: none;
 
-    --fx-grid-header-bg: #d4d0c8;
+    --fx-grid-header-bg: #e6e6e6;
     --fx-grid-header-color: #000000;
     --fx-grid-header-border: 1px solid;
     --fx-grid-header-border-color: #ffffff #808080 #808080 #ffffff;
@@ -135,14 +137,14 @@
     --fx-sidebar-item-active-bg: #787892;
     --fx-sidebar-item-active-color: #eafefe;
 
-    --fx-tab-bg: #d4d0c8;
+    --fx-tab-bg: #e6e6e6;
     --fx-tab-color: #000000;
     --fx-tab-border: 1px solid #808080;
     --fx-tab-active-bg: #ffffff;
     --fx-tab-active-color: #000080;
     --fx-tab-active-border-color: #000080;
 
-    --fx-dialog-bg: #d4d0c8;
+    --fx-dialog-bg: #e6e6e6;
     --fx-dialog-header-bg: #000080;
     --fx-dialog-header-color: #ffffff;
     --fx-dialog-border: 2px solid #ffffff;
@@ -157,6 +159,7 @@
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --fx-font-size: 12.5px;
     --fx-bg-color: #f1f5f9; /* Soft grey page bg */
+    --fx-form-bg: #f1f5f9;
     --fx-surface-color: #ffffff;
     --fx-text-color: #1e293b;
     --fx-text-muted: #64748b;
@@ -230,6 +233,7 @@
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --fx-font-size: 12.5px;
     --fx-bg-color: #0f172a; /* Deep dark page background */
+    --fx-form-bg: #0f172a;
     --fx-surface-color: #1e293b; /* Card/surface container background */
     --fx-text-color: #f8fafc;
     --fx-text-muted: #94a3b8;
@@ -327,4 +331,20 @@
     border-color: var(--fx-input-focus-border) !important;
     box-shadow: var(--fx-input-focus-shadow) !important;
     outline: none !important;
+}
+
+/* ============================================================
+   Standard Form Painting & Surface Utilities
+   ============================================================ */
+.fx-form-surface,
+.fx-form-bg {
+    background-color: var(--fx-form-bg, #e6e6e6) !important;
+    color: var(--fx-text-color, #000000);
+}
+
+.fx-form-panel {
+    background-color: var(--fx-form-bg, #e6e6e6);
+    border: 1px solid var(--fx-border-color, #808080);
+    border-radius: var(--fx-border-radius, 0px);
+    color: var(--fx-text-color, #000000);
 }

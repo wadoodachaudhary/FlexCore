@@ -8,12 +8,13 @@ namespace Fx.ControlKit.Grid;
 public interface ITreeGridControlOwner
 {
     void AddColumn(TreeGridColumn column);
+    void RemoveColumn(TreeGridColumn column);
 }
 
 /// <summary>
 /// Defines a column in the TreeGridControl. Equivalent to SyncFusion's TreeGridColumn.
 /// </summary>
-public class TreeGridColumn : ComponentBase
+public class TreeGridColumn : ComponentBase, IDisposable
 {
     [CascadingParameter] internal ITreeGridControlOwner? Owner { get; set; }
 
@@ -48,6 +49,11 @@ public class TreeGridColumn : ComponentBase
     protected override void OnInitialized()
     {
         Owner?.AddColumn(this);
+    }
+
+    public void Dispose()
+    {
+        Owner?.RemoveColumn(this);
     }
 
     public string GetCellStyle()

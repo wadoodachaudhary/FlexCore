@@ -19,7 +19,171 @@
     box-shadow: none;
 }
 
-.fx-textarea:disabled {
+.fx-textarea-host {
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-direction: row;
+    align-items: stretch;
+    width: 100%;
+    min-height: 60px;
+    border: 1px solid #7f9db9;
+    background: #ffffff;
+    position: relative;
+    overflow: hidden;
+}
+
+.fx-textarea-host .fx-textarea.fx-textarea-custom-scroll {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+    outline: none;
+    resize: none;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge */
+    overflow-y: scroll;
+    padding: 3px 5px;
+    background: transparent;
+}
+
+.fx-textarea-host .fx-textarea.fx-textarea-custom-scroll::-webkit-scrollbar {
+    display: none; /* Chrome/Safari */
+    width: 0;
+    height: 0;
+}
+
+/* ── Classic VB6-Style Dedicated Vertical Scrollbar ───────────────── */
+.fx-textarea-scrollbar-vertical {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    flex: 0 0 16px;
+    width: 16px;
+    min-width: 16px;
+    max-width: 16px;
+    height: 100%;
+    background: #f0f0f0;
+    border-left: 1px solid #d4d0c8;
+    user-select: none;
+    position: relative;
+}
+
+.fx-scrollbar-arrow {
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 16px;
+    min-height: 16px;
+    max-height: 16px;
+    padding: 0;
+    margin: 0;
+    background: #ece9d8;
+    border: 1px solid #d4d0c8;
+    border-top: 1px solid #ffffff;
+    border-left: 1px solid #ffffff;
+    border-bottom: 1px solid #999999;
+    border-right: 1px solid #999999;
+    cursor: pointer;
+    outline: none;
+    user-select: none;
+}
+
+.fx-scrollbar-arrow:not(:disabled):hover {
+    background: #dcd7c5;
+}
+
+.fx-scrollbar-arrow:not(:disabled):active {
+    background: #c8c2b0;
+    border-top: 1px solid #999999;
+    border-left: 1px solid #999999;
+    border-bottom: 1px solid #ffffff;
+    border-right: 1px solid #ffffff;
+}
+
+.fx-scrollbar-arrow-glyph {
+    font-size: 7px;
+    line-height: 1;
+    color: #444444;
+}
+
+.fx-textarea-scrollbar-vertical.is-disabled .fx-scrollbar-arrow {
+    cursor: default;
+    background: #f0f0f0;
+    border: 1px solid #e0e0e0;
+}
+
+.fx-textarea-scrollbar-vertical.is-disabled .fx-scrollbar-arrow-glyph {
+    color: #b0b0b0;
+}
+
+.fx-scrollbar-track {
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    background: #f0f0f0;
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+}
+
+.fx-scrollbar-thumb {
+    box-sizing: border-box;
+    position: absolute;
+    left: 0;
+    right: 0;
+    width: 100%;
+    min-height: 14px;
+    background: #ece9d8;
+    border: 1px solid #d4d0c8;
+    border-top: 1px solid #ffffff;
+    border-left: 1px solid #ffffff;
+    border-bottom: 1px solid #999999;
+    border-right: 1px solid #999999;
+    cursor: pointer;
+}
+
+.fx-scrollbar-thumb:hover {
+    background: #dcd7c5;
+}
+
+.fx-scrollbar-thumb.is-active {
+    background: #c8c2b0;
+    border-top: 1px solid #999999;
+    border-left: 1px solid #999999;
+    border-bottom: 1px solid #ffffff;
+    border-right: 1px solid #ffffff;
+}
+
+.fx-textarea-scroll-auto {
+    overflow: auto;
+}
+
+.fx-textarea-scroll-none {
+    overflow: hidden;
+}
+
+.fx-textarea-scroll-horizontal {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.fx-textarea-scroll-vertical {
+    overflow-x: hidden;
+    overflow-y: scroll;
+}
+
+.fx-textarea-scroll-both {
+    overflow: scroll;
+}
+
+.fx-textarea:disabled,
+.fx-textarea-host:has(.fx-textarea:disabled) {
     background: #d6d6d6;
     color: #555555;
     resize: none;

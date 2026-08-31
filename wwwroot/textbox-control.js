@@ -420,6 +420,14 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
         if ((event.altKey || event.ctrlKey || event.metaKey) && !controlBoundaryKey)
             return;
 
+        const hasCollapsedCaret = typeof el.selectionStart === "number"
+            && typeof el.selectionEnd === "number"
+            && el.selectionStart === el.selectionEnd;
+        const horizontalCaretBoundaryKey = !event.shiftKey
+            && hasCollapsedCaret
+            && ((key === "ArrowLeft" && el.selectionStart <= 0)
+                || (key === "ArrowRight" && el.selectionEnd >= (el.value?.length ?? 0)));
+
         let commits = key === "Enter"
             || key === "NumpadEnter"
             || key === "Escape"
@@ -428,7 +436,8 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
             || key === "ArrowDown"
             || key === "PageUp"
             || key === "PageDown"
-            || controlBoundaryKey;
+            || controlBoundaryKey
+            || horizontalCaretBoundaryKey;
 
         const staysInEditor = key.length === 1
             || key === "Backspace"
@@ -511,4 +520,207 @@ export function enableMaxLengthPasteNotice(el, dotNetRef, maxLength) {
             }
         } catch { /* clipboard unavailable — the clamp still applies */ }
     });
+}
+
+// ── Classic VB6-Style Vertical Scrollbar for TextAreaControl ────────────────
+const textAreaScrollBarBindings = new WeakMap();
+
+export function registerTextAreaScrollBar(hostEl, textareaEl, scrollbarEl) {
+    if (!hostEl || !textareaEl || !scrollbarEl) return;
+
+    unregisterTextAreaScrollBar(textareaEl);
+
+    const upBtn = scrollbarEl.querySelector(".fx-scrollbar-arrow-up");
+    const downBtn = scrollbarEl.querySelector(".fx-scrollbar-arrow-down");
+    const trackEl = scrollbarEl.querySelector(".fx-scrollbar-track");
+    const thumbEl = scrollbarEl.querySelector(".fx-scrollbar-thumb");
+
+    if (!upBtn || !downBtn || !trackEl || !thumbEl) return;
+
+    let isDragging = false;
+    let dragStartY = 0;
+    let dragStartScrollTop = 0;
+    let isScrollActive = false;
+
+    function updateScrollBar() {
+        const scrollHeight = textareaEl.scrollHeight;
+        const clientHeight = textareaEl.clientHeight;
+        const scrollTop = textareaEl.scrollTop;
+        const canScroll = (scrollHeight - clientHeight) > 1.5;
+
+        if (canScroll !== isScrollActive) {
+            isScrollActive = canScroll;
+            if (canScroll) {
+                scrollbarEl.classList.remove("is-disabled");
+                scrollbarEl.classList.add("is-enabled");
+                upBtn.removeAttribute("disabled");
+                downBtn.removeAttribute("disabled");
+                thumbEl.style.display = "block";
+            } else {
+                scrollbarEl.classList.remove("is-enabled");
+                scrollbarEl.classList.add("is-disabled");
+                upBtn.setAttribute("disabled", "disabled");
+                downBtn.setAttribute("disabled", "disabled");
+                thumbEl.style.display = "none";
+            }
+        }
+
+        if (canScroll) {
+            const trackHeight = trackEl.clientHeight;
+            if (trackHeight > 0) {
+                const thumbHeight = Math.max(16, Math.round((clientHeight / scrollHeight) * trackHeight));
+                const maxThumbTop = trackHeight - thumbHeight;
+                const maxScroll = scrollHeight - clientHeight;
+                const thumbTop = maxScroll > 0 ? Math.round((scrollTop / maxScroll) * maxThumbTop) : 0;
+
+                thumbEl.style.height = `${thumbHeight}px`;
+                thumbEl.style.top = `${thumbTop}px`;
+            }
+        }
+    }
+
+    const onScroll = () => {
+        if (!isDragging) {
+            updateScrollBar();
+        }
+    };
+
+    const onInput = () => {
+        requestAnimationFrame(updateScrollBar);
+    };
+
+    const onKeyDown = () => {
+        requestAnimationFrame(updateScrollBar);
+    };
+
+    const onUpClick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isScrollActive) return;
+        textareaEl.scrollTop -= 18;
+        updateScrollBar();
+    };
+
+    const onDownClick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isScrollActive) return;
+        textareaEl.scrollTop += 18;
+        updateScrollBar();
+    };
+
+    const onTrackMouseDown = (e) => {
+        if (e.target === thumbEl || !isScrollActive) return;
+        e.preventDefault();
+        const rect = trackEl.getBoundingClientRect();
+        const clickY = e.clientY - rect.top;
+        const thumbRect = thumbEl.getBoundingClientRect();
+        const thumbY = thumbRect.top - rect.top;
+
+        if (clickY < thumbY) {
+            textareaEl.scrollTop -= textareaEl.clientHeight * 0.8;
+        } else {
+            textareaEl.scrollTop += textareaEl.clientHeight * 0.8;
+        }
+        updateScrollBar();
+    };
+
+    const onThumbPointerDown = (e) => {
+        if (!isScrollActive) return;
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        dragStartY = e.clientY;
+        dragStartScrollTop = textareaEl.scrollTop;
+        thumbEl.classList.add("is-active");
+        try { thumbEl.setPointerCapture(e.pointerId); } catch { }
+
+        const onPointerMove = (ev) => {
+            if (!isDragging) return;
+            ev.preventDefault();
+            const deltaY = ev.clientY - dragStartY;
+            const trackHeight = trackEl.clientHeight;
+            const thumbHeight = thumbEl.offsetHeight;
+            const maxThumbTop = trackHeight - thumbHeight;
+            const maxScroll = textareaEl.scrollHeight - textareaEl.clientHeight;
+
+            if (maxThumbTop > 0 && maxScroll > 0) {
+                const scrollDelta = (deltaY / maxThumbTop) * maxScroll;
+                textareaEl.scrollTop = dragStartScrollTop + scrollDelta;
+                updateScrollBar();
+            }
+        };
+
+        const onPointerUp = (ev) => {
+            isDragging = false;
+            thumbEl.classList.remove("is-active");
+            try { thumbEl.releasePointerCapture(ev.pointerId); } catch { }
+            thumbEl.removeEventListener("pointermove", onPointerMove);
+            thumbEl.removeEventListener("pointerup", onPointerUp);
+            thumbEl.removeEventListener("pointercancel", onPointerUp);
+            updateScrollBar();
+        };
+
+        thumbEl.addEventListener("pointermove", onPointerMove);
+        thumbEl.addEventListener("pointerup", onPointerUp);
+        thumbEl.addEventListener("pointercancel", onPointerUp);
+    };
+
+    textareaEl.addEventListener("scroll", onScroll, { passive: true });
+    textareaEl.addEventListener("input", onInput, { passive: true });
+    textareaEl.addEventListener("keyup", onKeyDown, { passive: true });
+    textareaEl.addEventListener("keydown", onKeyDown, { passive: true });
+    upBtn.addEventListener("click", onUpClick);
+    downBtn.addEventListener("click", onDownClick);
+    trackEl.addEventListener("mousedown", onTrackMouseDown);
+    thumbEl.addEventListener("pointerdown", onThumbPointerDown);
+
+    let resizeObserver = null;
+    if (typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver(() => {
+            requestAnimationFrame(updateScrollBar);
+        });
+        resizeObserver.observe(textareaEl);
+        resizeObserver.observe(hostEl);
+    }
+
+    // Initial update
+    requestAnimationFrame(updateScrollBar);
+    setTimeout(updateScrollBar, 50);
+
+    const binding = {
+        cleanup: () => {
+            textareaEl.removeEventListener("scroll", onScroll);
+            textareaEl.removeEventListener("input", onInput);
+            textareaEl.removeEventListener("keyup", onKeyDown);
+            textareaEl.removeEventListener("keydown", onKeyDown);
+            upBtn.removeEventListener("click", onUpClick);
+            downBtn.removeEventListener("click", onDownClick);
+            trackEl.removeEventListener("mousedown", onTrackMouseDown);
+            thumbEl.removeEventListener("pointerdown", onThumbPointerDown);
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            }
+        },
+        update: updateScrollBar
+    };
+
+    textAreaScrollBarBindings.set(textareaEl, binding);
+}
+
+export function unregisterTextAreaScrollBar(textareaEl) {
+    if (!textareaEl) return;
+    const binding = textAreaScrollBarBindings.get(textareaEl);
+    if (binding?.cleanup) {
+        binding.cleanup();
+    }
+    textAreaScrollBarBindings.delete(textareaEl);
+}
+
+export function updateTextAreaScrollBar(textareaEl) {
+    if (!textareaEl) return;
+    const binding = textAreaScrollBarBindings.get(textareaEl);
+    if (binding?.update) {
+        binding.update();
+    }
 }
