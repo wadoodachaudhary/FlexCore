@@ -20,8 +20,9 @@
     else
     {
         <textarea class="@ResolvedCssClass"
-                  value="@EffectiveValue"
-                  @oninput="OnNativeInput"
+                  @bind:event="oninput"
+                  @bind:get="EffectiveValue"
+                  @bind:set="OnNativeInput"
                   @onchange="OnNativeChange"
                   @onblur="@BlurDispatch"
                   @onfocus="OnInputFocus"
@@ -43,8 +44,9 @@ else
     {
         <div class="fx-textbox fx-textbox-password-host">
             <input class="@ResolvedPasswordInputCssClass"
-                   value="@EffectiveValue"
-                   @oninput="OnNativeInput"
+                   @bind:event="oninput"
+                   @bind:get="EffectiveValue"
+                   @bind:set="OnNativeInput"
                    @onchange="OnNativeChange"
                    @onblur="@BlurDispatch"
                    @onfocus="OnInputFocus"
@@ -106,8 +108,9 @@ else
            TypingKeysStayLocal instead, which drops only printable/Backspace/Delete
            at the DOM level and leaves shortcut keys free to bubble. *@
         <input class="@ResolvedCssClass"
-               value="@EffectiveValue"
-               @oninput="OnNativeInput"
+               @bind:event="oninput"
+               @bind:get="EffectiveValue"
+               @bind:set="OnNativeInput"
                @onchange="OnNativeChange"
                @onblur="@BlurDispatch"
                @onfocus="OnInputFocus"
@@ -599,10 +602,8 @@ else
         }
     }
 
-    private async Task OnNativeInput(ChangeEventArgs e)
+    private async Task OnNativeInput(string? typed)
     {
-        var typed = e.Value?.ToString();
-
         if (UsesBrowserOwnedValue)
         {
             // UNCONTROLLED (no JS): the DOM already shows exactly what the user typed
@@ -617,11 +618,10 @@ else
             return;
         }
 
-        // Controlled (default): keep the bound Value in sync with what's typed. The
-        // input is rendered controlled (value="@Value"); if we don't update Value on
-        // every keystroke, Blazor reverts the DOM to the stale model value after the
-        // first character. Commit to the parent on each keystroke only when
-        // UpdateOnInput; otherwise the parent is notified on change (blur/Enter).
+        // Controlled (default): the bind getter/setter keeps the DOM synchronized
+        // when this value or the parent's ValueChanged callback rewrites the input.
+        // Commit to the parent on each keystroke only when UpdateOnInput; otherwise
+        // the parent is notified on change (blur/Enter).
         Value = typed;
         InputValueChanged?.Invoke(Value);
         if (!UpdateOnInput)
