@@ -9,28 +9,43 @@
    rich editor — overkill for plain multi-line text). Supports two-way binding via
    @bind-Value. Renders a native <textarea> directly so the scoped .fx-textarea CSS
    applies. *@
-@if (UpdateOnInput)
+@if (UseClassicScrollBar)
 {
-    <textarea class="@ResolvedCssClass"
-              value="@Value"
-              rows="@(Rows ?? 4)"
-              placeholder="@Placeholder"
-              maxlength="@MaxLength"
-              disabled="@(!Enabled)"
-              @ref="_inputElement"
-              @oninput="OnNativeInput"
-              @onchange="OnNativeValueChanged"
-              @onfocus="OnInputFocus"
-              @ondblclick="OnInputDoubleClick"
-              @oncontextmenu="OpenTextContextMenuAsync"
-              @oncontextmenu:preventDefault="UseClassicContextMenu"
-              @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+    <div class="@ResolvedHostCssClass" @ref="_hostElement">
+        <textarea class="@ResolvedCssClass"
+                  value="@Value"
+                  rows="@(Rows ?? 4)"
+                  wrap="@WrapMode"
+                  placeholder="@Placeholder"
+                  maxlength="@MaxLength"
+                  disabled="@(!Enabled)"
+                  @ref="_inputElement"
+                  @oninput="OnNativeInput"
+                  @onchange="OnNativeValueChanged"
+                  @onfocus="OnInputFocus"
+                  @ondblclick="OnInputDoubleClick"
+                  @oncontextmenu="OpenTextContextMenuAsync"
+                  @oncontextmenu:preventDefault="UseClassicContextMenu"
+                  @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
+        <div class="fx-textarea-scrollbar fx-textarea-scrollbar-vertical is-disabled" @ref="_scrollbarElement">
+            <button type="button" class="fx-scrollbar-arrow fx-scrollbar-arrow-up" tabindex="-1" disabled aria-hidden="true">
+                <span class="fx-scrollbar-arrow-glyph">▲</span>
+            </button>
+            <div class="fx-scrollbar-track">
+                <div class="fx-scrollbar-thumb" style="display: none;"></div>
+            </div>
+            <button type="button" class="fx-scrollbar-arrow fx-scrollbar-arrow-down" tabindex="-1" disabled aria-hidden="true">
+                <span class="fx-scrollbar-arrow-glyph">▼</span>
+            </button>
+        </div>
+    </div>
 }
 else
 {
     <textarea class="@ResolvedCssClass"
               value="@Value"
               rows="@(Rows ?? 4)"
+              wrap="@WrapMode"
               placeholder="@Placeholder"
               maxlength="@MaxLength"
               disabled="@(!Enabled)"
@@ -142,6 +157,10 @@ else
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public int? Rows { get; set; }
+    /// <summary>Controls which native textarea scrollbars are available.</summary>
+    [Parameter] public TextAreaScrollBars ScrollBars { get; set; } = TextAreaScrollBars.Auto;
+    /// <summary>Enables the classic VB6-style dedicated vertical scrollbar with disabled/enabled states.</summary>
+    [Parameter] public bool? ClassicScrollBar { get; set; }
     /// <summary>Commit the typed value to the parent on every keystroke (oninput) rather than
     /// only on change/blur. Set this on textareas that stay mounted while background re-renders
     /// can occur — otherwise a parent StateHasChanged mid-typing passes the stale (empty) model
@@ -160,12 +179,17 @@ else
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
     private ElementReference _inputElement;
+    private ElementReference _hostElement;
+    private ElementReference _scrollbarElement;
     private IJSObjectReference? _controlJsModule;
     private bool _showTextContextMenu;
     private int _textContextMenuX;
     private int _textContextMenuY;
     private TextContextMenuState _textContextMenuState = new();
     private bool _suppressNextNativeInputRender;
+
+    private bool UseClassicScrollBar =>
+        ClassicScrollBar ?? (ScrollBars is TextAreaScrollBars.Vertical or TextAreaScrollBars.Both);
 
     protected override bool ShouldRender()
     {
@@ -180,29 +204,76 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
-            return;
-
-        if (TabSpaces > 0)
+        if (firstRender)
         {
-            var tabModule = await GetControlJsModuleAsync();
-            if (tabModule != null)
+            if (TabSpaces > 0)
             {
-                try { await tabModule.InvokeVoidAsync("registerTabCapture", _inputElement, TabSpaces); }
-                catch { /* circuit teardown */ }
+                var tabModule = await GetControlJsModuleAsync();
+                if (tabModule != null)
+                {
+                    try { await tabModule.InvokeVoidAsync("registerTabCapture", _inputElement, TabSpaces); }
+                    catch { /* circuit teardown */ }
+                }
+            }
+
+            if (ReplaceOnFirstInput)
+            {
+                var module = await GetControlJsModuleAsync();
+                if (module != null)
+                    await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+            }
+
+            if (UseClassicScrollBar)
+            {
+                var module = await GetControlJsModuleAsync();
+                if (module != null)
+                {
+                    try { await module.InvokeVoidAsync("registerTextAreaScrollBar", _hostElement, _inputElement, _scrollbarElement); }
+                    catch { }
+                }
             }
         }
-
-        if (!ReplaceOnFirstInput)
-            return;
-
-        var module = await GetControlJsModuleAsync();
-        if (module != null)
-            await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+        else if (UseClassicScrollBar)
+        {
+            var module = await GetControlJsModuleAsync();
+            if (module != null)
+            {
+                try { await module.InvokeVoidAsync("updateTextAreaScrollBar", _inputElement); }
+                catch { }
+            }
+        }
     }
 
-    private string ResolvedCssClass =>
-        string.IsNullOrWhiteSpace(CssClass) ? "fx-textarea" : $"fx-textarea {CssClass}";
+    private string ResolvedHostCssClass =>
+        string.IsNullOrWhiteSpace(CssClass)
+            ? "fx-textarea-host"
+            : $"fx-textarea-host {CssClass}";
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var scrollClass = ScrollBars switch
+            {
+                TextAreaScrollBars.None => "fx-textarea-scroll-none",
+                TextAreaScrollBars.Horizontal => "fx-textarea-scroll-horizontal",
+                TextAreaScrollBars.Vertical => "fx-textarea-scroll-vertical",
+                TextAreaScrollBars.Both => "fx-textarea-scroll-both",
+                _ => "fx-textarea-scroll-auto"
+            };
+
+            var baseClass = UseClassicScrollBar
+                ? $"fx-textarea fx-textarea-custom-scroll {scrollClass}"
+                : $"fx-textarea {scrollClass}";
+
+            return string.IsNullOrWhiteSpace(CssClass) || UseClassicScrollBar
+                ? baseClass
+                : $"{baseClass} {CssClass}";
+        }
+    }
+
+    private string? WrapMode =>
+        ScrollBars is TextAreaScrollBars.Horizontal or TextAreaScrollBars.Both ? "off" : null;
 
     private async Task OnNativeInput(ChangeEventArgs e)
     {
@@ -330,7 +401,12 @@ else
     {
         if (_controlJsModule != null)
         {
-            try { await _controlJsModule.DisposeAsync(); }
+            try
+            {
+                if (UseClassicScrollBar)
+                    await _controlJsModule.InvokeVoidAsync("unregisterTextAreaScrollBar", _inputElement);
+                await _controlJsModule.DisposeAsync();
+            }
             catch { }
         }
     }

@@ -239,6 +239,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// every selection visual (single/multi, row/cell) instead of the
     /// light-blue row default.</summary>
     public const string EditableSelectionThemeCssClass = "fx-grid-editable-selection";
+    /// <summary>CssClass token for VB6-style grids whose active/editing cell stays flat.</summary>
+    public const string FlatCellFocusCssClass = "fx-grid-flat-cell-focus";
 
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }

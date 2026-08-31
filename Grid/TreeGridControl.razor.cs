@@ -250,6 +250,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             _columns.Add(column);
     }
 
+    public void RemoveColumn(TreeGridColumn column)
+    {
+        _columns.Remove(column);
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (_columns.Count != _lastRenderedColumnCount)

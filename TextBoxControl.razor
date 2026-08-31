@@ -307,6 +307,9 @@ else
         if (e.AltKey || ((e.CtrlKey || e.MetaKey) && !controlBoundaryKey))
             return false;
 
+        var horizontalCaretKey = !e.ShiftKey
+            && e.Key is "ArrowLeft" or "ArrowRight";
+
         return e.Key is "Enter"
             or "NumpadEnter"
             or "Tab"
@@ -314,7 +317,8 @@ else
             or "ArrowDown"
             or "PageUp"
             or "PageDown"
-            || controlBoundaryKey;
+            || controlBoundaryKey
+            || horizontalCaretKey;
     }
 
     private async Task OnNativeBlur(FocusEventArgs _)
