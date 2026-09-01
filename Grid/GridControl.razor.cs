@@ -368,6 +368,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     [Parameter] public bool ShowHeader { get; set; } = true;
 
+    /// <summary>Opens the grid with its first cell as the current cell and the grid
+    /// holding focus, so the first keystroke lands in the grid — the VSFlexGrid
+    /// behaviour, where a grid always has a current cell. Re-applied for a few
+    /// renders because rows usually arrive after the first one and other components
+    /// on the page can take focus back; it stops as soon as a cell is current.</summary>
+    [Parameter] public bool AutoFocusFirstCell { get; set; }
+
+    /// <summary>VB6 VSFlexGrid feel: Enter in an open cell editor commits and
+    /// walks to the NEXT editable cell (wrapping to the next row), exactly like
+    /// Tab, instead of committing in place. Enter on a non-editing active cell
+    /// still opens the editor (EditOnEnterKey), so the rhythm is
+    /// type → Enter → type → Enter across the row.</summary>
+    [Parameter] public bool EnterAdvancesToNextCell { get; set; }
+
     [Parameter] public bool AllowPaging { get; set; }
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public bool HighlightSelectedRows { get; set; } = true;
@@ -1384,7 +1398,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _gridScrollSyncRegistered;
     private bool _scrollbarActivityRegistered;
     private bool _gridResizeCaptureRegistered;
+    private int _autoFocusFirstCellAttempts;
     private bool _initialScrollResetOnFirstRenderPending = true;
+    // Opt-in, host-driven: set by RequestScrollToOrigin() and consumed on the NEXT completed
+    // render. Nothing in the grid sets it, so a column resize/reorder never scrolls the view.
+    private bool _scrollToOriginPending;
+
+    /// <summary>
+    /// Ask the grid to return to its origin (top-left) once the next render has landed.
+    /// Intended for a host that swaps the whole column set — e.g. a "Layout" picker — where a
+    /// stale pixel scroll offset would otherwise point into different columns. Deferred rather
+    /// than immediate because the columns rebuild takes several render batches to settle.
+    /// </summary>
+    public void RequestScrollToOrigin() => _scrollToOriginPending = true;
     private bool _initialScrollResetOnFirstDataPending = true;
     private bool _pendingFirstRowSelection;
     private string? _focusedGroupPath;
@@ -3464,6 +3490,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
         }
 
+        if (AutoFocusFirstCell && _autoFocusFirstCellAttempts < 3
+            && PagedData.Any() && VisibleColumns.Any())
+        {
+            _autoFocusFirstCellAttempts++;
+            if (!_activeCell.HasValue)
+                await SelectCellAsync((0, 0));
+            await FocusGridHostAsync();
+        }
+
         // Keep the open menu inside the viewport on every render — the inline
         // Insert-a-column submenu grows it after open — then focus it so
         // keyboard navigation is ready without preselecting a command.
@@ -3992,7 +4027,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task ResetInitialGridScrollIfNeededAsync(bool firstRender)
     {
         var hasData = HasAnyData;
-        var shouldReset = (_initialScrollResetOnFirstRenderPending && firstRender)
+        var hostRequested = _scrollToOriginPending;
+        var shouldReset = hostRequested
+            || (_initialScrollResetOnFirstRenderPending && firstRender)
             || (_initialScrollResetOnFirstDataPending && hasData);
 
         if (!shouldReset)
@@ -4000,6 +4037,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (!await ResetInitialGridScrollAsync())
             return;
+
+        // Cleared only on success, so a circuit without JS interop retries on a later render.
+        if (hostRequested)
+            _scrollToOriginPending = false;
 
         if (hasData)
         {
@@ -9056,6 +9097,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await CommitBatchEdit();
             if (item != null && colIndex >= 0)
             {
+                if (EnterAdvancesToNextCell && !e.ShiftKey)
+                {
+                    // Same walk as Tab: commit landed above, now advance to the
+                    // next editable cell (wrapping rows) and open its editor.
+                    RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+                    await NavigateToAdjacentEditTargetAsync(item, rowIndex, colIndex, backwards: false, allowRowWrap: true);
+                    await FocusGridHostAsync();
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
+
                 SetActiveCell(rowIndex, colIndex);
                 RememberKeyboardNavigationSource(item, rowIndex, colIndex);
                 _lastSelectedCell = (rowIndex, colIndex);
