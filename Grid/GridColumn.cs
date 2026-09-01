@@ -43,6 +43,11 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
+    /// <summary>Excludes this column from best-fit sizing (grip double-click, Best Fit
+    /// menu, AutoFitColumnsAsync). For a column whose width is deliberately pinned —
+    /// e.g. VB6 `ColWidth(0) = 240` followed by `AutoSize(1, .Cols - 1)`.</summary>
+    [Parameter] public bool AllowAutoFit { get; set; } = true;
+
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowHiding { get; set; } = true;
     /// <summary>

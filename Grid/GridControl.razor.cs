@@ -14573,7 +14573,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (columns == null || columns.Count == 0)
             return;
 
-        var targets = columns.Where(c => c != null && IsColumnVisible(c)).ToList();
+        var targets = columns.Where(c => c != null && IsColumnVisible(c) && c.AllowAutoFit).ToList();
         if (targets.Count == 0)
             return;
 
