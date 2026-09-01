@@ -283,6 +283,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
 
     // Feature flags
+    /// <summary>
+    /// Per-row/per-cell editability predicate: (item, field) => can edit. VB6
+    /// BeforeEdit parity — evaluated IN ADDITION to column-level AllowEditing at
+    /// every edit start, every mass-edit fan-out target, the checkbox toggle,
+    /// fill-down, the cell context-menu writes, and the fx-cell-editable render
+    /// cue. Must be synchronous and O(1) (it runs per rendered cell). Null (the
+    /// default) changes nothing. Blocked cells are silently skipped by fan-out
+    /// (VB6 ValidateEdit re-check parity) and by Tab/Enter edit navigation.
+    /// </summary>
+    [Parameter] public Func<TValue, string, bool>? CellEditablePredicate { get; set; }
+
+    private bool IsCellEditableForItem(TValue? item, GridColumn? col)
+        => col != null && !string.IsNullOrEmpty(col.Field)
+           && (CellEditablePredicate == null || item == null || CellEditablePredicate(item, col.Field));
+
     [Parameter] public bool AllowSorting { get; set; }
     [Parameter] public bool AllowMultiSorting { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
@@ -5603,6 +5618,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var item = _cellContextMenuItem;
         var col = _cellContextMenuColumn;
+        if (!IsCellEditableForItem(item, col))
+            return false;
         await CommitBatchEdit();
 
         if (EventsRef?.OnCellEdit.HasDelegate == true)
@@ -7629,6 +7646,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (!col.AllowEditing || string.IsNullOrEmpty(col.Field) || col.IsPrimaryKey) return false;
         if (EditSettingsRef?.AllowEditing != true || EditSettingsRef.Mode != EditMode.Batch) return false;
+        if (!IsCellEditableForItem(item, col)) return false;
 
         // Re-entrancy guard: if this exact cell is ALREADY being batch-edited,
         // keep the live editor instead of commit-and-restart. Dropdown cells
@@ -7731,6 +7749,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (!CanToggleCheckboxColumn(col))
             return;
+        if (!IsCellEditableForItem(item, col))
+        {
+            // The native input may have toggled client-side before this veto —
+            // re-render so the DOM snaps back to the model value.
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
 
         await CommitBatchEdit();
 
@@ -7739,6 +7764,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             : !GetBoolValue(item, col.Field);
 
         var targets = ResolveCheckboxToggleTargets(item, col);
+        targets.RemoveAll(t => !IsCellEditableForItem(t, col));
         var changedAny = false;
         foreach (var target in targets)
         {
@@ -8620,6 +8646,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             targets = new List<TValue> { primary };
         }
 
+        // Per-row predicate: fan-out silently skips locked rows (VB6 multi-row
+        // ValidateEdit parity); the primary already passed TryStartBatchEdit.
+        targets.RemoveAll(t => !IsCellEditableForItem(t, batchEditColumn));
+
         var shouldEnsureTrailingNewRow = false;
         if (cellMassEditTargets is { Count: > 1 } && EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
@@ -9441,6 +9471,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var item = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
         if (item == null)
+            return false;
+
+        if (!IsCellEditableForItem(item, column))
             return false;
 
         await HandleCheckboxToggle(item, column);
@@ -10377,7 +10410,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 {
                     await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
                     {
-                        SelectedItems = _selectedItems.ToList(),
+                        SelectedItems = _selectedItems.Where(i => IsCellEditableForItem(i, targetCol)).ToList(),
                         ColumnName = targetCol.Field,
                         Value = _typeAheadBuffer
                     });
@@ -10664,7 +10697,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
             {
-                SelectedItems = selectedItems,
+                SelectedItems = selectedItems.Where(i => IsCellEditableForItem(i, targetCol)).ToList(),
                 ColumnName = targetCol.Field,
                 Value = value
             });
@@ -11125,6 +11158,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var field = col.Field;
         var newValue = _typeAheadBuffer;
         var targets = ResolveSingleCellColumnMassEditTargets(item, col);
+        targets.RemoveAll(t => !IsCellEditableForItem(t, col));
 
         if (targets.Count > 1 && EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
@@ -11205,7 +11239,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (source == null)
             return false;
 
+        if (!IsCellEditableForItem(source, col))
+            return false;
+
         var targets = ResolveSingleCellColumnMassEditTargets(source, col);
+        targets.RemoveAll(t => !IsCellEditableForItem(t, col));
         if (targets.Count <= 1)
             return false;
 
@@ -12722,7 +12760,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 && _activeCell.Value.RowIndex == resolvedRowIdx
                                 && _activeCell.Value.CellIndex == capturedColIdx;
                             var isPointerFillCell = IsPointerFillCell(resolvedRowIdx, capturedColIdx);
-                            var showsEditableCue = GetBlazorServerEditableCue(capturedCol);
+                            var showsEditableCue = GetBlazorServerEditableCue(capturedCol) && IsCellEditableForItem(item, capturedCol);
                             var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
                             var activeClass = isActiveCell
                                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
@@ -12820,7 +12858,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 var cbItem = item;
                                 var cbCol = capturedCol;
                                 builder.OpenComponent<CheckBoxControl>(130);
-                                builder.AddAttribute(131, "Disabled", !CanToggleCheckboxColumn(cbCol));
+                                builder.AddAttribute(131, "Disabled", !CanToggleCheckboxColumn(cbCol) || !IsCellEditableForItem(cbItem, cbCol));
                                 builder.AddAttribute(132, "Checked", checkedValue);
                                 builder.AddAttribute(133, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
                                 if (CanToggleCheckboxColumn(cbCol))
@@ -12945,7 +12983,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 && _activeCell.Value.RowIndex == resolvedRowIndex
                 && _activeCell.Value.CellIndex == colIdx;
             var isPointerFillCell = IsPointerFillCell(resolvedRowIndex, colIdx);
-            var showsEditableCue = GetBlazorServerEditableCue(capturedCol);
+            var showsEditableCue = GetBlazorServerEditableCue(capturedCol) && IsCellEditableForItem(item, capturedCol);
             var editableClass = showsEditableCue ? " fx-cell-editable" : string.Empty;
             var activeClass = isActiveCell
                 ? showsEditableCue ? " fx-cell-active fx-cell-active-editable" : " fx-cell-active"
@@ -13037,7 +13075,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 var cbItem = item;
                 var cbCol = col;
                 builder.OpenComponent<CheckBoxControl>(30);
-                builder.AddAttribute(31, "Disabled", !CanToggleCheckboxColumn(cbCol));
+                builder.AddAttribute(31, "Disabled", !CanToggleCheckboxColumn(cbCol) || !IsCellEditableForItem(cbItem, cbCol));
                 builder.AddAttribute(32, "Checked", checkedValue);
                 builder.AddAttribute(33, "TabIndex", CanToggleCheckboxColumn(cbCol) ? 0 : -1);
                 if (CanToggleCheckboxColumn(cbCol))
