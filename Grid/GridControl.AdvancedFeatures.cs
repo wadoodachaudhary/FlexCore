@@ -259,14 +259,6 @@ public partial class GridControl<TValue>
         return idx >= 0 ? idx + 1 : null;
     }
 
-    // ── Row-Level Editing Lifecycle API ─────────────────────────────────
-    public void InsertRow(TValue item)
-    {
-        _editingRowIndex = -1;
-        _isEditing = true;
-        StateHasChanged();
-    }
-
     // ── Excel & CSV Export Helpers ──────────────────────────────────────
     public string ExportToCsv(string? customHeader = null)
     {
