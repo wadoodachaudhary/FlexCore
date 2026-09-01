@@ -259,33 +259,7 @@ public partial class GridControl<TValue>
         return idx >= 0 ? idx + 1 : null;
     }
 
-    // ── Row-Level Editing Lifecycle APIs ────────────────────────────────
-    public void EditRow(TValue item)
-    {
-        if (item == null) return;
-        var idx = PagedData.ToList().IndexOf(item);
-        if (idx >= 0)
-        {
-            _editingRowIndex = idx;
-            _isEditing = true;
-            StateHasChanged();
-        }
-    }
-
-    public void SaveRow(TValue item)
-    {
-        _isEditing = false;
-        _editingRowIndex = -1;
-        StateHasChanged();
-    }
-
-    public void CancelEditRow(TValue item)
-    {
-        _isEditing = false;
-        _editingRowIndex = -1;
-        StateHasChanged();
-    }
-
+    // ── Row-Level Editing Lifecycle API ─────────────────────────────────
     public void InsertRow(TValue item)
     {
         _editingRowIndex = -1;
