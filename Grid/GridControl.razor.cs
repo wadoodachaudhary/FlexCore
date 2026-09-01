@@ -5622,6 +5622,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         await CommitBatchEdit();
 
+        var candidateValue = Convert.ToString(newValue, CultureInfo.CurrentCulture) ?? string.Empty;
+        if (!TryResolveRequiredEditValue(col, item, candidateValue, out var ctxResolved, out var ctxMessage))
+        {
+            _validationStatusMessage = ctxMessage;
+            var ctxRowIndex = ResolveRowIndex(item, -1);
+            if (await TryStartBatchEdit(item, ctxRowIndex, col, selectAllOnStart: true))
+            {
+                _batchEditValue = candidateValue;
+                _batchEditDirty = true;
+                _batchEditReplaceOnFirstInput = false;
+            }
+            await InvokeAsync(StateHasChanged);
+            return false;
+        }
+
+        newValue = ctxResolved;
+        _validationStatusMessage = null;
+
         if (EventsRef?.OnCellEdit.HasDelegate == true)
         {
             var editArgs = new CellEditArgs<TValue> { Data = item, ColumnName = col.Field };
@@ -8208,6 +8226,75 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             yield return option;
     }
 
+    private IEnumerable<string> GetRawEditValueList(GridColumn col, object? item)
+    {
+        if (col.EditValueListProvider != null && item != null)
+        {
+            IEnumerable<string>? values = null;
+            try { values = col.EditValueListProvider(item); } catch { values = null; }
+            if (values != null)
+            {
+                foreach (var value in values)
+                    yield return value;
+                yield break;
+            }
+        }
+
+        if (col.EditValueList != null)
+        {
+            foreach (var value in col.EditValueList)
+                yield return value;
+            yield break;
+        }
+
+        foreach (var option in GetRawEditOptions(col, item))
+            yield return option;
+    }
+
+    private bool TryResolveRequiredEditValue(
+        GridColumn? col,
+        object? item,
+        string candidate,
+        out string resolvedValue,
+        out string? validationMessage)
+    {
+        resolvedValue = candidate;
+        validationMessage = null;
+        if (col?.RequireEditValueInList != true)
+            return true;
+
+        var trimmedCandidate = candidate.Trim();
+
+        // An EMPTY entry is always valid (VB6 MMain.ValidateField: EditText=""
+        // short-circuits to True and blanks the cell) — clearing a value must
+        // never be blocked by the membership check.
+        if (trimmedCandidate.Length == 0)
+        {
+            resolvedValue = "";
+            return true;
+        }
+
+        foreach (var rawValue in GetRawEditValueList(col, item))
+        {
+            var option = ParseEditOption(rawValue);
+            if (string.Equals(option.Value.Trim(), trimmedCandidate, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(option.Text.Trim(), trimmedCandidate, StringComparison.OrdinalIgnoreCase))
+            {
+                resolvedValue = option.Value;
+                return true;
+            }
+        }
+
+        var columnName = string.IsNullOrWhiteSpace(col.HeaderText) ? col.Field : col.HeaderText;
+        if (string.IsNullOrWhiteSpace(col.EditValueNotFoundMessage))
+            validationMessage = $"{columnName} '{trimmedCandidate}' not found.";
+        else if (col.EditValueNotFoundMessage.Contains("{0}", StringComparison.Ordinal))
+            validationMessage = string.Format(CultureInfo.CurrentCulture, col.EditValueNotFoundMessage, trimmedCandidate);
+        else
+            validationMessage = col.EditValueNotFoundMessage;
+        return false;
+    }
+
     private bool HasEditOptions(GridColumn? col, object? item)
     {
         return col != null
@@ -8595,6 +8682,48 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 _validationStatusMessage = "Invalid date. Use MM/DD/YYYY, MMDDYYYY, or MMDDYY.";
             }
         }
+        var resolvedValue = newValue;
+        string? validationMessage = null;
+        if (_batchEditDirty
+            && !TryResolveRequiredEditValue(batchEditColumn, primary, newValue, out resolvedValue, out validationMessage))
+        {
+            _validationStatusMessage = validationMessage;
+            _batchEditValue = newValue;
+            _pendingBatchEditFocus = true;
+            _pendingBatchEditSelectAll = true;
+            _pendingBatchEditClientX = null;
+            _batchEditHostKeyHandoffOpen = true;
+
+            // VB6 ValidateEdit Cancel=True parity: the cursor STAYS on the
+            // invalid cell. The gesture that triggered this commit may have
+            // already moved _activeCell, leaving the editor on one row while
+            // the active-cell cue sat on the clicked row. Snap it back.
+            var rejectRowIndex = ResolveRowIndex(primary, _batchEditRowIndex);
+            var rejectColIndex = ResolveVisibleColumnIndex(field);
+            if (rejectColIndex >= 0)
+            {
+                SetActiveCell(rejectRowIndex, rejectColIndex);
+                RememberKeyboardNavigationSource(primary, rejectRowIndex, rejectColIndex);
+            }
+
+            await InvokeAsync(StateHasChanged);
+
+            if (_batchDropdownEditorRef != null)
+                await _batchDropdownEditorRef.FocusAsync();
+            else
+                await ApplyPendingBatchEditFocusAsync();
+
+            // FlexCore's CommitBatchEdit returns Task (FlexKit's returns Task<bool>),
+            // so the rejection stops the commit here rather than reporting it upward.
+            return;
+        }
+
+        if (_batchEditDirty)
+        {
+            newValue = resolvedValue;
+            _validationStatusMessage = null;
+        }
+
         if (!string.Equals(newValue, currentValue, StringComparison.Ordinal))
             _batchEditValue = newValue;
 
@@ -10693,6 +10822,37 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var value = _typeAheadBuffer;
         var selectedItems = _selectedItems.ToList();
 
+        var validationItem = anchor.Item ?? selectedItems.FirstOrDefault();
+        if (validationItem != null)
+        {
+            if (!TryResolveRequiredEditValue(targetCol, validationItem, value, out var taResolved, out var taMessage))
+            {
+                _typeAheadBuffer = "";
+                await NotifyTypeAheadChangedAsync();
+
+                var taRowIndex = ResolveRowIndex(validationItem, anchor.RowIndex);
+                if (await TryStartBatchEdit(validationItem, taRowIndex, targetCol, selectAllOnStart: true))
+                {
+                    _batchEditValue = value;
+                    _batchEditDirty = true;
+                    _batchEditReplaceOnFirstInput = false;
+                    _validationStatusMessage = taMessage;
+                    _pendingBatchEditFocus = true;
+                    _pendingBatchEditSelectAll = true;
+                    _pendingBatchEditClientX = null;
+                }
+                else
+                {
+                    _validationStatusMessage = taMessage;
+                }
+
+                await InvokeAsync(StateHasChanged);
+                return false;
+            }
+
+            value = taResolved;
+        }
+
         if (EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
             await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
@@ -11157,6 +11317,33 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var field = col.Field;
         var newValue = _typeAheadBuffer;
+
+        if (!TryResolveRequiredEditValue(col, item, newValue, out var scResolved, out var scMessage))
+        {
+            _typeAheadBuffer = "";
+            await NotifyTypeAheadChangedAsync();
+
+            var scRowIndex = ResolveRowIndex(item, _activeCell?.RowIndex ?? -1);
+            if (await TryStartBatchEdit(item, scRowIndex, col, selectAllOnStart: true))
+            {
+                _batchEditValue = newValue;
+                _batchEditDirty = true;
+                _batchEditReplaceOnFirstInput = false;
+                _validationStatusMessage = scMessage;
+                _pendingBatchEditFocus = true;
+                _pendingBatchEditSelectAll = true;
+                _pendingBatchEditClientX = null;
+            }
+            else
+            {
+                _validationStatusMessage = scMessage;
+            }
+
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        newValue = scResolved;
         var targets = ResolveSingleCellColumnMassEditTargets(item, col);
         targets.RemoveAll(t => !IsCellEditableForItem(t, col));
 

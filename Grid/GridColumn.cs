@@ -48,6 +48,28 @@ public class GridColumn : ComponentBase, IDisposable
     /// e.g. VB6 `ColWidth(0) = 240` followed by `AutoSize(1, .Cols - 1)`.</summary>
     [Parameter] public bool AllowAutoFit { get; set; } = true;
 
+    /// <summary>
+    /// Requires a typed edit value to match one of the column's allowed values
+    /// before the cell can commit. Matching is case-insensitive and accepts
+    /// either side of a mapped option such as <c>#3;To closest</c>; the stored
+    /// value is normalized to the mapped value. When <see cref="EditValueList"/>
+    /// and <see cref="EditValueListProvider"/> are both omitted, the grid uses
+    /// <see cref="EditOptions"/> or <see cref="EditOptionsProvider"/>.
+    /// </summary>
+    [Parameter] public bool RequireEditValueInList { get; set; }
+
+    /// <summary>Allowed values for <see cref="RequireEditValueInList"/> when the
+    /// cell uses a popup button rather than an in-cell dropdown.</summary>
+    [Parameter] public IEnumerable<string>? EditValueList { get; set; }
+
+    /// <summary>Row-aware allowed values for <see cref="RequireEditValueInList"/>.</summary>
+    [Parameter] public Func<object, IEnumerable<string>>? EditValueListProvider { get; set; }
+
+    /// <summary>Message shown in the validation pill when a required list match is
+    /// not found. Defaults to "{column} '{value}' not found."; a {0} placeholder
+    /// is substituted with the refused entry.</summary>
+    [Parameter] public string? EditValueNotFoundMessage { get; set; }
+
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowHiding { get; set; } = true;
     /// <summary>
