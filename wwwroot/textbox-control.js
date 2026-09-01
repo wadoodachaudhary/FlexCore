@@ -460,6 +460,11 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
 
     const stopServerDispatch = event => {
         event.stopPropagation();
+        // Mark that a REAL user edit happened in this element. The grid's
+        // pending-editor relay (setBatchEditorValue) and the deferred
+        // select-all/caret placement consult this flag: once the user has
+        // typed here, any late server push or selection is stale by
+        // definition and must not clobber the DOM text.
         if (event.type === "input")
             el.dataset.fxUserTyped = "1";
     };

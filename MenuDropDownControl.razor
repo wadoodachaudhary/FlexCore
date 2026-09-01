@@ -115,6 +115,15 @@
     [Parameter] public RenderFragment? TriggerContent { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>
+    /// Raised when the panel transitions from closed to open — the VB6
+    /// Toolbar_ButtonDropDown moment. Hosts refresh menu-item state here
+    /// (checked flags, captions read from the database) so the popup shows
+    /// current data; an async handler re-renders the open panel when it
+    /// completes. Optional; default no behavior change.
+    /// </summary>
+    [Parameter] public EventCallback OnOpening { get; set; }
+
     [CascadingParameter] public MenuBarControl? Parent { get; set; }
 
     private bool _isOpen;
@@ -350,6 +359,8 @@
             _focusFirstItemAfterRender = opening && focusFirstItem;
             _focusItemsByKeyboardAfterRender = opening && keyboardActive;
             _keyboardNavigationActive = opening && keyboardActive;
+            if (opening)
+                NotifyOpening();
             return;
         }
 
@@ -357,10 +368,13 @@
         _focusFirstItemAfterRender = _isOpen && focusFirstItem;
         _focusItemsByKeyboardAfterRender = _isOpen && keyboardActive;
         _keyboardNavigationActive = _isOpen && keyboardActive;
+        if (opening)
+            NotifyOpening();
     }
 
     private void Open(bool focusFirstItem = false, bool focusLastItem = false, bool keyboardActive = false)
     {
+        var opening = !IsOpen;
         if (Parent is not null)
         {
             Parent.Open(this);
@@ -368,6 +382,8 @@
             _focusLastItemAfterRender = focusLastItem;
             _focusItemsByKeyboardAfterRender = keyboardActive;
             _keyboardNavigationActive = keyboardActive;
+            if (opening)
+                NotifyOpening();
             return;
         }
 
@@ -376,6 +392,17 @@
         _focusLastItemAfterRender = focusLastItem;
         _focusItemsByKeyboardAfterRender = keyboardActive;
         _keyboardNavigationActive = keyboardActive;
+        if (opening)
+            NotifyOpening();
+    }
+
+    private void NotifyOpening()
+    {
+        if (!OnOpening.HasDelegate)
+            return;
+        // Fire-and-forget: the panel opens immediately; an async host refresh
+        // re-renders the open panel through the event pipeline when it lands.
+        try { _ = OnOpening.InvokeAsync(); } catch { /* host handler faulted */ }
     }
 
     private string ResolvedCssClass =>

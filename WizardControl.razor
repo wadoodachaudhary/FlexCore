@@ -1,13 +1,9 @@
 @namespace Fx.ControlKit
 
-<DialogControl Visible="@Visible"
-               Header="@Header"
-               Width="@Width"
-               Height="@Height"
-               CssClass="@ResolvedCssClass"
-               CloseOnEscape="true"
-               OnClose="CancelAsync">
-    <div class="fx-wizard-control">
+@{
+    RenderFragment wizardSurface = @<div class="@SurfaceCssClass" style="@SurfaceStyle">
+        @if (ShowHeader)
+        {
         <section class="fx-wizard-header">
             <div class="fx-wizard-heading">
                 <h2>@CurrentStep.Title</h2>
@@ -16,11 +12,22 @@
                     <p>@CurrentStep.Description</p>
                 }
             </div>
-            @if (!string.IsNullOrWhiteSpace(CurrentStep.IconCss))
-            {
-                <span class="fx-wizard-step-icon @CurrentStep.IconCss" aria-hidden="true"></span>
-            }
+            <div class="fx-wizard-header-aside">
+                @if (!string.IsNullOrWhiteSpace(StepIndicator))
+                {
+                    <span class="fx-wizard-step-indicator">@StepIndicator</span>
+                }
+                @if (!string.IsNullOrWhiteSpace(CurrentStep.IconUrl))
+                {
+                    <img class="fx-wizard-step-icon fx-wizard-step-image" src="@CurrentStep.IconUrl" alt="" />
+                }
+                else if (!string.IsNullOrWhiteSpace(CurrentStep.IconCss))
+                {
+                    <span class="fx-wizard-step-icon @CurrentStep.IconCss" aria-hidden="true"></span>
+                }
+            </div>
         </section>
+        }
 
         <section class="fx-wizard-body">
             @if (StepContent is not null)
@@ -29,60 +36,179 @@
             }
         </section>
 
-        <section class="fx-wizard-footer">
-            <ButtonControl CssClass="fx-wizard-nav-btn"
-                           Disabled="@StepContext.IsFirst"
-                           OnClick="@(_ => MovePreviousAsync())">
-                &lt; Back
-            </ButtonControl>
-            <ButtonControl CssClass="fx-wizard-nav-btn primary"
-                           Disabled="@(StepContext.IsLast || !CanMoveNext)"
-                           OnClick="@(_ => MoveNextAsync())">
-                Next &gt;
-            </ButtonControl>
-            <ButtonControl CssClass="fx-wizard-nav-btn"
-                           Disabled="@(!CanFinish)"
-                           OnClick="@(_ => FinishAsync())">
-                Finish
-            </ButtonControl>
-            <ButtonControl CssClass="fx-wizard-nav-btn" OnClick="@(_ => CancelAsync())">
-                Cancel
-            </ButtonControl>
-            @if (ShowHelp)
+        @if (ShowFooter)
+        {
+            <section class="fx-wizard-footer">
+            @if (FooterContent is not null)
             {
-                <ButtonControl CssClass="fx-wizard-nav-btn"
-                               Disabled="@(!HelpRequested.HasDelegate)"
-                               OnClick="@(_ => HelpAsync())">
-                    Help
-                </ButtonControl>
+                @FooterContent(NavigationContext)
             }
-        </section>
-    </div>
-</DialogControl>
+            else
+            {
+                @if (ShowHelp)
+                {
+                    <ButtonControl CssClass="fx-wizard-nav-btn fx-wizard-help-btn"
+                                   accesskey="@HelpAccessKey"
+                                   Disabled="@(!HelpRequested.HasDelegate)"
+                                   OnClick="@(_ => HelpAsync())">
+                        @AccessKeyLabel(HelpText, HelpAccessKey)
+                    </ButtonControl>
+                }
+                @if (ShowCancel)
+                {
+                    <ButtonControl CssClass="fx-wizard-nav-btn"
+                                   accesskey="@CancelAccessKey"
+                                   OnClick="@(_ => CancelAsync())">
+                        @AccessKeyLabel(CancelText, CancelAccessKey)
+                    </ButtonControl>
+                }
+                @if (ShowPrevious)
+                {
+                    <ButtonControl CssClass="fx-wizard-nav-btn"
+                                   accesskey="@PreviousAccessKey"
+                                   Disabled="@(!CanNavigatePrevious)"
+                                   OnClick="@(_ => MovePreviousAsync())">
+                        @AccessKeyLabel(PreviousText, PreviousAccessKey)
+                    </ButtonControl>
+                }
+                @if (ShowNext)
+                {
+                    <ButtonControl CssClass="fx-wizard-nav-btn primary"
+                                   accesskey="@NextAccessKey"
+                                   Disabled="@(!CanNavigateNext)"
+                                   OnClick="@(_ => MoveNextAsync())">
+                        @AccessKeyLabel(NextText, NextAccessKey)
+                    </ButtonControl>
+                }
+                @if (ShowFinish)
+                {
+                    <ButtonControl CssClass="fx-wizard-nav-btn"
+                                   accesskey="@FinishAccessKey"
+                                   Disabled="@(!CanFinish)"
+                                   OnClick="@(_ => FinishAsync())">
+                        @AccessKeyLabel(FinishText, FinishAccessKey)
+                    </ButtonControl>
+                }
+            }
+            </section>
+        }
+    </div>;
+}
+
+@if (Visible)
+{
+    if (Inline)
+    {
+        @wizardSurface
+    }
+    else
+    {
+        <DialogControl Visible="true"
+                       Header="@Header"
+                       Width="@Width"
+                       Height="@Height"
+                       CssClass="@ResolvedCssClass"
+                       CloseOnEscape="true"
+                       OnClose="CancelAsync">
+            @wizardSurface
+        </DialogControl>
+    }
+}
 
 @code {
     [Parameter] public bool Visible { get; set; }
     [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public bool Inline { get; set; }
     [Parameter] public string Header { get; set; } = "Wizard";
     [Parameter] public IReadOnlyList<WizardStepDescriptor> Steps { get; set; } = Array.Empty<WizardStepDescriptor>();
     [Parameter] public int CurrentStepIndex { get; set; }
     [Parameter] public EventCallback<int> CurrentStepIndexChanged { get; set; }
     [Parameter] public bool CanMoveNext { get; set; } = true;
+    [Parameter] public bool CanMovePrevious { get; set; } = true;
     [Parameter] public bool CanFinish { get; set; } = true;
     [Parameter] public string Width { get; set; } = "920px";
     [Parameter] public string Height { get; set; } = "640px";
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public RenderFragment<WizardStepContext>? StepContent { get; set; }
+    [Parameter] public RenderFragment<WizardNavigationContext>? FooterContent { get; set; }
     [Parameter] public EventCallback FinishRequested { get; set; }
+    [Parameter] public EventCallback PreviousRequested { get; set; }
+    [Parameter] public EventCallback NextRequested { get; set; }
     [Parameter] public EventCallback Cancelled { get; set; }
     [Parameter] public EventCallback HelpRequested { get; set; }
     [Parameter] public bool ShowHelp { get; set; } = true;
+    [Parameter] public bool ShowHeader { get; set; } = true;
+    [Parameter] public bool ShowFooter { get; set; } = true;
+    [Parameter] public bool ShowPrevious { get; set; } = true;
+    [Parameter] public bool ShowNext { get; set; } = true;
+    [Parameter] public bool ShowFinish { get; set; } = true;
+    [Parameter] public bool ShowCancel { get; set; } = true;
+    [Parameter] public string PreviousText { get; set; } = "< Back";
+    [Parameter] public string NextText { get; set; } = "Next >";
+    [Parameter] public string FinishText { get; set; } = "Finish";
+    [Parameter] public string CancelText { get; set; } = "Cancel";
+    [Parameter] public string HelpText { get; set; } = "Help";
+
+    /// <summary>
+    /// Optional keyboard accelerators for the default footer buttons. Each is
+    /// forwarded as the underlying button's <c>accesskey</c> attribute (the
+    /// browser applies its platform modifier — Alt, Ctrl+Alt, …), and when the
+    /// letter occurs in the button's text its first occurrence renders
+    /// underlined as the accelerator cue. Null (the default) leaves the button
+    /// exactly as before. Ignored when <see cref="FooterContent"/> replaces
+    /// the default footer.
+    /// </summary>
+    [Parameter] public string? PreviousAccessKey { get; set; }
+    [Parameter] public string? NextAccessKey { get; set; }
+    [Parameter] public string? FinishAccessKey { get; set; }
+    [Parameter] public string? CancelAccessKey { get; set; }
+    [Parameter] public string? HelpAccessKey { get; set; }
+
+    [Parameter] public string? StepIndicator { get; set; }
+
+    /// <summary>
+    /// Renders a footer-button label, underlining the first occurrence of the
+    /// accesskey letter (case-insensitive) when one is set and present.
+    /// </summary>
+    private static RenderFragment AccessKeyLabel(string text, string? key) => builder =>
+    {
+        var idx = string.IsNullOrEmpty(key)
+            ? -1
+            : text.IndexOf(key![0].ToString(), StringComparison.OrdinalIgnoreCase);
+        if (idx < 0)
+        {
+            builder.AddContent(0, text);
+            return;
+        }
+        builder.AddContent(0, text[..idx]);
+        builder.OpenElement(1, "u");
+        builder.AddContent(2, text.Substring(idx, 1));
+        builder.CloseElement();
+        builder.AddContent(3, text[(idx + 1)..]);
+    };
 
     private static readonly WizardStepDescriptor EmptyStep = new() { Title = "Wizard" };
 
     private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
         ? "fx-wizard-dialog"
         : $"fx-wizard-dialog {CssClass}";
+
+    private string SurfaceCssClass
+    {
+        get
+        {
+            if (!Inline)
+                return "fx-wizard-control";
+
+            return string.IsNullOrWhiteSpace(CssClass)
+                ? "fx-wizard-control fx-wizard-inline"
+                : $"fx-wizard-control fx-wizard-inline {CssClass}";
+        }
+    }
+
+    private string? SurfaceStyle => Inline
+        ? $"width:{Width};height:{Height};max-width:100%;max-height:100%;"
+        : null;
 
     private int EffectiveStepIndex => Steps.Count == 0 ? 0 : Math.Clamp(CurrentStepIndex, 0, Steps.Count - 1);
     private WizardStepDescriptor CurrentStep => Steps.Count == 0 ? EmptyStep : Steps[EffectiveStepIndex];
@@ -95,6 +221,21 @@
         IsLast = Steps.Count == 0 || EffectiveStepIndex >= Steps.Count - 1
     };
 
+    private bool CanNavigatePrevious => !StepContext.IsFirst && CanMovePrevious;
+    private bool CanNavigateNext => !StepContext.IsLast && CanMoveNext;
+
+    private WizardNavigationContext NavigationContext => new()
+    {
+        CanMovePrevious = CanNavigatePrevious,
+        CanMoveNext = CanNavigateNext,
+        CanFinish = CanFinish,
+        MovePreviousAsync = MovePreviousAsync,
+        MoveNextAsync = MoveNextAsync,
+        FinishAsync = FinishAsync,
+        CancelAsync = CancelAsync,
+        HelpAsync = HelpAsync
+    };
+
     protected override async Task OnParametersSetAsync()
     {
         if (CurrentStepIndex != EffectiveStepIndex && CurrentStepIndexChanged.HasDelegate)
@@ -103,18 +244,24 @@
 
     private async Task MovePreviousAsync()
     {
-        if (StepContext.IsFirst)
+        if (!CanNavigatePrevious)
             return;
 
-        await SetStepIndexAsync(EffectiveStepIndex - 1);
+        if (PreviousRequested.HasDelegate)
+            await PreviousRequested.InvokeAsync();
+        else
+            await SetStepIndexAsync(EffectiveStepIndex - 1);
     }
 
     private async Task MoveNextAsync()
     {
-        if (StepContext.IsLast || !CanMoveNext)
+        if (!CanNavigateNext)
             return;
 
-        await SetStepIndexAsync(EffectiveStepIndex + 1);
+        if (NextRequested.HasDelegate)
+            await NextRequested.InvokeAsync();
+        else
+            await SetStepIndexAsync(EffectiveStepIndex + 1);
     }
 
     private async Task SetStepIndexAsync(int index)

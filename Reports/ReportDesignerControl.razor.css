@@ -1785,8 +1785,8 @@
     border-bottom: 5px solid #cfe3ff;
 }
 
-.fx-rd-icon.rd-code::before { content: "<>"; font: 700 calc(8px * var(--fx-zoom, 1))/17px Tahoma, Arial, sans-serif; color: #094a92; }
-.fx-rd-icon.rd-page::before { content: "Pg"; font: 700 calc(8px * var(--fx-zoom, 1))/17px Tahoma, Arial, sans-serif; color: #094a92; }
+.fx-rd-icon.rd-code::before { content: "<>"; font: 700 calc(8px/17px * var(--fx-zoom, 1)) Tahoma, Arial, sans-serif; color: #094a92; }
+.fx-rd-icon.rd-page::before { content: "Pg"; font: 700 calc(8px/17px * var(--fx-zoom, 1)) Tahoma, Arial, sans-serif; color: #094a92; }
 
 .fx-rd-icon.rd-open::before {
     content: "";
@@ -1850,7 +1850,7 @@
 .fx-rd-icon.rd-groupsort::before { content: "A↧"; color: #111; font-size: calc(10px * var(--fx-zoom, 1)); }
 .fx-rd-icon.rd-section::before { content: "S"; color: #0d3e9d; font-size: calc(15px * var(--fx-zoom, 1)); }
 .fx-rd-icon.rd-sort::before { content: "A↕"; color: #111; font-size: calc(10px * var(--fx-zoom, 1)); }
-.fx-rd-icon.rd-formula::before { content: "fx"; color: #6f6f6f; font: 700 italic calc(13px * var(--fx-zoom, 1))/18px Tahoma, Arial, sans-serif; }
+.fx-rd-icon.rd-formula::before { content: "fx"; color: #6f6f6f; font: 700 italic calc(13px/18px * var(--fx-zoom, 1)) Tahoma, Arial, sans-serif; }
 .fx-rd-icon.rd-parameter::before { content: "?"; color: #001b58; border: 1px solid #7692b7; background: #fff; width: 16px; height: 16px; display: block; line-height: 16px; }
 .fx-rd-icon.rd-summary::before,
 .fx-rd-icon.rd-sigma::before { content: "Σ"; color: #001a88; font-size: calc(19px * var(--fx-zoom, 1)); }
@@ -1858,7 +1858,7 @@
 .fx-rd-icon.rd-font-grow::before { content: "A+"; color: #001b58; font-size: calc(10px * var(--fx-zoom, 1)); }
 .fx-rd-icon.rd-font-shrink::before { content: "A-"; color: #001b58; font-size: calc(10px * var(--fx-zoom, 1)); }
 .fx-rd-icon.rd-bold::before { content: "B"; color: #111; font-size: calc(20px * var(--fx-zoom, 1)); }
-.fx-rd-icon.rd-italic::before { content: "I"; color: #111; font: 700 italic calc(20px * var(--fx-zoom, 1))/18px serif; }
+.fx-rd-icon.rd-italic::before { content: "I"; color: #111; font: 700 italic calc(20px/18px * var(--fx-zoom, 1)) serif; }
 .fx-rd-icon.rd-underline::before { content: "U"; color: #111; font-size: calc(20px * var(--fx-zoom, 1)); text-decoration: underline; }
 .fx-rd-icon.rd-align-left::before { content: "☰"; color: #111; font-size: calc(16px * var(--fx-zoom, 1)); text-align: left; }
 .fx-rd-icon.rd-align-center::before { content: "☰"; color: #111; font-size: calc(16px * var(--fx-zoom, 1)); }
@@ -2036,7 +2036,7 @@
     width: 17px;
     height: 16px;
     color: #0d3e9d;
-    font: 700 calc(18px * var(--fx-zoom, 1))/16px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font: 700 calc(18px/16px * var(--fx-zoom, 1)) Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
 /* Fallback glyphs for Crystal commands whose extracted PNG is not present yet. */
@@ -2056,7 +2056,7 @@
     width: 17px;
     height: 16px;
     color: #0d3e9d;
-    font: 700 calc(12px * var(--fx-zoom, 1))/16px Tahoma, "MS Sans Serif", Arial, sans-serif;
+    font: 700 calc(12px/16px * var(--fx-zoom, 1)) Tahoma, "MS Sans Serif", Arial, sans-serif;
 }
 
 .fx-rd-toolbar.crystal .fx-rd-icon.rd-indent-decrease::before,

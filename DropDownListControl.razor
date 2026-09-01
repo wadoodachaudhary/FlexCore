@@ -7,8 +7,12 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JSRuntime
 
+@* While the list is OPEN this control owns Escape (closes the list only), so
+   the hosting dialog's capture-phase Escape must stand down — VB6 combo
+   semantics: Escape on an open list never fires the form's Cancel button. *@
 <div class="@HostCssClass" style="@HostStyle"
      @ref="_hostRef"
+     data-fx-key-scope="@(_isOpen ? "" : null)"
      @onclick:stopPropagation="true"
      @onmousedown:stopPropagation="true"
      @onkeydown:stopPropagation="true">
@@ -40,6 +44,7 @@
     else
     {
         <button type="button"
+                @ref="_buttonRef"
                 class="@ButtonCssClass"
                 disabled="@(!Enabled)"
                 tabindex="@TabIndex"
@@ -137,6 +142,7 @@
     /// cell underneath can see it.
     /// </summary>
     [Parameter] public bool OpenOnClickWhenClosed { get; set; }
+    [Parameter] public bool DelegateVerticalArrows { get; set; }
     [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
@@ -148,6 +154,14 @@
 
     /// <summary>Event fired when value changes. Provides the new value.</summary>
     [Parameter] public EventCallback<ChangeEventArgs<TValue, TItem>> ValueChange { get; set; }
+
+    /// <summary>Opt-in: when true, re-selecting the item that is already the current Value
+    /// closes the list without raising ValueChanged/ValueChange. Default FALSE on purpose —
+    /// grid batch-edit dropdown cells rely on a same-value pick still firing so the transient
+    /// cell editor commits and closes (see the HandleKeyDown comment: "Selecting fires
+    /// ValueChanged; a grid host commits its editor"). Set it on standalone dropdowns whose
+    /// handler does expensive work (e.g. a layout switch).</summary>
+    [Parameter] public bool SuppressUnchangedValueChange { get; set; }
 
     private bool _isOpen;
     private bool _openOnRenderInitialized;
@@ -162,10 +176,15 @@
     private bool _pendingHighlightScroll;
     private readonly Dictionary<int, ElementReference> _optionRefs = new();
     private ElementReference _hostRef;
+    private ElementReference _buttonRef;
     private ElementReference _editableInputRef;
     private bool _autoFocusApplied;
     private IJSObjectReference? _dropdownJsModule;
     private string _editableText = "";
+    // True once the user has moved the open list's highlight with the keyboard
+    // and has NOT typed since: Enter then commits the highlighted option rather
+    // than the (untouched) input text. Cleared on typing, open and close.
+    private bool _highlightMovedByKeyboard;
 
     // Uncontrolled while typing: the DOM input renders _editableRenderedText, which stays
     // CONSTANT while the field is focused, so a keystroke's render round-trip can never
@@ -297,6 +316,7 @@
     /// <summary>True while the current press STARTED on this control — set on the
     /// button's own mousedown, consumed by <see cref="HandleButtonClick"/>.</summary>
     private bool _pressStartedOnControl;
+    private bool _suppressNextButtonClick;
 
     private void HandleButtonMouseDown()
     {
@@ -305,6 +325,12 @@
 
     private async Task HandleButtonClick()
     {
+        if (_suppressNextButtonClick)
+        {
+            _suppressNextButtonClick = false;
+            return;
+        }
+
         // One press = one mousedown THEN one click. The click that CREATED a grid
         // batch editor hit-tests against the fresh DOM, so on a fast circuit it can
         // land on this just-mounted button — but its mousedown landed on the CELL,
@@ -362,6 +388,7 @@
             return;
 
         _isOpen = true;
+        _highlightMovedByKeyboard = false;
         _needsGeometryRefresh = true;
         _openUp = false;
         _panelMaxHeight = null;
@@ -388,6 +415,7 @@
         _isOpen = false;
         ResetDropdownGeometry();
         _highlightedIndex = -1;
+        _highlightMovedByKeyboard = false;
         ClearTypeSelectBuffer();
         if (Closed.HasDelegate)
             await Closed.InvokeAsync();
@@ -401,12 +429,19 @@
         if (await TryDelegateNavigationKeyAsync(e))
             return;
 
-        if (e.Key is "Enter" or " ")
+        if (e.Key is "Enter" or " " || string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase) || (e.AltKey && e.Key is "ArrowDown" or "Down"))
         {
             if (_isOpen)
+            {
                 await CommitCurrentSelectionAsync();
+                if (OnKeyDown.HasDelegate)
+                    await OnKeyDown.InvokeAsync(e);
+            }
             else
+            {
+                _suppressNextButtonClick = true;
                 OpenDropdown();
+            }
         }
         else if (e.Key == "Escape")
         {
@@ -445,6 +480,8 @@
         if (e.Key is "Enter" or " ")
         {
             await CommitCurrentSelectionAsync();
+            if (OnKeyDown.HasDelegate)
+                await OnKeyDown.InvokeAsync(e);
         }
         else if (e.Key == "Escape")
         {
@@ -558,6 +595,18 @@
 
         if (e.Key == "Enter")
         {
+            // With the list OPEN and the user having ARROWED to an option, Enter
+            // takes that option (VB6 combo behaviour). Arrowing only moves
+            // _highlightedIndex and never writes the input, so publishing the
+            // typed text here committed the UNCHANGED text — an empty cell stayed
+            // empty and a filled one kept its old value. Typing still wins, so a
+            // custom value (AllowCustomEditOptionValue) is unaffected.
+            if (_isOpen && _highlightMovedByKeyboard)
+            {
+                await CommitCurrentSelectionAsync();
+                return;
+            }
+
             await PublishEditableTextAsync(_editableText);
             _editableRenderedText = _editableText;
             await CloseAsync();
@@ -565,10 +614,12 @@
         else if (e.Key == "ArrowDown")
         {
             await MoveSelectionAsync(1);
+            _highlightMovedByKeyboard = true;
         }
         else if (e.Key == "ArrowUp")
         {
             await MoveSelectionAsync(-1);
+            _highlightMovedByKeyboard = true;
         }
         else if (e.Key == "F4")
         {
@@ -596,6 +647,7 @@
     private Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _editableText = e.Value?.ToString() ?? "";
+        _highlightMovedByKeyboard = false;   // typing wins over the highlight
         return Task.CompletedTask;
     }
 
@@ -700,6 +752,12 @@
                 && !e.AltKey
                 && !e.CtrlKey
                 && !e.MetaKey
+                && !e.ShiftKey)
+            || (DelegateVerticalArrows && !_isOpen
+                && (e.Key is "ArrowDown" or "ArrowUp" or "Down" or "Up")
+                && !e.AltKey
+                && !e.CtrlKey
+                && !e.MetaKey
                 && !e.ShiftKey);
 
         if (!isGridNavigationKey)
@@ -726,10 +784,27 @@
             await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue });
     }
 
+    /// <summary>Returns keyboard focus to the editable input or closed dropdown button.</summary>
+    public async Task FocusAsync()
+    {
+        try
+        {
+            if (Editable)
+                await _editableInputRef.FocusAsync(preventScroll: true);
+            else
+                await _buttonRef.FocusAsync(preventScroll: true);
+        }
+        catch
+        {
+            // Best effort: the host may have re-rendered or removed the control.
+        }
+    }
+
     private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true)
     {
         _suppressNextEditableBlurCommit = false;
         var newValue = ConvertToValue(strVal);
+        var unchanged = object.Equals(Value, newValue);
         Value = newValue;
         if (Editable)
             ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: _editableInputFocused);
@@ -742,6 +817,11 @@
             ClearTypeSelectBuffer();
         }
 
+        // The list still closed and the editable text still reset above — only the
+        // notifications are skipped, so the UX of a re-pick is unchanged.
+        if (SuppressUnchangedValueChange && unchanged)
+            return;
+
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
 
@@ -753,38 +833,60 @@
     {
         var items = GetMaterializedItems();
         if (items.Count == 0)
-        {
-            OpenDropdown();
             return;
+
+        if (_isOpen)
+        {
+            var currentIndex = _highlightedIndex >= 0 ? _highlightedIndex : FindSelectedIndex(items);
+            var nextIndex = currentIndex < 0
+                ? (delta >= 0 ? 0 : items.Count - 1)
+                : Math.Clamp(currentIndex + delta, 0, items.Count - 1);
+
+            _highlightedIndex = nextIndex;
+            _pendingHighlightScroll = true;
         }
+        else
+        {
+            var currentIndex = FindSelectedIndex(items);
+            var nextIndex = currentIndex < 0
+                ? (delta >= 0 ? 0 : items.Count - 1)
+                : Math.Clamp(currentIndex + delta, 0, items.Count - 1);
 
-        if (!_isOpen)
-            OpenDropdown();
+            // Clamped at the list edge = no move. Firing ValueChange for it made hosts
+            // re-run whole change handlers for a selection that did not change.
+            if (nextIndex == currentIndex)
+                return;
 
-        var currentIndex = _highlightedIndex >= 0 ? _highlightedIndex : FindSelectedIndex(items);
-        var nextIndex = currentIndex < 0
-            ? (delta >= 0 ? 0 : items.Count - 1)
-            : Math.Clamp(currentIndex + delta, 0, items.Count - 1);
-
-        _highlightedIndex = nextIndex;
-        _pendingHighlightScroll = true;
+            if (nextIndex >= 0 && nextIndex < items.Count)
+            {
+                await SelectItemAtAsync(items, nextIndex, keepOpen: false);
+            }
+        }
     }
 
-    private Task MoveSelectionToAsync(bool first)
+    private async Task MoveSelectionToAsync(bool first)
     {
         var items = GetMaterializedItems();
         if (items.Count == 0)
+            return;
+
+        if (_isOpen)
         {
-            OpenDropdown();
-            return Task.CompletedTask;
+            _highlightedIndex = first ? 0 : items.Count - 1;
+            _pendingHighlightScroll = true;
         }
+        else
+        {
+            var targetIndex = first ? 0 : items.Count - 1;
+            // Home on the first row / End on the last = no move; same rule as MoveSelectionAsync.
+            if (targetIndex == FindSelectedIndex(items))
+                return;
 
-        if (!_isOpen)
-            OpenDropdown();
-
-        _highlightedIndex = first ? 0 : items.Count - 1;
-        _pendingHighlightScroll = true;
-        return Task.CompletedTask;
+            if (targetIndex >= 0 && targetIndex < items.Count)
+            {
+                await SelectItemAtAsync(items, targetIndex, keepOpen: false);
+            }
+        }
     }
 
     private async Task SelectItemAtAsync(IReadOnlyList<TItem> items, int index, bool keepOpen = true)
@@ -812,12 +914,15 @@
             }
         }
 
-        if (Editable && AutoFocus && !_autoFocusApplied && Enabled)
+        if (AutoFocus && !_autoFocusApplied && Enabled)
         {
             _autoFocusApplied = true;
             try
             {
-                await _editableInputRef.FocusAsync(preventScroll: true);
+                if (Editable)
+                    await _editableInputRef.FocusAsync(preventScroll: true);
+                else
+                    await _buttonRef.FocusAsync(preventScroll: true);
             }
             catch
             {

@@ -21,8 +21,8 @@
           disabled="@(!Enabled)"
           readonly="@ReadOnly"
           value="@Value"
-          @onchange="HandleChangeAsync"
-          @oninput="HandleInputAsync"></textarea>
+          @onchange="@ChangeDispatch"
+          @oninput="@InputDispatch"></textarea>
 
 @code {
     [Parameter] public string? Value { get; set; }
@@ -54,6 +54,16 @@
     /// expect for live "dirty" tracking.
     /// </summary>
     [Parameter] public bool BindOnChange { get; set; }
+
+    private EventCallback<ChangeEventArgs> InputDispatch =>
+        !BindOnChange
+            ? EventCallback.Factory.Create<ChangeEventArgs>(this, HandleInputAsync)
+            : default;
+
+    private EventCallback<ChangeEventArgs> ChangeDispatch =>
+        BindOnChange
+            ? EventCallback.Factory.Create<ChangeEventArgs>(this, HandleChangeAsync)
+            : default;
 
     private string ResolvedCssClass
     {

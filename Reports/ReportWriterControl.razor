@@ -344,6 +344,12 @@ else
     // ShowReportAsync run (e.g. DivisionID).
     private readonly Dictionary<string, string> _seedParameters = new(StringComparer.OrdinalIgnoreCase);
 
+    // Direct table-field filters supplied by the host through "Filter:Table.Field"
+    // seed keys (see ShowReportAsync). They constrain the report query the same
+    // way subreport-link filters do — the host-level hook for filtering a report
+    // whose read-only XML lacks a matching Crystal parameter.
+    private readonly List<ReportFieldFilter> _seedFieldFilters = new();
+
     // Embedded parameter prompt dialog — same control the page used to
     // host. Filled in by Blazor on first render.
     private ReportParamDialogControl? _paramDialog;
@@ -1224,16 +1230,36 @@ else
         try
         {
             IsLoading = true;
+            var previousFile = ReportFilePath;
             ReportFilePath = file;
             await OnPageTitleChanged.InvokeAsync(Path.GetFileNameWithoutExtension(file));
             StatusMessage = $"Loading report: {file}";
             await InvokeAsync(StateHasChanged);
 
+            // "Filter:Table.Field" seeds become ReportFieldFilters, not Crystal
+            // parameters. A refresh re-enters here with the stripped dict, so
+            // existing filters survive unless the file changed or the caller
+            // supplied a fresh filter set.
+            var incomingFilters = seedParameters != null
+                && seedParameters.Keys.Any(k => k.StartsWith("Filter:", StringComparison.OrdinalIgnoreCase));
+            if (incomingFilters || !string.Equals(file, previousFile, StringComparison.OrdinalIgnoreCase))
+                _seedFieldFilters.Clear();
+
             _seedParameters.Clear();
             if (seedParameters != null)
                 foreach (var kv in seedParameters)
                     if (!string.IsNullOrEmpty(kv.Value))
+                    {
+                        if (kv.Key.StartsWith("Filter:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var spec = kv.Key["Filter:".Length..];
+                            var dot = spec.LastIndexOf('.');
+                            if (dot > 0 && dot < spec.Length - 1)
+                                _seedFieldFilters.Add(new ReportFieldFilter(spec[..dot], spec[(dot + 1)..], kv.Value));
+                            continue;
+                        }
                         _seedParameters[kv.Key] = kv.Value;
+                    }
             if (!_seedParameters.ContainsKey("DivisionID"))
             {
                 var divId = SessionState.Get("DivisionID");
@@ -1252,8 +1278,28 @@ else
             var xmlPath = await ResolveOrConvertXmlPathAsync(file);
             if (xmlPath != null)
             {
-                var definition = XmlLoader.Load(xmlPath);
-                var typedParams = _seedParameters.ToDictionary(p => p.Key, p => (object)p.Value);
+                var definition = _seedFieldFilters.Count > 0
+                    ? XmlLoader.LoadWithFieldFilters(xmlPath, _seedFieldFilters)
+                    : XmlLoader.Load(xmlPath);
+                var typedParams = _seedParameters
+                    .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase))
+                    .ToDictionary(p => p.Key, p => (object)p.Value);
+                // "Multi:<name>" seeds — the host's answer to VB6's repeated
+                // c.ParameterValue calls (ONE multi-value parameter, many
+                // values). The value is a \u0002-separated list; it enters
+                // the pipeline as a string[] exactly like a dual-list prompt
+                // selection, so the parameter counts as supplied (no prompt)
+                // and MultiValueParameterRewriter expands it to IN (...).
+                // The raw entry stays in _seedParameters so chrome Refresh
+                // re-runs re-parse it identically.
+                foreach (var kv in _seedParameters)
+                {
+                    if (!kv.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase)) continue;
+                    var multiName = kv.Key["Multi:".Length..];
+                    var multiValues = kv.Value.Split('\u0002', StringSplitOptions.RemoveEmptyEntries);
+                    if (multiName.Length > 0 && multiValues.Length > 0)
+                        typedParams[multiName] = multiValues;
+                }
 
                 var missingRequired = definition.Parameters
                     .Where(p => p.Required
@@ -1453,6 +1499,10 @@ else
     private async Task ChromeOnRefresh()
     {
         if (string.IsNullOrEmpty(ReportFilePath)) return;
+        // Owner directive 2026-08-30: Refresh INTENTIONALLY re-prompts for
+        // parameters (passing _seedParameters itself lets ShowReportAsync's
+        // clear-then-copy empty it) so the user can run the report with
+        // different values. Do not "fix" this by passing a copy.
         await ShowReportAsync(ReportFilePath, _seedParameters);
     }
 

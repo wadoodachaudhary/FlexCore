@@ -6,7 +6,7 @@
 /* Fallback/Default variables mapped to VB Style */
 :root {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
-    --fx-font-size: 11px;
+    --fx-font-size: calc(11px * var(--fx-zoom, 1));
     --fx-bg-color: #e6e6e6;
     --fx-form-bg: #e6e6e6;
     --fx-surface-color: #ffffff;
@@ -85,7 +85,7 @@
    ============================================================ */
 .theme-vb {
     --fx-font-family: Tahoma, "MS Sans Serif", Geneva, sans-serif;
-    --fx-font-size: 11px;
+    --fx-font-size: calc(11px * var(--fx-zoom, 1));
     --fx-bg-color: #e6e6e6;
     --fx-form-bg: #e6e6e6;
     --fx-surface-color: #ffffff;
@@ -157,7 +157,7 @@
    ============================================================ */
 .theme-modern-blue {
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --fx-font-size: 12.5px;
+    --fx-font-size: calc(12.5px * var(--fx-zoom, 1));
     --fx-bg-color: #f1f5f9; /* Soft grey page bg */
     --fx-form-bg: #f1f5f9;
     --fx-surface-color: #ffffff;
@@ -231,7 +231,7 @@
    ============================================================ */
 .theme-dark {
     --fx-font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --fx-font-size: 12.5px;
+    --fx-font-size: calc(12.5px * var(--fx-zoom, 1));
     --fx-bg-color: #0f172a; /* Deep dark page background */
     --fx-form-bg: #0f172a;
     --fx-surface-color: #1e293b; /* Card/surface container background */
