@@ -363,6 +363,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// blank, the grid renders a compact built-in filter glyph.
     /// </summary>
     [Parameter] public string HeaderFilterIcon { get; set; } = string.Empty;
+    /// <summary>
+    /// Shows the table header row. Defaults to true. When false, the thead element is not rendered.
+    /// </summary>
+    [Parameter] public bool ShowHeader { get; set; } = true;
+
     [Parameter] public bool AllowPaging { get; set; }
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public bool HighlightSelectedRows { get; set; } = true;
