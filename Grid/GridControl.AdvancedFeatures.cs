@@ -5,7 +5,6 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
-using ClosedXML.Excel;
 using Microsoft.AspNetCore.Components;
 
 namespace Fx.ControlKit.Grid;
@@ -259,63 +258,4 @@ public partial class GridControl<TValue>
         return idx >= 0 ? idx + 1 : null;
     }
 
-    // ── Excel & CSV Export Helpers ──────────────────────────────────────
-    public string ExportToCsv(string? customHeader = null)
-    {
-        var sb = new StringBuilder();
-        if (!string.IsNullOrEmpty(customHeader))
-            sb.AppendLine(customHeader);
-
-        sb.AppendLine(string.Join(",", VisibleColumns.Select(c => $"\"{c.DisplayHeader.Replace("\"", "\"\"")}\"")));
-
-        foreach (var item in SortedData)
-        {
-            var line = VisibleColumns.Select(col =>
-            {
-                var val = GetColumnSearchText(item, col) ?? "";
-                return $"\"{val.Replace("\"", "\"\"")}\"";
-            });
-            sb.AppendLine(string.Join(",", line));
-        }
-
-        return sb.ToString();
-    }
-
-    public byte[] ExportToExcel(string sheetName = "Sheet1")
-    {
-        using var workbook = new XLWorkbook();
-        var worksheet = workbook.Worksheets.Add(sheetName);
-
-        // Header row
-        int colIndex = 1;
-        foreach (var col in VisibleColumns)
-        {
-            var cell = worksheet.Cell(1, colIndex);
-            cell.Value = col.DisplayHeader;
-            cell.Style.Font.Bold = true;
-            cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#0d6efd");
-            cell.Style.Font.FontColor = XLColor.White;
-            colIndex++;
-        }
-
-        // Data rows
-        int rowIndex = 2;
-        foreach (var item in SortedData)
-        {
-            colIndex = 1;
-            foreach (var col in VisibleColumns)
-            {
-                var val = GetColumnSearchText(item, col) ?? "";
-                worksheet.Cell(rowIndex, colIndex).Value = val;
-                colIndex++;
-            }
-            rowIndex++;
-        }
-
-        worksheet.Columns().AdjustToContents();
-
-        using var ms = new MemoryStream();
-        workbook.SaveAs(ms);
-        return ms.ToArray();
-    }
 }
