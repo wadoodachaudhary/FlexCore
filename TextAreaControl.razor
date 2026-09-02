@@ -13,18 +13,18 @@
 {
     <div class="@ResolvedHostCssClass" @ref="_hostElement">
         <textarea class="@ResolvedCssClass"
-                  value="@Value"
+                  value="@EffectiveValue"
                   rows="@(Rows ?? 4)"
                   wrap="@WrapMode"
                   placeholder="@Placeholder"
                   maxlength="@MaxLength"
                   disabled="@(!Enabled)"
                   @ref="_inputElement"
-                  @oninput="OnNativeInput"
-                  @onchange="OnNativeValueChanged"
-                  @onfocus="OnInputFocus"
-                  @ondblclick="OnInputDoubleClick"
-                  @oncontextmenu="OpenTextContextMenuAsync"
+                  @oninput="@InputDispatch"
+                  @onchange="@ChangeDispatch"
+                  @onfocus="@FocusDispatch"
+                  @ondblclick="@DoubleClickDispatch"
+                  @oncontextmenu="@ContextMenuDispatch"
                   @oncontextmenu:preventDefault="UseClassicContextMenu"
                   @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
         <div class="fx-textarea-scrollbar fx-textarea-scrollbar-vertical is-disabled" @ref="_scrollbarElement">
@@ -43,18 +43,18 @@
 else
 {
     <textarea class="@ResolvedCssClass"
-              value="@Value"
+              value="@EffectiveValue"
               rows="@(Rows ?? 4)"
               wrap="@WrapMode"
               placeholder="@Placeholder"
               maxlength="@MaxLength"
               disabled="@(!Enabled)"
               @ref="_inputElement"
-              @oninput="OnNativeInput"
-              @onchange="OnNativeValueChanged"
-              @onfocus="OnInputFocus"
-              @ondblclick="OnInputDoubleClick"
-              @oncontextmenu="OpenTextContextMenuAsync"
+              @oninput="@InputDispatch"
+              @onchange="@ChangeDispatch"
+              @onfocus="@FocusDispatch"
+              @ondblclick="@DoubleClickDispatch"
+              @oncontextmenu="@ContextMenuDispatch"
               @oncontextmenu:preventDefault="UseClassicContextMenu"
               @oncontextmenu:stopPropagation="UseClassicContextMenu"></textarea>
 }
@@ -168,6 +168,63 @@ else
     /// box lost text when the fire-and-forget Jira sync re-rendered the page).</summary>
     [Parameter] public bool UpdateOnInput { get; set; }
 
+    /// <summary>The DOM owns the text while typing: the textarea renders its initial
+    /// value ONCE and later re-renders never rewrite it. This is the fix for fast
+    /// typing losing characters on a slow link — a controlled value attribute snaps
+    /// the DOM back to the server's stale copy whenever a second render slips past
+    /// the one-shot suppression (rendering ValueChanged receivers produce two).
+    /// Re-key the component (@key) to load a different value.</summary>
+    [Parameter] public bool Uncontrolled { get; set; }
+
+    /// <summary>Same contract as TextBoxControl: ClientBuffered keeps every
+    /// keystroke in the browser (input/change dispatches are stopped at the
+    /// element) and commits the whole text in ONE call on blur. Enter stays a
+    /// newline — the buffer intercepts no keys for a textarea.</summary>
+    [Parameter] public TextBoxTypingBehavior TypingBehavior { get; set; } = TextBoxTypingBehavior.ServerBacked;
+
+    private bool _uncontrolledInitialized;
+    private string? _uncontrolledRenderedText;
+    private bool _clientBufferAttached;
+    private DotNetObjectReference<TextAreaControl>? _clientBufferRef;
+
+    private bool IsDomOwned => Uncontrolled || TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+
+    private string? EffectiveValue => IsDomOwned ? _uncontrolledRenderedText : Value;
+
+    private bool UseClassicScrollBar =>
+        ClassicScrollBar ?? (ScrollBars is TextAreaScrollBars.Vertical or TextAreaScrollBars.Both);
+
+    protected override void OnParametersSet()
+    {
+        if (IsDomOwned && !_uncontrolledInitialized)
+        {
+            _uncontrolledInitialized = true;
+            _uncontrolledRenderedText = Value;
+        }
+    }
+
+    [JSInvokable]
+    public Task CommitClientBufferedTypingAsync(
+        string? value, string key, bool shiftKey, bool ctrlKey, bool altKey, bool metaKey)
+    {
+        return InvokeAsync(async () =>
+        {
+            if (string.Equals(key, "Escape", StringComparison.Ordinal))
+                return;
+
+            var committed = value ?? string.Empty;
+            if (MaxLength is > 0 && committed.Length > MaxLength.Value)
+                committed = committed[..MaxLength.Value];
+
+            Value = committed;
+            _uncontrolledRenderedText = committed;
+            _uncontrolledInitialized = true;
+            _suppressNextNativeInputRender = true;
+            if (ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(committed);
+        });
+    }
+
     /// <summary>
     /// When &gt; 0, Tab is captured by the editor and inserts this many
     /// spaces at the caret instead of moving focus out of the app.
@@ -178,6 +235,40 @@ else
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
 
+    /// <summary>Bind only events that have observable behavior. A bound Blazor
+    /// event crosses the SignalR circuit even when its handler is a no-op.
+    /// Controlled ServerBacked textareas retain input synchronization so a parent
+    /// render cannot replace in-progress text with its stale model value.</summary>
+    private bool NeedsInputDispatch =>
+        TypingBehavior == TextBoxTypingBehavior.ClientBuffered
+        || !IsDomOwned
+        || UpdateOnInput;
+
+    private EventCallback<ChangeEventArgs> InputDispatch =>
+        NeedsInputDispatch
+            ? EventCallback.Factory.Create<ChangeEventArgs>(this, OnNativeInput)
+            : default;
+
+    private EventCallback<ChangeEventArgs> ChangeDispatch =>
+        !UpdateOnInput && ValueChanged.HasDelegate
+            ? EventCallback.Factory.Create<ChangeEventArgs>(this, OnNativeValueChanged)
+            : default;
+
+    private EventCallback<FocusEventArgs> FocusDispatch =>
+        ReplaceOnFirstInput
+            ? EventCallback.Factory.Create<FocusEventArgs>(this, OnInputFocus)
+            : default;
+
+    private EventCallback<MouseEventArgs> DoubleClickDispatch =>
+        SelectAllOnDoubleClick
+            ? EventCallback.Factory.Create<MouseEventArgs>(this, OnInputDoubleClick)
+            : default;
+
+    private EventCallback<MouseEventArgs> ContextMenuDispatch =>
+        UseClassicContextMenu
+            ? EventCallback.Factory.Create<MouseEventArgs>(this, OpenTextContextMenuAsync)
+            : default;
+
     private ElementReference _inputElement;
     private ElementReference _hostElement;
     private ElementReference _scrollbarElement;
@@ -187,9 +278,6 @@ else
     private int _textContextMenuY;
     private TextContextMenuState _textContextMenuState = new();
     private bool _suppressNextNativeInputRender;
-
-    private bool UseClassicScrollBar =>
-        ClassicScrollBar ?? (ScrollBars is TextAreaScrollBars.Vertical or TextAreaScrollBars.Both);
 
     protected override bool ShouldRender()
     {
@@ -204,6 +292,33 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        var wantsClientBuffer = TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+        if (wantsClientBuffer != _clientBufferAttached)
+        {
+            var bufModule = await GetControlJsModuleAsync();
+            if (bufModule != null)
+            {
+                try
+                {
+                    if (wantsClientBuffer)
+                    {
+                        _clientBufferRef ??= DotNetObjectReference.Create(this);
+                        // handlesNavigationKeys: false — Enter must stay a newline
+                        // in a textarea; the only commit is the blur.
+                        await bufModule.InvokeVoidAsync(
+                            "enableClientBufferedTyping", _inputElement, _clientBufferRef, false);
+                        _clientBufferAttached = true;
+                    }
+                    else
+                    {
+                        await bufModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement);
+                        _clientBufferAttached = false;
+                    }
+                }
+                catch { _clientBufferAttached = false; }
+            }
+        }
+
         if (firstRender)
         {
             if (TabSpaces > 0)
@@ -389,7 +504,7 @@ else
         try
         {
             return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js"));
+                "import", $"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js");
         }
         catch
         {
@@ -399,6 +514,13 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        if (_clientBufferAttached && _controlJsModule != null)
+        {
+            try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }
+            catch { /* circuit teardown */ }
+        }
+        _clientBufferRef?.Dispose();
+        _clientBufferRef = null;
         if (_controlJsModule != null)
         {
             try

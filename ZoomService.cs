@@ -14,7 +14,7 @@ public class ZoomService
     public const int DefaultPercent = 100;
     public const int MinPercent = 50;
     public const int MaxPercent = 200;
-    public const int StepPercent = 10;
+    public const int StepPercent = 5;
 
     public int ZoomPercent { get; private set; } = DefaultPercent;
 

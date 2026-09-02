@@ -1,7 +1,9 @@
 @namespace Fx.ControlKit
 @typeparam TValue
 
-<input type="@InputType"
+<input @key="_inputEpoch"
+       @ref="_inputRef"
+       type="@InputType"
        class="fx-numeric @CssClass"
        style="@(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
        value="@FormattedValue"
@@ -12,7 +14,10 @@
        maxlength="@MaxLength"
        inputmode="@InputMode"
        placeholder="@Placeholder"
-       @onchange="OnValueChanged" />
+       tabindex="@TabIndex"
+       @oninput="OnInputBuffer"
+       @onchange="OnNativeChange"
+       @onkeydown="OnKeyDown" />
 
 @code {
     [Parameter] public TValue? Value { get; set; }
@@ -26,6 +31,13 @@
     [Parameter] public decimal? Max { get; set; }
     [Parameter] public decimal Step { get; set; } = 1;
     [Parameter] public int? MaxLength { get; set; }
+    [Parameter] public int? TabIndex { get; set; }
+
+    /// <summary>VB6 apply-and-clear fields (Price Change / RoundTo): after a
+    /// commit (Enter/Tab/blur) the control clears itself back to blank —
+    /// the VB6 txtX.Text = "" after Validate. The bound value is synced to
+    /// null through ValueChanged.</summary>
+    [Parameter] public bool ClearOnCommit { get; set; }
 
     /// <summary>Event fired when value changes.</summary>
     [Parameter] public EventCallback<NumericChangeEventArgs<TValue>> ValueChange { get; set; }
@@ -49,22 +61,118 @@
         }
     }
 
+    // VB6 parity: numeric header fields commit on ENTER (VB6 KeyDown vbKeyReturn →
+    // Validate) as well as on blur/Tab (the DOM change event, which for number
+    // inputs does NOT fire on Enter). The latest raw text is buffered on input and
+    // committed from the Enter keydown; the duplicate-change guard swallows the one
+    // native change a browser might also emit for the same Enter press.
+    private string? _pendingText;
+    private string? _lastEnterCommitText;
+    private bool _suppressDuplicateChange;
+
+    // VB6 apply-and-clear parity: hosts often null the bound Value inside the
+    // commit (txtDollarChange.Text = "" after applying). Diffing alone cannot be
+    // trusted to push that clear into a live input (the browser keeps the typed
+    // text when renders coalesce), so when the committed raw text and the final
+    // bound value disagree the input element is RECREATED via @key — the fresh
+    // element renders the real value unconditionally. Focus is restored only for
+    // Enter commits (VB6 keeps the caret in the cleared box); blur/Tab commits
+    // leave focus where the user sent it.
+    private int _inputEpoch;
+    private ElementReference _inputRef;
+    private bool _refocusAfterEpochBump;
+    private bool _pendingRefocus;
+    private void OnInputBuffer(ChangeEventArgs e)
+    {
+        _pendingText = e.Value?.ToString();
+        _suppressDuplicateChange = false;
+        _refocusAfterEpochBump = false;
+    }
+
+    private async Task OnKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key is "Enter" or "NumpadEnter" && _pendingText != null)
+        {
+            var text = _pendingText;
+            _pendingText = null;
+            _lastEnterCommitText = text;
+            _suppressDuplicateChange = true;
+            _refocusAfterEpochBump = true;
+            await CommitAsync(text);
+        }
+    }
+
+    private async Task OnNativeChange(ChangeEventArgs e)
+    {
+        if (_suppressDuplicateChange
+            && (e.Value?.ToString() ?? "") == (_lastEnterCommitText ?? ""))
+        {
+            _suppressDuplicateChange = false;
+            return;
+        }
+        _suppressDuplicateChange = false;
+        _pendingText = null;
+        _refocusAfterEpochBump = false;
+        await CommitAsync(e.Value?.ToString() ?? "");
+    }
+
+    private async Task CommitAsync(string rawText)
+    {
+        await OnValueChanged(new ChangeEventArgs { Value = rawText });
+
+        // VB6 apply-and-clear (txtDollarChange.Text = "" after Validate): the
+        // CONTROL clears itself. Waiting on the parent is unsound — a host
+        // handler that runs synchronously renders the parent only after its
+        // field is already back to null, so the parameter never transitions
+        // and Blazor skips this child. Clearing locally (fresh @key element)
+        // is deterministic regardless of how the host handler is written.
+        if (ClearOnCommit)
+        {
+            Value = default;
+            if (ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(default);   // keep the bind in sync
+            _inputEpoch++;                                  // recreate → shows the cleared value
+            _pendingRefocus = _refocusAfterEpochBump;       // Enter keeps the caret (VB6)
+        }
+        _refocusAfterEpochBump = false;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pendingRefocus)
+        {
+            _pendingRefocus = false;
+            try { await _inputRef.FocusAsync(); } catch { /* torn down */ }
+        }
+
+    }
+
     private async Task OnValueChanged(ChangeEventArgs e)
     {
         var strVal = NormalizeInput(e.Value?.ToString() ?? "");
         TValue? newValue = default;
+        // TValue may be a Nullable<T> (e.g. decimal? on clear-after-apply fields):
+        // match on the UNDERLYING type, or every typed value would fall through to
+        // Convert.ChangeType, which throws on nullable targets and silently
+        // yielded null for all decimal? fields. Blank input stays null for
+        // nullable TValue (the VB6 "empty box" state).
+        var numericType = Nullable.GetUnderlyingType(typeof(TValue)) ?? typeof(TValue);
+        var isNullable = Nullable.GetUnderlyingType(typeof(TValue)) != null;
         try
         {
-            if (typeof(TValue) == typeof(decimal))
+            if (isNullable && strVal.Length == 0)
+                newValue = default;
+            else if (numericType == typeof(decimal))
                 newValue = (TValue)(object)ParseDecimalOrBoundary(strVal);
-            else if (typeof(TValue) == typeof(int))
+            else if (numericType == typeof(int))
                 newValue = (TValue)(object)(int.TryParse(strVal, out var i) ? i : ParseIntBoundary(strVal));
-            else if (typeof(TValue) == typeof(double))
+            else if (numericType == typeof(double))
                 newValue = (TValue)(object)(double.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var dbl) ? dbl : ParseDoubleBoundary(strVal));
-            else if (typeof(TValue) == typeof(float))
+            else if (numericType == typeof(float))
                 newValue = (TValue)(object)(float.TryParse(strVal, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var f) ? f : ParseFloatBoundary(strVal));
             else
-                newValue = (TValue)Convert.ChangeType(strVal, typeof(TValue));
+                newValue = (TValue)Convert.ChangeType(strVal, numericType);
         }
         catch
         {

@@ -505,223 +505,226 @@
         <table class="fx-grid-table" style="@GetTableStyle()">
 
             @* Header *@
-            <thead class="fx-grid-header">
-                <tr>
-                    @if (ShowRowReorderColumn)
-                    {
-                        <th class="fx-header-cell fx-row-reorder-header-cell" style="@RowReorderColumnStyle"></th>
-                    }
-                    @if (ShowRowSelectorHandleColumn)
-                    {
-                        <th class="fx-header-cell fx-row-selector-header-cell" style="@RowSelectorHandleColumnStyle"></th>
-                    }
-                    @if (ShowCheckboxColumn)
-                    {
-                        <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
-                            <CheckBoxControl Checked="@AllRowsSelected"
-                                             CheckedChanged="@SelectAllCheckedChanged"
-                                             TabIndex="-1"
-                                             StopClickPropagation="true"
-                                             StopMouseDownPropagation="true" />
-                        </th>
-                    }
-                    @if (HasDetailTemplate)
-                    {
-                        <th class="fx-header-cell fx-detail-expand-header-cell" style="width:36px; min-width:36px; text-align:center;">
-                            @if (ShowExpandAll && ExpandMode == GridExpandMode.Multiple)
-                            {
-                                <button type="button" class="fx-expand-all-btn btn btn-sm btn-link p-0 text-decoration-none" style="font-size:0.75rem; width:20px; height:20px; color:inherit;" @onclick="ToggleExpandAll">
-                                    @(AllRowsExpanded ? "▼" : "▶")
-                                </button>
-                            }
-                        </th>
-                    }
-                    @if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
-                    {
-                        @foreach (var gcol in GroupedLayoutColumns)
+            @if (ShowHeader)
+            {
+                <thead class="fx-grid-header">
+                    <tr>
+                        @if (ShowRowReorderColumn)
                         {
-                            @* Capture per-iteration so the @oncontextmenu lambda
-                               binds the right field instead of closing over the
-                               loop variable. *@
-                            var capturedGroupField = gcol.Field;
-                            <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
-                                @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
-                                @oncontextmenu:preventDefault="true"
-                                @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
-                                title="Right-click for options">
-                                <span class="fx-header-text">@HeaderColumnDisplay(gcol)</span>
+                            <th class="fx-header-cell fx-row-reorder-header-cell" style="@RowReorderColumnStyle"></th>
+                        }
+                        @if (ShowRowSelectorHandleColumn)
+                        {
+                            <th class="fx-header-cell fx-row-selector-header-cell" style="@RowSelectorHandleColumnStyle"></th>
+                        }
+                        @if (ShowCheckboxColumn)
+                        {
+                            <th class="fx-header-cell fx-checkbox-cell" style="width:50px;">
+                                <CheckBoxControl Checked="@AllRowsSelected"
+                                                 CheckedChanged="@SelectAllCheckedChanged"
+                                                 TabIndex="-1"
+                                                 StopClickPropagation="true"
+                                                 StopMouseDownPropagation="true" />
                             </th>
                         }
-                    }
-                    @{ GridColumn? prevResizeCol = null; }
-                    @foreach (var col in VisibleColumns)
-                    {
-                        var state = GetColumnState(col.Field);
-                        var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
-                        var capturedField = col.Field;
-                        var headerLabel = HeaderColumnDisplay(col);
-                        var leftGripCol = prevResizeCol;
-                        prevResizeCol = AllowResizing && col.AllowResizing ? col : null;
-                        @* data-field CSS hook (header) — matches the data-cell hook so a
-                           single rule like `[data-field="Total"]` paints both the column
-                           header AND every cell underneath. *@
-                        <th class="fx-header-cell @(state.SortDirection.HasValue ? "fx-sorted" : "") @(state.FilterActive ? "fx-filtered" : "") @(AllowResizing && col.AllowResizing ? "fx-resizable" : "")"
-                            style="@col.GetHeaderStyle(); position:relative;"
-                            data-field="@capturedField"
-                            @onclick="() => HandleSort(col)"
-                            @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
-                            @oncontextmenu:preventDefault="true"
-                            @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
-                            title="@headerLabel"
-                            draggable="@(headerDraggable ? "true" : "false")"
-                            @ondragstart="(e => StartColumnDrag(capturedField, e))"
-                            @ondragend="EndColumnDrag">
-
-                            @if (col.HeaderTemplate != null)
-                            {
-                                @col.HeaderTemplate
-                            }
-                            else
-                            {
-                                <span class="fx-header-text">@headerLabel</span>
-                            }
-
-                            @if (AllowSorting && col.AllowSorting && state.SortDirection.HasValue)
-                            {
-                                <span class="fx-sort-icon">@(state.SortDirection == SortDirection.Ascending ? "▲" : "▼")</span>
-                                @if (ShowMultiColumnSortingIndex && GetSortPriorityIndex(capturedField) is int sortPriority)
+                        @if (HasDetailTemplate)
+                        {
+                            <th class="fx-header-cell fx-detail-expand-header-cell" style="width:36px; min-width:36px; text-align:center;">
+                                @if (ShowExpandAll && ExpandMode == GridExpandMode.Multiple)
                                 {
-                                    <span class="fx-sort-index badge bg-secondary text-white ms-1" style="font-size:0.60rem; padding:1px 3px;">@sortPriority</span>
+                                    <button type="button" class="fx-expand-all-btn btn btn-sm btn-link p-0 text-decoration-none" style="font-size:0.75rem; width:20px; height:20px; color:inherit;" @onclick="ToggleExpandAll">
+                                        @(AllRowsExpanded ? "▼" : "▶")
+                                    </button>
                                 }
-                            }
-
-                            @if (state.FilterActive)
+                            </th>
+                        }
+                        @if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
+                        {
+                            @foreach (var gcol in GroupedLayoutColumns)
                             {
-                                @* HHM-871: the passive "filter applied" dot is now a
-                                   click-to-clear badge — one click removes the column's
-                                   filter without opening the popup. *@
-                                <span class="fx-filter-clear"
-                                      role="button"
-                                      title="Filter applied — click to clear"
-                                      aria-label="Clear filter on @headerLabel"
-                                      @onmousedown:stopPropagation="true"
-                                      @onclick:stopPropagation="true"
-                                      @onclick="() => ClearFilterFromHeader(col.Field)">×</span>
+                                @* Capture per-iteration so the @oncontextmenu lambda
+                                   binds the right field instead of closing over the
+                                   loop variable. *@
+                                var capturedGroupField = gcol.Field;
+                                <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
+                                    @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
+                                    @oncontextmenu:preventDefault="true"
+                                    @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
+                                    title="Right-click for options">
+                                    <span class="fx-header-text">@HeaderColumnDisplay(gcol)</span>
+                                </th>
                             }
-
-                            @if (AllowFiltering && col.AllowFiltering && ShowHeaderFilterIcon)
-                            {
-                                <span class="fx-filter-icon @(UseDefaultHeaderFilterIcon ? "fx-filter-icon-default" : "fx-filter-icon-custom") @(state.FilterActive ? "active" : "")"
-                                      title="Filter"
-                                      aria-label="Filter @headerLabel"
-                                      @onclick:stopPropagation="true"
-                                      @onclick="e => ToggleFilterPopup(col.Field, e)">
-                                    @if (!UseDefaultHeaderFilterIcon)
-                                    {
-                                        @ResolvedHeaderFilterIcon
-                                    }
-                                </span>
-                            }
-
-                            @* ── Resize Handle ────────────────────────── *@
-                            @if (AllowResizing && col.AllowResizing)
-                            {
-                                <span class="fx-resize-handle"
-                                      draggable="false"
-                                      @onmousedown="e => StartResize(col, e)"
-                                      @onmousedown:preventDefault="true"
-                                      @onmousedown:stopPropagation="true"
-                                      @onclick:stopPropagation="true"
-                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
-                                      @ondblclick:preventDefault="true"
-                                      @ondblclick:stopPropagation="true"></span>
-                            }
-                            @* The divider's right half. Each header cell is isolation:isolate, so
-                               the previous cell's grip cannot overhang into this one — instead this
-                               cell owns a left-edge strip that resizes the PREVIOUS column, giving
-                               the divider line a hit zone on both sides like VB6/Excel. *@
-                            @if (leftGripCol != null)
-                            {
-                                var capturedPrev = leftGripCol;
-                                <span class="fx-resize-handle fx-resize-handle-prev"
-                                      draggable="false"
-                                      @onmousedown="e => StartResize(capturedPrev, e)"
-                                      @onmousedown:preventDefault="true"
-                                      @onmousedown:stopPropagation="true"
-                                      @onclick:stopPropagation="true"
-                                      @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
-                                      @ondblclick:preventDefault="true"
-                                      @ondblclick:stopPropagation="true"></span>
-                            }
-
-                            @if (AllowColumnReorder)
-                            {
-                                <span class="fx-header-drop-zone fx-header-drop-zone-left"
-                                      @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: false, e)"
-                                      @ondragover:preventDefault="true"
-                                      @ondragover:stopPropagation="true"
-                                      @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: false, e)"
-                                      @ondrop:preventDefault="true"
-                                      @ondrop:stopPropagation="true"></span>
-                                <span class="fx-header-drop-zone fx-header-drop-zone-right"
-                                      @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: true, e)"
-                                      @ondragover:preventDefault="true"
-                                      @ondragover:stopPropagation="true"
-                                      @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: true, e)"
-                                      @ondrop:preventDefault="true"
-                                      @ondrop:stopPropagation="true"></span>
-                            }
-                        </th>
-                    }
-                </tr>
-
-                @if (FilterMode is GridFilterMode.Simple or GridFilterMode.SimpleWithMenu or GridFilterMode.Excel)
-                {
-                    <tr class="fx-filter-row">
-                        @if (ShowRowReorderColumn) { <th class="fx-filter-cell"></th> }
-                        @if (ShowRowSelectorHandleColumn) { <th class="fx-filter-cell"></th> }
-                        @if (ShowCheckboxColumn) { <th class="fx-filter-cell"></th> }
-                        @if (HasDetailTemplate) { <th class="fx-filter-cell"></th> }
+                        }
+                        @{ GridColumn? prevResizeCol = null; }
                         @foreach (var col in VisibleColumns)
                         {
-                            var fCol = col;
-                            <th class="fx-filter-cell" style="@fCol.GetHeaderStyle()">
-                                @if (fCol.AllowFiltering)
+                            var state = GetColumnState(col.Field);
+                            var headerDraggable = AllowColumnReorder || (AllowGrouping && col.AllowGrouping);
+                            var capturedField = col.Field;
+                            var headerLabel = HeaderColumnDisplay(col);
+                            var leftGripCol = prevResizeCol;
+                            prevResizeCol = AllowResizing && col.AllowResizing ? col : null;
+                            @* data-field CSS hook (header) — matches the data-cell hook so a
+                               single rule like `[data-field="Total"]` paints both the column
+                               header AND every cell underneath. *@
+                            <th class="fx-header-cell @(state.SortDirection.HasValue ? "fx-sorted" : "") @(state.FilterActive ? "fx-filtered" : "") @(AllowResizing && col.AllowResizing ? "fx-resizable" : "")"
+                                style="@col.GetHeaderStyle(); position:relative;"
+                                data-field="@capturedField"
+                                @onclick="() => HandleSort(col)"
+                                @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
+                                @oncontextmenu:preventDefault="true"
+                                @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
+                                title="@headerLabel"
+                                draggable="@(headerDraggable ? "true" : "false")"
+                                @ondragstart="(e => StartColumnDrag(capturedField, e))"
+                                @ondragend="EndColumnDrag">
+
+                                @if (col.HeaderTemplate != null)
                                 {
-                                    @if (fCol.FilterTemplate != null)
+                                    @col.HeaderTemplate
+                                }
+                                else
+                                {
+                                    <span class="fx-header-text">@headerLabel</span>
+                                }
+
+                                @if (AllowSorting && col.AllowSorting && state.SortDirection.HasValue)
+                                {
+                                    <span class="fx-sort-icon">@(state.SortDirection == SortDirection.Ascending ? "▲" : "▼")</span>
+                                    @if (ShowMultiColumnSortingIndex && GetSortPriorityIndex(capturedField) is int sortPriority)
                                     {
-                                        @fCol.FilterTemplate(fCol)
+                                        <span class="fx-sort-index badge bg-secondary text-white ms-1" style="font-size:0.60rem; padding:1px 3px;">@sortPriority</span>
                                     }
-                                    else
-                                    {
-                                        <div class="fx-grid-filter-input-wrap d-flex align-items-center gap-1">
-                                            <input type="text"
-                                                   class="fx-grid-filter-input form-control form-control-sm py-0 px-1"
-                                                   style="font-size:0.70rem; height:20px;"
-                                                   placeholder="Filter..."
-                                                   value="@GetColumnFilterValue(fCol.Field)"
-                                                   @oninput="@(e => OnColumnFilterInput(fCol.Field, e.Value?.ToString()))"
-                                                   @oninput:stopPropagation="true"
-                                                   @onkeydown:stopPropagation="true"
-                                                   @onkeyup:stopPropagation="true"
-                                                   @onclick:stopPropagation="true"
-                                                   @onfocus:stopPropagation="true" />
-                                            @if (!string.IsNullOrEmpty(GetColumnFilterValue(fCol.Field)))
-                                            {
-                                                <button type="button"
-                                                        class="btn btn-sm btn-link p-0 text-muted"
-                                                        style="font-size:0.65rem;"
-                                                        @onclick="@(() => ClearColumnFilter(fCol.Field))"
-                                                        @onclick:stopPropagation="true">✕</button>
-                                            }
-                                        </div>
-                                    }
+                                }
+
+                                @if (state.FilterActive)
+                                {
+                                    @* HHM-871: the passive "filter applied" dot is now a
+                                       click-to-clear badge — one click removes the column's
+                                       filter without opening the popup. *@
+                                    <span class="fx-filter-clear"
+                                          role="button"
+                                          title="Filter applied — click to clear"
+                                          aria-label="Clear filter on @headerLabel"
+                                          @onmousedown:stopPropagation="true"
+                                          @onclick:stopPropagation="true"
+                                          @onclick="() => ClearFilterFromHeader(col.Field)">×</span>
+                                }
+
+                                @if (AllowFiltering && col.AllowFiltering && ShowHeaderFilterIcon)
+                                {
+                                    <span class="fx-filter-icon @(UseDefaultHeaderFilterIcon ? "fx-filter-icon-default" : "fx-filter-icon-custom") @(state.FilterActive ? "active" : "")"
+                                          title="Filter"
+                                          aria-label="Filter @headerLabel"
+                                          @onclick:stopPropagation="true"
+                                          @onclick="e => ToggleFilterPopup(col.Field, e)">
+                                        @if (!UseDefaultHeaderFilterIcon)
+                                        {
+                                            @ResolvedHeaderFilterIcon
+                                        }
+                                    </span>
+                                }
+
+                                @* ── Resize Handle ────────────────────────── *@
+                                @if (AllowResizing && col.AllowResizing)
+                                {
+                                    <span class="fx-resize-handle"
+                                          draggable="false"
+                                          @onmousedown="e => StartResize(col, e)"
+                                          @onmousedown:preventDefault="true"
+                                          @onmousedown:stopPropagation="true"
+                                          @onclick:stopPropagation="true"
+                                          @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
+                                          @ondblclick:preventDefault="true"
+                                          @ondblclick:stopPropagation="true"></span>
+                                }
+                                @* The divider's right half. Each header cell is isolation:isolate, so
+                                   the previous cell's grip cannot overhang into this one — instead this
+                                   cell owns a left-edge strip that resizes the PREVIOUS column, giving
+                                   the divider line a hit zone on both sides like VB6/Excel. *@
+                                @if (leftGripCol != null)
+                                {
+                                    var capturedPrev = leftGripCol;
+                                    <span class="fx-resize-handle fx-resize-handle-prev"
+                                          draggable="false"
+                                          @onmousedown="e => StartResize(capturedPrev, e)"
+                                          @onmousedown:preventDefault="true"
+                                          @onmousedown:stopPropagation="true"
+                                          @onclick:stopPropagation="true"
+                                          @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
+                                          @ondblclick:preventDefault="true"
+                                          @ondblclick:stopPropagation="true"></span>
+                                }
+
+                                @if (AllowColumnReorder)
+                                {
+                                    <span class="fx-header-drop-zone fx-header-drop-zone-left"
+                                          @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: false, e)"
+                                          @ondragover:preventDefault="true"
+                                          @ondragover:stopPropagation="true"
+                                          @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: false, e)"
+                                          @ondrop:preventDefault="true"
+                                          @ondrop:stopPropagation="true"></span>
+                                    <span class="fx-header-drop-zone fx-header-drop-zone-right"
+                                          @ondragover="e => HandleHeaderDropZoneDragOver(capturedField, insertAfter: true, e)"
+                                          @ondragover:preventDefault="true"
+                                          @ondragover:stopPropagation="true"
+                                          @ondrop="e => HandleHeaderDropZoneDrop(capturedField, insertAfter: true, e)"
+                                          @ondrop:preventDefault="true"
+                                          @ondrop:stopPropagation="true"></span>
                                 }
                             </th>
                         }
                     </tr>
-                }
-            </thead>
+
+                    @if (FilterMode is GridFilterMode.Simple or GridFilterMode.SimpleWithMenu or GridFilterMode.Excel)
+                    {
+                        <tr class="fx-filter-row">
+                            @if (ShowRowReorderColumn) { <th class="fx-filter-cell"></th> }
+                            @if (ShowRowSelectorHandleColumn) { <th class="fx-filter-cell"></th> }
+                            @if (ShowCheckboxColumn) { <th class="fx-filter-cell"></th> }
+                            @if (HasDetailTemplate) { <th class="fx-filter-cell"></th> }
+                            @foreach (var col in VisibleColumns)
+                            {
+                                var fCol = col;
+                                <th class="fx-filter-cell" style="@fCol.GetHeaderStyle()">
+                                    @if (fCol.AllowFiltering)
+                                    {
+                                        @if (fCol.FilterTemplate != null)
+                                        {
+                                            @fCol.FilterTemplate(fCol)
+                                        }
+                                        else
+                                        {
+                                            <div class="fx-grid-filter-input-wrap d-flex align-items-center gap-1">
+                                                <input type="text"
+                                                       class="fx-grid-filter-input form-control form-control-sm py-0 px-1"
+                                                       style="font-size:0.70rem; height:20px;"
+                                                       placeholder="Filter..."
+                                                       value="@GetColumnFilterValue(fCol.Field)"
+                                                       @oninput="@(e => OnColumnFilterInput(fCol.Field, e.Value?.ToString()))"
+                                                       @oninput:stopPropagation="true"
+                                                       @onkeydown:stopPropagation="true"
+                                                       @onkeyup:stopPropagation="true"
+                                                       @onclick:stopPropagation="true"
+                                                       @onfocus:stopPropagation="true" />
+                                                @if (!string.IsNullOrEmpty(GetColumnFilterValue(fCol.Field)))
+                                                {
+                                                    <button type="button"
+                                                            class="btn btn-sm btn-link p-0 text-muted"
+                                                            style="font-size:0.65rem;"
+                                                            @onclick="@(() => ClearColumnFilter(fCol.Field))"
+                                                            @onclick:stopPropagation="true">✕</button>
+                                                }
+                                            </div>
+                                        }
+                                    }
+                                </th>
+                            }
+                        </tr>
+                    }
+                </thead>
+            }
 
             @* Body *@
             <tbody class="fx-grid-body">

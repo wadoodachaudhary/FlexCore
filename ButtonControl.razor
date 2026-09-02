@@ -2,8 +2,11 @@
 
 @if (DropDownContent is null)
 {
-    @* Default button — unchanged from before (existing consumers are unaffected). *@
-    <button class="@ResolvedCssClass"
+    @* Default button — unchanged from before (existing consumers are unaffected).
+       AdditionalAttributes is splatted FIRST so the explicit parameters below
+       always win when both define the same attribute. *@
+    <button @attributes="AdditionalAttributes"
+            class="@ResolvedCssClass"
             @ref="_buttonElement"
             type="@ButtonType"
             disabled="@Disabled"
@@ -26,7 +29,8 @@ else
        toggles a popup panel beneath it (same look/feel as the ColorPickerControl dropdown).
        Closes on click-away via a full-screen backdrop button — no JavaScript. *@
     <span class="fx-button-dd-host">
-        <button class="@ResolvedCssClass"
+        <button @attributes="AdditionalAttributes"
+                class="@ResolvedCssClass"
                 @ref="_buttonElement"
                 type="@ButtonType"
                 disabled="@Disabled"
@@ -58,6 +62,16 @@ else
 @code {
     [Parameter] public RenderFragment? ChildContent { get; set; }
     [Parameter] public string? CssClass { get; set; }
+
+    /// <summary>
+    /// Unmatched attributes are forwarded to the underlying &lt;button&gt;
+    /// element (e.g. <c>accesskey</c>, <c>aria-*</c>, <c>data-*</c>, <c>id</c>,
+    /// <c>name</c>, <c>form</c>). Splatted before the explicit parameters, so
+    /// <c>class</c>/<c>type</c>/<c>disabled</c>/<c>title</c>/<c>tabindex</c>/
+    /// <c>style</c> passed this way never override the component's own values.
+    /// </summary>
+    [Parameter(CaptureUnmatchedValues = true)]
+    public Dictionary<string, object>? AdditionalAttributes { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public string ButtonType { get; set; } = "button";
     [Parameter] public string? IconCss { get; set; }

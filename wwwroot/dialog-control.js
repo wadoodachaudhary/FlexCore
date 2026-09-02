@@ -4,6 +4,23 @@
 // after the dialog opened; on close, give focus BACK to the caller.
 const focusReturnStack = [];
 
+// Recent focus history (newest last). captureFocus() runs one interop round
+// trip behind the dialog's render, and dialog content (e.g. FPickList's own
+// grid) often focuses itself in the same breath the dialog appears — by
+// capture time document.activeElement is INSIDE the dialog, and recording it
+// meant restoreFocus popped a dead element on close and the keyboard fell to
+// <body> (the "Esc doesn't bring focus back to the grid" trap). The history
+// lets capture reach back to who really held focus before the dialog did.
+const focusHistory = [];
+document.addEventListener("focusin", e => {
+    const t = e.target;
+    if (!t || t === document.body) return;
+    const last = focusHistory[focusHistory.length - 1];
+    if (last === t) return;
+    focusHistory.push(t);
+    if (focusHistory.length > 10) focusHistory.shift();
+}, true);
+
 function pickFocusTarget(root) {
     // Text inputs first; then keyboard-focusable content (a grid host);
     // buttons LAST and never the dialog's own chrome (close / window icon).
@@ -35,7 +52,7 @@ function guardFocusWithin(root, preferred) {
 
 export function focusFirst(root) {
     if (!root) return;
-    captureFocus();
+    captureFocus(root);
     focusContent(root);
 }
 
@@ -70,15 +87,42 @@ export function hasOwnTextEntry(root) {
 
 // Capture-only variant: dialogs that manage their own focus (AutoFocus=false)
 // still record the caller so restoreFocus can give focus back on close.
-export function captureFocus() {
+// `root` is the opening dialog's own element: anything focused inside it is
+// the dialog's content, never the caller, so the capture reaches back through
+// the focus history for the most recent holder OUTSIDE that dialog. Nested
+// popups stay correct — a message box over a picklist captures the picklist's
+// grid (outside the MESSAGE BOX's root), not the page underneath both.
+export function captureFocus(root) {
     const prev = document.activeElement;
-    focusReturnStack.push(prev && prev !== document.body ? prev : null);
+    if (prev && prev !== document.body && !(root && root.contains(prev))) {
+        focusReturnStack.push(prev);
+        return;
+    }
+    for (let i = focusHistory.length - 1; i >= 0; i--) {
+        const el = focusHistory[i];
+        if (el && el.isConnected && el !== document.body && !(root && root.contains(el))) {
+            focusReturnStack.push(el);
+            return;
+        }
+    }
+    focusReturnStack.push(null);
 }
 
 export function restoreFocus() {
     const el = focusReturnStack.pop();
     if (el && el.isConnected) {
-        try { el.focus({ preventScroll: true }); } catch { /* detached mid-close */ }
+        try { el.focus({ preventScroll: true }); return; } catch { /* detached mid-close */ }
+    }
+    // The captured caller died while the dialog was open (re-render replaced
+    // it, or the capture found nothing). Falling back to the most recent
+    // surviving holder beats stranding the keyboard on <body>.
+    for (let i = focusHistory.length - 1; i >= 0; i--) {
+        const fb = focusHistory[i];
+        if (fb && fb.isConnected && fb !== document.body
+            && !fb.closest(".fx-dialog, .fx-msgbox-overlay")) {
+            try { fb.focus({ preventScroll: true }); } catch { /* detached */ }
+            return;
+        }
     }
 }
 

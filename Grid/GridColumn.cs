@@ -43,6 +43,33 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
+    /// <summary>Excludes this column from best-fit sizing (grip double-click, Best Fit
+    /// menu, AutoFitColumnsAsync). For a column whose width is deliberately pinned —
+    /// e.g. VB6 `ColWidth(0) = 240` followed by `AutoSize(1, .Cols - 1)`.</summary>
+    [Parameter] public bool AllowAutoFit { get; set; } = true;
+
+    /// <summary>
+    /// Requires a typed edit value to match one of the column's allowed values
+    /// before the cell can commit. Matching is case-insensitive and accepts
+    /// either side of a mapped option such as <c>#3;To closest</c>; the stored
+    /// value is normalized to the mapped value. When <see cref="EditValueList"/>
+    /// and <see cref="EditValueListProvider"/> are both omitted, the grid uses
+    /// <see cref="EditOptions"/> or <see cref="EditOptionsProvider"/>.
+    /// </summary>
+    [Parameter] public bool RequireEditValueInList { get; set; }
+
+    /// <summary>Allowed values for <see cref="RequireEditValueInList"/> when the
+    /// cell uses a popup button rather than an in-cell dropdown.</summary>
+    [Parameter] public IEnumerable<string>? EditValueList { get; set; }
+
+    /// <summary>Row-aware allowed values for <see cref="RequireEditValueInList"/>.</summary>
+    [Parameter] public Func<object, IEnumerable<string>>? EditValueListProvider { get; set; }
+
+    /// <summary>Message shown in the validation pill when a required list match is
+    /// not found. Defaults to "{column} '{value}' not found."; a {0} placeholder
+    /// is substituted with the refused entry.</summary>
+    [Parameter] public string? EditValueNotFoundMessage { get; set; }
+
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowHiding { get; set; } = true;
     /// <summary>
@@ -176,32 +203,16 @@ public class GridColumn : ComponentBase, IDisposable
     /// <summary>Child content (for Template shorthand).</summary>
     [Parameter] public RenderFragment<object>? ChildContent { get; set; }
 
-    /// <summary>Per-column filter mode override.</summary>
-    [Parameter] public GridFilterMode? FilterMode { get; set; }
 
     /// <summary>Custom filter template for this column.</summary>
     [Parameter] public RenderFragment<GridColumn>? FilterTemplate { get; set; }
 
-    /// <summary>Active filter value for in-header or popup filtering.</summary>
-    [Parameter] public object? FilterValue { get; set; }
 
-    /// <summary>Second filter value for 2-condition popup filtering.</summary>
-    [Parameter] public object? SecondFilterValue { get; set; }
 
-    /// <summary>Primary filter operator.</summary>
-    [Parameter] public GridFilterOperator FilterOperator { get; set; } = GridFilterOperator.Contains;
 
-    /// <summary>Secondary filter operator for 2-condition popup filtering.</summary>
-    [Parameter] public GridFilterOperator SecondFilterOperator { get; set; } = GridFilterOperator.Contains;
 
-    /// <summary>Logical operator between first and second filter conditions.</summary>
-    [Parameter] public LogicalFilterOperator LogicalFilterOperator { get; set; } = LogicalFilterOperator.And;
 
-    /// <summary>Custom footer cell template.</summary>
-    [Parameter] public RenderFragment<object>? FooterTemplate { get; set; }
 
-    /// <summary>Custom group header template.</summary>
-    [Parameter] public RenderFragment<object>? GroupHeaderTemplate { get; set; }
 
     /// <summary>Per-column filter settings override.</summary>
     [Parameter] public FilterSettings? FilterSettings { get; set; }

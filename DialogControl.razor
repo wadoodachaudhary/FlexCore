@@ -164,6 +164,13 @@
     private PopupFocusScope ContentFocusScope => _focusScope ??= new PopupFocusScope(AutoFocus);
     private bool _autoFocusApplied;
     private bool _wasVisibleForFocus;
+    private bool _openerCaptured;
+
+    private async Task CaptureOpenerEarlyAsync()
+    {
+        try { await _focusModule!.InvokeVoidAsync("captureFocus"); }
+        catch { /* circuit teardown */ }
+    }
     private bool _keysRegisteredForShow;
     private DotNetObjectReference<DialogControl>? _selfRef;
     private IJSObjectReference? _focusModule;
@@ -471,6 +478,26 @@
             _isDragging = false;
             _isResizing = false;
             _moveArmed = false;
+
+            // Rising edge: the dialog renders AFTER this method, so a capture
+            // enqueued HERE reaches the browser BEFORE the render batch that
+            // creates the dialog — document.activeElement is still the true
+            // caller and the capture cannot race the dialog's own content
+            // focusing itself (FPickList's grid, an AutoFocus field, ...).
+            // Needs the focus module already imported; hidden dialogs preload
+            // it in OnAfterRenderAsync, covering every open after first render.
+            if (_focusModule != null)
+            {
+                _wasVisibleForFocus = true;
+                _openerCaptured = true;
+                _ = CaptureOpenerEarlyAsync();
+            }
+            else
+            {
+                // First-ever open with no hidden pre-render: the late,
+                // root-aware capture in OnAfterRenderAsync is the fallback.
+                _openerCaptured = false;
+            }
         }
         _lastVisible = Visible;
     }
@@ -522,6 +549,16 @@
             _autoFocusApplied = false;
             _focusScope = null;
             _keysRegisteredForShow = false;
+            _openerCaptured = false;
+            // Preload the focus module while hidden: the rising-edge capture in
+            // OnParametersSet can only be enqueued pre-render when the module
+            // already exists, and importing it here also installs the module's
+            // focus-history tracker before any dialog ever opens.
+            if (_focusModule == null)
+            {
+                try { _focusModule = await JS.InvokeAsync<IJSObjectReference>("import", DialogJsModulePath); }
+                catch { /* prerender — retried on the open path */ }
+            }
             // The popup must yield focus back to the caller it took it from.
             if (_wasVisibleForFocus)
             {
@@ -554,15 +591,19 @@
         try
         {
             _focusModule ??= await JS.InvokeAsync<IJSObjectReference>("import", DialogJsModulePath);
-            // The caller must be captured BEFORE anything inside the dialog
-            // takes focus, or the restore stack records the content instead.
+            // The capture runs an interop round trip behind the render, so the
+            // dialog's own content (an FPickList grid, an AutoFocus field) may
+            // already hold focus. Passing our root lets captureFocus reject
+            // in-dialog holders and reach back to the real caller.
             if (!AutoFocus)
             {
-                await _focusModule.InvokeVoidAsync("captureFocus");
+                if (!_openerCaptured)
+                    await _focusModule.InvokeVoidAsync("captureFocus", _dialogElement);
             }
             else if (ContentFocusScope.HasClaim)
             {
-                await _focusModule.InvokeVoidAsync("captureFocus");
+                if (!_openerCaptured)
+                    await _focusModule.InvokeVoidAsync("captureFocus", _dialogElement);
                 // A text entry of the popup's own keeps the caret; the
                 // claimant then only prepares its keyboard state.
                 var yieldToTextEntry = false;
@@ -584,7 +625,9 @@
             else
             {
                 ContentFocusScope.MarkHostFocusPass();
-                await _focusModule.InvokeVoidAsync("focusFirst", _dialogElement);
+                if (!_openerCaptured)
+                    await _focusModule.InvokeVoidAsync("captureFocus", _dialogElement);
+                await _focusModule.InvokeVoidAsync("focusContent", _dialogElement);
             }
         }
         catch

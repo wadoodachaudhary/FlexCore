@@ -132,7 +132,7 @@
     overflow: auto;
     background: #ffffff;
     color: #111827;
-    font: calc(12px * var(--fx-zoom, 1))/1.42 Consolas, "Courier New", monospace;
+    font: calc(12px/1.42 * var(--fx-zoom, 1)) Consolas, "Courier New", monospace;
     tab-size: 4;
     white-space: pre;
     outline: none;

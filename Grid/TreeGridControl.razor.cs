@@ -211,6 +211,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// propagation; the browser contextmenu event still bubbles to page handlers.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
+    /// <summary>Fires for every keydown reaching the tree grid, BEFORE the built-in
+    /// tree navigation runs — the host-form hook for form-specific keys (VB6
+    /// gData_KeyDown parity, e.g. Delete clearing a cell value). Purely additive:
+    /// built-in navigation still runs after the callback.</summary>
+    [Parameter] public EventCallback<KeyboardEventArgs> OnHostKeyDown { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Expanded { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Collapsed { get; set; }
     [Parameter] public EventCallback<string> OnToolbarItemClick { get; set; }
@@ -1047,6 +1052,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await ToggleNode(node);
 
         await SelectNodeAsync(node, visibleIndex);
+        await FocusAsync();
     }
 
     private async Task HandleRowDoubleClick(TreeNode<TValue> node, int visibleIndex)
@@ -1071,6 +1077,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (OnHostKeyDown.HasDelegate)
+            await OnHostKeyDown.InvokeAsync(e);
+
         switch (e.Key)
         {
             case "ArrowDown":
@@ -1090,6 +1099,12 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             case "Enter":
                 await ActivateSelectedNodeAsync();
                 break;
+            case " ":
+            case "Spacebar":
+                // VB6 VSFlexGrid parity: Space toggles the current node's
+                // collapse/expand state (FInboxJobs gData_KeyDown vbKeySpace).
+                await ToggleSelectedNodeAsync();
+                break;
             case "ArrowRight":
             case "Right":
                 await ExpandOrMoveToChildAsync();
@@ -1099,6 +1114,21 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 await CollapseOrMoveToParentAsync();
                 break;
         }
+    }
+
+    private async Task ToggleSelectedNodeAsync()
+    {
+        var visible = VisibleNodes.ToList();
+        var selectedIndex = GetSelectedVisibleIndex(visible);
+        if (selectedIndex < 0)
+            return;
+
+        var node = visible[selectedIndex];
+        if (!node.HasChildren)
+            return;
+
+        _pendingTreeFocus = true;
+        await ToggleNode(node);
     }
 
     private async Task MoveSelectionAsync(int delta)
@@ -1141,10 +1171,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         var node = visible[selectedIndex];
         _pendingTreeFocus = true;
+        if (node.HasChildren)
+            await ToggleNode(node);
+
         if (RowActivated.HasDelegate)
             await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
-        else if (node.HasChildren)
-            await ToggleNode(node);
     }
 
     private async Task ExpandOrMoveToChildAsync()
