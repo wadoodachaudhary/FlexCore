@@ -210,6 +210,10 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// attached, right-click behavior is unchanged. The event does not stop
     /// propagation; the browser contextmenu event still bubbles to page handlers.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }
+    /// <summary>Keyboard activation event. Enter invokes this for the selected row
+    /// without changing its expanded state. When it has no subscriber, Enter falls
+    /// back to <see cref="RowDoubleClicked"/> so mouse and keyboard activation can
+    /// share the same host handler.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
     /// <summary>Fires for every keydown reaching the tree grid, BEFORE the built-in
     /// tree navigation runs — the host-form hook for form-specific keys (VB6
@@ -268,19 +272,24 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             StateHasChanged();
         }
 
-        IJSObjectReference? legacyScrollModule = null;
-        if (ShowLegacyScrollBar)
+        // Deferred no-trap refocus from ClearActiveCellEdit — runs after the
+        // editor's unmount render so the DOM removal can't steal focus back.
+        if (_refocusAfterCellEditClose)
         {
-            legacyScrollModule = await GetLegacyScrollModuleAsync();
-            if (!_legacyKeyboardNavigationEnabled && legacyScrollModule is not null)
+            _refocusAfterCellEditClose = false;
+            await FocusAsync();
+        }
+
+        var treeScrollModule = await GetLegacyScrollModuleAsync();
+        if (!_treeKeyboardNavigationEnabled && treeScrollModule is not null)
+        {
+            try
             {
-                try
-                {
-                    await legacyScrollModule.InvokeVoidAsync("enableTreeKeyboardNavigation", _treeGridElement);
-                    _legacyKeyboardNavigationEnabled = true;
-                }
-                catch { }
+                await treeScrollModule.InvokeVoidAsync(
+                    "enableTreeKeyboardNavigation", _treeGridElement, _scrollViewportElement);
+                _treeKeyboardNavigationEnabled = true;
             }
+            catch { }
         }
 
         if (_pendingTreeFocus)
@@ -294,8 +303,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             _pendingKeyboardFocusNode = null;
             try
             {
-                if (legacyScrollModule is not null)
-                    await legacyScrollModule.InvokeVoidAsync("focusSelectedTreeRow", _scrollViewportElement);
+                if (treeScrollModule is not null)
+                    await treeScrollModule.InvokeVoidAsync(
+                        "focusTreeRow", _scrollViewportElement, pendingNode.RowElement);
                 else
                     await pendingNode.RowElement.FocusAsync(preventScroll: false);
             }
@@ -329,7 +339,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private const string LegacyScrollBarJsModulePath = "./_content/FlexCore/legacy-scrollbar.js";
     private IJSObjectReference? _legacyScrollModule;
-    private bool _legacyKeyboardNavigationEnabled;
+    private bool _treeKeyboardNavigationEnabled;
 
     private ElementReference _scrollViewportElement;
     private ElementReference _legacyTrackElement;
@@ -354,7 +364,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             return _legacyScrollModule ??=
                 await LegacyScrollJs.InvokeAsync<IJSObjectReference>("import", LegacyScrollBarJsModulePath);
         }
-        catch { return null; }   // prerender / torn-down circuit — bar just stays hidden
+        catch { return null; }   // prerender / torn-down circuit — interop stays inactive
     }
 
     private async Task<(double Top, double Height, double Client)?> ReadLegacyMetricsAsync()
@@ -545,6 +555,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 parts.Add(CssClass.Trim());
             if (ShowGridOptionsRail && ShowColumnOptionsButton)
                 parts.Add("fx-treegrid-options-on");
+            // SelectionMode.Cell: highlight only the node (tree) cell of the
+            // selected row — the vsFlexGrid free-cell-selection look
+            // (AfterSelChange ColSel=Col). Row mode keeps the full-row band.
+            if (SelectionMode == SelectionMode.Cell)
+                parts.Add("fx-treegrid-select-cell");
             if (ShouldRenderToolbar)
                 parts.Add("fx-treegrid-toolbar-on");
             if (_isColumnResizing)
@@ -1047,6 +1062,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
     {
+        // (In-cell edits are cleared centrally in SelectNodeAsync — clicks on the
+        // editor's own display button stop propagation and never land here.)
+
         // Toggle expand/collapse when clicking anywhere on a parent node row
         if (ToggleOnRowClick && node.HasChildren)
             await ToggleNode(node);
@@ -1054,6 +1072,70 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         await SelectNodeAsync(node, visibleIndex);
         await FocusAsync();
     }
+
+    // ── In-cell editing (two-click contract; CellEditTemplate columns) ────────
+    // The CONTROL owns the machinery pages used to hand-roll: activation state,
+    // the two-click contract, the Blazor Server double-click race (second click
+    // lands on the stale display button before the editor swap reaches the
+    // browser), clearing on row change, and focus return on close.
+    private TreeNode<TValue>? _activeCellEditNode;
+    private string? _activeCellEditField;
+    private bool _activeCellEditOpenOnRender;
+
+    private bool IsCellEditActive(TreeNode<TValue> node, TreeGridColumn col) =>
+        ReferenceEquals(_activeCellEditNode, node)
+        && string.Equals(_activeCellEditField, col.Field, StringComparison.Ordinal);
+
+    private bool CellOffersEdit(TreeNode<TValue> node, TreeGridColumn col) =>
+        col.CellEditTemplate != null
+        && node.Data != null
+        && (col.CellEditPredicate == null || col.CellEditPredicate(node.Data));
+
+    private void ActivateCellEdit(TreeNode<TValue> node, TreeGridColumn col)
+    {
+        if (IsCellEditActive(node, col))
+        {
+            // Second click on an already-active cell: with a fast double-click the
+            // second click hits the STALE display button (the editor swap hasn't
+            // reached the browser yet). Legacy grids drop the full list on
+            // double-click, so tell the editor to open its popup on (re)render.
+            _activeCellEditOpenOnRender = true;
+        }
+        else
+        {
+            _activeCellEditNode = node;
+            _activeCellEditField = col.Field;
+            _activeCellEditOpenOnRender = false;
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>Ends any in-cell edit and returns keyboard focus to the tree
+    /// (no-trap rule: the keyboard must land on the tree, not on body). The
+    /// refocus is deferred to after the next render — focusing before the
+    /// editor unmounts lets the DOM removal steal focus back to body.</summary>
+    public void ClearActiveCellEdit()
+    {
+        var hadEditor = _activeCellEditNode != null;
+        _activeCellEditNode = null;
+        _activeCellEditField = null;
+        _activeCellEditOpenOnRender = false;
+        if (hadEditor)
+        {
+            _refocusAfterCellEditClose = true;
+            StateHasChanged();
+        }
+    }
+
+    private bool _refocusAfterCellEditClose;
+
+    private TreeGridCellEditContext BuildCellEditContext(TreeNode<TValue> node, TreeGridColumn col) => new()
+    {
+        Item = (object)node.Data!,
+        Field = col.Field,
+        OpenOnRender = _activeCellEditOpenOnRender,
+        CloseEditor = ClearActiveCellEdit,
+    };
 
     private async Task HandleRowDoubleClick(TreeNode<TValue> node, int visibleIndex)
     {
@@ -1097,6 +1179,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 await SelectVisibleNodeAsync(VisibleNodes.ToList().Count - 1);
                 break;
             case "Enter":
+            case "NumpadEnter":
+                // Cell mode: Enter on an editable cursor cell starts its editor
+                // with the list open (VB6 Enter on a combo cell).
+                if (SelectionMode == SelectionMode.Cell && TryActivateCursorCellEdit())
+                    break;
                 await ActivateSelectedNodeAsync();
                 break;
             case " ":
@@ -1107,13 +1194,90 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 break;
             case "ArrowRight":
             case "Right":
-                await ExpandOrMoveToChildAsync();
+                if (SelectionMode == SelectionMode.Cell)
+                    await CellCursorRightAsync();
+                else
+                    await ExpandOrMoveToChildAsync();
                 break;
             case "ArrowLeft":
             case "Left":
-                await CollapseOrMoveToParentAsync();
+                if (SelectionMode == SelectionMode.Cell)
+                    await CellCursorLeftAsync();
+                else
+                    await CollapseOrMoveToParentAsync();
                 break;
         }
+    }
+
+    // ── Cell-mode column cursor (vsFlexGrid free-cell navigation) ─────────────
+    // Left/Right move the highlighted cell across visible columns (the cursor
+    // survives row moves, like vsFlexGrid's Col). Explorer behavior is kept on
+    // the TREE column: Right first expands a collapsed parent, Left collapses /
+    // walks to the parent.
+    private int _activeCellColumnIndex = -1;
+
+    private int CurrentCellColumnIndex
+    {
+        get
+        {
+            var max = Math.Max(0, VisibleColumns.Count - 1);
+            var idx = _activeCellColumnIndex < 0 ? ResolvedTreeColumnIndex : _activeCellColumnIndex;
+            return Math.Clamp(idx, 0, max);
+        }
+    }
+
+    private bool IsCursorColumn(int colIdx) =>
+        SelectionMode == SelectionMode.Cell && colIdx == CurrentCellColumnIndex;
+
+    private async Task CellCursorRightAsync()
+    {
+        if (CurrentCellColumnIndex == ResolvedTreeColumnIndex)
+        {
+            var visible = VisibleNodes.ToList();
+            var i = GetSelectedVisibleIndex(visible);
+            if (i >= 0 && visible[i].HasChildren && !visible[i].IsExpanded)
+            {
+                await ExpandOrMoveToChildAsync();
+                return;
+            }
+        }
+        MoveCellCursor(1);
+    }
+
+    private async Task CellCursorLeftAsync()
+    {
+        if (CurrentCellColumnIndex != ResolvedTreeColumnIndex && CurrentCellColumnIndex > 0)
+        {
+            MoveCellCursor(-1);
+            return;
+        }
+        await CollapseOrMoveToParentAsync();
+    }
+
+    private void MoveCellCursor(int delta)
+    {
+        var max = Math.Max(0, VisibleColumns.Count - 1);
+        _activeCellColumnIndex = Math.Clamp(CurrentCellColumnIndex + delta, 0, max);
+        StateHasChanged();
+    }
+
+    /// <summary>Enter on the cursor cell: start its in-cell editor with the
+    /// popup open. False when the cell offers no editor.</summary>
+    private bool TryActivateCursorCellEdit()
+    {
+        var visible = VisibleNodes.ToList();
+        var i = GetSelectedVisibleIndex(visible);
+        if (i < 0) return false;
+        var node = visible[i];
+        var cols = VisibleColumns;
+        var ci = CurrentCellColumnIndex;
+        if (ci >= cols.Count) return false;
+        var col = cols[ci];
+        if (!CellOffersEdit(node, col)) return false;
+        ActivateCellEdit(node, col);
+        _activeCellEditOpenOnRender = true;
+        StateHasChanged();
+        return true;
     }
 
     private async Task ToggleSelectedNodeAsync()
@@ -1166,16 +1330,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (selectedIndex < 0)
         {
             await SelectVisibleNodeAsync(0, visible);
-            selectedIndex = 0;
+            return;
         }
 
         var node = visible[selectedIndex];
         _pendingTreeFocus = true;
-        if (node.HasChildren)
-            await ToggleNode(node);
-
         if (RowActivated.HasDelegate)
             await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
+        else if (RowDoubleClicked.HasDelegate)
+            await RowDoubleClicked.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
     }
 
     private async Task ExpandOrMoveToChildAsync()
@@ -1249,6 +1412,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task SelectNodeAsync(TreeNode<TValue> node, int visibleIndex)
     {
         if (!AllowSelection) return;
+
+        // Selection moving off the row being edited (click, keyboard, or
+        // programmatic) ends the in-cell edit.
+        if (_activeCellEditNode != null && !ReferenceEquals(_activeCellEditNode, node))
+            ClearActiveCellEdit();
 
         var prevSelected = _selectedItem;
         _selectedItem = node.Data;

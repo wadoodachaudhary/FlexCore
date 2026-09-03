@@ -1,18 +1,46 @@
 .fx-dropdown-grid {
     display: inline-block;
-    vertical-align: middle;
+    vertical-align: top;
+    height: 100%;
 }
 
 .fx-dropdown-grid-input-wrap {
     position: relative;
     display: flex;
-    align-items: center;
+    align-items: stretch;
+    height: 100%;
     cursor: pointer;
 }
 
+/* Closed form mirrors the regular DropDownListControl (owner directive
+   2026-09-02): flat white box, square corners, thin grey border, classic 3D
+   arrow — and it sizes to its HOST (height:100% chain) so an in-cell editor
+   fits the row without inflating it. */
 .fx-dropdown-grid-input {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
     cursor: pointer;
     background-color: #fff;
+    border: 1px solid #9a9a9a;
+    border-radius: 0;
+    /* Room for the arrow only; the wider reserve applies just when the clear
+       button actually renders — a blanket 44px clipped the value text in
+       narrow in-cell hosts (owner screenshot 2026-09-02). */
+    padding: 0 20px 0 4px;
+    /* Control-level default: hosts (dense grids/trees) run 10px fonts, which
+       is too small for the combo (owner directives 2026-09-02, sized down from
+       15px — the closed input clipped). Consumers can override via CssClass. */
+    font-size: calc(13px * var(--fx-zoom, 1));
+    line-height: normal;
+}
+
+.fx-dropdown-grid-input:focus,
+.fx-dropdown-grid-input:focus-visible {
+    outline: none;
+}
+
+.fx-dropdown-grid-input-wrap:has(.fx-dropdown-grid-clear-btn) .fx-dropdown-grid-input {
     padding-right: 44px;
 }
 
@@ -33,14 +61,31 @@
     color: #333;
 }
 
+/* Classic DropDownListControl arrow: 18px 3D grey lane with a black
+   triangle; the markup's text glyph is hidden (font-size 0). */
 .fx-dropdown-grid-arrow {
     position: absolute;
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    font-size: 0.60rem;
-    color: #666;
+    top: 1px;
+    right: 1px;
+    bottom: 1px;
+    width: 18px;
+    border-left: 1px solid #9a9a9a;
+    background: linear-gradient(to bottom, #f5f5f5 0%, #dcdcdc 100%);
+    font-size: 0;
     pointer-events: none;
+}
+
+.fx-dropdown-grid-arrow::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 50%;
+    margin-top: -2px;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #000;
 }
 
 .fx-dropdown-grid.fx-disabled .fx-dropdown-grid-input {
@@ -50,4 +95,63 @@
 
 .fx-dropdown-grid-popup {
     box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    font-size: calc(13px * var(--fx-zoom, 1));
+}
+
+/* The popup's inner GridControl runs Density=Compact, whose rule sets
+   --fx-grid-font-size: 9px ON the grid root — an ancestor-level seed loses to
+   it. Re-declare the var on the root itself (higher specificity) so the combo
+   rows default to 1.5× the dense-grid font (owner directive 2026-09-02) while
+   keeping Compact's tight padding. */
+.fx-dropdown-grid-popup ::deep .fx-grid {
+    --fx-grid-font-size: 15px;
+    /* Default #e0e0e0 gridlines wash out in the popup — darker for legibility,
+       then lightened to #d0d0d0 (owner directives 2026-09-02). */
+    --fx-grid-line-color: #d0d0d0;
+}
+
+/* Popup type scale (owner directives 2026-09-02): headers 16px, body rows
+   11px; the KEY (first) column is bold so the code reads at a glance next to
+   its description. */
+.fx-dropdown-grid-popup ::deep .fx-header-cell {
+    font-size: calc(16px * var(--fx-zoom, 1));
+}
+
+/* .fx-grid-body in the selector: GridControl ships a font-size:inherit rule
+   whose selector list ties a plain td.fx-cell override — the extra class wins
+   the specificity race regardless of bundle order. */
+.fx-dropdown-grid-popup ::deep .fx-grid-body td.fx-cell {
+    font-size: calc(11px * var(--fx-zoom, 1));
+}
+
+.fx-dropdown-grid-popup ::deep .fx-grid-body td.fx-cell:first-child {
+    font-weight: 700;
+}
+
+.fx-dropdown-grid-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9998;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+}
+
+/* Legacy multi-column combos render bare rows: collapse (not display:none —
+   that would lose the column widths under table-layout:fixed) the popup
+   grid's header when ShowColumnHeaders=false. */
+.fx-dropdown-grid-headerless ::deep thead {
+    visibility: collapse;
+}
+
+/* Self-styled (Bootstrap's form-control-sm forced a ~30px min-height that
+   inflated in-cell hosts — owner directive 2026-09-02). */
+.fx-dropdown-grid-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 2px 4px;
+    border: 1px solid #9a9a9a;
+    border-radius: 0;
+    font: inherit;
 }
