@@ -1,6 +1,8 @@
+@namespace Fx.ControlKit
+
 <button type="@Type"
         class="@ResolvedCssClass"
-        title="@(ShowTooltip ? ResolvedTitle : null)"
+        title="@(EffectiveShowTooltip ? ResolvedTitle : null)"
         aria-label="@ResolvedAriaLabel"
         aria-pressed="@AriaPressed"
         disabled="@Disabled"
@@ -25,6 +27,8 @@
 </button>
 
 @code {
+    [CascadingParameter] public ToolbarControl? ParentToolbar { get; set; }
+
     [Parameter] public string Type { get; set; } = "button";
     [Parameter] public string CssClass { get; set; } = string.Empty;
     [Parameter] public string Title { get; set; } = string.Empty;
@@ -42,6 +46,9 @@
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public EventCallback OnClick { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool EffectiveShowTooltip =>
+        (ParentToolbar != null && !ParentToolbar.EffectiveShowCaptions) || ShowTooltip;
 
     private string ResolvedCssClass
     {
