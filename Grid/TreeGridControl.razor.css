@@ -256,24 +256,31 @@
 .fx-treegrid-popup-overflow .fx-treegrid-content {
     overflow: visible;
 }
-.fx-treegrid:has(.fx-dropdown-panel),
-.fx-treegrid:has(.fx-datepicker-dropdown),
-.fx-treegrid:has(.fx-dropdown-panel) .fx-treegrid-content,
-.fx-treegrid:has(.fx-datepicker-dropdown) .fx-treegrid-content,
+/* NOTE: the tree ROOT and .fx-treegrid-content deliberately KEEP their
+   normal overflow while a popup is open — flipping the scroll container to
+   overflow:visible removed its scrollbar and reflowed (shifted) the whole
+   grid on every open/close (HHM-946). Editor popups therefore render within
+   the content area's bounds; only the CELL and ROW clip/stacking are lifted. */
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-host),
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-datepicker-host),
+.fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-grid),
 .fx-treegrid-cell:has(.fx-dropdown-host),
 .fx-treegrid-cell:has(.fx-datepicker-host),
+.fx-treegrid-cell:has(.fx-dropdown-grid),
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-panel),
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-datepicker-dropdown),
+.fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-grid-popup),
 .fx-treegrid-cell:has(.fx-dropdown-panel),
-.fx-treegrid-cell:has(.fx-datepicker-dropdown) {
+.fx-treegrid-cell:has(.fx-datepicker-dropdown),
+.fx-treegrid-cell:has(.fx-dropdown-grid-popup) {
     overflow: visible !important;
 }
 .fx-treegrid ::deep .fx-treegrid-row:has(.fx-dropdown-panel),
 .fx-treegrid ::deep .fx-treegrid-row:has(.fx-datepicker-dropdown),
+.fx-treegrid ::deep .fx-treegrid-row:has(.fx-dropdown-grid-popup),
 .fx-treegrid-row:has(.fx-dropdown-panel),
-.fx-treegrid-row:has(.fx-datepicker-dropdown) {
+.fx-treegrid-row:has(.fx-datepicker-dropdown),
+.fx-treegrid-row:has(.fx-dropdown-grid-popup) {
     position: relative;
     z-index: 40;
 }
@@ -995,4 +1002,79 @@
 .fx-legacy-vscroll-menu-sep {
     margin: 3px 6px;
     border-top: 1px solid #c0c0c0;
+}
+
+/* ── In-cell editing (CellEditTemplate columns) ───────────────────────────
+   The display-mode click target inherits the cell's look completely; hosts
+   restyle via TreeGridColumn.CellEditDisplayCssClass. */
+.fx-treegrid-cell-edit-display {
+    display: inline-block;
+    width: 100%;
+    /* An EMPTY cell value must stay clickable — without a floor the
+       content-less button collapses to 0px height. */
+    min-height: 1em;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    text-align: inherit;
+    line-height: inherit;
+    cursor: default;
+    vertical-align: top;
+}
+
+.fx-treegrid-cell-edit-host {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* In-cell editors must FIT the row — percentage-height chains do not resolve
+   reliably inside table cells, so the compact tree PINS the closed editor's
+   height (16px sits inside the ~17px content-driven compact rows without
+   inflating them; owner directive 2026-09-02). */
+.fx-treegrid-compact .fx-treegrid-cell-edit-host ::deep .fx-dropdown-grid,
+.fx-treegrid-compact .fx-treegrid-cell-edit-host ::deep .fx-dropdown-grid-input-wrap,
+.fx-treegrid-compact .fx-treegrid-cell-edit-host ::deep .fx-dropdown-grid-input {
+    height: calc(16px * var(--fx-zoom, 1));
+}
+
+/* ── SelectionMode.Cell — node-cell-only selection ─────────────────────────
+   The vsFlexGrid free-cell-selection look (legacy AfterSelChange forces
+   ColSel = Col, so only the clicked cell paints). Row and hover bands are
+   suppressed; the selected row's NODE cell carries the selection colors.
+   These rules come after the row-mode rules and carry the extra
+   .fx-treegrid-select-cell class, so they win only in Cell mode. */
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected,
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected:hover {
+    background: transparent !important;
+    color: inherit;
+}
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor {
+    background: #e3f2fd;
+}
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor {
+    background: #bbdefb;
+}
+
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected,
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover,
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected.fx-treegrid-hover:hover {
+    background: transparent !important;
+    color: inherit;
+}
+/* Text outside the node cell keeps its normal color in Cell mode. */
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-parent-text {
+    color: inherit;
+}
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor,
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor {
+    background: #0078d7 !important;
+    color: #fff;
+}
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor .fx-treegrid-parent-text,
+.fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor .fx-treegrid-parent-text {
+    color: #fff;
 }

@@ -2,16 +2,17 @@
 @typeparam TItem
 @typeparam TValue
 
-<div class="fx-dropdown-grid @CssClass @(Disabled ? "fx-disabled" : "") @(_isOpen ? "fx-open" : "")" style="@ComputedContainerStyle" @ref="_containerRef">
-    <div class="fx-dropdown-grid-input-wrap" @onclick="ToggleDropdown">
+<div class="fx-dropdown-grid @CssClass @(Disabled ? "fx-disabled" : "") @(_isOpen ? "fx-open" : "")" style="@ComputedContainerStyle" @ref="_containerRef" @onkeydown="HandleKeyDown" @onkeydown:stopPropagation="true">
+    <div class="fx-dropdown-grid-input-wrap" @onmousedown="HandleInputWrapMouseDown" @onclick="ToggleDropdown">
         <input type="text"
-               class="fx-dropdown-grid-input form-control form-control-sm"
+               class="fx-dropdown-grid-input"
                value="@DisplayText"
                placeholder="@Placeholder"
                readonly
                disabled="@Disabled"
-               tabindex="@(Disabled ? -1 : 0)" />
-        
+               tabindex="@(Disabled ? -1 : 0)"
+               @ref="_inputRef" />
+
         @if (AllowClear && HasValue && !Disabled && !ReadOnly)
         {
             <button type="button" class="fx-dropdown-grid-clear-btn" @onclick:stopPropagation="true" @onclick="ClearValue" title="Clear">✕</button>
@@ -21,12 +22,15 @@
 
     @if (_isOpen)
     {
-        <div class="fx-dropdown-grid-popup shadow" style="@ComputedPopupStyle" @onclick:stopPropagation="true">
+        @* Fixed backdrop (same scheme as DropDownListControl): outside clicks
+           close the popup instead of leaking into the page underneath. *@
+        <button type="button" class="fx-dropdown-grid-backdrop" tabindex="-1" aria-hidden="true" @onclick="ClosePopupAsync"></button>
+        <div class="fx-dropdown-grid-popup shadow @(ShowColumnHeaders ? "" : "fx-dropdown-grid-headerless")" style="@ComputedPopupStyle" @onclick:stopPropagation="true">
             @if (ShowSearch)
             {
                 <div class="fx-dropdown-grid-search-bar p-1 border-bottom bg-light">
                     <input type="text"
-                           class="form-control form-control-sm"
+                           class="fx-dropdown-grid-search-input"
                            placeholder="@(SearchPlaceholder ?? "Search...")"
                            value="@_searchText"
                            @oninput="OnSearchInput"
@@ -47,7 +51,7 @@
                              ShowRowCountInFooter="false"
                              ShowSearchBar="false"
                              SearchText="@_searchText"
-                             OnRowSelected="@OnGridRowSelected">
+                             EventsRef="@_gridEvents">
                     <GridColumnsBase>
                         @if (Columns != null)
                         {

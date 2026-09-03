@@ -283,7 +283,7 @@
                         {
                             @* No title tooltip — the floating chip read as a stuck
                                selection next to the hover tint (owner directive 2026-08-01). *@
-                            <td class="fx-treegrid-cell"
+                            <td class="fx-treegrid-cell @(colIdx == ResolvedTreeColumnIndex ? "fx-treegrid-node-cell" : "") @(isSelected && IsCursorColumn(colIdx) ? "fx-treegrid-cell-cursor" : "")"
                                 style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {
@@ -454,7 +454,11 @@
                                         }
                                     }
 
-                                    @if (col.Template != null)
+                                    @if (CellOffersEdit(node, col))
+                                    {
+                                        @RenderEditableCell(node, col)
+                                    }
+                                    else if (col.Template != null)
                                     {
                                         @col.Template((object)node.Data!)
                                     }
@@ -467,7 +471,11 @@
                                 }
                                 else
                                 {
-                                    @if (col.Template != null)
+                                    @if (CellOffersEdit(node, col))
+                                    {
+                                        @RenderEditableCell(node, col)
+                                    }
+                                    else if (col.Template != null)
                                     {
                                         @col.Template((object)node.Data!)
                                     }
@@ -548,3 +556,37 @@
         }
     }
 </div>
+
+@code {
+    // In-cell edit rendering (CellEditTemplate columns). Active cell → the
+    // column's editor template (keyed to the node so switching rows remounts a
+    // fresh editor); otherwise → the display content wrapped in the activation
+    // click target. Propagation stops so the row-click handler never sees
+    // activation clicks (state + race logic live in the partial class).
+    private RenderFragment RenderEditableCell(TreeNode<TValue> node, TreeGridColumn col) => __builder =>
+    {
+        @if (IsCellEditActive(node, col))
+        {
+            <span class="fx-treegrid-cell-edit-host" @key="node">
+                @col.CellEditTemplate!(BuildCellEditContext(node, col))
+            </span>
+        }
+        else
+        {
+            <button type="button"
+                    class="fx-treegrid-cell-edit-display @(col.CellEditDisplayCssClass ?? "")"
+                    @onmousedown:stopPropagation="true"
+                    @onclick:stopPropagation="true"
+                    @onclick="() => ActivateCellEdit(node, col)">
+                @if (col.Template != null)
+                {
+                    @col.Template((object)node.Data!)
+                }
+                else
+                {
+                    @GetCellDisplayValue(node.Data, col)
+                }
+            </button>
+        }
+    };
+}
