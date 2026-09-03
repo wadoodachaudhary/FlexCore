@@ -1,13 +1,147 @@
-<div class="@ResolvedCssClass" role="@Role">
-    @ChildContent
-</div>
+@namespace Fx.ControlKit
+@inject IServiceProvider Services
+
+<CascadingValue Value="this" IsFixed="false">
+    <div class="@ResolvedCssClass" role="@Role">
+        <div class="fx-toolbar-items">
+            @ChildContent
+        </div>
+        @if (ShowCaptionsToggle)
+        {
+            <div class="fx-toolbar-trailing">
+                <label class="fx-toolbar-captions-toggle" title="Show or hide toolbar text captions">
+                    <input type="checkbox" checked="@EffectiveShowCaptions" @onchange="HandleCaptionsToggle" />
+                    <span>@CaptionsToggleLabel</span>
+                </label>
+                @TrailingContent
+            </div>
+        }
+        else if (TrailingContent is not null)
+        {
+            <div class="fx-toolbar-trailing">
+                @TrailingContent
+            </div>
+        }
+    </div>
+</CascadingValue>
 
 @code {
     [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? TrailingContent { get; set; }
     [Parameter] public string CssClass { get; set; } = string.Empty;
     [Parameter] public string Role { get; set; } = "toolbar";
 
-    private string ResolvedCssClass => string.IsNullOrWhiteSpace(CssClass)
-        ? "fx-toolbar"
-        : $"fx-toolbar {CssClass}";
+    /// <summary>Whether button text captions are displayed on the toolbar.</summary>
+    [Parameter] public bool? ShowCaptions { get; set; }
+    [Parameter] public EventCallback<bool> ShowCaptionsChanged { get; set; }
+
+    /// <summary>When true (default), renders a checkbox at the right of the toolbar to toggle captions.</summary>
+    [Parameter] public bool ShowCaptionsToggle { get; set; } = true;
+
+    /// <summary>Label text for the captions checkbox.</summary>
+    [Parameter] public string CaptionsToggleLabel { get; set; } = "Captions";
+
+    /// <summary>Optional key under which to persist the ShowCaptions setting (e.g., "FEstimateItems" or "Global").</summary>
+    [Parameter] public string? PreferenceKey { get; set; }
+
+    private bool _internalShowCaptions = true;
+
+    public bool EffectiveShowCaptions => ShowCaptions ?? _internalShowCaptions;
+
+    protected override void OnInitialized()
+    {
+        base.OnInitialized();
+        if (ShowCaptions is null)
+        {
+            _internalShowCaptions = LoadPreference();
+        }
+    }
+
+    private async Task HandleCaptionsToggle(ChangeEventArgs e)
+    {
+        var isChecked = e.Value is bool b ? b : (e.Value?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true);
+        _internalShowCaptions = isChecked;
+        SavePreference(isChecked);
+        if (ShowCaptionsChanged.HasDelegate)
+        {
+            await ShowCaptionsChanged.InvokeAsync(isChecked);
+        }
+    }
+
+    private bool LoadPreference()
+    {
+        try
+        {
+            var key = !string.IsNullOrWhiteSpace(PreferenceKey) ? PreferenceKey : "Toolbar";
+            var services = GetRegisteredServices();
+            foreach (var svc in services)
+            {
+                var method = svc.GetType().GetMethod("GetBool", new[] { typeof(string), typeof(string), typeof(bool) });
+                if (method != null)
+                {
+                    var val = method.Invoke(svc, new object[] { "Toolbar", $"{key}.Captions", true });
+                    if (val is bool b) return b;
+                }
+            }
+        }
+        catch
+        {
+        }
+        return true;
+    }
+
+    private void SavePreference(bool isChecked)
+    {
+        try
+        {
+            var key = !string.IsNullOrWhiteSpace(PreferenceKey) ? PreferenceKey : "Toolbar";
+            var services = GetRegisteredServices();
+            foreach (var svc in services)
+            {
+                var method = svc.GetType().GetMethod("PutBool", new[] { typeof(string), typeof(string), typeof(bool) });
+                if (method != null)
+                {
+                    method.Invoke(svc, new object[] { "Toolbar", $"{key}.Captions", isChecked });
+                }
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private IEnumerable<object> GetRegisteredServices()
+    {
+        var list = new List<object>();
+        try
+        {
+            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            foreach (var asm in assemblies)
+            {
+                var type = asm.GetType("HomeFront.Services.IUserPreferencesService")
+                        ?? asm.GetType("Fx.ControlKit.IUserPreferencesService");
+                if (type != null)
+                {
+                    var svc = Services.GetService(type);
+                    if (svc != null) list.Add(svc);
+                }
+            }
+        }
+        catch
+        {
+        }
+        return list;
+    }
+
+    private string ResolvedCssClass
+    {
+        get
+        {
+            var baseClass = "fx-toolbar";
+            var captionsClass = EffectiveShowCaptions ? string.Empty : " fx-toolbar--no-captions";
+            return string.IsNullOrWhiteSpace(CssClass)
+                ? $"{baseClass}{captionsClass}"
+                : $"{baseClass}{captionsClass} {CssClass}";
+        }
+    }
 }
