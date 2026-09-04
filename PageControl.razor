@@ -23,6 +23,16 @@
     [Parameter] public PageNavigationGraph? NavigationGraph { get; set; }
     [Parameter] public PageNavigationMap? NavigationMap { get; set; }
 
+    /// <summary>
+    /// Focus the navigation graph's first target once the page has loaded — VB6
+    /// leaves the keyboard on the lowest-TabIndex visible control when a form
+    /// opens. Retried across a few renders because a grid node has no rows on the
+    /// first render (its host focus seeds no cell until data lands). Never steals
+    /// focus the user has already placed inside the page. Off by default: pages
+    /// that seed their own focus (FEstimateItems' tree) must not be fought.
+    /// </summary>
+    [Parameter] public bool FocusFirstNodeOnLoad { get; set; }
+
     /// <summary>When true (default) and a ZoomService is registered on the host,
     /// the page handles Ctrl++ / Ctrl+- to zoom text in and out.</summary>
     [Parameter] public bool EnableZoomShortcuts { get; set; } = true;
@@ -48,6 +58,8 @@
     private PageNavigationContext _navigationContext = new(false);
     private string _registeredGraphSignature = string.Empty;
     private bool _navigationRegistered;
+    private int _initialFocusAttempts;
+    private const int InitialFocusMaxAttempts = 5;
     private ZoomService? _zoomService;
     private DotNetObjectReference<PageControl>? _zoomShortcutRef;
     private bool _zoomShortcutsRegistered;
@@ -133,11 +145,27 @@
         {
             await EnsureZoomShortcutRegistrationAsync();
             await EnsureNavigationRegistrationAsync();
+            await TryFocusFirstNodeAsync();
         }
         catch (JSDisconnectedException)
         {
             // The circuit is already gone; there is nothing left to register.
         }
+    }
+
+    private async Task TryFocusFirstNodeAsync()
+    {
+        if (!FocusFirstNodeOnLoad || !HandlesTabNavigation || !Enabled)
+            return;
+        if (_initialFocusAttempts >= InitialFocusMaxAttempts)
+            return;
+
+        _initialFocusAttempts++;
+        var module = await GetModuleAsync();
+        var settled = await module.InvokeAsync<bool>(
+            "focusFirstPageNavigationTarget", _rootElement, BuildGraphDescriptors());
+        if (settled)
+            _initialFocusAttempts = InitialFocusMaxAttempts;
     }
 
     private async Task<IJSObjectReference> GetModuleAsync()

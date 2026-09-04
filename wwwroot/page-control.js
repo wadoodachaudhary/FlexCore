@@ -199,14 +199,26 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
 
         if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
 
-        // GridControl owns Tab by default. A grid participates as one page-level
-        // stop only when it explicitly delegates Tab to PageControl.
+        // GridControl owns Tab by default. Only a grid that explicitly opts
+        // into PageControl navigation participates as one page-level stop.
+        // "wrap-until-edge" is the hybrid: the grid keeps Tab for its own
+        // cell walk until its terminal cell, where data-fx-grid-tab-edge
+        // (maintained server-side from the active cell) hands the key to
+        // this graph in the matching direction.
         const sourceGrid = event.target instanceof Element
             ? event.target.closest("[data-fx-grid-tab-navigation]")
             : null;
-        if (sourceGrid
-            && root.contains(sourceGrid)
-            && sourceGrid.dataset.fxGridTabNavigation !== "page-control") return;
+        if (sourceGrid && root.contains(sourceGrid)) {
+            const gridMode = sourceGrid.dataset.fxGridTabNavigation;
+            if (gridMode === "wrap-until-edge") {
+                const edge = sourceGrid.dataset.fxGridTabEdge ?? "none";
+                const atEdge = event.shiftKey
+                    ? (edge === "first" || edge === "both")
+                    : (edge === "last" || edge === "both");
+                if (!atEdge) return;
+            }
+            else if (gridMode !== "page-control") return;
+        }
 
         const currentIndex = resolveCurrentIndex(graph.targets, root.ownerDocument.activeElement);
         const direction = event.shiftKey ? -1 : 1;
@@ -225,6 +237,28 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
 
     root.addEventListener("keydown", onKeyDown, true);
     pageNavigationBindings.set(root, onKeyDown);
+}
+
+// Load-time focus: VB6 leaves the keyboard on the lowest-TabIndex visible
+// control when a form opens. Focuses the graph's first resolvable target and
+// returns true when focus is settled — either because it landed, or because
+// the user already put focus somewhere inside this root (never steal it).
+// Returns false when nothing is focusable YET (e.g. a grid node whose rows have
+// not arrived, so SeedActiveCellOnHostFocus has nothing to seed); the caller
+// retries on a later render.
+export function focusFirstPageNavigationTarget(root, nodeDefinitions) {
+    if (!root) return true;
+    const doc = root.ownerDocument;
+    const active = doc.activeElement;
+    if (active && active !== doc.body && active !== root && root.contains(active))
+        return true;
+
+    const graph = collectTargets(root, normalizeNodes(nodeDefinitions));
+    const first = graph.targets[0];
+    if (!first) return false;
+
+    focusTarget(first);
+    return doc.activeElement === first.element;
 }
 
 export function registerPageNavigation(root, selectors, wrap = true) {
@@ -249,7 +283,7 @@ export function unregisterPageNavigation(root) {
     pageNavigationBindings.delete(root);
 }
 
-// --- Page zoom shortcuts (Ctrl+> / Ctrl+<) -------------------------------
+// --- Page zoom shortcuts (Ctrl++ / Ctrl+-) -------------------------------
 // One document-level listener serves every registered PageControl so a chord
 // zooms exactly once per keypress no matter how many page roots are nested.
 
@@ -262,11 +296,14 @@ let pageZoomListener = null;
 
 function resolveZoomDirection(event) {
     if (!event.ctrlKey || event.altKey || event.metaKey) return null;
-    // Ctrl+> is physically Ctrl+Shift+. on most layouts; browsers report the
-    // produced character (">") on some layouts and the base key (".") on others.
+    // event.key keeps the shortcut layout-aware and covers both the main
+    // keyboard and numeric keypad in current browsers. The guarded Equal-key
+    // fallback covers browsers that report the base key for Ctrl+Shift+=.
     const key = event.key;
-    if (key === ">" || (key === "." && event.shiftKey)) return "in";
-    if (key === "<" || (key === "," && event.shiftKey)) return "out";
+    const code = event.code;
+    if (key === "+" || key === "Add" || code === "NumpadAdd"
+        || (key === "=" && code === "Equal" && event.shiftKey)) return "in";
+    if (key === "-" || key === "Subtract" || code === "NumpadSubtract") return "out";
     return null;
 }
 
