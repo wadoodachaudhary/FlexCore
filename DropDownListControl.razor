@@ -30,6 +30,7 @@
                    maxlength="@MaxLength"
                    value="@_editableRenderedText"
                    placeholder="@Placeholder"
+                   aria-label="@AriaLabel"
                    @onfocus="HandleEditableFocus"
                    @onblur="HandleEditableBlur"
                    @oninput="HandleEditableInput"
@@ -48,6 +49,7 @@
                 class="@ButtonCssClass"
                 disabled="@(!Enabled)"
                 tabindex="@TabIndex"
+                aria-label="@AriaLabel"
                 aria-haspopup="listbox"
                 aria-expanded="@_isOpen"
                 @onmousedown="HandleButtonMouseDown"
@@ -111,6 +113,8 @@
     [Parameter] public TValue? Value { get; set; }
     [Parameter] public EventCallback<TValue?> ValueChanged { get; set; }
     [Parameter] public string? Placeholder { get; set; }
+    /// <summary>Accessible name for the dropdown's focusable input or button.</summary>
+    [Parameter] public string? AriaLabel { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;

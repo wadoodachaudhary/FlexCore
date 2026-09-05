@@ -12,6 +12,13 @@ public class GridColumn : ComponentBase, IDisposable
 
     [Parameter] public string Field { get; set; } = "";
     [Parameter] public string? HeaderText { get; set; }
+    /// <summary>
+    /// Optional one-level parent header displayed above this column. Adjacent
+    /// visible columns with the same value share one spanning header cell.
+    /// Use <see cref="GridColumnHeaderBand"/> descriptors on the owning grid
+    /// when the band needs a template, CSS class, or an explicit field list.
+    /// </summary>
+    [Parameter] public string? HeaderBand { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? MinWidth { get; set; }
     [Parameter] public string? MaxWidth { get; set; }
@@ -41,6 +48,29 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public bool IsPrimaryKey { get; set; }
     [Parameter] public bool IsFrozen { get; set; }
     [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
+
+    // A menu-applied lock must survive parent re-renders that re-apply the
+    // declarative parameters above. Null means explicitly unlocked; when no
+    // runtime override exists the declared IsFrozen/FrozenPosition win.
+    internal bool HasRuntimeFrozenOverride { get; private set; }
+    internal FrozenColumnPosition? RuntimeFrozenPosition { get; private set; }
+    internal bool EffectiveIsFrozen => HasRuntimeFrozenOverride
+        ? RuntimeFrozenPosition.HasValue
+        : IsFrozen;
+    internal FrozenColumnPosition EffectiveFrozenPosition =>
+        RuntimeFrozenPosition ?? FrozenPosition;
+
+    internal void SetRuntimeFrozenPosition(FrozenColumnPosition? position)
+    {
+        HasRuntimeFrozenOverride = true;
+        RuntimeFrozenPosition = position;
+    }
+
+    internal void ClearRuntimeFrozenOverride()
+    {
+        HasRuntimeFrozenOverride = false;
+        RuntimeFrozenPosition = null;
+    }
     [Parameter] public bool AllowSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; } = true;
     /// <summary>Excludes this column from best-fit sizing (grip double-click, Best Fit
@@ -204,8 +234,20 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public RenderFragment<object>? ChildContent { get; set; }
 
 
-    /// <summary>Custom filter template for this column.</summary>
+    /// <summary>
+    /// Legacy filter-row template. Prefer <see cref="FilterCellTemplate"/>,
+    /// whose context exposes typed operators and apply/clear callbacks.
+    /// </summary>
     [Parameter] public RenderFragment<GridColumn>? FilterTemplate { get; set; }
+
+    /// <summary>Custom template for this column's filter-row cell.</summary>
+    [Parameter] public RenderFragment<GridFilterCellTemplateContext>? FilterCellTemplate { get; set; }
+
+    /// <summary>Custom content for this column's header filter menu.</summary>
+    [Parameter] public RenderFragment<GridFilterMenuTemplateContext>? FilterMenuTemplate { get; set; }
+
+    /// <summary>Custom action area for this column's header filter menu.</summary>
+    [Parameter] public RenderFragment<GridFilterMenuButtonsTemplateContext>? FilterMenuButtonsTemplate { get; set; }
 
 
 
@@ -228,6 +270,13 @@ public class GridColumn : ComponentBase, IDisposable
 
     /// <summary>Runtime column width (pixels) for resize — overrides Width when set.</summary>
     internal double? RuntimeWidth { get; set; }
+
+    /// <summary>
+    /// Calculated by the owning grid for a frozen column. Keeping the value on
+    /// the column lets every rendering path (normal, grouped, windowed and
+    /// server-optimized) use the same cumulative sticky offset.
+    /// </summary>
+    internal string? FrozenOffsetCss { get; set; }
 
     protected override void OnInitialized()
     {
@@ -259,10 +308,13 @@ public class GridColumn : ComponentBase, IDisposable
         parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");
         parts.Add("white-space:nowrap");
-        if (IsFrozen)
+        if (EffectiveIsFrozen)
         {
             parts.Add("position:sticky");
-            parts.Add(FrozenPosition == FrozenColumnPosition.Right ? "right:0;z-index:2" : "left:0;z-index:2");
+            var offset = string.IsNullOrWhiteSpace(FrozenOffsetCss) ? "0px" : FrozenOffsetCss;
+            parts.Add(EffectiveFrozenPosition == FrozenColumnPosition.Right
+                ? $"right:{offset};z-index:2"
+                : $"left:{offset};z-index:2");
             parts.Add("background-color:inherit");
         }
         if (ClipMode == ClipMode.Ellipsis || ClipMode == ClipMode.EllipsisWithTooltip)
@@ -292,11 +344,66 @@ public class GridColumn : ComponentBase, IDisposable
         else if (!string.IsNullOrEmpty(Width))
             parts.Add($"width:{Width}");
         parts.Add($"text-align:{HeaderTextAlign.ToString().ToLower()}");
-        if (IsFrozen)
+        if (EffectiveIsFrozen)
         {
             parts.Add("position:sticky");
-            parts.Add(FrozenPosition == FrozenColumnPosition.Right ? "right:0;z-index:3" : "left:0;z-index:3");
+            var offset = string.IsNullOrWhiteSpace(FrozenOffsetCss) ? "0px" : FrozenOffsetCss;
+            parts.Add(EffectiveFrozenPosition == FrozenColumnPosition.Right
+                ? $"right:{offset};z-index:3"
+                : $"left:{offset};z-index:3");
         }
         return string.Join(";", parts);
+    }
+
+    /// <summary>Returns a CSS length suitable for a cumulative sticky offset.</summary>
+    internal string GetEffectiveWidthCss(double fallbackWidthPx = 120)
+    {
+        string width;
+        if (RuntimeWidth.HasValue)
+        {
+            width = $"{RuntimeWidth.Value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px";
+        }
+        else
+        {
+            width = NormalizeCssLength(Width)
+                ?? $"{fallbackWidthPx.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px";
+        }
+
+        // Sticky offsets must use the width the browser ultimately lays out,
+        // not merely Width before min/max constraints are applied.
+        var minWidth = NormalizeCssLength(MinWidth);
+        var maxWidth = NormalizeCssLength(MaxWidth);
+        if (minWidth != null && maxWidth != null)
+            return $"clamp({minWidth},{width},{maxWidth})";
+        if (minWidth != null)
+            return $"max({width},{minWidth})";
+        if (maxWidth != null)
+            return $"min({width},{maxWidth})";
+        return width;
+    }
+
+    private static string? NormalizeCssLength(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var length = value.Trim();
+        if (double.TryParse(length, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var unitless))
+        {
+            return $"{unitless.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px";
+        }
+
+        // CSS-wide/content keywords cannot participate in an offset calc().
+        return length.Equals("auto", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("min-content", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("max-content", StringComparison.OrdinalIgnoreCase)
+            || length.StartsWith("fit-content(", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("fit-content", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("inherit", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("initial", StringComparison.OrdinalIgnoreCase)
+            || length.Equals("unset", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : length;
     }
 }

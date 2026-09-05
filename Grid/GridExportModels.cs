@@ -17,6 +17,26 @@ public enum GridExportFormat
     Json
 }
 
+/// <summary>
+/// Character encoding used by CSV and TSV exports. Other export formats ignore
+/// this setting. <see cref="GridDelimitedTextEncoding.Utf8NoBom"/> preserves
+/// GridControl's historical byte output and remains the default.
+/// </summary>
+public enum GridDelimitedTextEncoding
+{
+    /// <summary>UTF-8 without a byte-order mark (the default).</summary>
+    Utf8NoBom,
+
+    /// <summary>UTF-8 prefixed with the standard EF BB BF byte-order mark.</summary>
+    Utf8WithBom,
+
+    /// <summary>Little-endian UTF-16 prefixed with the FF FE byte-order mark.</summary>
+    Utf16LittleEndian,
+
+    /// <summary>7-bit ASCII. Characters outside ASCII are replaced with '?'.</summary>
+    Ascii
+}
+
 public enum GridPdfOrientation
 {
     Portrait,
@@ -84,6 +104,19 @@ public sealed class GridExportColumn
     }
 
     public string Header { get; set; }
+    /// <summary>
+    /// Source field name used to translate safe same-row grid formulas to A1
+    /// references during XLSX export. It has no effect on other formats.
+    /// </summary>
+    public string? Field { get; set; }
+
+    /// <summary>
+    /// Optional GridColumn formula metadata. XLSX exports preserve arithmetic
+    /// formulas whose field references can all be mapped to exported columns;
+    /// unsupported formulas retain the row's already-evaluated value.
+    /// </summary>
+    public string? Formula { get; set; }
+
     public string? Format { get; set; }
     public TextAlign TextAlign { get; set; }
     public double? Width { get; set; }
@@ -103,7 +136,24 @@ public sealed class GridExportRow
     }
 
     public List<object?> Values { get; } = new();
+
+    /// <summary>
+    /// Optional native CLR values used only by XLSX output. <see cref="Values"/>
+    /// remains the formatted/display representation used by CSV, TSV, HTML,
+    /// legacy XLS, JSON and PDF so adding typed spreadsheets does not change
+    /// those established exports.
+    /// </summary>
+    public List<object?> XlsxValues { get; } = new();
+
+    /// <summary>Optional per-cell .NET formats for native XLSX values.</summary>
+    public List<string?> XlsxFormats { get; } = new();
     public bool IsBold { get; set; }
+
+    /// <summary>
+    /// Allows XLSX output to apply formulas declared by the corresponding
+    /// <see cref="GridExportColumn"/>. Set false for aggregate or summary rows.
+    /// </summary>
+    public bool UseColumnFormulas { get; set; } = true;
 }
 
 public sealed class GridExportTable
@@ -133,6 +183,18 @@ public static class GridExporter
         GridExportFormat format,
         string? fileName = null,
         GridPdfPrintOptions? pdfOptions = null)
+        => ExportWithEncoding(table, format, GridDelimitedTextEncoding.Utf8NoBom, fileName, pdfOptions);
+
+    /// <summary>
+    /// Exports a table with an explicit CSV/TSV encoding. The encoding is
+    /// ignored for non-delimited formats.
+    /// </summary>
+    public static GridExportResult ExportWithEncoding(
+        GridExportTable table,
+        GridExportFormat format,
+        GridDelimitedTextEncoding delimitedEncoding,
+        string? fileName = null,
+        GridPdfPrintOptions? pdfOptions = null)
     {
         var resolvedName = EnsureExtension(
             string.IsNullOrWhiteSpace(fileName) ? SanitizeFileName(table.Title) : fileName!,
@@ -140,8 +202,14 @@ public static class GridExporter
 
         return format switch
         {
-            GridExportFormat.Csv => new GridExportResult(BuildDelimited(table, ","), resolvedName, CsvMime),
-            GridExportFormat.Tsv => new GridExportResult(BuildDelimited(table, "\t"), resolvedName, TsvMime),
+            GridExportFormat.Csv => new GridExportResult(
+                BuildDelimited(table, ",", delimitedEncoding),
+                resolvedName,
+                ResolveDelimitedContentType(CsvMime, delimitedEncoding)),
+            GridExportFormat.Tsv => new GridExportResult(
+                BuildDelimited(table, "\t", delimitedEncoding),
+                resolvedName,
+                ResolveDelimitedContentType(TsvMime, delimitedEncoding)),
             GridExportFormat.Html => new GridExportResult(BuildHtml(table, standalone: true), resolvedName, HtmlMime),
             GridExportFormat.Xls => new GridExportResult(BuildHtml(table, standalone: false), resolvedName, XlsMime),
             GridExportFormat.Xlsx => new GridExportResult(BuildXlsx(table), resolvedName, XlsxMime),
@@ -198,6 +266,7 @@ public static class GridExporter
     {
         using var workbook = new XLWorkbook();
         var worksheet = workbook.Worksheets.Add(SanitizeSheetName(table.SheetName));
+        var formulaFields = BuildFormulaFieldMap(table.Columns);
         var rowIndex = 1;
 
         if (table.IncludeHeaderRow && table.Columns.Count > 0)
@@ -220,7 +289,26 @@ public static class GridExporter
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
                 var cell = worksheet.Cell(rowIndex, colIndex + 1);
-                SetCellValue(cell, colIndex < row.Values.Count ? row.Values[colIndex] : null);
+                var value = colIndex < row.XlsxValues.Count
+                    ? row.XlsxValues[colIndex]
+                    : colIndex < row.Values.Count
+                        ? row.Values[colIndex]
+                        : null;
+                if (row.UseColumnFormulas
+                    && colIndex < table.Columns.Count
+                    && TryTranslateSameRowFormula(
+                        table.Columns,
+                        formulaFields,
+                        colIndex,
+                        rowIndex,
+                        out var formula))
+                {
+                    cell.FormulaA1 = formula;
+                }
+                else
+                {
+                    SetCellValue(cell, value);
+                }
 
                 if (row.IsBold)
                     cell.Style.Font.Bold = true;
@@ -234,8 +322,12 @@ public static class GridExporter
                 if (colIndex < table.Columns.Count)
                 {
                     var column = table.Columns[colIndex];
-                    if (!string.IsNullOrWhiteSpace(column.Format))
-                        cell.Style.NumberFormat.Format = column.Format;
+                    var sourceFormat = colIndex < row.XlsxFormats.Count
+                        ? row.XlsxFormats[colIndex]
+                        : column.Format;
+                    var numberFormat = ResolveXlsxNumberFormat(sourceFormat, value);
+                    if (!string.IsNullOrWhiteSpace(numberFormat))
+                        cell.Style.NumberFormat.Format = numberFormat;
 
                     cell.Style.Alignment.Horizontal = column.TextAlign switch
                     {
@@ -273,7 +365,400 @@ public static class GridExporter
         return Math.Clamp(excelWidth, 4, 80);
     }
 
-    private static byte[] BuildDelimited(GridExportTable table, string delimiter)
+    private static string? ResolveXlsxNumberFormat(string? dotNetFormat, object? value)
+    {
+        if (string.IsNullOrWhiteSpace(dotNetFormat))
+            return null;
+
+        var format = dotNetFormat.Trim();
+        var isDate = value is DateTime or DateOnly or DateTimeOffset;
+        var isTime = value is TimeOnly or TimeSpan;
+        var isNumeric = value is byte or sbyte or short or ushort or int or uint
+            or long or ulong or float or double or decimal;
+
+        if (!isDate && !isTime && !isNumeric)
+            return null;
+
+        if (isDate || isTime)
+        {
+            if (format.Length == 1)
+            {
+                return format[0] switch
+                {
+                    'd' => "m/d/yyyy",
+                    'D' => "dddd, mmmm d, yyyy",
+                    't' => "h:mm AM/PM",
+                    'T' => "h:mm:ss AM/PM",
+                    'g' => "m/d/yyyy h:mm",
+                    'G' => "m/d/yyyy h:mm:ss",
+                    'M' or 'm' => "mmmm d",
+                    'Y' or 'y' => "mmmm yyyy",
+                    's' => "yyyy-mm-dd hh:mm:ss",
+                    'u' => "yyyy-mm-dd hh:mm:ss",
+                    'O' or 'o' => "yyyy-mm-dd hh:mm:ss.000",
+                    _ => null
+                };
+            }
+
+            // Most custom .NET date patterns have direct Excel equivalents.
+            // Normalize the tokens whose spelling differs. Time-zone tokens
+            // have no Excel-cell equivalent and are intentionally omitted.
+            return format
+                .Replace("tt", "AM/PM", StringComparison.Ordinal)
+                .Replace("fff", "000", StringComparison.Ordinal)
+                .Replace("ff", "00", StringComparison.Ordinal)
+                .Replace("HH", "hh", StringComparison.Ordinal)
+                .Replace("H", "h", StringComparison.Ordinal)
+                .Replace("MM", "mm", StringComparison.Ordinal)
+                .Replace("M", "m", StringComparison.Ordinal)
+                .Replace("zzz", string.Empty, StringComparison.Ordinal)
+                .Replace("zz", string.Empty, StringComparison.Ordinal)
+                .Replace("K", string.Empty, StringComparison.Ordinal)
+                .Trim();
+        }
+
+        var specifier = format[0];
+        var precisionText = format.Length > 1 ? format[1..] : string.Empty;
+        var isStandard = precisionText.Length == 0
+            || precisionText.All(char.IsDigit);
+        if (!isStandard)
+            return format;
+
+        var precision = precisionText.Length > 0
+            && int.TryParse(precisionText, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
+                ? Math.Clamp(parsed, 0, 30)
+                : 2;
+        var decimals = precision == 0 ? string.Empty : "." + new string('0', precision);
+
+        return specifier switch
+        {
+            'C' or 'c' => $"\"{EscapeExcelFormatLiteral(CultureInfo.CurrentCulture.NumberFormat.CurrencySymbol)}\"#,##0{decimals}",
+            'N' or 'n' => $"#,##0{decimals}",
+            'F' or 'f' => $"0{decimals}",
+            'P' or 'p' => $"0{decimals}%",
+            'E' or 'e' => $"0{decimals}E+00",
+            'D' or 'd' => new string('0', precisionText.Length == 0 ? 1 : precision),
+            'G' or 'g' => "General",
+            _ => format
+        };
+    }
+
+    private static string EscapeExcelFormatLiteral(string value) =>
+        value.Replace("\"", "\"\"", StringComparison.Ordinal);
+
+    private static IReadOnlyDictionary<string, int> BuildFormulaFieldMap(
+        IReadOnlyList<GridExportColumn> columns)
+    {
+        var fields = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var ambiguousFields = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        for (var index = 0; index < columns.Count; index++)
+        {
+            var field = columns[index].Field?.Trim();
+            if (string.IsNullOrWhiteSpace(field) || ambiguousFields.Contains(field))
+                continue;
+
+            if (fields.ContainsKey(field))
+            {
+                fields.Remove(field);
+                ambiguousFields.Add(field);
+                continue;
+            }
+
+            fields[field] = index;
+        }
+
+        return fields;
+    }
+
+    /// <summary>
+    /// Translates only FlexCore's documented arithmetic formula subset. All
+    /// references must identify a unique exported field in the current row.
+    /// Function calls, ranges, sheet/external references, string literals,
+    /// formula-column dependencies, and circular/self references deliberately
+    /// fall back to the evaluated value already held by the export row.
+    /// </summary>
+    private static bool TryTranslateSameRowFormula(
+        IReadOnlyList<GridExportColumn> columns,
+        IReadOnlyDictionary<string, int> formulaFields,
+        int formulaColumnIndex,
+        int rowIndex,
+        out string formula)
+    {
+        formula = string.Empty;
+        var source = columns[formulaColumnIndex].Formula?.Trim();
+        if (string.IsNullOrWhiteSpace(source))
+            return false;
+
+        if (source.StartsWith("=", StringComparison.Ordinal))
+            source = source[1..].Trim();
+
+        if (source.Length == 0 || source.Length > 4_096)
+            return false;
+
+        var tokens = new List<XlsxFormulaToken>();
+        var translated = new StringBuilder(source.Length + 16);
+        var position = 0;
+
+        while (position < source.Length)
+        {
+            var current = source[position];
+            if (char.IsWhiteSpace(current))
+            {
+                position++;
+                continue;
+            }
+
+            if (current == '[')
+            {
+                var close = source.IndexOf(']', position + 1);
+                if (close < 0 || source.IndexOf('[', position + 1, close - position - 1) >= 0)
+                    return false;
+
+                var field = source[(position + 1)..close].Trim();
+                if (!TryAppendFormulaReference(
+                        columns,
+                        formulaFields,
+                        formulaColumnIndex,
+                        rowIndex,
+                        field,
+                        translated))
+                {
+                    return false;
+                }
+
+                tokens.Add(new XlsxFormulaToken(XlsxFormulaTokenKind.Operand));
+                position = close + 1;
+                continue;
+            }
+
+            if (char.IsLetter(current) || current == '_')
+            {
+                var start = position++;
+                while (position < source.Length
+                       && (char.IsLetterOrDigit(source[position])
+                           || source[position] is '_' or '.'))
+                {
+                    position++;
+                }
+
+                var field = source[start..position];
+                if (!TryAppendFormulaReference(
+                        columns,
+                        formulaFields,
+                        formulaColumnIndex,
+                        rowIndex,
+                        field,
+                        translated))
+                {
+                    return false;
+                }
+
+                tokens.Add(new XlsxFormulaToken(XlsxFormulaTokenKind.Operand));
+                continue;
+            }
+
+            if (char.IsDigit(current) || (current == '.' && position + 1 < source.Length && char.IsDigit(source[position + 1])))
+            {
+                var start = position;
+                if (current == '.')
+                    position++;
+
+                while (position < source.Length && char.IsDigit(source[position]))
+                    position++;
+
+                if (position < source.Length && source[position] == '.')
+                {
+                    position++;
+                    while (position < source.Length && char.IsDigit(source[position]))
+                        position++;
+                }
+
+                if (position < source.Length && source[position] is 'e' or 'E')
+                {
+                    position++;
+                    if (position < source.Length && source[position] is '+' or '-')
+                        position++;
+                    var exponentDigits = position;
+                    while (position < source.Length && char.IsDigit(source[position]))
+                        position++;
+                    if (position == exponentDigits)
+                        return false;
+                }
+
+                translated.Append(source, start, position - start);
+                tokens.Add(new XlsxFormulaToken(XlsxFormulaTokenKind.Operand));
+                continue;
+            }
+
+            var tokenKind = current switch
+            {
+                '+' => XlsxFormulaTokenKind.Plus,
+                '-' => XlsxFormulaTokenKind.Minus,
+                '*' => XlsxFormulaTokenKind.Multiply,
+                '/' => XlsxFormulaTokenKind.Divide,
+                '^' => XlsxFormulaTokenKind.Power,
+                '(' => XlsxFormulaTokenKind.LeftParenthesis,
+                ')' => XlsxFormulaTokenKind.RightParenthesis,
+                _ => XlsxFormulaTokenKind.Invalid
+            };
+
+            if (tokenKind == XlsxFormulaTokenKind.Invalid)
+                return false;
+
+            translated.Append(current);
+            tokens.Add(new XlsxFormulaToken(tokenKind));
+            position++;
+        }
+
+        if (!XlsxFormulaParser.IsValid(tokens))
+            return false;
+
+        formula = translated.ToString();
+        return true;
+    }
+
+    private static bool TryAppendFormulaReference(
+        IReadOnlyList<GridExportColumn> columns,
+        IReadOnlyDictionary<string, int> formulaFields,
+        int formulaColumnIndex,
+        int rowIndex,
+        string field,
+        StringBuilder translated)
+    {
+        if (string.IsNullOrWhiteSpace(field)
+            || !formulaFields.TryGetValue(field, out var referencedColumnIndex)
+            || referencedColumnIndex == formulaColumnIndex
+            || !string.IsNullOrWhiteSpace(columns[referencedColumnIndex].Formula))
+        {
+            return false;
+        }
+
+        translated.Append(ToExcelColumnName(referencedColumnIndex + 1));
+        translated.Append(rowIndex.ToString(CultureInfo.InvariantCulture));
+        return true;
+    }
+
+    private static string ToExcelColumnName(int oneBasedIndex)
+    {
+        var result = new StringBuilder(4);
+        var index = oneBasedIndex;
+        while (index > 0)
+        {
+            index--;
+            result.Insert(0, (char)('A' + (index % 26)));
+            index /= 26;
+        }
+
+        return result.ToString();
+    }
+
+    private enum XlsxFormulaTokenKind
+    {
+        Invalid,
+        Operand,
+        Plus,
+        Minus,
+        Multiply,
+        Divide,
+        Power,
+        LeftParenthesis,
+        RightParenthesis
+    }
+
+    private readonly record struct XlsxFormulaToken(XlsxFormulaTokenKind Kind);
+
+    private sealed class XlsxFormulaParser
+    {
+        private readonly IReadOnlyList<XlsxFormulaToken> _tokens;
+        private int _position;
+
+        private XlsxFormulaParser(IReadOnlyList<XlsxFormulaToken> tokens)
+        {
+            _tokens = tokens;
+        }
+
+        public static bool IsValid(IReadOnlyList<XlsxFormulaToken> tokens)
+        {
+            if (tokens.Count == 0)
+                return false;
+
+            var parser = new XlsxFormulaParser(tokens);
+            return parser.ParseExpression() && parser._position == tokens.Count;
+        }
+
+        private bool ParseExpression()
+        {
+            if (!ParseTerm())
+                return false;
+
+            while (Match(XlsxFormulaTokenKind.Plus) || Match(XlsxFormulaTokenKind.Minus))
+            {
+                if (!ParseTerm())
+                    return false;
+            }
+
+            return true;
+        }
+
+        private bool ParseTerm()
+        {
+            if (!ParsePower())
+                return false;
+
+            while (Match(XlsxFormulaTokenKind.Multiply) || Match(XlsxFormulaTokenKind.Divide))
+            {
+                if (!ParsePower())
+                    return false;
+            }
+
+            return true;
+        }
+
+        private bool ParsePower()
+        {
+            if (!ParseUnary())
+                return false;
+
+            if (Match(XlsxFormulaTokenKind.Power))
+                return ParsePower();
+
+            return true;
+        }
+
+        private bool ParseUnary()
+        {
+            if (Match(XlsxFormulaTokenKind.Plus) || Match(XlsxFormulaTokenKind.Minus))
+                return ParseUnary();
+
+            return ParsePrimary();
+        }
+
+        private bool ParsePrimary()
+        {
+            if (Match(XlsxFormulaTokenKind.Operand))
+                return true;
+
+            if (!Match(XlsxFormulaTokenKind.LeftParenthesis))
+                return false;
+
+            return ParseExpression() && Match(XlsxFormulaTokenKind.RightParenthesis);
+        }
+
+        private bool Match(XlsxFormulaTokenKind kind)
+        {
+            if (_position >= _tokens.Count || _tokens[_position].Kind != kind)
+                return false;
+
+            _position++;
+            return true;
+        }
+    }
+
+    private static byte[] BuildDelimited(
+        GridExportTable table,
+        string delimiter,
+        GridDelimitedTextEncoding encoding)
     {
         var sb = new StringBuilder();
         if (table.IncludeHeaderRow && table.Columns.Count > 0)
@@ -282,8 +767,59 @@ public static class GridExporter
         foreach (var row in table.Rows)
             sb.AppendLine(string.Join(delimiter, row.Values.Select(v => EscapeDelimited(ToExportString(v), delimiter))));
 
-        return Encoding.UTF8.GetBytes(sb.ToString());
+        return EncodeDelimitedText(sb.ToString(), encoding);
     }
+
+    private static byte[] EncodeDelimitedText(
+        string value,
+        GridDelimitedTextEncoding encodingChoice)
+    {
+        Encoding encoding;
+        var includePreamble = false;
+
+        switch (encodingChoice)
+        {
+            case GridDelimitedTextEncoding.Utf8WithBom:
+                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+                includePreamble = true;
+                break;
+            case GridDelimitedTextEncoding.Utf16LittleEndian:
+                encoding = new UnicodeEncoding(bigEndian: false, byteOrderMark: true);
+                includePreamble = true;
+                break;
+            case GridDelimitedTextEncoding.Ascii:
+                encoding = Encoding.ASCII;
+                break;
+            default:
+                // This exactly matches the historical Encoding.UTF8.GetBytes
+                // path: UTF-8 bytes without a preamble.
+                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                break;
+        }
+
+        var content = encoding.GetBytes(value);
+        if (!includePreamble)
+            return content;
+
+        var preamble = encoding.GetPreamble();
+        if (preamble.Length == 0)
+            return content;
+
+        var result = new byte[preamble.Length + content.Length];
+        Buffer.BlockCopy(preamble, 0, result, 0, preamble.Length);
+        Buffer.BlockCopy(content, 0, result, preamble.Length, content.Length);
+        return result;
+    }
+
+    private static string ResolveDelimitedContentType(
+        string baseContentType,
+        GridDelimitedTextEncoding encoding) => encoding switch
+        {
+            GridDelimitedTextEncoding.Utf8WithBom => $"{baseContentType}; charset=utf-8",
+            GridDelimitedTextEncoding.Utf16LittleEndian => $"{baseContentType}; charset=utf-16le",
+            GridDelimitedTextEncoding.Ascii => $"{baseContentType}; charset=us-ascii",
+            _ => baseContentType
+        };
 
     private static byte[] BuildHtml(GridExportTable table, bool standalone)
     {
@@ -1009,23 +1545,62 @@ public static class GridExporter
             case string s:
                 cell.SetValue(s);
                 break;
+            case byte number:
+                cell.SetValue((int)number);
+                break;
+            case sbyte number:
+                cell.SetValue((int)number);
+                break;
+            case short number:
+                cell.SetValue((int)number);
+                break;
+            case ushort number:
+                cell.SetValue((int)number);
+                break;
             case int i:
                 cell.SetValue(i);
+                break;
+            case uint number:
+                cell.SetValue((long)number);
                 break;
             case long l:
                 cell.SetValue(l);
                 break;
+            case ulong number when number <= long.MaxValue:
+                cell.SetValue((long)number);
+                break;
+            case ulong number:
+                cell.SetValue((double)number);
+                break;
             case decimal d:
                 cell.SetValue(d);
                 break;
-            case double d:
+            case double d when !double.IsNaN(d) && !double.IsInfinity(d):
                 cell.SetValue(d);
                 break;
-            case float f:
+            case double d:
+                cell.SetValue(d.ToString(CultureInfo.InvariantCulture));
+                break;
+            case float f when !float.IsNaN(f) && !float.IsInfinity(f):
                 cell.SetValue(f);
+                break;
+            case float f:
+                cell.SetValue(f.ToString(CultureInfo.InvariantCulture));
                 break;
             case DateTime dt:
                 cell.SetValue(dt);
+                break;
+            case DateOnly date:
+                cell.SetValue(date.ToDateTime(TimeOnly.MinValue));
+                break;
+            case DateTimeOffset dateTimeOffset:
+                cell.SetValue(dateTimeOffset.DateTime);
+                break;
+            case TimeOnly time:
+                cell.SetValue(time.ToTimeSpan());
+                break;
+            case TimeSpan timeSpan:
+                cell.SetValue(timeSpan);
                 break;
             case bool b:
                 cell.SetValue(b);

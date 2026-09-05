@@ -1,0 +1,62 @@
+.fx-grid-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-top: 1px solid #dee2e6;
+    background: #f8f9fa;
+    font-size: calc(12px * var(--fx-zoom, 1));
+    flex-shrink: 0;
+}
+
+.fx-pager-info {
+    color: #6c757d;
+}
+
+.fx-pager-nav {
+    display: flex;
+    gap: 2px;
+}
+
+.fx-pager-btn {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: calc(12px * var(--fx-zoom, 1));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+}
+
+.fx-pager-btn:hover:not(:disabled) {
+    background: #e9ecef;
+    border-color: #adb5bd;
+}
+
+.fx-pager-btn:focus-visible {
+    outline: 2px solid #0d6efd;
+    outline-offset: 1px;
+}
+
+.fx-pager-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-pager-active {
+    background: #0d6efd !important;
+    color: #fff !important;
+    border-color: #0d6efd !important;
+}
+
+.fx-pager-size ::deep select {
+    padding: 4px 8px;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    font-size: calc(12px * var(--fx-zoom, 1));
+}

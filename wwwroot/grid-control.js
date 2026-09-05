@@ -62,6 +62,7 @@ const gridScrollSyncBindings = new WeakMap();
 const filterPopupDragBindings = new WeakMap();
 const gridResizeCaptureBindings = new WeakMap();
 const horizontalBoundaryKeyState = new WeakMap();
+const gridColumnWindowBindings = new WeakMap();
 const defaultHeaderReorderPipeColor = "#2b2b2b";
 const headerAutoScrollEdgePx = 56;
 const headerAutoScrollMaxPx = 24;
@@ -680,6 +681,10 @@ function isInteractiveDragSource(target) {
 
 function shouldTrapGridKeyboardNavigation(gridRoot, target) {
     const active = gridRoot.ownerDocument?.activeElement ?? null;
+    // Composite controls such as the pager own their native Tab/arrow/Enter
+    // behavior. They opt out before the broad "active inside the grid" test.
+    if (active instanceof Element && active.closest?.("[data-fx-key-scope]")) return false;
+    if (target instanceof Element && target.closest?.("[data-fx-key-scope]")) return false;
     if (active === gridRoot) return true;
     if (active instanceof Element && gridRoot.contains(active)) return true;
     if (!target || !gridRoot.contains(target)) return false;
@@ -974,6 +979,27 @@ export function registerGridKeyboardTrap(gridRoot) {
             && (event.key === "Tab" || event.key.startsWith("Arrow")))
             lastPressedEditCell = null;
         if (bufferEditMountKey(event)) return;
+
+        // Blazor can choose the command at event time, but preventDefault must
+        // happen synchronously in the browser. The grid publishes only the
+        // configured gestures (not commands) so custom shortcuts do not make
+        // every key inside the grid non-native.
+        const customShortcutText = gridRoot.dataset.fxCustomKeyboardShortcuts;
+        if (customShortcutText) {
+            const target = event.target instanceof Element ? event.target : null;
+            if (shouldTrapGridKeyboardNavigation(gridRoot, target)) {
+                const key = event.key === " " ? "Space" : event.key === "Esc" ? "Escape" : event.key;
+                const parts = [];
+                if (event.ctrlKey) parts.push("Ctrl");
+                if (event.altKey) parts.push("Alt");
+                if (event.shiftKey) parts.push("Shift");
+                if (event.metaKey) parts.push("Meta");
+                parts.push(key);
+                const gesture = parts.join("+").toLowerCase();
+                if (customShortcutText.split("|").includes(gesture))
+                    event.preventDefault();
+            }
+        }
 
         const isGridScrollKey =
             event.key === "PageUp" ||
@@ -4106,6 +4132,95 @@ export function unregisterGridWindowScroll(scrollEl) {
     scrollEl.__gridDeferredScrollSuppressTop = null;
 }
 
+/**
+ * Horizontal geometry reader for opt-in column virtualization. It deliberately
+ * remains separate from registerGridWindowScroll because row windowing is not
+ * required for a wide, paged grid. Calls are rAF-throttled and single-flight;
+ * while a Blazor Server invocation is outstanding only the newest geometry is
+ * retained. C# performs the actual column-range calculation and avoids a render
+ * while the scroll position stays inside the existing overscan window.
+ */
+export function registerGridColumnWindow(scrollEl, dotNetRef) {
+    if (!scrollEl || !dotNetRef) return;
+
+    unregisterGridColumnWindow(scrollEl);
+
+    let disposed = false;
+    let scheduled = false;
+    let inFlight = false;
+    let pending = null;
+    let lastLeft = Number.NaN;
+    let lastWidth = Number.NaN;
+
+    const invokeLatest = () => {
+        scheduled = false;
+        if (disposed || inFlight || !pending) return;
+
+        const request = pending;
+        pending = null;
+        inFlight = true;
+        dotNetRef.invokeMethodAsync(
+            "OnGridColumnWindowScrollAsync",
+            request.left,
+            request.width)
+            .catch(() => {})
+            .finally(() => {
+                inFlight = false;
+                if (pending) schedule();
+            });
+    };
+
+    const schedule = () => {
+        if (disposed || scheduled || inFlight) return;
+        scheduled = true;
+        const doc = scrollEl.ownerDocument || document;
+        const win = doc.defaultView || window;
+        if (typeof doc !== "undefined" && doc.hidden) {
+            win.setTimeout(invokeLatest, 32);
+        } else if (typeof win.requestAnimationFrame === "function") {
+            win.requestAnimationFrame(invokeLatest);
+        } else {
+            win.setTimeout(invokeLatest, 0);
+        }
+    };
+
+    const capture = () => {
+        if (disposed) return;
+        const left = Math.max(0, Number(scrollEl.scrollLeft) || 0);
+        const width = Math.max(0, Number(scrollEl.clientWidth) || 0);
+        if (Math.abs(left - lastLeft) <= 0.25
+            && Math.abs(width - lastWidth) <= 0.25) return;
+        lastLeft = left;
+        lastWidth = width;
+        pending = { left, width };
+        schedule();
+    };
+
+    const resizeObserver = typeof ResizeObserver === "function"
+        ? new ResizeObserver(capture)
+        : null;
+    scrollEl.addEventListener("scroll", capture, { passive: true });
+    resizeObserver?.observe(scrollEl);
+
+    const binding = {
+        dispose: () => {
+            disposed = true;
+            pending = null;
+            scrollEl.removeEventListener("scroll", capture);
+            resizeObserver?.disconnect();
+        }
+    };
+    gridColumnWindowBindings.set(scrollEl, binding);
+    capture();
+}
+
+export function unregisterGridColumnWindow(scrollEl) {
+    if (!scrollEl) return;
+    const binding = gridColumnWindowBindings.get(scrollEl);
+    binding?.dispose?.();
+    gridColumnWindowBindings.delete(scrollEl);
+}
+
 export function positionDatePickerDropdown(hostEl, dropdownEl, popupLayerEl) {
     if (!hostEl || !dropdownEl) return;
 
@@ -5218,6 +5333,15 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // NOTE: the grid's own keyboard trap preventDefaults trusted arrows at
         // document capture (page-scroll suppression) BEFORE this listener —
         // defaultPrevented is NOT a foreign claim here.
+        // Column-window spacers intentionally do not have a one-to-one DOM
+        // cellIndex mapping to logical GridColumn indices. Let the existing
+        // server keyboard pipeline handle those grids; its bound callbacks use
+        // logical indices and keep the active target mounted before revealing it.
+        if (gridRoot.dataset.fxColumnVirtualization === "active") {
+            pending = null;
+            releasePreview();
+            return;
+        }
         const key = event.key;
         const isArrow = key === "ArrowDown" || key === "ArrowUp" || key === "ArrowLeft" || key === "ArrowRight";
         const t = event.target;
@@ -5262,12 +5386,15 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
             let td = cur;
             do {
                 td = key === "ArrowRight" ? td.nextElementSibling : td.previousElementSibling;
-            } while (td && td.tagName !== "TD");
+            } while (td && (td.tagName !== "TD"
+                || (!td.hasAttribute("data-field") && !td.classList.contains("fx-checkbox-cell"))));
             if (!td) { flushPreviewPosition(); return; } // row edge — sync first, server owns wrap rules
             target = td;
         }
-        if (!target) return;
-
+        if (!target || (!target.hasAttribute("data-field") && !target.classList.contains("fx-checkbox-cell"))) {
+            flushPreviewPosition();
+            return;
+        }
 
         // Enroll this preview with the paint arbiter: pointer-era safety nets
         // become obsolete (their generation is stale) and a pointer gesture

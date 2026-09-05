@@ -233,14 +233,12 @@ else
     [Parameter] public Action<string?>? InputValueChanged { get; set; }
     [Parameter] public TextBoxTypingBehavior TypingBehavior { get; set; } = TextBoxTypingBehavior.ServerBacked;
 
-    /// <summary>UNCONTROLLED mode (no JS). The rendered <c>value</c> attribute is
-    /// captured ONCE and never re-applied, so the DOM owns the text while the user
-    /// types — Blazor never rewrites the value or resets the caret, no matter how
-    /// often a parent (e.g. a grid) re-renders. Typed text is reported to the parent
-    /// via <see cref="InputValueChanged"/> / <see cref="ValueChanged"/> for commit.
-    /// Give the control a fresh <c>@key</c> per edit session so each edit re-captures
-    /// its starting value. Used by GridControl's batch cell editor to kill the
-    /// Blazor-Server controlled-input typing wobble (caret-to-0 / dropped chars).</summary>
+    /// <summary>Browser-owned draft mode (no JS). The starting value is seeded
+    /// once; native input then updates the draft independently of parent Value
+    /// parameters. Parent renders therefore retain the typed text and caret.
+    /// Typed text is reported through <see cref="InputValueChanged"/> and
+    /// <see cref="ValueChanged"/>. Use a fresh <c>@key</c> per edit session to
+    /// seed a new starting value.</summary>
     [Parameter] public bool Uncontrolled { get; set; }
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool SelectOnFocus { get; set; }
@@ -263,8 +261,10 @@ else
     /// <summary>Bound only when a host is actually listening. Blazor dispatches every
     /// bound keydown to the server, so an always-bound handler cost one SignalR round
     /// trip per character on every textbox in the app for a handler that did nothing.</summary>
-    private Func<KeyboardEventArgs, Task>? KeyDownDispatch
-        => OnKeyDown.HasDelegate ? OnNativeKeyDown : null;
+    private EventCallback<KeyboardEventArgs> KeyDownDispatch =>
+        OnKeyDown.HasDelegate
+            ? EventCallback.Factory.Create<KeyboardEventArgs>(this, OnNativeKeyDown)
+            : default;
 
     private EventCallback<FocusEventArgs> BlurDispatch =>
         OnBlur.HasDelegate
@@ -419,13 +419,14 @@ else
     private bool _clientBufferedTypingAttached;
     private bool _clientBufferedHandlesNavigationKeys;
 
-    // Uncontrolled-mode: the value rendered ONCE, then never re-applied.
+    // Browser-owned draft: seed from Value once, then track native input.
+    // Parent Value changes must not overwrite a live draft.
     private string? _uncontrolledValue;
     private bool _uncontrolledInitialized;
 
     /// <summary>The value rendered into the input. In Uncontrolled mode this is the
-    /// once-captured starting value (stable across re-renders); otherwise it tracks
-    /// the live <see cref="Value"/> as before.</summary>
+    /// browser's latest draft (independent of parent re-renders); otherwise it
+    /// tracks the live <see cref="Value"/>.</summary>
     private bool UsesBrowserOwnedValue =>
         Uncontrolled || TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
 
@@ -606,11 +607,11 @@ else
     {
         if (UsesBrowserOwnedValue)
         {
-            // UNCONTROLLED (no JS): the DOM already shows exactly what the user typed
-            // and the rendered value attribute is a fixed string, so we DON'T touch
-            // Value or re-render — that is precisely what keeps the caret from
-            // jumping to 0 and the last keystroke from being reverted under a
-            // parent re-render on Blazor Server. Just report the typed text upstream.
+            // @bind updates Blazor's value frame for each input event. Keep
+            // its getter in sync before invoking a parent callback: otherwise
+            // a parent render compares the typed value with the mount-time
+            // snapshot and writes the old text back into the live input.
+            _uncontrolledValue = typed;
             InputValueChanged?.Invoke(typed);
             _suppressNextNativeInputRender = true;
             if (UpdateOnInput && ValueChanged.HasDelegate)
@@ -636,6 +637,8 @@ else
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        if (UsesBrowserOwnedValue)
+            _uncontrolledValue = Value;
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }

@@ -29,9 +29,20 @@ public partial class GridControl<TValue>
     [Parameter] public bool GroupFootersAlwaysVisible { get; set; }
 
     // ── Master-Detail State ─────────────────────────────────────────────
-    private readonly HashSet<TValue> _expandedRows = new();
+    private HashSet<TValue>? _expandedRowsSet;
+    private HashSet<TValue> _expandedRows =>
+        _expandedRowsSet ??= new HashSet<TValue>(new GridItemIdentityComparer(this));
     public bool HasDetailTemplate => DetailTemplate != null;
-    public bool AllRowsExpanded => PagedData.Any() && PagedData.All(r => _expandedRows.Contains(r));
+    private bool ShowDetailExpandColumn => HasDetailTemplate && ShowExpandColumn;
+
+    public bool AllRowsExpanded
+    {
+        get
+        {
+            var rows = GetExpandableDetailRows();
+            return rows.Count > 0 && rows.All(r => _expandedRows.Contains(r));
+        }
+    }
 
     public bool IsRowExpanded(TValue item) => item != null && _expandedRows.Contains(item);
 
@@ -46,6 +57,7 @@ public partial class GridControl<TValue>
             if (RowExpand.HasDelegate)
                 await RowExpand.InvokeAsync(item);
             StateHasChanged();
+            await NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
         }
     }
 
@@ -57,6 +69,7 @@ public partial class GridControl<TValue>
             if (RowCollapse.HasDelegate)
                 await RowCollapse.InvokeAsync(item);
             StateHasChanged();
+            await NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
         }
     }
 
@@ -70,15 +83,17 @@ public partial class GridControl<TValue>
 
     public void ExpandAll()
     {
-        foreach (var row in PagedData)
+        foreach (var row in GetExpandableDetailRows())
             _expandedRows.Add(row);
         StateHasChanged();
+        _ = NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
     }
 
     public void CollapseAll()
     {
         _expandedRows.Clear();
         StateHasChanged();
+        _ = NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
     }
 
     public void ToggleExpandAll()
@@ -87,6 +102,14 @@ public partial class GridControl<TValue>
             CollapseAll();
         else
             ExpandAll();
+    }
+
+    private IReadOnlyList<TValue> GetExpandableDetailRows()
+    {
+        if (UsesProviderGrouping)
+            return EnumerateLoadedProviderRows().ToList();
+
+        return PagedData.ToList();
     }
 
     // ── In-Header Simple / Advanced Column Filter State ─────────────────
@@ -106,31 +129,41 @@ public partial class GridControl<TValue>
 
     public string GetColumnFilterValue(string field)
     {
+        if (_filterRowDrafts.TryGetValue(field, out var draft))
+            return draft;
         return _simpleColumnFilters.TryGetValue(field, out var val) ? val : "";
     }
 
     public void OnColumnFilterInput(string field, string? val)
     {
-        if (string.IsNullOrWhiteSpace(val))
-            _simpleColumnFilters.Remove(field);
-        else
-            _simpleColumnFilters[field] = val;
-
-        ClearPassViewMemos();
-        InvalidateBlazorServerOptimizationCaches();
-        _pageState.CurrentPage = 1;
-        StateHasChanged();
+        QueueFilterRowValue(field, val);
     }
 
-    public void ClearColumnFilter(string field)
+    /// <summary>
+    /// Compatibility wrapper for callers that used the original synchronous
+    /// API. State is cleared before the first await; provider-backed callers
+    /// can use <see cref="ClearColumnFilterAsync"/> when they need to await the
+    /// refreshed range.
+    /// </summary>
+    public void ClearColumnFilter(string field) => _ = ClearColumnFilterAsync(field);
+
+    /// <summary>
+    /// Clears every filter surface for one column and refreshes the active
+    /// ItemsProvider query when applicable.
+    /// </summary>
+    public async Task ClearColumnFilterAsync(string field)
     {
-        _simpleColumnFilters.Remove(field);
-        _columnAdvancedFilters.Remove(field);
-        _columnCheckboxFilters.Remove(field);
-        ClearPassViewMemos();
-        InvalidateBlazorServerOptimizationCaches();
-        _pageState.CurrentPage = 1;
-        StateHasChanged();
+        ClearFilter(field);
+        if (string.Equals(_activeFilterPopupField, field, StringComparison.OrdinalIgnoreCase))
+            _activeFilterPopupField = null;
+        if (string.Equals(_filterPopupField, field, StringComparison.OrdinalIgnoreCase))
+            CloseFilterPopup();
+
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     public void ToggleColumnFilterPopup(string field)
@@ -144,8 +177,10 @@ public partial class GridControl<TValue>
 
     public bool HasActiveColumnFilter(string field)
     {
-        return _simpleColumnFilters.ContainsKey(field)
-            || _columnAdvancedFilters.ContainsKey(field)
+        return GetColumnState(field).FilterActive
+            || _simpleColumnFilters.ContainsKey(field)
+            || (_columnAdvancedFilters.TryGetValue(field, out var criteria)
+                && IsAdvancedFilterCriteriaActive(criteria))
             || _columnCheckboxFilters.ContainsKey(field);
     }
 
@@ -159,16 +194,38 @@ public partial class GridControl<TValue>
         return crit;
     }
 
-    public void ApplyAdvancedFilter(string field)
+    /// <summary>
+    /// Compatibility wrapper for the original synchronous API. Provider hosts
+    /// can await <see cref="ApplyAdvancedFilterAsync"/> to observe completion.
+    /// </summary>
+    public void ApplyAdvancedFilter(string field) => _ = ApplyAdvancedFilterAsync(field);
+
+    /// <summary>Applies the staged advanced criteria and refreshes provider rows.</summary>
+    public async Task ApplyAdvancedFilterAsync(string field)
     {
         _activeFilterPopupField = null;
+        if (_columnAdvancedFilters.TryGetValue(field, out var criteria)
+            && !IsAdvancedFilterCriteriaActive(criteria))
+        {
+            // GetAdvancedFilterCriteria stages a mutable object for the editor.
+            // An untouched/cleared object is not an applied filter and should
+            // not leave a filtered header indicator or disable fast paths.
+            _columnAdvancedFilters.Remove(field);
+        }
         _pageState.CurrentPage = 1;
-        StateHasChanged();
+        ClearPassViewMemos();
+        InvalidateBlazorServerOptimizationCaches();
+
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     public HashSet<string> GetDistinctColumnValues(string field)
     {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var set = new HashSet<string>(FilterTextComparer);
         if (DataSource == null) return set;
         var col = VisibleColumns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
         if (col == null) return set;
@@ -189,8 +246,7 @@ public partial class GridControl<TValue>
         {
             var col = VisibleColumns.FirstOrDefault(c => string.Equals(c.Field, kvp.Key, StringComparison.OrdinalIgnoreCase));
             if (col == null) continue;
-            var cellVal = GetColumnSearchText(item, col) ?? "";
-            if (!cellVal.Contains(kvp.Value, StringComparison.OrdinalIgnoreCase))
+            if (!PassesTypedFilterRow(item, col, kvp.Value))
                 return false;
         }
 
@@ -201,18 +257,23 @@ public partial class GridControl<TValue>
             if (col == null) continue;
             var cellVal = GetColumnSearchText(item, col) ?? "";
             var crit = kvp.Value;
+            if (!IsAdvancedFilterCriteriaActive(crit))
+                continue;
 
-            bool cond1 = EvaluateFilterCondition(cellVal, crit.Operator1, crit.Value1);
-            if (string.IsNullOrEmpty(crit.Value2) && crit.Operator2 is not GridFilterOperator.IsNull and not GridFilterOperator.IsNotNull and not GridFilterOperator.IsEmpty and not GridFilterOperator.IsNotEmpty)
-            {
-                if (!cond1) return false;
-            }
-            else
-            {
-                bool cond2 = EvaluateFilterCondition(cellVal, crit.Operator2, crit.Value2);
-                bool overall = crit.LogicalOperator == LogicalFilterOperator.And ? (cond1 && cond2) : (cond1 || cond2);
-                if (!overall) return false;
-            }
+            var hasFirstCondition = IsAdvancedFilterConditionActive(crit.Operator1, crit.Value1);
+            var hasSecondCondition = IsAdvancedFilterConditionActive(crit.Operator2, crit.Value2);
+
+            var passes = hasFirstCondition && hasSecondCondition
+                ? crit.LogicalOperator == LogicalFilterOperator.And
+                    ? EvaluateFilterCondition(cellVal, crit.Operator1, crit.Value1)
+                        && EvaluateFilterCondition(cellVal, crit.Operator2, crit.Value2)
+                    : EvaluateFilterCondition(cellVal, crit.Operator1, crit.Value1)
+                        || EvaluateFilterCondition(cellVal, crit.Operator2, crit.Value2)
+                : hasFirstCondition
+                    ? EvaluateFilterCondition(cellVal, crit.Operator1, crit.Value1)
+                    : EvaluateFilterCondition(cellVal, crit.Operator2, crit.Value2);
+            if (!passes)
+                return false;
         }
 
         // CheckBoxList filters
@@ -221,40 +282,50 @@ public partial class GridControl<TValue>
             var col = VisibleColumns.FirstOrDefault(c => string.Equals(c.Field, kvp.Key, StringComparison.OrdinalIgnoreCase));
             if (col == null) continue;
             var cellVal = GetColumnSearchText(item, col) ?? "";
-            if (!kvp.Value.Contains(cellVal))
+            if (!kvp.Value.Any(value => string.Equals(value, cellVal, FilterTextComparison)))
                 return false;
         }
 
         return true;
     }
 
-    private static bool EvaluateFilterCondition(string cellVal, GridFilterOperator op, string? filterVal)
+    private static bool IsAdvancedFilterCriteriaActive(ColumnAdvancedFilterCriteria? criteria) =>
+        criteria is not null
+        && (IsAdvancedFilterConditionActive(criteria.Operator1, criteria.Value1)
+            || IsAdvancedFilterConditionActive(criteria.Operator2, criteria.Value2));
+
+    private static bool IsAdvancedFilterConditionActive(GridFilterOperator filterOperator, string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        || IsValueOptionalAdvancedFilterOperator(filterOperator);
+
+    private bool EvaluateFilterCondition(string cellVal, GridFilterOperator op, string? filterVal)
     {
         filterVal ??= "";
         return op switch
         {
-            GridFilterOperator.Equals => string.Equals(cellVal, filterVal, StringComparison.OrdinalIgnoreCase),
-            GridFilterOperator.NotEquals => !string.Equals(cellVal, filterVal, StringComparison.OrdinalIgnoreCase),
-            GridFilterOperator.Contains => cellVal.Contains(filterVal, StringComparison.OrdinalIgnoreCase),
-            GridFilterOperator.DoesNotContain => !cellVal.Contains(filterVal, StringComparison.OrdinalIgnoreCase),
-            GridFilterOperator.StartsWith => cellVal.StartsWith(filterVal, StringComparison.OrdinalIgnoreCase),
-            GridFilterOperator.EndsWith => cellVal.EndsWith(filterVal, StringComparison.OrdinalIgnoreCase),
+            GridFilterOperator.Equals => string.Equals(cellVal, filterVal, FilterTextComparison),
+            GridFilterOperator.NotEquals => !string.Equals(cellVal, filterVal, FilterTextComparison),
+            GridFilterOperator.Contains => cellVal.Contains(filterVal, FilterTextComparison),
+            GridFilterOperator.DoesNotContain => !cellVal.Contains(filterVal, FilterTextComparison),
+            GridFilterOperator.StartsWith => cellVal.StartsWith(filterVal, FilterTextComparison),
+            GridFilterOperator.EndsWith => cellVal.EndsWith(filterVal, FilterTextComparison),
             GridFilterOperator.IsNull or GridFilterOperator.IsEmpty => string.IsNullOrEmpty(cellVal),
             GridFilterOperator.IsNotNull or GridFilterOperator.IsNotEmpty => !string.IsNullOrEmpty(cellVal),
             GridFilterOperator.GreaterThan when double.TryParse(cellVal, out var cn) && double.TryParse(filterVal, out var fn) => cn > fn,
             GridFilterOperator.GreaterThanOrEquals when double.TryParse(cellVal, out var cn) && double.TryParse(filterVal, out var fn) => cn >= fn,
             GridFilterOperator.LessThan when double.TryParse(cellVal, out var cn) && double.TryParse(filterVal, out var fn) => cn < fn,
             GridFilterOperator.LessThanOrEquals when double.TryParse(cellVal, out var cn) && double.TryParse(filterVal, out var fn) => cn <= fn,
-            _ => cellVal.Contains(filterVal, StringComparison.OrdinalIgnoreCase)
+            _ => cellVal.Contains(filterVal, FilterTextComparison)
         };
     }
 
     // ── Multi-Column Sorting Priority Index ─────────────────────────────
     public int? GetSortPriorityIndex(string field)
     {
-        var sortedColumns = _columnStates.Where(kvp => kvp.Value.SortDirection.HasValue).Select(kvp => kvp.Key).ToList();
-        if (sortedColumns.Count <= 1) return null;
-        var idx = sortedColumns.IndexOf(field);
+        var sorts = GetActiveSortDescriptors();
+        if (sorts.Length <= 1) return null;
+        var idx = Array.FindIndex(sorts, sort =>
+            string.Equals(sort.Field, field, StringComparison.OrdinalIgnoreCase));
         return idx >= 0 ? idx + 1 : null;
     }
 

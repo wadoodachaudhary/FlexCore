@@ -1,0 +1,76 @@
+@namespace Fx.ControlKit.Grid
+
+@if (Template != null)
+{
+    <div class="fx-grid-pager fx-grid-pager-template"
+         role="navigation"
+         aria-label="Grid pages"
+         data-fx-key-scope=""
+         @onkeydown:stopPropagation="true">
+        @Template(Context)
+    </div>
+}
+else
+{
+    <div class="fx-grid-pager"
+         role="navigation"
+         aria-label="Grid pages"
+         data-fx-key-scope=""
+         @onkeydown:stopPropagation="true">
+        <div class="fx-pager-info">
+            @if (ShowRowCount)
+            {
+                <small class="fx-grid-row-count-text">@Context.RowCountText</small>
+            }
+        </div>
+        <div class="fx-pager-nav">
+            <button type="button" class="fx-pager-btn"
+                    aria-label="First page"
+                    disabled="@(Context.CurrentPage <= 1)"
+                    @onclick="() => Context.GoToPageAsync(1)">⟨⟨</button>
+            <button type="button" class="fx-pager-btn"
+                    aria-label="Previous page"
+                    disabled="@(Context.CurrentPage <= 1)"
+                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage - 1)">⟨</button>
+
+            @foreach (var page in Context.PageNumbers)
+            {
+                var capturedPage = page;
+                <button type="button"
+                        class="fx-pager-btn @(capturedPage == Context.CurrentPage ? "fx-pager-active" : "")"
+                        aria-label="Page @capturedPage"
+                        aria-current="@(capturedPage == Context.CurrentPage ? "page" : null)"
+                        @onclick="() => Context.GoToPageAsync(capturedPage)">@capturedPage</button>
+            }
+
+            <button type="button" class="fx-pager-btn"
+                    aria-label="Next page"
+                    disabled="@(Context.CurrentPage >= Context.TotalPages)"
+                    @onclick="() => Context.GoToPageAsync(Context.CurrentPage + 1)">⟩</button>
+            <button type="button" class="fx-pager-btn"
+                    aria-label="Last page"
+                    disabled="@(Context.CurrentPage >= Context.TotalPages)"
+                    @onclick="() => Context.GoToPageAsync(Context.TotalPages)">⟩⟩</button>
+        </div>
+        <div class="fx-pager-size">
+            <DropDownListControl TValue="int" TItem="GridPageSizeOption"
+                                 DataSource="@PageSizeOptions"
+                                 TextFieldName="@nameof(GridPageSizeOption.Text)"
+                                 ValueFieldName="@nameof(GridPageSizeOption.Value)"
+                                 Value="@Context.PageSize"
+                                 ValueChanged="Context.SetPageSizeAsync"
+                                 CssClass="fx-pager-size-select" />
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public GridPagerContext Context { get; set; } = default!;
+    [Parameter] public RenderFragment<GridPagerContext>? Template { get; set; }
+    [Parameter] public bool ShowRowCount { get; set; }
+
+    private IEnumerable<GridPageSizeOption> PageSizeOptions =>
+        Context.PageSizes.Select(size => new GridPageSizeOption(size, size <= 0 ? "All" : $"{size} / page"));
+
+    public sealed record GridPageSizeOption(int Value, string Text);
+}

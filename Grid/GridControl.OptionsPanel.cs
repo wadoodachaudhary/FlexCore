@@ -26,7 +26,10 @@ public partial class GridControl<TValue>
     private bool _advancedViewInitialized;
     private bool _advancedViewEnabled;
 
-    private readonly record struct FilterValueCandidate(string Value, string DisplayText);
+    private readonly record struct FilterValueCandidate(
+        string Value,
+        string DisplayText,
+        int? Count = null);
 
     private string _columnPanelSearch = "";
     private string _pivotFieldSearch = "";
@@ -44,18 +47,6 @@ public partial class GridControl<TValue>
         new(GridTheme.ExcelMediumGreen, "Medium Green", "Medium", "#548235", "#ffffff", "#e2f0d9", "#70ad47"),
         new(GridTheme.ExcelDarkSlate, "Dark Slate", "Dark", "#2f3542", "#111827", "#1f2937", "#64748b", true)
     ];
-    private static readonly TextFilterOperator[] TextFilterOperators =
-    [
-        TextFilterOperator.Contains,
-        TextFilterOperator.Equals,
-        TextFilterOperator.DoesNotEqual,
-        TextFilterOperator.BeginsWith,
-        TextFilterOperator.DoesNotBeginWith,
-        TextFilterOperator.EndsWith,
-        TextFilterOperator.DoesNotEndWith,
-        TextFilterOperator.DoesNotContain,
-        TextFilterOperator.ChooseOne
-    ];
     private static readonly AggregateType[] PivotAggregateTypes =
     [
         AggregateType.Sum,
@@ -65,8 +56,13 @@ public partial class GridControl<TValue>
         AggregateType.Max
     ];
 
-    private IEnumerable<TextFilterOperatorChoice> TextFilterOperatorChoices =>
-        TextFilterOperators.Select(op => new TextFilterOperatorChoice(op, GetTextFilterOperatorLabel(op)));
+    private IEnumerable<TextFilterOperatorChoice> GetFilterMenuOperatorChoices(GridColumn column) =>
+        GetFilterRowOperators(column)
+            .Concat([_filterOperatorDraft, _secondFilterOperatorDraft])
+            .Distinct()
+            .Select(filterOperator => new TextFilterOperatorChoice(
+                filterOperator,
+                GetTextFilterOperatorLabel(filterOperator)));
 
     private bool _pivotMode;
     private readonly List<string> _pivotRowFields = new();
@@ -354,18 +350,31 @@ public partial class GridControl<TValue>
     private void SeedFilterPopupDraft(string field)
     {
         var state = GetColumnState(field);
+        var column = FindColumnByField(field);
+        var defaultOperator = column == null
+            ? TextFilterOperator.Contains
+            : GetDefaultFilterOperator(column);
         _filterTextDraft = state.FilterValue ?? "";
         _secondFilterTextDraft = state.SecondFilterValue ?? "";
         _filterOperatorDraft = _filterOperatorDraftsByField.TryGetValue(field, out var cachedOperator)
             ? cachedOperator
-            : state.FilterOperator;
-        _secondFilterOperatorDraft = state.SecondFilterOperator;
+            : string.IsNullOrWhiteSpace(state.FilterValue)
+                && state.FilterOperator == TextFilterOperator.Contains
+                    ? defaultOperator
+                    : state.FilterOperator;
+        _secondFilterOperatorDraft = string.IsNullOrWhiteSpace(state.SecondFilterValue)
+            && state.SecondFilterOperator == TextFilterOperator.Contains
+                ? defaultOperator
+                : state.SecondFilterOperator;
         _filterLogicalOperatorDraft = state.LogicalFilterOperator;
         _blankRowFilterDraft = state.BlankRowFilter;
         IEnumerable<string> checkedValues = state.UseCheckedFilter
             ? state.CheckedFilterValues
             : GetDistinctValues(field);
-        _filterCheckedDraft = new HashSet<string>(checkedValues, StringComparer.Ordinal);
+        _filterCheckedDraft = new HashSet<string>(checkedValues, FilterTextComparer);
+        _filterChecklistSearchDraft = string.Empty;
+        _filterChecklistDraftTouched = false;
+        _filterChecklistCommitError = null;
     }
 
     private async Task OnTextFilterOperatorChanged(ChangeEventArgs e)
@@ -398,7 +407,7 @@ public partial class GridControl<TValue>
             _filterOperatorDraftsByField[_filterPopupField] = _filterOperatorDraft;
         QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
         if (_filterPopupAutoApply && _filterPopupField != null)
-            await ApplyFilterPopupAsync(close: false);
+            await QueueFilterPopupAutoApplyAsync();
     }
 
     private async Task OnSecondTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
@@ -412,7 +421,7 @@ public partial class GridControl<TValue>
     {
         _secondFilterTextDraft = e.Value?.ToString() ?? "";
         if (_filterPopupAutoApply && _filterPopupField != null)
-            await ApplyFilterPopupAsync(close: false);
+            await QueueFilterPopupAutoApplyAsync();
     }
 
     private async Task OnFilterLogicalOperatorChanged(LogicalFilterOperator op)
@@ -444,7 +453,17 @@ public partial class GridControl<TValue>
         if (field == null)
             return;
 
-        await ApplyFilter(field, _filterTextDraft, _filterOperatorDraft);
+        if (!CanCommitCheckedFilterDraft(field))
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        // Commit the menu as one transaction. ApplyFilter normally reloads a
+        // provider immediately, but here the second/checklist/blank criteria
+        // must be copied first so one user action issues one complete request.
+        if (!await ApplyFilter(field, _filterTextDraft, _filterOperatorDraft, finalizeUpdate: false))
+            return;
         var state = GetColumnState(field);
         state.SecondFilterValue = string.IsNullOrWhiteSpace(_secondFilterTextDraft) ? null : _secondFilterTextDraft;
         state.SecondFilterOperator = _secondFilterOperatorDraft;
@@ -452,19 +471,37 @@ public partial class GridControl<TValue>
         state.BlankRowFilter = _blankRowFilterDraft;
         CommitCheckedFilterDraft(field);
 
+        if (EventsRef?.Filtered.HasDelegate == true)
+        {
+            await EventsRef.Filtered.InvokeAsync(new FilterEventArgs
+            {
+                Field = field,
+                Value = _filterTextDraft
+            });
+        }
+
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
+
         if (close)
             CloseFilterPopup();
+
+        await InvokeAsync(StateHasChanged);
     }
 
     private void CommitCheckedFilterDraft(string field)
     {
+        // Applying a text condition must not accidentally turn an unavailable
+        // provider checklist into an active "select nothing" predicate.
+        if (!_filterChecklistDraftTouched)
+            return;
+
         var state = GetColumnState(field);
         var all = GetDistinctValues(field);
-        state.CheckedFilterValues.Clear();
-        foreach (var value in _filterCheckedDraft)
-            state.CheckedFilterValues.Add(value);
+        state.CheckedFilterValues = new HashSet<string>(_filterCheckedDraft, FilterTextComparer);
 
-        state.UseCheckedFilter = _filterCheckedDraft.Count < all.Count || all.Count == 0;
+        state.UseCheckedFilter = all.Count > 0 && _filterCheckedDraft.Count < all.Count;
         if (!state.UseCheckedFilter)
             state.CheckedFilterValues.Clear();
 
@@ -474,6 +511,39 @@ public partial class GridControl<TValue>
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
         _pageState.CurrentPage = 1;
+    }
+
+    /// <summary>
+    /// A provider checklist is an inclusion list. Applying a partial page of
+    /// distinct values as though it were the whole universe would silently
+    /// exclude every value the provider did not return. Until the provider
+    /// confirms the distinct set is complete, only the no-op "all currently
+    /// shown values selected" state is safe to commit.
+    /// </summary>
+    private bool CanCommitCheckedFilterDraft(string field)
+    {
+        _filterChecklistCommitError = null;
+        if (!_filterChecklistDraftTouched || !UsesItemsProvider)
+            return true;
+
+        var knownValues = GetDistinctValues(field);
+        if (knownValues.Count > 0 && knownValues.All(_filterCheckedDraft.Contains))
+            return true;
+
+        var hasMore = true;
+        var completenessKnown = EnableProviderFilterValueRequests
+            && _providerFilterValuesHaveMore.TryGetValue(field, out hasMore);
+        if (completenessKnown && !hasMore)
+            return true;
+
+        _filterChecklistCommitError = !EnableProviderFilterValueRequests
+            ? "Partial checklist filtering needs provider distinct-value requests. Enable them or use the typed conditions above."
+            : IsProviderFilterValuesLoading
+                ? "Wait for all requested distinct values before applying a partial checklist selection."
+                : ProviderFilterValuesLastError != null
+                    ? "Distinct values could not be loaded, so a partial checklist selection cannot be applied safely."
+                    : "The provider returned only part of the distinct-value set. Narrow the query or increase ProviderFilterValueRequestSize before applying a partial selection.";
+        return false;
     }
 
     private static string GetTextFilterOperatorLabel(TextFilterOperator filterOperator) => filterOperator switch
@@ -495,9 +565,9 @@ public partial class GridControl<TValue>
         _ => "Choose One"
     };
 
-    private static bool PassesTextFilter(string actual, string expected, TextFilterOperator filterOperator)
+    private bool PassesTextFilter(string actual, string expected, TextFilterOperator filterOperator)
     {
-        var comparison = StringComparison.OrdinalIgnoreCase;
+        var comparison = FilterTextComparison;
         return filterOperator switch
         {
             TextFilterOperator.Equals => string.Equals(actual, expected, comparison),
@@ -509,12 +579,31 @@ public partial class GridControl<TValue>
             TextFilterOperator.DoesNotContain => !actual.Contains(expected, comparison),
             TextFilterOperator.IsEmpty => string.IsNullOrWhiteSpace(actual),
             TextFilterOperator.IsNotEmpty => !string.IsNullOrWhiteSpace(actual),
-            TextFilterOperator.GreaterThan when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum > eNum,
-            TextFilterOperator.GreaterThanOrEqual when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum >= eNum,
-            TextFilterOperator.LessThan when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum < eNum,
-            TextFilterOperator.LessThanOrEqual when double.TryParse(actual, out var aNum) && double.TryParse(expected, out var eNum) => aNum <= eNum,
+            TextFilterOperator.GreaterThan => CompareFilterText(actual, expected) > 0,
+            TextFilterOperator.GreaterThanOrEqual => CompareFilterText(actual, expected) >= 0,
+            TextFilterOperator.LessThan => CompareFilterText(actual, expected) < 0,
+            TextFilterOperator.LessThanOrEqual => CompareFilterText(actual, expected) <= 0,
             TextFilterOperator.ChooseOne or TextFilterOperator.Contains or _ => actual.Contains(expected, comparison)
         };
+    }
+
+    private int CompareFilterText(string actual, string expected)
+    {
+        if ((decimal.TryParse(actual, NumberStyles.Any, CultureInfo.CurrentCulture, out var actualNumber)
+                || decimal.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out actualNumber))
+            && (decimal.TryParse(expected, NumberStyles.Any, CultureInfo.CurrentCulture, out var expectedNumber)
+                || decimal.TryParse(expected, NumberStyles.Any, CultureInfo.InvariantCulture, out expectedNumber)))
+        {
+            return actualNumber.CompareTo(expectedNumber);
+        }
+
+        if (TryParseFilterDate(actual, out var actualDate)
+            && TryParseFilterDate(expected, out var expectedDate))
+        {
+            return actualDate.CompareTo(expectedDate);
+        }
+
+        return string.Compare(actual, expected, FilterTextComparison);
     }
 
     private bool IsCurrentFilterPopupField(string field) =>
@@ -526,22 +615,30 @@ public partial class GridControl<TValue>
     private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field)
     {
         return GetDistinctFilterValueCandidates(field)
-            .Where(v => MatchesPopupTextFilter(field, v))
+            .Where(MatchesChecklistSearch)
             .ToList();
     }
 
-    private bool MatchesPopupTextFilter(string field, FilterValueCandidate candidate)
+    private bool MatchesChecklistSearch(FilterValueCandidate candidate)
     {
-        if (!IsCurrentFilterPopupField(field) || string.IsNullOrWhiteSpace(_filterTextDraft))
+        if (string.IsNullOrWhiteSpace(_filterChecklistSearchDraft))
             return true;
 
-        return PassesDisplayAwareTextFilter(candidate.Value, candidate.DisplayText, _filterTextDraft, _filterOperatorDraft);
+        return CombineFilterSearchText(candidate.Value, candidate.DisplayText)
+            .Contains(_filterChecklistSearchDraft, FilterTextComparison);
     }
 
     private IReadOnlyList<FilterValueCandidate> GetDistinctFilterValueCandidates(string field)
     {
+        if (UsesItemsProvider)
+        {
+            return _providerFilterValueCandidates.TryGetValue(field, out var providerCandidates)
+                ? providerCandidates
+                : Array.Empty<FilterValueCandidate>();
+        }
+
         var col = FindColumnByField(field);
-        var candidates = new Dictionary<string, FilterValueCandidate>(StringComparer.Ordinal);
+        var candidates = new Dictionary<string, FilterValueCandidate>(FilterTextComparer);
 
         foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
         {
@@ -584,7 +681,7 @@ public partial class GridControl<TValue>
         return $"{displayText} {rawValue}";
     }
 
-    private static bool PassesDisplayAwareTextFilter(string rawValue, string displayText, string expected, TextFilterOperator filterOperator)
+    private bool PassesDisplayAwareTextFilter(string rawValue, string displayText, string expected, TextFilterOperator filterOperator)
     {
         displayText = string.IsNullOrWhiteSpace(displayText) ? rawValue : displayText;
         if (string.Equals(rawValue, displayText, StringComparison.Ordinal))
@@ -646,10 +743,68 @@ public partial class GridControl<TValue>
         return candidates.Count > 0 && candidates.All(state.CheckedFilterValues.Contains);
     }
 
-    private void SetFilterFieldSelected(string field, bool selected, IReadOnlyList<string>? values = null)
+    private GridFilterSelectionState GetFilterFieldSelectionState(
+        string field,
+        IReadOnlyList<string>? values = null)
+    {
+        var candidates = values ?? GetDistinctValues(field);
+        if (candidates.Count == 0)
+            return GridFilterSelectionState.None;
+
+        var selectedCount = IsCurrentFilterPopupField(field)
+            ? candidates.Count(_filterCheckedDraft.Contains)
+            : !GetColumnState(field).UseCheckedFilter
+                ? candidates.Count
+                : candidates.Count(GetColumnState(field).CheckedFilterValues.Contains);
+
+        return selectedCount switch
+        {
+            0 => GridFilterSelectionState.None,
+            var count when count == candidates.Count => GridFilterSelectionState.All,
+            _ => GridFilterSelectionState.Some
+        };
+    }
+
+    private static string GetFilterSelectionAriaValue(GridFilterSelectionState state) => state switch
+    {
+        GridFilterSelectionState.All => "true",
+        GridFilterSelectionState.Some => "mixed",
+        _ => "false"
+    };
+
+    private Task SetFilterChecklistSearch(ChangeEventArgs e) =>
+        SetFilterChecklistSearchAsync(e.Value?.ToString());
+
+    private async Task SetFilterChecklistSearchAsync(string? searchText)
+    {
+        _filterChecklistSearchDraft = searchText ?? string.Empty;
+        var field = _filterPopupField;
+        if (field == null)
+            return;
+
+        // A search selects its matching values, as in Excel. Keeping hidden
+        // values selected makes both Auto Apply and Apply admit every row.
+        // Clearing the search selects the complete checklist again.
+        if (!IsProviderFilterValuesLoading)
+        {
+            _filterCheckedDraft = new HashSet<string>(
+                GetColumnFilterValueCandidates(field).Select(candidate => candidate.Value),
+                FilterTextComparer);
+            _filterChecklistDraftTouched = true;
+            _filterChecklistCommitError = null;
+
+            if (_filterPopupAutoApply)
+                await QueueFilterPopupAutoApplyAsync();
+        }
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetFilterFieldSelected(string field, bool selected, IReadOnlyList<string>? values = null)
     {
         if (IsCurrentFilterPopupField(field))
         {
+            _filterChecklistDraftTouched = true;
             var draftCandidates = values ?? GetDistinctValues(field);
             if (selected)
             {
@@ -663,7 +818,17 @@ public partial class GridControl<TValue>
             }
 
             if (_filterPopupAutoApply)
+            {
+                if (!CanCommitCheckedFilterDraft(field))
+                {
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
                 CommitCheckedFilterDraft(field);
+                if (UsesItemsProvider)
+                    await ReloadItemsAsync();
+                await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
+            }
             return;
         }
 
@@ -698,19 +863,33 @@ public partial class GridControl<TValue>
         }
 
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
-    private void SetFilterValueChecked(string field, string value, bool selected)
+    private async Task SetFilterValueChecked(string field, string value, bool selected)
     {
         if (IsCurrentFilterPopupField(field))
         {
+            _filterChecklistDraftTouched = true;
             if (selected)
                 _filterCheckedDraft.Add(value);
             else
                 _filterCheckedDraft.Remove(value);
 
             if (_filterPopupAutoApply)
+            {
+                if (!CanCommitCheckedFilterDraft(field))
+                {
+                    await InvokeAsync(StateHasChanged);
+                    return;
+                }
                 CommitCheckedFilterDraft(field);
+                if (UsesItemsProvider)
+                    await ReloadItemsAsync();
+                await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
+            }
             return;
         }
 
@@ -736,6 +915,9 @@ public partial class GridControl<TValue>
         }
 
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private int GetSelectedFilterValueCount(string field)
@@ -750,6 +932,9 @@ public partial class GridControl<TValue>
 
         return all.Count(state.CheckedFilterValues.Contains);
     }
+
+    private bool ProviderFilterValuesHaveMore(string field) =>
+        _providerFilterValuesHaveMore.TryGetValue(field, out var hasMore) && hasMore;
 
     private string GetNumericFilterMinText(string field)
     {
@@ -785,7 +970,7 @@ public partial class GridControl<TValue>
             _numericFilterMaxText[field] = value;
     }
 
-    private void ApplyNumericBoundsFilter(string field)
+    private async Task ApplyNumericBoundsFilter(string field)
     {
         var minText = GetNumericFilterMinText(field);
         var maxText = GetNumericFilterMaxText(field);
@@ -813,6 +998,9 @@ public partial class GridControl<TValue>
             _numericFilterMaxText.Remove(field);
 
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private IReadOnlyList<NumericFilterRange> GetNumericFilterRanges(string field)
@@ -846,23 +1034,24 @@ public partial class GridControl<TValue>
         var stats = new NumericFilterStats();
         Dictionary<decimal, int>? exactCounts = new();
 
-        foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
+        foreach (var sample in EnumerateNumericFilterSamples(field))
         {
-            var raw = GetFilterRawValue(item, field);
-            if (!TryConvertToDecimal(raw, out var number))
+            if (!TryConvertToDecimal(sample.Value, out var number))
             {
-                stats.BlankCount++;
+                stats.BlankCount += sample.Count;
                 continue;
             }
 
-            stats.NumericCount++;
+            stats.NumericCount += sample.Count;
             stats.Min = !stats.Min.HasValue || number < stats.Min.Value ? number : stats.Min;
             stats.Max = !stats.Max.HasValue || number > stats.Max.Value ? number : stats.Max;
 
             if (exactCounts == null)
                 continue;
 
-            exactCounts[number] = exactCounts.TryGetValue(number, out var count) ? count + 1 : 1;
+            exactCounts[number] = exactCounts.TryGetValue(number, out var count)
+                ? count + sample.Count
+                : sample.Count;
             if (exactCounts.Count > maxExactNumericFilterValues)
                 exactCounts = null;
         }
@@ -886,13 +1075,13 @@ public partial class GridControl<TValue>
             return new[] { NumericFilterRange.Exact(min, numericCount, FormatNumericFilterDisplayValue(min)) };
 
         var counts = new int[bucketCount];
-        foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
+        foreach (var sample in EnumerateNumericFilterSamples(field))
         {
-            if (!TryConvertToDecimal(GetFilterRawValue(item, field), out var number))
+            if (!TryConvertToDecimal(sample.Value, out var number))
                 continue;
 
             var index = GetNumericBucketIndex(number, min, width, bucketCount);
-            counts[index]++;
+            counts[index] += sample.Count;
         }
 
         var ranges = new List<NumericFilterRange>(bucketCount);
@@ -913,6 +1102,29 @@ public partial class GridControl<TValue>
         }
 
         return ranges;
+    }
+
+    private IEnumerable<(object? Value, int Count)> EnumerateNumericFilterSamples(string field)
+    {
+        if (UsesItemsProvider)
+        {
+            if (!_providerFilterValueCandidates.TryGetValue(field, out var candidates))
+                yield break;
+
+            foreach (var candidate in candidates)
+            {
+                // FilterValues are distinct values. Count carries the provider's
+                // row frequency when available; one keeps older providers that
+                // only return Value/DisplayText useful for range generation.
+                var count = Math.Max(0, candidate.Count ?? 1);
+                if (count > 0)
+                    yield return (candidate.Value, count);
+            }
+            yield break;
+        }
+
+        foreach (var item in DataSource ?? Enumerable.Empty<TValue>())
+            yield return (GetFilterRawValue(item, field), 1);
     }
 
     private static int GetNumericBucketIndex(decimal number, decimal min, decimal width, int bucketCount)
@@ -959,7 +1171,7 @@ public partial class GridControl<TValue>
         return !state.UseNumericRangeFilter || state.CheckedNumericRangeKeys.Contains(range.Key);
     }
 
-    private void SetNumericRangeChecked(string field, NumericFilterRange range, bool selected)
+    private async Task SetNumericRangeChecked(string field, NumericFilterRange range, bool selected)
     {
         var state = GetColumnState(field);
         var ranges = GetNumericFilterRanges(field);
@@ -991,6 +1203,9 @@ public partial class GridControl<TValue>
         _numericFilterMinText.Remove(field);
         _numericFilterMaxText.Remove(field);
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private bool PassesNumericFilter(string field, object? raw, ColumnState state, IReadOnlyList<NumericFilterRange> ranges)

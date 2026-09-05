@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.JSInterop;
@@ -221,7 +222,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (dead != null)
             foreach (var key in dead)
+            {
                 _columnStates.Remove(key);
+                RemoveSortPriority(key);
+            }
     }
 
     // ── Injectables ─────────────────────────────────────────────────────
@@ -299,7 +303,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
            && (CellEditablePredicate == null || item == null || CellEditablePredicate(item, col.Field));
 
     [Parameter] public bool AllowSorting { get; set; }
-    [Parameter] public bool AllowMultiSorting { get; set; }
+    /// <summary>Allow multiple sort levels on sortable grids. Hosts can opt out explicitly.</summary>
+    [Parameter] public bool AllowMultiSorting { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; }
     /// <summary>
     /// When enabled, column filter popups render dual condition inputs (Condition 1 + AND/OR + Condition 2)
@@ -572,7 +577,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // Resolved visibility. The advanced toggle lives in the group drop area so
     // enabling it does not create a separate toolbar row above the grid.
     internal bool ShouldRenderToolbar =>
-        ShowGridToolbar ?? ((Toolbar is { Count: > 0 }) || ShowSearchBar);
+        ShowGridToolbar ?? ((Toolbar is { Count: > 0 }) || ShowSearchBar || GridToolBarTemplate != null);
 
     /// <summary>Initial group columns (field names).</summary>
     [Parameter] public List<string>? GroupColumns { get; set; }
@@ -1131,11 +1136,85 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // ── Internal State ───────────────────────────────────────────────────
 
     internal GridColumnsBase? _columnsContainer;
-    private readonly Dictionary<string, ColumnState> _columnStates = new();
+    // Column fields are identifiers throughout the grid (property lookup,
+    // filters, provider descriptors and layout state all treat them without
+    // regard to casing). Keep sort/filter state on the same contract so an
+    // imperative call using "name" cannot create a second state beside a
+    // declarative column whose field is "Name".
+    private readonly Dictionary<string, ColumnState> _columnStates =
+        new(StringComparer.OrdinalIgnoreCase);
+    // Sort priority follows the user's sort interaction order. ColumnState's
+    // insertion order is unrelated because filtering can create it first.
+    private readonly List<string> _sortPriorityFields = new();
     private readonly PageState _pageState = new();
-    private readonly HashSet<TValue> _selectedItems = new();
+    private HashSet<TValue>? _selectedItemsSet;
+    private HashSet<TValue> _selectedItems =>
+        _selectedItemsSet ??= new HashSet<TValue>(new GridItemIdentityComparer(this));
     private readonly HashSet<(int RowIndex, int CellIndex)> _selectedCells = new();
     private (int RowIndex, int CellIndex)? _activeCell;
+    private readonly string _accessibleGridDomId = $"fx-grid-{Guid.NewGuid():N}";
+
+    private string? GridActiveDescendantId =>
+        RowTemplate is null
+        && _activeCell is { RowIndex: >= 0 } active
+        && (active.CellIndex >= 0 || (ShowCheckboxColumn && active.CellIndex == RowSelectionCellIndex))
+            ? GetGridCellDomId(active.RowIndex, active.CellIndex)
+            : null;
+
+    private string GetGridCellDomId(int rowIndex, int cellIndex) =>
+        $"{_accessibleGridDomId}-r{rowIndex}-c{cellIndex}";
+
+    /// <summary>
+    /// Provider DTO instances are commonly recreated after a range leaves the
+    /// cache. When an ItemKeySelector is supplied, selection/expansion identity
+    /// follows that stable key instead of reference equality. Local DataSource
+    /// behavior remains exactly the TValue equality contract it used before.
+    /// </summary>
+    private sealed class GridItemIdentityComparer(GridControl<TValue> owner) : IEqualityComparer<TValue>
+    {
+        public bool Equals(TValue? left, TValue? right)
+        {
+            if (ReferenceEquals(left, right))
+                return true;
+            if (left is null || right is null)
+                return false;
+
+            if (owner.TryGetProviderIdentityKey(left, out var leftKey)
+                && owner.TryGetProviderIdentityKey(right, out var rightKey))
+            {
+                return EqualityComparer<object>.Default.Equals(leftKey, rightKey);
+            }
+
+            return EqualityComparer<TValue>.Default.Equals(left, right);
+        }
+
+        public int GetHashCode(TValue item)
+        {
+            if (item is not null && owner.TryGetProviderIdentityKey(item, out var key))
+                return key.GetHashCode();
+            return item is null ? 0 : EqualityComparer<TValue>.Default.GetHashCode(item);
+        }
+    }
+
+    private bool TryGetProviderIdentityKey(TValue item, out object key)
+    {
+        key = null!;
+        if (!UsesItemsProvider || ItemKeySelector is null)
+            return false;
+
+        try
+        {
+            var candidate = ItemKeySelector(item);
+            if (candidate is null)
+                return false;
+            key = candidate;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private async Task HandleHostFocusSeed(FocusEventArgs _)
     {
@@ -1405,6 +1484,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // subsequent edits reuse the module reference.
     private IJSObjectReference? _gridJsModule;
     private ElementReference _gridHostElement;
+    private ElementReference _gridFocusElement;
     private PivotControl<TValue>? _pivotControlRef;
     private DotNetObjectReference<GridControl<TValue>>? _gridDotNetRef;
     private bool _headerDragPreviewRegistered;
@@ -1455,7 +1535,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private BlankRowFilterMode _blankRowFilterDraft = BlankRowFilterMode.All;
     private bool _filterPopupAutoApply = true;
     private HashSet<string> _filterCheckedDraft = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, TextFilterOperator> _filterOperatorDraftsByField = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, TextFilterOperator> _filterOperatorDraftsByField = new(StringComparer.OrdinalIgnoreCase);
     private IEnumerable<TValue>? _lastFilterDataSource;
     private DataSourceSelectionSignature _lastFilterDataSourceSignature;
     private bool _filterDataSourceCaptured;
@@ -1529,7 +1609,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // ── Computed Properties ──────────────────────────────────────────────
 
     private bool ShowCheckboxColumn =>
-        SelectionSettingsRef?.CheckboxOnly == true ||
+        SelectionSettingsRef?.CheckboxOnly == true || SelectionSettingsRef?.ShowCheckboxes == true ||
         VisibleColumns.Any(c => c.Type == ColumnType.CheckBox && string.IsNullOrEmpty(c.Field));
 
     private bool ShowRowReorderColumn =>
@@ -1610,7 +1690,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         SyncPendingColumnStructure();
         EnsureAutoColumnWidthsBeforeRender();
+        UpdateFrozenColumnOffsets();
         PrepareBlazorServerOptimizationForRender();
+        BeginColumnVirtualizationRenderPass();
         BeginCellHandlerRenderPass();
         BeginRowHandlerRenderPass();
         _renderPassActive = true;
@@ -1650,19 +1732,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private IEnumerable<GridColumn> EffectiveColumns
-    {
-        get
-        {
-            var columns = _columnsContainer?.Columns;
-            if (columns is { Count: > 0 })
-                return columns;
-
-            return AvailableColumns?
-                .Where(c => !string.IsNullOrWhiteSpace(c.Field))
-                .Select(CreateTransientColumn)
-                ?? Enumerable.Empty<GridColumn>();
-        }
-    }
+        => GetEffectiveColumns();
 
     #pragma warning disable BL0005 // Transient non-rendered columns mirror host schema when data is empty.
     private static GridColumn CreateTransientColumn(ChooseColumnDescriptor column) => new()
@@ -1673,13 +1743,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     };
     #pragma warning restore BL0005
 
-    public IReadOnlyList<GridColumn> Columns =>
-        _columnsContainer?.Columns ?? Array.Empty<GridColumn>();
+    /// <summary>
+    /// Current declared column set, including metadata-generated columns when
+    /// <see cref="AutoGenerateColumns"/> is enabled. With auto-generation off,
+    /// this preserves the legacy contract of exposing the registered container.
+    /// </summary>
+    public IReadOnlyList<GridColumn> Columns => AutoGenerateColumns
+        ? GetEffectiveColumns()
+        : _columnsContainer?.Columns ?? Array.Empty<GridColumn>();
 
     private bool AllRowsSelected
     {
         get
         {
+            if (UsesProviderGrouping)
+            {
+                var loadedRows = GetVisibleRowItems();
+                return loadedRows.Count > 0 && loadedRows.All(item => _selectedItems.Contains(item));
+            }
+
             var rows = _renderPassActive ? GetPassFlatRows() : _passFlatRows;
             if (rows != null)
                 return rows.Count > 0 && rows.All(item => _selectedItems.Contains(item));
@@ -1700,7 +1782,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int TotalColumnCount =>
         VisibleColumns.Count()
         + (ShowCheckboxColumn ? 1 : 0)
-        + (HasDetailTemplate ? 1 : 0)
+        + (ShowDetailExpandColumn ? 1 : 0)
         + (ShowRowReorderColumn ? 1 : 0)
         + (ShowRowSelectorHandleColumn ? 1 : 0)
         + GroupedPlaceholderCount;
@@ -1727,8 +1809,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         get
         {
+            if (UsesProviderGrouping)
+                return _providerRootGroups.Count > 0
+                    || IsItemsProviderLoading
+                    || ItemsProviderLastError is not null;
+
             if (UsesItemsProvider)
-                return _providerTotalCount > 0 || _providerWindowItems.Count > 0;
+                return _providerTotalCount > 0
+                    || _providerWindowItems.Count > 0
+                    || IsItemsProviderLoading
+                    || ItemsProviderLastError is not null;
 
             if (AllowGrouping && _groupDescriptors.Count > 0)
             {
@@ -1759,10 +1849,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 var colField = kvp.Key;
                 var state = kvp.Value;
 
-                if (!string.IsNullOrEmpty(state.FilterValue)
-                    || !string.IsNullOrEmpty(state.SecondFilterValue)
-                    || state.FilterOperator == TextFilterOperator.IsEmpty
-                    || state.FilterOperator == TextFilterOperator.IsNotEmpty
+                var hasFirstCondition = !string.IsNullOrWhiteSpace(state.FilterValue)
+                    || IsValueOptionalFilterOperator(state.FilterOperator);
+                var hasSecondCondition = EnableAdvancedFilterPopup
+                    && (!string.IsNullOrWhiteSpace(state.SecondFilterValue)
+                        || IsValueOptionalFilterOperator(state.SecondFilterOperator));
+                if (hasFirstCondition
+                    || hasSecondCondition
                     || (EnableBlankRowFilter && state.BlankRowFilter != BlankRowFilterMode.All))
                 {
                     var filterVal = state.FilterValue ?? "";
@@ -1786,20 +1879,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 return false;
                         }
 
-                        if (!string.IsNullOrEmpty(filterVal) || op1 == TextFilterOperator.IsEmpty || op1 == TextFilterOperator.IsNotEmpty)
+                        if (hasFirstCondition && hasSecondCondition)
                         {
                             bool cond1 = PassesDisplayAwareTextFilter(rawVal, displayText, filterVal, op1);
-                            if (EnableAdvancedFilterPopup && (!string.IsNullOrEmpty(filterVal2) || op2 == TextFilterOperator.IsEmpty || op2 == TextFilterOperator.IsNotEmpty))
-                            {
-                                bool cond2 = PassesDisplayAwareTextFilter(rawVal, displayText, filterVal2, op2);
-                                bool overall = logic == LogicalFilterOperator.And ? (cond1 && cond2) : (cond1 || cond2);
-                                if (!overall) return false;
-                            }
-                            else
-                            {
-                                if (!cond1) return false;
-                            }
+                            bool cond2 = PassesDisplayAwareTextFilter(rawVal, displayText, filterVal2, op2);
+                            bool overall = logic == LogicalFilterOperator.And ? (cond1 && cond2) : (cond1 || cond2);
+                            if (!overall) return false;
                         }
+                        else if (hasFirstCondition
+                            && !PassesDisplayAwareTextFilter(rawVal, displayText, filterVal, op1))
+                            return false;
+                        else if (hasSecondCondition
+                            && !PassesDisplayAwareTextFilter(rawVal, displayText, filterVal2, op2))
+                            return false;
                         return true;
                     });
                 }
@@ -1810,7 +1902,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     data = data.Where(item =>
                     {
                         var val = GetFilterRawValue(item, colField)?.ToString() ?? "";
-                        return checkedVals.Contains(val);
+                        return checkedVals.Any(checkedValue =>
+                            string.Equals(checkedValue, val, FilterTextComparison));
                     });
                 }
 
@@ -1830,7 +1923,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             // Apply in-header and advanced column filters.
-            if (_simpleColumnFilters.Count > 0 || _columnAdvancedFilters.Count > 0 || _columnCheckboxFilters.Count > 0)
+            if (_simpleColumnFilters.Count > 0
+                || _columnAdvancedFilters.Values.Any(IsAdvancedFilterCriteriaActive)
+                || _columnCheckboxFilters.Count > 0)
             {
                 data = data.Where(PassesColumnFilters);
             }
@@ -1838,12 +1933,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // Apply global search
             if (!string.IsNullOrEmpty(SearchText))
             {
-                var searchLower = SearchText.ToLower();
+                var searchValue = SearchText;
                 data = data.Where(item =>
                     VisibleColumns.Any(col =>
                     {
                         var val = GetColumnSearchText(item, col);
-                        return val.Contains(searchLower, StringComparison.OrdinalIgnoreCase);
+                        return val.Contains(searchValue, FilterTextComparison);
                     }));
             }
 
@@ -1861,22 +1956,57 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 return _providerWindowItems;
 
             var data = FilteredData;
-            var sortedCol = _columnStates.FirstOrDefault(kvp => kvp.Value.SortDirection.HasValue);
-            if (sortedCol.Key != null)
+            var sorts = GetActiveSortDescriptors();
+            if (sorts.Length > 0)
             {
-                var sortField = sortedCol.Key;
                 var rows = data.ToList();
                 var regularRows = rows.Where(item => !IsPinnedTrailingNewRow(item));
                 var pinnedRows = rows.Where(IsPinnedTrailingNewRow);
 
-                if (sortedCol.Value.SortDirection == SortDirection.Ascending)
-                    data = regularRows.OrderBy(item => GetSortKeyValue(item, sortField), GridSortKeyComparer.Instance).Concat(pinnedRows);
-                else
-                    data = regularRows.OrderByDescending(item => GetSortKeyValue(item, sortField), GridSortKeyComparer.Instance).Concat(pinnedRows);
+                // Descriptor order is the visible sort-priority order and is
+                // also sent to ItemsProvider. OrderBy establishes priority 1;
+                // every later descriptor must refine ties via ThenBy.
+                data = GridLocalSortPipeline.Apply(
+                        regularRows,
+                        sorts,
+                        static (item, sortField) => GetSortKeyValue(item, sortField),
+                        GridSortKeyComparer.Instance)
+                    .Concat(pinnedRows);
             }
             return data;
         }
     }
+
+    private GridSortDescriptor[] GetActiveSortDescriptors()
+    {
+        _sortPriorityFields.RemoveAll(field =>
+            !_columnStates.TryGetValue(field, out var state) || !state.SortDirection.HasValue);
+
+        // Compatibility for state set before this ordered list existed: append
+        // any active descriptor that has not yet been observed.
+        foreach (var pair in _columnStates)
+        {
+            if (pair.Value.SortDirection.HasValue
+                && !_sortPriorityFields.Contains(pair.Key, StringComparer.OrdinalIgnoreCase))
+            {
+                _sortPriorityFields.Add(pair.Key);
+            }
+        }
+
+        return _sortPriorityFields
+            .Select(field => new GridSortDescriptor(field, _columnStates[field].SortDirection!.Value))
+            .ToArray();
+    }
+
+    private void EnsureSortPriority(string field)
+    {
+        if (!_sortPriorityFields.Contains(field, StringComparer.OrdinalIgnoreCase))
+            _sortPriorityFields.Add(field);
+    }
+
+    private void RemoveSortPriority(string field) =>
+        _sortPriorityFields.RemoveAll(candidate =>
+            string.Equals(candidate, field, StringComparison.OrdinalIgnoreCase));
 
     private static object? GetSortKeyValue(object? item, string field)
         => NormalizeSortValue(GetPropertyValue(item, field));
@@ -1886,7 +2016,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (string.IsNullOrWhiteSpace(field))
             return null;
 
-        return Columns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
+        return EffectiveColumns.FirstOrDefault(c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
     }
 
     private static object? NormalizeSortValue(object? value)
@@ -2136,6 +2266,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (_groupDescriptors.Count == 0)
             return _passGroups = new List<GroupResult<TValue>>();
+
+        if (UsesProviderGrouping)
+        {
+            _pageState.TotalRecords = Math.Max(0, _providerTotalCount);
+            return _passGroups = _providerRootGroups.ToList();
+        }
 
         var data = GetPassSortedRows();
         _pageState.TotalRecords = data.Count;
@@ -2421,17 +2557,39 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// hardcoded 999) makes the browser split the table width across that many
     /// phantom columns — every real cell collapses to ~0px wide.</summary>
     private int WindowSpacerColspan =>
-        Math.Max(1, VisibleColumns.Count()
-            + (ShowCheckboxColumn ? 1 : 0)
-            + (HasDetailTemplate ? 1 : 0)
-            + (ShowRowReorderColumn ? 1 : 0)
-            + (ShowRowSelectorHandleColumn ? 1 : 0));
+        Math.Max(1, IsColumnVirtualizationActive
+            ? RenderedColumnSlotCount
+            : VisibleColumns.Count()
+                + (ShowCheckboxColumn ? 1 : 0)
+                + (ShowDetailExpandColumn ? 1 : 0)
+                + (ShowRowReorderColumn ? 1 : 0)
+                + (ShowRowSelectorHandleColumn ? 1 : 0));
+
+    /// <summary>
+    /// The count-based spacer algorithm is exact only when every data item owns
+    /// one row with one stable pitch. These features can add rows, change their
+    /// height, or let host markup determine it, so local grids fall back to the
+    /// ordinary render-all path instead of risking an incorrect scroll extent.
+    /// </summary>
+    private bool HasDeterministicRowWindowPitch =>
+        RowTemplate is null
+        && DataLayoutMode == GridDataLayoutMode.Columns
+        && AdaptiveMode == GridAdaptiveMode.None
+        && !HasDetailTemplate
+        && RowHeightSelector is null
+        && !AllowRowResizing
+        && _runtimeRowHeights.Count == 0
+        && !(EditSettingsRef is { Mode: EditMode.Inline } inlineEdit
+            && (inlineEdit.AllowEditing || inlineEdit.AllowAdding));
 
     private bool UseRowWindowing =>
         !IsPagingActive
         && !string.IsNullOrWhiteSpace(Height)
         && (UsesItemsProvider || MeetsRowWindowingThreshold)
-        && (UsesItemsProvider || !(AllowGrouping && _groupDescriptors.Count > 0))
+        && (UsesItemsProvider
+            ? !UsesProviderGrouping
+            : !(AllowGrouping && _groupDescriptors.Count > 0))
+        && (UsesItemsProvider || HasDeterministicRowWindowPitch)
         && !_pivotMode
         && !(ShowAsChart && ChartValueFields is { Count: > 0 });
 
@@ -2458,6 +2616,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         && !string.IsNullOrWhiteSpace(Height)
         && MeetsRowWindowingThreshold
         && AllowGrouping && _groupDescriptors.Count > 0
+        && HasDeterministicRowWindowPitch
         && !_pivotMode
         && !(ShowAsChart && ChartValueFields is { Count: > 0 });
 
@@ -3375,6 +3534,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     public void ToggleExpandCollapseAll()
     {
+        if (UsesProviderGrouping)
+        {
+            var shouldExpand = _providerRootGroups.Count > 0
+                && _providerRootGroups.All(group => group.IsCollapsed);
+            _expandAllGroups = shouldExpand;
+            _allGroupsCollapsed = !shouldExpand;
+            ApplyGroupCollapseState(_providerRootGroups, collapsed: !shouldExpand);
+            if (shouldExpand)
+                _ = ExpandAllProviderGroupsAsync(_providerRootGroups);
+            StateHasChanged();
+            _ = NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
+            return;
+        }
+
         if (_allGroupsCollapsed)
         {
             _expandAllGroups = true;
@@ -3387,13 +3560,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _allGroupsCollapsed = true;
         }
         StateHasChanged();
+        _ = NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
     }
 
-    public Task CollapseAllGroupAsync()
+    public async Task CollapseAllGroupAsync()
     {
         _allGroupsCollapsed = true;
         _expandAllGroups = false;
-        return InvokeAsync(StateHasChanged);
+        if (UsesProviderGrouping)
+            ApplyGroupCollapseState(_providerRootGroups, collapsed: true);
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
     }
 
     // ── Lifecycle ────────────────────────────────────────────────────────
@@ -3579,7 +3756,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 EnsureFilterPopupDragRegisteredAsync(),
                 EnsureGridMetricsMeasuredAsync(),
                 EnsureActiveCellScrollSyncRegisteredAsync(),
-                EnsureClientNavigationPreviewRegisteredAsync());
+                EnsureClientNavigationPreviewRegisteredAsync(),
+                EnsureGridColumnWindowRegisteredAsync());
         }
 
         // MUST precede EnsureGridWindowScrollRegisteredAsync: registering the scroll
@@ -3593,7 +3771,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // PersistenceKey is supplied, pull the saved settings.
         if (!string.IsNullOrEmpty(PersistenceKey)
             && PersistenceKey != _gridSettingsLoadedKey
-            && _columnsContainer != null
+            && (_columnsContainer != null || AutoGenerateColumns)
             && Columns.Count > 0
             && GridSettingsStore != null)
         {
@@ -4345,20 +4523,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         if (settings.Widths != null)
         {
-            foreach (var col in Columns)
+            foreach (var col in EffectiveColumns)
                 if (settings.Widths.TryGetValue(col.Field, out var w))
                     col.RuntimeWidth = w;
         }
-        if (settings.ColumnOrder is { Count: > 0 } && _columnsContainer != null)
+        if (settings.FrozenPositions != null)
         {
-            _columnsContainer.ReorderColumns(settings.ColumnOrder);
+            foreach (var col in EffectiveColumns)
+                if (settings.FrozenPositions.TryGetValue(col.Field, out var position))
+                    col.SetRuntimeFrozenPosition(position);
         }
+        if (settings.ColumnOrder is { Count: > 0 })
+            ApplyEffectiveColumnOrder(settings.ColumnOrder);
         if (settings.GroupColumns != null)
         {
             _groupDescriptors.Clear();
             foreach (var f in settings.GroupColumns)
             {
-                var col = Columns.FirstOrDefault(c => c.Field == f);
+                var col = EffectiveColumns.FirstOrDefault(c =>
+                    string.Equals(c.Field, f, StringComparison.OrdinalIgnoreCase));
                 if (col == null) continue;
                 _groupDescriptors.Add(new GroupDescriptor
                 {
@@ -4370,7 +4553,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     }
 
-    private string ComputeColumnSignature() => string.Join("|", Columns.Select(c => c.Field));
+    private string ComputeColumnSignature() => string.Join("|", EffectiveColumns.Select(c => c.Field));
 
     /// <summary>Re-applies the cached saved settings whenever the host
     /// rebuilds the columns (a fresh <c>&lt;GridColumnsBase&gt;</c> keyed on a
@@ -4381,7 +4564,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// last-saved order/widths would be silently lost mid-session.</summary>
     private void ReapplyAfterRebuildIfNeeded()
     {
-        if (!_gridSettingsLoaded || _lastAppliedSettings == null || Columns.Count == 0)
+        if (!_gridSettingsLoaded || _lastAppliedSettings == null || !EffectiveColumns.Any())
             return;
         var sig = ComputeColumnSignature();
         if (sig == _lastAppliedColumnSignature) return;
@@ -4431,8 +4614,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             Visibility      = visibility,
             // Carry forward any existing user state for fields the dialog
             // didn't touch — widths, header overrides, group columns.
-            Widths          = Columns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
+            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
                                      .ToDictionary(c => c.Field, c => c.RuntimeWidth!.Value),
+            FrozenPositions = EffectiveColumns.Where(c => !string.IsNullOrEmpty(c.Field))
+                                     .ToDictionary(c => c.Field, c => c.EffectiveIsFrozen
+                                         ? (FrozenColumnPosition?)c.EffectiveFrozenPosition
+                                         : null),
             HeaderOverrides = _headerOverrides.Count > 0 ? new Dictionary<string, string>(_headerOverrides) : null,
             GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList()
         };
@@ -4449,11 +4636,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         return new GridSettings
         {
-            ColumnOrder     = Columns.Select(c => c.Field).Where(f => !string.IsNullOrEmpty(f)).ToList(),
+            ColumnOrder     = EffectiveColumns.Select(c => c.Field).Where(f => !string.IsNullOrEmpty(f)).ToList(),
             Visibility      = _visibilityOverrides.Count > 0 ? new Dictionary<string, bool>(_visibilityOverrides) : null,
             HeaderOverrides = _headerOverrides.Count > 0 ? new Dictionary<string, string>(_headerOverrides) : null,
-            Widths          = Columns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
+            Widths          = EffectiveColumns.Where(c => c.RuntimeWidth.HasValue && !string.IsNullOrEmpty(c.Field))
                                      .ToDictionary(c => c.Field, c => c.RuntimeWidth!.Value),
+            FrozenPositions = EffectiveColumns.Where(c => !string.IsNullOrEmpty(c.Field))
+                                     .ToDictionary(c => c.Field, c => c.EffectiveIsFrozen
+                                         ? (FrozenColumnPosition?)c.EffectiveFrozenPosition
+                                         : null),
             GroupColumns    = _groupDescriptors.Select(g => g.Field).ToList()
         };
     }
@@ -4463,10 +4654,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// other than <see cref="ChooseColumnsOk"/> (which uses
     /// <see cref="OnColumnsChosen"/> with the dialog snapshot instead, since
     /// the host's rebuild is async at that point).</summary>
-    private async Task FireLayoutChangedAsync(GridSettings? snapshot = null)
+    private async Task FireLayoutChangedAsync(
+        GridSettings? snapshot = null,
+        GridStateChangeKind changeKind = GridStateChangeKind.Columns)
     {
-        if (!OnLayoutChanged.HasDelegate) return;
-        await OnLayoutChanged.InvokeAsync(snapshot ?? BuildCurrentSnapshot());
+        if (OnLayoutChanged.HasDelegate)
+            await OnLayoutChanged.InvokeAsync(snapshot ?? BuildCurrentSnapshot());
+        await NotifyGridStateChangedAsync(changeKind);
     }
 
     private async Task SaveGridSettingsAsync()
@@ -4818,17 +5012,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!AllowMultiSorting)
         {
             foreach (var kvp in _columnStates)
-                if (kvp.Key != col.Field)
+                if (!string.Equals(kvp.Key, col.Field, StringComparison.OrdinalIgnoreCase))
                     kvp.Value.SortDirection = null;
+            _sortPriorityFields.RemoveAll(field =>
+                !string.Equals(field, col.Field, StringComparison.OrdinalIgnoreCase));
         }
 
         // Toggle
         if (!state.SortDirection.HasValue)
+        {
             state.SortDirection = SortDirection.Ascending;
+            EnsureSortPriority(col.Field);
+        }
         else if (state.SortDirection == SortDirection.Ascending)
             state.SortDirection = SortDirection.Descending;
         else
+        {
             state.SortDirection = null;
+            RemoveSortPriority(col.Field);
+        }
 
         _pageState.CurrentPage = 1;
 
@@ -4840,11 +5042,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _pendingFirstRowSelection = false;
         await SelectFirstVisibleRowAsync(force: true);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Sorting);
     }
 
     // ── Filtering ────────────────────────────────────────────────────────
 
-    private async Task ApplyFilter(string field, string? value, TextFilterOperator? filterOperator = null)
+    private async Task<bool> ApplyFilter(
+        string field,
+        string? value,
+        TextFilterOperator? filterOperator = null,
+        bool finalizeUpdate = true)
     {
         var state = GetColumnState(field);
 
@@ -4852,7 +5059,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var args = new FilterEventArgs { Field = field, Value = value };
             await EventsRef.Filtering.InvokeAsync(args);
-            if (args.Cancel) return;
+            if (args.Cancel) return false;
         }
 
         state.FilterValue = string.IsNullOrWhiteSpace(value) ? null : value;
@@ -4864,14 +5071,21 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         state.UseNumericBoundsFilter = false;
         _pageState.CurrentPage = 1;
 
-        if (EventsRef?.Filtered.HasDelegate == true)
+        if (finalizeUpdate && EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = value });
 
-        if (UsesItemsProvider)
-            await ReloadItemsAsync();
+        if (finalizeUpdate)
+        {
+            if (UsesItemsProvider)
+                await ReloadItemsAsync();
+
+            await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
+        }
+
+        return true;
     }
 
-    private void ToggleFilterPopup(string field, MouseEventArgs e)
+    private async Task ToggleFilterPopup(string field, MouseEventArgs e)
     {
         if (_filterPopupField == field)
         {
@@ -4883,32 +5097,54 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         SeedFilterPopupDraft(field);
         _filterPopupX = e.ClientX;
         _filterPopupY = e.ClientY;
+        await InvokeAsync(StateHasChanged);
+        await LoadProviderFilterValuesAsync(field);
     }
 
     private void CloseFilterPopup()
     {
+        CancelProviderFilterValuesLoad();
         _filterPopupField = null;
+        _filterChecklistSearchDraft = string.Empty;
+        _filterChecklistDraftTouched = false;
+        _filterChecklistCommitError = null;
     }
 
-    private void ToggleCheckboxFilter(string field, string value)
+    private Task ToggleCheckboxFilter(string field, string value)
     {
         var selected = !IsFilterValueChecked(field, value);
-        SetFilterValueChecked(field, value, selected);
+        return SetFilterValueChecked(field, value, selected);
     }
 
     private void ClearFilter(string field)
     {
+        if (_filterRowDebounce.Remove(field, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+
         var state = GetColumnState(field);
         ResetColumnFilterState(state);
+        _simpleColumnFilters.Remove(field);
+        _filterRowDrafts.Remove(field);
+        _filterRowOperators.Remove(field);
+        _columnAdvancedFilters.Remove(field);
+        _columnCheckboxFilters.Remove(field);
         ResetFilterPopupDraft(field);
         _pageState.CurrentPage = 1;
+        ClearPassViewMemos();
+        InvalidateBlazorServerOptimizationCaches();
     }
 
-    private void ClearFilterFromPopup(string field)
+    private async Task ClearFilterFromPopup(string field)
     {
+        ClearFilter(field);
         ResetFilterPopupDraft(field);
-        if (_filterPopupAutoApply)
-            ClearFilter(field);
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     /// <summary>HHM-871 — the in-header clear affordance: the "filter applied"
@@ -4916,11 +5152,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// the popup draft) and closes the popup when it is showing this field.
     /// Component-receiver click, so the implicit render recomputes the view —
     /// the same pipeline as the popup's Clear Filter button.</summary>
-    private void ClearFilterFromHeader(string field)
+    private async Task ClearFilterFromHeader(string field)
     {
         ClearFilter(field);
         if (string.Equals(_filterPopupField, field, StringComparison.Ordinal))
-            _filterPopupField = null;
+            CloseFilterPopup();
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private void ResetFilterPopupDraft(string field)
@@ -4930,13 +5170,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (string.Equals(_filterPopupField, field, StringComparison.Ordinal))
         {
             var state = GetColumnState(field);
+            var column = FindColumnByField(field);
+            var defaultOperator = column == null
+                ? TextFilterOperator.Contains
+                : GetDefaultFilterOperator(column);
             _filterTextDraft = "";
             _secondFilterTextDraft = "";
-            _filterOperatorDraft = state.FilterOperator;
-            _secondFilterOperatorDraft = state.SecondFilterOperator;
+            _filterOperatorDraft = defaultOperator;
+            _secondFilterOperatorDraft = defaultOperator;
             _filterLogicalOperatorDraft = state.LogicalFilterOperator;
             _blankRowFilterDraft = BlankRowFilterMode.All;
-            _filterCheckedDraft = new HashSet<string>(GetDistinctValues(field), StringComparer.Ordinal);
+            _filterCheckedDraft = new HashSet<string>(GetDistinctValues(field), FilterTextComparer);
+            _filterChecklistSearchDraft = string.Empty;
+            _filterChecklistDraftTouched = false;
+            _filterChecklistCommitError = null;
         }
     }
 
@@ -4974,15 +5221,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _blankRowFilterDraft = BlankRowFilterMode.All;
         _filterOperatorDraftsByField.Clear();
         _filterCheckedDraft.Clear();
+        _filterChecklistSearchDraft = string.Empty;
+        _filterChecklistDraftTouched = false;
+        _filterChecklistCommitError = null;
+        _simpleColumnFilters.Clear();
+        foreach (var pending in _filterRowDebounce.Values)
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+        _filterRowDebounce.Clear();
+        _filterRowDrafts.Clear();
+        _filterRowOperators.Clear();
+        _columnAdvancedFilters.Clear();
+        _columnCheckboxFilters.Clear();
+        _restoredProviderNumericRanges.Clear();
         _pageState.CurrentPage = 1;
     }
 
     private List<string> GetDistinctValues(string field)
     {
-        return (DataSource ?? Enumerable.Empty<TValue>())
-            .Select(item => GetFilterRawValue(item, field)?.ToString() ?? "")
-            .Distinct()
-            .OrderBy(v => v)
+        return GetDistinctFilterValueCandidates(field)
+            .Select(candidate => candidate.Value)
             .ToList();
     }
 
@@ -5009,7 +5269,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            await Task.Delay(300, token);
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, token);
             if (_pendingSearchText != null)
                 SearchText = _pendingSearchText;
             _pageState.CurrentPage = 1;
@@ -5017,6 +5278,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await ReloadItemsAsync();
             else
                 await InvokeAsync(StateHasChanged);
+            await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
         }
         catch (TaskCanceledException) { }
     }
@@ -5024,7 +5286,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>True when any column filter or the expression filter is applied —
     /// gates the group-bar Clear-all-filters button.</summary>
     private bool HasAnyActiveFilter =>
-        _expressionFilterRoot != null || _columnStates.Values.Any(state => state.FilterActive);
+        _expressionFilterRoot != null
+        || _columnStates.Values.Any(state => state.FilterActive)
+        || _simpleColumnFilters.Count > 0
+        || _columnAdvancedFilters.Values.Any(IsAdvancedFilterCriteriaActive)
+        || _columnCheckboxFilters.Count > 0;
 
     // ── Paging ───────────────────────────────────────────────────────────
 
@@ -5059,6 +5325,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (EventsRef?.PageChanged.HasDelegate == true)
             await EventsRef.PageChanged.InvokeAsync(new PageChangeEventArgs { PreviousPage = prev, CurrentPage = page });
+
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
     }
 
     private void HandlePageSizeChange(ChangeEventArgs e)
@@ -5067,18 +5335,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             _pageState.PageSize = size;
             _pageState.CurrentPage = 1;
+            _ = NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
         }
     }
 
     private IEnumerable<PageSizeChoice> PageSizeChoices =>
         ResolvedPageSizes.Select(size => new PageSizeChoice(size, size <= 0 ? "All" : $"{size} / page"));
 
-    private Task HandlePageSizeValueChanged(int size)
+    private async Task HandlePageSizeValueChanged(int size)
     {
         _pageState.PageSize = size;
         _pageState.CurrentPage = 1;
-
-        return Task.CompletedTask;
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
     }
 
     private sealed record PageSizeChoice(int Value, string Text);
@@ -6283,11 +6551,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         else
             GridServerOptimizationDiagnostics.ClientNavigationSilentSyncs++;
 
-        var rows = GetKeyboardNavigationRowItems();
-        if (absoluteRowIndex < 0 || absoluteRowIndex >= rows.Count)
+        // Match the body renderer: local indices are relative to the current
+        // sorted/filtered page; provider indices include the window offset.
+        var rows = GetPassFlatRows();
+        var displayRowIndex = absoluteRowIndex - (UsesItemsProvider ? _providerWindowStart : 0);
+        if (displayRowIndex < 0 || displayRowIndex >= rows.Count)
             return false;
+        var item = rows[displayRowIndex];
 
         var handleOffset = (ShowRowReorderColumn ? 1 : 0) + (ShowRowSelectorHandleColumn ? 1 : 0);
+        if (ShowCheckboxColumn && domCellIndex == handleOffset)
+            return await ActivateRowSelectionCellAsync(item,
+                ResolveRowIndex(item, absoluteRowIndex), requestRender);
+        handleOffset += (ShowCheckboxColumn ? 1 : 0) + (ShowDetailExpandColumn ? 1 : 0)
+            + GroupedPlaceholderCount;
         var columns = VisibleColumns.ToList();
         var cellIndex = domCellIndex - handleOffset;
         if (cellIndex < 0 || cellIndex >= columns.Count)
@@ -6297,7 +6574,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!IsKeyboardNavigationTargetColumn(column))
             return false;
 
-        var item = rows[absoluteRowIndex];
         // Mid-hold catch-up syncs pass requestRender:false — the server adopts
         // the position silently and only the settle sync paints, so checkpoint
         // renders can never repaint a row behind the client cursor.
@@ -7164,7 +7440,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            await _gridHostElement.FocusAsync(preventScroll: true);
+            // Keyboard focus belongs on the element that exposes role="grid"
+            // and its accessible name/counts. The outer host remains the JS
+            // lookup root for scrolling, menus and drag behavior.
+            await _gridFocusElement.FocusAsync(preventScroll: true);
             return true;
         }
         catch (InvalidOperationException)
@@ -7257,7 +7536,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void SetActiveCell(int rowIndex, int cellIndex, bool preservePointerFill = false)
     {
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
-        _activeCell = col != null ? (rowIndex, cellIndex) : null;
+        _activeCell = col != null || (ShowCheckboxColumn && cellIndex == RowSelectionCellIndex)
+            ? (rowIndex, cellIndex) : null;
         if (!preservePointerFill)
             _pointerFillCell = null;
     }
@@ -7367,6 +7647,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (TryResolveBlazorServerRowIndex(item, fallbackIndex, out var optimizedIndex))
             return optimizedIndex;
 
+        if (UsesProviderGrouping)
+        {
+            var visibleRows = GetVisibleRowItems();
+            var visibleIndex = visibleRows.FindIndex(candidate =>
+                EqualityComparer<TValue>.Default.Equals(candidate, item));
+            return visibleIndex >= 0 ? visibleIndex : fallbackIndex;
+        }
+
+        if (UsesItemsProvider)
+        {
+            for (var localIndex = 0; localIndex < _providerWindowItems.Count; localIndex++)
+            {
+                if (EqualityComparer<TValue>.Default.Equals(_providerWindowItems[localIndex], item))
+                    return _providerWindowStart + localIndex;
+            }
+
+            return fallbackIndex;
+        }
+
         if (DataSource is IList<TValue> list)
         {
             if (_renderPassActive && item is not null)
@@ -7380,6 +7679,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var idx = list.IndexOf(item);
             if (idx >= 0)
                 return idx;
+        }
+
+        if (DataSource != null)
+        {
+            var visibleRows = GetVisibleRowItems();
+            var visibleIndex = visibleRows.FindIndex(candidate =>
+                EqualityComparer<TValue>.Default.Equals(candidate, item));
+            if (visibleIndex >= 0)
+                return visibleIndex;
         }
 
         return fallbackIndex;
@@ -7413,6 +7721,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (UsesItemsProvider)
         {
+            if (UsesProviderGrouping)
+            {
+                var loadedRows = GetVisibleRowItems();
+                return rowIndex < loadedRows.Count ? loadedRows[rowIndex] : default;
+            }
+
             var localIndex = rowIndex - _providerWindowStart;
             return localIndex >= 0 && localIndex < _providerWindowItems.Count
                 ? _providerWindowItems[localIndex]
@@ -7455,7 +7769,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     result.AddRange(g.Items);
             }
         }
-        Walk(GroupedData);
+        Walk(UsesProviderGrouping ? _providerRootGroups : GroupedData);
         return result;
     }
 
@@ -7473,7 +7787,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return rows;
     }
 
-    private async Task ToggleRowSelection(TValue item, int rowIndex)
+    private async Task ToggleRowSelection(TValue item, int rowIndex, GridSelectionChangeSource source = GridSelectionChangeSource.Pointer)
     {
         _focusedGroupPath = null;
 
@@ -7497,7 +7811,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (EventsRef?.RowSelected.HasDelegate == true)
             await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex });
 
-        await NotifySelectionChangedAsync(GridSelectionChangeSource.Pointer);
+        await NotifySelectionChangedAsync(source);
     }
 
     private void ToggleSelectAll(ChangeEventArgs e)
@@ -7515,7 +7829,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (AllRowsSelected)
             _selectedItems.Clear();
         else
-            foreach (var item in PagedData)
+            foreach (var item in UsesProviderGrouping ? GetVisibleRowItems() : PagedData)
                 _selectedItems.Add(item);
         _ = NotifySelectionChangedAsync(GridSelectionChangeSource.Programmatic);
     }
@@ -7534,6 +7848,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _editItem = CloneItem(item);
         _editingRowIndex = rowIndex;
         _isEditing = true;
+        InitializeRowValidationContext();
     }
 
     private void StartAdd()
@@ -7541,11 +7856,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _editItem = CreateNewItem();
         _editingRowIndex = -1;
         _isEditing = true;
+        InitializeRowValidationContext();
     }
 
     private async Task SaveEdit()
     {
         if (_editItem == null) return;
+
+        if (!ValidateRowEdit())
+        {
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
 
         if (_editingRowIndex >= 0)
         {
@@ -7600,7 +7922,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await EventsRef.RowCreated.InvokeAsync(new RowEditEventArgs<TValue> { Data = _editItem });
         }
 
+        ClearPassViewMemos();
+        InvalidateBlazorServerOptimizationCaches();
         _isEditing = false;
+        DisposeRowValidationContext();
         _editItem = default;
         _editingRowIndex = -1;
     }
@@ -7608,31 +7933,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void CancelEdit()
     {
         _isEditing = false;
+        DisposeRowValidationContext();
         _editItem = default;
         _editingRowIndex = -1;
     }
 
-    private async Task DeleteRow(TValue item, int rowIndex)
-    {
-        if (EditSettingsRef?.ShowConfirmDialog == true)
-        {
-            // In a real implementation, show a confirmation dialog.
-        }
-
-        if (EventsRef?.RowDeleting.HasDelegate == true)
-        {
-            var args = new RowEditEventArgs<TValue> { Data = item, RowIndex = rowIndex };
-            await EventsRef.RowDeleting.InvokeAsync(args);
-            if (args.Cancel) return;
-        }
-
-        var list = DataSource as IList<TValue>;
-        list?.Remove(item);
-        _selectedItems.Remove(item);
-
-        if (EventsRef?.RowDeleted.HasDelegate == true)
-            await EventsRef.RowDeleted.InvokeAsync(new RowEditEventArgs<TValue> { Data = item, RowIndex = rowIndex });
-    }
+    private Task DeleteRow(TValue item, int rowIndex) => RequestRowDeletionAsync([(item, rowIndex)]);
 
     private async Task HandleCommand(string type, TValue item, int rowIndex)
     {
@@ -8779,6 +9085,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // ValidateEdit parity); the primary already passed TryStartBatchEdit.
         targets.RemoveAll(t => !IsCellEditableForItem(t, batchEditColumn));
 
+        if (_batchEditDirty)
+        {
+            foreach (var target in targets)
+            {
+                if (!TryValidateBatchProperty(target, field, newValue, out var batchValidationMessage))
+                {
+                    await RejectBatchValidationAsync(primary, field, batchValidationMessage);
+                    return;
+                }
+            }
+        }
+
         var shouldEnsureTrailingNewRow = false;
         if (cellMassEditTargets is { Count: > 1 } && EventsRef?.OnTypeAheadCommit.HasDelegate == true)
         {
@@ -9616,6 +9934,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         bool backwards,
         bool allowRowWrap)
     {
+        if (ShowCheckboxColumn && backwards && currentCellIndex == 0)
+        {
+            await ActivateRowSelectionCellAsync(currentItem, currentRowIndex);
+            return;
+        }
+
+        if (ShowCheckboxColumn && !backwards && allowRowWrap
+            && currentCellIndex == FindLastKeyboardNavigationTargetColumnIndex(VisibleColumns.ToList()))
+        {
+            var rows = GetKeyboardNavigationRowItems();
+            var displayIndex = ResolveKeyboardDisplayRowIndex(rows, currentItem, currentRowIndex);
+            if (displayIndex >= 0 && displayIndex + 1 < rows.Count)
+            {
+                var nextItem = rows[displayIndex + 1];
+                await ActivateRowSelectionCellAsync(nextItem, ResolveRowIndex(nextItem, displayIndex + 1));
+                return;
+            }
+        }
+
         var cursorItem = currentItem;
         var cursorRowIndex = currentRowIndex;
         var cursorCellIndex = currentCellIndex;
@@ -10000,9 +10337,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private bool IsKeyboardNavigationTargetColumn(GridColumn column)
     {
-        return column.Visible
-            && !column.IsPrimaryKey
-            && !string.IsNullOrWhiteSpace(column.Field);
+        // Read-only/primary-key columns remain navigable; edit-entry guards
+        // separately prevent them from being changed.
+        return column.Visible && !string.IsNullOrWhiteSpace(column.Field);
     }
 
     private bool IsKeyboardEditTargetColumn(GridColumn column)
@@ -10319,8 +10656,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             case "delete":
                 if (_selectedItems.Count > 0)
                 {
-                    foreach (var sel in _selectedItems.ToList())
-                        await DeleteRow(sel, 0);
+                    await RequestRowDeletionAsync(_selectedItems
+                        .Select(sel => (sel, ResolveRowIndex(sel, -1))).ToArray());
                 }
                 break;
             case "csv":
@@ -10352,6 +10689,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (suppressEnterReopen)
             return;
 
+        if (await TryHandleCustomKeyboardShortcutAsync(e))
+            return;
+
         // While the batch editor owns the keyboard (mounted, focus applied),
         // plain typing keys bubbling up from its input need no grid work.
         if (_batchEditItem != null
@@ -10367,6 +10707,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await EventsRef.OnHostKeyDown.InvokeAsync(e);
 
         if (await TryHandleCellContextShortcutAsync(e))
+            return;
+
+        if (await TryHandleRowSelectionCellKeyAsync(e))
             return;
 
         if (await TryApplyKeyToPendingBatchEditorAsync(e))
@@ -10387,6 +10730,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && e.Key == "Escape")
         {
             await CancelPendingTypeAheadAndClearSelectionAsync();
+            return;
+        }
+
+        if (e.Key == "F2" && !e.CtrlKey && !e.AltKey && !e.MetaKey)
+        {
+            if (!_isEditing && _batchEditItem == null && EditSettingsRef?.AllowEditing == true)
+            {
+                if (EditSettingsRef.Mode == EditMode.Batch)
+                {
+                    if (TryGetActiveKeyboardBatchEditCell(out var f2Item, out var f2Row, out var f2Column))
+                        await TryStartBatchEdit(f2Item, f2Row, f2Column, selectAllOnStart: true);
+                }
+                else if (_selectedItems.Count == 1)
+                {
+                    var selected = _selectedItems.First();
+                    await StartEdit(selected, ResolveRowIndex(selected, -1));
+                }
+            }
             return;
         }
 
@@ -10523,29 +10884,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (e.Key == "Escape" && _typeAheadBuffer.Length > 0)
             {
                 await CancelPendingTypeAheadAndClearSelectionAsync();
-                return;
-            }
-
-            if (e.Key == "Enter" && _typeAheadBuffer.Length > 0)
-            {
-                if (targetCol == null)
-                {
-                    _typeAheadBuffer = "";
-                    await NotifyTypeAheadChangedAsync();
-                    return;
-                }
-
-                if (EventsRef?.OnTypeAheadCommit.HasDelegate == true)
-                {
-                    await EventsRef.OnTypeAheadCommit.InvokeAsync(new TypeAheadCommitArgs<TValue>
-                    {
-                        SelectedItems = _selectedItems.Where(i => IsCellEditableForItem(i, targetCol)).ToList(),
-                        ColumnName = targetCol.Field,
-                        Value = _typeAheadBuffer
-                    });
-                }
-                _typeAheadBuffer = "";
-                await NotifyTypeAheadChangedAsync();
                 return;
             }
         }
@@ -10862,7 +11200,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 Value = value
             });
         }
+        else if (validationItem != null && EditSettingsRef?.AllowEditing == true && EditSettingsRef.Mode == EditMode.Batch)
+        {
+            // Use the same conversion, validation, per-row editability and save
+            // pipeline as an in-cell editor when the host does not own bulk edits.
+            if (!await TryStartBatchEdit(validationItem, anchor.RowIndex, targetCol))
+                return false;
+            _batchEditValue = value;
+            _batchEditDirty = true;
+            _batchEditReplaceOnFirstInput = false;
+            _typeAheadBuffer = "";
+            await CommitBatchEdit();
+            if (_batchEditItem != null)
+            {
+                await NotifyTypeAheadChangedAsync();
+                return false; // Validation retained the editor and its draft.
+            }
+        }
+        else
+        {
+            return false;
+        }
 
+        ClearPassViewMemos();
+        InvalidateBlazorServerOptimizationCaches();
         var selectionChanged = RestoreTypeAheadAnchor(anchor, collapseSelection);
         _typeAheadBuffer = "";
         await NotifyTypeAheadChangedAsync();
@@ -11254,7 +11615,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool HasRowSelectionTypeAheadSelection()
     {
         return SelectionSettingsRef?.Mode != SelectionMode.Cell
-            && _selectedItems.Count > 1;
+            && _selectedItems.Count > 1
+            && (EventsRef?.OnTypeAheadCommit.HasDelegate == true
+                || (EditSettingsRef?.AllowEditing == true && EditSettingsRef.Mode == EditMode.Batch));
     }
 
     private async Task<bool> CommitPendingSingleCellTypeAheadAsync(bool collapseSelectionToAnchor = false)
@@ -11644,14 +12007,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (string.IsNullOrEmpty(fromField)) return;
             if (string.Equals(fromField, targetField, StringComparison.OrdinalIgnoreCase)) return;
-            if (_columnsContainer == null) return;
+            if (_columnsContainer == null && !AutoGenerateColumns) return;
 
             var resolvedInsertAfter =
                 string.Equals(_dragOverHeaderField, targetField, StringComparison.OrdinalIgnoreCase)
                     ? _dragInsertAfterTarget
                     : insertAfter;
 
-            if (_columnsContainer.ReorderColumn(fromField, targetField, resolvedInsertAfter))
+            if (ReorderEffectiveColumn(fromField, targetField, resolvedInsertAfter))
             {
                 StateHasChanged();
                 await SaveGridSettingsAsync();
@@ -11730,7 +12093,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Right-click on a column header opens the context menu.</summary>
     private void OpenHeaderContextMenu(MouseEventArgs e, string field)
     {
-        if (!EnableHeaderContextMenu)
+        if (!EnableHeaderContextMenu && !ShowColumnMenu)
             return;
 
         CloseCellContextMenu();
@@ -11753,7 +12116,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? CurrentHeaderColumn =>
         string.IsNullOrEmpty(_headerContextMenuField)
             ? null
-            : Columns.FirstOrDefault(c => string.Equals(c.Field, _headerContextMenuField, StringComparison.Ordinal));
+            : EffectiveColumns.FirstOrDefault(c => string.Equals(c.Field, _headerContextMenuField, StringComparison.OrdinalIgnoreCase));
 
     private bool IsColumnGrouped(GridColumn col) =>
         _groupDescriptors.Any(g => string.Equals(g.Field, col.Field, StringComparison.OrdinalIgnoreCase));
@@ -11773,17 +12136,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         CurrentHeaderColumn != null && !IsHeaderColumnGrouped;
 
     private IReadOnlyList<GridColumn> HiddenColumns =>
-        Columns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();
+        EffectiveColumns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();
 
     private IReadOnlyList<GridColumn> HeaderContextMenuColumns =>
-        Columns.Where(c => !string.IsNullOrWhiteSpace(c.Field)).ToList();
+        EffectiveColumns.Where(c => !string.IsNullOrWhiteSpace(c.Field)).ToList();
 
     private bool CanHideColumn(GridColumn col) =>
         col.AllowHiding
         && IsColumnVisible(col)
         && !IsColumnGrouped(col)
         // Can't hide the last visible column — grids need at least one.
-        && Columns.Count(IsColumnVisible) > 1;
+        && EffectiveColumns.Count(IsColumnVisible) > 1;
 
     private bool CanToggleHeaderContextColumn(GridColumn col) =>
         IsColumnVisible(col) ? CanHideColumn(col) : true;
@@ -11807,7 +12170,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? RenameColumn =>
         string.IsNullOrWhiteSpace(_renameColumnField)
             ? null
-            : Columns.FirstOrDefault(c => string.Equals(c.Field, _renameColumnField, StringComparison.Ordinal));
+            : EffectiveColumns.FirstOrDefault(c => string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>VB6 passes the raw column KEY as the InputBox title
     /// (FMain.frm:2418 <c>InputBox(..., MouseCtrl.ColKey(MouseCol))</c>) — not the
@@ -11821,7 +12184,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             // The column's DISPLAY caption (e.g. "Community"), not the raw
             // colkey ("Area") — QA reads the title as the column's name.
-            var col = Columns.FirstOrDefault(c =>
+            var col = EffectiveColumns.FirstOrDefault(c =>
                 string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
             return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
         }
@@ -11874,7 +12237,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HeaderMenuInsertColumn(string field)
     {
-        var col = Columns.FirstOrDefault(c => c.Field == field);
+        var col = EffectiveColumns.FirstOrDefault(c =>
+            string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
         CloseHeaderContextMenu();
         if (col == null) return;
         await SetColumnPanelVisibleAsync(col, true);
@@ -11917,7 +12281,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void CaptureOriginalLayoutOnce()
     {
         if (_originalColumnOrder != null) return;
-        var snapCols = Columns.Where(c => !string.IsNullOrEmpty(c.Field)).ToList();
+        var snapCols = EffectiveColumns.Where(c => !string.IsNullOrEmpty(c.Field)).ToList();
         _originalColumnOrder = snapCols.Select(c => c.Field).ToList();
         _originalVisibility = snapCols.ToDictionary(c => c.Field, c => c.Visible, StringComparer.Ordinal);
     }
@@ -11948,7 +12312,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         else
         {
-            _chooseColumnsRows = Columns
+            _chooseColumnsRows = EffectiveColumns
                 .Where(c => !string.IsNullOrEmpty(c.Field))
                 .Select(c => new ChooseColumnRow
                 {
@@ -12155,7 +12519,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         if (_originalColumnOrder == null || _originalVisibility == null) return;
-        var byField = Columns
+        var byField = EffectiveColumns
             .Where(c => !string.IsNullOrEmpty(c.Field))
             .GroupBy(c => c.Field, StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
@@ -12211,7 +12575,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             // Built-in path for grids that just declare their columns inline:
             // apply visibility overrides + reorder the underlying column list.
-            _columnsContainer?.ReorderColumns(snapshot.Select(r => r.Field));
+            ApplyEffectiveColumnOrder(snapshot.Select(r => r.Field));
             await SaveSnapshotSettingsAsync(snapshot);
             await FireLayoutChangedAsync(layoutSnapshot);
         }
@@ -12446,7 +12810,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         CloseHeaderContextMenu();
         var title = ResolveExportTitle("Grid Export");
-        var table = BuildExportTable(title);
+        var table = await BuildExportTableAsync(title);
         var result = GridExporter.Export(table, GridExportFormat.Xlsx);
         var saveResult = await GridExporter.SaveAsync(JsRuntime, result);
         await ShowExportResultAsync(table.Rows.Count, saveResult);
@@ -12522,6 +12886,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 _groupDescriptors.Remove(existing);
                 _groupDescriptors.Add(existing);
+                await SaveGridSettingsAsync();
+                await FireLayoutChangedAsync(changeKind: GridStateChangeKind.Grouping);
             }
             _draggingGroupChipField = null;
         }
@@ -12554,7 +12920,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (EventsRef?.Grouped.HasDelegate == true)
             await EventsRef.Grouped.InvokeAsync(new GroupEventArgs { Field = colField });
         await SaveGridSettingsAsync();
-        await FireLayoutChangedAsync();
+        await FireLayoutChangedAsync(changeKind: GridStateChangeKind.Grouping);
     }
 
     private async Task RemoveGroup(string colField)
@@ -12572,7 +12938,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (EventsRef?.Ungrouped.HasDelegate == true)
             await EventsRef.Ungrouped.InvokeAsync(new GroupEventArgs { Field = colField });
         await SaveGridSettingsAsync();
-        await FireLayoutChangedAsync();
+        await FireLayoutChangedAsync(changeKind: GridStateChangeKind.Grouping);
     }
 
     /// <summary>Returns the index (within <paramref name="visibleCols"/>) of the
@@ -12616,7 +12982,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await FocusGridHostAsync();
     }
 
-    private void ToggleGroupCollapse(GroupResult<TValue> group)
+    private async Task ToggleGroupCollapse(GroupResult<TValue> group)
     {
         group.IsCollapsed = !group.IsCollapsed;
         if (group.IsCollapsed)
@@ -12631,7 +12997,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // state from _collapsedGroupPaths takes over from here.
         _allGroupsCollapsed = false;
         _expandAllGroups = false;
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
+
+        if (!group.IsCollapsed && UsesProviderGrouping)
+            await EnsureProviderGroupLoadedAsync(group);
     }
+
+    private Task HandleGroupExpandKeyDownAsync(
+        GroupResult<TValue> group,
+        KeyboardEventArgs args) =>
+        args.Key is "Enter" or " " or "Spacebar"
+            ? ToggleGroupCollapse(group)
+            : Task.CompletedTask;
 
     private void ApplyGroupCollapseState(IEnumerable<GroupResult<TValue>> groups, bool collapsed)
     {
@@ -12689,6 +13066,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.OpenElement(0, "tr");
             builder.AddAttribute(1, "class", groupHeaderClass);
             builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => FocusGroupHeaderAsync(group)));
+            builder.AddAttribute(3, "role", "row");
+            builder.AddAttribute(4, "aria-expanded", group.IsCollapsed ? "false" : "true");
 
             // Indent cells for nesting
             for (int i = 0; i < level; i++)
@@ -12723,6 +13102,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.OpenElement(20, "td");
             builder.AddAttribute(21, "colspan", labelColspan);
             builder.AddAttribute(22, "class", "fx-cell fx-group-header-cell");
+            builder.AddAttribute(23, "role", "gridcell");
 
             // Expand/collapse glyph. Three layers of customization:
             //   1. ExpandIconTemplate (RenderFragment<bool>) — caller-supplied,
@@ -12756,6 +13136,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     builder.AddAttribute(32, "style", iconInlineStyle);
                 builder.AddAttribute(34, "onclick", EventCallback.Factory.Create(this, () => ToggleGroupCollapse(group)));
                 builder.AddEventStopPropagationAttribute(35, "onclick", true);
+                builder.AddAttribute(37, "role", "button");
+                builder.AddAttribute(38, "tabindex", 0);
+                builder.AddAttribute(39, "aria-label", group.IsCollapsed ? "Expand group" : "Collapse group");
+                builder.AddAttribute(44, "aria-expanded", group.IsCollapsed ? "false" : "true");
+                builder.AddAttribute(45, "onkeydown", EventCallback.Factory.Create<KeyboardEventArgs>(this,
+                    args => HandleGroupExpandKeyDownAsync(group, args)));
+                builder.AddEventStopPropagationAttribute(47, "onkeydown", true);
                 builder.AddContent(36, iconGlyph);
                 builder.CloseElement();
             }
@@ -12866,17 +13253,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void RenderGroupedItemRow(RenderTreeBuilder builder, TValue item, int currentIdx)
     {
                         var resolvedRowIdx = ResolveRowIndex(item, currentIdx);
+                        if (_isEditing
+                            && EditSettingsRef?.Mode == EditMode.Inline
+                            && _editingRowIndex == resolvedRowIdx)
+                        {
+                            builder.AddContent(69, RenderEditRow());
+                            return;
+                        }
+
                         var isSelected = _selectedItems.Contains(item);
                         var isCellSelectedRow = IsCellSelectionRow(item, resolvedRowIdx);
                         var rowCssClass = GetRowCssClass(item, resolvedRowIdx);
 
-	                        builder.OpenElement(70, "tr");
-	                        builder.SetKey(item);
-	                        builder.AddAttribute(71, "class",
-	                            $"fx-row {(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
+                        builder.OpenElement(70, "tr");
+                        builder.SetKey(GetRowRenderKey(item));
+                        builder.AddAttribute(71, "class",
+                            $"fx-row {(currentIdx % 2 == 1 && EnableAltRow ? "fx-alt-row" : "")} {(isSelected && HighlightSelectedRows ? "fx-selected" : "")} {(isCellSelectedRow && HighlightSelectedRows ? "fx-cell-row-selected" : "")} {(EnableHover ? "fx-hover" : "")} {rowCssClass}");
+                        builder.AddAttribute(75, "role", "row");
+                        builder.AddAttribute(76, "aria-rowindex", GetGridDataAriaRowIndex(resolvedRowIdx));
+                        builder.AddAttribute(77, "aria-selected", isSelected ? "true" : "false");
                         var groupedRowHandlers = GetRowHandlers(item, resolvedRowIdx);
                         builder.AddAttribute(72, "onclick", groupedRowHandlers?.Click
                             ?? EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleRowClick(item, resolvedRowIdx, e)));
+                        builder.AddAttribute(78, "ondblclick", groupedRowHandlers?.DblClick
+                            ?? EventCallback.Factory.Create(this, () => HandleRowDblClick(item, resolvedRowIdx)));
                         // Drag-select wiring — see HandleRowMouseDown /
                         // HandleRowMouseEnter for the protocol. Keep
                         // sequence numbers monotonic alongside 71/72/73.
@@ -12889,34 +13289,43 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         if (rowStyle.Length > 0)
                             builder.AddAttribute(73, "style", rowStyle);
 
+                        // Checkbox column
+                        if (ShowCheckboxColumn)
+                        {
+                            builder.AddContent(80, RenderRowSelectionCheckboxCell(item, resolvedRowIdx));
+                        }
+
+                        // Master/detail expand column. Keep this ahead of the
+                        // grouped placeholders so grouped rows use the same
+                        // structural column order as colgroup/header/flat rows.
+                        if (ShowDetailExpandColumn)
+                        {
+                            builder.OpenElement(89, "td");
+                            builder.AddAttribute(90, "class", "fx-cell fx-detail-expand-cell");
+                            builder.AddAttribute(91, "style", "width:36px; min-width:36px; text-align:center;");
+                            builder.AddEventStopPropagationAttribute(92, "onclick", true);
+                            builder.OpenElement(93, "button");
+                            builder.AddAttribute(94, "type", "button");
+                            builder.AddAttribute(95, "class", "fx-detail-expand-btn btn btn-sm btn-link p-0 text-decoration-none");
+                            builder.AddAttribute(96, "style", "font-size:0.75rem; width:20px; height:20px; color:inherit;");
+                            builder.AddAttribute(97, "onclick", EventCallback.Factory.Create(this, () => ToggleRowExpand(item)));
+                            builder.AddAttribute(142, "aria-label", IsRowExpanded(item) ? "Collapse row details" : "Expand row details");
+                            builder.AddAttribute(143, "aria-expanded", IsRowExpanded(item) ? "true" : "false");
+                            builder.AddContent(98, IsRowExpanded(item) ? "▼" : "▶");
+                            builder.CloseElement();
+                            builder.CloseElement();
+                        }
+
                         // Grouped column placeholders (align data columns when grouped columns are hidden)
                         if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
                         {
                             foreach (var gcol in GroupedLayoutColumns)
                             {
-                                builder.OpenElement(80, "td");
-                                builder.AddAttribute(81, "class", "fx-cell fx-group-indent");
-                                builder.AddAttribute(82, "style", GetGroupedPlaceholderStyle(gcol));
+                                builder.OpenElement(99, "td");
+                                builder.AddAttribute(99, "class", "fx-cell fx-group-indent");
+                                builder.AddAttribute(99, "style", GetGroupedPlaceholderStyle(gcol));
                                 builder.CloseElement();
                             }
-                        }
-
-                        // Checkbox column
-                        if (ShowCheckboxColumn)
-                        {
-                            builder.OpenElement(90, "td");
-                            builder.AddAttribute(91, "class", "fx-cell fx-checkbox-cell");
-                            builder.AddAttribute(92, "style", "width:50px;");
-                            builder.OpenComponent<CheckBoxControl>(93);
-                            builder.AddAttribute(94, "Checked", isSelected);
-                            builder.AddAttribute(95, "CheckedChanged",
-                                EventCallback.Factory.Create<bool>(this,
-                                    _ => ToggleRowSelection(item, resolvedRowIdx)));
-                            builder.AddAttribute(96, "TabIndex", -1);
-                            builder.AddAttribute(97, "StopClickPropagation", true);
-                            builder.AddAttribute(98, "StopMouseDownPropagation", true);
-                            builder.CloseComponent();
-                            builder.CloseElement();
                         }
 
                         // Data cells
@@ -12964,6 +13373,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                                 + activeClass + editableClass + typeAheadClass + rowSelectionEditTargetClass;
                             builder.OpenElement(100, "td");
                             builder.AddAttribute(101, "class", cellClass);
+                            builder.AddAttribute(118, "role", "gridcell");
+                            builder.AddAttribute(119, "data-label", HeaderColumnDisplay(capturedCol));
+                            builder.AddAttribute(121, "aria-colindex", GetColumnAriaIndex(capturedColIdx));
+                            builder.AddAttribute(122, "id", GetGridCellDomId(resolvedRowIdx, capturedColIdx));
                             // data-field exposes the bound field name as a CSS hook so
                             // consumers can colour / style specific columns from their
                             // own .razor.css (e.g. FPricingWorkSheet greens the
@@ -13083,6 +13496,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         }
 
                         builder.CloseElement(); // tr
+
+                        // Detail rows are siblings of their grouped data row,
+                        // exactly like the flat path. Grouped row windowing is
+                        // disabled whenever a DetailTemplate is present, so no
+                        // count-based spacer can accidentally omit this row.
+                        if (HasDetailTemplate && IsRowExpanded(item))
+                        {
+                            builder.OpenElement(300, "tr");
+                            builder.SetKey((GetRowRenderKey(item), "group-detail"));
+                            builder.AddAttribute(301, "class", "fx-detail-row");
+                            builder.AddAttribute(306, "role", "row");
+                            builder.OpenElement(302, "td");
+                            builder.AddAttribute(303, "colspan", Math.Max(1, TotalColumnCount));
+                            builder.AddAttribute(304, "class", "fx-detail-cell p-2 bg-light border-bottom");
+                            builder.AddAttribute(307, "role", "gridcell");
+                            builder.AddContent(305, DetailTemplate!(item));
+                            builder.CloseElement();
+                            builder.CloseElement();
+                        }
     }
 
     /// <summary>The group's footer aggregate row(s), when configured — extracted
@@ -13098,12 +13530,41 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         builder.OpenElement(200, "tr");
                         builder.AddAttribute(201, "class", "fx-group-footer-row");
 
-                        // Indent cells
-                        for (int i = 0; i < _groupDescriptors.Count; i++)
+                        // Structural cells follow the same order and widths as
+                        // the header and grouped data rows.
+                        if (ShowRowReorderColumn)
                         {
-                            builder.OpenElement(210, "td");
-                            builder.AddAttribute(211, "class", "fx-cell fx-group-indent");
-                            builder.AddAttribute(212, "style", "width:32px;");
+                            builder.OpenElement(202, "td");
+                            builder.AddAttribute(203, "class", "fx-cell fx-row-reorder-cell disabled");
+                            builder.AddAttribute(204, "style", RowReorderColumnStyle);
+                            builder.CloseElement();
+                        }
+                        if (ShowRowSelectorHandleColumn)
+                        {
+                            builder.OpenElement(205, "td");
+                            builder.AddAttribute(206, "class", "fx-cell fx-row-selector-cell");
+                            builder.AddAttribute(207, "style", RowSelectorHandleColumnStyle);
+                            builder.CloseElement();
+                        }
+                        if (ShowCheckboxColumn)
+                        {
+                            builder.OpenElement(208, "td");
+                            builder.AddAttribute(209, "class", "fx-cell fx-checkbox-cell");
+                            builder.AddAttribute(210, "style", "width:50px;");
+                            builder.CloseElement();
+                        }
+                        if (ShowDetailExpandColumn)
+                        {
+                            builder.OpenElement(211, "td");
+                            builder.AddAttribute(212, "class", "fx-cell fx-detail-expand-cell");
+                            builder.AddAttribute(213, "style", "width:36px; min-width:36px;");
+                            builder.CloseElement();
+                        }
+                        foreach (var groupedColumn in GroupedLayoutColumns)
+                        {
+                            builder.OpenElement(214, "td");
+                            builder.AddAttribute(215, "class", "fx-cell fx-group-indent");
+                            builder.AddAttribute(216, "style", GetGroupedPlaceholderStyle(groupedColumn));
                             builder.CloseElement();
                         }
 
@@ -13139,14 +13600,26 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private RenderFragment RenderDataCells(TValue item, int rowIndex, Func<GridColumn, GridColumn> transform) => builder =>
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
-        var visibleColumns = GetRenderVisibleColumns();
+        var columnLayout = GetColumnVirtualizationRenderLayout();
+        var visibleColumns = columnLayout.Columns;
         // Reused delegate instances for this row's cells — see the comment on
         // GetRowCellHandlers. Null for value-type TValue (falls back to inline
         // lambdas, which is the old, diff-churning behaviour).
         var cellHandlers = GetRowCellHandlers(item, visibleColumns.Count);
-        var colIdx = 0;
-        foreach (var col in visibleColumns)
+        foreach (var columnSlot in columnLayout.Slots)
         {
+            if (columnSlot.IsSpacer)
+            {
+                builder.OpenElement(0, "td");
+                builder.AddAttribute(1, "class", "fx-cell fx-column-window-spacer");
+                builder.AddAttribute(2, "aria-hidden", "true");
+                builder.AddAttribute(3, "style", ColumnVirtualizationSpacerStyle(columnSlot.WidthPx));
+                builder.CloseElement();
+                continue;
+            }
+
+            var col = columnSlot.Column!;
+            var colIdx = columnSlot.ColumnIndex;
             var capturedCol = col;
             var capturedColIdx = colIdx;
             // Refresh this cell's context box BEFORE the callbacks are emitted:
@@ -13186,6 +13659,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 + (isBatchDropdownEditing ? " fx-batch-dropdown-editing" : string.Empty)
                 + activeClass + editableClass + typeAheadClass + rowSelectionEditTargetClass;
             builder.AddAttribute(1, "class", cellClass);
+            builder.AddAttribute(18, "role", "gridcell");
+            builder.AddAttribute(19, "data-label", HeaderColumnDisplay(capturedCol));
+            builder.AddAttribute(21, "aria-colindex", GetColumnAriaIndex(capturedColIdx));
+            builder.AddAttribute(22, "id", GetGridCellDomId(resolvedRowIndex, capturedColIdx));
             // data-field CSS hook — see same comment on the row-render path above.
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
@@ -13253,7 +13730,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 {
                     RenderDisplayCellContent(builder, 30, item, col, isActiveCell, cellHandlers?.ActionClick[capturedColIdx]);
                     builder.CloseElement();
-                    colIdx++;
                     continue;
                 }
 
@@ -13307,7 +13783,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             builder.CloseElement(); // td
-            colIdx++;
         }
     };
 
@@ -13630,8 +14105,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private RenderFragment RenderEditRow() => builder =>
     {
+        if (_rowEditContext == null)
+        {
+            BuildEditRow(builder);
+            return;
+        }
+
+        builder.OpenComponent<CascadingValue<EditContext>>(0);
+        builder.AddAttribute(1, "Value", _rowEditContext);
+        builder.AddAttribute(2, "IsFixed", false);
+        builder.AddAttribute(3, "ChildContent", (RenderFragment)BuildEditRow);
+        builder.CloseComponent();
+    };
+
+    private void BuildEditRow(RenderTreeBuilder builder)
+    {
         builder.OpenElement(0, "tr");
         builder.AddAttribute(1, "class", "fx-row fx-edit-row");
+        builder.AddEventStopPropagationAttribute(90, "onkeydown", true);
 
         if (ShowRowReorderColumn)
         {
@@ -13656,35 +14147,56 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.CloseElement();
         }
 
-        // Group indent cells for edit row
-        if (AllowGrouping && _groupDescriptors.Count > 0)
+        if (ShowDetailExpandColumn)
         {
-            for (int i = 0; i < _groupDescriptors.Count; i++)
+            builder.OpenElement(12, "td");
+            builder.AddAttribute(13, "class", "fx-cell fx-detail-expand-cell");
+            builder.AddAttribute(14, "style", "width:36px; min-width:36px;");
+            builder.CloseElement();
+        }
+
+        // Grouped-column placeholders follow the same visibility/width rules
+        // as the header and normal data rows.
+        if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
+        {
+            foreach (var groupedColumn in GroupedLayoutColumns)
             {
                 builder.OpenElement(4, "td");
                 builder.AddAttribute(5, "class", "fx-cell fx-group-indent");
+                builder.AddAttribute(15, "style", GetGroupedPlaceholderStyle(groupedColumn));
                 builder.CloseElement();
             }
         }
 
+        var validatorTemplateRendered = false;
         foreach (var col in VisibleColumns)
         {
             builder.OpenElement(10, "td");
             builder.AddAttribute(11, "class", "fx-cell fx-edit-cell");
 
+            if (!validatorTemplateRendered
+                && _rowEditContext != null
+                && ValidationSettings?.ValidatorTemplate != null)
+            {
+                builder.AddContent(12, ValidationSettings.ValidatorTemplate(_rowEditContext));
+                validatorTemplateRendered = true;
+            }
+
             if (col.Commands is { Count: > 0 })
             {
-                builder.OpenElement(20, "button");
-                builder.AddAttribute(21, "class", "fx-cmd-btn fx-cmd-save");
-                builder.AddAttribute(22, "onclick", EventCallback.Factory.Create(this, SaveEdit));
-                builder.AddContent(23, "Save");
-                builder.CloseElement();
+                builder.OpenComponent<ButtonControl>(20);
+                builder.AddAttribute(21, "BareStyle", true);
+                builder.AddAttribute(22, "CssClass", "fx-cmd-btn fx-cmd-save");
+                builder.AddAttribute(23, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, SaveEdit));
+                builder.AddAttribute(24, "ChildContent", (RenderFragment)(content => content.AddContent(0, "Save")));
+                builder.CloseComponent();
 
-                builder.OpenElement(30, "button");
-                builder.AddAttribute(31, "class", "fx-cmd-btn fx-cmd-cancel");
-                builder.AddAttribute(32, "onclick", EventCallback.Factory.Create(this, CancelEdit));
-                builder.AddContent(33, "Cancel");
-                builder.CloseElement();
+                builder.OpenComponent<ButtonControl>(30);
+                builder.AddAttribute(31, "BareStyle", true);
+                builder.AddAttribute(32, "CssClass", "fx-cmd-btn fx-cmd-cancel");
+                builder.AddAttribute(33, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, CancelEdit));
+                builder.AddAttribute(34, "ChildContent", (RenderFragment)(content => content.AddContent(0, "Cancel")));
+                builder.CloseComponent();
             }
             else if (!string.IsNullOrEmpty(col.Field) && col.AllowEditing && !col.IsPrimaryKey)
             {
@@ -13694,20 +14206,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 }
                 else
                 {
-                    var inputType = GetEditorInputType(col);
+                    builder.AddContent(50, RenderGeneratedRowEditor(col));
+                }
 
-                    builder.OpenElement(50, "input");
-                    builder.AddAttribute(51, "type", inputType);
-                    builder.AddAttribute(52, "class", "fx-edit-input");
-                    builder.AddAttribute(53, "value", GetPropertyValue(_editItem, col.Field));
-                    builder.AddAttribute(55, "style", GetEditorInputStyle(col));
-                    if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
-                        builder.AddAttribute(56, "inputmode", "decimal");
-                    if (col.MaxLength.HasValue && col.MaxLength.Value > 0)
-                        builder.AddAttribute(57, "maxlength", col.MaxLength.Value);
-                    builder.AddAttribute(54, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this,
-                        e => SetPropertyValue(_editItem, col.Field, e.Value?.ToString())));
-                    builder.CloseElement();
+                if (ValidationSettings?.ShowFieldMessages == true)
+                {
+                    foreach (var message in GetRowValidationMessages(col.Field))
+                    {
+                        builder.OpenElement(70, "div");
+                        builder.AddAttribute(71, "class", "fx-edit-validation-message");
+                        builder.AddAttribute(72, "role", "alert");
+                        builder.AddContent(73, message);
+                        builder.CloseElement();
+                    }
                 }
             }
             else
@@ -13719,7 +14230,58 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         builder.CloseElement(); // tr
-    };
+
+        if (!VisibleColumns.Any(column => column.Commands is { Count: > 0 }))
+        {
+            builder.OpenElement(74, "tr");
+            builder.AddAttribute(75, "class", "fx-edit-actions-row");
+            builder.OpenElement(76, "td");
+            builder.AddAttribute(77, "colspan", Math.Max(1, TotalColumnCount));
+            builder.OpenElement(78, "div");
+            builder.AddAttribute(79, "class", "fx-edit-actions");
+
+            builder.OpenComponent<ButtonControl>(80);
+            builder.AddAttribute(81, "BareStyle", true);
+            builder.AddAttribute(82, "CssClass", "fx-cmd-btn fx-cmd-cancel");
+            builder.AddAttribute(83, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, CancelEdit));
+            builder.AddAttribute(84, "ChildContent", (RenderFragment)(content => content.AddContent(0, "Cancel")));
+            builder.CloseComponent();
+
+            builder.OpenComponent<ButtonControl>(85);
+            builder.AddAttribute(86, "BareStyle", true);
+            builder.AddAttribute(87, "CssClass", "fx-cmd-btn fx-cmd-save");
+            builder.AddAttribute(88, "OnClick", EventCallback.Factory.Create<MouseEventArgs>(this, SaveEdit));
+            builder.AddAttribute(89, "ChildContent", (RenderFragment)(content => content.AddContent(0, "Save")));
+            builder.CloseComponent();
+
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+
+        var summaryMessages = ValidationSettings?.ShowValidationSummary == true
+            ? GetRowValidationMessages()
+            : Array.Empty<string>();
+        if (summaryMessages.Count > 0)
+        {
+            builder.OpenElement(100, "tr");
+            builder.AddAttribute(101, "class", "fx-edit-validation-summary-row");
+            builder.OpenElement(102, "td");
+            builder.AddAttribute(103, "colspan", Math.Max(1, TotalColumnCount));
+            builder.OpenElement(104, "div");
+            builder.AddAttribute(105, "class", "fx-edit-validation-summary");
+            builder.AddAttribute(106, "role", "alert");
+            foreach (var message in summaryMessages)
+            {
+                builder.OpenElement(107, "div");
+                builder.AddContent(108, message);
+                builder.CloseElement();
+            }
+            builder.CloseElement();
+            builder.CloseElement();
+            builder.CloseElement();
+        }
+    }
 
     private static string GetEditorInputType(GridColumn col)
     {
@@ -13731,6 +14293,43 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return col.Type == ColumnType.Number && col.ShowNumericSpinner
             ? "number"
             : "text";
+    }
+
+    private string GetGeneratedEditorValue(GridColumn col)
+    {
+        var value = GetPropertyValue(_editItem, col.Field);
+        if (value == null || value == DBNull.Value)
+            return string.Empty;
+
+        if (col.Type == ColumnType.Date)
+        {
+            if (value is DateOnly dateOnly)
+                return dateOnly.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (value is DateTime dateTime)
+                return dateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            if (value is DateTimeOffset dateTimeOffset)
+                return dateTimeOffset.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+            var text = Convert.ToString(value, CultureInfo.CurrentCulture) ?? string.Empty;
+            if (DateOnly.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedDate)
+                || DateOnly.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AllowWhiteSpaces, out parsedDate))
+            {
+                return parsedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            }
+
+            return string.Empty;
+        }
+
+        if (col.Type == ColumnType.Number)
+        {
+            if (value is double doubleValue && !double.IsFinite(doubleValue))
+                return string.Empty;
+            if (value is float floatValue && !float.IsFinite(floatValue))
+                return string.Empty;
+            return FormatPlainNumber(value);
+        }
+
+        return Convert.ToString(value, CultureInfo.CurrentCulture) ?? string.Empty;
     }
 
     private static string GetEditorInputStyle(GridColumn col)
@@ -13954,6 +14553,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (targetType == typeof(DateTime))
                 return DateTime.Parse(s, CultureInfo.InvariantCulture);
 
+            if (targetType == typeof(DateTimeOffset))
+                return DateTimeOffset.Parse(s, CultureInfo.InvariantCulture);
+
+            if (targetType == typeof(DateOnly))
+                return DateOnly.Parse(s, CultureInfo.InvariantCulture);
+
             if (targetType == typeof(Guid))
                 return Guid.Parse(s);
 
@@ -13988,7 +14593,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private string GetTableStyle()
     {
-        var totalWidth = GetTotalColumnWidthPx();
+        var totalWidth = IsColumnVirtualizationActive
+            ? GetColumnVirtualizedTableWidthPx()
+            : GetTotalColumnWidthPx();
         if (totalWidth <= 0)
             return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
 
@@ -14023,6 +14630,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             total += RowReorderColumnWidth;
         if (ShowRowSelectorHandleColumn)
             total += ResolvedRowSelectorHandleWidth;
+        if (ShowDetailExpandColumn)
+            total += 36;
 
         if (AllowGrouping && HideGroupedColumns && GroupedLayoutColumns.Count > 0)
         {
@@ -14078,13 +14687,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private bool EnsureAutoColumnWidths()
     {
-        if (_columnsContainer == null)
+        if (_columnsContainer == null && !AutoGenerateColumns)
             return false;
 
         var sample = (DataSource?.Take(50).ToList()) ?? new List<TValue>();
         var changed = false;
 
-        foreach (var col in _columnsContainer.Columns)
+        foreach (var col in GetEffectiveColumns())
         {
             if (!col.Visible)
                 continue;
@@ -14162,6 +14771,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return val is bool boolValue ? (boolValue ? 1 : 0) : val;
 
         return GetCellDisplayValue(item, col);
+    }
+
+    private object? GetCellXlsxValue(object? item, GridColumn col)
+    {
+        var value = ResolveCellValue(item, col);
+        if (value == null || value == DBNull.Value)
+            return null;
+
+        // Preserve true spreadsheet types for arithmetic, sorting and native
+        // Excel number/date formatting. Complex/template/display-field values
+        // retain the same human-readable representation as other exports.
+        return value is byte or sbyte or short or ushort or int or uint
+            or long or ulong or float or double or decimal
+            or DateTime or DateOnly or DateTimeOffset or TimeOnly or TimeSpan
+            or bool
+                ? value
+                : GetCellDisplayValue(item, col);
     }
 
     private static string FormatPlainNumber(object value)
@@ -14615,9 +15241,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 Count = count,
                 Source = source
             });
+
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Selection);
     }
 
-    public Task SelectCellAsync((int RowIndex, int CellIndex) cell, bool isCtrlPressed = false)
+    public async Task SelectCellAsync((int RowIndex, int CellIndex) cell, bool isCtrlPressed = false)
     {
         if (!isCtrlPressed)
         {
@@ -14635,22 +15263,29 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _activeCell = cell;
         _lastSelectedCell = cell;
 
-        return InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Selection);
     }
 
-    public Task SelectCellsAsync(IEnumerable<(int RowIndex, int CellIndex)> cells)
+    public async Task SelectCellsAsync(IEnumerable<(int RowIndex, int CellIndex)> cells)
     {
         _selectedCells.Clear();
         _selectedCells.UnionWith(cells);
-        return InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Selection);
     }
 
     public async Task SortByColumnAsync(string field, SortDirection direction)
     {
         foreach (var kvp in _columnStates) kvp.Value.SortDirection = null;
+        _sortPriorityFields.Clear();
         GetColumnState(field).SortDirection = direction;
+        EnsureSortPriority(field);
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Sorting);
     }
 
     public async Task FilterByColumnAsync(string field, string value)
@@ -14664,13 +15299,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     public async Task ClearFilteringAsync()
     {
         ClearAllFilterState();
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     public async Task AddRecordAsync(TValue record)
@@ -14751,7 +15392,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _groupDescriptors.Clear();
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Grouping);
     }
 
     public async Task RefreshAsync()
@@ -14768,12 +15412,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     /// <summary>Sizes every visible column to its content.</summary>
     public Task AutoFitColumnsAsync()
-        => AutoFitCoreAsync(_columnsContainer?.Columns.Where(IsColumnVisible).ToList());
+        => AutoFitCoreAsync(Columns.Where(IsColumnVisible).ToList());
 
     /// <summary>Sizes one column to its content.</summary>
     public Task AutoFitColumnAsync(string field)
     {
-        var col = _columnsContainer?.Columns.FirstOrDefault(
+        var col = Columns.FirstOrDefault(
             c => string.Equals(c.Field, field, StringComparison.OrdinalIgnoreCase));
         return col == null ? Task.CompletedTask : AutoFitCoreAsync(new List<GridColumn> { col });
     }
@@ -14934,8 +15578,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         GridPdfPrintOptions? pdfOptions = null,
         bool showCompletionStatus = true)
     {
-        var table = BuildExportTable(ResolveExportTitle(title));
-        var result = GridExporter.Export(table, format, fileName, pdfOptions);
+        var table = await BuildExportTableAsync(ResolveExportTitle(title));
+        var result = GridExporter.ExportWithEncoding(
+            table,
+            format,
+            DelimitedExportEncoding,
+            fileName,
+            pdfOptions);
         var saveResult = await GridExporter.SaveAsync(JsRuntime, result);
         if (showCompletionStatus)
             await ShowExportResultAsync(table.Rows.Count, saveResult);
@@ -15004,7 +15653,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         GridPdfPrintOptions? pdfOptions = null)
     {
         var table = BuildExportTable(ResolveExportTitle(title));
-        return GridExporter.Export(table, format, fileName, pdfOptions);
+        return GridExporter.ExportWithEncoding(
+            table,
+            format,
+            DelimitedExportEncoding,
+            fileName,
+            pdfOptions);
     }
 
     /// <summary>Export grid data to CSV and trigger browser download.</summary>
@@ -15068,6 +15722,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private GridExportTable BuildGridExportTable(string title)
+        => BuildGridExportTable(title, SortedData.ToList(), providerAggregates: null);
+
+    private GridExportTable BuildGridExportTable(
+        string title,
+        IReadOnlyList<TValue> items,
+        IReadOnlyDictionary<string, object?>? providerAggregates)
     {
         var table = new GridExportTable
         {
@@ -15084,19 +15744,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 format: col.Format,
                 textAlign: col.TextAlign,
                 width: width > 0 ? width : null,
-                printCellIcon: col.PrintCellIcon));
+                printCellIcon: col.PrintCellIcon)
+            {
+                Field = col.Field,
+                Formula = col.Formula
+            });
         }
 
-        // Export all filtered+sorted data, not just the current page.
-        var items = SortedData.ToList();
+        // Local mode supplies all filtered+sorted data. Provider export-all
+        // supplies pages for a stable query snapshot; legacy provider mode
+        // continues to supply only its loaded window.
         foreach (var item in items)
-            table.Rows.Add(new GridExportRow(cols.Select(col => GetCellExportValue(item, col))));
+        {
+            var exportRow = new GridExportRow(cols.Select(col => GetCellExportValue(item, col)));
+            exportRow.XlsxValues.AddRange(cols.Select(col => GetCellXlsxValue(item, col)));
+            table.Rows.Add(exportRow);
+        }
 
-        AddExportTotalRows(table, cols, items);
+        AddExportTotalRows(table, cols, items, providerAggregates);
         return table;
     }
 
-    private void AddExportTotalRows(GridExportTable table, IReadOnlyList<GridColumn> cols, IReadOnlyList<TValue> items)
+    private void AddExportTotalRows(
+        GridExportTable table,
+        IReadOnlyList<GridColumn> cols,
+        IReadOnlyList<TValue> items,
+        IReadOnlyDictionary<string, object?>? providerAggregates = null)
     {
         if (!IncludeTotalsInExport || AggregateRows is not { Count: > 0 } || items.Count == 0)
             return;
@@ -15105,10 +15778,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (footerRows.Count == 0)
             return;
 
-        var footerAggs = ComputeAggregates(items);
+        var footerAggs = providerAggregates ?? ComputeAggregates(items);
         foreach (var aggRow in footerRows)
         {
             var values = new object?[cols.Count];
+            var xlsxValues = new object?[cols.Count];
+            var xlsxFormats = new string?[cols.Count];
             for (var colIndex = 0; colIndex < cols.Count; colIndex++)
             {
                 var col = cols[colIndex];
@@ -15119,9 +15794,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 var key = $"{aggCol.Field}_{aggCol.Type}";
                 footerAggs.TryGetValue(key, out var val);
                 values[colIndex] = FormatAggregateValue(aggCol, val);
+                xlsxValues[colIndex] = val;
+                xlsxFormats[colIndex] = aggCol.Format ?? col.Format;
             }
 
-            table.Rows.Add(new GridExportRow(values, isBold: true));
+            var exportRow = new GridExportRow(values, isBold: true)
+            {
+                UseColumnFormulas = false
+            };
+            exportRow.XlsxValues.AddRange(xlsxValues);
+            exportRow.XlsxFormats.AddRange(xlsxFormats);
+            table.Rows.Add(exportRow);
         }
     }
 
@@ -15344,19 +16027,30 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     public async Task EndEditAsync()
     {
-        await CommitBatchEdit();
-        _isEditing = false;
-        _editingRowIndex = -1;
-        _editItem = default;
+        if (_typeAheadBuffer.Length > 0)
+        {
+            if (BatchEditBehavior == GridBatchEditBehavior.SingleCell)
+                await CommitPendingSingleCellTypeAheadAsync();
+            else
+                await CommitPendingRowSelectionTypeAheadAsync();
+        }
+        else
+        {
+            await SynchronizeClientBufferedBatchEditorValueAsync();
+            await CommitBatchEdit();
+        }
+        if (_isEditing)
+            await SaveEdit();
         await InvokeAsync(StateHasChanged);
     }
 
-    public Task ExpandAllGroupAsync()
+    public async Task ExpandAllGroupAsync()
     {
         _expandAllGroups = true;
         _allGroupsCollapsed = false;
         _collapsedGroupPaths.Clear();
-        return InvokeAsync(StateHasChanged);
+        await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Expansion);
     }
 
     /// <summary>
@@ -15516,7 +16210,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _searchCts?.Dispose();
         _searchCts = null;
 
+        DisposeFilteringState();
+        DisposeRowValidationContext();
+
         DisposeItemsProviderState();
+        DisposeProviderExportState();
 
         try
         {
@@ -15548,6 +16246,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterGridWindowScroll", _scrollElement);
             }
+            await DisposeGridColumnWindowAsync();
             if (_activeCellScrollSyncRegistered && _gridJsModule != null)
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterActiveCellScrollSync", _gridHostElement);
@@ -15565,6 +16264,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _scrollbarActivityRegistered = false;
         _gridResizeCaptureRegistered = false;
         _windowScrollRegistered = false;
+        _columnWindowScrollRegistered = false;
         _activeCellScrollSyncRegistered = false;
 
         if (_gridJsModule != null)

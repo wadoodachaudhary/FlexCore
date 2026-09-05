@@ -116,7 +116,11 @@ public class GridControlEvents<TValue>
     /// </summary>
     public EventCallback<string> TypeAheadChanged { get; set; }
 
-    // Type-ahead (multi-select numeric input)
+    /// <summary>
+    /// Optional bulk-edit override. When supplied, the host applies the value
+    /// to SelectedItems. Without a handler, the grid commits editable selected
+    /// rows through its normal cell-edit validation and OnCellSave pipeline.
+    /// </summary>
     public EventCallback<TypeAheadCommitArgs<TValue>> OnTypeAheadCommit { get; set; }
 
     // Lifecycle
