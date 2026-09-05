@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Components;
 using System.Globalization;
 using System.Reflection;
+using Microsoft.AspNetCore.Components.Web;
 
 namespace Fx.ControlKit.Grid;
 
@@ -46,8 +47,10 @@ public partial class PivotControl<TValue>
     private readonly List<HeaderLevel> _headerLevels = new();
     private readonly List<PivotDisplayRow> _displayRows = new();
     private readonly List<PivotValueColumn> _valueColumns = new();
-    private string? _sortField;
-    private bool _sortAscending = true;
+    [Parameter] public IReadOnlyList<PivotSortDescriptor>? SortDescriptors { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<PivotSortDescriptor>> SortDescriptorsChanged { get; set; }
+    private readonly List<PivotSortDescriptor> _sortDescriptors = new();
+    private IReadOnlyList<PivotSortDescriptor>? _lastSortParameters;
 
     // Interactive state
     private List<string> _allDiscoveredFields = new();
@@ -92,6 +95,17 @@ public partial class PivotControl<TValue>
 
     protected override void OnParametersSet()
     {
+        if (SortDescriptors != null && (_lastSortParameters == null || !_lastSortParameters.SequenceEqual(SortDescriptors)))
+        {
+            _sortDescriptors.Clear();
+            _sortDescriptors.AddRange(SortDescriptors.DistinctBy(s => s.Field, StringComparer.OrdinalIgnoreCase));
+            _lastSortParameters = SortDescriptors.ToArray();
+        }
+        else if (SortDescriptors == null && _lastSortParameters != null)
+        {
+            _sortDescriptors.Clear();
+            _lastSortParameters = null;
+        }
         if (Interactive && !_initialized)
         {
             DiscoverFields();
@@ -326,7 +340,7 @@ public partial class PivotControl<TValue>
             ? new List<PivotKey> { new("Value", new[] { "Value" }) }
             : rows.Select(item => BuildKey(item, effectiveCols))
                   .Distinct()
-                  .OrderBy(key => key.Display)
+                  .OrderBy(key => key, Comparer<PivotKey>.Create((a, b) => CompareKeys(a, b, effectiveCols)))
                   .ToList();
 
         // Build value columns: colKey × valueConfig
@@ -355,8 +369,9 @@ public partial class PivotControl<TValue>
 
         var rowGroups = rows
             .GroupBy(item => BuildKey(item, effectiveRows))
-            .OrderBy(group => group.Key.Display)
+            .OrderBy(group => group.Key, Comparer<PivotKey>.Create((a, b) => CompareKeys(a, b, effectiveRows)))
             .ToList();
+        rowGroups = SortRowGroupsByValues(rowGroups);
 
         if (effectiveRows.Count > 1)
             BuildGroupedRows(rows, rowGroups);
@@ -419,11 +434,11 @@ public partial class PivotControl<TValue>
 
         for (var i = 0; i < rowFieldCount; i++)
             topLevel.Add(new HeaderCell(GetFieldLabel(_effectiveRowFields[i]),
-                rowspan: 2, cssClass: "fx-pivot-hdr-row"));
+                rowspan: 2, cssClass: "fx-pivot-hdr-row", sortField: _effectiveRowFields[i], isSortable: AllowSorting));
 
         var groups = _valueColumns.Where(c => !c.IsTotal)
             .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
-            .OrderBy(g => g.Key).ToList();
+            .ToList();
 
         foreach (var group in groups)
         {
@@ -456,11 +471,11 @@ public partial class PivotControl<TValue>
 
         for (var i = 0; i < rowFieldCount; i++)
             topLevel.Add(new HeaderCell(GetFieldLabel(_effectiveRowFields[i]),
-                rowspan: 2, cssClass: "fx-pivot-hdr-row"));
+                rowspan: 2, cssClass: "fx-pivot-hdr-row", sortField: _effectiveRowFields[i], isSortable: AllowSorting));
 
         var groups = _valueColumns.Where(c => !c.IsTotal)
             .GroupBy(c => c.Key.Display)
-            .OrderBy(g => g.Key).ToList();
+            .ToList();
 
         foreach (var group in groups)
         {
@@ -494,12 +509,12 @@ public partial class PivotControl<TValue>
 
         for (var i = 0; i < rowFieldCount; i++)
             top.Add(new HeaderCell(GetFieldLabel(_effectiveRowFields[i]),
-                rowspan: 3, cssClass: "fx-pivot-hdr-row"));
+                rowspan: 3, cssClass: "fx-pivot-hdr-row", sortField: _effectiveRowFields[i], isSortable: AllowSorting));
 
         // Group by first column field
         var topGroups = _valueColumns.Where(c => !c.IsTotal)
             .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
-            .OrderBy(g => g.Key).ToList();
+            .ToList();
 
         foreach (var tg in topGroups)
         {
@@ -508,7 +523,7 @@ public partial class PivotControl<TValue>
 
             var midGroups = topItems
                 .GroupBy(c => c.Key.Parts.Count > 1 ? c.Key.Parts[1] : "")
-                .OrderBy(g => g.Key).ToList();
+                .ToList();
 
             foreach (var mg in midGroups)
             {
@@ -541,7 +556,7 @@ public partial class PivotControl<TValue>
     {
         var firstFieldGroups = rowGroups
             .GroupBy(rg => rg.Key.Parts.Count > 0 ? rg.Key.Parts[0] : "")
-            .OrderBy(g => g.Key).ToList();
+            .ToList();
 
         foreach (var group in firstFieldGroups)
         {
@@ -668,12 +683,104 @@ public partial class PivotControl<TValue>
 
     // ── Sorting ─────────────────────────────────────────────────────
 
-    private void HandleHeaderClick(HeaderCell cell)
+    private Task HandleHeaderClick(HeaderCell cell, MouseEventArgs args) =>
+        !AllowSorting || !cell.IsSortable ? Task.CompletedTask : ToggleSortAsync(cell.SortField, args.ShiftKey);
+
+    private SortDirection? GetSortDirection(string field) =>
+        _sortDescriptors.FirstOrDefault(s => string.Equals(s.Field, field, StringComparison.OrdinalIgnoreCase))?.Direction;
+
+    private string GetSortLabel(string field) => GetSortDirection(field) switch
     {
-        if (!AllowSorting || !cell.IsSortable || string.IsNullOrEmpty(cell.SortField)) return;
-        _sortAscending = _sortField == cell.SortField ? !_sortAscending : true;
-        _sortField = cell.SortField;
+        SortDirection.Ascending => "▲", SortDirection.Descending => "▼", _ => "↕"
+    };
+
+    private Task ToggleSortAsync(string field, bool add = false) => SortByAsync(field, GetSortDirection(field) switch
+    {
+        null => SortDirection.Ascending,
+        SortDirection.Ascending => SortDirection.Descending,
+        _ => null
+    }, add);
+
+    /// <summary>Sort a row/column field or a rendered value-column field. Null removes its sort.
+    /// Hierarchical dimensions keep their nesting; value sorts order siblings by aggregates.</summary>
+    public async Task SortByAsync(string field, SortDirection? direction, bool add = false)
+    {
+        if (!AllowSorting || string.IsNullOrWhiteSpace(field)) return;
+        if (!_effectiveRowFields.Contains(field) && !_effectiveColumnFields.Contains(field) && !_valueColumns.Any(c => c.Field == field))
+            throw new ArgumentException($"Unknown pivot sort field '{field}'.", nameof(field));
+        if (!add && direction.HasValue) _sortDescriptors.Clear();
+        var index = _sortDescriptors.FindIndex(s => string.Equals(s.Field, field, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0)
+        {
+            if (direction.HasValue) _sortDescriptors[index] = new(field, direction.Value);
+            else _sortDescriptors.RemoveAt(index);
+        }
+        else if (direction.HasValue)
+        {
+            _sortDescriptors.Add(new(field, direction.Value));
+        }
         BuildPivot();
+        await SortDescriptorsChanged.InvokeAsync(_sortDescriptors.ToArray());
+        await InvokeAsync(StateHasChanged);
+    }
+
+    public async Task ClearSortingAsync()
+    {
+        _sortDescriptors.Clear();
+        BuildPivot();
+        await SortDescriptorsChanged.InvokeAsync(_sortDescriptors.ToArray());
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private int CompareKeys(PivotKey a, PivotKey b, IReadOnlyList<string> fields)
+    {
+        for (var i = 0; i < fields.Count; i++)
+        {
+            var result = ComparePivotValues(a.RawParts[i], b.RawParts[i]);
+            if (result != 0) return GetSortDirection(fields[i]) == SortDirection.Descending ? -Math.Sign(result) : result;
+        }
+        return 0;
+    }
+
+    private static int ComparePivotValues(object? a, object? b)
+    {
+        if (a is DBNull) a = null;
+        if (b is DBNull) b = null;
+        if (ReferenceEquals(a, b)) return 0;
+        if (a is null) return -1;
+        if (b is null) return 1;
+        if (a.GetType() == b.GetType() && a is IComparable comparable) return comparable.CompareTo(b);
+        if (a is not string && b is not string && a is IConvertible && b is IConvertible)
+        {
+            try { return Convert.ToDecimal(a, CultureInfo.InvariantCulture).CompareTo(Convert.ToDecimal(b, CultureInfo.InvariantCulture)); }
+            catch (Exception ex) when (ex is InvalidCastException or FormatException or OverflowException) { }
+        }
+        return StringComparer.CurrentCulture.Compare(Convert.ToString(a, CultureInfo.CurrentCulture), Convert.ToString(b, CultureInfo.CurrentCulture));
+    }
+
+    private List<IGrouping<PivotKey, TValue>> SortRowGroupsByValues(List<IGrouping<PivotKey, TValue>> groups)
+    {
+        var sorts = _sortDescriptors.Select(s => (Sort: s, Column: _valueColumns.FirstOrDefault(c => c.Field == s.Field)))
+            .Where(s => s.Column != null).ToArray();
+        if (sorts.Length == 0) return groups;
+        object SortValue(IGrouping<PivotKey, TValue> group, PivotValueColumn column) => Aggregate(
+            column.IsTotal || _effectiveColumnFields.Count == 0 ? group : group.Where(item => BuildKey(item, _effectiveColumnFields).Equals(column.Key)), column.ValueConfig);
+        var values = groups.ToDictionary(g => g.Key, g => sorts.Select(s => SortValue(g, s.Column!)).ToArray());
+        return groups.OrderBy(g => g, Comparer<IGrouping<PivotKey, TValue>>.Create((a, b) =>
+        {
+            // Keep parent groups together so row spans and subtotals stay valid.
+            for (var i = 0; i < _effectiveRowFields.Count - 1; i++)
+            {
+                var parent = ComparePivotValues(a.Key.RawParts[i], b.Key.RawParts[i]);
+                if (parent != 0) return GetSortDirection(_effectiveRowFields[i]) == SortDirection.Descending ? -Math.Sign(parent) : parent;
+            }
+            for (var i = 0; i < sorts.Length; i++)
+            {
+                var result = ComparePivotValues(values[a.Key][i], values[b.Key][i]);
+                if (result != 0) return sorts[i].Sort.Direction == SortDirection.Descending ? -Math.Sign(result) : result;
+            }
+            return CompareKeys(a.Key, b.Key, _effectiveRowFields);
+        })).ToList();
     }
 
     // ── Value helpers ───────────────────────────────────────────────
@@ -735,10 +842,9 @@ public partial class PivotControl<TValue>
 
     private PivotKey BuildKey(TValue item, IReadOnlyList<string> fields)
     {
-        var parts = fields
-            .Select(f => Convert.ToString(GetValue(item!, f), CultureInfo.CurrentCulture) ?? "")
-            .ToArray();
-        return new PivotKey(string.Join(" / ", parts), parts);
+        var values = fields.Select(f => GetValue(item!, f)).ToArray();
+        var parts = values.Select(value => Convert.ToString(value, CultureInfo.CurrentCulture) ?? "").ToArray();
+        return new PivotKey(string.Join(" / ", parts), parts, values);
     }
 
     private static object GetValue(object item, string field)
@@ -836,8 +942,9 @@ public partial class PivotControl<TValue>
 
     private sealed class PivotKey
     {
-        public PivotKey(string display, IReadOnlyList<string> parts)
-        { Display = display; Parts = parts; }
+        public PivotKey(string display, IReadOnlyList<string> parts, IReadOnlyList<object?>? rawParts = null)
+        { Display = display; Parts = parts; RawParts = rawParts ?? parts.Cast<object?>().ToArray(); }
+        public IReadOnlyList<object?> RawParts { get; }
         public static readonly PivotKey Empty = new("", Array.Empty<string>());
         public string Display { get; }
         public IReadOnlyList<string> Parts { get; }

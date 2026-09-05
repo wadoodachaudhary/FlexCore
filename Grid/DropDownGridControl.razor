@@ -3,7 +3,11 @@
 @typeparam TValue
 
 <div class="fx-dropdown-grid @CssClass @(Disabled ? "fx-disabled" : "") @(_isOpen ? "fx-open" : "")" style="@ComputedContainerStyle" @ref="_containerRef" @onkeydown="HandleKeyDown" @onkeydown:stopPropagation="true">
-    <div class="fx-dropdown-grid-input-wrap" @onmousedown="HandleInputWrapMouseDown" @onclick="ToggleDropdown">
+    <div class="fx-dropdown-grid-input-wrap"
+         @onmousedown="HandleInputWrapMouseDown"
+         @onmousedown:stopPropagation="true"
+         @onclick="ToggleDropdown"
+         @onclick:stopPropagation="true">
         <input type="text"
                class="fx-dropdown-grid-input"
                value="@DisplayText"
@@ -11,13 +15,17 @@
                readonly
                disabled="@Disabled"
                tabindex="@(Disabled ? -1 : 0)"
+               @onmousedown="HandleInputWrapMouseDown"
+               @onmousedown:stopPropagation="true"
+               @onclick="ToggleDropdown"
+               @onclick:stopPropagation="true"
                @ref="_inputRef" />
 
         @if (AllowClear && HasValue && !Disabled && !ReadOnly)
         {
             <button type="button" class="fx-dropdown-grid-clear-btn" @onclick:stopPropagation="true" @onclick="ClearValue" title="Clear">✕</button>
         }
-        <span class="fx-dropdown-grid-arrow" aria-hidden="true">▼</span>
+        <span class="fx-dropdown-grid-arrow" aria-hidden="true" @onclick="ToggleDropdown" @onclick:stopPropagation="true">▼</span>
     </div>
 
     @if (_isOpen)
@@ -25,7 +33,10 @@
         @* Fixed backdrop (same scheme as DropDownListControl): outside clicks
            close the popup instead of leaking into the page underneath. *@
         <button type="button" class="fx-dropdown-grid-backdrop" tabindex="-1" aria-hidden="true" @onclick="ClosePopupAsync"></button>
-        <div class="fx-dropdown-grid-popup shadow @(ShowColumnHeaders ? "" : "fx-dropdown-grid-headerless")" style="@ComputedPopupStyle" @onclick:stopPropagation="true">
+        <div class="fx-dropdown-grid-popup shadow @(ShowColumnHeaders ? "" : "fx-dropdown-grid-headerless")"
+             style="@ComputedPopupStyle"
+             @ref="_popupRef"
+             @onclick:stopPropagation="true">
             @if (ShowSearch)
             {
                 <div class="fx-dropdown-grid-search-bar p-1 border-bottom bg-light">

@@ -94,8 +94,37 @@
 }
 
 .fx-dropdown-grid-popup {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25), 0 4px 12px rgba(0, 0, 0, 0.15) !important;
     font-size: calc(13px * var(--fx-zoom, 1));
+    background-color: #ffffff !important;
+    border-radius: 6px;
+    border: 1px solid #cbd5e1;
+    overflow: hidden;
+}
+
+.fx-dropdown-grid-body {
+    background-color: #ffffff !important;
+}
+
+.fx-dropdown-grid-popup ::deep .fx-grid,
+.fx-dropdown-grid-popup ::deep .fx-grid-table,
+.fx-dropdown-grid-popup ::deep .fx-grid-body {
+    background-color: #ffffff !important;
+}
+
+.fx-dropdown-grid-popup ::deep .fx-grid-body tr,
+.fx-dropdown-grid-popup ::deep .fx-grid-body td.fx-cell {
+    background-color: #ffffff;
+}
+
+.fx-dropdown-grid-popup ::deep .fx-grid-body tr:hover td.fx-cell {
+    background-color: #f1f5f9;
+}
+
+.fx-dropdown-grid-popup ::deep .fx-grid-body tr.fx-selected td.fx-cell,
+.fx-dropdown-grid-popup ::deep .fx-grid-body tr.fx-cell-row-selected td.fx-cell {
+    background-color: #e0f2fe !important;
+    color: #0369a1 !important;
 }
 
 /* The popup's inner GridControl runs Density=Compact, whose rule sets

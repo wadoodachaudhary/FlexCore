@@ -409,7 +409,7 @@ public partial class GridControl<TValue>
         && _expressionFilterRoot == null
         && !_columnStates.Values.Any(state => state.SortDirection.HasValue || state.FilterActive)
         && _simpleColumnFilters.Count == 0
-        && _columnAdvancedFilters.Count == 0
+        && !_columnAdvancedFilters.Values.Any(IsAdvancedFilterCriteriaActive)
         && _columnCheckboxFilters.Count == 0
         && !IsPagingActive;
 

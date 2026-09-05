@@ -14,7 +14,9 @@
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
          @onkeydown="HandleKeyDown">
-        <div class="@DialogCssClass" style="@DialogStyle" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true">
+        <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
+             aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && !string.IsNullOrWhiteSpace(Header) ? _titleId : null)"
+             aria-describedby="@AriaDescribedBy" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true">
             <div class="fx-dialog-header"
                  @onmousedown="HandleDragStart"
                  @onmousedown:preventDefault="true"
@@ -33,7 +35,7 @@
                             @onclick="HandleWindowIconClick"
                             @onclick:stopPropagation="true"></button>
                 }
-                <span class="fx-dialog-title">@Header</span>
+                <span id="@_titleId" class="fx-dialog-title">@Header</span>
                 @if (ShowCloseIcon)
                 {
                     <button class="fx-dialog-close"
@@ -105,7 +107,10 @@
     /// keyboard input goes to the popup instead of the window under it.
     /// </summary>
     [Parameter] public bool AutoFocus { get; set; } = true;
+    private readonly string _titleId = $"fx-dialog-title-{Guid.NewGuid():N}";
     [Parameter] public string? Header { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public string? AriaDescribedBy { get; set; }
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool IsModal { get; set; } = true;

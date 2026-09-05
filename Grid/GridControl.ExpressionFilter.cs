@@ -63,6 +63,7 @@ public partial class GridControl<TValue>
             return;
         }
 
+        var applied = false;
         try
         {
             var parser = new ExpressionFilterParser(expression, BuildExpressionFilterColumnAliases());
@@ -71,6 +72,7 @@ public partial class GridControl<TValue>
             _expressionFilterDraft = expression;
             _expressionFilterError = null;
             _pageState.CurrentPage = 1;
+            applied = true;
         }
         catch (Exception ex)
         {
@@ -78,14 +80,21 @@ public partial class GridControl<TValue>
             _expressionFilterOpen = true;
         }
 
+        if (applied && UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        if (applied)
+            await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private async Task ClearExpressionFilterAsync()
     {
         ClearExpressionFilterState();
         _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
     private void ClearExpressionFilterState()
@@ -190,7 +199,7 @@ public partial class GridControl<TValue>
         public override bool Evaluate(GridControl<TValue> grid, TValue item)
         {
             var actual = grid.ResolveCellValue(item, _column);
-            return EvaluateExpressionFilterCondition(actual, _operator, _expected);
+            return grid.EvaluateExpressionFilterCondition(actual, _operator, _expected);
         }
     }
 
@@ -483,7 +492,7 @@ public partial class GridControl<TValue>
         End
     }
 
-    private static bool EvaluateExpressionFilterCondition(object? actual, string comparisonOperator, string expected)
+    private bool EvaluateExpressionFilterCondition(object? actual, string comparisonOperator, string expected)
     {
         var actualText = Convert.ToString(actual, CultureInfo.CurrentCulture) ?? string.Empty;
         var expectedText = expected.Trim();
@@ -498,13 +507,13 @@ public partial class GridControl<TValue>
             "<=" => CompareExpressionFilterValues(actual, actualText, expectedText) <= 0,
             "like" or "contains" => MatchesExpressionFilterLike(actualText, expectedText),
             "not like" => !MatchesExpressionFilterLike(actualText, expectedText),
-            "startswith" => actualText.StartsWith(expectedText, StringComparison.OrdinalIgnoreCase),
-            "endswith" => actualText.EndsWith(expectedText, StringComparison.OrdinalIgnoreCase),
+            "startswith" => actualText.StartsWith(expectedText, FilterTextComparison),
+            "endswith" => actualText.EndsWith(expectedText, FilterTextComparison),
             _ => false
         };
     }
 
-    private static int CompareExpressionFilterValues(object? actual, string actualText, string expectedText)
+    private int CompareExpressionFilterValues(object? actual, string actualText, string expectedText)
     {
         if (TryGetExpressionFilterDecimal(actual, actualText, out var actualDecimal)
             && TryGetExpressionFilterDecimal(expectedText, expectedText, out var expectedDecimal))
@@ -518,10 +527,10 @@ public partial class GridControl<TValue>
             && TryGetExpressionFilterBool(expectedText, expectedText, out var expectedBool))
             return actualBool.CompareTo(expectedBool);
 
-        return string.Compare(actualText, expectedText, StringComparison.OrdinalIgnoreCase);
+        return string.Compare(actualText, expectedText, FilterTextComparison);
     }
 
-    private static bool MatchesExpressionFilterLike(string actualText, string pattern)
+    private bool MatchesExpressionFilterLike(string actualText, string pattern)
     {
         if (pattern.Contains('%') || pattern.Contains('*') || pattern.Contains('_'))
         {
@@ -529,10 +538,13 @@ public partial class GridControl<TValue>
                 .Replace("%", ".*")
                 .Replace("\\*", ".*")
                 .Replace("_", ".") + "$";
-            return Regex.IsMatch(actualText, regex, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            var options = RegexOptions.CultureInvariant;
+            if (FilterSettingsRef?.EnableCaseSensitivity != true)
+                options |= RegexOptions.IgnoreCase;
+            return Regex.IsMatch(actualText, regex, options);
         }
 
-        return actualText.Contains(pattern, StringComparison.OrdinalIgnoreCase);
+        return actualText.Contains(pattern, FilterTextComparison);
     }
 
     private static bool TryGetExpressionFilterDecimal(object? value, string text, out decimal result)

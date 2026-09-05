@@ -5,11 +5,14 @@ using System.Reflection;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.JSInterop;
 
 namespace Fx.ControlKit.Grid;
 
 public partial class DropDownGridControl<TItem, TValue> : ComponentBase
 {
+    [Inject] private IJSRuntime JSRuntime { get; set; } = default!;
+
     [Parameter] public IEnumerable<TItem>? DataSource { get; set; }
     [Parameter] public TValue? Value { get; set; }
     [Parameter] public EventCallback<TValue> ValueChanged { get; set; }
@@ -60,6 +63,7 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
 
     private ElementReference _containerRef;
     private ElementReference _inputRef;
+    private ElementReference _popupRef;
     private GridControl<TItem>? _gridRef;
     // Row picks arrive through GridControl's EventsRef contract (the control
     // has no OnRowSelected parameter — the original wiring here was inert).
@@ -93,6 +97,14 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
                 StateHasChanged();
             }
         }
+        if (_isOpen)
+        {
+            try
+            {
+                await JSRuntime.InvokeVoidAsync("fxPositionDropdownGrid", _containerRef, _popupRef);
+            }
+            catch { }
+        }
         // The popup grid mounts a render after the open — apply the pending
         // keyboard highlight once it exists, then RETAKE focus: the reveal
         // scroll can land focus on the popup grid, which would route the next
@@ -111,13 +123,31 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
     }
 
     private string ComputedContainerStyle => $"width: {Width ?? "100%"}; position: relative;";
-    // z-index pairs with the fixed backdrop (9998) — same stacking scheme as
-    // DropDownListControl's panel, so the popup overlays grid/tree chrome.
-    private string ComputedPopupStyle => $"width: {PopupWidth ?? "450px"}; position: absolute; top: 100%; left: 0; z-index: 9999; background: #fff; border: 1px solid #ccc; border-radius: 4px;";
+    private string ComputedPopupStyle => $"width: {PopupWidth ?? "450px"}; position: fixed; top: -9999px; left: -9999px; z-index: 10001; background: #ffffff !important; border: 1px solid #cbd5e1; border-radius: 6px; box-shadow: 0 10px 30px rgba(0,0,0,0.25), 0 4px 12px rgba(0,0,0,0.15); visibility: hidden;";
 
     private bool HasValue => Value != null && !string.IsNullOrEmpty(Value.ToString());
 
-    private IEnumerable<TItem> FilteredDataSource => DataSource ?? Enumerable.Empty<TItem>();
+    private IEnumerable<TItem> FilteredDataSource
+    {
+        get
+        {
+            if (DataSource == null) return Enumerable.Empty<TItem>();
+            if (string.IsNullOrWhiteSpace(_searchText)) return DataSource;
+            var search = _searchText.Trim();
+            var props = typeof(TItem).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+            return DataSource.Where(item =>
+            {
+                if (item == null) return false;
+                foreach (var prop in props)
+                {
+                    var val = prop.GetValue(item)?.ToString();
+                    if (!string.IsNullOrEmpty(val) && val.Contains(search, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                return false;
+            });
+        }
+    }
 
     private string DisplayText
     {
@@ -150,9 +180,10 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
             await ClosePopupAsync();
             return;
         }
-        if (!pressStartedHere) return;   // mid-press mount retarget — see field note
+        if (OpenOnRender && !pressStartedHere) return;
         SeedKeyboardIndex();
         _isOpen = true;
+        StateHasChanged();
     }
 
     /// <summary>Closes the popup (if open) and raises <see cref="Closed"/>.</summary>
@@ -163,7 +194,13 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
         _searchText = "";
         _keyboardIndex = -1;
         _pendingKeyboardHighlight = false;
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("fxResetDropdownGrid", _containerRef);
+        }
+        catch { }
         if (Closed.HasDelegate) await Closed.InvokeAsync();
+        StateHasChanged();
     }
 
     // ── Keyboard navigation (owner directive 2026-09-02): Down opens the
@@ -175,7 +212,7 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
     private int _keyboardIndex = -1;
     private bool _pendingKeyboardHighlight;
 
-    private List<TItem> KeyboardItems => (DataSource ?? Enumerable.Empty<TItem>()).ToList();
+    private List<TItem> KeyboardItems => FilteredDataSource.ToList();
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
@@ -263,6 +300,8 @@ public partial class DropDownGridControl<TItem, TValue> : ComponentBase
     private void OnSearchInput(ChangeEventArgs e)
     {
         _searchText = e.Value?.ToString() ?? "";
+        _keyboardIndex = 0;
+        StateHasChanged();
     }
 
     private async Task OnGridRowSelected(TItem? selectedItem)

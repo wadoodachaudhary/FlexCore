@@ -1,14 +1,15 @@
 using Microsoft.AspNetCore.Components;
+using System.Globalization;
 
 namespace Fx.ControlKit.Grid;
 
 public partial class GridControl<TValue>
 {
     /// <summary>
-    /// Optional range provider for large, flat datasets. When null, GridControl
+    /// Optional range provider for large datasets. When null, GridControl
     /// continues to use <see cref="DataSource"/> and its existing local pipeline.
-    /// The initial provider mode supports a bounded, fixed-height, ungrouped body;
-    /// paging and client-computed aggregate footers are intentionally bypassed.
+    /// Flat row windows are the default; provider-executed lazy grouping is an
+    /// additive opt-in through <see cref="EnableProviderGrouping"/>.
     /// </summary>
     [Parameter] public GridItemsProvider<TValue>? ItemsProvider { get; set; }
 
@@ -30,6 +31,18 @@ public partial class GridControl<TValue>
     /// </summary>
     [Parameter] public int ItemsProviderCacheSize { get; set; } = 4;
 
+    /// <summary>
+    /// Opts the Excel-style checklist menu into distinct-value requests through
+    /// <see cref="ItemsProvider"/>. The default is false so existing providers
+    /// receive exactly the same request purposes as before. When enabled, the
+    /// provider receives <see cref="GridItemsRequestPurpose.FilterValues"/> with
+    /// <see cref="GridItemsRequest.FilterField"/> populated.
+    /// </summary>
+    [Parameter] public bool EnableProviderFilterValueRequests { get; set; }
+
+    /// <summary>Maximum distinct values requested for one checklist menu.</summary>
+    [Parameter] public int ProviderFilterValueRequestSize { get; set; } = 1_000;
+
     /// <summary>True while the current provider request is outstanding.</summary>
     public bool IsItemsProviderLoading { get; private set; }
 
@@ -38,6 +51,12 @@ public partial class GridControl<TValue>
     /// remains committed when a request fails.
     /// </summary>
     public Exception? ItemsProviderLastError { get; private set; }
+
+    /// <summary>True while an opt-in provider checklist-value request is running.</summary>
+    public bool IsProviderFilterValuesLoading { get; private set; }
+
+    /// <summary>Most recent provider checklist-value failure.</summary>
+    public Exception? ProviderFilterValuesLastError { get; private set; }
 
     private bool UsesItemsProvider => ItemsProvider is not null;
 
@@ -48,11 +67,19 @@ public partial class GridControl<TValue>
     private long _providerRequestSerial;
     private CancellationTokenSource? _providerLoadCts;
     private GridItemsProvider<TValue>? _observedItemsProvider;
+    private Func<TValue, object?>? _observedItemKeySelector;
     private object? _observedItemsProviderContextKey;
     private int _observedProviderQuerySignature;
+    private bool _observedProviderGroupingMode;
     private bool _providerIdentityCaptured;
     private GridQueryDescriptor _providerQuery = GridQueryDescriptor.Empty;
     private readonly LinkedList<ProviderCacheEntry> _providerCache = new();
+    private readonly Dictionary<string, IReadOnlyList<FilterValueCandidate>> _providerFilterValueCandidates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, bool> _providerFilterValuesHaveMore =
+        new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _providerFilterValuesCts;
+    private long _providerFilterValuesRequestSerial;
 
     private sealed record ProviderCacheEntry(
         long QueryVersion,
@@ -100,6 +127,11 @@ public partial class GridControl<TValue>
         return InvokeAsync(async () =>
         {
             CaptureCurrentProviderIdentity(forceNewGeneration: true);
+            if (UsesProviderGrouping)
+            {
+                await LoadAndCommitProviderRootGroupsAsync();
+                return;
+            }
             await LoadAndCommitProviderWindowAsync(
                 startIndex: 0,
                 count: Math.Max(1, _winCount),
@@ -125,6 +157,58 @@ public partial class GridControl<TValue>
             throw new InvalidOperationException(
                 $"{nameof(ItemsProvider)} currently requires a bounded {nameof(Height)}.");
         }
+
+        // A flat provider can only fetch an index range, so the two spacer rows
+        // must represent exactly one fixed-pitch rendered row per returned item.
+        // Local DataSource grids can safely fall back to render-all for variable
+        // height features; a provider cannot do that without loading the entire
+        // result set, so fail early instead of producing an incorrect scroll
+        // extent (and the characteristic white gaps near a window boundary).
+        if (!IsProviderGroupingConfiguredForValidation())
+        {
+            var incompatibleOptions = new List<string>();
+            if (RowTemplate is not null)
+                incompatibleOptions.Add(nameof(RowTemplate));
+            if (DataLayoutMode == GridDataLayoutMode.Stacked)
+                incompatibleOptions.Add($"{nameof(DataLayoutMode)}=Stacked");
+            if (AdaptiveMode != GridAdaptiveMode.None)
+                incompatibleOptions.Add($"{nameof(AdaptiveMode)}={AdaptiveMode}");
+            if (HasDetailTemplate)
+                incompatibleOptions.Add(nameof(DetailTemplate));
+            if (RowHeightSelector is not null)
+                incompatibleOptions.Add(nameof(RowHeightSelector));
+            if (AllowRowResizing || _runtimeRowHeights.Count > 0)
+                incompatibleOptions.Add($"{nameof(AllowRowResizing)} / runtime row heights");
+            if (EditSettingsRef is { Mode: EditMode.Inline } inlineEdit
+                && (inlineEdit.AllowEditing || inlineEdit.AllowAdding))
+            {
+                incompatibleOptions.Add("inline row editing/adding");
+            }
+
+            if (incompatibleOptions.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Flat {nameof(ItemsProvider)} mode requires one deterministic fixed-height row " +
+                    $"per item and cannot be combined with: {string.Join(", ", incompatibleOptions)}. " +
+                    $"Remove those options, or use {nameof(DataSource)} so GridControl can safely " +
+                    "fall back to rendering all rows. DetailTemplate is also supported with lazy " +
+                    $"provider grouping when {nameof(EnableProviderGrouping)}, {nameof(AllowGrouping)}, " +
+                    $"and at least one {nameof(GroupColumns)} entry are configured.");
+            }
+        }
+    }
+
+    private bool IsProviderGroupingConfiguredForValidation()
+    {
+        if (!EnableProviderGrouping || !AllowGrouping)
+            return false;
+
+        // Validation runs before SyncGroupDescriptorsFromParameter. When the
+        // host replaces GroupColumns, inspect that incoming list; otherwise the
+        // live descriptors may include groups created interactively in the UI.
+        return ReferenceEquals(GroupColumns, _lastSyncedGroupColumns)
+            ? _groupDescriptors.Count > 0
+            : GroupColumns?.Any(field => !string.IsNullOrWhiteSpace(field)) == true;
     }
 
     /// <summary>
@@ -142,7 +226,18 @@ public partial class GridControl<TValue>
         }
 
         var changed = CaptureCurrentProviderIdentity(forceNewGeneration: false);
-        if (!changed && _providerTotalCount >= 0)
+        if (UsesProviderGrouping)
+        {
+            if (!changed && (_providerGroupsLoaded || IsItemsProviderLoading))
+                return;
+
+            await LoadAndCommitProviderRootGroupsAsync();
+            return;
+        }
+        if (!changed
+            && (_providerTotalCount >= 0
+                || IsItemsProviderLoading
+                || ItemsProviderLastError is not null))
             return;
 
         await LoadAndCommitProviderWindowAsync(
@@ -160,25 +255,48 @@ public partial class GridControl<TValue>
         // render. Delegate equality compares method + target and therefore does
         // not turn those harmless allocations into a new query generation.
         var providerChanged = !Equals(_observedItemsProvider, ItemsProvider);
+        var itemKeySelectorChanged = !Equals(_observedItemKeySelector, ItemKeySelector);
         var contextChanged = !_providerIdentityCaptured
             || !Equals(_observedItemsProviderContextKey, ItemsProviderContextKey);
         var queryChanged = !_providerIdentityCaptured
             || signature != _observedProviderQuerySignature;
+        var groupingModeChanged = _providerIdentityCaptured
+            && _observedProviderGroupingMode != UsesProviderGrouping;
 
-        if (!forceNewGeneration && !providerChanged && !contextChanged && !queryChanged)
+        if (!forceNewGeneration
+            && !providerChanged
+            && !itemKeySelectorChanged
+            && !contextChanged
+            && !queryChanged
+            && !groupingModeChanged)
             return false;
 
         _providerIdentityCaptured = true;
         _observedItemsProvider = ItemsProvider;
+        _observedItemKeySelector = ItemKeySelector;
         _observedItemsProviderContextKey = ItemsProviderContextKey;
         _observedProviderQuerySignature = signature;
+        _observedProviderGroupingMode = UsesProviderGrouping;
         _providerQuery = query;
         _providerQueryVersion++;
+        // Cell/row selection and edit targets store loaded object references or
+        // positional row indexes. A sort/filter/search/context change can put a
+        // different database record at the same index, so retaining that state
+        // could highlight or edit the wrong row. Clear it at the generation
+        // boundary; SetStateAsync restores identities after the new first range
+        // is committed when those identities are available in that range.
+        ClearTransientSelectionState(clearRows: true);
+        if (_isEditing)
+            CancelEdit();
+        _expandedRows.Clear();
         // Keep the last committed rows and total painted while the first range
         // for this generation is in flight. They are replaced atomically only
         // after the new request succeeds.
         _providerCache.Clear();
+        ResetProviderGroupingState();
         CancelProviderLoad();
+        CancelProviderFilterValuesLoad();
+        CancelProviderExport();
         ItemsProviderLastError = null;
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
@@ -187,16 +305,21 @@ public partial class GridControl<TValue>
 
     private GridQueryDescriptor BuildProviderQueryDescriptor()
     {
-        var sorts = _columnStates
-            .Where(pair => pair.Value.SortDirection.HasValue)
-            .Select(pair => new GridSortDescriptor(pair.Key, pair.Value.SortDirection!.Value))
-            .ToArray();
+        var sorts = GetActiveSortDescriptors();
 
         var filters = new List<GridFilterDescriptor>();
         foreach (var pair in _columnStates.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
         {
             var state = pair.Value;
-            if (!string.IsNullOrWhiteSpace(state.FilterValue))
+            var hasFirstCondition = !string.IsNullOrWhiteSpace(state.FilterValue)
+                || IsValueOptionalFilterOperator(state.FilterOperator);
+            var hasSecondCondition = EnableAdvancedFilterPopup
+                && (!string.IsNullOrWhiteSpace(state.SecondFilterValue)
+                    || IsValueOptionalFilterOperator(state.SecondFilterOperator));
+            var blankFilter = EnableBlankRowFilter
+                ? state.BlankRowFilter
+                : BlankRowFilterMode.All;
+            if (hasFirstCondition || hasSecondCondition || blankFilter != BlankRowFilterMode.All)
             {
                 filters.Add(new GridFilterDescriptor(
                     pair.Key,
@@ -205,7 +328,14 @@ public partial class GridControl<TValue>
                     state.FilterValue,
                     Array.Empty<string>(),
                     null,
-                    null));
+                    null)
+                {
+                    Source = GridProviderFilterSource.ColumnMenu,
+                    SecondOperator = hasSecondCondition ? state.SecondFilterOperator : null,
+                    SecondValue = hasSecondCondition ? state.SecondFilterValue : null,
+                    LogicalOperator = state.LogicalFilterOperator,
+                    BlankRowFilter = blankFilter
+                });
             }
 
             if (state.UseCheckedFilter)
@@ -217,7 +347,26 @@ public partial class GridControl<TValue>
                     null,
                     state.CheckedFilterValues.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
                     null,
-                    null));
+                    null)
+                {
+                    Source = GridProviderFilterSource.ColumnMenu
+                });
+            }
+
+            if (state.UseNumericRangeFilter)
+            {
+                filters.Add(new GridFilterDescriptor(
+                    pair.Key,
+                    GridProviderFilterKind.NumericRanges,
+                    TextFilterOperator.ChooseOne,
+                    null,
+                    state.CheckedNumericRangeKeys.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
+                    null,
+                    null)
+                {
+                    Source = GridProviderFilterSource.ColumnMenu,
+                    NumericRanges = BuildProviderNumericRanges(pair.Key, state.CheckedNumericRangeKeys)
+                });
             }
 
             if (state.UseNumericBoundsFilter)
@@ -229,24 +378,63 @@ public partial class GridControl<TValue>
                     null,
                     Array.Empty<string>(),
                     state.NumericFilterMin,
-                    state.NumericFilterMax));
+                    state.NumericFilterMax)
+                {
+                    Source = GridProviderFilterSource.ColumnMenu
+                });
             }
         }
 
-        // The lightweight filter row is an additive feature implemented outside
-        // ColumnState. Emit it as a normal contains predicate for provider hosts.
+        // The typed filter row is additive state outside ColumnState. Emit its
+        // selected per-column operator for provider hosts.
         foreach (var pair in _simpleColumnFilters.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
         {
-            if (string.IsNullOrWhiteSpace(pair.Value))
+            var column = FindColumnByField(pair.Key);
+            var filterOperator = column == null
+                ? (_filterRowOperators.TryGetValue(pair.Key, out var configuredOperator)
+                    ? configuredOperator
+                    : TextFilterOperator.Contains)
+                : GetFilterRowOperator(column);
+            if (string.IsNullOrWhiteSpace(pair.Value) && !IsValueOptionalFilterOperator(filterOperator))
                 continue;
             filters.Add(new GridFilterDescriptor(
                 pair.Key,
                 GridProviderFilterKind.Text,
-                TextFilterOperator.Contains,
+                filterOperator,
                 pair.Value,
                 Array.Empty<string>(),
                 null,
-                null));
+                null)
+            {
+                Source = GridProviderFilterSource.FilterRow
+            });
+        }
+
+        foreach (var pair in _columnAdvancedFilters.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var criteria = pair.Value;
+            if (!IsAdvancedFilterCriteriaActive(criteria))
+                continue;
+
+            var hasFirstCondition = IsAdvancedFilterConditionActive(criteria.Operator1, criteria.Value1);
+            var hasSecondCondition = IsAdvancedFilterConditionActive(criteria.Operator2, criteria.Value2);
+
+            filters.Add(new GridFilterDescriptor(
+                pair.Key,
+                GridProviderFilterKind.Text,
+                MapAdvancedFilterOperator(criteria.Operator1),
+                criteria.Value1,
+                Array.Empty<string>(),
+                null,
+                null)
+            {
+                Source = GridProviderFilterSource.AdvancedColumn,
+                AdvancedOperator = criteria.Operator1,
+                SecondOperator = hasSecondCondition ? MapAdvancedFilterOperator(criteria.Operator2) : null,
+                SecondAdvancedOperator = hasSecondCondition ? criteria.Operator2 : null,
+                SecondValue = hasSecondCondition ? criteria.Value2 : null,
+                LogicalOperator = criteria.LogicalOperator
+            });
         }
 
         foreach (var pair in _columnCheckboxFilters.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
@@ -258,7 +446,10 @@ public partial class GridControl<TValue>
                 null,
                 pair.Value.OrderBy(value => value, StringComparer.Ordinal).ToArray(),
                 null,
-                null));
+                null)
+            {
+                Source = GridProviderFilterSource.ColumnCheckBox
+            });
         }
 
         var searchFields = VisibleColumns
@@ -267,13 +458,240 @@ public partial class GridControl<TValue>
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return new GridQueryDescriptor(sorts, filters, SearchText, searchFields);
+        var groups = _groupDescriptors
+            .Select(group => new GridGroupQueryDescriptor(group.Field)
+            {
+                Direction = GetGroupSortDirection(group.Field)
+            })
+            .ToArray();
+        var aggregates = (AggregateRows ?? Enumerable.Empty<AggregateRow>())
+            .SelectMany(row => row.Columns)
+            .Where(column => !string.IsNullOrWhiteSpace(column.Field))
+            .Select(column => new GridAggregateQueryDescriptor(column.Field, column.Type))
+            .Distinct()
+            .ToArray();
+
+        return new GridQueryDescriptor(sorts, filters, SearchText, searchFields)
+        {
+            ExpressionFilterText = _expressionFilterText,
+            Groups = groups,
+            Aggregates = aggregates,
+            CaseSensitive = FilterSettingsRef?.EnableCaseSensitivity == true
+        };
+    }
+
+    private async Task LoadProviderFilterValuesAsync(string field)
+    {
+        var provider = ItemsProvider;
+        if (provider == null || !EnableProviderFilterValueRequests || string.IsNullOrWhiteSpace(field))
+            return;
+
+        CancelProviderFilterValuesLoad();
+        var cts = _providerFilterValuesCts = new CancellationTokenSource();
+        var requestSerial = ++_providerFilterValuesRequestSerial;
+        var queryVersion = _providerQueryVersion;
+        var contextKey = ItemsProviderContextKey;
+        IsProviderFilterValuesLoading = true;
+        var applyChecklistSearch = false;
+        ProviderFilterValuesLastError = null;
+        _providerFilterValueCandidates.Remove(field);
+        _providerFilterValuesHaveMore.Remove(field);
+
+        try
+        {
+            // Distinct values should be constrained by the other active
+            // columns, not by the field whose checklist is being edited.
+            var query = BuildProviderQueryDescriptor();
+            query = query with
+            {
+                Filters = query.Filters
+                    .Where(filter => !string.Equals(filter.Field, field, StringComparison.OrdinalIgnoreCase))
+                    .ToArray()
+            };
+
+            var result = await provider(new GridItemsRequest(
+                0,
+                Math.Clamp(ProviderFilterValueRequestSize, 1, 100_000),
+                queryVersion,
+                true,
+                query,
+                contextKey,
+                cts.Token)
+            {
+                Purpose = GridItemsRequestPurpose.FilterValues,
+                FilterField = field
+            });
+
+            if (cts.IsCancellationRequested
+                || requestSerial != _providerFilterValuesRequestSerial
+                || queryVersion != _providerQueryVersion
+                || !Equals(provider, ItemsProvider)
+                || !Equals(contextKey, ItemsProviderContextKey))
+                return;
+
+            var candidates = new Dictionary<string, FilterValueCandidate>(FilterTextComparer);
+            foreach (var value in result.FilterValues ?? Array.Empty<GridProviderFilterValue>())
+            {
+                var rawValue = value.Value ?? string.Empty;
+                var displayText = string.IsNullOrWhiteSpace(value.DisplayText)
+                    ? (string.IsNullOrEmpty(rawValue) ? "(blank)" : rawValue)
+                    : value.DisplayText;
+                var candidate = new FilterValueCandidate(rawValue, displayText, value.Count);
+                if (!candidates.TryGetValue(rawValue, out var existing)
+                    || IsBetterFilterCandidate(candidate, existing))
+                {
+                    candidates[rawValue] = candidate;
+                }
+            }
+
+            var ordered = candidates.Values
+                .OrderBy(value => value.DisplayText, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(value => value.Value, StringComparer.CurrentCultureIgnoreCase)
+                .ToArray();
+            _providerFilterValueCandidates[field] = ordered;
+            _providerFilterValuesHaveMore[field] = result.HasMore
+                || (result.ResultSetCount.HasValue && result.ResultSetCount.Value > ordered.Length);
+            _filterChecklistCommitError = null;
+
+            // An unfiltered checklist represents "all" without an active
+            // descriptor. Seed the newly-arrived universe only when the user
+            // has not already changed the draft.
+            var state = GetColumnState(field);
+            if (IsCurrentFilterPopupField(field) && !_filterChecklistDraftTouched && !state.UseCheckedFilter)
+            {
+                _filterCheckedDraft = new HashSet<string>(ordered.Select(value => value.Value), FilterTextComparer);
+            }
+            applyChecklistSearch = IsCurrentFilterPopupField(field)
+                && !string.IsNullOrWhiteSpace(_filterChecklistSearchDraft);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested)
+        {
+            // Closing/reopening the menu superseded this request.
+        }
+        catch (Exception ex)
+        {
+            if (!cts.IsCancellationRequested && requestSerial == _providerFilterValuesRequestSerial)
+                ProviderFilterValuesLastError = ex;
+        }
+        finally
+        {
+            if (ReferenceEquals(_providerFilterValuesCts, cts))
+            {
+                _providerFilterValuesCts = null;
+                IsProviderFilterValuesLoading = false;
+            }
+            cts.Dispose();
+            await InvokeAsync(StateHasChanged);
+        }
+
+        // A user may type before the distinct-value request completes. Apply
+        // that search to the returned universe once the loading guard is clear.
+        if (applyChecklistSearch && IsCurrentFilterPopupField(field)
+            && requestSerial == _providerFilterValuesRequestSerial)
+            await SetFilterChecklistSearchAsync(_filterChecklistSearchDraft);
+    }
+
+    private void CancelProviderFilterValuesLoad()
+    {
+        if (_providerFilterValuesCts is null)
+            return;
+        try { _providerFilterValuesCts.Cancel(); }
+        catch (ObjectDisposedException) { }
+        _providerFilterValuesCts = null;
+        IsProviderFilterValuesLoading = false;
+    }
+
+    private static bool IsValueOptionalFilterOperator(TextFilterOperator filterOperator) =>
+        filterOperator is TextFilterOperator.IsEmpty or TextFilterOperator.IsNotEmpty;
+
+    private static bool IsValueOptionalAdvancedFilterOperator(GridFilterOperator filterOperator) =>
+        filterOperator is GridFilterOperator.IsNull
+            or GridFilterOperator.IsNotNull
+            or GridFilterOperator.IsEmpty
+            or GridFilterOperator.IsNotEmpty;
+
+    private static TextFilterOperator MapAdvancedFilterOperator(GridFilterOperator filterOperator) =>
+        filterOperator switch
+        {
+            GridFilterOperator.Equals => TextFilterOperator.Equals,
+            GridFilterOperator.NotEquals => TextFilterOperator.DoesNotEqual,
+            GridFilterOperator.Contains => TextFilterOperator.Contains,
+            GridFilterOperator.DoesNotContain => TextFilterOperator.DoesNotContain,
+            GridFilterOperator.StartsWith => TextFilterOperator.BeginsWith,
+            GridFilterOperator.EndsWith => TextFilterOperator.EndsWith,
+            GridFilterOperator.GreaterThan => TextFilterOperator.GreaterThan,
+            GridFilterOperator.GreaterThanOrEquals => TextFilterOperator.GreaterThanOrEqual,
+            GridFilterOperator.LessThan => TextFilterOperator.LessThan,
+            GridFilterOperator.LessThanOrEquals => TextFilterOperator.LessThanOrEqual,
+            GridFilterOperator.IsNull or GridFilterOperator.IsEmpty => TextFilterOperator.IsEmpty,
+            GridFilterOperator.IsNotNull or GridFilterOperator.IsNotEmpty => TextFilterOperator.IsNotEmpty,
+            _ => TextFilterOperator.Contains
+        };
+
+    private IReadOnlyList<GridNumericRangeDescriptor> BuildProviderNumericRanges(
+        string field,
+        IReadOnlySet<string> selectedKeys)
+    {
+        var ranges = new List<GridNumericRangeDescriptor>();
+        var known = GetNumericFilterRanges(field)
+            .Where(range => selectedKeys.Contains(range.Key))
+            .ToDictionary(range => range.Key, StringComparer.Ordinal);
+        var restored = _restoredProviderNumericRanges.TryGetValue(field, out var restoredRanges)
+            ? restoredRanges.ToDictionary(range => range.Key, StringComparer.Ordinal)
+            : new Dictionary<string, GridNumericRangeDescriptor>(StringComparer.Ordinal);
+
+        foreach (var key in selectedKeys.OrderBy(value => value, StringComparer.Ordinal))
+        {
+            if (known.TryGetValue(key, out var range))
+            {
+                ranges.Add(new GridNumericRangeDescriptor(
+                    range.Key,
+                    range.IsBlank ? null : range.Min,
+                    range.IsBlank ? null : range.Max,
+                    range.IncludeMax,
+                    range.IsBlank));
+                continue;
+            }
+
+            if (restored.TryGetValue(key, out var restoredRange))
+            {
+                ranges.Add(restoredRange);
+                continue;
+            }
+
+            // Keys are deliberately self-describing. This fallback preserves
+            // restored/provider-only state even when no local DataSource exists.
+            if (string.Equals(key, NumericFilterRange.BlankKey, StringComparison.Ordinal))
+            {
+                ranges.Add(new GridNumericRangeDescriptor(key, null, null, false, true));
+                continue;
+            }
+
+            var parts = key.Split(':');
+            if (parts.Length == 2
+                && string.Equals(parts[0], "value", StringComparison.Ordinal)
+                && decimal.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var exact))
+            {
+                ranges.Add(new GridNumericRangeDescriptor(key, exact, exact, true, false));
+            }
+            else if (parts.Length == 4
+                && string.Equals(parts[0], "range", StringComparison.Ordinal)
+                && decimal.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var minimum)
+                && decimal.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out var maximum))
+            {
+                ranges.Add(new GridNumericRangeDescriptor(key, minimum, maximum, false, false));
+            }
+        }
+
+        return ranges;
     }
 
     private static int ComputeProviderQuerySignature(GridQueryDescriptor query)
     {
         var hash = new HashCode();
         hash.Add(query.SearchText, StringComparer.Ordinal);
+        hash.Add(query.ExpressionFilterText, StringComparer.Ordinal);
+        hash.Add(query.CaseSensitive);
         foreach (var field in query.SearchFields)
             hash.Add(field, StringComparer.OrdinalIgnoreCase);
         foreach (var sort in query.Sorts)
@@ -289,8 +707,33 @@ public partial class GridControl<TValue>
             hash.Add(filter.Value, StringComparer.Ordinal);
             hash.Add(filter.Minimum);
             hash.Add(filter.Maximum);
+            hash.Add(filter.Source);
+            hash.Add(filter.SecondOperator);
+            hash.Add(filter.AdvancedOperator);
+            hash.Add(filter.SecondAdvancedOperator);
+            hash.Add(filter.SecondValue, StringComparer.Ordinal);
+            hash.Add(filter.LogicalOperator);
+            hash.Add(filter.BlankRowFilter);
             foreach (var value in filter.Values)
                 hash.Add(value, StringComparer.Ordinal);
+            foreach (var range in filter.NumericRanges)
+            {
+                hash.Add(range.Key, StringComparer.Ordinal);
+                hash.Add(range.Minimum);
+                hash.Add(range.Maximum);
+                hash.Add(range.IncludeMaximum);
+                hash.Add(range.IsBlank);
+            }
+        }
+        foreach (var group in query.Groups)
+        {
+            hash.Add(group.Field, StringComparer.OrdinalIgnoreCase);
+            hash.Add(group.Direction);
+        }
+        foreach (var aggregate in query.Aggregates)
+        {
+            hash.Add(aggregate.Field, StringComparer.OrdinalIgnoreCase);
+            hash.Add(aggregate.Type);
         }
         return hash.ToHashCode();
     }
@@ -345,9 +788,13 @@ public partial class GridControl<TValue>
         var serial = ++_providerRequestSerial;
         IsItemsProviderLoading = true;
         ItemsProviderLastError = null;
+        var renderInitialStatus = _providerTotalCount < 0 && _providerWindowItems.Count == 0;
 
         try
         {
+            if (renderInitialStatus)
+                await InvokeAsync(StateHasChanged);
+
             var request = new GridItemsRequest(
                 startIndex,
                 count,
@@ -370,6 +817,11 @@ public partial class GridControl<TValue>
             var items = (result.Items ?? Array.Empty<TValue>())
                 .Take(count)
                 .ToArray();
+            // Flat providers can return authoritative aggregates for the
+            // complete query just like grouped providers. Keep them outside
+            // the range cache so later window navigation never replaces the
+            // totals with calculations over only the painted rows.
+            CaptureProviderAggregates(result.Aggregates, _providerQueryAggregates);
             var entry = new ProviderCacheEntry(queryVersion, startIndex, items, totalCount);
             AddProviderCacheEntry(entry);
             return new ProviderWindow(startIndex, items, totalCount);
@@ -386,11 +838,19 @@ public partial class GridControl<TValue>
         }
         finally
         {
+            var renderSettledStatus = false;
             if (serial == _providerRequestSerial)
+            {
                 IsItemsProviderLoading = false;
+                // Success is rendered after CommitProviderWindow. Here only a
+                // failure needs a render because there is no window to commit.
+                renderSettledStatus = ItemsProviderLastError is not null;
+            }
             if (ReferenceEquals(_providerLoadCts, cts))
                 _providerLoadCts = null;
             cts.Dispose();
+            if (renderSettledStatus)
+                await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -445,6 +905,9 @@ public partial class GridControl<TValue>
         int scrollDirection = 0,
         bool forceRecenter = false)
     {
+        if (UsesProviderGrouping)
+            return ProviderScrollLoadStatus.NoChange;
+
         var oldStart = _winStart;
         var oldCount = _winCount;
         var changed = UpdateGridWindow(
@@ -499,22 +962,34 @@ public partial class GridControl<TValue>
     private void ResetItemsProviderState()
     {
         CancelProviderLoad();
+        CancelProviderFilterValuesLoad();
+        CancelProviderExport();
         _providerIdentityCaptured = false;
         _observedItemsProvider = null;
+        _observedItemKeySelector = null;
         _observedItemsProviderContextKey = null;
         _observedProviderQuerySignature = 0;
+        _observedProviderGroupingMode = false;
         _providerQuery = GridQueryDescriptor.Empty;
         _providerWindowItems = Array.Empty<TValue>();
         _providerWindowStart = 0;
         _providerTotalCount = -1;
         _providerCache.Clear();
+        _providerFilterValueCandidates.Clear();
+        _providerFilterValuesHaveMore.Clear();
+        ResetProviderGroupingState();
         IsItemsProviderLoading = false;
         ItemsProviderLastError = null;
+        ProviderFilterValuesLastError = null;
     }
 
     private void DisposeItemsProviderState()
     {
         CancelProviderLoad();
+        CancelProviderFilterValuesLoad();
         _providerCache.Clear();
+        _providerFilterValueCandidates.Clear();
+        _providerFilterValuesHaveMore.Clear();
+        ResetProviderGroupingState();
     }
 }

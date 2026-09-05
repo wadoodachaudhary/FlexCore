@@ -1,8 +1,5 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Globalization;
+using System.Text.Json;
 using Fx.ControlKit.Grid;
 using Microsoft.AspNetCore.Components;
 
@@ -12,7 +9,16 @@ public sealed class FilterProperty
 {
     public string Property { get; set; } = "";
     public string? Title { get; set; }
+    public string DisplayTitle => Title ?? Property;
     public Type Type { get; set; } = typeof(string);
+    public RenderFragment<FilterValueTemplateContext>? ValueTemplate { get; set; }
+}
+
+public sealed class FilterValueTemplateContext
+{
+    public required FilterProperty Property { get; init; }
+    public required FilterCondition Condition { get; init; }
+    public required Func<string?, Task> SetValueAsync { get; init; }
 }
 
 public sealed class FilterCondition
@@ -34,133 +40,114 @@ public partial class DataFilterControl : ComponentBase
     [Parameter] public List<FilterProperty> Properties { get; set; } = new();
     [Parameter] public FilterGroup? Value { get; set; }
     [Parameter] public EventCallback<FilterGroup> ValueChanged { get; set; }
+    /// <summary>Human-readable expression text; use BuildPredicate for execution.</summary>
     [Parameter] public EventCallback<string> OnExpressionChanged { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public CultureInfo Culture { get; set; } = CultureInfo.CurrentCulture;
+    [Parameter] public bool CaseSensitive { get; set; }
 
     public FilterGroup RootGroup { get; private set; } = new();
+    private FilterGroup? _lastValue;
+    private bool _initialized;
 
-    protected override void OnInitialized()
+    protected override void OnParametersSet()
     {
-        RootGroup = Value ?? new FilterGroup();
-        if (RootGroup.Conditions.Count == 0 && Properties.Count > 0)
+        if (!_initialized || !ReferenceEquals(Value, _lastValue))
         {
-            RootGroup.Conditions.Add(new FilterCondition
-            {
-                Field = Properties[0].Property,
-                Operator = GridFilterOperator.Contains,
-                Value = ""
-            });
+            RootGroup = Value ?? new FilterGroup();
+            if (Value == null && Properties.Count > 0)
+                RootGroup.Conditions.Add(NewCondition());
+            _lastValue = Value;
+            _initialized = true;
         }
     }
 
-    private void SetGroupOperator(FilterGroup group, LogicalFilterOperator op)
-    {
-        group.LogicalOperator = op;
-        NotifyChange();
-    }
+    /// <summary>Builds a snapshot predicate for local data. Invalid values throw FormatException.</summary>
+    public Func<T, bool> BuildPredicate<T>() => FilterEvaluator.BuildPredicate<T>(RootGroup, Properties, Culture, CaseSensitive);
 
-    private void AddCondition(FilterGroup group)
+    private FilterProperty? PropertyFor(FilterCondition condition) => Properties.FirstOrDefault(p => p.Property == condition.Field);
+    private Type ValueType(FilterCondition condition) => Nullable.GetUnderlyingType(PropertyFor(condition)?.Type ?? typeof(string))
+        ?? PropertyFor(condition)?.Type ?? typeof(string);
+    private FilterCondition NewCondition() => new()
     {
-        var defaultField = Properties.FirstOrDefault()?.Property ?? "";
-        group.Conditions.Add(new FilterCondition
-        {
-            Field = defaultField,
-            Operator = GridFilterOperator.Contains,
-            Value = ""
-        });
-        NotifyChange();
-    }
+        Field = Properties.FirstOrDefault()?.Property ?? "",
+        Operator = (Nullable.GetUnderlyingType(Properties.FirstOrDefault()?.Type ?? typeof(string))
+            ?? Properties.FirstOrDefault()?.Type ?? typeof(string)) == typeof(string)
+            ? GridFilterOperator.Contains : GridFilterOperator.Equals
+    };
 
-    private void RemoveCondition(FilterGroup group, FilterCondition condition)
-    {
-        group.Conditions.Remove(condition);
-        NotifyChange();
-    }
-
-    private void AddSubGroup(FilterGroup group)
-    {
-        var defaultField = Properties.FirstOrDefault()?.Property ?? "";
-        group.Groups.Add(new FilterGroup
-        {
-            LogicalOperator = LogicalFilterOperator.And,
-            Conditions = new List<FilterCondition>
-            {
-                new() { Field = defaultField, Operator = GridFilterOperator.Contains, Value = "" }
-            }
-        });
-        NotifyChange();
-    }
-
-    private void RemoveSubGroup(FilterGroup parentGroup, FilterGroup group)
-    {
-        parentGroup.Groups.Remove(group);
-        NotifyChange();
-    }
-
-    private void OnConditionFieldChanged(FilterCondition condition, string? field)
+    private async Task SetGroupOperator(FilterGroup group, LogicalFilterOperator op)
+    { group.LogicalOperator = op; await NotifyChangeAsync(); }
+    private async Task AddCondition(FilterGroup group)
+    { group.Conditions.Add(NewCondition()); await NotifyChangeAsync(); }
+    private async Task RemoveCondition(FilterGroup group, FilterCondition condition)
+    { group.Conditions.Remove(condition); await NotifyChangeAsync(); }
+    private async Task AddSubGroup(FilterGroup group)
+    { group.Groups.Add(new FilterGroup { Conditions = [NewCondition()] }); await NotifyChangeAsync(); }
+    private async Task RemoveSubGroup(FilterGroup parent, FilterGroup group)
+    { parent.Groups.Remove(group); await NotifyChangeAsync(); }
+    private async Task OnConditionFieldChanged(FilterCondition condition, string? field)
     {
         condition.Field = field ?? "";
-        NotifyChange();
+        condition.Value = "";
+        condition.Operator = ValueType(condition) == typeof(string) ? GridFilterOperator.Contains : GridFilterOperator.Equals;
+        await NotifyChangeAsync();
     }
-
-    private void OnConditionOperatorChanged(FilterCondition condition, string? opStr)
+    private async Task OnConditionOperatorChanged(FilterCondition condition, GridFilterOperator op)
+    { condition.Operator = op; await NotifyChangeAsync(); }
+    private async Task OnConditionValueChanged(FilterCondition condition, string? value)
+    { condition.Value = value ?? ""; await NotifyChangeAsync(); }
+    private async Task NotifyChangeAsync()
     {
-        if (Enum.TryParse<GridFilterOperator>(opStr, out var op))
-        {
-            condition.Operator = op;
-            NotifyChange();
-        }
+        await ValueChanged.InvokeAsync(RootGroup);
+        await OnExpressionChanged.InvokeAsync(BuildExpression(RootGroup));
     }
 
-    private void OnConditionValueChanged(FilterCondition condition, string? val)
+    private sealed record OperatorChoice(GridFilterOperator Value, string Label);
+    private IEnumerable<OperatorChoice> OperatorsFor(FilterCondition condition) =>
+        FilterEvaluator.GetOperators(PropertyFor(condition)?.Type ?? typeof(string))
+            .Select(op => new OperatorChoice(op, op switch
+            {
+                GridFilterOperator.NotEquals => "Not Equals", GridFilterOperator.DoesNotContain => "Does Not Contain",
+                GridFilterOperator.StartsWith => "Starts With", GridFilterOperator.EndsWith => "Ends With",
+                GridFilterOperator.GreaterThan => "Greater Than", GridFilterOperator.GreaterThanOrEquals => "Greater Than or Equal",
+                GridFilterOperator.LessThan => "Less Than", GridFilterOperator.LessThanOrEquals => "Less Than or Equal",
+                GridFilterOperator.IsNull => "Is Null", GridFilterOperator.IsNotNull => "Is Not Null",
+                GridFilterOperator.IsEmpty => "Is Empty", GridFilterOperator.IsNotEmpty => "Is Not Empty",
+                _ => op.ToString()
+            }));
+    private IEnumerable<string> ChoicesFor(FilterCondition condition) => ValueType(condition) == typeof(bool)
+        ? ["True", "False"] : Enum.GetNames(ValueType(condition));
+    private DateTime? DateValue(FilterCondition condition) => DateTime.TryParse(condition.Value, Culture,
+        DateTimeStyles.None, out var value) ? value : null;
+    private Task OnDateValueChanged(FilterCondition condition, DateTime? value) =>
+        OnConditionValueChanged(condition, value?.ToString(ValueType(condition) == typeof(DateOnly) ? "d" : "G", Culture));
+    private string? ConditionError(FilterCondition condition)
     {
-        condition.Value = val ?? "";
-        NotifyChange();
+        try { FilterEvaluator.Validate(condition, Properties, Culture); return null; }
+        catch (FormatException ex) { return ex.Message; }
     }
 
-    private void NotifyChange()
-    {
-        var expr = BuildExpression(RootGroup);
-        if (ValueChanged.HasDelegate)
-            _ = ValueChanged.InvokeAsync(RootGroup);
-        if (OnExpressionChanged.HasDelegate)
-            _ = OnExpressionChanged.InvokeAsync(expr);
-        StateHasChanged();
-    }
-
+    /// <summary>Formats a display expression, not SQL or an executable query language.</summary>
     public string BuildExpression(FilterGroup group)
     {
-        var parts = new List<string>();
-        foreach (var c in group.Conditions.Where(c => !string.IsNullOrEmpty(c.Field)))
-        {
-            if (string.IsNullOrEmpty(c.Value) && c.Operator is not GridFilterOperator.IsNull and not GridFilterOperator.IsNotNull and not GridFilterOperator.IsEmpty and not GridFilterOperator.IsNotEmpty)
-                continue;
-
-            parts.Add(FormatCondition(c));
-        }
-
-        foreach (var g in group.Groups)
-        {
-            var sub = BuildExpression(g);
-            if (!string.IsNullOrEmpty(sub))
-                parts.Add($"({sub})");
-        }
-
-        if (parts.Count == 0) return "";
-        var joiner = group.LogicalOperator == LogicalFilterOperator.And ? " AND " : " OR ";
-        return string.Join(joiner, parts);
+        var parts = group.Conditions.Where(FilterEvaluator.IsActive).Select(FormatCondition).ToList();
+        parts.AddRange(group.Groups.Select(BuildExpression).Where(s => s.Length > 0).Select(s => $"({s})"));
+        return string.Join(group.LogicalOperator == LogicalFilterOperator.And ? " AND " : " OR ", parts);
     }
 
-    private string FormatCondition(FilterCondition c)
+    private static string FormatCondition(FilterCondition c)
     {
+        // Keep the existing expression's operator spelling; escape quoted drafts.
+        var quoted = JsonSerializer.Serialize(c.Value);
         return c.Operator switch
         {
-            GridFilterOperator.Equals => $"{c.Field} = \"{c.Value}\"",
-            GridFilterOperator.NotEquals => $"{c.Field} != \"{c.Value}\"",
-            GridFilterOperator.Contains => $"{c.Field} contains \"{c.Value}\"",
-            GridFilterOperator.DoesNotContain => $"not ({c.Field} contains \"{c.Value}\")",
-            GridFilterOperator.StartsWith => $"{c.Field} startswith \"{c.Value}\"",
-            GridFilterOperator.EndsWith => $"{c.Field} endswith \"{c.Value}\"",
+            GridFilterOperator.Equals => $"{c.Field} = {quoted}",
+            GridFilterOperator.NotEquals => $"{c.Field} != {quoted}",
+            GridFilterOperator.Contains => $"{c.Field} contains {quoted}",
+            GridFilterOperator.DoesNotContain => $"not ({c.Field} contains {quoted})",
+            GridFilterOperator.StartsWith => $"{c.Field} startswith {quoted}",
+            GridFilterOperator.EndsWith => $"{c.Field} endswith {quoted}",
             GridFilterOperator.GreaterThan => $"{c.Field} > {c.Value}",
             GridFilterOperator.GreaterThanOrEquals => $"{c.Field} >= {c.Value}",
             GridFilterOperator.LessThan => $"{c.Field} < {c.Value}",
@@ -169,7 +156,8 @@ public partial class DataFilterControl : ComponentBase
             GridFilterOperator.IsNotNull => $"{c.Field} is not null",
             GridFilterOperator.IsEmpty => $"{c.Field} = \"\"",
             GridFilterOperator.IsNotEmpty => $"{c.Field} != \"\"",
-            _ => $"{c.Field} contains \"{c.Value}\""
+            _ => $"{c.Field} {c.Operator} {quoted}"
         };
     }
+
 }

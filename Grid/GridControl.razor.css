@@ -15,6 +15,30 @@
     --fx-grid-selected-editable-cell-bg: #e8e8e8;
 }
 
+.fx-provider-group-status-cell {
+    color: var(--fx-grid-muted-text, #667085);
+    font-size: 0.72rem;
+    min-height: 28px;
+    padding: 5px 8px;
+}
+
+.fx-provider-group-more {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    color: var(--fx-grid-link-color, #0b5ed7);
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.fx-provider-group-more:focus-visible {
+    outline: 1px solid currentColor;
+    outline-offset: 2px;
+}
+
 .fx-grid {
     --fx-grid-bg: var(--fx-surface-color, #fff);
     --fx-grid-text-color: var(--fx-text-color, #212529);
@@ -369,6 +393,17 @@
 .fx-grid.fx-grid-options-panel-open > .fx-grid-content,
 .fx-grid.fx-grid-options-panel-open > .fx-grid-row-count,
 .fx-grid.fx-grid-options-panel-open > .fx-grid-pager {
+    margin-left: 344px;
+}
+
+/* GridPagerControl is a child component. CSS-isolation attributes do not
+   cross component boundaries, so preserve the option-rail offsets for the
+   extracted pager through an explicit deep descendant selector. */
+.fx-grid.fx-grid-options-rail-on ::deep > .fx-grid-pager {
+    margin-left: 36px;
+}
+
+.fx-grid.fx-grid-options-panel-open ::deep > .fx-grid-pager {
     margin-left: 344px;
 }
 
@@ -851,15 +886,50 @@
 .fx-grid-filter-input-wrap {
     width: 100%;
 }
-.fx-grid-filter-input {
+.fx-grid-filter-typed-wrap {
+    display: grid;
+    grid-template-columns: minmax(0, 0.75fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 2px;
+}
+.fx-grid-filter-value-only {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+.fx-grid-filter-typed-wrap ::deep .fx-dropdown-host {
+    min-width: 0;
+    width: 100%;
+}
+.fx-grid-filter-typed-wrap ::deep .fx-dropdown {
+    font-size: calc(10px * var(--fx-zoom, 1));
+}
+.fx-grid-filter-typed-wrap ::deep .fx-grid-filter-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 20px;
+    padding: 0 3px;
     border: 1px solid #ccc;
     border-radius: 2px;
     background-color: #fff;
+    font: inherit;
+    font-size: calc(10px * var(--fx-zoom, 1));
 }
-.fx-grid-filter-input:focus {
+.fx-grid-filter-typed-wrap ::deep .fx-grid-filter-input:focus {
     border-color: #0d6efd;
     outline: none;
     box-shadow: 0 0 0 1px #0d6efd;
+}
+.fx-grid-filter-typed-wrap ::deep .fx-grid-filter-clear {
+    padding: 0 2px;
+    border: 0;
+    background: transparent;
+    color: #666;
+    font-size: calc(10px * var(--fx-zoom, 1));
+    cursor: pointer;
+}
+.fx-filter-cell:has(.fx-dropdown-panel) {
+    position: relative;
+    z-index: 10 !important;
 }
 
 /* ── Master-Detail Expansion ──────────────────────────────────────── */
@@ -1631,6 +1701,28 @@
     box-sizing: border-box;
 }
 
+/* Horizontal column virtualization replaces each contiguous off-screen run
+   with one inert, fixed-width table slot. The spacer preserves the complete
+   scroll range without mounting the omitted header/filter/data cells. */
+.fx-column-window-spacer {
+    overflow: hidden !important;
+    border-left: 0 !important;
+    border-right: 0 !important;
+    background: inherit;
+}
+
+.fx-grid-column-virtualization-fallback {
+    flex: 0 0 auto;
+    max-width: 100%;
+    padding: 1px 4px;
+    overflow: hidden;
+    color: #6b7280;
+    font-size: 9px;
+    line-height: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* ── Header ───────────────────────────────────────────────────────── */
 .fx-grid-header {
     position: sticky;
@@ -1667,6 +1759,23 @@
     background-clip: border-box;
     box-shadow: inset 0 -1px 0 var(--fx-grid-header-border-color);
     isolation: isolate;
+}
+.fx-column-header-band-row .fx-header-cell {
+    text-align: center;
+    cursor: default;
+    font-weight: 600;
+    line-height: 1.15;
+}
+.fx-column-header-band-row .fx-column-header-band-cell {
+    border-bottom-color: var(--fx-grid-header-shadow-color);
+}
+.fx-column-header-band-row .fx-column-header-band-empty,
+.fx-column-header-band-row .fx-column-header-band-spacer {
+    color: transparent;
+}
+.fx-column-header-band-row .fx-column-header-band-cell:hover,
+.fx-column-header-band-row .fx-column-header-band-spacer:hover {
+    background: var(--fx-grid-header-bg, #fff);
 }
 .fx-header-drop-zone {
     position: absolute;
@@ -1827,6 +1936,35 @@
 .fx-filter-icon-custom {
     width: auto;
     min-width: 10px;
+}
+
+.fx-grid ::deep .fx-column-menu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    margin-left: 3px;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: #495057;
+    font: inherit;
+    font-size: calc(13px * var(--fx-zoom, 1));
+    line-height: 1;
+    vertical-align: middle;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.fx-grid ::deep .fx-column-menu-button:hover,
+.fx-grid ::deep .fx-column-menu-button:focus-visible {
+    color: #0d6efd;
+    background: #eef5ff;
+    opacity: 1;
+    outline: 1px solid color-mix(in srgb, #0d6efd 45%, transparent);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -2011,6 +2149,17 @@ tr.fx-row:has(.fx-colorpicker-panel) {
 tr.fx-row:has(.fx-dropdown-panel) {
     position: relative;
     z-index: 30;
+}
+.fx-grid ::deep tr.fx-row:has(.fx-dropdown-grid.fx-open),
+tr.fx-row:has(.fx-dropdown-grid.fx-open),
+.fx-grid ::deep tr.fx-row:has(.fx-dropdown-grid-popup),
+tr.fx-row:has(.fx-dropdown-grid-popup),
+.fx-grid ::deep .fx-cell:has(.fx-dropdown-grid.fx-open),
+.fx-cell:has(.fx-dropdown-grid.fx-open),
+.fx-grid ::deep .fx-cell:has(.fx-dropdown-grid-popup),
+.fx-cell:has(.fx-dropdown-grid-popup) {
+    position: relative;
+    z-index: 1000 !important;
 }
 .fx-grid ::deep .fx-cell > .inline-edit {
     display: flex;
@@ -2595,6 +2744,52 @@ tr.fx-row:has(.fx-dropdown-panel) {
     outline-offset: -3px;
     box-shadow: none;
 }
+.fx-edit-checkbox,
+.fx-dialog-field input.fx-edit-checkbox {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    padding: 0;
+    vertical-align: middle;
+    accent-color: #0d6efd;
+}
+.fx-edit-actions-row td {
+    padding: 4px 6px;
+    border-top: 0;
+    background: #fff9e6;
+}
+.fx-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+}
+.fx-edit-input-invalid,
+.fx-dialog-field .fx-edit-input-invalid {
+    border-color: #b42318;
+    box-shadow: 0 0 0 1px rgba(180, 35, 24, 0.18);
+}
+.fx-edit-validation-message {
+    margin-top: 2px;
+    color: #b42318;
+    font-size: calc(10px * var(--fx-zoom, 1));
+    line-height: 1.2;
+    white-space: normal;
+}
+.fx-edit-validation-summary-row td {
+    padding: 0;
+    border-top: 0;
+}
+.fx-edit-validation-summary {
+    margin: 4px 6px;
+    padding: 5px 8px;
+    border: 1px solid #f1aeb5;
+    border-radius: 3px;
+    background: #fff1f2;
+    color: #842029;
+    font-size: calc(11px * var(--fx-zoom, 1));
+    line-height: 1.35;
+}
 
 /* ── Command Buttons ──────────────────────────────────────────────── */
 .fx-cmd-btn {
@@ -2803,6 +2998,19 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #64748b;
     font-size: calc(11px * var(--fx-zoom, 1));
 }
+.fx-filter-checklist-search {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid #eef2f7;
+    color: #64748b;
+}
+.fx-filter-checklist-search .fx-filter-popup-input {
+    min-width: 0;
+    padding-block: 4px;
+}
 .fx-filter-value-summary {
     margin: 0;
     padding: 0 12px 8px;
@@ -2887,6 +3095,30 @@ tr.fx-row:has(.fx-dropdown-panel) {
     padding: 8px 12px;
     border-bottom: 1px solid #eef2f7;
     font-weight: 600;
+}
+.fx-filter-tristate {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border: 1px solid #64748b;
+    border-radius: 2px;
+    background: #fff;
+    color: #fff;
+    font: 700 11px/1 sans-serif;
+    cursor: pointer;
+}
+.fx-filter-tristate-all,
+.fx-filter-tristate-some {
+    border-color: #2563eb;
+    background: #2563eb;
+}
+.fx-filter-tristate:focus-visible {
+    outline: 2px solid #60a5fa;
+    outline-offset: 1px;
 }
 .fx-filter-popup-empty {
     padding: 12px 0;
@@ -3439,7 +3671,8 @@ tr.fx-row:has(.fx-dropdown-panel) {
     color: #1f2937;
     user-select: none;
 }
-.fx-grid-header-context-item {
+.fx-grid-header-context-item,
+.fx-grid-header-context-menu ::deep .fx-grid-header-context-item {
     display: flex;
     align-items: center;
     width: 100%;
@@ -3453,12 +3686,15 @@ tr.fx-row:has(.fx-dropdown-panel) {
     white-space: nowrap;
 }
 .fx-grid-header-context-item:hover:not(:disabled),
-.fx-grid-header-context-item:focus-visible:not(:disabled) {
+.fx-grid-header-context-item:focus-visible:not(:disabled),
+.fx-grid-header-context-menu ::deep .fx-grid-header-context-item:hover:not(:disabled),
+.fx-grid-header-context-menu ::deep .fx-grid-header-context-item:focus-visible:not(:disabled) {
     background: #316ac5;
     color: #ffffff;
     outline: none;
 }
-.fx-grid-header-context-item:disabled {
+.fx-grid-header-context-item:disabled,
+.fx-grid-header-context-menu ::deep .fx-grid-header-context-item:disabled {
     color: #9ca3af;
     cursor: default;
 }
@@ -3860,6 +4096,12 @@ td.fx-drag-preview-cell {
     color: #e5e7eb;
 }
 
+.fx-grid.fx-grid-dark ::deep .fx-grid-pager {
+    background: #1f2937;
+    border-color: #374151;
+    color: #e5e7eb;
+}
+
 .fx-grid.fx-grid-dark .fx-grid-side-panel,
 .fx-grid.fx-grid-dark .fx-grid-side-panel-header,
 .fx-grid.fx-grid-dark .fx-filter-section,
@@ -3964,6 +4206,7 @@ td.fx-drag-preview-cell {
 
 .fx-grid.fx-grid-dark .fx-filter-popup-header,
 .fx-grid.fx-grid-dark .fx-filter-condition,
+.fx-grid.fx-grid-dark .fx-filter-checklist-search,
 .fx-grid.fx-grid-dark .fx-filter-value-summary,
 .fx-grid.fx-grid-dark .fx-filter-number-panel > .fx-filter-popup-summary,
 .fx-grid.fx-grid-dark .fx-filter-number-custom,
@@ -3986,10 +4229,18 @@ td.fx-drag-preview-cell {
 }
 
 .fx-grid.fx-grid-dark .fx-filter-popup-close,
-.fx-grid.fx-grid-dark .fx-filter-popup-btn {
+.fx-grid.fx-grid-dark .fx-filter-popup-btn,
+.fx-grid.fx-grid-dark .fx-filter-tristate {
     background: #0f172a;
     border-color: #475569;
     color: #e5e7eb;
+}
+
+.fx-grid.fx-grid-dark .fx-filter-tristate-all,
+.fx-grid.fx-grid-dark .fx-filter-tristate-some {
+    background: #2563eb;
+    border-color: #60a5fa;
+    color: #fff;
 }
 
 .fx-grid.fx-grid-dark .fx-grid-pivot-zone {
@@ -4076,4 +4327,202 @@ td.fx-row-selector-cell-flat.fx-row-selector-emphasis {
 .fx-grid.fx-grid-flat-cell-focus .fx-cell.fx-typeahead-preview-cell {
     outline: none !important;
     box-shadow: none !important;
+}
+
+/* Opt-in stacked/adaptive layout. Data behavior is unchanged; each flat row
+   becomes a compact field card and uses the column header exposed through the
+   cell's data-label attribute. */
+.fx-grid.fx-grid-layout-stacked .fx-grid-content {
+    overflow-x: hidden !important;
+}
+
+.fx-grid.fx-grid-layout-stacked .fx-grid-table,
+.fx-grid.fx-grid-layout-stacked .fx-grid-table tbody {
+    display: block;
+    width: 100% !important;
+    min-width: 0 !important;
+}
+
+.fx-grid.fx-grid-layout-stacked .fx-grid-table colgroup,
+.fx-grid.fx-grid-layout-stacked .fx-grid-table thead {
+    display: none;
+}
+
+.fx-grid.fx-grid-layout-stacked .fx-grid-table tr.fx-row {
+    display: grid;
+    grid-template-columns: repeat(var(--fx-grid-stacked-columns, 1), minmax(0, 1fr));
+    width: 100%;
+    height: auto !important;
+    min-height: var(--fx-grid-row-height, 24px);
+    border-bottom: 1px solid var(--fx-grid-line-color);
+}
+
+.fx-grid.fx-grid-layout-stacked .fx-grid-table tr.fx-row > td.fx-cell[data-label] {
+    position: static !important;
+    display: grid;
+    grid-template-columns: minmax(7rem, 35%) minmax(0, 1fr);
+    align-items: center;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    min-height: 28px;
+    white-space: normal;
+}
+
+.fx-grid.fx-grid-layout-stacked .fx-grid-table tr.fx-row > td.fx-cell[data-label]::before {
+    content: attr(data-label);
+    padding-right: 0.5rem;
+    color: color-mix(in srgb, currentColor 72%, transparent);
+    font-weight: 600;
+}
+
+@media (max-width: 720px) {
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-content {
+        overflow-x: hidden !important;
+    }
+
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table,
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table tbody {
+        display: block;
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table colgroup,
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table thead {
+        display: none;
+    }
+
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table tr.fx-row {
+        display: grid;
+        grid-template-columns: repeat(var(--fx-grid-stacked-columns, 1), minmax(0, 1fr));
+        width: 100%;
+        height: auto !important;
+        min-height: var(--fx-grid-row-height, 24px);
+        border-bottom: 1px solid var(--fx-grid-line-color);
+    }
+
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table tr.fx-row > td.fx-cell[data-label] {
+        position: static !important;
+        display: grid;
+        grid-template-columns: minmax(7rem, 35%) minmax(0, 1fr);
+        align-items: center;
+        width: auto !important;
+        min-width: 0 !important;
+        max-width: none !important;
+        min-height: 28px;
+        white-space: normal;
+    }
+
+    .fx-grid.fx-grid-adaptive-auto .fx-grid-table tr.fx-row > td.fx-cell[data-label]::before {
+        content: attr(data-label);
+        padding-right: 0.5rem;
+        color: color-mix(in srgb, currentColor 72%, transparent);
+        font-weight: 600;
+    }
+}
+
+/* Custom sort uses the shared dialog and dropdown controls. Let menus extend
+   past the dialog body; scroll the modal viewport when there are many levels. */
+.fx-grid ::deep .fx-dialog-overlay:has(.fx-sort-dialog) {
+    overflow: auto;
+    align-items: flex-start;
+    padding: 24px;
+    box-sizing: border-box;
+}
+.fx-grid ::deep .fx-sort-dialog {
+    flex-shrink: 0;
+    margin: auto;
+    max-height: none;
+    overflow: visible;
+}
+.fx-grid ::deep .fx-sort-dialog .fx-dialog-body {
+    overflow: visible;
+}
+.fx-sort-editor {
+    color: #222;
+    font: 12px Tahoma, Arial, sans-serif;
+}
+.fx-sort-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.fx-sort-hint {
+    margin: 12px 0 8px;
+}
+.fx-sort-levels {
+    min-height: 155px;
+    border: 1px solid #aaa;
+    background: #fff;
+}
+.fx-sort-level {
+    display: grid;
+    grid-template-columns: 76px minmax(100px, 1fr) minmax(120px, 0.8fr);
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+}
+.fx-sort-heading {
+    color: #444;
+    background: #e8e8e8;
+    border-bottom: 1px solid #aaa;
+}
+.fx-sort-level-selected {
+    background: #e6effb;
+}
+.fx-sort-level ::deep .fx-dropdown-host {
+    min-width: 0;
+}
+.fx-sort-level ::deep .fx-dropdown {
+    height: 24px;
+    font-size: 12px;
+}
+.fx-sort-level ::deep .fx-sort-level-select {
+    padding: 4px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+}
+.fx-sort-level ::deep .fx-sort-level-select:focus-visible {
+    outline: 1px dotted #222;
+}
+.fx-sort-empty {
+    margin: 16px;
+    color: #555;
+}
+.fx-sort-error {
+    margin: 10px 0 0;
+    color: #a02020;
+}
+
+/* Shared FlexCore controls in the generated inline and dialog editors. */
+.fx-grid ::deep .fx-grid-edit-dialog { max-height: 90vh; }
+.fx-dialog-field ::deep .fx-row-editor-text,
+.fx-dialog-field ::deep .fx-datepicker-input {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 29px;
+    font-size: calc(13px * var(--fx-zoom, 1));
+}
+.fx-edit-cell ::deep .fx-row-editor-text,
+.fx-edit-cell ::deep .fx-row-editor-date { width: 100%; min-width: 0; }
+.fx-edit-cell ::deep .fx-row-editor-checkbox { margin: 0; }
+.fx-edit-cell ::deep .fx-row-editor-checkbox .fx-checkbox-label { display: none; }
+.fx-grid ::deep .fx-edit-input-invalid { border-color: #b42318; }
+.fx-grid ::deep .fx-edit-input-invalid .fx-datepicker-input { border-color: #b42318; }
+.fx-edit-actions ::deep .fx-cmd-btn,
+.fx-edit-cell ::deep .fx-cmd-btn { padding: 3px 10px; cursor: pointer; }
+
+.fx-dialog-field ::deep .fx-datepicker-input-group { height: 29px; }
+.fx-dialog-field ::deep .fx-datepicker-input { min-height: 0; }
+
+.fx-grid-header-context-heading {
+    padding: 4px 8px 3px;
+    color: #555;
+    font-size: calc(10px * var(--fx-zoom, 1));
+    font-weight: 600;
 }

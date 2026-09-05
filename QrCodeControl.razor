@@ -2,10 +2,18 @@
 @inherits FlexControlBase
 
 <div class="fx-qrcode @CssClass" style="@Style" @attributes="AdditionalAttributes">
-    <svg viewBox="0 0 @TotalSize @TotalSize" width="@Size" height="@Size" shape-rendering="crispEdges">
-        <rect width="@TotalSize" height="@TotalSize" fill="@BackgroundColor" />
-        <path d="@_svgPath" fill="@ForegroundColor" />
-    </svg>
+    @if (ErrorMessage is not null)
+    {
+        <span class="fx-qrcode-error" role="alert">@ErrorMessage</span>
+    }
+    else if (_matrix is not null)
+    {
+        <svg viewBox="0 0 @_matrix.Width @_matrix.Height" width="@Size" height="@Size"
+             shape-rendering="crispEdges" role="img" aria-label="@(AriaLabel ?? $"QR code: {Value}")">
+            <rect width="@_matrix.Width" height="@_matrix.Height" fill="@BackgroundColor" />
+            <path d="@_svgPath" fill="@ForegroundColor" />
+        </svg>
+    }
 </div>
 
 @code {
@@ -13,80 +21,50 @@
     [Parameter] public int Size { get; set; } = 150;
     [Parameter] public string ForegroundColor { get; set; } = "#000000";
     [Parameter] public string BackgroundColor { get; set; } = "#ffffff";
+    [Parameter] public QrErrorCorrectionLevel ErrorCorrection { get; set; } = QrErrorCorrectionLevel.Medium;
+    [Parameter] public string? AriaLabel { get; set; }
+    public string? ErrorMessage { get; private set; }
 
-    private const int GridSize = 25; // 25x25 QR matrix representation
-    private const int QuietZone = 2;
-    private int TotalSize => GridSize + (QuietZone * 2);
-
+    private ZXing.Common.BitMatrix? _matrix;
     private string _svgPath = "";
 
     protected override void OnParametersSet()
     {
-        GenerateQrMatrix();
-    }
-
-    private void GenerateQrMatrix()
-    {
-        var matrix = new bool[GridSize, GridSize];
-
-        // Draw 3 standard Finder Patterns (7x7 outer boxes with 3x3 inner squares)
-        DrawFinderPattern(matrix, 0, 0);
-        DrawFinderPattern(matrix, GridSize - 7, 0);
-        DrawFinderPattern(matrix, 0, GridSize - 7);
-
-        // Draw timing patterns
-        for (int i = 8; i < GridSize - 8; i++)
+        _matrix = null;
+        _svgPath = "";
+        ErrorMessage = null;
+        if (string.IsNullOrEmpty(Value)) return;
+        try
         {
-            matrix[6, i] = (i % 2) == 0;
-            matrix[i, 6] = (i % 2) == 0;
-        }
-
-        // Encode data bits using hash seed
-        var hash = (uint)Math.Abs((Value ?? "").GetHashCode());
-        var bitIndex = 0;
-        for (int r = 0; r < GridSize; r++)
-        {
-            for (int c = 0; c < GridSize; c++)
+            var level = ErrorCorrection switch
             {
-                // Skip finder pattern zones
-                if ((r < 8 && c < 8) || (r < 8 && c >= GridSize - 8) || (r >= GridSize - 8 && c < 8))
-                    continue;
-                if (r == 6 || c == 6)
-                    continue;
-
-                // Deterministic data bit generation from string content
-                var bit = ((hash >> (bitIndex % 31)) & 1) == 1;
-                matrix[r, c] = bit ^ ((r + c) % 2 == 0);
-                bitIndex++;
-            }
-        }
-
-        // Build SVG path
-        var sb = new System.Text.StringBuilder();
-        for (int r = 0; r < GridSize; r++)
-        {
-            for (int c = 0; c < GridSize; c++)
-            {
-                if (matrix[r, c])
+                QrErrorCorrectionLevel.Low => ZXing.QrCode.Internal.ErrorCorrectionLevel.L,
+                QrErrorCorrectionLevel.Medium => ZXing.QrCode.Internal.ErrorCorrectionLevel.M,
+                QrErrorCorrectionLevel.Quartile => ZXing.QrCode.Internal.ErrorCorrectionLevel.Q,
+                QrErrorCorrectionLevel.High => ZXing.QrCode.Internal.ErrorCorrectionLevel.H,
+                _ => throw new ArgumentException("Unsupported QR error correction level.")
+            };
+            _matrix = new ZXing.MultiFormatWriter().encode(Value, ZXing.BarcodeFormat.QR_CODE, 0, 0,
+                new Dictionary<ZXing.EncodeHintType, object>
                 {
-                    sb.Append($"M{c + QuietZone},{r + QuietZone}h1v1h-1z ");
-                }
-            }
-        }
-        _svgPath = sb.ToString();
-    }
-
-    private static void DrawFinderPattern(bool[,] matrix, int startR, int startC)
-    {
-        for (int r = 0; r < 7; r++)
-        {
-            for (int c = 0; c < 7; c++)
-            {
-                if (r == 0 || r == 6 || c == 0 || c == 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4))
+                    [ZXing.EncodeHintType.CHARACTER_SET] = "UTF-8",
+                    [ZXing.EncodeHintType.ERROR_CORRECTION] = level,
+                    [ZXing.EncodeHintType.MARGIN] = 4
+                });
+            var path = new System.Text.StringBuilder();
+            for (var y = 0; y < _matrix.Height; y++)
+                for (var x = 0; x < _matrix.Width;)
                 {
-                    matrix[startR + r, startC + c] = true;
+                    if (!_matrix[x, y]) { x++; continue; }
+                    var start = x++;
+                    while (x < _matrix.Width && _matrix[x, y]) x++;
+                    path.Append(System.FormattableString.Invariant($"M{start},{y}h{x - start}v1h{start - x}z "));
                 }
-            }
+            _svgPath = path.ToString();
+        }
+        catch (Exception ex) when (ex is ArgumentException or ZXing.WriterException)
+        {
+            ErrorMessage = $"Cannot encode QR code: {ex.Message}";
         }
     }
 }

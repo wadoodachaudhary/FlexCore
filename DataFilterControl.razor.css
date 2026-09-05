@@ -1,15 +1,11 @@
-.fx-data-filter {
-    font-family: inherit;
-    font-size: 0.75rem;
-}
-
-.fx-filter-group {
-    background-color: #f8f9fa;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-}
-
-.fx-filter-conditions {
-    border-left: 2px solid #0d6efd;
-    padding-left: 8px;
-}
+.fx-data-filter { font-family: inherit; font-size: 0.75rem; }
+.fx-filter-group { padding: 8px; margin: 4px 0; background: var(--fx-surface, #f8f9fa); border: 1px solid var(--fx-border, #dee2e6); border-radius: 4px; }
+.fx-filter-group > .fx-filter-group { margin-left: 16px; }
+.fx-filter-actions, .fx-filter-editors { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.fx-filter-actions { margin-bottom: 8px; }
+.fx-filter-conditions { border-left: 2px solid var(--fx-accent, #0d6efd); padding-left: 8px; }
+.fx-filter-condition + .fx-filter-condition { margin-top: 6px; }
+.fx-filter-value { width: 180px; }
+.fx-filter-value ::deep .fx-textbox { width: 100%; }
+.fx-filter-actions ::deep .fx-filter-selected { background: var(--fx-accent, #0d6efd); color: white; }
+.fx-filter-error { color: var(--fx-danger, #b42318); margin-top: 3px; }

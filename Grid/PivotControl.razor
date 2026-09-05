@@ -71,6 +71,10 @@
                                      @ondragstart="() => OnDragStart(field, PivotArea.Row)"
                                      @ondragend="OnDragEnd">
                                     <span>@GetFieldLabel(field)</span>
+                                    @if (AllowSorting)
+                                    {
+                                        <ButtonControl BareStyle="true" Title="@($"Sort {GetFieldLabel(field)}")" OnClick="() => ToggleSortAsync(field, true)">@GetSortLabel(field)</ButtonControl>
+                                    }
                                     <button class="fx-pivot-chip-remove" @onclick="() => RemoveField(field, PivotArea.Row)">✕</button>
                                 </div>
                             }
@@ -96,6 +100,10 @@
                                      @ondragstart="() => OnDragStart(field, PivotArea.Column)"
                                      @ondragend="OnDragEnd">
                                     <span>@GetFieldLabel(field)</span>
+                                    @if (AllowSorting)
+                                    {
+                                        <ButtonControl BareStyle="true" Title="@($"Sort {GetFieldLabel(field)}")" OnClick="() => ToggleSortAsync(field, true)">@GetSortLabel(field)</ButtonControl>
+                                    }
                                     <button class="fx-pivot-chip-remove" @onclick="() => RemoveField(field, PivotArea.Column)">✕</button>
                                 </div>
                             }
@@ -192,11 +200,21 @@
                                         <th colspan="@cell.Colspan"
                                             rowspan="@cell.Rowspan"
                                             class="@cell.CssClass"
-                                            @onclick="() => HandleHeaderClick(cell)">
-                                            @cell.Text
-                                            @if (cell.IsSortable && !string.IsNullOrEmpty(_sortField) && _sortField == cell.SortField)
+                                            aria-sort="@(GetSortDirection(cell.SortField) is { } direction ? direction == SortDirection.Ascending ? "ascending" : "descending" : null)"
+                                            data-sort-field="@cell.SortField">
+                                            @if (cell.IsSortable)
                                             {
-                                                <span class="fx-pivot-sort">@(_sortAscending ? "▲" : "▼")</span>
+                                                <ButtonControl BareStyle="true" OnClick="e => HandleHeaderClick(cell, e)" Title="@($"Sort {cell.Text}")">
+                                                    @cell.Text
+                                                    @if (GetSortDirection(cell.SortField).HasValue)
+                                                    {
+                                                        <span class="fx-pivot-sort">@GetSortLabel(cell.SortField)</span>
+                                                    }
+                                                </ButtonControl>
+                                            }
+                                            else
+                                            {
+                                                @cell.Text
                                             }
                                         </th>
                                     }

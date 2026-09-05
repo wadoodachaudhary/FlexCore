@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- Namespace and CSS prefix are unchanged from FlexCore — only the
@@ -11,7 +12,7 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.31</Version>
+    <Version>0.2.32</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
@@ -40,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="ZXing.Net" Version="0.16.11" />
     <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />

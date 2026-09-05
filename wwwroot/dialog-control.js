@@ -60,8 +60,14 @@ export function focusFirst(root) {
 // was already captured.
 export function focusContent(root) {
     if (!root) return;
-    pickFocusTarget(root).focus({ preventScroll: true });
-    guardFocusWithin(root, null);
+    // The initial focus pass arrives after a server round trip. A user may
+    // already be typing in another field; preserve that field and its caret.
+    const active = document.activeElement;
+    const enteredField = root.contains(active)
+        && active.matches("input, textarea, select, [contenteditable=true]");
+    const target = enteredField ? active : pickFocusTarget(root);
+    if (target !== active) target.focus({ preventScroll: true });
+    guardFocusWithin(root, target);
 }
 
 // Guard only: the dialog's content already took focus for itself. Returns

@@ -21,6 +21,13 @@ public sealed class GridSettings
     /// to <c>GridColumn.RuntimeWidth</c>. Null when the user hasn't resized.</summary>
     public Dictionary<string, double>? Widths { get; set; }
 
+    /// <summary>
+    /// Effective per-field locking. A Left/Right value pins the column to that
+    /// edge; a null value explicitly leaves it scrollable. A null dictionary
+    /// preserves the declarative layout for settings written by older builds.
+    /// </summary>
+    public Dictionary<string, FrozenColumnPosition?>? FrozenPositions { get; set; }
+
     /// <summary>Per-field header-text override from the "Rename this column"
     /// context-menu item.</summary>
     public Dictionary<string, string>? HeaderOverrides { get; set; }

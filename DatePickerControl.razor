@@ -25,6 +25,7 @@
                    @onkeydown="OnInputKeyDown"
                    @ondblclick="OnInputDoubleClick"
                    placeholder="@ResolvedPlaceholder"
+                   aria-label="@AriaLabel"
                    aria-invalid="@(_validationMessage != null ? "true" : null)"
                    disabled="@(!Enabled)" />
             @if (ShowTriggerButton)
@@ -91,8 +92,14 @@
                                     </div>
 
                                     <div class="fx-days-grid">
-                                        @foreach (var date in GetDaysInGrid(monthStart))
+                                        @foreach (var cellDate in GetDaysInGrid(monthStart))
                                         {
+                                            if (!cellDate.HasValue)
+                                            {
+                                                <span class="fx-day-cell" aria-hidden="true"></span>
+                                                continue;
+                                            }
+                                            var date = cellDate.Value;
                                             var isCurrentMonth = date.Month == monthStart.Month && date.Year == monthStart.Year;
                                             var isSelected = Value.HasValue && date.Date == Value.Value.Date;
                                             var isToday = date.Date == DateTime.Today;
@@ -225,6 +232,7 @@
 
     [Parameter] public string? Format { get; set; }
     [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
     [Parameter] public bool ShowTime { get; set; }
     [Parameter] public DateTime? MinDate { get; set; }
     [Parameter] public DateTime? MaxDate { get; set; }
@@ -647,6 +655,8 @@
     // --- Calendar Nav ---
     private void PrevMonth()
     {
+        if (_viewYear == 1 && _viewMonth == 1)
+            return;
         if (_viewMonth == 1)
         {
             _viewMonth = 12;
@@ -661,6 +671,8 @@
 
     private void NextMonth()
     {
+        if (_viewYear == 9999 && _viewMonth == 12)
+            return;
         if (_viewMonth == 12)
         {
             _viewMonth = 1;
@@ -701,16 +713,19 @@
         yield return new DateTime(_viewYear, _viewMonth, 1);
     }
 
-    private List<DateTime> GetDaysInGrid(DateTime monthStart)
+    private List<DateTime?> GetDaysInGrid(DateTime monthStart)
     {
         int offset = (int)monthStart.DayOfWeek;
-        var startDate = monthStart.AddDays(-offset);
         var daysInMonth = DateTime.DaysInMonth(monthStart.Year, monthStart.Month);
         var visibleCellCount = Math.Clamp(((offset + daysInMonth + 6) / 7) * 7, 28, 42);
-        var days = new List<DateTime>();
+        var days = new List<DateTime?>();
         for (int i = 0; i < visibleCellCount; i++)
         {
-            days.Add(startDate.AddDays(i));
+            // Default non-nullable dates can be January 0001. Preserve the
+            // weekday positions without constructing dates outside DateTime.
+            var ticks = monthStart.Ticks + (long)(i - offset) * TimeSpan.TicksPerDay;
+            days.Add(ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks
+                ? null : new DateTime(ticks));
         }
         return days;
     }
@@ -734,11 +749,16 @@
 
     private void MoveKeyboardDateByDays(int days)
     {
-        SetKeyboardDate(_keyboardDate.AddDays(days));
+        var ticks = Math.Clamp(_keyboardDate.Ticks + (long)days * TimeSpan.TicksPerDay,
+            DateTime.MinValue.Ticks, DateTime.MaxValue.Date.Ticks);
+        SetKeyboardDate(new DateTime(ticks));
     }
 
     private void MoveKeyboardDateByMonths(int months)
     {
+        var targetMonth = (_keyboardDate.Year - 1) * 12 + _keyboardDate.Month - 1 + months;
+        if (targetMonth < 0 || targetMonth >= 9999 * 12)
+            return;
         SetKeyboardDate(_keyboardDate.AddMonths(months));
     }
 
