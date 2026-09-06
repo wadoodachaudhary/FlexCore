@@ -1,0 +1,33 @@
+@namespace Fx.ControlKit.AI
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@using System.Reflection
+@using System.ComponentModel
+@using System.Globalization
+<ButtonControl Disabled="@(!Enabled||_busy)" OnClick="ReadClipboardAsync">@Text</ButtonControl>
+@if(_error is not null){<span role="alert">@_error</span>}
+<DialogControl Visible="@_open" OnClose="Close" Header="Review pasted fields" Width="520px" IsModal="true">
+<ChildContent>
+@if(_preview.Count==0){<TextBoxControl @bind-Value="_text" Multiline="true" Rows="5" aria-label="Text to map to fields" /><ButtonControl OnClick="MapAsync" Disabled="@_busy">Map fields</ButtonControl>}
+@foreach(var row in _preview){<div class="fx-smart-paste-field"><CheckBoxControl Label="@row.Field.Label" @bind-Checked="row.Selected" /><TextBoxControl @bind-Value="row.Text" aria-label="@row.Field.Label" /></div>}
+@if(_busy){<LoaderControl Text="Mapping fields" />}
+@if(_error is not null){<AlertControl Text="@_error" />}
+</ChildContent>
+<FooterContent><ButtonControl OnClick="Close">Cancel</ButtonControl><ButtonControl OnClick="ApplyAsync" Disabled="@(_busy||_preview.Count==0)">Apply fields</ButtonControl></FooterContent>
+</DialogControl>
+@code {
+ [CascadingParameter] public EditContext? EditContext {get;set;}
+ [Parameter,EditorRequired] public object Model {get;set;}=default!;
+ [Parameter] public IReadOnlyList<string> Fields {get;set;}=Array.Empty<string>();
+ [Parameter] public Func<SmartPasteRequest,CancellationToken,Task<IReadOnlyDictionary<string,string>>>? Map {get;set;}
+ [Parameter] public EventCallback<SmartPasteApplied> Applied {get;set;}
+ [Parameter] public string Text {get;set;}="Smart paste";
+ private sealed class Preview{public required SmartPasteField Field{get;init;}public required PropertyInfo Property{get;init;}public string? Text{get;set;}public bool Selected{get;set;}=true;}
+ private List<Preview> _preview=[];private string? _text,_error;private bool _open,_busy,_disposed;private CancellationTokenSource? _request;private BrowserInterop? _browser;
+ private async Task ReadClipboardAsync(){if(!Enabled)return;_error=null;_preview.Clear();_open=true;_browser??=new(JS);try{_text=await _browser.InvokeAsync<string>("clipboardRead");await MapAsync();}catch(JSException){_error="Paste text below to continue; clipboard access is unavailable.";}}
+ public async Task MapAsync(){if(_busy||!Enabled||string.IsNullOrWhiteSpace(_text))return;if(Map is null){_error="Configure the Map callback to extract field values.";return;}if(Model is null)throw new InvalidOperationException("A model is required.");var properties=Model.GetType().GetProperties().Where(p=>p.CanWrite&&p.GetIndexParameters().Length==0&&Fields.Contains(p.Name)).ToArray();var fields=properties.Select(p=>new SmartPasteField(p.Name,p.GetCustomAttribute<DisplayNameAttribute>()?.DisplayName??p.Name,p.PropertyType,p.GetValue(Model))).ToArray();var request=_request=new();_busy=true;_error=null;try{var values=await Map(new(_text,fields),request.Token);if(_disposed||request.IsCancellationRequested)return;_preview=fields.Where(f=>values.ContainsKey(f.Name)).Select(f=>new Preview{Field=f,Property=properties.First(p=>p.Name==f.Name),Text=values[f.Name]}).ToList();if(_preview.Count==0)_error="No allowed fields were found in the pasted text.";}catch(OperationCanceledException){}catch(Exception e){_error=e.Message;}finally{if(ReferenceEquals(_request,request)){_busy=false;_request=null;}request.Dispose();}}
+ public async Task ApplyAsync(){if(!Enabled||_busy)return;_error=null;var selected=_preview.Where(p=>p.Selected).ToArray();var converted=new Dictionary<string,object?>();var previous=new Dictionary<PropertyInfo,object?>();try{foreach(var row in selected){var type=Nullable.GetUnderlyingType(row.Property.PropertyType)??row.Property.PropertyType;object? value=string.IsNullOrEmpty(row.Text)&&Nullable.GetUnderlyingType(row.Property.PropertyType)is not null?null:type==typeof(string)?row.Text:TypeDescriptor.GetConverter(type).ConvertFrom(null,CultureInfo.CurrentCulture,row.Text??"");converted[row.Field.Name]=value;}foreach(var row in selected){previous[row.Property]=row.Property.GetValue(Model);row.Property.SetValue(Model,converted[row.Field.Name]);}foreach(var row in selected)EditContext?.NotifyFieldChanged(new FieldIdentifier(Model,row.Field.Name));await Applied.InvokeAsync(new(converted));_open=false;}catch(Exception e){foreach(var pair in previous)pair.Key.SetValue(Model,pair.Value);_error=$"Fields were not applied: {e.GetBaseException().Message}";}}
+ private Task Close(){_request?.Cancel();_request=null;_busy=false;_open=false;return Task.CompletedTask;}
+ public async ValueTask DisposeAsync(){_disposed=true;_request?.Cancel();if(_browser is not null)await _browser.DisposeAsync();}
+}

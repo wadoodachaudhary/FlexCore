@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-stack-layout @CssClass" style="display:flex;flex-direction:@(Orientation==FlexOrientation.Vertical?"column":"row");gap:@Gap;align-items:@Align(AlignItems);justify-content:@Align(JustifyContent);flex-wrap:@(Wrap?"wrap":"nowrap");@ResolvedStyle" @attributes="AdditionalAttributes">@ChildContent</div>
+@code {
+ [Parameter] public FlexOrientation Orientation {get;set;}
+ [Parameter] public string Gap {get;set;}="12px";
+ [Parameter] public FlexAlignment AlignItems {get;set;}=FlexAlignment.Stretch;
+ [Parameter] public FlexAlignment JustifyContent {get;set;}=FlexAlignment.Start;
+ [Parameter] public bool Wrap {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ private static string Align(FlexAlignment a)=>a switch{FlexAlignment.Start=>"flex-start",FlexAlignment.End=>"flex-end",FlexAlignment.SpaceBetween=>"space-between",FlexAlignment.SpaceAround=>"space-around",FlexAlignment.SpaceEvenly=>"space-evenly",_=>a.ToString().ToLowerInvariant()};
+}

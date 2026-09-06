@@ -1,0 +1,4 @@
+.fx-color-palette{display:inline-grid;grid-template-columns:repeat(var(--fx-palette-columns),var(--fx-swatch-size));gap:4px;padding:4px}
+.fx-color-palette ::deep .fx-palette-swatch{width:var(--fx-swatch-size);height:var(--fx-swatch-size);min-width:0;padding:0;border:1px solid #888;border-radius:2px;color:#fff;text-shadow:0 1px 2px #000,0 -1px 2px #000}
+.fx-color-palette ::deep .fx-palette-swatch.selected{outline:2px solid var(--fx-primary,#2563eb);outline-offset:1px}
+.fx-color-palette ::deep .fx-palette-swatch:focus-visible{outline:2px solid #111;outline-offset:2px}

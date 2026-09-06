@@ -37,6 +37,7 @@ else
             {
                 var capturedPage = page;
                 <button type="button"
+                        @key="capturedPage"
                         class="fx-pager-btn @(capturedPage == Context.CurrentPage ? "fx-pager-active" : "")"
                         aria-label="Page @capturedPage"
                         aria-current="@(capturedPage == Context.CurrentPage ? "page" : null)"

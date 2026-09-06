@@ -1,0 +1,14 @@
+@namespace Fx.ControlKit
+@using System.ComponentModel.DataAnnotations
+@using System.Reflection
+@if (Context != null)
+{
+    @foreach (var property in Context.Model.GetType().GetProperties().Where(p => p.GetMethod?.IsPublic==true && (Template!=null||FormFields.Supports(p.PropertyType)) && p.GetIndexParameters().Length==0 && p.GetCustomAttribute<DisplayAttribute>()?.GetAutoGenerateField()!=false).OrderBy(p=>p.GetCustomAttribute<DisplayAttribute>()?.GetOrder()??int.MaxValue))
+    {
+        <FormItemControl @key="property.Name" Field="@property.Name" Template="@Template" />
+    }
+}
+@code {
+    [CascadingParameter] public EditContext? Context { get; set; }
+    [Parameter] public RenderFragment<FormFieldContext>? Template { get; set; }
+}

@@ -1,0 +1,65 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IDisposable
+@using System.Globalization
+@using System.Linq.Expressions
+<div class="fx-timepicker @CssClass" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    <DropDownListControl @ref="_editor" OnKeyDown="OnKeyDown" TItem="string" TValue="string" DataSource="@Times" Editable="true" Value="@_text" ValueChanged="CommitAsync"
+                         Enabled="@Enabled" Width="@Width" AriaLabel="@AriaLabel" Placeholder="@Format" />
+    @if(ErrorMessage!=null){<div role="alert" class="fx-timepicker-error">@ErrorMessage</div>}
+</div>
+@code {
+    private DropDownListControl<string,string>? _editor;
+    [Parameter] public EventCallback<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs> OnKeyDown {get;set;}
+    public async Task FocusAsync() { if (_editor is not null) await _editor.FocusAsync(); }
+    [CascadingParameter] public EditContext? EditContext {get;set;}
+    [Parameter] public TimeOnly? Value {get;set;}
+    [Parameter] public EventCallback<TimeOnly?> ValueChanged {get;set;}
+    [Parameter] public Expression<Func<TimeOnly?>>? ValueExpression {get;set;}
+    [Parameter] public TimeOnly Min {get;set;}=TimeOnly.MinValue;
+    [Parameter] public TimeOnly Max {get;set;}=TimeOnly.MaxValue;
+    [Parameter] public TimeSpan Step {get;set;}=TimeSpan.FromMinutes(30);
+    [Parameter] public string Format {get;set;}="hh:mm tt";
+    [Parameter] public CultureInfo Culture {get;set;}=CultureInfo.CurrentCulture;
+    [Parameter] public string? Width {get;set;}
+    [Parameter] public string? AriaLabel {get;set;}
+    [Parameter] public EventCallback<string?> ValidationChanged {get;set;}
+    public string? ErrorMessage {get;private set;}
+    private TimeOnly? _last;
+    private string _text="";
+    private EditContext? _context;
+    private ValidationMessageStore? _messages;
+    private IEnumerable<string> Times => EnumerateTimes();
+    private IEnumerable<string> EnumerateTimes()
+    {
+        for(long ticks=Min.Ticks;ticks<=Max.Ticks;ticks+=Step.Ticks)yield return new TimeOnly(ticks).ToString(Format,Culture);
+    }
+    protected override void OnParametersSet()
+    {
+        if(Max<Min||Step<=TimeSpan.Zero||Step.TotalSeconds<1)throw new ArgumentException("TimePicker requires Min <= Max and a step of at least one second.");
+        if((Max.Ticks-Min.Ticks)/Step.Ticks>1440)throw new ArgumentException("Choose a time step producing at most 1441 options.");
+        if(Value!=_last){ErrorMessage=null;_messages?.Clear();_context?.NotifyValidationStateChanged();}
+        if(Value!=_last || ErrorMessage==null){_last=Value;_text=Value?.ToString(Format,Culture)??"";}
+        if(!ReferenceEquals(EditContext,_context)){_messages?.Clear();_context?.NotifyValidationStateChanged();_context=EditContext;_messages=_context==null?null:new(_context);}
+    }
+    private async Task CommitAsync(string? text)
+    {
+        if(!Enabled)return;
+        _text=text??"";TimeOnly? next=null;
+        ErrorMessage=null;
+        if(!string.IsNullOrWhiteSpace(_text))
+        {
+            if(!TimeOnly.TryParseExact(_text,Format,Culture,DateTimeStyles.AllowWhiteSpaces,out var time) && !TimeOnly.TryParse(_text,Culture,DateTimeStyles.AllowWhiteSpaces,out time))ErrorMessage="Enter a valid time.";
+            else if(time<Min||time>Max)ErrorMessage=$"Choose a time between {Min.ToString(Format,Culture)} and {Max.ToString(Format,Culture)}.";
+            else next=time;
+        }
+        if(ValueExpression!=null && _messages!=null)
+        {var field=FieldIdentifier.Create(ValueExpression);_messages.Clear(field);if(ErrorMessage!=null)_messages.Add(field,ErrorMessage);_context?.NotifyValidationStateChanged();}
+        await ValidationChanged.InvokeAsync(ErrorMessage);
+        if(ErrorMessage!=null)return;
+        Value=next;_last=next;_text=next?.ToString(Format,Culture)??"";
+        await ValueChanged.InvokeAsync(next);
+        if(ValueExpression!=null)_context?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));
+    }
+    public void Dispose(){_messages?.Clear();}
+}

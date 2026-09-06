@@ -17,6 +17,7 @@
 <div class="fx-propertygrid @CssClass">
     @if (Value != null)
     {
+        <CascadingValue Value="_context">
         <table class="fx-propertygrid-table">
             <tbody>
                 @foreach (var prop in _properties)
@@ -24,12 +25,14 @@
                     <tr>
                         <td class="fx-propertygrid-name">@(DisplayName(prop))</td>
                         <td class="fx-propertygrid-editor">
-                            @RenderEditor(prop)
+                            @if(CustomEditor!=null){@CustomEditor((Value,prop))}
+                            else{<FormItemControl Model="@Value" Field="@prop.Name" ShowLabel="false" ValueChanged="()=>ValueChanged.InvokeAsync(Value)" />}
                         </td>
                     </tr>
                 }
             </tbody>
         </table>
+        </CascadingValue>
     }
 </div>
 
@@ -48,11 +51,13 @@
 
     private System.Reflection.PropertyInfo[] _properties = Array.Empty<System.Reflection.PropertyInfo>();
 
+    private EditContext? _context;
     protected override void OnParametersSet()
     {
-        _properties = typeof(TModel)
+        if (Value is not null && !ReferenceEquals(_context?.Model,Value)) _context = new EditContext(Value);
+        _properties = (Value?.GetType() ?? typeof(TModel))
             .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
-            .Where(p => p.CanRead && p.CanWrite)
+            .Where(p => p.CanRead && p.CanWrite && p.GetIndexParameters().Length == 0)
             .ToArray();
     }
 
@@ -63,64 +68,4 @@
             .Replace(prop.Name, "(\\B[A-Z])", " $1");
     }
 
-    private RenderFragment RenderEditor(System.Reflection.PropertyInfo prop) => builder =>
-    {
-        if (CustomEditor != null)
-        {
-            builder.AddContent(0, CustomEditor((Value, prop)));
-            return;
-        }
-
-        var current = Value == null ? null : prop.GetValue(Value);
-        void Setter(object? v)
-        {
-            if (Value == null) return;
-            prop.SetValue(Value, v);
-            ValueChanged.InvokeAsync(Value);
-        }
-
-        var t = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
-        if (t == typeof(bool))
-        {
-            builder.OpenElement(0, "input");
-            builder.AddAttribute(1, "type", "checkbox");
-            builder.AddAttribute(2, "checked", (bool?)current ?? false);
-            builder.AddAttribute(3, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
-                this, e => Setter(bool.TryParse(e.Value?.ToString(), out var b) && b)));
-            builder.CloseElement();
-        }
-        else if (t.IsEnum)
-        {
-            builder.OpenElement(0, "select");
-            builder.AddAttribute(1, "onchange", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
-                this, e => Setter(Enum.Parse(t, e.Value?.ToString() ?? ""))));
-            foreach (var v in Enum.GetValues(t))
-            {
-                builder.OpenElement(2, "option");
-                builder.AddAttribute(3, "value", v?.ToString());
-                builder.AddAttribute(4, "selected", Equals(current, v));
-                builder.AddContent(5, v?.ToString());
-                builder.CloseElement();
-            }
-            builder.CloseElement();
-        }
-        else if (t == typeof(int) || t == typeof(long) || t == typeof(decimal) || t == typeof(double) || t == typeof(float))
-        {
-            builder.OpenElement(0, "input");
-            builder.AddAttribute(1, "type", "number");
-            builder.AddAttribute(2, "value", current?.ToString() ?? "");
-            builder.AddAttribute(3, "oninput", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
-                this, e => Setter(Convert.ChangeType(e.Value ?? 0, t))));
-            builder.CloseElement();
-        }
-        else
-        {
-            builder.OpenElement(0, "input");
-            builder.AddAttribute(1, "type", "text");
-            builder.AddAttribute(2, "value", current?.ToString() ?? "");
-            builder.AddAttribute(3, "oninput", Microsoft.AspNetCore.Components.EventCallback.Factory.Create<ChangeEventArgs>(
-                this, e => Setter(e.Value?.ToString())));
-            builder.CloseElement();
-        }
-    };
 }

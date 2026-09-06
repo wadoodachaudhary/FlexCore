@@ -1,0 +1,134 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Globalization
+<div class="fx-calendar @CssClass" style="@ResolvedStyle" id="@Id" @attributes="AdditionalAttributes">
+    <div class="fx-calendar-header">
+        <ButtonControl Disabled="@(!Enabled || !CanNavigate(-1))" OnClick="()=>NavigateAsync(-1)" aria-label="Previous period">‹</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled)" OnClick="ChangeViewAsync" aria-label="Change calendar view">@Heading</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled || !CanNavigate(1))" OnClick="()=>NavigateAsync(1)" aria-label="Next period">›</ButtonControl>
+    </div>
+    <div class="fx-calendar-cells @(_view==CalendarView.Month?"month":"period")" role="grid" aria-label="@Heading" aria-multiselectable="@(SelectionMode!=CalendarSelectionMode.Single)">
+        @if(_view==CalendarView.Month)
+        {
+            <div class="fx-calendar-row" role="row">
+                @for(var i=0;i<7;i++){<span role="columnheader">@Culture.DateTimeFormat.AbbreviatedDayNames[((int)EffectiveFirstDay+i)%7]</span>}
+            </div>
+            @foreach(var week in CalendarDateMath.DaysForMonth(_display,EffectiveFirstDay).Chunk(7))
+            {
+                <div class="fx-calendar-row" role="row">
+                @foreach(var day in week)
+                {
+                    if(day is not DateTime date){<span role="gridcell"></span>}
+                    else
+                    {
+                        var selected=IsSelected(date);var disabled=IsDisabled(date);
+                        <div role="gridcell" aria-selected="@selected" class="fx-calendar-cell @(date.Month!=_display.Month?"outside":"") @(selected?"selected":"") @(date==DateTime.Today?"today":"")">
+                            <ButtonControl @ref="_buttons[date]" Disabled="@disabled" TabIndex="@(date==_focus?0:-1)" OnClick="()=>SelectAsync(date)"
+                                           aria-label="@date.ToString("D",Culture)" @onkeydown="e=>KeyAsync(e,date)">
+                                @if(DayTemplate!=null){@DayTemplate(new(date,selected,disabled,date.Month==_display.Month))}else{@date.Day}
+                            </ButtonControl>
+                        </div>
+                    }
+                }
+                </div>
+            }
+        }
+        else
+        {
+            @foreach(var row in Periods.Chunk(3))
+            {
+                <div class="fx-calendar-row" role="row">
+                @foreach(var period in row)
+                {
+                    <div role="gridcell"><ButtonControl Disabled="@(!Enabled || !PeriodAllowed(period))" OnClick="()=>ChoosePeriodAsync(period)">@(_view==CalendarView.Year?period.ToString("MMM",Culture):period.Year.ToString(Culture))</ButtonControl></div>
+                }
+                </div>
+            }
+        }
+    </div>
+    @if(ShowTodayButton){<ButtonControl Disabled="@IsDisabled(DateTime.Today)" OnClick="()=>SelectAsync(DateTime.Today)">Today</ButtonControl>}
+</div>
+@code {
+    [Parameter] public DateTime? Value {get;set;}
+    [Parameter] public EventCallback<DateTime?> ValueChanged {get;set;}
+    [Parameter] public IReadOnlyList<DateTime> Values {get;set;}=Array.Empty<DateTime>();
+    [Parameter] public EventCallback<IReadOnlyList<DateTime>> ValuesChanged {get;set;}
+    [Parameter] public CalendarRange Range {get;set;}=new(null,null);
+    [Parameter] public EventCallback<CalendarRange> RangeChanged {get;set;}
+    [Parameter] public CalendarSelectionMode SelectionMode {get;set;}
+    [Parameter] public DateTime? Min {get;set;}
+    [Parameter] public DateTime? Max {get;set;}
+    [Parameter] public Func<DateTime,bool>? DisabledDate {get;set;}
+    [Parameter] public CultureInfo Culture {get;set;}=CultureInfo.CurrentCulture;
+    [Parameter] public DayOfWeek? FirstDayOfWeek {get;set;}
+    [Parameter] public DateTime? DisplayDate {get;set;}
+    [Parameter] public EventCallback<DateTime> DisplayDateChanged {get;set;}
+    [Parameter] public CalendarView View {get;set;}
+    [Parameter] public EventCallback<CalendarView> ViewChanged {get;set;}
+    [Parameter] public bool ShowTodayButton {get;set;}=true;
+    [Parameter] public RenderFragment<CalendarCellContext>? DayTemplate {get;set;}
+    private readonly Dictionary<DateTime,ButtonControl> _buttons=new();
+    private DateTime _display=DateTime.Today, _focus=DateTime.Today;
+    private DateTime? _lastDisplay, _lastValue;
+    private CalendarView _view, _lastView;
+    private bool _initialized, _focusPending;
+    private DayOfWeek EffectiveFirstDay=>FirstDayOfWeek??Culture.DateTimeFormat.FirstDayOfWeek;
+    private int DecadeStart=>Math.Max(1,_display.Year/10*10);
+    private string Heading=>_view switch {CalendarView.Month=>_display.ToString("MMMM yyyy",Culture),CalendarView.Year=>_display.Year.ToString(Culture),_=>$"{DecadeStart}–{Math.Min(9999,DecadeStart+9)}"};
+    private IEnumerable<DateTime> Periods=>_view==CalendarView.Year?Enumerable.Range(1,12).Select(m=>new DateTime(_display.Year,m,1)):Enumerable.Range(DecadeStart,Math.Min(10,10000-DecadeStart)).Select(y=>new DateTime(y,1,1));
+    private DateTime Clamp(DateTime date)=>date.Date<(Min?.Date??DateTime.MinValue)?Min!.Value.Date:date.Date>(Max?.Date??DateTime.MaxValue.Date)?Max!.Value.Date:date.Date;
+    protected override void OnParametersSet()
+    {
+        if(Min?.Date>Max?.Date)throw new ArgumentException("Calendar Min must not exceed Max.");
+        if(!_initialized || DisplayDate!=_lastDisplay || Value!=_lastValue)
+        {
+            _focus=Clamp(DisplayDate??Value??Range.Start??DateTime.Today);
+            _display=new(_focus.Year,_focus.Month,1);
+        }
+        if(!_initialized||View!=_lastView)_view=View;
+        _lastDisplay=DisplayDate;_lastValue=Value;_lastView=View;_initialized=true;
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(_focusPending){_focusPending=false;if(_buttons.TryGetValue(_focus,out var button))await button.FocusAsync();}
+        foreach(var date in _buttons.Keys.Where(d=>Math.Abs((d-_display).TotalDays)>50).ToArray())_buttons.Remove(date);
+    }
+    private bool IsDisabled(DateTime date)=>!Enabled||date.Date<(Min?.Date??DateTime.MinValue)||date.Date>(Max?.Date??DateTime.MaxValue.Date)||DisabledDate?.Invoke(date.Date)==true;
+    private bool IsSelected(DateTime date)=>SelectionMode switch {CalendarSelectionMode.Multiple=>Values.Any(d=>d.Date==date.Date),CalendarSelectionMode.Range=>Range.Start?.Date<=date.Date && date.Date<=(Range.End??Range.Start)?.Date,_=>Value?.Date==date.Date};
+    private bool PeriodAllowed(DateTime date)
+    {
+        var end=_view==CalendarView.Year?new DateTime(date.Year,date.Month,DateTime.DaysInMonth(date.Year,date.Month)):new DateTime(date.Year,12,31);
+        return end>=(Min?.Date??DateTime.MinValue)&&date<=(Max?.Date??DateTime.MaxValue);
+    }
+    private DateTime NextPeriod(int direction)=>CalendarDateMath.AddMonths(_display,direction*(_view switch {CalendarView.Month=>1,CalendarView.Year=>12,_=>120}));
+    private bool CanNavigate(int direction){var next=NextPeriod(direction);return next!=_display && (direction<0 ? (_view==CalendarView.Month?CalendarDateMath.AddMonths(next,1).AddDays(-1):new DateTime(next.Year,12,31)) >=(Min?.Date??DateTime.MinValue) : next<=(Max?.Date??DateTime.MaxValue));}
+    public async Task NavigateAsync(int direction)
+    {
+        direction=Math.Sign(direction);if(!Enabled||!CanNavigate(direction))return;
+        _display=NextPeriod(direction);_focus=Clamp(_display);await DisplayDateChanged.InvokeAsync(_display);await InvokeAsync(StateHasChanged);
+    }
+    private async Task ChangeViewAsync(){_view=_view switch{CalendarView.Month=>CalendarView.Year,CalendarView.Year=>CalendarView.Decade,_=>CalendarView.Month};await ViewChanged.InvokeAsync(_view);}
+    private async Task ChoosePeriodAsync(DateTime period){_display=period;_focus=Clamp(period);_view=_view==CalendarView.Decade?CalendarView.Year:CalendarView.Month;await ViewChanged.InvokeAsync(_view);await DisplayDateChanged.InvokeAsync(_display);}
+    public async Task SelectAsync(DateTime date)
+    {
+        date=date.Date;if(IsDisabled(date))return;
+        if(SelectionMode==CalendarSelectionMode.Multiple){Values=Values.Where(d=>d.Date!=date).Concat(Values.Any(d=>d.Date==date)?Array.Empty<DateTime>():[date]).Order().ToArray();await ValuesChanged.InvokeAsync(Values);}
+        else if(SelectionMode==CalendarSelectionMode.Range)
+        {
+            var next=Range.Start==null||Range.End!=null?new CalendarRange(date,null):new CalendarRange(date<Range.Start?date:Range.Start,date<Range.Start?Range.Start:date);
+            if(next.Start.HasValue&&next.End.HasValue&&DisabledDate!=null)
+                for(var current=next.Start.Value;current<=next.End.Value;){if(IsDisabled(current))return;if(current==next.End.Value)break;current=current.AddDays(1);}
+            Range=next;await RangeChanged.InvokeAsync(next);
+        }
+        else{Value=date;_lastValue=date;await ValueChanged.InvokeAsync(date);}
+        _focus=date;_display=new(date.Year,date.Month,1);await InvokeAsync(StateHasChanged);
+    }
+    private async Task KeyAsync(KeyboardEventArgs e,DateTime date)
+    {
+        if(e.Key is "Enter" or " ")return;
+        var next=e.Key switch{"ArrowLeft"=>CalendarDateMath.AddDays(date,-1),"ArrowRight"=>CalendarDateMath.AddDays(date,1),"ArrowUp"=>CalendarDateMath.AddDays(date,-7),"ArrowDown"=>CalendarDateMath.AddDays(date,7),"Home"=>CalendarDateMath.AddDays(date,-(((int)date.DayOfWeek-(int)EffectiveFirstDay+7)%7)),"End"=>CalendarDateMath.AddDays(date,6-(((int)date.DayOfWeek-(int)EffectiveFirstDay+7)%7)),"PageUp"=>CalendarDateMath.AddMonths(date,e.ShiftKey?-12:-1),"PageDown"=>CalendarDateMath.AddMonths(date,e.ShiftKey?12:1),_=>date};
+        next=Clamp(next);var direction=Math.Sign((next-date).Ticks);
+        while(IsDisabled(next)&&direction!=0){var candidate=Clamp(CalendarDateMath.AddDays(next,direction));if(candidate==next)return;next=candidate;}
+        _focus=next;_display=new(next.Year,next.Month,1);_focusPending=true;
+    }
+}

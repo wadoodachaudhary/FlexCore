@@ -11,9 +11,15 @@ using Fx.ControlKit.Notifications;
 
 - **GridControl** — virtualized data grid with sorting, filtering, grouping, drag-reorder, header context menu, dialog / batch / inline editing, metadata-generated columns, banded headers, cumulative left/right frozen columns, choose-columns dialog, and aggregate footers
 - **TreeGridControl** — hierarchical version of the grid
+- **EditorControl** — optional formatting/search toolbar, literal find/replace, opt-in undo/redo, read-only mode and formatted block snapshots. See [editor parity progress and bench](docs/editor-parity-progress.md).
+- **PDF Viewer and Spreadsheet** — occurrence search and bookmark navigation; visible frozen panes and persistent worksheet filters. See [document parity progress and benches](docs/pdf-spreadsheet-parity-progress.md) for APIs, verification and remaining gaps.
 - **ReportWriterControl** — adaptive paginated report renderer fed by a small `ReportDefinition` (loaded from Crystal XML, plain SQL, or any other source you wire)
 - **DialogControl, NotificationService, RibbonControl, ToolbarControl, ButtonControl, DropDownListControl, MultiSelectDualListControl, ChartControl, DiagramControl, EditorPanelControl, OutlineControl, ProgressBarControl, PropertyGridControl, TabsControl** — the rest of the kit
 - **App-agnostic by design** — every external dependency (DB, session, picklist source, report exporter) is exposed as an interface; host apps wire their own adapters in `Program.cs`
+
+## Dedicated counterparts
+
+Forms and validation, Calendar/TimePicker, AutoComplete, Stepper, RadioGroup, ToggleButton, ColorPalette, gauges, StockChart, DockManager, AppBar/GridLayout, icons, AIPrompt, Gantt and PDF Viewer are available in FlexCore. See the [API guide and implemented scope](docs/dedicated-controls.md) and the showcase at `/demo/counterparts`. These additions reuse the existing controls; the guide also records remaining feature limits.
 
 ## Targets
 
@@ -395,3 +401,11 @@ with `dotnet run --project tests/FlexCore.RegressionTests/FlexCore.RegressionTes
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Independent control benches
+
+The 32 remaining dedicated control types now have independent pages in FlexKitTester under `/flexcore-controls`, including Spreadsheet, Scheduler, Map, Upload, inputs, overlays, layout and chat. See [the control/bench guide](docs/remaining-controls.md) for APIs, dependencies, validation and remaining feature-level parity differences.
+
+### TreeView and TreeGrid parity work
+
+See [tree parity progress](docs/tree-parity-progress.md) for APIs, behavior, limitations, and validation. Independent FlexKitTester benches are available at `/flexcore-controls/tree-view`, `/flexcore-controls/tree-grid`, and `/flexcore-controls/tree-grid-operations`. The operations bench covers inline/dialog/batch editing, hierarchy checkboxes, reparenting and left/right frozen columns.

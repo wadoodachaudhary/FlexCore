@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-flat-color-picker @CssClass" style="@ResolvedStyle">
+<ButtonGroupControl Items="@_views" Values="@(new[]{_view})" ValuesChanged="ChangeView" />
+@if(_view=="palette"){<ColorPaletteControl Value="@Draft" ValueChanged="Changed" Enabled="@Enabled" />}
+else{<ColorGradientControl Value="@Draft" ValueChanged="Changed" Opacity="@Opacity" Enabled="@Enabled" />}
+@if(ShowButtons){<div><ButtonControl OnClick="ApplyAsync" Disabled="@(!Enabled)">Apply color</ButtonControl><ButtonControl OnClick="Cancel">Cancel</ButtonControl></div>}
+</div>
+@code {
+ [Parameter] public string Value {get;set;}="#3478C5";
+ [Parameter] public EventCallback<string> ValueChanged {get;set;}
+ [Parameter] public bool ShowButtons {get;set;}
+ [Parameter] public bool Opacity {get;set;}=true;
+ [Parameter] public EventCallback OnCancel {get;set;}
+ private void ChangeView(IReadOnlyList<string> views)=>_view=views.FirstOrDefault()??"gradient";
+ private string? _draft,_last;private string _view="gradient";private string Draft=>_draft??Value;
+ private readonly SelectionItem[] _views=[new("gradient","Gradient"),new("palette","Palette")];
+ protected override void OnParametersSet(){if(_last!=Value){_draft=_last=Value;}}
+ private async Task Changed(string value){_draft=value;if(!ShowButtons)await ApplyAsync();}
+ public async Task ApplyAsync(){if(!Enabled)return;Value=_last=Draft;await ValueChanged.InvokeAsync(Value);}
+ private async Task Cancel(){_draft=Value;await OnCancel.InvokeAsync();}
+}

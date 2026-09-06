@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit.Charts
+@inherits FlexControlBase
+<div class="fx-gauge @CssClass" style="@($"position:relative;{ResolvedStyle}")" id="@Id" role="meter" aria-label="@AriaLabel" aria-valuenow="@Math.Clamp(Value,Min,Max)" aria-valuemin="@Min" aria-valuemax="@Max" @attributes="AdditionalAttributes">
+    <ChartControl Type="@GaugeType" GaugeCircular="@IsCircular" GaugeValue="@Value" GaugeMin="@Min" GaugeMax="@Max" GaugeRanges="@Ranges" GaugePointers="@Pointers" GaugeTickCount="@TickCount" GaugeShowValue="@(ValueTemplate==null)" GaugeLabelFormat="@LabelFormat" ValueFormat="@ValueFormat" ColorPalette="@(new[]{Color})" Height="@Height" />
+    @if(ValueTemplate!=null){<div class="fx-gauge-value-template" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)">@ValueTemplate(new(Value,Min,Max))</div>}
+</div>
+@code {
+    protected virtual ChartType GaugeType=>ChartType.Gauge;
+    protected virtual bool IsCircular=>false;
+    [Parameter] public double Value {get;set;}
+    [Parameter] public double Min {get;set;}
+    [Parameter] public double Max {get;set;}=100;
+    [Parameter] public IReadOnlyList<GaugeRange> Ranges {get;set;}=Array.Empty<GaugeRange>();
+    [Parameter] public IReadOnlyList<GaugePointer> Pointers {get;set;}=Array.Empty<GaugePointer>();
+    [Parameter] public string Color {get;set;}="#2563eb";
+    [Parameter] public int TickCount {get;set;}=5;
+    [Parameter] public string LabelFormat {get;set;}="0";
+    [Parameter] public string ValueFormat {get;set;}="0.##";
+    [Parameter] public string Height {get;set;}="260px";
+    [Parameter] public string AriaLabel {get;set;}="Gauge";
+    [Parameter] public RenderFragment<GaugeValueContext>? ValueTemplate {get;set;}
+}

@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit.Layout
+@inherits FlexControlBase
+<header class="fx-app-bar @CssClass" id="@Id" style="@($"position:{Position.ToString().ToLowerInvariant()};{(Bottom?"bottom:0":"top:0")};{(Position==AppBarPosition.Fixed?"left:0;right:0;":"")}z-index:{ZIndex};{ResolvedStyle}")" @attributes="AdditionalAttributes">
+    <ToolbarControl CssClass="fx-app-bar-toolbar" ShowCaptionsToggle="false">
+        <ChildContent><div class="fx-app-bar-start">@StartContent</div><div class="fx-app-bar-center">@ChildContent</div><div class="fx-app-bar-end">@EndContent</div></ChildContent>
+    </ToolbarControl>
+</header>
+@code {
+    [Parameter] public AppBarPosition Position {get;set;}=AppBarPosition.Static;
+    [Parameter] public bool Bottom {get;set;}
+    [Parameter] public int ZIndex {get;set;}=100;
+    [Parameter] public RenderFragment? StartContent {get;set;}
+    [Parameter] public RenderFragment? ChildContent {get;set;}
+    [Parameter] public RenderFragment? EndContent {get;set;}
+}

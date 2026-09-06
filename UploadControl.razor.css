@@ -1,0 +1,1 @@
+.fx-upload-list{list-style:none;padding:0;display:grid;gap:8px}.fx-upload-list li{border:1px solid #c5d1df;border-radius:4px;padding:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}.fx-upload-list li>span{font-size:12px}.fx-upload-list [role=alert]{color:#ac2436;width:100%}

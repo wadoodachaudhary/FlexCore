@@ -8,7 +8,7 @@
 
 @if (Multiline)
 {
-    if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
+    if (ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
         && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
     {
         <InputTextArea class="@ResolvedCssClass"
@@ -89,7 +89,7 @@ else
             </button>
         </div>
     }
-    else if (ValueExpression is not null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
+    else if (ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
              && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
     {
         <InputText class="@ResolvedCssClass"
@@ -219,6 +219,13 @@ else
     [Parameter] public string? Value { get; set; }
     [Parameter] public EventCallback<string?> ValueChanged { get; set; }
     [Parameter] public Expression<Func<string?>>? ValueExpression { get; set; }
+    [CascadingParameter] private EditContext? CascadedEditContext { get; set; }
+
+    private void NotifyNativeFieldChanged()
+    {
+        if (CascadedEditContext is not null && ValueExpression is not null)
+            CascadedEditContext.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));
+    }
 
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? CssClass { get; set; }
@@ -360,6 +367,9 @@ else
             // The editor may have unmounted while a navigation key was in flight.
         }
     }
+
+    /// <summary>Focuses the input through Blazor's element API.</summary>
+    public ValueTask FocusAsync(bool preventScroll = true) => _inputElement.FocusAsync(preventScroll);
 
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
@@ -616,6 +626,7 @@ else
             _suppressNextNativeInputRender = true;
             if (UpdateOnInput && ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(typed);
+            if (UpdateOnInput) NotifyNativeFieldChanged();
             return;
         }
 
@@ -629,6 +640,7 @@ else
             _suppressNextNativeInputRender = true;
         if (UpdateOnInput && ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+        if (UpdateOnInput) NotifyNativeFieldChanged();
     }
 
     private Task OnNativeChange(ChangeEventArgs e) =>
@@ -641,6 +653,7 @@ else
             _uncontrolledValue = Value;
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
+        NotifyNativeFieldChanged();
     }
 
     private async Task OnInputFocus()

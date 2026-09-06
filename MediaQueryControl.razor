@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+<span class="fx-media-query" style="display:contents" @ref="_host">@if(Matches){@ChildContent}else{@ElseContent}</span>
+@code {
+ [Parameter] public string Media {get;set;}="(min-width: 768px)";
+ [Parameter] public bool Matches {get;set;}
+ [Parameter] public EventCallback<bool> MatchesChanged {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ [Parameter] public RenderFragment? ElseContent {get;set;}
+ private string? _query;private ElementReference _host;private BrowserInterop? _browser;private DotNetObjectReference<MediaQueryControl>? _self;
+ protected override async Task OnAfterRenderAsync(bool firstRender){if(_query==Media)return;_query=Media;_browser??=new(JS);_self??=DotNetObjectReference.Create(this);try{await SetMatchAsync(await _browser.InvokeAsync<bool>("mediaQuery",_host,Media,_self));}catch(JSException){/* The supplied Matches value is the prerender/no-JS fallback. */}}
+ [JSInvokable] public async Task SetMatchAsync(bool value){if(value==Matches)return;Matches=value;await MatchesChanged.InvokeAsync(value);await InvokeAsync(StateHasChanged);}
+ public async ValueTask DisposeAsync(){if(_browser is not null){try{await _browser.InvokeAsync<object?>("dispose",_host);}catch(JSDisconnectedException){}await _browser.DisposeAsync();}_self?.Dispose();}
+}

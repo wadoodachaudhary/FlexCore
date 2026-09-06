@@ -7,7 +7,7 @@ public enum ChartType
     // Trend over time
     Line, MultiLine, Spline, StepLine, Area, StackedArea, Sparkline,
     // Part-to-whole
-    Pie, Donut, Treemap, Funnel, Pyramid,
+    Pie, Donut, Treemap, Funnel, Pyramid, Sunburst,
     // Distribution
     Histogram, BoxPlot,
     // Correlation

@@ -1,0 +1,35 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@using System.Globalization
+<div class="fx-signature @CssClass" style="@ResolvedStyle">
+<svg @ref="_pad" viewBox="@($"0 0 {F(Width)} {F(Height)}")" style="width:@(F(Width))px;max-width:100%;height:auto;background:@BackgroundColor" role="img" aria-label="@AriaLabel" tabindex="@(Enabled?0:-1)">
+@foreach(var stroke in Value.Strokes){<polyline points="@Points(stroke)" fill="none" stroke="@stroke.Color" stroke-width="@F(stroke.Width)" stroke-linecap="round" stroke-linejoin="round" />}
+</svg>
+@if(ShowToolbar){<ToolbarControl><ButtonControl OnClick="UndoAsync" Disabled="@(!Enabled||ReadOnly||Value.Strokes.Count==0)">Undo stroke</ButtonControl><ButtonControl OnClick="ClearAsync" Disabled="@(!Enabled||ReadOnly||Value.Strokes.Count==0)">Clear signature</ButtonControl><ButtonControl OnClick="DownloadAsync">Download signature</ButtonControl></ToolbarControl>}
+@if(_error is not null){<AlertControl Text="@_error" />}
+</div>
+@code {
+ [Parameter] public SignatureValue Value {get;set;}=SignatureValue.Empty;
+ [Parameter] public EventCallback<SignatureValue> ValueChanged {get;set;}
+ [Parameter] public double Width {get;set;}=600;
+ [Parameter] public double Height {get;set;}=180;
+ [Parameter] public string Color {get;set;}="#202938";
+ [Parameter] public string BackgroundColor {get;set;}="#FFFFFF";
+ [Parameter] public double StrokeWidth {get;set;}=2;
+ [Parameter] public bool ReadOnly {get;set;}
+ [Parameter] public bool ShowToolbar {get;set;}=true;
+ [Parameter] public string AriaLabel {get;set;}="Signature drawing area";
+ private ElementReference _pad;private BrowserInterop? _browser;private DotNetObjectReference<SignatureControl>? _self;private string? _binding,_error;
+ private static string F(double n)=>n.ToString("0.###",CultureInfo.InvariantCulture);
+ private static string Points(SignatureStroke stroke)=>string.Join(" ",stroke.Points.Select(p=>$"{F(p.X)},{F(p.Y)}"));
+ protected override void OnParametersSet(){if(!double.IsFinite(Width)||!double.IsFinite(Height)||!double.IsFinite(StrokeWidth)||Width<=0||Height<=0||StrokeWidth<=0)throw new ArgumentException("Signature dimensions and stroke width must be positive and finite.");}
+ protected override async Task OnAfterRenderAsync(bool firstRender){var key=$"{Enabled}:{ReadOnly}:{Width}:{Height}:{Color}:{StrokeWidth}";if(key==_binding)return;_binding=key;_browser??=new(JS);_self??=DotNetObjectReference.Create(this);try{await _browser.InvokeAsync<object?>(Enabled&&!ReadOnly?"signature":"dispose",_pad,new{width=Width,height=Height,color=Color,strokeWidth=StrokeWidth},_self);}catch(JSException e){_error=$"Drawing unavailable: {e.Message}";await InvokeAsync(StateHasChanged);}}
+ [JSInvokable] public async Task AddStrokeAsync(SignaturePoint[] points){if(!Enabled||ReadOnly||points.Length<2)return;if(points.Length>100000||points.Any(p=>!double.IsFinite(p.X)||!double.IsFinite(p.Y)))throw new ArgumentException("Invalid signature stroke.");var bounded=points.Select(p=>new SignaturePoint(Math.Clamp(p.X,0,Width),Math.Clamp(p.Y,0,Height))).ToArray();Value=new(Value.Strokes.Append(new SignatureStroke(bounded,Color,StrokeWidth)).ToArray());await ValueChanged.InvokeAsync(Value);await InvokeAsync(StateHasChanged);}
+ public async Task ClearAsync(){if(!Enabled||ReadOnly)return;Value=SignatureValue.Empty;await ValueChanged.InvokeAsync(Value);}
+ public async Task UndoAsync(){if(!Enabled||ReadOnly||Value.Strokes.Count==0)return;Value=new(Value.Strokes.Take(Value.Strokes.Count-1).ToArray());await ValueChanged.InvokeAsync(Value);}
+ public string ExportSvg()=>Value.ToSvg(Width,Height,BackgroundColor);
+ public async Task DownloadAsync(){_browser??=new(JS);try{await _browser.InvokeAsync<object?>("download",null,new{bytes=System.Text.Encoding.UTF8.GetBytes(ExportSvg()),type="image/svg+xml",name="signature.svg"});}catch(JSException e){_error=e.Message;}}
+ public async ValueTask DisposeAsync(){if(_browser is not null){try{await _browser.InvokeAsync<object?>("dispose",_pad);}catch(JSDisconnectedException){}await _browser.DisposeAsync();}_self?.Dispose();}
+}

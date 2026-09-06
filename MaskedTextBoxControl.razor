@@ -1,0 +1,31 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Linq.Expressions
+@implements IDisposable
+<div class="fx-masked-textbox @CssClass" style="@ResolvedStyle">
+<TextBoxControl Value="@_draft" ValueChanged="Input" UpdateOnInput="true" OnBlur="CommitAsync" OnKeyDown="KeyDown" Enabled="@(Enabled&&!ReadOnly)" Placeholder="@Placeholder" id="@Id" aria-label="@AriaLabel" aria-invalid="@(Error is not null ? "true" : "false")" aria-describedby="@(Error is null?null:_errorId)" />
+@if(Error is not null){<span id="@_errorId" class="fx-field-error" role="alert">@Error</span>}
+</div>
+@code {
+ [CascadingParameter] public EditContext? EditContext {get;set;}
+ [Parameter] public string? Value {get;set;}
+ [Parameter] public EventCallback<string?> ValueChanged {get;set;}
+ [Parameter] public Expression<Func<string?>>? ValueExpression {get;set;}
+ [Parameter] public string Mask {get;set;}="000-000-0000";
+ [Parameter] public char PromptChar {get;set;}='_';
+ [Parameter] public bool IncludeLiterals {get;set;}=true;
+ [Parameter] public bool Required {get;set;}
+ [Parameter] public bool ReadOnly {get;set;}
+ [Parameter] public string? Placeholder {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Masked value";
+ [Parameter] public EventCallback<MaskResult> OnChange {get;set;}
+ public string? Error {get;private set;}
+ private string? _draft,_lastValue,_lastMask;private bool _initialized;private MaskPattern _pattern=new("0");
+ private readonly string _errorId="fx-mask-error-"+Guid.NewGuid().ToString("N");private ValidationMessageStore? _messages;private EditContext? _context;
+ protected override void OnParametersSet(){if(_context!=EditContext){_messages?.Clear();_context=EditContext;_messages=_context is null?null:new(_context);}if(!_initialized||_lastValue!=Value||_lastMask!=Mask){_initialized=true;_lastMask=Mask;_pattern=new(Mask);_lastValue=Value;_draft=Value;Error=null;}}
+ private void Input(string? text){_draft=text;SetError(null);}
+ public async Task CommitAsync(){if(!Enabled||ReadOnly)return;var result=string.IsNullOrEmpty(_draft)&&!Required?new MaskResult("","",true,null):_pattern.Apply(_draft,PromptChar,IncludeLiterals);SetError(result.Error);if(result.Error is not null)return;_draft=IncludeLiterals?result.Text:result.RawValue;Value=_lastValue=_draft;await ValueChanged.InvokeAsync(Value);if(ValueExpression is not null)_context?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));await OnChange.InvokeAsync(result);}
+ private void SetError(string? error){Error=error;if(ValueExpression is null||_messages is null)return;var field=FieldIdentifier.Create(ValueExpression);_messages.Clear(field);if(error is not null)_messages.Add(field,error);_context?.NotifyValidationStateChanged();}
+ private Task KeyDown(KeyboardEventArgs e)=>e.Key=="Enter"?CommitAsync():Task.CompletedTask;
+ public void Dispose(){_messages?.Clear();_context?.NotifyValidationStateChanged();}
+}

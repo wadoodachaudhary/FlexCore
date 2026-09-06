@@ -1,0 +1,78 @@
+@namespace Fx.ControlKit.AI
+@using Fx.ControlKit.Editor
+@inherits FlexControlBase
+@implements IDisposable
+<section class="fx-ai-prompt @CssClass" id="@Id" style="@ResolvedStyle" aria-label="@AriaLabel" @attributes="AdditionalAttributes">
+    <div class="fx-ai-prompt-input">
+        <TextBoxControl Value="@Prompt" ValueChanged="SetPromptAsync" Multiline="true" Rows="@Rows" UpdateOnInput="true" Enabled="@(Enabled&&!IsBusy)" Placeholder="@Placeholder" aria-label="@AriaLabel" />
+        <div class="fx-ai-prompt-suggestions">
+            @foreach(var suggestion in Suggestions){<ButtonControl Disabled="@(!Enabled||IsBusy)" OnClick="()=>SetPromptAsync(suggestion)">@suggestion</ButtonControl>}
+        </div>
+        <ToolbarControl ShowCaptionsToggle="false">
+            <ButtonControl Disabled="@(!CanGenerate)" OnClick="()=>GenerateAsync()"><SvgIconControl Name="sparkles" /> Generate</ButtonControl>
+            @foreach(var command in Commands){<ButtonControl Disabled="@(!CanGenerate)" OnClick="()=>GenerateAsync(command)">@command.Text</ButtonControl>}
+            @if(IsBusy){<ButtonControl OnClick="CancelAsync">Cancel</ButtonControl>}
+        </ToolbarControl>
+    </div>
+    @if(Generate==null){<div role="status">Connect a prompt provider through Generate to enable generation.</div>}
+    @if(IsBusy||ErrorMessage!=null||_active!=null)
+    {
+        <LlmResultCard OutputText="@_active?.Output" OriginalText="@_active?.Prompt" OperationLabel="@(_active?.Command??"Response")" IsBusy="@IsBusy" ErrorMessage="@ErrorMessage"
+                       OnApply="ApplyAsync" OnDismiss="DismissAsync" ApplyLabel="@ApplyLabel" />
+    }
+    @if(_history.Count>1)
+    {
+        <div class="fx-ai-prompt-history" aria-label="Response history">
+            @foreach(var result in _history){<ButtonControl Disabled="@IsBusy" OnClick="()=>SelectResultAsync(result)" aria-pressed="@ReferenceEquals(result,_active)">@result.CreatedAt.ToLocalTime().ToString("t") — @Preview(result.Prompt)</ButtonControl>}
+        </div>
+    }
+    @FooterContent
+</section>
+@code {
+    [Parameter] public string Prompt {get;set;}="";
+    [Parameter] public EventCallback<string> PromptChanged {get;set;}
+    [Parameter] public Func<AIPromptRequest,CancellationToken,Task<string>>? Generate {get;set;}
+    [Parameter] public IReadOnlyList<string> Suggestions {get;set;}=Array.Empty<string>();
+    [Parameter] public IReadOnlyList<AIPromptCommand> Commands {get;set;}=Array.Empty<AIPromptCommand>();
+    [Parameter] public EventCallback<AIPromptResult> Generated {get;set;}
+    [Parameter] public EventCallback<AIPromptResult> Apply {get;set;}
+    [Parameter] public int MaxHistory {get;set;}=10;
+    [Parameter] public int Rows {get;set;}=4;
+    [Parameter] public string AriaLabel {get;set;}="AI prompt";
+    [Parameter] public string Placeholder {get;set;}="Enter a prompt…";
+    [Parameter] public string ApplyLabel {get;set;}="Use response";
+    [Parameter] public RenderFragment? FooterContent {get;set;}
+    public bool IsBusy {get;private set;}
+    public string? ErrorMessage {get;private set;}
+    public IReadOnlyList<AIPromptResult> History=>_history.AsReadOnly();
+    private readonly List<AIPromptResult> _history=new();
+    private AIPromptResult? _active;
+    private CancellationTokenSource? _request;
+    private bool _disposed;
+    private bool CanGenerate=>Enabled&&!IsBusy&&Generate!=null&&!string.IsNullOrWhiteSpace(Prompt);
+    private static string Preview(string text)=>text.Length>60?text[..60]+"…":text;
+    private async Task SetPromptAsync(string? text){if(!Enabled||IsBusy)return;Prompt=text??"";await PromptChanged.InvokeAsync(Prompt);}
+    public async Task GenerateAsync(AIPromptCommand? command=null)
+    {
+        if(!CanGenerate)return;
+        var source=_request=new();var token=source.Token;var request=new AIPromptRequest(Prompt,command);
+        IsBusy=true;ErrorMessage=null;_active=null;await InvokeAsync(StateHasChanged);
+        try
+        {
+            var output=await Generate!(request,token);
+            if(token.IsCancellationRequested||_disposed||!ReferenceEquals(source,_request))return;
+            var result=new AIPromptResult(request.Prompt,output,command?.Text,DateTimeOffset.UtcNow);
+            _active=result;_history.Insert(0,result);
+            if(_history.Count>Math.Max(1,MaxHistory))_history.RemoveRange(Math.Max(1,MaxHistory),_history.Count-Math.Max(1,MaxHistory));
+            await Generated.InvokeAsync(result);
+        }
+        catch(OperationCanceledException) when(token.IsCancellationRequested){}
+        catch(Exception ex){if(!token.IsCancellationRequested&&!_disposed)ErrorMessage=ex.Message;}
+        finally{if(ReferenceEquals(source,_request)){_request=null;IsBusy=false;}source.Dispose();if(!_disposed)await InvokeAsync(StateHasChanged);}
+    }
+    public Task CancelAsync(){_request?.Cancel();_request=null;IsBusy=false;return InvokeAsync(StateHasChanged);}
+    private Task ApplyAsync()=>Enabled&&!IsBusy&&_active!=null?Apply.InvokeAsync(_active):Task.CompletedTask;
+    private Task DismissAsync(){_active=null;ErrorMessage=null;return Task.CompletedTask;}
+    private Task SelectResultAsync(AIPromptResult result){if(!IsBusy)_active=result;return Task.CompletedTask;}
+    public void Dispose(){_disposed=true;_request?.Cancel();}
+}

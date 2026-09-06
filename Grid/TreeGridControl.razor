@@ -10,6 +10,31 @@
      @onmouseup="EndColumnResize"
      @onmouseleave="EndColumnResize">
 
+    @if (ShowEditToolbar && (EditSettingsRef is not null || AllowRowDragAndDrop))
+    {
+        <div class="fx-treegrid-edit-toolbar" @onkeydown:stopPropagation="true">
+            @if (EditSettingsRef?.AllowAdding == true)
+            {
+                <ButtonControl Disabled="@_mutationBusy" OnClick="() => AddFromToolbarAsync(false)">Add root</ButtonControl>
+                <ButtonControl Disabled="@(_mutationBusy || _selectedItem is null)" OnClick="() => AddFromToolbarAsync(true)">Add child</ButtonControl>
+            }
+            @if (EditSettingsRef?.AllowEditing == true)
+            { <ButtonControl Disabled="@(_mutationBusy || _selectedItem is null)" OnClick="EditSelectedAsync">Edit row</ButtonControl> }
+            @if (EditSettingsRef?.AllowDeleting == true)
+            { <ButtonControl Disabled="@(_mutationBusy || (_selectedItem is null && _checkedKeys.Count == 0))" OnClick="RequestDeleteAsync">Delete</ButtonControl> }
+            @if (EditSettingsRef is not null)
+            {
+                <ButtonControl Disabled="@(_mutationBusy || !HasPendingChanges)" OnClick="async () => await SaveChangesAsync()">Save changes</ButtonControl>
+                <ButtonControl Disabled="@(_mutationBusy || !HasPendingChanges)" OnClick="CancelChangesAsync">Cancel changes</ButtonControl>
+            }
+            @if (AllowRowDragAndDrop)
+            {
+                <ButtonControl Disabled="@(_selectedItem is null || HasPendingChanges)" OnClick="IndentSelectedAsync">Indent</ButtonControl>
+                <ButtonControl Disabled="@(_selectedItem is null || HasPendingChanges)" OnClick="OutdentSelectedAsync">Outdent</ButtonControl>
+                <ButtonControl Disabled="@(_selectedItem is null || HasPendingChanges)" OnClick="OpenMoveDialog">Move row…</ButtonControl>
+            }
+        </div>
+    }
     @if (ShouldRenderToolbar)
     {
         <div class="fx-treegrid-toolbar">
@@ -121,17 +146,20 @@
     <div class="fx-treegrid-content@(ShowLegacyScrollBar ? " fx-treegrid-legacy-scroll" : "")"
          @ref="_scrollViewportElement"
          @onscroll="HandleLegacyScroll">
-        <table class="fx-treegrid-table">
+        <table class="fx-treegrid-table" role="treegrid" aria-label="@AriaLabel" aria-rowcount="@(VisibleNodes.Count() + (ShowColumnHeaders ? 1 : 0))">
             @if (ShowColumnHeaders)
             {
-                <thead class="fx-treegrid-header">
+                <thead class="fx-treegrid-header" @oncontextmenu="e => ShowHeaderMenu(e)" @oncontextmenu:preventDefault="@ShowHeaderContextMenu">
                     <tr>
+                        @if (ShowCheckboxes)
+                        { <th class="fx-treegrid-check-cell"><CheckBoxControl Checked="@AllRowsChecked" Indeterminate="@SomeRowsChecked" CheckedChanged="value => CheckAllAsync(value)" Label="Check all loaded rows" CssClass="fx-treegrid-check" StopClickPropagation="true" StopKeyDownPropagation="true" /></th> }
                         @foreach (var col in VisibleColumns)
                         {
                             var headerIconSrc = ResolveHeaderIconSrc(col);
-                            <th class="@GetHeaderCellCss(col)"
+                            <th class="@GetHeaderCellCss(col)" data-tree-field="@col.Field" data-tree-column="@VisibleColumns.IndexOf(col)" data-tree-frozen="@FrozenSide(col)"
+                                @oncontextmenu="e => ShowHeaderMenu(e, col)" @oncontextmenu:stopPropagation="true" @oncontextmenu:preventDefault="@ShowHeaderContextMenu"
                                 style="@GetHeaderStyle(col)"
-                                @onclick="() => HandleHeaderClickAsync(col)">
+                                @onclick="e => HandleHeaderClickAsync(col, e)" aria-sort="@(GetColumnState(col).SortDirection is {} direction ? direction == SortDirection.Ascending ? "ascending" : "descending" : null)">
                                 <span class="fx-treegrid-header-content">
                                     <span class="fx-treegrid-header-text">
                                         @if (col.HeaderTemplate is not null)
@@ -228,7 +256,7 @@
                                     @if (AllowFiltering && col.AllowFiltering && ShowHeaderFilterIcon && !string.IsNullOrWhiteSpace(col.Field))
                                     {
                                         <button type="button"
-                                                class="fx-treegrid-filter-button @(GetColumnState(col).FilterActive ? "active" : "")"
+                                                class="fx-treegrid-filter-button @(HasFilter(GetColumnState(col)) ? "active" : "")"
                                                 title="Filter"
                                                 aria-label="Filter @col.DisplayHeader"
                                                 @onclick="() => ToggleFilterPopup(col)"
@@ -239,16 +267,22 @@
                                 </span>
                                 @if (IsColumnFilterPopupOpen(col))
                                 {
-                                    <div class="fx-treegrid-filter-popup" @onclick:stopPropagation="true">
+                                    <div class="fx-treegrid-filter-popup" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
                                         <div class="fx-treegrid-filter-title">@col.DisplayHeader</div>
-                                        <TextBoxControl @bind-Value="_filterDraft"
-                                                        Width="100%"
-                                                        CssClass="fx-treegrid-filter-input"
-                                                        Placeholder="Contains" />
+                                        <DropDownListControl TItem="Choice<TextFilterOperator>" TValue="TextFilterOperator" DataSource="@FilterOperators"
+                                            TextFieldName="Text" ValueFieldName="Value" @bind-Value="_filterOperatorDraft" AriaLabel="Filter operator" />
+                                        <TextBoxControl @bind-Value="_filterDraft" UpdateOnInput="true" Width="100%" aria-label="Filter value"
+                                            OnKeyDown="e => FilterKeyDownAsync(e, col)" />
+                                        <DropDownListControl TItem="LogicalFilterOperator" TValue="LogicalFilterOperator" DataSource="@(Enum.GetValues<LogicalFilterOperator>())"
+                                            @bind-Value="_logicalDraft" AriaLabel="Combine conditions" />
+                                        <DropDownListControl TItem="Choice<TextFilterOperator>" TValue="TextFilterOperator" DataSource="@FilterOperators"
+                                            TextFieldName="Text" ValueFieldName="Value" @bind-Value="_secondOperatorDraft" AriaLabel="Second operator" />
+                                        <TextBoxControl @bind-Value="_secondFilterDraft" UpdateOnInput="true" Width="100%" aria-label="Second value" />
                                         <div class="fx-treegrid-filter-actions">
-                                            <button type="button" @onclick="() => ApplyFilterAsync(col)">Apply</button>
-                                            <button type="button" @onclick="() => ClearFilterAsync(col)">Clear</button>
-                                        </div>
+                                            <ButtonControl OnClick="() => ApplyFilterAsync(col)">Apply</ButtonControl>
+                                            <ButtonControl OnClick="() => ClearFilterAsync(col)">Clear</ButtonControl>
+                                            <ButtonControl OnClick="() => _filterPopupField = null">Cancel</ButtonControl>
+                                    </div>
                                     </div>
                                 }
                                 @if (AllowResizing && col.AllowResizing)
@@ -263,27 +297,32 @@
                 </thead>
             }
             <tbody class="fx-treegrid-body">
-                @{ var rowIdx = 0; }
-                @foreach (var node in VisibleNodes)
+                @{ var rowIdx = PageOffset; }
+                @foreach (var node in RenderedNodes)
                 {
                     var currentIdx = rowIdx;
                     var isSelected = AllowSelection && _selectedItem != null && EqualityComparer<TValue>.Default.Equals(node.Data, _selectedItem);
                     var rowCssClass = GetRowCssClass(node, currentIdx);
 
-                    <tr class="fx-treegrid-row @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "") @rowCssClass"
+                    <tr @key="node.Id" draggable="@(AllowRowDragAndDrop && !HasPendingChanges ? "true" : "false")" @ondragstart="() => StartRowDrag(node)" @ondragend="() => _dragRowId = null" class="fx-treegrid-row @(IsChecked(node) ? "fx-treegrid-checked" : "") @(Session(node) is not null ? "fx-treegrid-dirty" : "") @(isSelected ? "fx-treegrid-selected" : "") @(EnableHover ? "fx-treegrid-hover" : "") @rowCssClass"
                         style="@(IsCompact ? "height:14px;" : "")"
+                        aria-busy="@(IsLoading(node) ? "true" : null)" role="row" aria-level="@(node.Level + 1)" aria-rowindex="@(currentIdx + (ShowColumnHeaders ? 2 : 1))"
+                        aria-selected="@(isSelected ? "true" : "false")" data-node-id="@node.Id"
+                        aria-expanded="@(node.HasChildren ? DisplayExpanded(node) ? "true" : "false" : null)"
                         tabindex="-1"
                         @ref="node.RowElement"
                         @onclick="() => HandleRowClick(node, currentIdx)"
                         @ondblclick="() => HandleRowDoubleClick(node, currentIdx)"
                         @oncontextmenu="() => HandleRowContextMenu(node, currentIdx)">
 
+                        @if (ShowCheckboxes)
+                        { <td class="fx-treegrid-check-cell" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown:stopPropagation="true"><CheckBoxControl Checked="@IsChecked(node)" Indeterminate="@IsMixed(node)" Disabled="@(!CanCheck(node))" CheckedChanged="value => SetRowCheckedAsync(node.Id!, value)" Label="@($"Check row {node.Id}")" CssClass="fx-treegrid-check" /></td> }
                         @{ var colIdx = 0; }
                         @foreach (var col in VisibleColumns)
                         {
                             @* No title tooltip — the floating chip read as a stuck
                                selection next to the hover tint (owner directive 2026-08-01). *@
-                            <td class="fx-treegrid-cell @(colIdx == ResolvedTreeColumnIndex ? "fx-treegrid-node-cell" : "") @(isSelected && IsCursorColumn(colIdx) ? "fx-treegrid-cell-cursor" : "")"
+                            <td data-tree-field="@col.Field" data-tree-column="@colIdx" data-tree-frozen="@FrozenSide(col)" @onclick="() => HandleCellClickAsync(node, col, currentIdx)" @onclick:stopPropagation="@(EditSettingsRef is not null)" class="fx-treegrid-cell @(colIdx == ResolvedTreeColumnIndex ? "fx-treegrid-node-cell" : "") @(isSelected && IsCursorColumn(colIdx) ? "fx-treegrid-cell-cursor" : "")"
                                 style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {
@@ -323,18 +362,18 @@
                                     {
                                         @if (ExpandIconTemplate != null)
                                         {
-                                            @ExpandIconTemplate(node.IsExpanded)
+                                            @ExpandIconTemplate(DisplayExpanded(node))
                                         }
                                         else if (NodeExpandIconStyle == GroupExpandIconStyle.PlusMinus
                                                  || CollapsedGlyph != null || ExpandedGlyph != null)
                                         {
                                             @* Glyph + style path — covers PlusMinus preset
                                                AND any caller that supplied custom glyph strings. *@
-                                            <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(node.IsExpanded ? "expanded" : "collapsed")"
+                                            <span class="fx-treegrid-expand-icon fx-treegrid-expand-icon-plusminus @(DisplayExpanded(node) ? "expanded" : "collapsed")"
                                                   style="@ResolveExpandIconStyle() @(IsCompact ? ";height:12px;width:12px;line-height:1;margin-right:2px;font-size:calc(13px * var(--fx-zoom, 1));" : "")"
                                                   @onclick="() => HandleExpandIconClick(node, currentIdx)"
                                                   @onclick:stopPropagation="true">
-                                                @(node.IsExpanded ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
+                                                @(DisplayExpanded(node) ? ResolveExpandedGlyph() : ResolveCollapsedGlyph())
                                             </span>
 
                                             @if (GetNodeIcon != null)
@@ -364,7 +403,7 @@
                                         else
                                         {
                                             @* Triangle preset → original folder.ico look. *@
-                                            <span class="fx-treegrid-expand-icon @(node.IsExpanded ? "expanded" : "collapsed")"
+                                            <span class="fx-treegrid-expand-icon @(DisplayExpanded(node) ? "expanded" : "collapsed")"
                                                   style="@(IsCompact ? "height:14px;line-height:14px;margin-right:2px;" : "")"
                                                   @onclick="() => HandleExpandIconClick(node, currentIdx)"
                                                   @onclick:stopPropagation="true">
@@ -454,47 +493,69 @@
                                         }
                                     }
 
-                                    @if (CellOffersEdit(node, col))
+                                    @if (IsBuiltInEditor(node, col))
+                                    { @RenderBuiltInEditor(Session(node)!, col, false) }
+                                    else if (CellOffersEdit(node, col))
                                     {
                                         @RenderEditableCell(node, col)
                                     }
                                     else if (col.Template != null)
                                     {
-                                        @col.Template((object)node.Data!)
+                                        @col.Template((object)DisplayRecord(node)!)
                                     }
                                     else
                                     {
                                         <span class="fx-treegrid-cell-text @(node.HasChildren ? "fx-treegrid-parent-text" : "")">
-                                            @GetCellDisplayValue(node.Data, col)
+                                            @GetCellDisplayValue(DisplayRecord(node), col)
                                         </span>
                                     }
                                 }
                                 else
                                 {
-                                    @if (CellOffersEdit(node, col))
+                                    @if (IsBuiltInEditor(node, col))
+                                    { @RenderBuiltInEditor(Session(node)!, col, false) }
+                                    else if (CellOffersEdit(node, col))
                                     {
                                         @RenderEditableCell(node, col)
                                     }
                                     else if (col.Template != null)
                                     {
-                                        @col.Template((object)node.Data!)
+                                        @col.Template((object)DisplayRecord(node)!)
                                     }
                                     else
                                     {
-                                        @GetCellDisplayValue(node.Data, col)
+                                        @GetCellDisplayValue(DisplayRecord(node), col)
                                     }
+                                }
+                                @if (_dragRowId is not null && colIdx == ResolvedTreeColumnIndex && !Equals(_dragRowId, node.Id))
+                                {
+                                    <span class="fx-treegrid-drop-zones">
+                                        @foreach (var position in Enum.GetValues<TreeDropPosition>())
+                                        { <span class="fx-treegrid-drop-zone" data-drop-position="@position" @ondragover:preventDefault="true" @ondrop="() => DropRowAsync(node, position)" @ondrop:stopPropagation="true">@position</span> }
+                                    </span>
                                 }
                             </td>
                             colIdx++;
                         }
                     </tr>
+                    @if (_activeEdit?.Id.Equals(node.Id) == true && !_editDialog)
+                    {
+                        <tr class="fx-treegrid-edit-actions"><td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))" @onkeydown:stopPropagation="true">
+                            <CascadingValue Value="_activeEdit.Context">
+                                @if (EditValidatorTemplate is not null) { @EditValidatorTemplate(_activeEdit.Context) }
+                                <ValidationSummaryControl />
+                            </CascadingValue>
+                            <ButtonControl OnClick="CommitEditorAsync">@(EditSettingsRef?.Mode == EditMode.Batch ? "Stage row" : "Save row")</ButtonControl>
+                            <ButtonControl OnClick="CancelEditAsync">Cancel row</ButtonControl>
+                        </td></tr>
+                    }
                     rowIdx++;
                 }
 
                 @if (!VisibleNodes.Any())
                 {
                     <tr>
-                        <td colspan="@VisibleColumns.Count" class="fx-treegrid-empty">
+                        <td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))" class="fx-treegrid-empty">
                             No records to display
                         </td>
                     </tr>
@@ -557,7 +618,110 @@
     }
 </div>
 
+@if (_operationError is not null && !_editDialog && !_moveDialog) { <AlertControl Text="@_operationError" /> }
+@if (_loadError is not null) { <AlertControl Text="@_loadError" /> }
+@if (AllowPaging)
+{
+    <div class="fx-treegrid-pager" role="navigation" aria-label="Tree grid pages">
+        <ButtonControl Disabled="@(CurrentPage <= 1)" OnClick="() => GoToPageAsync(CurrentPage - 1)">Previous page</ButtonControl>
+        <span role="status">Page @CurrentPage of @PageCount · @VisibleNodes.Count() rows</span>
+        <ButtonControl Disabled="@(CurrentPage >= PageCount)" OnClick="() => GoToPageAsync(CurrentPage + 1)">Next page</ButtonControl>
+    </div>
+}
+<ContextMenuControl @bind-Visible="_headerMenu" X="@_menuX" Y="@_menuY">
+    @if (_menuColumn is not null)
+    {
+        <ContextMenuSectionControl Text="@($"Columns · {_menuColumn.DisplayHeader}")" />
+        <ContextMenuItemControl Text="Freeze left" OnClick="() => FreezeColumnAsync(_menuColumn.Field, FrozenColumnPosition.Left)" />
+        <ContextMenuItemControl Text="Freeze right" OnClick="() => FreezeColumnAsync(_menuColumn.Field, FrozenColumnPosition.Right)" />
+        <ContextMenuItemControl Text="Unfreeze column" OnClick="() => FreezeColumnAsync(_menuColumn.Field, null)" />
+    }
+    @if (AllowRowDragAndDrop && _selectedItem is not null)
+    {
+        <ContextMenuSectionControl Text="Move selected row" />
+        <ContextMenuItemControl Text="Indent" OnClick="IndentSelectedAsync" />
+        <ContextMenuItemControl Text="Outdent" OnClick="OutdentSelectedAsync" />
+        <ContextMenuItemControl Text="Move row…" OnClick="OpenMoveDialog" />
+    }
+    <ContextMenuSectionControl Text="Hierarchy" />
+    <ContextMenuItemControl Text="Expand all" OnClick="ExpandAllAsync" />
+    <ContextMenuItemControl Text="Collapse all" OnClick="CollapseAllAsync" />
+    @if (AllowSorting)
+    {
+        <ContextMenuSectionControl Text="Sorting" />
+        <ContextMenuItemControl Text="Custom sort…" OnClick="OpenSortDialogAsync" />
+        <ContextMenuItemControl Text="Clear sorting" OnClick="() => SetSortsAsync([])" />
+    }
+    @if (AllowFiltering) { <ContextMenuItemControl Text="Clear filters" OnClick="ClearFiltersAsync" /> }
+</ContextMenuControl>
+<DialogControl @bind-Visible="_sortDialog" Header="Sort tree rows" Width="640px">
+    <ChildContent>
+        <p>Sort siblings at each level. The first row has the highest priority.</p>
+        @foreach (var level in _sortDraft)
+        {
+            <div @key="level" class="fx-treegrid-sort-level">
+                <DropDownListControl TItem="Choice<string>" TValue="string" DataSource="@SortColumns" TextFieldName="Text" ValueFieldName="Value"
+                    @bind-Value="level.Field" AriaLabel="Sort column" Width="180px" />
+                <DropDownListControl TItem="SortDirection" TValue="SortDirection" DataSource="@(Enum.GetValues<SortDirection>())"
+                    @bind-Value="level.Direction" AriaLabel="Sort direction" Width="140px" />
+                <ButtonControl OnClick="() => MoveSortLevel(level, -1)" Disabled="@(_sortDraft.IndexOf(level) == 0)">Up</ButtonControl>
+                <ButtonControl OnClick="() => MoveSortLevel(level, 1)" Disabled="@(_sortDraft.IndexOf(level) == _sortDraft.Count - 1)">Down</ButtonControl>
+                <ButtonControl OnClick="() => _sortDraft.Remove(level)">Remove</ButtonControl>
+            </div>
+        }
+        <ButtonControl OnClick="AddSortLevel" Disabled="@((!AllowMultiSorting && _sortDraft.Count >= 1) || _sortDraft.Count >= SortColumns.Count)">Add level</ButtonControl>
+        @if (_sortError is not null) { <AlertControl Text="@_sortError" /> }
+    </ChildContent>
+    <FooterContent>
+        <ButtonControl OnClick="() => _sortDialog = false">Cancel</ButtonControl>
+        <ButtonControl OnClick="ApplySortDialogAsync">Apply sort</ButtonControl>
+    </FooterContent>
+</DialogControl>
+
+<DialogControl Visible="@_editDialog" VisibleChanged="EditDialogVisibleChangedAsync" Header="@(_activeEdit?.IsNew == true ? "Add tree row" : "Edit tree row")" Width="560px" CloseOnOverlayClick="false">
+    <ChildContent>
+        @if (_activeEdit is {} session)
+        {
+            <div class="fx-treegrid-edit-form" @key="session" @onkeydown:stopPropagation="true">
+                @foreach (var col in _columns.Where(CanEditColumn)) { @RenderBuiltInEditor(session, col, true) }
+                <CascadingValue Value="session.Context">
+                    @if (EditValidatorTemplate is not null) { @EditValidatorTemplate(session.Context) }
+                    <ValidationSummaryControl />
+                </CascadingValue>
+            </div>
+        }
+        @if (_operationError is not null) { <AlertControl Text="@_operationError" /> }
+    </ChildContent>
+    <FooterContent><ButtonControl OnClick="CancelEditAsync">Cancel row</ButtonControl><ButtonControl OnClick="CommitEditorAsync">@(EditSettingsRef?.Mode == EditMode.Batch ? "Stage row" : "Save row")</ButtonControl></FooterContent>
+</DialogControl>
+<DialogControl @bind-Visible="_deleteDialog" Header="Delete tree rows" Width="420px">
+    <ChildContent><p>Delete the selected rows and all their descendants?</p></ChildContent>
+    <FooterContent><ButtonControl OnClick="() => _deleteDialog = false">Cancel</ButtonControl><ButtonControl OnClick="ConfirmDeleteAsync">Delete rows</ButtonControl></FooterContent>
+</DialogControl>
+<DialogControl @bind-Visible="_moveDialog" Header="Move tree row" Width="500px">
+    <ChildContent>
+        <p>Move the selected row and its descendants.</p>
+        <DropDownListControl TItem="Choice<string>" TValue="string" DataSource="@MoveTargets" TextFieldName="Text" ValueFieldName="Value" @bind-Value="_moveTarget" AriaLabel="Destination row" Width="100%" />
+        <DropDownListControl TItem="TreeDropPosition" TValue="TreeDropPosition" DataSource="@(Enum.GetValues<TreeDropPosition>())" @bind-Value="_movePosition" AriaLabel="Drop position" />
+        @if (_operationError is not null) { <AlertControl Text="@_operationError" /> }
+    </ChildContent>
+    <FooterContent><ButtonControl OnClick="() => _moveDialog = false">Cancel</ButtonControl><ButtonControl OnClick="ApplyMoveDialogAsync">Move</ButtonControl></FooterContent>
+</DialogControl>
+
 @code {
+    private RenderFragment RenderBuiltInEditor(TreeGridEditSession<TValue> session, TreeGridColumn col, bool showLabel) => __builder =>
+    {
+        <div class="fx-treegrid-editor @(EditSettingsRef?.Mode == EditMode.Batch && !_editDialog ? "fx-treegrid-batch-editor" : "")" @key="(session, col.Field)" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown="e => col.EditTemplate is not null ? EditorKeyDownAsync(e) : Task.CompletedTask" @onkeydown:stopPropagation="true">
+            <CascadingValue Value="session.Context">
+                @if (col.EditTemplate is not null) { @col.EditTemplate(session.Draft!) }
+                else if (col.Field == _editField)
+                { <FormItemControl OnKeyDown="EditorKeyDownAsync" @ref="_focusEditor" Model="session.Draft" Field="@col.Field" Label="@col.DisplayHeader" ShowLabel="showLabel" Enabled="@(!_mutationBusy)" /> }
+                else
+                { <FormItemControl OnKeyDown="EditorKeyDownAsync" Model="session.Draft" Field="@col.Field" Label="@col.DisplayHeader" ShowLabel="showLabel" Enabled="@(!_mutationBusy)" /> }
+            </CascadingValue>
+        </div>
+    };
+
     // In-cell edit rendering (CellEditTemplate columns). Active cell → the
     // column's editor template (keyed to the node so switching rows remounts a
     // fresh editor); otherwise → the display content wrapped in the activation
@@ -580,11 +744,11 @@
                     @onclick="() => ActivateCellEdit(node, col)">
                 @if (col.Template != null)
                 {
-                    @col.Template((object)node.Data!)
+                    @col.Template((object)DisplayRecord(node)!)
                 }
                 else
                 {
-                    @GetCellDisplayValue(node.Data, col)
+                    @GetCellDisplayValue(DisplayRecord(node), col)
                 }
             </button>
         }

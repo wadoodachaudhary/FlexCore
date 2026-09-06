@@ -1,0 +1,49 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IDisposable
+<div class="fx-upload @CssClass" style="@ResolvedStyle" id="@ResolvedId">
+@foreach(var batch in _pickers){<div @key="batch" style="@(batch==_pickers[^1]?null:"display:none")" data-fx-upload-active="@(batch==_pickers[^1]?"true":"false")"><FilePickerControl Multiple="@Multiple" Enabled="@(Enabled&&Files.Count<MaxFileCount)" Accept="@Accept" Label="Select files" OnChange="SelectFiles" /></div>}
+@if(!AutoUpload){<ButtonControl OnClick="UploadAllAsync" Disabled="@(!Enabled||!Files.Any(f=>f.Status is UploadStatus.Queued or UploadStatus.Failed or UploadStatus.Cancelled))">Upload files</ButtonControl>}
+@if(_error is not null){<AlertControl Text="@_error" />}
+<ul class="fx-upload-list" aria-label="Upload queue">
+@foreach(var file in Files){<li @key="file.Id"><strong>@file.Name</strong><span>@file.Size.ToString("N0") bytes · @file.Status</span><ChunkProgressBarControl Value="@(file.Size==0?(file.Status==UploadStatus.Succeeded?100:0):100d*file.UploadedBytes/file.Size)" AriaLabel="@($"Upload {file.Name}")" />
+@if(file.Error is not null){<span role="alert">@file.Error</span>}
+@if(file.Status==UploadStatus.Uploading){<ButtonControl OnClick="()=>Cancel(file.Id)">Cancel upload</ButtonControl>}
+else {if(file.Status is UploadStatus.Failed or UploadStatus.Cancelled){<ButtonControl Disabled="@(!Enabled)" OnClick="()=>UploadAsync(file.Id)">Retry upload</ButtonControl>}<ButtonControl Disabled="@(!Enabled)" OnClick="()=>RemoveAsync(file.Id)">Remove file</ButtonControl>}
+</li>}
+</ul>
+</div>
+@code {
+ [Parameter] public Func<UploadChunk,CancellationToken,Task>? UploadHandler {get;set;}
+ [Parameter] public Func<UploadFile,CancellationToken,Task>? RemoveHandler {get;set;}
+ [Parameter] public EventCallback<IReadOnlyList<UploadFile>> FilesChanged {get;set;}
+ [Parameter] public EventCallback<UploadProgress> Progress {get;set;}
+ [Parameter] public EventCallback<UploadFile> Completed {get;set;}
+ [Parameter] public EventCallback<UploadFile> Failed {get;set;}
+ [Parameter] public IReadOnlyCollection<string> AllowedExtensions {get;set;}=Array.Empty<string>();
+ [Parameter] public long MaxFileSize {get;set;}=50*1024*1024;
+ [Parameter] public int MaxFileCount {get;set;}=20;
+ [Parameter] public int ChunkSize {get;set;}=256*1024;
+ [Parameter] public bool AutoUpload {get;set;}=true;
+ [Parameter] public bool Multiple {get;set;}=true;
+ public IReadOnlyList<UploadFile> Files=>_files;
+ private readonly List<UploadFile> _files=[];private readonly List<Guid> _pickers=[Guid.NewGuid()];private readonly CancellationTokenSource _lifetime=new();private bool _disposed;private string? _error;
+ private readonly string _id="fx-upload-"+Guid.NewGuid().ToString("N");private string ResolvedId=>Id??_id;private string? Accept=>AllowedExtensions.Count>0?string.Join(',',AllowedExtensions):null;
+ protected override void OnParametersSet(){if(MaxFileSize<0||MaxFileCount<1||MaxFileCount>1000||ChunkSize<1024||ChunkSize>4*1024*1024)throw new ArgumentOutOfRangeException(nameof(ChunkSize),"Use a 1 KiB–4 MiB chunk size and a positive file count.");}
+ private async Task SelectFiles(InputFileChangeEventArgs args){if(!Enabled)return;_error=null;if(args.FileCount>MaxFileCount-_files.Count||!Multiple&&args.FileCount>1){_error="Too many files selected.";return;}var added=new List<UploadFile>();foreach(var browser in args.GetMultipleFiles(MaxFileCount)){var error=UploadValidation.Validate(browser.Name,browser.Size,MaxFileSize,AllowedExtensions);var file=new UploadFile{Name=browser.Name,Size=browser.Size,ContentType=browser.ContentType,BrowserFile=browser,BrowserBatch=_pickers[^1],Status=error is null?UploadStatus.Queued:UploadStatus.Failed,Error=error};_files.Add(file);added.Add(file);} _pickers.Add(Guid.NewGuid());await FilesChanged.InvokeAsync(Files);if(AutoUpload)foreach(var file in added.Where(f=>f.Status==UploadStatus.Queued))await UploadAsync(file.Id);}
+ public async Task UploadAllAsync(){foreach(var file in _files.Where(f=>f.Status is UploadStatus.Queued or UploadStatus.Failed or UploadStatus.Cancelled).ToArray())await UploadAsync(file.Id);}
+ public async Task UploadAsync(string id)
+ {
+  var file=_files.FirstOrDefault(f=>f.Id==id);if(!Enabled||file?.BrowserFile is null||file.Status is UploadStatus.Uploading or UploadStatus.Succeeded)return;
+  var validation=UploadValidation.Validate(file.Name,file.Size,MaxFileSize,AllowedExtensions);if(validation is not null){file.Error=validation;file.Status=UploadStatus.Failed;return;}
+  if(UploadHandler is null){_error="Configure UploadHandler to receive file data.";return;}
+  file.Cancellation?.Dispose();file.Cancellation=CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);var token=file.Cancellation.Token;file.Status=UploadStatus.Uploading;file.Error=null;file.UploadedBytes=0;await InvokeAsync(StateHasChanged);
+  try{await using var stream=file.BrowserFile.OpenReadStream(MaxFileSize,token);var buffer=new byte[ChunkSize];long offset=0;if(file.Size==0)await UploadHandler(new(file.Id,file.Name,file.ContentType,0,0,ReadOnlyMemory<byte>.Empty,true),token);
+   while(offset<file.Size){int count=await stream.ReadAsync(buffer.AsMemory(0,(int)Math.Min(buffer.Length,file.Size-offset)),token);if(count==0)throw new System.IO.EndOfStreamException("The file stream ended early.");await UploadHandler(new(file.Id,file.Name,file.ContentType,file.Size,offset,buffer.AsMemory(0,count),offset+count==file.Size),token);token.ThrowIfCancellationRequested();offset+=count;file.UploadedBytes=offset;if(!_disposed){await Progress.InvokeAsync(new(file,offset,file.Size));await InvokeAsync(StateHasChanged);}}
+   token.ThrowIfCancellationRequested();file.Status=UploadStatus.Succeeded;if(!_disposed)await Completed.InvokeAsync(file);
+  }catch(OperationCanceledException){file.Status=UploadStatus.Cancelled;}catch(Exception e){file.Status=UploadStatus.Failed;file.Error=e.Message;if(!_disposed)await Failed.InvokeAsync(file);}finally{if(!_disposed){await FilesChanged.InvokeAsync(Files);await InvokeAsync(StateHasChanged);}}
+ }
+ public void Cancel(string id)=>_files.FirstOrDefault(f=>f.Id==id)?.Cancellation?.Cancel();
+ public async Task RemoveAsync(string id){var file=_files.FirstOrDefault(f=>f.Id==id);if(!Enabled||file is null||file.Status==UploadStatus.Uploading)return;try{if(file.Status==UploadStatus.Succeeded&&RemoveHandler is not null)await RemoveHandler(file,_lifetime.Token);_files.Remove(file);if(!_files.Any(f=>f.BrowserBatch==file.BrowserBatch))_pickers.Remove(file.BrowserBatch);file.Cancellation?.Dispose();await FilesChanged.InvokeAsync(Files);}catch(Exception e){file.Error=e.Message;}}
+ public void Dispose(){_disposed=true;_lifetime.Cancel();foreach(var file in _files)file.Cancellation?.Dispose();_lifetime.Dispose();}
+}

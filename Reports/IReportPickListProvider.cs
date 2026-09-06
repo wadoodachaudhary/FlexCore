@@ -50,3 +50,14 @@ public interface IReportPickListProvider
 
 /// <summary>One entry in a parameter pick-list.</summary>
 public sealed record PickListItem(string Value, string Display);
+
+/// <summary>
+/// Default in-memory empty implementation registered when no host pick-list
+/// provider is supplied.
+/// </summary>
+public sealed class EmptyReportPickListProvider : IReportPickListProvider
+{
+    public IReadOnlyList<PickListItem>? GetPickList(ReportParameter parameter) => null;
+    public IReadOnlyList<PickListItem>? GetPickList(string parameterName) => null;
+    public bool HasPickList(string parameterName) => false;
+}

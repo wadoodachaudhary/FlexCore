@@ -1,0 +1,6 @@
+@namespace Fx.ControlKit
+<div class="fx-validation-summary @CssClass" role="alert"><ValidationSummary Model="@Model" /></div>
+@code {
+    [Parameter] public object? Model { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+}

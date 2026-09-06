@@ -47,16 +47,25 @@ public partial class GridControl<TValue>
     private bool ShowPagerAtBottom =>
         PagerPosition is GridPagerPosition.Bottom or GridPagerPosition.Both;
 
-    private GridPagerContext BuildPagerContext() => new(
-        _pageState.CurrentPage,
-        _pageState.TotalPages,
-        _pageState.PageSize,
-        _pageState.TotalRecords,
-        ResolvedPageSizes,
-        GetPageNumbers().ToList(),
-        GridRowCountText,
-        GoToPage,
-        SetPageSizeFromTemplateAsync);
+    private GridPagerContext BuildPagerContext()
+    {
+        if (!UsesItemsProvider && _passSortedRows == null)
+        {
+            _pageState.TotalRecords = GetPassSortedRows().Count;
+            EnsureCurrentPageInRange();
+        }
+
+        return new(
+            _pageState.CurrentPage,
+            _pageState.TotalPages,
+            _pageState.PageSize,
+            _pageState.TotalRecords,
+            ResolvedPageSizes,
+            GetPageNumbers().ToList(),
+            GridRowCountText,
+            GoToPage,
+            SetPageSizeFromTemplateAsync);
+    }
 
     private async Task SetPageSizeFromTemplateAsync(int size)
     {

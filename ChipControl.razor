@@ -1,0 +1,19 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@if(Visible){<span class="fx-chip @CssClass @(Selected?"selected":null)" style="@Style">
+<ButtonControl Disabled="@(!Enabled)" BareStyle="true" CssClass="fx-chip-label" IconCss="@IconCss" aria-pressed="@(Selectable ? (Selected ? "true" : "false") : null)" OnClick="Select">@if(ChildContent is not null){@ChildContent}else{@Text}</ButtonControl>
+@if(Removable){<ButtonControl Disabled="@(!Enabled)" BareStyle="true" CssClass="fx-chip-remove" Title="@($"Remove {Text}")" aria-label="@($"Remove {Text}")" OnClick="Remove">×</ButtonControl>}
+</span>}
+@code {
+ [Parameter] public string Text {get;set;}="";
+ [Parameter] public string? IconCss {get;set;}
+ [Parameter] public bool Selected {get;set;}
+ [Parameter] public EventCallback<bool> SelectedChanged {get;set;}
+ [Parameter] public bool Selectable {get;set;}=true;
+ [Parameter] public bool Removable {get;set;}
+ [Parameter] public EventCallback OnRemove {get;set;}
+ [Parameter] public EventCallback OnClick {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ private async Task Select(){if(!Enabled)return;if(Selectable){Selected=!Selected;await SelectedChanged.InvokeAsync(Selected);}await OnClick.InvokeAsync();}
+ private Task Remove()=>Enabled?OnRemove.InvokeAsync():Task.CompletedTask;
+}

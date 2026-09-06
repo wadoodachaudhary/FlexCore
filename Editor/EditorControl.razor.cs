@@ -34,7 +34,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// the library's JS helpers use <c>document.getElementById</c> to locate
     /// the editor.
     /// </summary>
-    [Parameter] public string EditorId { get; set; } = "fx-editor";
+    [Parameter] public string EditorId { get; set; } = $"fx-editor-{Guid.NewGuid():N}";
 
     /// <summary>
     /// Seed content. Pushed into the DOM after each render when the reference
@@ -81,6 +81,15 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     [Parameter] public int FontSizePx { get; set; } = 18;
     [Parameter] public double LineHeight { get; set; } = 1.7;
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool SpellCheck { get; set; } = true;
+    [Parameter] public string AriaLabel { get; set; } = "Document editor";
+    [Parameter] public bool ShowToolbar { get; set; }
+
+    /// <summary>Opt in to component-owned history. Leave false when the host owns undo/redo.</summary>
+    [Parameter] public bool EnableHistory { get; set; }
+    [Parameter] public int HistoryLimit { get; set; } = 100;
+    [Parameter] public EventCallback<EditorHistoryState> HistoryChanged { get; set; }
 
     /// <summary>
     /// When true (the default), every parameter change that swaps the
@@ -92,8 +101,13 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     [Parameter] public bool AutoPush { get; set; } = true;
 
     private int _editorKey;
-    private bool _pendingPush;
-    private IReadOnlyList<EditorBlock> _lastPushed = Array.Empty<EditorBlock>();
+    private bool _pendingPush = true;
+    private bool _pendingLayout;
+    private bool _initialized;
+    private IJSObjectReference? _module;
+    private DotNetObjectReference<EditorControl>? _self;
+    private IReadOnlyList<EditorBlock>? _lastEmitted;
+    private IReadOnlyList<EditorBlock>? _lastBlocksParameter;
     private bool _lastPaginatePushed;
     private string? _lastPagedCssClassPushed;
 
@@ -112,13 +126,16 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
 
     protected override void OnParametersSet()
     {
+        if (string.IsNullOrWhiteSpace(EditorId)) throw new ArgumentException("EditorId must not be empty.");
+        if (HistoryLimit < 1) throw new ArgumentOutOfRangeException(nameof(HistoryLimit));
         // Blocks change → only auto-push when AutoPush is on. Hosts that manage
         // content updates manually (GhostWriter does this — see PushCurrentChapter
         // ToEditorAsync) opt out so they can sync DOM edits back to the model
         // before the next push, otherwise typing-in-flight gets clobbered.
-        if (AutoPush && !ReferenceEquals(Blocks, _lastPushed))
+        if (!ReferenceEquals(Blocks, _lastBlocksParameter))
         {
-            _pendingPush = true;
+            _lastBlocksParameter = Blocks;
+            if (AutoPush && !ReferenceEquals(Blocks, _lastEmitted)) _pendingPush = true;
         }
 
         // Pagination toggles → ALWAYS re-init, regardless of AutoPush. Paginate
@@ -131,17 +148,42 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
         if (Paginate != _lastPaginatePushed ||
             !string.Equals(PagedCssClass, _lastPagedCssClassPushed, StringComparison.Ordinal))
         {
-            _pendingPush = true;
+            _pendingLayout = true;
         }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await EnsureScriptAsync();
         if (_pendingPush)
         {
             _pendingPush = false;
             await PushAsync();
         }
+        else if (_pendingLayout && _initialized)
+        {
+            await JS.InvokeVoidAsync("fxEditor.setLayout", EditorId, Options);
+        }
+        _pendingLayout = false;
+        _lastPaginatePushed = Paginate;
+        _lastPagedCssClassPushed = PagedCssClass;
+        var history = await JS.InvokeAsync<EditorHistoryState>("fxEditor.configure", EditorId, Options, _self);
+        if (await UpdateHistoryAsync(history)) await InvokeAsync(StateHasChanged);
+        if (_focusSearch && _findInput is not null)
+        {
+            _focusSearch = false;
+            await _findInput.FocusAsync();
+        }
+    }
+
+    private object Options => new { paged = Paginate, pagedCssClass = PagedCssClass ?? string.Empty,
+        readOnly = ReadOnly, enableHistory = EnableHistory, historyLimit = HistoryLimit };
+
+    private async Task EnsureScriptAsync()
+    {
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import",
+            $"./_content/{typeof(EditorControl).Assembly.GetName().Name}/editor-control.js");
+        _self ??= DotNetObjectReference.Create(this);
     }
 
     /// <summary>
@@ -153,6 +195,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// </summary>
     public async Task PushAsync(IReadOnlyList<EditorBlock>? blocks = null)
     {
+        await EnsureScriptAsync();
         var source = blocks ?? Blocks;
         var dtos = source.Select(b => new
         {
@@ -170,13 +213,12 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
         // splitter (greedy fit + word-boundary mid-paragraph splits). The C#
         // side just signals "go paginated", JS owns the slicing because only
         // it can measure rendered heights against the per-format card size.
-        await JS.InvokeVoidAsync("fxEditor.init", EditorId, dtos,
-            new
-            {
-                paged = Paginate,
-                pagedCssClass = PagedCssClass ?? string.Empty
-            });
-        _lastPushed = source;
+        await JS.InvokeVoidAsync("fxEditor.init", EditorId, dtos, Options);
+        _pendingPush = false;
+        _initialized = true;
+        _matches = Array.Empty<EditorSearchMatch>();
+        _matchIndex = -1;
+        await UpdateHistoryAsync(new(false, false, 0, 0));
         _lastPaginatePushed = Paginate;
         _lastPagedCssClassPushed = PagedCssClass;
     }
@@ -196,6 +238,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
             r.Text ?? string.Empty,
             string.IsNullOrWhiteSpace(r.Alignment) ? null : r.Alignment,
             string.IsNullOrWhiteSpace(r.LineHeight) ? null : r.LineHeight,
+            Html: r.Kind is "Image" or "PageBreak" ? null : r.Text,
             ImageSrc: string.IsNullOrWhiteSpace(r.ImageSrc) ? null : r.ImageSrc))
             .ToList();
     }
@@ -231,7 +274,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
 
     /// <summary>Runs a contenteditable exec-command (bold/italic/underline/strikeThrough).</summary>
     public Task ExecFormatCommandAsync(string command) =>
-        JS.InvokeVoidAsync("fxEditor.execCommand", EditorId, command).AsTask();
+        ReadOnly ? Task.CompletedTask : JS.InvokeVoidAsync("fxEditor.execCommand", EditorId, command).AsTask();
 
     /// <summary>
     /// Wraps the current selection in a <c>&lt;span style="property: value"&gt;</c>.
@@ -239,7 +282,7 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// <c>font-size</c>, and <c>font-weight</c>.
     /// </summary>
     public Task ApplyInlineStyleAsync(string property, string value) =>
-        JS.InvokeVoidAsync("fxEditor.applyInlineStyle", EditorId, property, value).AsTask();
+        ReadOnly ? Task.CompletedTask : JS.InvokeVoidAsync("fxEditor.applyInlineStyle", EditorId, property, value).AsTask();
 
     /// <summary>
     /// Applies a heading-like inline preset to the current selection using the
@@ -270,11 +313,11 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     /// top-level block the selection intersects.
     /// </summary>
     public Task ApplyBlockStyleAsync(string property, string value) =>
-        JS.InvokeVoidAsync("fxEditor.applyBlockStyle", EditorId, property, value).AsTask();
+        ReadOnly ? Task.CompletedTask : JS.InvokeVoidAsync("fxEditor.applyBlockStyle", EditorId, property, value).AsTask();
 
     /// <summary>Sets paragraph alignment on the intersecting blocks.</summary>
     public Task SetBlockAlignmentAsync(EditorAlignment alignment) =>
-        JS.InvokeVoidAsync("fxEditor.setBlockAlignment", EditorId, alignment.ToString().ToLowerInvariant()).AsTask();
+        ReadOnly ? Task.CompletedTask : JS.InvokeVoidAsync("fxEditor.setBlockAlignment", EditorId, alignment.ToString().ToLowerInvariant()).AsTask();
 
     /// <summary>Returns the caret as a (block-id, offset) pair.</summary>
     public async Task<EditorCaretInfo?> GetCaretAsync()
@@ -286,11 +329,11 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
 
     /// <summary>Moves the caret to the given position.</summary>
     public Task SetCaretAsync(string blockId, int offset) =>
-        JS.InvokeVoidAsync("fxEditor.setCaret", blockId, offset).AsTask();
+        JS.InvokeVoidAsync("fxEditor.setEditorCaret", EditorId, blockId, offset).AsTask();
 
     /// <summary>Scrolls a block into view (no-op if the id isn't present).</summary>
     public Task ScrollToBlockAsync(string blockId) =>
-        JS.InvokeVoidAsync("fxEditor.scrollToBlock", blockId).AsTask();
+        JS.InvokeVoidAsync("fxEditor.scrollToEditorBlock", EditorId, blockId).AsTask();
 
     /// <summary>Scrolls the editor's owning viewport back to the top.</summary>
     public Task ScrollToTopAsync() =>
@@ -315,24 +358,17 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
     }
 
     /// <summary>
-    /// Fires after every contenteditable input event (typed character, paste,
-    /// delete, drag-drop). The host listens to this to schedule debounced
-    /// typing-undo snapshots — without this hook, only LLM-applied / format
-    /// edits ever get into the undo stack and Ctrl+Z does nothing for plain
-    /// typing.
-    /// <para>
-    /// We pass an empty list rather than calling <see cref="ReadBlocksAsync"/>
-    /// per keystroke to avoid a DOM-readback round-trip on every key (which
-    /// would be O(N) per key for an N-block chapter). The host typically
-    /// wants the *signal* "user edited something", not the actual blocks —
-    /// it can pull them via <see cref="ReadBlocksAsync"/> on its own when
-    /// the snapshot timer fires.
-    /// </para>
+    /// Delivers an actual snapshot to subscribed hosts. Echoing that same
+    /// snapshot through Blocks must not replace the DOM and reset the caret.
     /// </summary>
     private async Task HandleInputAsync()
     {
-        if (!OnBlocksChanged.HasDelegate) return;
-        await OnBlocksChanged.InvokeAsync(Array.Empty<EditorBlock>());
+        await RefreshStateAsync();
+        if (OnBlocksChanged.HasDelegate)
+        {
+            _lastEmitted = await ReadBlocksAsync();
+            await OnBlocksChanged.InvokeAsync(_lastEmitted);
+        }
     }
 
     private static EditorBlockKind ParseKind(string? kind) => kind switch
@@ -340,10 +376,19 @@ public partial class EditorControl : ComponentBase, IAsyncDisposable
         "ChapterHeading" => EditorBlockKind.ChapterHeading,
         "SectionHeading" => EditorBlockKind.SectionHeading,
         "Image" => EditorBlockKind.Image,
+        "PageBreak" => EditorBlockKind.PageBreak,
         _ => EditorBlockKind.Paragraph
     };
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public async ValueTask DisposeAsync()
+    {
+        if (_module is not null)
+        {
+            try { await JS.InvokeVoidAsync("fxEditor.dispose", EditorId); await _module.DisposeAsync(); }
+            catch (JSDisconnectedException) { }
+        }
+        _self?.Dispose();
+    }
 
     // ─── JSON interop DTOs ─────────────────────────────────────────────────
     private sealed class JsBlock

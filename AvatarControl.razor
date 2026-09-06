@@ -1,0 +1,17 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@if(Visible){<span class="fx-avatar @Shape.ToString().ToLowerInvariant() @CssClass" style="width:@Size;height:@Size;@Style" role="img" aria-label="@AlternativeText">
+@if(!string.IsNullOrWhiteSpace(ImageUrl)&&!_failed){<img src="@ImageUrl" alt="" @onerror="()=>_failed=true" />}
+else if(ChildContent is not null){@ChildContent}else{<span aria-hidden="true">@Initials</span>}
+</span>}
+@code {
+ [Parameter] public string? ImageUrl {get;set;}
+ [Parameter] public string Text {get;set;}="?";
+ [Parameter] public string AlternativeText {get;set;}="Avatar";
+ [Parameter] public string Size {get;set;}="40px";
+ [Parameter] public AvatarShape Shape {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ private bool _failed;private string? _last;
+ private string Initials=>Text.Trim().Length<=2?Text.Trim().ToUpperInvariant():string.Concat(Text.Split(' ',StringSplitOptions.RemoveEmptyEntries).Take(2).Select(s=>System.Globalization.StringInfo.GetNextTextElement(s))).ToUpperInvariant();
+ protected override void OnParametersSet(){if(_last!=ImageUrl){_last=ImageUrl;_failed=false;}}
+}

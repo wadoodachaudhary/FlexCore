@@ -1,0 +1,4 @@
+.fx-ai-prompt{display:flex;flex-direction:column;gap:12px;min-width:0}
+.fx-ai-prompt-input{display:flex;flex-direction:column;gap:8px}
+.fx-ai-prompt-input ::deep textarea{width:100%;box-sizing:border-box}
+.fx-ai-prompt-suggestions,.fx-ai-prompt-history{display:flex;gap:6px;flex-wrap:wrap}

@@ -4,10 +4,10 @@
 <div class="fx-slider-host @(Disabled ? "fx-slider-disabled" : "") @CssClass" style="@Style">
     <input type="range"
            class="fx-slider-range"
-           min="@Min"
-           max="@Max"
-           step="@Step"
-           value="@Value"
+           min="@Min.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+           max="@Max.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+           step="@Step.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+           value="@Value.ToString(System.Globalization.CultureInfo.InvariantCulture)"
            disabled="@Disabled"
            @oninput="HandleInput"
            @onchange="HandleChange"
@@ -30,7 +30,7 @@
     private async Task HandleInput(ChangeEventArgs e)
     {
         if (Disabled) return;
-        if (double.TryParse(e.Value?.ToString(), out var val))
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var val))
         {
             Value = val;
             if (ValueChanged.HasDelegate)
@@ -43,7 +43,7 @@
     private async Task HandleChange(ChangeEventArgs e)
     {
         if (Disabled) return;
-        if (double.TryParse(e.Value?.ToString(), out var val))
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var val))
         {
             Value = val;
             if (ValueChanged.HasDelegate)

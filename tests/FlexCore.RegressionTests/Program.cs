@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Fx.ControlKit;
+using Fx.ControlKit.Charts;
 using Fx.ControlKit.Grid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -220,7 +221,108 @@ await renderer.Dispatcher.InvokeAsync(async () => {
     await Dispatch(grid,"HandleCellClick",gridRows[0],0,grid.Columns.ToList().FindIndex(c=>c.Field=="Number"),new MouseEventArgs());
     await Dispatch(grid,"HandleKeyDown",new KeyboardEventArgs{Key="F2"});
     Check(Member(grid,"_batchEditItem")==null,"F2 respects read-only columns");
+
+    // Large dataset grouping regression test: 15,000 rows with Height activates windowing and does not auto-page
+    var largeRows = Enumerable.Range(1, 15000).Select(i => new Row { Name = i % 3 == 0 ? "A" : i % 3 == 1 ? "B" : "C", Number = i }).ToList();
+    var largeGridHtml = await renderer.RenderComponentAsync<GridControl<Row>>(Parameters(
+        ("DataSource", largeRows),
+        ("Height", "400px"),
+        ("AllowGrouping", true),
+        ("DefaultGroupsCollapsed", true),
+        ("AutoGenerateColumns", true)
+    ));
+    var largeGrid = activation.All.OfType<GridControl<Row>>().Last();
+    await Dispatch(largeGrid, "AddGroup", "Name");
+    var isPagingActive = (bool)Member(largeGrid, "IsPagingActive")!;
+    var useGroupedWindowing = (bool)Member(largeGrid, "UseGroupedRowWindowing")!;
+    Check(!isPagingActive, "large dataset with Height does not activate auto-paging");
+    Check(useGroupedWindowing, "large dataset with Height activates grouped row windowing");
+    var passGroups = (List<GroupResult<Row>>)Call(largeGrid, "GetPassGroups")!;
+    Check(passGroups.Count == 3, "groups 15,000 rows into 3 categories successfully");
+
+    // Unwindowed safety cap: without Height, grouping 1,000 rows caps rendering at 250 rows per group and emits overflow hint
+    var capRows = Enumerable.Range(1, 1000).Select(i => new Row { Name = "AllOneGroup", Number = i }).ToList();
+    var capGridHtml = await renderer.RenderComponentAsync<GridControl<Row>>(Parameters(
+        ("DataSource", capRows),
+        ("AllowGrouping", true),
+        ("DefaultGroupsCollapsed", false),
+        ("AutoGenerateColumns", true)
+    ));
+    var capGrid = activation.All.OfType<GridControl<Row>>().Last();
+    await Dispatch(capGrid, "AddGroup", "Name");
+    await capGrid.RefreshAsync();
+    Check(capGridHtml.ToHtmlString().Contains("fx-group-overflow-hint") && capGridHtml.ToHtmlString().Contains("Showing first 250 of 1,000 records"), "unwindowed grouping caps items at 250 and displays overflow hint");
+
+    // Pager navigation & reversal regression test:
+    var pagedRows = Enumerable.Range(1, 250).Select(i => new Row { Name = $"Item {i}", Number = i }).ToList();
+    var pagedGridHtml = await renderer.RenderComponentAsync<GridControl<Row>>(Parameters(
+        ("DataSource", pagedRows),
+        ("AllowPaging", true),
+        ("PageSize", 25),
+        ("AutoGenerateColumns", true)
+    ));
+    var pagedGrid = activation.All.OfType<GridControl<Row>>().Last();
+    Check(pagedGrid.CurrentPage == 1 && pagedGridHtml.ToHtmlString().Contains("Item 1") && !pagedGridHtml.ToHtmlString().Contains("Item 26"), "page 1 renders items 1-25");
+
+    // Click to page 2: must update CurrentPage immediately and render page 2
+    await pagedGrid.GoToPageAsync(2);
+    Check(pagedGrid.CurrentPage == 2 && pagedGridHtml.ToHtmlString().Contains("Item 26") && !pagedGridHtml.ToHtmlString().Contains(">Item 1<"), "page 2 renders items 26-50 immediately on first navigation");
+
+    // Navigate to page 7
+    await pagedGrid.GoToPageAsync(7);
+    Check(pagedGrid.CurrentPage == 7 && pagedGridHtml.ToHtmlString().Contains("Item 151"), "page 7 renders items 151-175");
+
+    // Reversal / going backwards: navigate to previous page (page 6)
+    await pagedGrid.GoToPageAsync(6);
+    Check(pagedGrid.CurrentPage == 6 && pagedGridHtml.ToHtmlString().Contains("Item 126") && !pagedGridHtml.ToHtmlString().Contains("Item 151"), "going backwards from page 7 immediately renders page 6");
+
+    // Reversal back to page 1
+    await pagedGrid.GoToPageAsync(1);
+    Check(pagedGrid.CurrentPage == 1 && pagedGridHtml.ToHtmlString().Contains("Item 1"), "reversal back to page 1 restores original items");
+
+    // Sunburst Chart tests:
+    var sunburstRoot = new SunburstNode("World", 0, "#56abf6");
+    var asiaNode = new SunburstNode("Asia", 0, "#63c6c1");
+    asiaNode.AddChild(new SunburstNode("India", 100, 10));
+    asiaNode.AddChild(new SunburstNode("China", 50, 5));
+    var europeNode = new SunburstNode("Europe", 0, "#adc965");
+    europeNode.AddChild(new SunburstNode("Italy", 50, 5));
+    sunburstRoot.AddChild(asiaNode);
+    sunburstRoot.AddChild(europeNode);
+
+    Check(sunburstRoot.TotalValue == 200 && asiaNode.TotalValue == 150 && europeNode.TotalValue == 50, "sunburst hierarchy sums children values correctly");
+
+    var sunburstHtml = await renderer.RenderComponentAsync<SunburstChartControl>(Parameters(
+        ("RootNode", sunburstRoot),
+        ("Title", "COVID-19 Cases Across the World"),
+        ("CenterTitle", "TOTAL CASES"),
+        ("ValueFormat", "N0"),
+        ("Height", "500px")
+    ));
+    var sunburstStr = sunburstHtml.ToHtmlString();
+    Check(sunburstStr.Contains("fx-sunburst-container") && sunburstStr.Contains("TOTAL CASES") && sunburstStr.Contains("200"), "sunburst renders SVG container and formatted center metric");
+    Check(sunburstStr.Contains("Asia") && sunburstStr.Contains("India") && sunburstStr.Contains("Europe"), "sunburst renders hierarchical slice labels");
+
+    var arc = new SunburstArc
+    {
+        InnerRadius = 90,
+        OuterRadius = 180,
+        StartAngle = 0,
+        EndAngle = Math.PI / 2
+    };
+    var path = arc.GenerateSvgPath(350, 350);
+    Check(path.StartsWith("M") && path.Contains("A") && path.Contains("Z") && !path.Contains("NaN"), "sunburst annular arc generates valid non-negative SVG path");
+
+    var sunburstControl = activation.All.OfType<SunburstChartControl>().Last();
+    await Dispatch(sunburstControl, "SetDrilldownNode", asiaNode);
+    var drilledHtml = sunburstHtml.ToHtmlString();
+    Check(drilledHtml.Contains("ASIA") && drilledHtml.Contains("150"), "sunburst drilldown updates center to selected continent and value");
 });
+await renderer.Dispatcher.InvokeAsync(() => CounterpartChecks.Run(renderer,activation.All,Check));
+RemainingControlChecks.Run(Check);
+DocumentChecks.Run(Check);
+await renderer.Dispatcher.InvokeAsync(() => TreeChecks.Run(renderer, activation.All, Check));
+await renderer.Dispatcher.InvokeAsync(() => TreeGridOperationChecks.Run(renderer, activation.All, Check));
 Console.WriteLine($"All {checks} regression checks passed.");
 public class PivotRow { public string Region {get;set;}="";public int Number{get;set;}public int Year{get;set;}public int Month{get;set;}public decimal Amount{get;set;} }
 public enum Status { Open, Closed }

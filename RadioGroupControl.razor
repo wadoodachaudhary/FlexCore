@@ -1,0 +1,35 @@
+@namespace Fx.ControlKit
+@typeparam TValue
+@inherits FlexControlBase
+@using System.Linq.Expressions
+<div class="fx-radio-group @CssClass" role="radiogroup" aria-label="@AriaLabel" style="@($"display:flex;gap:{Spacing};flex-direction:{(Vertical ? "column" : "row")};{ResolvedStyle}")" @attributes="AdditionalAttributes">
+    @{
+        // Explicit tabindex makes radio inputs click-focusable in Safari and gives
+        // the group one Tab entry point, even when nothing is selected yet.
+        var tabStop = Items.FirstOrDefault(i => !i.Disabled && EqualityComparer<TValue>.Default.Equals(i.Value, Value))
+            ?? Items.FirstOrDefault(i => !i.Disabled);
+    }
+    @foreach (var item in Items)
+    {
+        <RadioControl TValue="TValue" @key="item" Name="@_name" Value="@item.Value" SelectedValue="@Value" SelectedValueChanged="SelectAsync"
+                      Label="@item.Text" Disabled="@(!Enabled || item.Disabled)"
+                      TabIndex="@(Enabled && ReferenceEquals(item, tabStop) ? 0 : -1)" />
+    }
+</div>
+@code {
+    [CascadingParameter] public EditContext? EditContext {get;set;}
+    [Parameter] public IReadOnlyList<RadioGroupItem<TValue>> Items {get;set;}=Array.Empty<RadioGroupItem<TValue>>();
+    [Parameter] public TValue? Value {get;set;}
+    [Parameter] public EventCallback<TValue?> ValueChanged {get;set;}
+    [Parameter] public Expression<Func<TValue>>? ValueExpression {get;set;}
+    [Parameter] public string? AriaLabel {get;set;}
+    [Parameter] public bool Vertical {get;set;}
+    [Parameter] public string Spacing {get;set;}="12px";
+    private readonly string _name=$"fx-radio-{Guid.NewGuid():N}";
+    private async Task SelectAsync(TValue? value)
+    {
+        if(!Enabled||!Items.Any(i=>!i.Disabled&&EqualityComparer<TValue>.Default.Equals(i.Value,value)))return;
+        Value=value;await ValueChanged.InvokeAsync(value);
+        if(ValueExpression!=null)EditContext?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));
+    }
+}

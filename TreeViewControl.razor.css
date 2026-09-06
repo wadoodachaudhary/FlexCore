@@ -55,6 +55,12 @@
 .fx-treeview-node-bold {
     font-weight: bold;
 }
+.fx-treeview:focus .fx-treeview-current{outline:1px dotted currentColor;outline-offset:-2px}
+.fx-treeview-virtual{overflow:auto;max-height:500px}
+.fx-treeview-check{display:inline-flex;align-items:center}
+.fx-treeview-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fx-treeview ::deep input{user-select:text;-webkit-user-select:text}
+.fx-treeview-arrow[role=button]{cursor:pointer}
 
 .fx-treeview-arrow {
     display: inline-flex;

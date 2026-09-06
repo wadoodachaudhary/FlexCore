@@ -1,0 +1,9 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<span id="@Id" class="fx-font-icon @IconCss @CssClass" style="@($"font-size:{Size};{ResolvedStyle}")" role="@(Label==null?null:"img")" aria-hidden="@(Label==null?"true":null)" aria-label="@Label" @attributes="AdditionalAttributes">@Glyph</span>
+@code {
+    [Parameter] public string? IconCss {get;set;}
+    [Parameter] public string? Glyph {get;set;}
+    [Parameter] public string Size {get;set;}="1em";
+    [Parameter] public string? Label {get;set;}
+}

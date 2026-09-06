@@ -1,0 +1,3 @@
+.fx-validation-tooltip-host{position:relative;display:inline-block;}
+.fx-validation-tooltip{display:none;position:absolute;z-index:1000;inset:auto auto 100% 0;min-width:180px;background:var(--fx-surface,#fff);color:var(--fx-danger,#b42318);box-shadow:0 2px 8px #0003;padding:6px;}
+.fx-validation-tooltip-host:hover .fx-validation-tooltip:has(.fx-validation-message),.fx-validation-tooltip-host:focus-within .fx-validation-tooltip:has(.fx-validation-message){display:block;}

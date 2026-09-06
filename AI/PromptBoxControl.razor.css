@@ -1,0 +1,1 @@
+.fx-prompt-box{display:grid;gap:8px;border:1px solid #bac8da;padding:10px;border-radius:6px;background:white}.fx-prompt-box ::deep textarea{width:100%;box-sizing:border-box;resize:vertical}.fx-prompt-box [role=alert]{color:#b12a38}

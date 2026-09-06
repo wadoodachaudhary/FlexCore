@@ -101,6 +101,9 @@
 
 @code {
     [Parameter] public bool Visible { get; set; }
+    [Parameter] public DialogPosition? Position { get; set; }
+    [Parameter] public EventCallback<DialogPosition> PositionChanged { get; set; }
+    private DialogPosition? _lastPosition;
 
     /// <summary>
     /// Focus the first focusable control in the dialog when it opens, so
@@ -346,6 +349,9 @@
         if (_isDragging)
         {
             _isDragging = false;
+            var position = new DialogPosition(_dialogOffsetX, _dialogOffsetY);
+            _lastPosition = position;
+            await PositionChanged.InvokeAsync(position);
             if (suppressOverlayClick)
                 _suppressNextOverlayClick = true;
             return;
@@ -477,8 +483,8 @@
         {
             _runtimeWidth = null;
             _runtimeHeight = null;
-            _dialogOffsetX = 0;
-            _dialogOffsetY = 0;
+            _dialogOffsetX = Position?.X ?? 0;
+            _dialogOffsetY = Position?.Y ?? 0;
             _systemMenuVisible = false;
             _isDragging = false;
             _isResizing = false;
@@ -504,6 +510,11 @@
                 _openerCaptured = false;
             }
         }
+        if (Position != _lastPosition && !_isDragging)
+        {
+            _dialogOffsetX = Position?.X ?? 0; _dialogOffsetY = Position?.Y ?? 0;
+        }
+        _lastPosition = Position;
         _lastVisible = Visible;
     }
 

@@ -18,6 +18,13 @@
     outline: none;
 }
 
+.fx-editor:focus-visible { outline: 2px solid #2563eb; outline-offset: 3px; }
+.fx-editor-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; background: #f1f5f9; border: 1px solid #cbd5e1; }
+.fx-editor-search [role="status"] { min-width: 120px; }
+.fx-editor::highlight(fx-editor-search) { background: #ffe68a; color: #172033; }
+.fx-editor ::deep ::highlight(fx-editor-search) { background: #ffe68a; color: #172033; }
+.fx-editor[contenteditable="false"] ::deep .fx-page-add { display: none; }
+
 /* Page-width presets rendered as a CSS class on the editor container. */
 .fx-pw-narrow { max-width: 640px;  margin: 0 auto; width: 100%; }
 .fx-pw-normal { max-width: 820px;  margin: 0 auto; width: 100%; }

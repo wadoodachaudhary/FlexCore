@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit.Docking
+<div class="fx-dock-actions" style="display:flex;gap:4px;padding:4px;border-bottom:1px solid var(--fx-border,#cbd5e1)">
+    <ButtonControl Disabled="@(!Manager.Enabled)">
+        <ChildContent>Dock…</ChildContent>
+        <DropDownContent>
+            @foreach(var node in Manager.Layout.Nodes().Where(n=>n.Children.Count==0))
+            {
+                <div><span>@(node.Panels.Count==0?"Empty area":string.Join(", ",node.Panels.Select(k=>Manager.Panel(k).Title)))</span>
+                @foreach(var position in Enum.GetValues<DockPosition>()){<ButtonControl OnClick="()=>Manager.DockAsync(PanelKey,node.Id,position)">@position</ButtonControl>}
+                </div>
+            }
+        </DropDownContent>
+    </ButtonControl>
+    @if(Manager.Panel(PanelKey).Floatable&&!Manager.Layout.Floating.Any(p=>p.Panel==PanelKey)){<ButtonControl Disabled="@(!Manager.Enabled)" OnClick="()=>Manager.FloatAsync(PanelKey)">Float</ButtonControl>}
+    @if(!Manager.Layout.AutoHidden.Contains(PanelKey)){<ButtonControl Disabled="@(!Manager.Enabled)" OnClick="()=>Manager.UnpinAsync(PanelKey)">Unpin</ButtonControl>}
+    else{<ButtonControl Disabled="@(!Manager.Enabled)" OnClick="()=>Manager.DockAsync(PanelKey,Manager.Layout.Nodes().First(n=>n.Children.Count==0).Id)">Pin</ButtonControl>}
+    @if(Manager.Panel(PanelKey).Closable){<ButtonControl Disabled="@(!Manager.Enabled)" OnClick="()=>Manager.CloseAsync(PanelKey)">Close</ButtonControl>}
+</div>
+@code {
+    [CascadingParameter] public DockManagerControl Manager {get;set;}=default!;
+    [Parameter] public string PanelKey {get;set;}="";
+}

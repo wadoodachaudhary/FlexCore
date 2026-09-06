@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-floating-label @CssClass @(HasValue?"has-value":null)" style="@ResolvedStyle">
+<label for="@For">@Text@if(Required){<span aria-hidden="true"> *</span>}</label><div>@ChildContent</div>
+</div>
+@code {
+ [Parameter] public string For {get;set;}="";
+ [Parameter] public string Text {get;set;}="";
+ [Parameter] public bool HasValue {get;set;}
+ [Parameter] public bool Required {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+}

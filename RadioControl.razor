@@ -9,6 +9,7 @@
            name="@Name"
            checked="@IsChecked"
            disabled="@Disabled"
+           tabindex="@TabIndex"
            @onchange="OnChange" />
     @if (!string.IsNullOrEmpty(Label))
     {
@@ -24,6 +25,7 @@
     [Parameter] public string? Name { get; set; }
     [Parameter] public string? Label { get; set; }
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public int? TabIndex { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
@@ -31,6 +33,7 @@
 
     private async Task OnChange(ChangeEventArgs e)
     {
+        if (Disabled) return;
         SelectedValue = Value;
         if (SelectedValueChanged.HasDelegate)
             await SelectedValueChanged.InvokeAsync(Value);

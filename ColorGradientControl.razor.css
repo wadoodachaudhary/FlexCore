@@ -1,0 +1,103 @@
+.fx-color-gradient {
+    display: grid;
+    gap: 10px;
+    width: min-content;
+    color: #1e293b;
+    font-size: 13px;
+}
+
+.fx-hsv-surface {
+    position: relative;
+    touch-action: none;
+    cursor: crosshair;
+    background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+    outline: 1px solid #9bacbf;
+}
+
+.fx-hsv-point {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border: 2px solid white;
+    outline: 1px solid #333;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+
+.fx-color-channel {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) 38px;
+    align-items: center;
+    gap: 8px;
+    min-height: 22px;
+    margin: 0;
+}
+
+.fx-color-channel-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.fx-color-hue {
+    --fx-color-track: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.fx-color-channel ::deep .fx-slider-host,
+.fx-color-channel ::deep .fx-slider-range {
+    min-width: 0;
+    width: 100%;
+}
+
+.fx-color-channel ::deep .fx-slider-range {
+    height: 12px;
+    margin: 0;
+    background: var(--fx-color-track);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px #0003;
+}
+
+.fx-color-opacity ::deep .fx-slider-range {
+    background: var(--fx-color-track), repeating-conic-gradient(#cbd5e1 0 25%, #fff 0 50%) 0 / 8px 8px;
+}
+
+.fx-color-channel ::deep .fx-slider-range:focus-visible {
+    outline: 2px solid #1e293b;
+    outline-offset: 4px;
+}
+
+.fx-color-channel ::deep .fx-slider-range::-webkit-slider-thumb {
+    background: #fff;
+    border: 2px solid #334155;
+    box-sizing: border-box;
+}
+
+.fx-color-channel ::deep .fx-slider-range::-moz-range-thumb {
+    background: #fff;
+    border: 2px solid #334155;
+    box-sizing: border-box;
+}
+
+.fx-color-entry {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: stretch;
+    gap: 8px;
+}
+
+.fx-color-preview {
+    min-height: 34px;
+    border: 1px solid #9bacbf;
+    border-radius: 3px;
+    overflow: hidden;
+    background: repeating-conic-gradient(#cbd5e1 0 25%, #fff 0 50%) 0 / 8px 8px;
+}
+
+.fx-color-preview span {
+    display: block;
+    height: 100%;
+}
+
+.fx-color-gradient [role=alert] {
+    color: #b12435;
+}

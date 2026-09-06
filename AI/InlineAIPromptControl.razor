@@ -1,0 +1,24 @@
+@namespace Fx.ControlKit.AI
+@inherits FlexControlBase
+<PopupControl IsOpen="@IsOpen" IsOpenChanged="IsOpenChanged" Anchor="Anchor" AnchorId="@AnchorId" Width="@Width" AriaLabel="Inline AI prompt" Enabled="@Enabled" Visible="@Visible">
+<ChildContent>
+@if(!string.IsNullOrEmpty(SelectedText)){<blockquote class="fx-inline-context">@SelectedText</blockquote>}
+<AIPromptControl Generate="GenerateWithContext" Prompt="@Prompt" PromptChanged="PromptChanged" Suggestions="@Suggestions" Commands="@Commands" Apply="ApplyResult" Enabled="@Enabled" />
+</ChildContent>
+</PopupControl>
+@code {
+ [Parameter] public bool IsOpen {get;set;}
+ [Parameter] public EventCallback<bool> IsOpenChanged {get;set;}
+ [Parameter] public RenderFragment<PopupAnchorContext>? Anchor {get;set;}
+ [Parameter] public string? AnchorId {get;set;}
+ [Parameter] public string Width {get;set;}="420px";
+ [Parameter] public string Prompt {get;set;}="";
+ [Parameter] public EventCallback<string> PromptChanged {get;set;}
+ [Parameter] public string SelectedText {get;set;}="";
+ [Parameter] public Func<AIPromptRequest,CancellationToken,Task<string>>? Generate {get;set;}
+ [Parameter] public IReadOnlyList<string> Suggestions {get;set;}=Array.Empty<string>();
+ [Parameter] public IReadOnlyList<AIPromptCommand> Commands {get;set;}=Array.Empty<AIPromptCommand>();
+ [Parameter] public EventCallback<AIPromptResult> Apply {get;set;}
+ private Task<string> GenerateWithContext(AIPromptRequest request,CancellationToken token)=>Generate is null?Task.FromException<string>(new InvalidOperationException("Connect a generation provider.")):Generate(request with{Prompt=$"{request.Prompt}\n\nSelected text:\n{SelectedText}"},token);
+ private async Task ApplyResult(AIPromptResult result){await Apply.InvokeAsync(result);await IsOpenChanged.InvokeAsync(false);}
+}

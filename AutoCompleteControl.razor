@@ -1,0 +1,77 @@
+@namespace Fx.ControlKit
+@typeparam TItem
+@inherits FlexControlBase
+@implements IDisposable
+@using System.Linq.Expressions
+<div class="fx-autocomplete @CssClass" style="@ResolvedStyle" aria-busy="@IsLoading" @attributes="AdditionalAttributes">
+    <DropDownListControl @ref="_list" TItem="Suggestion" TValue="string" DataSource="@_suggestions" TextFieldName="Text" ValueFieldName="Text"
+                         Value="@Value" ValueChanged="CommitAsync" TextChanged="SearchAsync" Editable="true" Enabled="@Enabled" Width="@Width" AriaLabel="@AriaLabel" Placeholder="@Placeholder">
+        <ItemTemplate Context="suggestion">
+            @if(ItemTemplate!=null){@ItemTemplate(suggestion.Item)}else{@suggestion.Text}
+        </ItemTemplate>
+    </DropDownListControl>
+    @if(ErrorMessage!=null){<div role="alert">@ErrorMessage</div>}
+    @if(IsLoading){<span role="status">Loading suggestions…</span>}
+</div>
+@code {
+    [CascadingParameter] public EditContext? EditContext {get;set;}
+    [Parameter] public IEnumerable<TItem> DataSource {get;set;}=Array.Empty<TItem>();
+    [Parameter] public Func<TItem,string>? TextSelector {get;set;}
+    [Parameter] public string TextField {get;set;}="";
+    [Parameter] public string? Value {get;set;}
+    [Parameter] public EventCallback<string?> ValueChanged {get;set;}
+    [Parameter] public Expression<Func<string?>>? ValueExpression {get;set;}
+    [Parameter] public Func<string,CancellationToken,Task<IEnumerable<TItem>>>? OnRead {get;set;}
+    [Parameter] public RenderFragment<TItem>? ItemTemplate {get;set;}
+    [Parameter] public int MinLength {get;set;}=1;
+    [Parameter] public int DebounceDelay {get;set;}=250;
+    [Parameter] public int MaxSuggestions {get;set;}=25;
+    [Parameter] public string? Width {get;set;}
+    [Parameter] public string? AriaLabel {get;set;}
+    [Parameter] public string? Placeholder {get;set;}
+    [Parameter] public EventCallback<TItem> ItemSelected {get;set;}
+    public bool IsLoading{get;private set;}
+    public string? ErrorMessage{get;private set;}
+    private sealed record Suggestion(string Text,TItem Item);
+    private IReadOnlyList<Suggestion> _suggestions=Array.Empty<Suggestion>();
+    private DropDownListControl<string,Suggestion>? _list;
+    private CancellationTokenSource? _search;
+    private bool _disposed;
+    private string? _lastValue;
+    protected override async Task OnParametersSetAsync()
+    {
+        if(!Enabled || Value!=_lastValue)
+        {
+            _search?.Cancel();IsLoading=false;_suggestions=Array.Empty<Suggestion>();
+            if(_list!=null)await _list.HidePopupAsync();
+        }
+        _lastValue=Value;
+    }
+    private string Text(TItem item)=>TextSelector?.Invoke(item)??(string.IsNullOrEmpty(TextField)?item?.ToString()??"":Convert.ToString(item?.GetType().GetProperty(TextField)?.GetValue(item))??"");
+    public async Task SearchAsync(string text)
+    {
+        _search?.Cancel();_search?.Dispose();var request=_search=new();var token=request.Token;
+        ErrorMessage=null;_suggestions=Array.Empty<Suggestion>();
+        if(!Enabled||text.Length<Math.Max(0,MinLength)){IsLoading=false;if(_list!=null)await _list.HidePopupAsync();return;}
+        IsLoading=true;
+        try
+        {
+            await Task.Delay(Math.Max(0,DebounceDelay),token);
+            var items=OnRead==null?DataSource.Where(i=>Text(i).Contains(text,StringComparison.CurrentCultureIgnoreCase)):await OnRead(text,token);
+            if(token.IsCancellationRequested||_disposed)return;
+            _suggestions=items.Take(Math.Max(1,MaxSuggestions)).Select(i=>new Suggestion(Text(i),i)).ToArray();
+            if(_list!=null) { if(_suggestions.Count>0)await _list.ShowPopupAsync(); else await _list.HidePopupAsync(); }
+        }
+        catch(OperationCanceledException) when(token.IsCancellationRequested) { }
+        catch(Exception ex){if(!token.IsCancellationRequested)ErrorMessage=ex.Message;}
+        finally {if(ReferenceEquals(_search,request)&&!_disposed){IsLoading=false;await InvokeAsync(StateHasChanged);}}
+    }
+    private async Task CommitAsync(string? text)
+    {
+        _search?.Cancel();IsLoading=false;
+        Value=text;_lastValue=text;await ValueChanged.InvokeAsync(text);
+        if(_suggestions.FirstOrDefault(s=>s.Text==text) is {} selected)await ItemSelected.InvokeAsync(selected.Item);
+        if(ValueExpression!=null)EditContext?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));
+    }
+    public void Dispose(){_disposed=true;_search?.Cancel();_search?.Dispose();}
+}

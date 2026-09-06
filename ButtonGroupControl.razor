@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@if(Visible){
+<div class="fx-button-group @CssClass @Orientation.ToString().ToLowerInvariant()" style="@Style" role="group" aria-label="@AriaLabel" @onkeydown="KeyDown">
+@foreach(var item in Items){
+<ButtonControl @key="item.Value" @ref="_buttons[item.Value]" Disabled="@(!Enabled || item.Disabled)" CssClass="@(Values.Contains(item.Value)?"fx-selected":null)" IconCss="@item.IconCss" aria-pressed="@(Values.Contains(item.Value) ? "true" : "false")" OnClick="()=>SelectAsync(item.Value)">@item.Text</ButtonControl>
+}
+</div>}
+@code {
+ [Parameter] public IReadOnlyList<SelectionItem> Items {get;set;}=Array.Empty<SelectionItem>();
+ [Parameter] public IReadOnlyList<string> Values {get;set;}=Array.Empty<string>();
+ [Parameter] public EventCallback<IReadOnlyList<string>> ValuesChanged {get;set;}
+ [Parameter] public ChoiceSelectionMode Selection {get;set;}
+ [Parameter] public FlexOrientation Orientation {get;set;}
+ [Parameter] public bool AllowEmpty {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Button group";
+ private readonly Dictionary<string,ButtonControl> _buttons=new();
+ private string? _focused;
+ protected override void OnParametersSet(){if(Items.Select(i=>i.Value).Distinct().Count()!=Items.Count)throw new ArgumentException("Button group values must be unique.");}
+ public async Task SelectAsync(string value){if(!Enabled||!Items.Any(i=>i.Value==value&&!i.Disabled))return;var selected=Values.ToList();if(selected.Contains(value)){if(AllowEmpty||selected.Count>1)selected.Remove(value);}else{if(Selection==ChoiceSelectionMode.Single)selected.Clear();selected.Add(value);}Values=selected;_focused=value;await ValuesChanged.InvokeAsync(Values);}
+ private async Task KeyDown(KeyboardEventArgs e){var items=Items.Where(i=>!i.Disabled).ToArray();if(!Enabled||items.Length==0)return;var index=Array.FindIndex(items,i=>i.Value==_focused);index=e.Key switch{"ArrowRight" or "ArrowDown"=>(index+1)%items.Length,"ArrowLeft" or "ArrowUp"=>(index-1+items.Length)%items.Length,"Home"=>0,"End"=>items.Length-1,_=>-1};if(index<0)return;_focused=items[index].Value;if(_buttons.TryGetValue(_focused,out var button))await button.FocusAsync();}
+}

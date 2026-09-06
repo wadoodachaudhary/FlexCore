@@ -1,0 +1,29 @@
+@namespace Fx.ControlKit.AI
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+<span class="fx-speech-button @CssClass" style="@ResolvedStyle" @ref="_host">
+<ButtonControl OnClick="ToggleAsync" Disabled="@(!Enabled||!Supported)" aria-pressed="@(Listening ? "true" : "false")">@(Listening?"Stop listening":Text)</ButtonControl>
+@if(!Supported){<span role="status">Speech recognition is unavailable in this browser.</span>}
+@if(!string.IsNullOrEmpty(InterimText)){<span role="status">@InterimText</span>}
+@if(_error is not null){<span role="alert">@_error</span>}
+</span>
+@code {
+ [Parameter] public string Text {get;set;}="Speak";
+ [Parameter] public string Language {get;set;}="en-US";
+ [Parameter] public bool Continuous {get;set;}
+ [Parameter] public string Value {get;set;}="";
+ [Parameter] public EventCallback<string> ValueChanged {get;set;}
+ [Parameter] public EventCallback<string> Result {get;set;}
+ [Parameter] public EventCallback<string> Error {get;set;}
+ public bool Supported {get;private set;}=true;
+ public bool Listening {get;private set;}
+ public string InterimText {get;private set;}="";
+ private ElementReference _host;private BrowserInterop? _browser;private DotNetObjectReference<SpeechToTextButtonControl>? _self;private string? _error;
+ protected override async Task OnAfterRenderAsync(bool firstRender){if(!firstRender)return;_browser=new(JS);_self=DotNetObjectReference.Create(this);try{Supported=await _browser.InvokeAsync<bool>("speechSupported");}catch(JSException){Supported=false;}await InvokeAsync(StateHasChanged);}
+ public async Task ToggleAsync(){if(!Enabled||!Supported||_browser is null)return;try{if(Listening){await _browser.InvokeAsync<object?>("speechStop",_host);return;}_error=null;InterimText="";Listening=true;await _browser.InvokeAsync<object?>("speechStart",_host,new{language=Language,continuous=Continuous},_self);}catch(JSException e){await SpeechErrorAsync(e.Message);}}
+ [JSInvokable] public async Task ReceiveAsync(string final,string interim){if(!Listening)return;InterimText=interim;if(final.Length>0){Value=string.IsNullOrWhiteSpace(Value)?final:Value+" "+final;await ValueChanged.InvokeAsync(Value);await Result.InvokeAsync(final);}await InvokeAsync(StateHasChanged);}
+ [JSInvokable] public async Task SpeechErrorAsync(string error){_error=error;Listening=false;await Error.InvokeAsync(error);await InvokeAsync(StateHasChanged);}
+ [JSInvokable] public Task SpeechEndedAsync(){Listening=false;InterimText="";return InvokeAsync(StateHasChanged);}
+ public async ValueTask DisposeAsync(){if(_browser is not null){try{await _browser.InvokeAsync<object?>("dispose",_host);}catch(JSDisconnectedException){}await _browser.DisposeAsync();}_self?.Dispose();}
+}

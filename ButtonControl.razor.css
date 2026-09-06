@@ -13,7 +13,7 @@
 
 .fx-button:hover:not(:disabled) {
     background: var(--fx-btn-hover-bg, #e6e6e6);
-    border: var(--fx-btn-hover-border);
+    border: var(--fx-btn-hover-border, var(--fx-btn-border, 1px solid #c9c9c9));
     border-color: var(--fx-btn-hover-border-color);
 }
 

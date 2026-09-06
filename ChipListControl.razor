@@ -1,0 +1,16 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-chip-list @CssClass" style="display:flex;flex-wrap:wrap;gap:6px;@ResolvedStyle" role="group" aria-label="@AriaLabel">
+@foreach(var item in Items){<ChipControl @key="item.Id" Text="@item.Text" IconCss="@item.IconCss" Enabled="@(Enabled&&!item.Disabled)" Selected="@SelectedIds.Contains(item.Id)" SelectedChanged="v=>Select(item.Id,v)" Removable="@Removable" OnRemove="()=>RemoveAsync(item.Id)" />}
+</div>
+@code {
+ [Parameter] public IReadOnlyList<ChipItem> Items {get;set;}=Array.Empty<ChipItem>();
+ [Parameter] public EventCallback<IReadOnlyList<ChipItem>> ItemsChanged {get;set;}
+ [Parameter] public IReadOnlyList<string> SelectedIds {get;set;}=Array.Empty<string>();
+ [Parameter] public EventCallback<IReadOnlyList<string>> SelectedIdsChanged {get;set;}
+ [Parameter] public ChoiceSelectionMode Selection {get;set;}=ChoiceSelectionMode.Multiple;
+ [Parameter] public bool Removable {get;set;}=true;
+ [Parameter] public string AriaLabel {get;set;}="Chips";
+ private async Task Select(string id,bool selected){var values=SelectedIds.ToHashSet();if(Selection==ChoiceSelectionMode.Single)values.Clear();if(selected)values.Add(id);else values.Remove(id);SelectedIds=values.ToArray();await SelectedIdsChanged.InvokeAsync(SelectedIds);}
+ public async Task RemoveAsync(string id){if(!Enabled||!Items.Any(i=>i.Id==id&&!i.Disabled))return;Items=Items.Where(i=>i.Id!=id).ToArray();await ItemsChanged.InvokeAsync(Items);if(SelectedIds.Contains(id)){SelectedIds=SelectedIds.Where(i=>i!=id).ToArray();await SelectedIdsChanged.InvokeAsync(SelectedIds);}}
+}

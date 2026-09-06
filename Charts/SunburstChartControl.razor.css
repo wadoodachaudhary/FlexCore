@@ -1,0 +1,226 @@
+.fx-sunburst-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    user-select: none;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.fx-sunburst-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #1e293b;
+    margin-bottom: 8px;
+    text-align: center;
+}
+
+.fx-sunburst-breadcrumbs {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+    padding: 6px 14px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    font-size: 13px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.fx-breadcrumb-btn {
+    background: transparent;
+    border: none;
+    color: #475569;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 12px;
+    transition: all 0.15s ease-in-out;
+}
+
+.fx-breadcrumb-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.fx-breadcrumb-btn.active {
+    background: #2563eb;
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.fx-breadcrumb-sep {
+    color: #94a3b8;
+    font-size: 14px;
+}
+
+.fx-sunburst-viewport {
+    position: relative;
+    width: 100%;
+    max-width: 680px;
+    aspect-ratio: 1 / 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.fx-sunburst-svg {
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+.fx-sunburst-slice {
+    transition: opacity 0.2s ease, stroke-width 0.2s ease, filter 0.2s ease;
+}
+
+.fx-sunburst-slice.dimmed {
+    opacity: 0.35;
+}
+
+.fx-sunburst-slice.hovered {
+    opacity: 1;
+    stroke-width: 2px;
+}
+
+.fx-sunburst-slice.highlighted {
+    opacity: 1;
+    stroke: #ffffff;
+    stroke-width: 3px;
+}
+
+.fx-sunburst-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+    pointer-events: none;
+    fill: #ffffff;
+}
+
+.fx-sunburst-label.level-1 {
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.fx-sunburst-center-circle {
+    transition: all 0.25s ease;
+}
+
+.fx-sunburst-center-circle.drilldown-active:hover {
+    filter: brightness(0.92);
+}
+
+.fx-center-sub {
+    fill: #ffffff;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+
+.fx-center-val {
+    fill: #ffffff;
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+}
+
+.fx-center-hint {
+    fill: #f1f5f9;
+    font-size: 10.5px;
+    font-weight: 500;
+    opacity: 0.9;
+}
+
+.fx-center-subtitle {
+    fill: #e2e8f0;
+    font-size: 10px;
+    font-weight: 500;
+    opacity: 0.85;
+}
+
+/* Tooltip floating card faithful to the article */
+.fx-sunburst-tooltip {
+    position: absolute;
+    z-index: 1000;
+    background: rgba(33, 37, 41, 0.95);
+    color: #ffffff;
+    padding: 10px 14px;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    font-size: 12px;
+    line-height: 1.4;
+    min-width: 170px;
+    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fx-tooltip-title {
+    font-size: 13px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    padding-bottom: 4px;
+}
+
+.fx-tooltip-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.fx-tooltip-badge {
+    margin-left: auto;
+    background: rgba(255, 255, 255, 0.2);
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: normal;
+}
+
+.fx-tooltip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.fx-tooltip-stat {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.fx-stat-lbl {
+    color: #cbd5e1;
+}
+
+.fx-stat-val {
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.fx-tooltip-sub {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.fx-tooltip-hint {
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: #60a5fa;
+    font-style: italic;
+    border-top: 1px dashed rgba(255, 255, 255, 0.15);
+    padding-top: 3px;
+}

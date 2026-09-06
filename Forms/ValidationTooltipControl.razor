@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit
+<div class="fx-validation-tooltip-host" tabindex="0" aria-label="@Label" aria-describedby="@_tooltipId">
+    @ChildContent
+    <div class="fx-validation-tooltip" role="tooltip" id="@_tooltipId"><ValidationMessageControl Field="@Field" Model="@Model" /></div>
+</div>
+@code {
+    private readonly string _tooltipId=$"fx-validation-tooltip-{Guid.NewGuid():N}";
+    [Parameter] public string Field { get; set; } = "";
+    [Parameter] public object? Model { get; set; }
+    [Parameter] public string Label { get; set; } = "Validation details";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

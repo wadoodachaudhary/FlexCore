@@ -1656,8 +1656,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         !UsesItemsProvider
         && !_pivotMode
         && _pageState.PageSize > 0
-        && _pageState.TotalRecords > _pageState.PageSize
-        && (AllowPaging || (AutoPageRowThreshold > 0 && _pageState.TotalRecords > AutoPageRowThreshold));
+        && (AllowPaging || (AutoPageRowThreshold > 0 && string.IsNullOrWhiteSpace(Height) && _pageState.TotalRecords > AutoPageRowThreshold));
 
     private IEnumerable<GridColumn> VisibleColumns
     {
@@ -3294,8 +3293,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// Returns null (per-value grouping) for non-numeric columns or small value sets.</summary>
     private Func<TValue, string>? BuildNumericBucketSelector(IEnumerable<TValue> data, string field)
     {
-        var values = new List<double>();
         var distinct = new HashSet<double>();
+        var min = double.MaxValue;
+        var max = double.MinValue;
+        var hasValues = false;
+
         foreach (var item in data)
         {
             var raw = GetPropertyValue(item, field);
@@ -3306,14 +3308,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             double d;
             try { d = Convert.ToDouble(raw, CultureInfo.InvariantCulture); }
             catch { return null; }
-            values.Add(d);
-            distinct.Add(d);
+
+            hasValues = true;
+            if (d < min) min = d;
+            if (d > max) max = d;
+            if (distinct.Count <= 100)
+                distinct.Add(d);
         }
-        if (values.Count == 0 || distinct.Count <= 100)
+        if (!hasValues || distinct.Count <= 100)
             return null;
 
-        var min = values.Min();
-        var max = values.Max();
         var span = max - min;
         if (span <= 0)
             return null;
@@ -4702,6 +4706,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _lastHostResolvedPageSize = resolvedPageSize;
             _pageState.CurrentPage = 1;
         }
+
+        var dataCount = GetCurrentDataSourceCount();
+        if (dataCount >= 0)
+        {
+            _pageState.TotalRecords = dataCount;
+            EnsureCurrentPageInRange();
+        }
         _autoWidthPending = true;
         EnsureThemeInitialized();
         EnsureAdvancedViewInitialized();
@@ -5309,6 +5320,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task GoToPage(int page)
     {
+        if (!UsesItemsProvider && _pageState.TotalRecords == 0)
+        {
+            _pageState.TotalRecords = GetPassSortedRows().Count;
+        }
         EnsureCurrentPageInRange();
         if (page < 1 || page > _pageState.TotalPages || page == _pageState.CurrentPage)
             return;
@@ -5326,16 +5341,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (EventsRef?.PageChanged.HasDelegate == true)
             await EventsRef.PageChanged.InvokeAsync(new PageChangeEventArgs { PreviousPage = prev, CurrentPage = page });
 
+        ClearPassViewMemos();
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+
+        _pendingWindowScrollReset = true;
         await NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
+        await InvokeAsync(StateHasChanged);
     }
 
     private void HandlePageSizeChange(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out var size))
         {
-            _pageState.PageSize = size;
-            _pageState.CurrentPage = 1;
-            _ = NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
+            _ = HandlePageSizeValueChanged(size);
         }
     }
 
@@ -5346,7 +5365,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _pageState.PageSize = size;
         _pageState.CurrentPage = 1;
+        ClearPassViewMemos();
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+
+        _pendingWindowScrollReset = true;
         await NotifyGridStateChangedAsync(GridStateChangeKind.Paging);
+        await InvokeAsync(StateHasChanged);
     }
 
     private sealed record PageSizeChoice(int Value, string Text);
@@ -13029,6 +13054,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private RenderFragment RenderGroupedRows(IEnumerable<GroupResult<TValue>> groups, int level) => builder =>
     {
+        const int maxItemsPerGroup = 250;
         foreach (var group in groups)
         {
             RenderGroupHeaderRow(builder, group, level);
@@ -13042,10 +13068,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 }
                 else
                 {
-                    // Render actual data rows
+                    // Render actual data rows with safety cap to avoid SignalR disconnects on unwindowed large datasets
                     var rowIdx = 0;
                     foreach (var item in group.Items)
+                    {
+                        if (rowIdx >= maxItemsPerGroup)
+                        {
+                            builder.OpenElement(70, "tr");
+                            builder.AddAttribute(71, "class", "fx-group-overflow-hint");
+                            builder.OpenElement(72, "td");
+                            builder.AddAttribute(73, "colspan", Math.Max(1, TotalColumnCount));
+                            builder.AddAttribute(74, "style", "text-align:center;padding:8px;font-style:italic;color:#6b7280;background:#f9fafb;font-size:12px;");
+                            builder.AddContent(75, $"Showing first {maxItemsPerGroup:N0} of {group.Count:N0} records. Specify Height on GridControl to enable full virtual scrolling.");
+                            builder.CloseElement();
+                            builder.CloseElement();
+                            break;
+                        }
                         RenderGroupedItemRow(builder, item, rowIdx++);
+                    }
                 }
 
                 RenderGroupFooterRows(builder, group);

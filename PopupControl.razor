@@ -1,0 +1,59 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@if (Visible)
+{
+    <span class="fx-popup-host @CssClass" style="@Style" id="@Id" @ref="_host">
+        <span data-fx-anchor>@Anchor?.Invoke(new(IsOpen, _panelId, OpenAsync, CloseAsync, ToggleAsync))</span>
+        @if (IsOpen && Enabled)
+        {
+            <div data-fx-popup id="@_panelId" class="fx-popup-panel" role="@Role" aria-label="@AriaLabel" tabindex="-1"
+                 style="width:@Width;max-height:@MaxHeight;z-index:@ZIndex" @onkeydown="KeyDown">
+                @ChildContent
+            </div>
+        }
+    </span>
+}
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+    [Parameter] public RenderFragment<PopupAnchorContext>? Anchor { get; set; }
+    [Parameter] public string? AnchorId { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public PopupPlacement Placement { get; set; } = PopupPlacement.BottomStart;
+    [Parameter] public string Width { get; set; } = "auto";
+    [Parameter] public string MaxHeight { get; set; } = "min(70vh,600px)";
+    [Parameter] public int ZIndex { get; set; } = 10000;
+    [Parameter] public double Offset { get; set; } = 4;
+    [Parameter] public bool DismissOnOutsideClick { get; set; } = true;
+    [Parameter] public bool FocusOnOpen { get; set; } = true;
+    [Parameter] public string Role { get; set; } = "dialog";
+    [Parameter] public string AriaLabel { get; set; } = "Popup";
+    private readonly string _panelId = "fx-popup-" + Guid.NewGuid().ToString("N");
+    private ElementReference _host;
+    private BrowserInterop? _browser;
+    private DotNetObjectReference<PopupControl>? _self;
+    private bool _attached;
+    public async Task OpenAsync() { if (!Enabled) return; IsOpen = true; await IsOpenChanged.InvokeAsync(true); await InvokeAsync(StateHasChanged); }
+    [JSInvokable] public Task DismissAsync() => CloseAsync();
+    public async Task CloseAsync() { IsOpen = false; await IsOpenChanged.InvokeAsync(false); await InvokeAsync(StateHasChanged); }
+    public Task ToggleAsync() => IsOpen ? CloseAsync() : OpenAsync();
+    private Task KeyDown(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_attached == (IsOpen && Enabled && Visible)) return;
+        _browser ??= new(JS); _self ??= DotNetObjectReference.Create(this);
+        try
+        {
+            if (IsOpen && Enabled && Visible) _attached = await _browser.InvokeAsync<bool>("popup", _host, new { anchorId=AnchorId, placement=Placement.ToString(), offset=Offset, dismiss=DismissOnOutsideClick, focus=FocusOnOpen }, _self);
+            else { await _browser.InvokeAsync<object?>("dispose", _host); _attached=false; }
+        }
+        catch (JSException) { /* CSS anchor placement and Escape remain available without DOM measurement. */ }
+    }
+    public async ValueTask DisposeAsync()
+    {
+        if (_browser is not null) { try { await _browser.InvokeAsync<object?>("dispose",_host); } catch (JSDisconnectedException) { } await _browser.DisposeAsync(); }
+        _self?.Dispose();
+    }
+}

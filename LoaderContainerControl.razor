@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-loader-container @CssClass" style="min-height:@MinHeight;@ResolvedStyle" aria-busy="@(Loading ? "true" : "false")">
+<div inert="@(Loading && BlockInteraction)">@ChildContent</div>
+@if(Loading){<div class="fx-loader-overlay @(BlockInteraction?"blocking":null)"><div>@if(Template is not null){@Template}else{<LoaderControl Text="@Text" Type="@Type" />}</div></div>}
+</div>
+@code {
+ [Parameter] public bool Loading {get;set;}
+ [Parameter] public bool BlockInteraction {get;set;}=true;
+ [Parameter] public string Text {get;set;}="Loading";
+ [Parameter] public string MinHeight {get;set;}="80px";
+ [Parameter] public LoaderType Type {get;set;}
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ [Parameter] public RenderFragment? Template {get;set;}
+}

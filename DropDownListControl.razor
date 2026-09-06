@@ -18,11 +18,10 @@
      @onkeydown:stopPropagation="true">
     @if (Editable)
     {
-        <div class="@ButtonCssClass"
-             role="combobox"
-             aria-haspopup="listbox"
-             aria-expanded="@_isOpen">
+        <div class="@ButtonCssClass">
             <input class="fx-dropdown-input"
+                   role="combobox" aria-haspopup="listbox" aria-expanded="@_isOpen" aria-controls="@(_isOpen?_listId:null)" aria-autocomplete="list"
+                   aria-activedescendant="@(_isOpen && _highlightedIndex>=0?$"{_listId}-{_highlightedIndex}":null)"
                    @key="_editableInputGeneration"
                    @ref="_editableInputRef"
                    disabled="@(!Enabled)"
@@ -72,7 +71,7 @@
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
 
-        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = DataSource.ToList();
@@ -88,7 +87,7 @@
                     var isHighlighted = index == _highlightedIndex;
                     <button type="button"
                             class="fx-dropdown-option @(isSelected ? "selected" : "") @(isHighlighted ? "highlighted" : "")"
-                            role="option"
+                            role="option" id="@($"{_listId}-{optionIndex}")"
                             aria-selected="@isSelected"
                             @ref="_optionRefs[optionIndex]"
                             @onkeydown="e => HandleOptionKeyDown(e, val, item)"
@@ -96,7 +95,7 @@
                             @onkeydown:stopPropagation="true"
                             @onmouseover="() => SetHighlightedIndex(optionIndex)"
                             @onclick="() => SelectItemAsync(val, item)">
-                        @txt
+                        @if (ItemTemplate != null) { @ItemTemplate(item) } else { @txt }
                     </button>
                 }
             }
@@ -120,6 +119,9 @@
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
+    /// <summary>Live draft notifications for composed suggestion controls. Does not commit Value.</summary>
+    [Parameter] public EventCallback<string> TextChanged { get; set; }
+    [Parameter] public RenderFragment<TItem>? ItemTemplate { get; set; }
     [Parameter] public bool Editable { get; set; }
 
     /// <summary>Native maxlength for the editable input — the browser stops further
@@ -167,6 +169,7 @@
     /// handler does expensive work (e.g. a layout switch).</summary>
     [Parameter] public bool SuppressUnchangedValueChange { get; set; }
 
+    private readonly string _listId=$"fx-list-{Guid.NewGuid():N}";
     private bool _isOpen;
     private bool _openOnRenderInitialized;
     private bool _editableInputFocused;
@@ -648,12 +651,15 @@
             _suppressNextEditableBlurCommit = true;
     }
 
-    private Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
+    private async Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
     {
         _editableText = e.Value?.ToString() ?? "";
-        _highlightMovedByKeyboard = false;   // typing wins over the highlight
-        return Task.CompletedTask;
+        _highlightMovedByKeyboard = false;
+        await TextChanged.InvokeAsync(_editableText);
     }
+
+    public Task ShowPopupAsync() => InvokeAsync(() => { if (Enabled) { OpenDropdown(); StateHasChanged(); } });
+    public Task HidePopupAsync() => CloseAsync();
 
     private async Task<bool> TrySelectByTypedPrefixAsync(KeyboardEventArgs e)
     {

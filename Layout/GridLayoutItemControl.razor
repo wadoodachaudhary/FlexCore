@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit.Layout
+@inherits FlexControlBase
+<div class="fx-grid-layout-item @CssClass" id="@Id" style="@($"min-width:0;grid-column:{(Column.HasValue?Column.Value.ToString():"auto")} / span {Math.Max(1,ColumnSpan)};grid-row:{(Row.HasValue?Row.Value.ToString():"auto")} / span {Math.Max(1,RowSpan)};align-self:{AlignSelf};justify-self:{JustifySelf};{ResolvedStyle}")" @attributes="AdditionalAttributes">@ChildContent</div>
+@code {
+    [Parameter] public int? Row {get;set;}
+    [Parameter] public int? Column {get;set;}
+    [Parameter] public int RowSpan {get;set;}=1;
+    [Parameter] public int ColumnSpan {get;set;}=1;
+    [Parameter] public string AlignSelf {get;set;}="auto";
+    [Parameter] public string JustifySelf {get;set;}="auto";
+    [Parameter] public RenderFragment? ChildContent {get;set;}
+}

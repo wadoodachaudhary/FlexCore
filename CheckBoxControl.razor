@@ -1,7 +1,7 @@
 @namespace Fx.ControlKit
 
 <label class="fx-checkbox @(Indeterminate ? "fx-checkbox-indeterminate" : "") @CssClass" style="@(Disabled ? "opacity:0.6;cursor:default;" : "")">
-    <input type="checkbox"
+    <input @ref="_inputElement" type="checkbox"
            checked="@Checked"
            aria-checked="@(Indeterminate ? "mixed" : Checked ? "true" : "false")"
            disabled="@Disabled"
@@ -21,6 +21,8 @@
 </label>
 
 @code {
+    private ElementReference _inputElement;
+    public async Task FocusAsync() { try { await _inputElement.FocusAsync(preventScroll: true); } catch { } }
     [Parameter] public bool Checked { get; set; }
     [Parameter] public EventCallback<bool> CheckedChanged { get; set; }
     [Parameter] public bool Indeterminate { get; set; }

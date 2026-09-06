@@ -1,0 +1,13 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-segmented @CssClass" style="@ResolvedStyle">
+<RadioGroupControl TValue="string" Items="@RadioItems" Value="@Value" ValueChanged="ValueChanged" Vertical="@(Orientation==FlexOrientation.Vertical)" Enabled="@Enabled" AriaLabel="@AriaLabel" />
+</div>
+@code {
+ [Parameter] public IReadOnlyList<SelectionItem> Items {get;set;}=Array.Empty<SelectionItem>();
+ [Parameter] public string Value {get;set;}="";
+ [Parameter] public EventCallback<string> ValueChanged {get;set;}
+ [Parameter] public FlexOrientation Orientation {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Segments";
+ private IReadOnlyList<RadioGroupItem<string>> RadioItems=>Items.Select(i=>new RadioGroupItem<string>(i.Value,i.Text,i.Disabled)).ToArray();
+}

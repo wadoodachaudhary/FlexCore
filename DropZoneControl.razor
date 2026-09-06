@@ -1,0 +1,16 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+<div class="fx-drop-zone @CssClass" style="@ResolvedStyle" @ref="_host" role="group" aria-label="@Text" aria-disabled="@(Enabled ? "false" : "true")">
+@if(ChildContent is not null){@ChildContent}else{<span>@Text</span>}
+@if(_error is not null){<span role="alert">@_error</span>}
+</div>
+@code {
+ [Parameter,EditorRequired] public string UploadId {get;set;}="";
+ [Parameter] public string Text {get;set;}="Drop files here, or use Select files in the upload control.";
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ private ElementReference _host;private BrowserInterop? _browser;private string? _key,_error;
+ protected override async Task OnAfterRenderAsync(bool firstRender){var key=$"{UploadId}:{Enabled}";if(key==_key)return;_key=key;_browser??=new(JS);try{await _browser.InvokeAsync<object?>(Enabled?"dropZone":"dispose",_host,new{targetId=UploadId});}catch(JSException){_error="Drag and drop is unavailable; use Select files.";await InvokeAsync(StateHasChanged);}}
+ public async ValueTask DisposeAsync(){if(_browser is not null){try{await _browser.InvokeAsync<object?>("dispose",_host);}catch(JSDisconnectedException){}await _browser.DisposeAsync();}}
+}

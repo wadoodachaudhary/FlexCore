@@ -1,0 +1,16 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<svg class="fx-svg-icon @CssClass" style="@ResolvedStyle" id="@Id" width="@Size" height="@Size" viewBox="@ViewBox" fill="none" stroke="currentColor" stroke-width="@StrokeWidth" stroke-linecap="round" stroke-linejoin="round" role="@(Label==null?null:"img")" aria-hidden="@(Label==null?"true":null)" aria-label="@Label" focusable="false" @attributes="AdditionalAttributes">
+    @if(Label!=null){<title>@Label</title>}
+    @if(ChildContent!=null){@ChildContent}else{<path d="@ResolvedPath" />}
+</svg>
+@code {
+    [Parameter] public string Name {get;set;}="info";
+    [Parameter] public string? Path {get;set;}
+    [Parameter] public string ViewBox {get;set;}="0 0 24 24";
+    [Parameter] public string Size {get;set;}="1em";
+    [Parameter] public double StrokeWidth {get;set;}=2;
+    [Parameter] public string? Label {get;set;}
+    [Parameter] public RenderFragment? ChildContent {get;set;}
+    private string ResolvedPath=>Path??(FlexIcons.Paths.TryGetValue(Name,out var path)?path:throw new ArgumentException($"Unknown FlexCore icon '{Name}'. Supply Path for a custom icon."));
+}

@@ -1,0 +1,163 @@
+@namespace Fx.ControlKit
+@implements IDisposable
+@using System.ComponentModel.DataAnnotations
+@using System.Reflection
+@using System.Globalization
+@if (_property != null)
+{
+    <div class="fx-form-item @CssClass" style="@($"grid-column:span {Math.Max(1,ColSpan)}")">
+        @if(ShowLabel){<label id="@(_id+"-label")">@Caption</label>}
+        @if (Template != null) { @Template(new(){Model=_owner!,Property=_property,Field=_field,SetValueAsync=SetValueAsync}) }
+        else if (EditorType==FormEditorType.DropDownList || _type.IsEnum || _type==typeof(bool) && Nullable.GetUnderlyingType(_property.PropertyType)!=null)
+        {
+            <DropDownListControl OnKeyDown="OnKeyDown" @ref="_choiceEditor" TItem="string" TValue="string" DataSource="@Choices" Value="@_draft" ValueChanged="SetTextAsync" Enabled="@CanEdit" Width="100%" AriaLabel="@Caption" />
+        }
+        else if (EditorType==FormEditorType.Switch)
+        {
+            <SwitchControl Checked="@((bool?)_property.GetValue(_owner) ?? false)" CheckedChanged="value=>SetValueAsync(value)" Disabled="@(!CanEdit)" Label="@Caption" />
+        }
+        else if (_type==typeof(bool))
+        {
+            <CheckBoxControl @ref="_checkEditor" OnKeyDown="OnKeyDown" Checked="@((bool?)_property.GetValue(_owner) ?? false)" CheckedChanged="value=>SetValueAsync(value)" Disabled="@(!CanEdit)" Label="@Caption" />
+        }
+        else if (_type==typeof(DateTime) || _type==typeof(DateOnly))
+        {
+            <DatePickerControl @ref="_dateEditor" OnKeyDown="OnKeyDown" ShowTime="@(ShowTime || _property.GetCustomAttribute<DataTypeAttribute>()?.DataType==DataType.DateTime)" Value="@DateValue" ValueChanged="SetDateAsync" Enabled="@CanEdit" AriaLabel="@Caption" Culture="@Culture" ValidationChanged="SetErrorAsync" />
+        }
+        else if (_type==typeof(TimeOnly))
+        {
+            <TimePickerControl @ref="_timeEditor" OnKeyDown="OnKeyDown" Value="@((TimeOnly?)_property.GetValue(_owner))" ValueChanged="value=>SetValueAsync(value)" Enabled="@CanEdit" AriaLabel="@Caption" Culture="@Culture" ValidationChanged="SetErrorAsync" />
+        }
+        else
+        {
+            <TextBoxControl OnKeyDown="OnKeyDown" @ref="_textEditor" Value="@_draft" ValueChanged="SetTextAsync" UpdateOnInput="true" Multiline="@(EditorType==FormEditorType.TextArea)" Rows="@Rows"
+                            Enabled="@CanEdit" aria-label="@(ShowLabel?null:Caption)" aria-labelledby="@(ShowLabel?_id+"-label":null)" aria-describedby="@(_id+"-messages")" aria-invalid="@(HasErrors ? "true" : null)" />
+        }
+        @if (!string.IsNullOrEmpty(Hint)) { <small>@Hint</small> }
+        <div id="@(_id+"-messages")"><ValidationMessageControl Field="@_property.Name" Model="@_owner" />
+        @if(Context==null && _error!=null){<span role="alert">@_error</span>}</div>
+    </div>
+}
+@code {
+    [Parameter] public EventCallback<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs> OnKeyDown { get; set; }
+    private DatePickerControl? _dateEditor;
+    private CheckBoxControl? _checkEditor;
+    private TimePickerControl? _timeEditor;
+    private TextBoxControl? _textEditor;
+    private DropDownListControl<string, string>? _choiceEditor;
+    public async Task FocusAsync()
+    {
+        if (_textEditor is not null) await _textEditor.FocusAsync();
+        else if (_choiceEditor is not null) await _choiceEditor.FocusAsync();
+        else if (_dateEditor is not null) await _dateEditor.FocusAsync();
+        else if (_checkEditor is not null) await _checkEditor.FocusAsync();
+        else if (_timeEditor is not null) await _timeEditor.FocusAsync();
+    }
+    [CascadingParameter] public EditContext? Context { get; set; }
+    [CascadingParameter] public FormControl? Form { get; set; }
+    [Parameter] public object? Model { get; set; }
+    [Parameter] public string Field { get; set; } = "";
+    [Parameter] public bool ShowLabel { get; set; } = true;
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public string? Hint { get; set; }
+    [Parameter] public bool Enabled { get; set; } = true;
+    [Parameter] public int ColSpan { get; set; } = 1;
+    [Parameter] public bool ShowTime { get; set; }
+    [Parameter] public int Rows { get; set; } = 3;
+    [Parameter] public string? CssClass { get; set; }
+    [Parameter] public FormEditorType EditorType { get; set; }
+    [Parameter] public IEnumerable<string>? Options { get; set; }
+    [Parameter] public CultureInfo Culture { get; set; } = CultureInfo.CurrentCulture;
+    [Parameter] public RenderFragment<FormFieldContext>? Template { get; set; }
+    [Parameter] public EventCallback<FormFieldChangedArgs> ValueChanged { get; set; }
+    private object? _owner, _lastValue;
+    private PropertyInfo? _property;
+    private Type _type=typeof(string);
+    private FieldIdentifier _field;
+    private string _draft="";
+    private readonly string _id=$"fx-form-field-{Guid.NewGuid():N}";
+    private EditContext? _subscribed;
+    private ValidationMessageStore? _messages;
+    private string? _error;
+    private string Caption => Label ?? _property?.GetCustomAttribute<DisplayAttribute>()?.GetName() ?? System.Text.RegularExpressions.Regex.Replace(_property?.Name??Field,"(\\B[A-Z])"," $1");
+    private bool CanEdit => Enabled && Form?.Enabled!=false && _property?.SetMethod?.IsPublic==true && _property.GetCustomAttribute<EditableAttribute>()?.AllowEdit!=false;
+    private bool HasErrors => _error!=null || Context?.GetValidationMessages(_field).Any()==true;
+    private IEnumerable<string> Choices => Options ?? (Nullable.GetUnderlyingType(_property!.PropertyType)!=null ? new[]{""}.Concat(_type.IsEnum ? Enum.GetNames(_type) : ["True","False"]) : (_type.IsEnum ? Enum.GetNames(_type) : ["True","False"]));
+    private DateTime? DateValue => _property?.GetValue(_owner) switch { DateTime date=>date,DateOnly day=>day.ToDateTime(TimeOnly.MinValue),_=>null };
+    protected override void OnParametersSet()
+    {
+        var model=Model??Context?.Model??throw new InvalidOperationException("FormItemControl needs a form or Model.");
+        var (owner,property)=FormFields.Resolve(model,Field);
+        var changed=!ReferenceEquals(owner,_owner)||_property!=property;
+        if (changed && _messages!=null) { _messages.Clear(_field);Context?.NotifyValidationStateChanged(); }
+        _owner=owner;_property=property;_type=Nullable.GetUnderlyingType(property.PropertyType)??property.PropertyType;_field=new(owner,property.Name);
+        if(!ReferenceEquals(Context,_subscribed))
+        {
+            if(_subscribed!=null){_subscribed.OnValidationStateChanged-=ValidationChanged;_subscribed.OnFieldChanged-=ExternalFieldChanged;}
+            _subscribed=Context;_messages=Context==null?null:new(Context);
+            if(_subscribed!=null){_subscribed.OnValidationStateChanged+=ValidationChanged;_subscribed.OnFieldChanged+=ExternalFieldChanged;}
+        }
+        if ((EditorType is FormEditorType.Switch or FormEditorType.CheckBox) && _type!=typeof(bool)
+            || EditorType==FormEditorType.DatePicker && _type!=typeof(DateTime) && _type!=typeof(DateOnly)
+            || EditorType==FormEditorType.TimePicker && _type!=typeof(TimeOnly))
+            throw new ArgumentException($"{EditorType} cannot edit {property.PropertyType.Name}.");
+        var current=property.GetValue(owner);
+        if(changed || !Equals(current,_lastValue)) { _draft=Convert.ToString(current,Culture)??"";_lastValue=current;_error=null; }
+    }
+    private void ExternalFieldChanged(object? sender,FieldChangedEventArgs args)
+    {
+        if(!args.FieldIdentifier.Equals(_field)||_property is null)return;
+        var current=_property.GetValue(_owner);
+        // A host can update the same model instance (for example SmartPaste). Own
+        // keystrokes already update _lastValue, so their unformatted draft stays intact.
+        if(Equals(current,_lastValue))return;
+        _lastValue=current;_draft=Convert.ToString(current,Culture)??"";_error=null;
+        _messages?.Clear(_field);
+        _ = InvokeAsync(StateHasChanged);
+    }
+    private void ValidationChanged(object? sender,ValidationStateChangedEventArgs args)=>_ = InvokeAsync(StateHasChanged);
+    private Task SetDateAsync(DateTime? value)=>SetValueAsync(_type==typeof(DateOnly) && value.HasValue ? DateOnly.FromDateTime(value.Value) : value);
+    private Task SetErrorAsync(string? message)
+    {
+        _error=message;
+        _messages?.Clear(_field);
+        if(message!=null)_messages?.Add(_field,message);
+        Context?.NotifyValidationStateChanged();
+        return Task.CompletedTask;
+    }
+    private async Task SetTextAsync(string? text)
+    {
+        if(!CanEdit) return;
+        _draft=text??"";
+        object? value;
+        try
+        {
+            if(_draft.Length==0 && _type!=typeof(string) && Nullable.GetUnderlyingType(_property!.PropertyType)!=null) value=null;
+            else if(_type==typeof(string)) value=_draft;
+            else if(_type.IsEnum) value=Enum.Parse(_type,_draft);
+            else if(_type==typeof(Guid)) value=Guid.Parse(_draft);
+            else value=Convert.ChangeType(_draft,_type,Culture);
+        }
+        catch(Exception ex) when(ex is FormatException or OverflowException or ArgumentException or InvalidCastException)
+        {
+            await SetErrorAsync($"Enter a valid {Caption}.");
+            return;
+        }
+        await PublishAsync(value, false);
+    }
+    public Task SetValueAsync(object? value) => PublishAsync(value, true);
+    private async Task PublishAsync(object? value, bool formatDraft)
+    {
+        if(!CanEdit||_property==null||_owner==null) return;
+        if(value==null && _property.PropertyType.IsValueType && Nullable.GetUnderlyingType(_property.PropertyType)==null)
+        { await SetErrorAsync($"{Caption} is required.");return; }
+        _property.SetValue(_owner,value);_lastValue=value;
+        if(formatDraft)_draft=Convert.ToString(value,Culture)??"";
+        await SetErrorAsync(null);
+        Context?.NotifyFieldChanged(_field);
+        var args=new FormFieldChangedArgs(Model??Context?.Model??_owner,Field,value);
+        await ValueChanged.InvokeAsync(args);
+        if(Form!=null) await Form.FieldChangedAsync(args);
+    }
+    public void Dispose(){if(_subscribed!=null){_subscribed.OnValidationStateChanged-=ValidationChanged;_subscribed.OnFieldChanged-=ExternalFieldChanged;_messages?.Clear(_field);}}
+}

@@ -1,0 +1,293 @@
+@namespace Fx.ControlKit.Pdf
+@inherits FlexControlBase
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+<div class="fx-pdf-viewer @CssClass" id="@Id" style="@ResolvedStyle" @ref="_host" @attributes="AdditionalAttributes">
+    <ToolbarControl ShowCaptionsToggle="false">
+        @if(AllowOpen){<FilePickerControl Accept=".pdf,application/pdf" OnChange="OpenFileAsync" Enabled="@(!Busy&&Enabled)" Label="Open PDF" />}
+        <ButtonControl Disabled="@(!Ready||Page<=1)" OnClick="()=>GoToPageAsync(Page-1)" aria-label="Previous page">‹</ButtonControl>
+        <span>Page @Page of @PageCount</span>
+        <ButtonControl Disabled="@(!Ready||Page>=PageCount)" OnClick="()=>GoToPageAsync(Page+1)" aria-label="Next page">›</ButtonControl>
+        <ButtonControl Disabled="@(!Ready||Zoom<=.25)" OnClick="()=>SetZoomAsync(Zoom-.25)">−</ButtonControl>
+        <span>@Zoom.ToString("P0")</span>
+        <ButtonControl Disabled="@(!Ready||Zoom>=4)" OnClick="()=>SetZoomAsync(Zoom+.25)">+</ButtonControl>
+        <ButtonControl Disabled="@(!Ready)" OnClick="RotateAsync">Rotate</ButtonControl>
+        <ButtonControl Disabled="@(!Ready)" OnClick="DownloadAsync"><SvgIconControl Name="download" /> Download</ButtonControl>
+        <ButtonControl Disabled="@(!Ready)" OnClick="PrintAsync"><SvgIconControl Name="print" /> Print</ButtonControl>
+        <ToggleButtonControl Selected="@_showSidebar" SelectedChanged="v=>_showSidebar=v">Details</ToggleButtonControl>
+    </ToolbarControl>
+    <ToolbarControl ShowCaptionsToggle="false">
+        <TextBoxControl Value="@_query" ValueChanged="v=>_query=v??string.Empty" UpdateOnInput="true" OnKeyDown="SearchKeyDown" Placeholder="Search document" Enabled="@Ready" aria-label="Search document" />
+        <ButtonControl Disabled="@(!Ready)" OnClick="FindAsync">Find</ButtonControl>
+        <CheckBoxControl Label="Match case" Checked="@_matchCase" CheckedChanged="v=>_matchCase=v" Disabled="@(!Ready)" />
+        <ButtonControl Disabled="@(!Ready||_matches.Count==0)" OnClick="SearchPreviousAsync">Previous match</ButtonControl>
+        <ButtonControl Disabled="@(!Ready||_matches.Count==0)" OnClick="SearchNextAsync">Next match</ButtonControl>
+        <ButtonControl Disabled="@(!Ready||!_searched)" OnClick="CancelTextSearchAsync">Clear search</ButtonControl>
+        @if(_searched){<span class="fx-pdf-search-status" role="status">@(_matchIndex+1) of @_matches.Count matches@(_searchTruncated ? " (result limit reached)" : "")</span>}
+        @if(AllowAnnotations)
+        {
+            <ButtonControl Disabled="@(!Ready)" PreventMouseDownDefault="true" OnClick="HighlightAsync">Highlight selection</ButtonControl>
+            <ButtonControl Disabled="@(!Ready)" OnClick="()=>_noteOpen=true">Add note</ButtonControl>
+        }
+    </ToolbarControl>
+    @if(Busy){<div role="status">@_busyText</div>}
+    @if(ErrorMessage!=null){<div class="fx-pdf-error" role="alert">@ErrorMessage</div>}
+    <div class="fx-pdf-body" style="@($"height:{Height}")">
+        @if(_showSidebar)
+        {
+            <aside class="fx-pdf-sidebar" aria-label="Document details">
+                @if(ShowBookmarks)
+                {
+                    <h4>Bookmarks</h4>
+                    @if(_bookmarks.Count==0){<p>No bookmarks in this document.</p>}
+                    <ul class="fx-pdf-bookmarks">@BookmarkItems(_bookmarks)</ul>
+                }
+                @if(_searched){<h4>Search results</h4>}
+                @for(var i=0;i<_matches.Count;i++)
+                {
+                    var index=i;var match=_matches[i];
+                    <div class="fx-pdf-search-result"><ButtonControl Disabled="@(!Ready)" aria-current="@(index==_matchIndex ? "true" : "false")" OnClick="()=>GoToSearchMatchAsync(index)">Page @match.Page: @match.Text</ButtonControl></div>
+                }
+                @if(_searched&&_matches.Count==0){<p>No matches.</p>}
+                @if(AllowFormFilling&&_fields.Count>0)
+                {
+                    <h4>Form fields</h4>
+                    @foreach(var field in _fields)
+                    {
+                        <div class="fx-pdf-field">
+                            <label>@field.Name</label>
+                            @if(field.Type=="checkbox"){<CheckBoxControl Checked="@field.BoolValue" CheckedChanged="v=>SetFieldAsync(field,v)" Disabled="@(field.ReadOnly||!Ready)" Label="@field.Name" />}
+                            else if(field.Options.Count>0){<DropDownListControl TItem="string" TValue="string" DataSource="@field.Options" Value="@field.TextValue" ValueChanged="v=>SetFieldAsync(field,v)" Enabled="@(!field.ReadOnly&&Ready)" AriaLabel="@field.Name" Width="100%" />}
+                            else{<TextBoxControl Value="@field.TextValue" ValueChanged="v=>SetFieldAsync(field,v)" Enabled="@(!field.ReadOnly&&Ready)" aria-label="@field.Name" />}
+                            @if(field.ReadOnly){<small>Read only</small>}
+                        </div>
+                    }
+                }
+                @if(_pageAnnotations.Count>0||_annotations.Count>0)
+                {
+                    <h4>Notes and highlights</h4>
+                    @foreach(var note in _pageAnnotations.Where(n=>!_annotations.Any(a=>a.Page==n.Page&&a.Kind==n.Kind&&a.Text==n.Text&&Math.Abs(a.X-n.X)<.01&&Math.Abs(a.Y-n.Y)<.01))){<p>@note.Kind: @note.Text</p>}
+                    @foreach(var note in _annotations)
+                    {
+                        <div><ButtonControl Disabled="@(!Ready)" OnClick="()=>GoToPageAsync(note.Page)">Page @note.Page: @note.Kind — @note.Text</ButtonControl><ButtonControl Disabled="@(!Ready)" OnClick="()=>RemoveAnnotationAsync(note.Id)" aria-label="Remove annotation">×</ButtonControl></div>
+                    }
+                }
+            </aside>
+        }
+        <div class="fx-pdf-viewport" role="region" aria-label="PDF page" tabindex="0">
+            <div class="fx-pdf-page"><canvas aria-label="@($"PDF page {Page}")"></canvas><div class="fx-pdf-text textLayer"></div><div class="fx-pdf-search-layer" aria-hidden="true"></div></div>
+            @if(PageCount==0&&!Busy){<p>Open a PDF document.</p>}
+        </div>
+    </div>
+    @if(_noteOpen)
+    {
+        <DialogControl Visible="true" Header="Add note" Width="420px" OnClose="()=>_noteOpen=false">
+            <ChildContent><TextBoxControl Value="@_noteText" ValueChanged="v=>_noteText=v??string.Empty" Multiline="true" Rows="4" UpdateOnInput="true" aria-label="Note text" /></ChildContent>
+            <FooterContent><ButtonControl OnClick="()=>_noteOpen=false">Cancel</ButtonControl><ButtonControl Disabled="@string.IsNullOrWhiteSpace(_noteText)" OnClick="AddNoteAsync">Add note</ButtonControl></FooterContent>
+        </DialogControl>
+    }
+</div>
+@code {
+    [Parameter] public byte[]? DocumentBytes {get;set;}
+    [Parameter] public string? Url {get;set;}
+    [Parameter] public string? Password {get;set;}
+    [Parameter] public string FileName {get;set;}="document.pdf";
+    [Parameter] public string Height {get;set;}="600px";
+    [Parameter] public bool ShowBookmarks {get;set;}=true;
+    [Parameter] public EventCallback<PdfSearchState> SearchChanged {get;set;}
+    [Parameter] public bool AllowOpen {get;set;}=true;
+    [Parameter] public bool AllowAnnotations {get;set;}=true;
+    [Parameter] public bool AllowFormFilling {get;set;}=true;
+    [Parameter] public long MaxFileSize {get;set;}=50*1024*1024;
+    [Parameter] public EventCallback<PdfDocumentInfo> Loaded {get;set;}
+    [Parameter] public EventCallback<string> Error {get;set;}
+    [Parameter] public EventCallback<int> PageChanged {get;set;}
+    public int Page {get;private set;}=1;
+    public int PageCount {get;private set;}
+    public double Zoom {get;private set;}=1;
+    public bool Busy {get;private set;}
+    public string? ErrorMessage {get;private set;}
+    public IReadOnlyList<PdfBookmark> Bookmarks=>_bookmarks.AsReadOnly();
+    public PdfSearchState SearchState=>new(_activeQuery,_activeMatchCase,_matches.AsReadOnly(),_matchIndex,_searchTruncated);
+    private bool Ready=>Enabled&&PageCount>0;
+    private readonly SemaphoreSlim _operations=new(1,1);
+    private readonly string _viewerSessionId = Guid.NewGuid().ToString("N");
+    private ElementReference _host;
+    private IJSObjectReference? _module;
+    private Task<IJSObjectReference>? _moduleImport;
+    private byte[]? _lastBytes,_openBytes;
+    private string? _lastUrl,_lastPassword;
+    private int _rotation,_revision;
+    private bool _loadPending,_disposed,_showSidebar=true,_searched,_noteOpen;
+    private string _query="",_noteText="",_busyText="Opening PDF…";
+    private List<PdfFormField> _fields=[];
+    private List<PdfSearchMatch> _matches=[];
+    private List<PdfBookmark> _bookmarks=[];
+    private string _activeQuery="";
+    private bool _matchCase,_activeMatchCase,_searchTruncated;
+    private int _matchIndex=-1;
+    private List<PdfAnnotation> _annotations=[],_pageAnnotations=[];
+    protected override void OnParametersSet()
+    {
+        if(!ReferenceEquals(DocumentBytes,_lastBytes)||Url!=_lastUrl||Password!=_lastPassword)
+        {
+            _lastBytes=DocumentBytes;_lastUrl=Url;_lastPassword=Password;_openBytes=DocumentBytes;_loadPending=true;_revision++;
+        }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if(_loadPending&&!_disposed){_loadPending=false;await LoadAsync();}
+    }
+    private Task<IJSObjectReference> ModuleAsync()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _moduleImport ??= ImportModuleAsync();
+    }
+    private async Task<IJSObjectReference> ImportModuleAsync()
+    {
+        var module = await JS.InvokeAsync<IJSObjectReference>("import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/pdf-viewer.js"));
+        if (_disposed)
+        {
+            try { await module.DisposeAsync(); } catch (JSDisconnectedException) { }
+            throw new ObjectDisposedException(nameof(PdfViewerControl));
+        }
+        return _module = module;
+    }
+    private async Task<T> InvokeAsync<T>(string action,object? data=null)=>await (await ModuleAsync()).InvokeAsync<T>("invoke",action,_host,data??new{},_viewerSessionId);
+    private object EditData()=>new{fields=_fields,annotations=_annotations,fileName=FileName};
+    private async Task LoadAsync()
+    {
+        var revision=_revision;Busy=true;_busyText="Opening PDF…";ErrorMessage=null;PageCount=0;_annotations=[];_fields=[];_matches=[];_pageAnnotations=[];_searched=false;_bookmarks=[];_matchIndex=-1;_activeQuery="";_searchTruncated=false;await InvokeAsync(StateHasChanged);
+        try
+        {
+            if((_openBytes?.Length??0)==0&&string.IsNullOrWhiteSpace(Url)){if(_module!=null)await _module.InvokeVoidAsync("invoke","dispose",null,new{},_viewerSessionId);return;}
+            if((_openBytes?.Length??0)>MaxFileSize)throw new ArgumentException("PDF exceeds MaxFileSize.");
+            var info=await InvokeAsync<PdfDocumentInfo>("load",new{bytes=_openBytes,url=Url,password=Password,maxFileSize=MaxFileSize});
+            if(revision!=_revision||_disposed)return;
+            _fields=info.Fields;_bookmarks=info.Bookmarks;PageCount=info.Pages;Page=1;Zoom=1;_rotation=0;await RenderPageAsync(false);if(revision==_revision&&!_disposed)await Loaded.InvokeAsync(info);
+        }
+        catch(ObjectDisposedException) when(_disposed) { }
+        catch(Exception ex) when(ex is JSException or ArgumentException){if(revision==_revision&&!_disposed)await ReportErrorAsync(ex.Message);}
+        finally{if(revision==_revision)Busy=false;if(!_disposed)await InvokeAsync(StateHasChanged);}
+    }
+    private async Task RenderPageAsync(bool refresh)
+    {
+        var revision=_revision;
+        var annotations=await InvokeAsync<List<PdfAnnotation>>("render",new{page=Page,zoom=Zoom,rotation=_rotation,matches=_matches.Where(m=>m.Page==Page),activeMatch=_matchIndex>=0?_matches[_matchIndex]:null,refresh,fields=_fields,annotations=_annotations})??[];
+        if(revision==_revision&&!_disposed)_pageAnnotations=annotations;
+    }
+    private async Task RunAsync(Func<Task> operation,string text="Updating PDF…")
+    {
+        if(!Ready||_disposed)return;
+        var revision=_revision;
+        await _operations.WaitAsync();
+        try
+        {
+            if(revision!=_revision||_disposed||!Ready)return;
+            Busy=true;_busyText=text;ErrorMessage=null;
+            await operation();
+        }
+        catch(ObjectDisposedException) when(_disposed) { }
+        catch(Exception ex) when(ex is JSException or ArgumentException)
+        { if(revision==_revision&&!_disposed)await ReportErrorAsync(ex.Message); }
+        finally
+        {
+            if(revision==_revision)Busy=false;
+            _operations.Release();
+            if(!_disposed)await InvokeAsync(StateHasChanged);
+        }
+    }
+    private async Task ReportErrorAsync(string text){ErrorMessage=text.Split('\n')[0];await Error.InvokeAsync(ErrorMessage);}
+    public Task GoToPageAsync(int page)=>RunAsync(async()=>{Page=Math.Clamp(page,1,PageCount);await RenderPageAsync(false);await PageChanged.InvokeAsync(Page);});
+    public Task SetZoomAsync(double zoom)=>RunAsync(async()=>{if(!double.IsFinite(zoom))throw new ArgumentException("Zoom must be finite.");Zoom=Math.Clamp(zoom,.25,4);await RenderPageAsync(false);});
+    private Task RotateAsync()=>RunAsync(async()=>{_rotation=(_rotation+90)%360;await RenderPageAsync(false);});
+    public Task FindAsync()=>SearchTextAsync(_query,_matchCase);
+    public Task SearchTextAsync(string query,bool matchCase=false)=>RunAsync(async()=>
+    {
+        _query=query??"";_matchCase=matchCase;_activeQuery=_query;_activeMatchCase=matchCase;
+        var results=await InvokeAsync<PdfSearchResults>("search",new{query=_activeQuery,matchCase});
+        _matches=results.Matches;_searchTruncated=results.IsTruncated;_matchIndex=_matches.Count>0?0:-1;
+        _searched=_activeQuery.Length>0;_showSidebar=true;
+        if(_matchIndex>=0){Page=_matches[0].Page;await PageChanged.InvokeAsync(Page);}
+        await RenderPageAsync(false);await SearchChanged.InvokeAsync(SearchState);
+    },"Searching PDF…");
+    public Task SearchNextAsync()=>GoToSearchMatchAsync(_matches.Count==0?-1:(_matchIndex+1)%_matches.Count);
+    public Task SearchPreviousAsync()=>GoToSearchMatchAsync(_matches.Count==0?-1:(_matchIndex-1+_matches.Count)%_matches.Count);
+    public Task GoToSearchMatchAsync(int index)=>RunAsync(async()=>
+    {
+        if(index<0||index>=_matches.Count)return;
+        _matchIndex=index;Page=_matches[index].Page;await RenderPageAsync(false);
+        await PageChanged.InvokeAsync(Page);await SearchChanged.InvokeAsync(SearchState);
+    });
+    public Task CancelTextSearchAsync()=>RunAsync(async()=>
+    {
+        _query=_activeQuery="";_matches=[];_matchIndex=-1;_searched=_searchTruncated=false;
+        await RenderPageAsync(false);await SearchChanged.InvokeAsync(SearchState);
+    });
+    private Task SearchKeyDown(KeyboardEventArgs e)=>e.Key=="Enter"?FindAsync():e.Key=="Escape"?CancelTextSearchAsync():Task.CompletedTask;
+    private RenderFragment BookmarkItems(IEnumerable<PdfBookmark> bookmarks)=>@<text>
+        @foreach(var bookmark in bookmarks)
+        {
+            <li><ButtonControl Disabled="@(!Ready||bookmark.Page is null)" OnClick="()=>GoToPageAsync(bookmark.Page??Page)">@bookmark.Title</ButtonControl>
+            @if(bookmark.Children.Count>0){<ul>@BookmarkItems(bookmark.Children)</ul>}</li>
+        }
+    </text>;
+    private Task SetFieldAsync(PdfFormField field,object? value)=>RunAsync(async()=>
+    {
+        if(!AllowFormFilling||field.ReadOnly)return;
+        var oldText=field.TextValue;var oldBool=field.BoolValue;var oldDirty=field.Dirty;
+        if(value is bool flag)field.BoolValue=flag;else field.TextValue=Convert.ToString(value)??"";field.Dirty=true;
+        try{await RenderPageAsync(true);}catch{field.TextValue=oldText;field.BoolValue=oldBool;field.Dirty=oldDirty;throw;}
+    });
+    private Task HighlightAsync()=>RunAsync(async()=>
+    {
+        if(!AllowAnnotations)return;
+        var regions=await InvokeAsync<List<PdfAnnotation>>("selection");if(regions.Count==0){ErrorMessage="Select text on the PDF page before highlighting.";return;}
+        foreach(var region in regions){region.Id=Guid.NewGuid().ToString("N");region.Kind="Highlight";_annotations.Add(region);}await RenderPageAsync(true);
+    });
+    private Task AddNoteAsync()=>RunAsync(async()=>{if(!AllowAnnotations)return;var note=await InvokeAsync<PdfAnnotation>("notePosition",new{page=Page});note.Id=Guid.NewGuid().ToString("N");note.Text=_noteText;note.Kind="Text";_annotations.Add(note);_noteOpen=false;_noteText="";await RenderPageAsync(true);});
+    private Task RemoveAnnotationAsync(string id)=>RunAsync(async()=>{if(!AllowAnnotations)return;_annotations.RemoveAll(a=>a.Id==id);await RenderPageAsync(true);});
+    public Task DownloadAsync()=>RunAsync(async()=>{await InvokeAsync<object?>("download",EditData());});
+    public Task PrintAsync()=>RunAsync(async()=>{await InvokeAsync<object?>("print",EditData());});
+    public async Task<byte[]> SaveAsync()
+    {
+        if(!Ready||_disposed)throw new InvalidOperationException("Open a PDF before saving.");
+        var revision=_revision;
+        await _operations.WaitAsync();
+        try
+        {
+            if(!Ready||_disposed||revision!=_revision)throw new InvalidOperationException("The PDF changed before it could be saved.");
+            await using var reference=await InvokeAsync<IJSStreamReference>("saveStream",EditData());
+            await using var stream=await reference.OpenReadStreamAsync(MaxFileSize);
+            using var buffer=new MemoryStream();await stream.CopyToAsync(buffer);return buffer.ToArray();
+        }
+        finally{_operations.Release();}
+    }
+    public async Task OpenAsync(byte[] bytes,string? name=null)
+    {
+        if(!Enabled||_disposed)return;_openBytes=bytes;FileName=name??FileName;_revision++;await LoadAsync();
+    }
+    private async Task OpenFileAsync(InputFileChangeEventArgs args)
+    {
+        try{using var buffer=new MemoryStream();await args.File.OpenReadStream(MaxFileSize).CopyToAsync(buffer);await OpenAsync(buffer.ToArray(),args.File.Name);}
+        catch(Exception ex) when(ex is IOException or JSException){await ReportErrorAsync(ex.Message);}
+    }
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true; _revision++;
+        var module = _module; _module = null;
+        if (module is null) return;
+        try
+        {
+            // The renderer may already have removed _host. Dispose resources by
+            // session ID; never resolve an ElementReference during teardown.
+            await module.InvokeVoidAsync("invoke", "dispose", null, new { }, _viewerSessionId);
+        }
+        catch (JSDisconnectedException) { }
+        finally
+        {
+            try { await module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        }
+    }
+}

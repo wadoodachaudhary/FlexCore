@@ -1,0 +1,34 @@
+@namespace Fx.ControlKit
+@implements IDisposable
+@if (Context != null && _field.HasValue)
+{
+    <div id="@Id" class="fx-validation-messages">
+    @foreach (var message in Context.GetValidationMessages(_field.Value))
+    {
+        <div class="fx-validation-message @CssClass" role="alert">@message</div>
+    }
+    </div>
+}
+@code {
+    [CascadingParameter] public EditContext? Context { get; set; }
+    [Parameter] public string Field { get; set; } = "";
+    [Parameter] public object? Model { get; set; }
+    [Parameter] public string? Id { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+    private EditContext? _subscribed;
+    private FieldIdentifier? _field;
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Context,_subscribed))
+        {
+            if (_subscribed!=null) _subscribed.OnValidationStateChanged-=Changed;
+            _subscribed=Context;
+            if (_subscribed!=null) _subscribed.OnValidationStateChanged+=Changed;
+        }
+        if (Context!=null && !string.IsNullOrEmpty(Field))
+        {var f=FormFields.Resolve(Model??Context.Model,Field);_field=new(f.Owner,f.Property.Name);}
+        else _field=null;
+    }
+    private void Changed(object? sender, ValidationStateChangedEventArgs args)=>_ = InvokeAsync(StateHasChanged);
+    public void Dispose(){if(_subscribed!=null)_subscribed.OnValidationStateChanged-=Changed;}
+}

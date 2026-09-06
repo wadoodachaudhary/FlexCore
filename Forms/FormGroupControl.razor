@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<fieldset class="fx-form-group @CssClass" style="@($"grid-column:1/-1;{ResolvedStyle}")" disabled="@(!Enabled)" @attributes="AdditionalAttributes">
+    <legend>@Label</legend>
+    <div style="@($"display:grid;grid-template-columns:repeat({Math.Max(1,Columns)},minmax(0,1fr));gap:{Spacing}")">@ChildContent</div>
+</fieldset>
+@code {
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public int Columns { get; set; } = 1;
+    [Parameter] public string Spacing { get; set; } = "12px";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

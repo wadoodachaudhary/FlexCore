@@ -1,0 +1,12 @@
+.fx-gantt{min-width:0}.fx-gantt-error{color:var(--fx-danger,#b42318);padding:8px}
+.fx-gantt ::deep .fx-gantt-tree td{height:34px;box-sizing:border-box;padding-top:0;padding-bottom:0}
+.fx-gantt ::deep .fx-gantt-tree td:has(.fx-gantt-timeline){padding:0;overflow:visible}
+.fx-gantt-axis{position:relative;height:28px}.fx-gantt-axis span{position:absolute;top:5px;font-size:11px}
+.fx-gantt-timeline{height:34px;position:relative;background-image:linear-gradient(to right,#e2e8f0 1px,transparent 1px)}
+.fx-gantt-task{position:absolute;top:7px;height:20px;min-width:6px;border-radius:3px;z-index:2}
+.fx-gantt-task ::deep .fx-gantt-move{background:transparent;border:0;color:white;width:100%;min-width:0;height:20px;padding:0 8px;display:block;overflow:hidden;cursor:grab}
+.fx-gantt-progress{position:absolute;inset:0 auto 0 0;background:#0003;pointer-events:none}.fx-gantt-bar-label{position:relative;font-size:11px;white-space:nowrap}
+.fx-gantt-task ::deep .fx-gantt-resize{position:absolute;top:0;width:7px;min-width:0;height:20px;padding:0;border:0;background:#ffffff60;color:transparent;cursor:ew-resize}
+.fx-gantt-task ::deep .start{left:0}.fx-gantt-task ::deep .end{right:0}
+.fx-gantt ::deep .fx-gantt-links{position:absolute;inset:0;overflow:visible;pointer-events:none;z-index:1}
+.fx-gantt-drag-surface{position:fixed;inset:0;z-index:2000;cursor:grabbing}

@@ -1,0 +1,33 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-color-palette @CssClass" style="@($"--fx-palette-columns:{Math.Max(1,Columns)};--fx-swatch-size:{TileSize};{ResolvedStyle}")" id="@Id" role="listbox" aria-label="@AriaLabel" @attributes="AdditionalAttributes">
+    @for(var i=0;i<Colors.Count;i++)
+    {
+        var index=i;var color=Colors[i];
+        <ButtonControl @ref="_buttons[index]" CssClass="@($"fx-palette-swatch {(string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)?"selected":"")}")" Style="@($"background:{color}")" Disabled="@(!Enabled)"
+                       TabIndex="@(index==_cursor?0:-1)" role="option" aria-selected="@string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)" aria-label="@color" Title="@color"
+                       OnClick="()=>SelectAsync(color)" @onkeydown="e=>KeyAsync(e,index)">
+            @if(TileTemplate!=null){@TileTemplate(color)}else{<span aria-hidden="true">@(string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)?"✓":" ")</span>}
+        </ButtonControl>
+    }
+</div>
+@code {
+    [Parameter] public IReadOnlyList<string> Colors {get;set;}=ColorPalettes.Basic;
+    [Parameter] public string? Value {get;set;}
+    [Parameter] public EventCallback<string?> ValueChanged {get;set;}
+    [Parameter] public int Columns {get;set;}=8;
+    [Parameter] public string TileSize {get;set;}="28px";
+    [Parameter] public string AriaLabel {get;set;}="Color palette";
+    [Parameter] public RenderFragment<string>? TileTemplate {get;set;}
+    private readonly Dictionary<int,ButtonControl> _buttons=new();
+    private int _cursor;
+    private string? _last;
+    protected override void OnParametersSet(){if(Value!=_last){var index=Colors.ToList().FindIndex(c=>string.Equals(c,Value,StringComparison.OrdinalIgnoreCase));if(index>=0)_cursor=index;_last=Value;}_cursor=Math.Clamp(_cursor,0,Math.Max(0,Colors.Count-1));}
+    public async Task SelectAsync(string color){if(!Enabled||!Colors.Contains(color))return;Value=color;_last=color;_cursor=Colors.ToList().IndexOf(color);await ValueChanged.InvokeAsync(color);await InvokeAsync(StateHasChanged);}
+    private async Task KeyAsync(KeyboardEventArgs e,int index)
+    {
+        if(Colors.Count==0)return;
+        var next=e.Key switch{"ArrowLeft"=>index-1,"ArrowRight"=>index+1,"ArrowUp"=>index-Math.Max(1,Columns),"ArrowDown"=>index+Math.Max(1,Columns),"Home"=>0,"End"=>Colors.Count-1,_=>index};
+        if(next==index)return;_cursor=Math.Clamp(next,0,Colors.Count-1);if(_buttons.TryGetValue(_cursor,out var button))await button.FocusAsync();
+    }
+}

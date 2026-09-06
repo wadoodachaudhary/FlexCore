@@ -60,13 +60,14 @@
         }
         function walk(node) {
             if (!node) return "";
-            if (node.nodeType === 3) return node.nodeValue || "";
+            if (node.nodeType === 3) return escapeHtml(node.nodeValue || "");
             if (node.nodeType !== 1) return "";
             var inner = "";
             for (var c = 0; c < node.childNodes.length; c++) {
                 inner += walk(node.childNodes[c]);
             }
             var tag = node.tagName ? node.tagName.toUpperCase() : "";
+            if (tag === "BR") return "<br>";
             if (INLINE_ALLOWED[tag]) {
                 if (!inner) return "";
                 return "<" + INLINE_ALLOWED[tag] + ">" + inner + "</" + INLINE_ALLOWED[tag] + ">";
@@ -128,6 +129,10 @@
             .replace(/>/g, "&gt;");
     }
 
+    function blockChunks(root, blockId) {
+        return Array.from(root.querySelectorAll("[data-block-id]")).filter(function (block) { return block.dataset.blockId === blockId; });
+    }
+
     function resolveContainer(editor) {
         // Positioning reference for floating-toolbar coordinates. The editor's
         // nearest positioned ancestor is the implicit coordinate space.
@@ -160,6 +165,7 @@
     // Pulled out of init() so the paginator can re-render a single block
     // (e.g. a split-paragraph chunk) with the same markup contract.
     function renderBlockHtml(b) {
+        b = Object.assign({}, b, { id: escapeAttr(b.id) });
         var content = (typeof b.html === "string" && b.html.length > 0)
             ? b.html
             : escapeHtml(b.text || "");
@@ -465,13 +471,13 @@
             if (!btn) return;
             e.preventDefault();
             e.stopPropagation();
-            insertNewBlankPage(editor, btn);
+            if (!isReadOnly(editor)) runEdit(editor, function () { insertNewBlankPage(editor, btn); });
         });
 
         // selectionchange is a document-level event; we filter to selections
         // that land inside this editor. Debounced so rapid arrow-key moves
         // within one page don't all fire repaginate checks.
-        document.addEventListener("selectionchange", function () {
+        editor._hfPageSelectionListener = function () {
             if (!editor.classList.contains("fx-paged")) return;
             var sel = window.getSelection();
             if (!sel || sel.rangeCount === 0) return;
@@ -500,7 +506,8 @@
             editor._hfRepagTimer = setTimeout(function () {
                 fxEditor.repaginate(editor.id);
             }, 250);
-        });
+        };
+        document.addEventListener("selectionchange", editor._hfPageSelectionListener);
     }
 
     // Schedules a re-paginate during typing/deleting using a TRAILING-EDGE
@@ -526,7 +533,7 @@
     function scheduleOverflowRepaginate(editor) {
         if (editor._hfRepagPending) return;
         editor._hfRepagPending = true;
-        setTimeout(function () {
+        editor._hfOverflowTimer = setTimeout(function () {
             editor._hfRepagPending = false;
             if (editor.classList.contains("fx-paged")) {
                 fxEditor.repaginate(editor.id);
@@ -584,7 +591,7 @@
         // Sum the text length of chunks BEFORE the caret's chunk, then add
         // the offset within the caret's chunk. The +1 between non-empty
         // chunks mirrors the joiner space read() inserts when it merges.
-        var chunks = editor.querySelectorAll('[data-block-id="' + blockId + '"]');
+        var chunks = blockChunks(editor, blockId);
         var mergedOffset = 0;
         for (var i = 0; i < chunks.length; i++) {
             var chunk = chunks[i];
@@ -604,7 +611,7 @@
 
     function restoreCaret(editor, caret) {
         if (!caret || !caret.blockId) return;
-        var chunks = editor.querySelectorAll('[data-block-id="' + caret.blockId + '"]');
+        var chunks = blockChunks(editor, caret.blockId);
         if (chunks.length === 0) return;
 
         // Walk chunks in document order, decrementing the remaining offset by
@@ -678,6 +685,12 @@
         init: function (editorId, blocks, pageOpts) {
             var editor = document.getElementById(editorId);
             if (!editor) return;
+            var oldDirty = editor.dataset.dirty;
+            var keepHistory = !!(pageOpts && pageOpts.preserveHistory);
+            clearTimeout(editor._hfOverflowTimer);
+            clearTimeout(editor._hfRepagTimer);
+            editor._hfRepagPending = false;
+            if (!blocks.length) blocks = [{ id: freshBlockId(), kind: "Paragraph", text: "" }];
 
             // Build the per-block markup once.
             var blockHtml = new Array(blocks.length);
@@ -725,7 +738,7 @@
                 editor.innerHTML = blockHtml.join("");
             }
 
-            editor.dataset.dirty = "false";
+            editor.dataset.dirty = keepHistory ? oldDirty : "false";
             if (!editor._hfDirtyBound) {
                 editor._hfDirtyBound = true;
                 editor.addEventListener("input", function () {
@@ -743,6 +756,12 @@
                 });
             }
             bindPagedHandlers(editor);
+            configureEditor(editor, pageOpts || {}, null);
+            if (!keepHistory) {
+                editor._fxHistory = newHistory(editor);
+                fxEditor.clearSearch(editorId);
+            }
+            editor._fxSavedSelection = null;
         },
 
         /**
@@ -795,10 +814,11 @@
             });
 
             fxEditor.init(editorId, dtos,
-                { paged: true, pagedCssClass: pagedCssClass });
+                Object.assign({}, editor._fxOptions, { paged: true, pagedCssClass: pagedCssClass, preserveHistory: true }));
 
             restoreCaret(editor, caret);
             editor._hfDirtySincePagination = false;
+            refreshSearch(editor);
         },
 
         isDirty: function (editorId) {
@@ -810,6 +830,7 @@
             var editor = document.getElementById(editorId);
             if (!editor) return [];
             var results = [];
+            var seenIds = new Set();
 
             // Build the iteration source: in flat mode every child of the
             // editor IS a block; in paged mode the editor's children are
@@ -830,6 +851,7 @@
 
             for (var i = 0; i < blockEls.length; i++) {
                 var el = blockEls[i];
+                if (el.closest('.fx-page-blank') && !el.textContent.trim() && !el.querySelector('img')) continue;
                 // Browsers don't tag the <p> they create on Enter — stamp a
                 // fresh data-block-id so captureCaret can anchor the cursor
                 // to this paragraph after the next re-paginate. Existing IDs
@@ -837,6 +859,11 @@
                 if (el.dataset && !el.dataset.blockId) {
                     el.dataset.blockId = freshBlockId();
                 }
+                // Enter may clone the paragraph's attributes. A new paragraph
+                // needs its own identity; only paginator continuations share one.
+                if (el.dataset && seenIds.has(el.dataset.blockId) && el.dataset.splitCont !== "true")
+                    el.dataset.blockId = freshBlockId();
+                if (el.dataset) seenIds.add(el.dataset.blockId);
                 var tag = el.tagName.toUpperCase();
                 if (tag === "FIGURE") {
                     var img = el.querySelector("img");
@@ -1032,8 +1059,9 @@
             if (!sel || sel.rangeCount === 0) return;
             var range = sel.getRangeAt(0);
             var matched = 0;
-            for (var i = 0; i < editor.children.length; i++) {
-                var el = editor.children[i];
+            var blocks = editor.querySelectorAll("[data-block-id]");
+            for (var i = 0; i < blocks.length; i++) {
+                var el = blocks[i];
                 if (!el.dataset) continue;
                 if (range.intersectsNode(el)) {
                     if (!value) el.style.removeProperty(property);
@@ -1058,8 +1086,9 @@
             var sel = window.getSelection();
             if (!sel || sel.rangeCount === 0) return;
             var range = sel.getRangeAt(0);
-            for (var i = 0; i < editor.children.length; i++) {
-                var el = editor.children[i];
+            var blocks = editor.querySelectorAll("[data-block-id]");
+            for (var i = 0; i < blocks.length; i++) {
+                var el = blocks[i];
                 if (!el.dataset) continue;
                 if (range.intersectsNode(el)) {
                     if (align && align !== "left") el.setAttribute("data-align", align);
@@ -1097,7 +1126,7 @@
             // non-empty chunks mirrors the joiner space read() inserts when
             // it merges chunks back into a single block.
             var blockId = blockEl.dataset.blockId;
-            var chunks = editor.querySelectorAll('[data-block-id="' + blockId + '"]');
+            var chunks = blockChunks(editor, blockId);
             var mergedOffset = 0;
             for (var i = 0; i < chunks.length; i++) {
                 var chunk = chunks[i];
@@ -1127,7 +1156,7 @@
             // setCaret would always land in the FIRST chunk and clamp to its
             // end, which is why an Undo / Redo on a split paragraph took the
             // cursor to the wrong place.
-            var chunks = document.querySelectorAll('[data-block-id="' + blockId + '"]');
+            var chunks = blockChunks(document, blockId);
             if (chunks.length === 0) return;
 
             var remaining = Math.max(0, offset || 0);
@@ -1204,6 +1233,312 @@
             }
         }
     };
+
+    // Browser-owned selection and editable DOM transactions stay in this existing
+    // bridge. The public commands, options and UI belong to EditorControl.
+    function isReadOnly(editor) {
+        return editor.getAttribute("contenteditable") === "false" || !!editor._fxOptions?.readOnly;
+    }
+
+    function snapshot(editor) {
+        var blocks = fxEditor.read(editor.id);
+        return { blocks: blocks, key: JSON.stringify(blocks), caret: captureCaret(editor) };
+    }
+
+    function newHistory(editor) {
+        var current = snapshot(editor);
+        return { undo: [], redo: [], current: current, clean: current.key, lastType: "", lastTime: 0 };
+    }
+
+    function asRichBlocks(blocks) {
+        return blocks.map(function (b) {
+            return Object.assign({}, b, { html: b.kind === "Image" || b.kind === "PageBreak" ? "" : b.text });
+        });
+    }
+
+    function restoreEditorSelection(editor) {
+        var selection = window.getSelection();
+        var range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+        if (!editor.contains(document.activeElement) || !range || !editor.contains(range.commonAncestorContainer)) range = editor._fxSavedSelection;
+        if (!range || !editor.contains(range.commonAncestorContainer)) return;
+        range = range.cloneRange();
+        editor.focus({ preventScroll: true });
+        selection.removeAllRanges();
+        selection.addRange(range.cloneRange());
+    }
+
+    function recordEdit(editor, inputType) {
+        var h = editor._fxHistory;
+        if (!h || !editor._fxOptions.enableHistory || editor._fxRestoring) return;
+        var next = snapshot(editor), before = h.current;
+        if (next.key === before.key) { h.current = next; return; }
+        var now = Date.now();
+        var typing = /^(insertText|deleteContentBackward|deleteContentForward)$/.test(inputType || "");
+        var coalesce = typing && h.lastType === inputType && now - h.lastTime < 750 &&
+            h.lastCaret?.blockId === before.caret?.blockId && h.lastCaret?.offset === before.caret?.offset;
+        if (!coalesce) h.undo.push(before);
+        h.undo.splice(0, Math.max(0, h.undo.length - editor._fxOptions.historyLimit));
+        h.redo = [];
+        h.current = next;
+        h.lastType = typing ? inputType : "";
+        h.lastTime = now;
+        h.lastCaret = next.caret;
+    }
+
+    function runEdit(editor, action) {
+        if (isReadOnly(editor)) return;
+        restoreEditorSelection(editor);
+        var before = snapshot(editor);
+        if (editor._fxHistory) editor._fxHistory.current = before;
+        editor._fxCommand = true;
+        try { action(); }
+        finally { editor._fxCommand = false; }
+        if (snapshot(editor).key !== before.key) editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    var commandEditors = new Map();
+    function configureEditor(editor, options, callback) {
+        var previous = commandEditors.get(editor.id);
+        if (previous && previous !== editor) fxEditor.dispose(editor.id);
+        if (editor._fxRegisteredId !== editor.id) commandEditors.delete(editor._fxRegisteredId);
+        editor._fxRegisteredId = editor.id;
+        commandEditors.set(editor.id, editor);
+        var wasEnabled = editor._fxOptions?.enableHistory;
+        editor._fxOptions = Object.assign({ enableHistory: false, historyLimit: 100 }, editor._fxOptions, options);
+        if (wasEnabled !== undefined && wasEnabled !== editor._fxOptions.enableHistory) editor._fxHistory = newHistory(editor);
+        if (callback) editor._fxCallback = callback;
+        if (editor._fxHistory) {
+            var h = editor._fxHistory;
+            h.undo.splice(0, Math.max(0, h.undo.length - editor._fxOptions.historyLimit));
+            h.redo.splice(0, Math.max(0, h.redo.length - editor._fxOptions.historyLimit));
+        }
+        if (editor._fxCommandsBound) return;
+        editor._fxCommandsBound = true;
+        editor.addEventListener("beforeinput", function (event) {
+            if (isReadOnly(editor)) { event.preventDefault(); return; }
+            if (!editor._fxCommand && editor._fxOptions.enableHistory) editor._fxHistory.current = snapshot(editor);
+            if (editor._fxOptions.enableHistory && /^(historyUndo|historyRedo)$/.test(event.inputType)) {
+                event.preventDefault();
+                (event.inputType === "historyUndo" ? fxEditor.undo : fxEditor.redo)(editor.id);
+            }
+        });
+        editor.addEventListener("input", function (event) {
+            // execCommand can produce its own input; emit one final notification
+            // per API transaction, including formatting and replace-all.
+            if (editor._fxCommand) { event.stopImmediatePropagation(); return; }
+            if (isReadOnly(editor)) return;
+            editor.dataset.dirty = "true";
+            recordEdit(editor, event.inputType);
+            if (editor._fxRestoring) editor.dataset.dirty = String(snapshot(editor).key !== editor._fxHistory.clean);
+            refreshSearch(editor);
+        });
+        editor.addEventListener("keydown", function (event) {
+            if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+            var key = event.key.toLowerCase();
+            if (key === "f" && editor._fxCallback) {
+                event.preventDefault(); event.stopPropagation();
+                editor._fxCallback.invokeMethodAsync("OpenSearchAsync").catch(function () { /* disposed circuit */ });
+            } else if (editor._fxOptions.enableHistory && (key === "z" || key === "y")) {
+                event.preventDefault(); event.stopPropagation();
+                if (!isReadOnly(editor)) (key === "y" || event.shiftKey ? fxEditor.redo : fxEditor.undo)(editor.id);
+            }
+        });
+        editor._fxSelectionListener = function () {
+            var sel = window.getSelection();
+            if (editor.contains(document.activeElement) && sel?.rangeCount && editor.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+                editor._fxSavedSelection = sel.getRangeAt(0).cloneRange();
+            }
+        };
+        document.addEventListener("selectionchange", editor._fxSelectionListener);
+    }
+
+    function restoreHistory(editorId, redo) {
+        var editor = document.getElementById(editorId);
+        if (!editor || isReadOnly(editor) || !editor._fxOptions.enableHistory) return;
+        var h = editor._fxHistory, from = redo ? h.redo : h.undo, to = redo ? h.undo : h.redo;
+        if (!from.length) return;
+        restoreEditorSelection(editor);
+        to.push(snapshot(editor));
+        var target = from.pop();
+        h.lastType = "";
+        editor._fxRestoring = true;
+        try {
+            fxEditor.init(editorId, asRichBlocks(target.blocks), Object.assign({}, editor._fxOptions, { preserveHistory: true }));
+            editor.focus({ preventScroll: true });
+            restoreCaret(editor, target.caret);
+            h.current = snapshot(editor);
+            editor.dispatchEvent(new Event("input", { bubbles: true }));
+        } finally { editor._fxRestoring = false; }
+    }
+
+    function textGroups(editor) {
+        var groups = [];
+        // read also gives browser-created paragraphs stable block identities.
+        fxEditor.read(editor.id);
+        editor.querySelectorAll("[data-block-id]").forEach(function (block) {
+            var locked = block.closest('[contenteditable="false"]');
+            if (locked && locked !== editor) return;
+            var id = block.dataset.blockId;
+            var group = groups[groups.length - 1];
+            if (!group || group.id !== id || !block.dataset.splitCont) {
+                group = { id: id, text: "", runs: [] }; groups.push(group);
+            } else if (group.text) group.text += " ";
+            var walker = document.createTreeWalker(block, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+                acceptNode: function (node) {
+                    if (node.nodeType === 1 && node.getAttribute("contenteditable") === "false") return NodeFilter.FILTER_REJECT;
+                    return node.nodeType === 3 || node.nodeName === "BR" ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP;
+                }
+            });
+            var node;
+            while ((node = walker.nextNode())) {
+                if (node.nodeName === "BR") { group.text += "\n"; continue; }
+                group.runs.push({ node: node, start: group.text.length, end: group.text.length + node.nodeValue.length });
+                group.text += node.nodeValue;
+            }
+        });
+        return groups;
+    }
+
+    function rangeFor(group, start, length) {
+        var first = group.runs.find(function (run) { return run.end > start; });
+        var last = group.runs.find(function (run) { return run.end >= start + length; });
+        if (!first || !last) return null;
+        var range = document.createRange();
+        range.setStart(first.node, Math.max(0, start - first.start));
+        range.setEnd(last.node, Math.max(0, start + length - last.start));
+        return range;
+    }
+
+    function updateSearchHighlights() {
+        if (!window.CSS?.highlights || !window.Highlight) return;
+        var ranges = [];
+        document.querySelectorAll(".fx-editor").forEach(function (editor) {
+            if (editor._fxSearch) ranges.push(...editor._fxSearch.ranges);
+        });
+        if (ranges.length) CSS.highlights.set("fx-editor-search", new Highlight(...ranges));
+        else CSS.highlights.delete("fx-editor-search");
+    }
+
+    function refreshSearch(editor) {
+        var search = editor._fxSearch;
+        if (search) fxEditor.findAll(editor.id, search.query, search.options);
+    }
+
+    fxEditor.configure = function (id, options, callback) {
+        var editor = document.getElementById(id);
+        if (editor) configureEditor(editor, options, callback);
+        return fxEditor.historyState(id);
+    };
+    fxEditor.historyState = function (id) {
+        var editor = document.getElementById(id), h = editor?._fxHistory;
+        var active = !!editor?._fxOptions?.enableHistory;
+        return { canUndo: active && !!h?.undo.length, canRedo: active && !!h?.redo.length,
+            undoCount: active ? h?.undo.length || 0 : 0, redoCount: active ? h?.redo.length || 0 : 0 };
+    };
+    fxEditor.undo = function (id) { restoreHistory(id, false); };
+    fxEditor.redo = function (id) { restoreHistory(id, true); };
+    fxEditor.focus = function (id) { document.getElementById(id)?.focus({ preventScroll: true }); };
+    fxEditor.setLayout = function (id, options) {
+        var editor = document.getElementById(id);
+        if (!editor) return;
+        var caret = captureCaret(editor), blocks = fxEditor.read(id);
+        fxEditor.init(id, asRichBlocks(blocks), Object.assign({}, options, { preserveHistory: true }));
+        restoreCaret(editor, caret);
+        refreshSearch(editor);
+    };
+    fxEditor.setEditorCaret = function (id, blockId, offset) {
+        var editor = document.getElementById(id);
+        if (!editor) return;
+        editor.focus({ preventScroll: true });
+        restoreCaret(editor, { blockId: blockId, offset: Math.max(0, offset) });
+    };
+    fxEditor.scrollToEditorBlock = function (id, blockId) {
+        var editor = document.getElementById(id);
+        Array.from(editor?.querySelectorAll("[data-block-id]") || []).find(function (b) { return b.dataset.blockId === blockId; })
+            ?.scrollIntoView({ block: "nearest" });
+    };
+    fxEditor.findAll = function (id, query, options) {
+        var editor = document.getElementById(id);
+        if (!editor) return [];
+        options = options || {};
+        var search = { query: query || "", options: options, results: [], ranges: [] };
+        editor._fxSearch = search;
+        if (query) {
+            var expression = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), options.matchCase ? "gu" : "giu");
+            var word = /[\p{L}\p{N}\p{M}_]/u;
+            textGroups(editor).forEach(function (group) {
+                expression.lastIndex = 0;
+                var match;
+                while ((match = expression.exec(group.text))) {
+                    var start = match.index, length = match[0].length;
+                    if (options.wholeWord && (word.test(Array.from(group.text.slice(0, start)).pop() || " ") ||
+                        word.test(Array.from(group.text.slice(start + length))[0] || " "))) continue;
+                    var range = rangeFor(group, start, length);
+                    if (!range) continue;
+                    search.ranges.push(range);
+                    search.results.push({ index: search.results.length, blockId: group.id, start: start, length: length,
+                        text: match[0], preview: group.text.slice(Math.max(0, start - 30), start + length + 40) });
+                }
+            });
+        }
+        updateSearchHighlights();
+        return search.results;
+    };
+    fxEditor.searchResults = function (id) { return document.getElementById(id)?._fxSearch?.results || []; };
+    fxEditor.selectSearchResult = function (id, index) {
+        var editor = document.getElementById(id), range = editor?._fxSearch?.ranges[index];
+        if (!range || !editor.contains(range.commonAncestorContainer)) return false;
+        editor.focus({ preventScroll: true });
+        var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range.cloneRange());
+        editor._fxSavedSelection = range.cloneRange();
+        (range.startContainer.parentElement || editor).scrollIntoView({ block: "nearest" });
+        return true;
+    };
+    fxEditor.clearSearch = function (id) {
+        var editor = document.getElementById(id);
+        if (editor) editor._fxSearch = null;
+        updateSearchHighlights();
+    };
+    fxEditor.replaceSearch = function (id, index, replacement, all) {
+        var editor = document.getElementById(id);
+        if (!editor || isReadOnly(editor)) return 0;
+        var search = editor._fxSearch;
+        if (!search) return 0;
+        var ranges = all ? search.ranges.slice() : search.ranges[index] ? [search.ranges[index]] : [];
+        if (!ranges.length) return 0;
+        runEdit(editor, function () {
+            // Reverse order keeps offsets valid. Text nodes make replacement
+            // strings literal, including HTML characters and dollar signs.
+            for (var i = ranges.length - 1; i >= 0; i--) {
+                var range = ranges[i]; range.deleteContents();
+                var text = document.createTextNode(replacement || ""); range.insertNode(text);
+                if (i === 0) {
+                    range.setStartAfter(text); range.collapse(true);
+                    var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+                }
+            }
+        });
+        return ranges.length;
+    };
+    fxEditor.dispose = function (id) {
+        var editor = commandEditors.get(id) || document.getElementById(id);
+        if (!editor) return;
+        document.removeEventListener("selectionchange", editor._fxSelectionListener);
+        document.removeEventListener("selectionchange", editor._hfPageSelectionListener);
+        clearTimeout(editor._hfOverflowTimer); clearTimeout(editor._hfRepagTimer);
+        fxEditor.clearSearch(id);
+        editor._fxSearch = null;
+        commandEditors.delete(id);
+        updateSearchHighlights();
+        editor._fxCallback = null;
+    };
+    ["execCommand", "applyInlineStyle", "applyBlockStyle", "setBlockAlignment"].forEach(function (name) {
+        var command = fxEditor[name];
+        fxEditor[name] = function (id) {
+            var args = arguments, editor = document.getElementById(id);
+            if (editor) runEdit(editor, function () { command.apply(fxEditor, args); });
+        };
+    });
 
     window.fxEditor = fxEditor;
     window.hfEditor = fxEditor;

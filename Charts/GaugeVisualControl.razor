@@ -1,0 +1,63 @@
+@namespace Fx.ControlKit.Charts
+@using System.Globalization
+<svg viewBox="@(Type==ChartType.LinearGauge?"0 0 320 105":"0 0 300 300")" style="@($"height:{Height};width:100%")" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    @if(Type==ChartType.LinearGauge)
+    {
+        <rect x="30" y="40" width="260" height="18" rx="4" fill="#e2e8f0" />
+        @foreach(var range in Ranges){<rect x="@F(30+260*Fraction(range.From))" y="40" width="@F(260*Math.Max(0,Fraction(range.To)-Fraction(range.From)))" height="18" fill="@range.Color"><title>@range.Label</title></rect>}
+        <rect x="30" y="45" width="@F(260*Fraction(Value))" height="8" fill="@Color" />
+        @foreach(var pointer in Pointers){<path d="@($"M{F(30+260*Fraction(pointer.Value))} 33v33")" stroke="@pointer.Color" stroke-width="3"><title>@pointer.Label: @pointer.Value</title></path>}
+        @for(var i=0;i<=TickCount;i++){var x=30+260d*i/TickCount;<line x1="@F(x)" y1="61" x2="@F(x)" y2="65" stroke="currentColor" />@Text(x,80,(Min+(Max-Min)*i/TickCount).ToString(LabelFormat,Culture))}
+        @if(ShowValue){@Text(160,25,Value.ToString(ValueFormat,Culture),18)}
+    }
+    else
+    {
+        <path d="@Arc(0,1,110)" fill="none" stroke="#e2e8f0" stroke-width="16" />
+        @foreach(var range in Ranges){<path d="@Arc(Fraction(range.From),Fraction(range.To),110)" fill="none" stroke="@range.Color" stroke-width="16"><title>@range.Label</title></path>}
+        @if(Fraction(Value)>0){<path d="@Arc(0,Fraction(Value),110)" fill="none" stroke="@Color" stroke-width="@(Ranges.Count>0?7:16)" />}
+        @if(Type==ChartType.RadialGauge||Type==ChartType.Gauge&&!Circular){@Needle(new(Value,Color))}
+        @foreach(var pointer in Pointers){@Needle(pointer)}
+        @for(var i=0;i<=TickCount;i++)
+        {
+            if(Circular&&i==TickCount)continue;
+            var fraction=(double)i/TickCount;var outer=Point(fraction,124);var inner=Point(fraction,119);var label=Point(fraction,138);
+            <line x1="@F(inner.X)" y1="@F(inner.Y)" x2="@F(outer.X)" y2="@F(outer.Y)" stroke="currentColor" />
+            @Text(label.X,label.Y+4,(Min+(Max-Min)*fraction).ToString(LabelFormat,Culture))
+        }
+        @if(ShowValue){@Text(150,Circular?158:225,Value.ToString(ValueFormat,Culture),22)}
+    }
+</svg>
+@code {
+    [Parameter] public ChartType Type {get;set;}=ChartType.ArcGauge;
+    [Parameter] public bool Circular {get;set;}
+    [Parameter] public double Value {get;set;}
+    [Parameter] public double Min {get;set;}
+    [Parameter] public double Max {get;set;}=100;
+    [Parameter] public IReadOnlyList<GaugeRange> Ranges {get;set;}=Array.Empty<GaugeRange>();
+    [Parameter] public IReadOnlyList<GaugePointer> Pointers {get;set;}=Array.Empty<GaugePointer>();
+    [Parameter] public string Color {get;set;}="#2563eb";
+    [Parameter] public int TickCount {get;set;}=5;
+    [Parameter] public string LabelFormat {get;set;}="0";
+    [Parameter] public string ValueFormat {get;set;}="0.##";
+    [Parameter] public bool ShowValue {get;set;}=true;
+    [Parameter] public string Height {get;set;}="260px";
+    [Parameter] public CultureInfo Culture {get;set;}=CultureInfo.CurrentCulture;
+    protected override void OnParametersSet()
+    {
+        if(!double.IsFinite(Min)||!double.IsFinite(Max)||Max<=Min||!double.IsFinite(Value))throw new ArgumentException("A gauge requires finite values and Max > Min.");
+        if(TickCount<1||TickCount>100)throw new ArgumentException("Gauge TickCount must be between 1 and 100.");
+        if(Ranges.Any(r=>!double.IsFinite(r.From)||!double.IsFinite(r.To)||r.To<r.From)||Pointers.Any(p=>!double.IsFinite(p.Value)))throw new ArgumentException("Gauge ranges and pointers must have finite, ordered values.");
+    }
+    private double Fraction(double value)=>Math.Clamp((value-Min)/(Max-Min),0,1);
+    private static string F(double value)=>value.ToString("0.###",CultureInfo.InvariantCulture);
+    private (double X,double Y) Point(double fraction,double radius){var angle=(-225+fraction*(Circular?360:270))*Math.PI/180;return(150+radius*Math.Cos(angle),150+radius*Math.Sin(angle));}
+    private string Arc(double from,double to,double radius)
+    {
+        if(to<=from)return "";
+        var a=Point(from,radius);var b=Point(to,radius);var sweep=(to-from)*(Circular?360:270);
+        if(sweep>=359.999){var m=Point((from+to)/2,radius);return $"M{F(a.X)} {F(a.Y)} A{F(radius)} {F(radius)} 0 1 1 {F(m.X)} {F(m.Y)} A{F(radius)} {F(radius)} 0 1 1 {F(b.X)} {F(b.Y)}";}
+        return $"M{F(a.X)} {F(a.Y)} A{F(radius)} {F(radius)} 0 {(sweep>180?1:0)} 1 {F(b.X)} {F(b.Y)}";
+    }
+    private RenderFragment Needle(GaugePointer pointer)=>builder=>{var p=Point(Fraction(pointer.Value),90);builder.OpenElement(0,"line");builder.AddAttribute(1,"x1","150");builder.AddAttribute(2,"y1","150");builder.AddAttribute(3,"x2",F(p.X));builder.AddAttribute(4,"y2",F(p.Y));builder.AddAttribute(5,"stroke",pointer.Color);builder.AddAttribute(6,"stroke-width","3");builder.OpenElement(7,"title");builder.AddContent(8,$"{pointer.Label}: {pointer.Value}");builder.CloseElement();builder.CloseElement();};
+    private static RenderFragment Text(double x,double y,string content,int size=11)=>builder=>{builder.OpenElement(0,"text");builder.AddAttribute(1,"x",F(x));builder.AddAttribute(2,"y",F(y));builder.AddAttribute(3,"text-anchor","middle");builder.AddAttribute(4,"fill","currentColor");builder.AddAttribute(5,"font-size",size);builder.AddContent(6,content);builder.CloseElement();};
+}

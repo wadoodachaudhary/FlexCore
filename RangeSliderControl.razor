@@ -1,0 +1,29 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Globalization
+@using System.Linq.Expressions
+<div class="fx-range-slider @CssClass" style="@ResolvedStyle" role="group" aria-label="@AriaLabel">
+<label><span>@StartLabel</span><SliderControl Min="@Min" Max="@Max" Step="@Step" Value="@Value.Start" ValueChanged="SetStart" Disabled="@(!Enabled||ReadOnly)" ShowValue="false" aria-label="@StartLabel" /></label>
+<label><span>@EndLabel</span><SliderControl Min="@Min" Max="@Max" Step="@Step" Value="@Value.End" ValueChanged="SetEnd" Disabled="@(!Enabled||ReadOnly)" ShowValue="false" aria-label="@EndLabel" /></label>
+@if(ShowValue){<output>@Value.Start.ToString(Format,CultureInfo.CurrentCulture) – @Value.End.ToString(Format,CultureInfo.CurrentCulture)</output>}
+</div>
+@code {
+ [CascadingParameter] public EditContext? EditContext {get;set;}
+ [Parameter] public NumericRange Value {get;set;}=new(25,75);
+ [Parameter] public EventCallback<NumericRange> ValueChanged {get;set;}
+ [Parameter] public Expression<Func<NumericRange>>? ValueExpression {get;set;}
+ [Parameter] public double Min {get;set;}
+ [Parameter] public double Max {get;set;}=100;
+ [Parameter] public double Step {get;set;}=1;
+ [Parameter] public bool ReadOnly {get;set;}
+ [Parameter] public bool ShowValue {get;set;}=true;
+ [Parameter] public string Format {get;set;}="0.##";
+ [Parameter] public string StartLabel {get;set;}="Range start";
+ [Parameter] public string EndLabel {get;set;}="Range end";
+ [Parameter] public string AriaLabel {get;set;}="Range";
+ protected override void OnParametersSet(){if(!double.IsFinite(Min)||!double.IsFinite(Max)||!double.IsFinite(Step)||Min>=Max||Step<=0||!double.IsFinite(Value.Start)||!double.IsFinite(Value.End)||Value.Start>Value.End||Value.Start<Min||Value.End>Max)throw new ArgumentException("Range requires finite ordered values within Min and Max and a positive step.");}
+ private Task SetStart(double value)=>SetValueAsync(new(Math.Min(Snap(value),Value.End),Value.End));
+ private Task SetEnd(double value)=>SetValueAsync(new(Value.Start,Math.Max(Snap(value),Value.Start)));
+ private double Snap(double value)=>Math.Clamp(Min+Math.Round((value-Min)/Step)*Step,Min,Max);
+ public async Task SetValueAsync(NumericRange range){if(!Enabled||ReadOnly||range==Value)return;if(range.Start<Min||range.End>Max||range.Start>range.End)throw new ArgumentOutOfRangeException(nameof(range));Value=range;await ValueChanged.InvokeAsync(Value);if(ValueExpression is not null)EditContext?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));}
+}

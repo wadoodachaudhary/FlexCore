@@ -1,0 +1,37 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IDisposable
+<PopupControl @bind-IsOpen="_open" Enabled="@Enabled" Width="@PopupWidth" AriaLabel="@AriaLabel" CssClass="@CssClass" Visible="@Visible">
+<Anchor Context="popup"><ButtonControl Disabled="@(!Enabled)" OnClick="()=>popup.ToggleAsync()" aria-haspopup="tree" aria-expanded="@(popup.IsOpen ? "true" : "false")" aria-controls="@popup.PopupId">@(Selected?.Text??Placeholder) ▾</ButtonControl></Anchor>
+<ChildContent>
+@if(Filterable){<TextBoxControl @bind-Value="_filter" UpdateOnInput="true" Placeholder="Search tree…" aria-label="Search tree" />}
+@if(_loading){<LoaderControl Text="Loading children" />}
+@if(_error is not null){<AlertControl>@_error</AlertControl>}
+<TreeViewControl Nodes="@VisibleNodes" SelectedNode="@Selected" SelectedNodeChanged="SelectedChanged" OnNodeExpand="Expand" ToggleOnNodeClick="false" />
+@if(AllowClear){<ButtonControl OnClick="ClearAsync">Clear</ButtonControl>}
+</ChildContent>
+</PopupControl>
+@code {
+ [Parameter] public IReadOnlyList<TreeNode> Nodes {get;set;}=Array.Empty<TreeNode>();
+ [Parameter] public string? Value {get;set;}
+ [Parameter] public EventCallback<string?> ValueChanged {get;set;}
+ [Parameter] public EventCallback<TreeNode?> OnChange {get;set;}
+ [Parameter] public Func<TreeNode,CancellationToken,Task<IReadOnlyList<TreeNode>>>? LoadChildren {get;set;}
+ [Parameter] public bool Filterable {get;set;}=true;
+ [Parameter] public bool AllowClear {get;set;}=true;
+ [Parameter] public bool SelectLeavesOnly {get;set;}
+ [Parameter] public string Placeholder {get;set;}="Select a node…";
+ [Parameter] public string AriaLabel {get;set;}="Tree selector";
+ [Parameter] public string PopupWidth {get;set;}="320px";
+ private List<TreeNode> _nodes=[];private IReadOnlyList<TreeNode>? _source;private string? _filter,_error;private bool _open,_loading;private CancellationTokenSource _lifetime=new();
+ private IEnumerable<TreeNode> All(IEnumerable<TreeNode> nodes)=>nodes.SelectMany(n=>new[]{n}.Concat(All(n.Children)));
+ private TreeNode? Selected=>All(_nodes).FirstOrDefault(n=>n.Id==Value);
+ protected override void OnParametersSet(){if(ReferenceEquals(_source,Nodes))return;_source=Nodes;var seen=new HashSet<string>();_nodes=Clone(Nodes,seen);}
+ private static List<TreeNode> Clone(IEnumerable<TreeNode> nodes,HashSet<string> seen)=>nodes.Select(n=>{if(!seen.Add(n.Id))throw new ArgumentException("Tree IDs must be unique and cannot contain cycles.");return new TreeNode{Id=n.Id,Text=n.Text,IsDisabled=n.IsDisabled,IsExpanded=n.IsExpanded,IconCss=n.IconCss,Tag=n.Tag,HasUnloadedChildren=n.HasUnloadedChildren,Children=Clone(n.Children,seen)};}).ToList();
+ private List<TreeNode> VisibleNodes=>string.IsNullOrWhiteSpace(_filter)?_nodes:Filter(_nodes);
+ private List<TreeNode> Filter(IEnumerable<TreeNode> nodes)=>nodes.Select(n=>new TreeNode{Id=n.Id,Text=n.Text,IsDisabled=n.IsDisabled,IsExpanded=true,IconCss=n.IconCss,HasUnloadedChildren=n.HasUnloadedChildren,Children=Filter(n.Children)}).Where(n=>n.Text.Contains(_filter!,StringComparison.CurrentCultureIgnoreCase)||n.Children.Count>0).ToList();
+ private async Task SelectedChanged(TreeNode node){var original=All(_nodes).FirstOrDefault(n=>n.Id==node.Id);if(!Enabled||original is null||original.IsDisabled||SelectLeavesOnly&&original.HasChildren)return;Value=node.Id;_open=false;await ValueChanged.InvokeAsync(Value);await OnChange.InvokeAsync(original);}
+ public async Task ClearAsync(){if(!Enabled)return;Value=null;await ValueChanged.InvokeAsync(null);await OnChange.InvokeAsync(null);_open=false;}
+ private async Task Expand(TreeNode node){if(LoadChildren is null||_loading)return;_loading=true;_error=null;try{var children=await LoadChildren(node,_lifetime.Token);if(_lifetime.IsCancellationRequested)return;var original=All(_nodes).First(n=>n.Id==node.Id);original.HasUnloadedChildren=false;original.Children=Clone(children,All(_nodes).Where(n=>!All(original.Children).Contains(n)).Select(n=>n.Id).ToHashSet());}catch(OperationCanceledException){}catch(Exception e){_error=e.Message;}finally{_loading=false;}}
+ public void Dispose(){_lifetime.Cancel();_lifetime.Dispose();}
+}

@@ -1,0 +1,33 @@
+@namespace Fx.ControlKit.AI
+@inherits FlexControlBase
+<div class="fx-prompt-box @CssClass" style="@ResolvedStyle" aria-busy="@(Busy ? "true" : "false")">
+<TextBoxControl Value="@Value" ValueChanged="ValueChanged" Multiline="true" Rows="@Rows" UpdateOnInput="true" OnKeyDown="KeyDown" Enabled="@(Enabled&&!Busy)" Placeholder="@Placeholder" aria-label="@AriaLabel" />
+@if(_files.Count>0){<ChipListControl Items="@_files.Select((f,i)=>new ChipItem(i.ToString(),f.Name)).ToArray()" ItemsChanged="FilesRemoved" Enabled="@(!Busy)" />}
+<ToolbarControl>
+@if(AllowAttachments){<FilePickerControl Multiple="true" Label="Attach files" Enabled="@(Enabled&&!Busy)" OnChange="Attach" />}
+@ToolbarContent
+@if(Busy){<ButtonControl OnClick="Cancel">Cancel request</ButtonControl>}else{<ButtonControl OnClick="SubmitAsync" Disabled="@(!Enabled||string.IsNullOrWhiteSpace(Value))">@SendLabel</ButtonControl>}
+</ToolbarControl>
+@if(_error is not null){<span role="alert">@_error</span>}
+</div>
+@code {
+ [Parameter] public string? Value {get;set;}
+ [Parameter] public EventCallback<string?> ValueChanged {get;set;}
+ [Parameter] public EventCallback<PromptSubmission> Submit {get;set;}
+ [Parameter] public EventCallback Cancel {get;set;}
+ [Parameter] public bool Busy {get;set;}
+ [Parameter] public bool AllowAttachments {get;set;}
+ [Parameter] public int MaxAttachments {get;set;}=5;
+ [Parameter] public long MaxAttachmentSize {get;set;}=10*1024*1024;
+ [Parameter] public int Rows {get;set;}=3;
+ [Parameter] public bool SendOnEnter {get;set;}=true;
+ [Parameter] public string SendLabel {get;set;}="Send";
+ [Parameter] public string Placeholder {get;set;}="Write a message…";
+ [Parameter] public string AriaLabel {get;set;}="Message";
+ [Parameter] public RenderFragment? ToolbarContent {get;set;}
+ private List<IBrowserFile> _files=[];private string? _error;private bool _submitting;
+ private void Attach(InputFileChangeEventArgs args){_error=null;if(args.FileCount>MaxAttachments){_error=$"Select at most {MaxAttachments} attachments.";return;}var files=args.GetMultipleFiles(MaxAttachments);if(files.Any(f=>f.Size>MaxAttachmentSize)){_error="An attachment exceeds the size limit.";return;}_files=files.ToList();}
+ private void FilesRemoved(IReadOnlyList<ChipItem> chips){var keep=chips.Select(c=>int.Parse(c.Id)).ToHashSet();_files=_files.Where((_,i)=>keep.Contains(i)).ToList();}
+ public async Task SubmitAsync(){if(!Enabled||Busy||_submitting||string.IsNullOrWhiteSpace(Value))return;_submitting=true;_error=null;try{await Submit.InvokeAsync(new(Value.Trim(),_files.ToArray()));Value="";await ValueChanged.InvokeAsync(Value);_files.Clear();}catch(Exception e){_error=e.Message;}finally{_submitting=false;}}
+ private Task KeyDown(KeyboardEventArgs e)=>SendOnEnter&&e.Key=="Enter"&&!e.ShiftKey?SubmitAsync():Task.CompletedTask;
+}

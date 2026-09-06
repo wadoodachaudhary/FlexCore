@@ -116,6 +116,8 @@ else
     /// <summary>Extra CSS class applied to the dropdown popup panel.</summary>
     [Parameter] public string? DropDownCssClass { get; set; }
 
+    public ValueTask FocusAsync() => _buttonElement.FocusAsync(preventScroll: true);
+
     private bool _ddOpen;
     private ElementReference _buttonElement;
     private bool _autoFocusApplied;

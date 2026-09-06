@@ -1,0 +1,14 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-animation-container @Effect.ToString().ToLowerInvariant() @(Show?"shown":"hidden") @CssClass" style="--fx-duration:@(Duration.ToString(System.Globalization.CultureInfo.InvariantCulture))ms;@ResolvedStyle" aria-hidden="@(Show ? "false" : "true")" inert="@(!Show)" @attributes="AdditionalAttributes">
+@if(KeepContent||Show){@ChildContent}
+</div>
+@code {
+ [Parameter] public bool Show {get;set;}
+ [Parameter] public EventCallback<bool> ShowChanged {get;set;}
+ [Parameter] public AnimationEffect Effect {get;set;}
+ [Parameter] public int Duration {get;set;}=200;
+ [Parameter] public bool KeepContent {get;set;}=true;
+ [Parameter] public RenderFragment? ChildContent {get;set;}
+ public async Task ToggleAsync(){Show=!Show;await ShowChanged.InvokeAsync(Show);await InvokeAsync(StateHasChanged);}
+}

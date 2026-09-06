@@ -1,0 +1,87 @@
+@namespace Fx.ControlKit.Scheduling
+@inherits FlexControlBase
+@implements IDisposable
+@using System.Globalization
+<div class="fx-scheduler @CssClass" style="@ResolvedStyle">
+<ToolbarControl><ButtonControl OnClick="()=>NavigateAsync(-1)">Previous</ButtonControl><ButtonControl OnClick="TodayAsync">Today</ButtonControl><ButtonControl OnClick="()=>NavigateAsync(1)">Next</ButtonControl><strong>@Range.Start.ToString("d MMM yyyy") – @Range.End.AddDays(-1).ToString("d MMM yyyy")</strong><DropDownListControl TItem="SchedulerView" TValue="SchedulerView" DataSource="@(Enum.GetValues<SchedulerView>())" Value="@View" ValueChanged="ChangeView" AriaLabel="Scheduler view" /><ButtonControl OnClick="()=>NewAsync(Date.Date.AddHours(StartHour),null)" Disabled="@(!CanEdit)">New appointment</ButtonControl></ToolbarControl>
+@if(_error is not null){<AlertControl Text="@_error" />}
+@if(_loading){<LoaderControl Text="Loading appointments" />}
+<div class="fx-scheduler-scroll" style="height:@Height">
+@if(View==SchedulerView.Agenda){
+<table class="fx-agenda"><thead><tr><th>Date</th><th>Time</th><th>Appointment</th><th>Resource</th></tr></thead><tbody>@foreach(var occurrence in _occurrences){<tr><td>@occurrence.Start.ToString("ddd d MMM")</td><td>@(occurrence.Event.AllDay?"All day":$"{occurrence.Start:t} – {occurrence.End:t}")</td><td><ButtonControl OnClick="()=>EditAsync(occurrence)">@occurrence.Event.Title</ButtonControl></td><td>@ResourceText(occurrence.Event.ResourceId)</td></tr>}</tbody></table>
+}else if(View==SchedulerView.Month){
+<div class="fx-scheduler-month">@foreach(var day in Days){<div class="fx-month-day" @ondragover:preventDefault="true" @ondrop="()=>DropAsync(day.AddHours(StartHour),null)"><ButtonControl OnClick="()=>NewAsync(day.AddHours(StartHour),null)" Disabled="@(!CanEdit)" Title="@($"New appointment {day:d}")">@day.ToString("ddd d")</ButtonControl>@foreach(var occurrence in DayEvents(day,null)){<div draggable="@CanEdit" @ondragstart="()=>Drag(occurrence,false)"><ButtonControl OnClick="()=>EditAsync(occurrence)" CssClass="fx-appointment">@occurrence.Start.ToString("t") @occurrence.Event.Title</ButtonControl></div>}</div>}</div>
+}else if(View==SchedulerView.Timeline){
+@foreach(var resource in Groups){<div class="fx-timeline-resource"><strong>@resource.Text</strong><div class="fx-timeline-days" style="grid-template-columns:repeat(@Days.Count,1fr)">@foreach(var day in Days){<div @ondragover:preventDefault="true" @ondrop="()=>DropAsync(day.AddHours(StartHour),resource.Id)"><ButtonControl OnClick="()=>NewAsync(day.AddHours(StartHour),resource.Id)">@day.ToString("ddd d")</ButtonControl>@foreach(var occurrence in DayEvents(day,resource.Id)){<div draggable="@CanEdit" @ondragstart="()=>Drag(occurrence,false)"><ButtonControl OnClick="()=>EditAsync(occurrence)">@occurrence.Event.Title</ButtonControl></div>}</div>}</div></div>}
+}else{
+<div class="fx-scheduler-time-columns" style="grid-template-columns:60px repeat(@(Days.Count*Groups.Count),minmax(140px,1fr))"><div class="fx-time-labels"><div class="fx-time-heading"></div>@for(var hour=StartHour;hour<EndHour;hour++){<div style="height:60px">@TimeOnly.FromTimeSpan(TimeSpan.FromHours(hour)).ToString("t")</div>}</div>
+@foreach(var day in Days){@foreach(var resource in Groups){<div class="fx-time-column"><div class="fx-time-heading"><strong>@day.ToString("ddd d MMM")</strong><span>@resource.Text</span>@foreach(var allDay in DayEvents(day,resource.Id).Where(o=>o.Event.AllDay)){<ButtonControl OnClick="()=>EditAsync(allDay)">@allDay.Event.Title</ButtonControl>}</div><div class="fx-time-body" style="height:@((EndHour-StartHour)*60)px">
+@for(var minute=StartHour*60;minute<EndHour*60;minute+=SlotMinutes){var at=day.AddMinutes(minute);<div class="fx-time-slot" style="top:@(minute-StartHour*60)px;height:@(SlotMinutes)px" @ondblclick="()=>NewAsync(at,resource.Id)" @ondragover:preventDefault="true" @ondrop="()=>DropAsync(at,resource.Id)" title="@($"New appointment {at:g}")"></div>}
+@foreach(var positioned in Positioned(day,resource.Id)){var occurrence=positioned.Item;var top=Math.Max(StartHour*60,(occurrence.Start-day).TotalMinutes)-StartHour*60;var bottom=Math.Min(EndHour*60,(occurrence.End-day).TotalMinutes);var height=Math.Max(20,bottom-StartHour*60-top);<div class="fx-timed-event" style="top:@F(top)px;height:@F(height)px;left:@F(100d*positioned.Lane/positioned.Lanes)%;width:@F(100d/positioned.Lanes)%;border-left-color:@resource.Color" draggable="@CanEdit" @ondragstart="()=>Drag(occurrence,false)"><ButtonControl OnClick="()=>EditAsync(occurrence)" Title="@($"{occurrence.Start:t}–{occurrence.End:t} {occurrence.Event.Title}")">@occurrence.Event.Title <small>@occurrence.Start.ToString("t")</small></ButtonControl>@if(CanEdit){<span class="fx-schedule-resize" draggable="true" @ondragstart="()=>Drag(occurrence,true)" @ondragstart:stopPropagation="true" title="Drag to resize appointment"></span>}</div>}
+</div></div>}}
+</div>
+}
+</div>
+</div>
+@if(_draft is not null){<DialogControl Visible="true" OnClose="CloseEditor" Header="@(_isNew?"New appointment":"Edit appointment")" Width="560px" IsModal="true"><ChildContent>
+@if(_selected?.Event.RecurrenceRule is not null){<RadioGroupControl TValue="bool" Items="@_editScopes" Value="@_editSeries" ValueChanged="SetEditScope" AriaLabel="Recurring appointment scope" />}
+<FormControl Model="@_draft" OnValidSubmit="SaveDraft"><ChildContent><FormItemControl Field="Title" /><FormGroupControl Columns="2"><FormItemControl Field="Start" ShowTime="true" /><FormItemControl Field="End" ShowTime="true" /></FormGroupControl><FormItemControl Field="AllDay" /><FormItemControl Field="TimeZoneId" />
+<DropDownListControl TItem="SchedulerResource" TValue="string" DataSource="@Groups" Value="@(_draft.ResourceId??"")" ValueChanged="ResourceChanged" TextFieldName="Text" ValueFieldName="Id" AriaLabel="Resource" />
+<DropDownListControl TItem="SelectionItem" TValue="string" DataSource="@_repeatOptions" Value="@RepeatKey" ValueChanged="RepeatChanged" TextFieldName="Text" ValueFieldName="Value" AriaLabel="Repeat" />
+<FormItemControl Field="RecurrenceRule" Label="Recurrence rule (RRULE)" /><FormItemControl Field="Description" EditorType="FormEditorType.TextArea" />
+</ChildContent><ButtonsTemplate><ButtonControl ButtonType="submit">Save appointment</ButtonControl><ButtonControl OnClick="CloseEditor">Cancel</ButtonControl>@if(!_isNew){<ButtonControl OnClick="()=>_confirmDelete=true">Delete appointment</ButtonControl>}</ButtonsTemplate></FormControl>
+@if(_error is not null){<AlertControl Text="@_error" />}
+</ChildContent></DialogControl>}
+@if(_confirmDelete){<DialogControl Visible="true" OnClose="()=>_confirmDelete=false" Header="Delete appointment?" Width="360px" IsModal="true"><ChildContent>Delete @(_editSeries?"the series":"this appointment")?</ChildContent><FooterContent><ButtonControl OnClick="()=>_confirmDelete=false" AutoFocus="true">Cancel</ButtonControl><ButtonControl OnClick="DeleteDraft">Delete</ButtonControl></FooterContent></DialogControl>}
+@code {
+ [Parameter] public IReadOnlyList<SchedulerEvent> Events {get;set;}=Array.Empty<SchedulerEvent>();
+ [Parameter] public EventCallback<IReadOnlyList<SchedulerEvent>> EventsChanged {get;set;}
+ [Parameter] public EventCallback<SchedulerChangingArgs> Changing {get;set;}
+ [Parameter] public Func<SchedulerRange,CancellationToken,Task<IReadOnlyList<SchedulerEvent>>>? OnRead {get;set;}
+ [Parameter] public IReadOnlyList<SchedulerResource> Resources {get;set;}=Array.Empty<SchedulerResource>();
+ [Parameter] public DateTime Date {get;set;}=DateTime.Today;
+ [Parameter] public EventCallback<DateTime> DateChanged {get;set;}
+ [Parameter] public SchedulerView View {get;set;}=SchedulerView.Week;
+ [Parameter] public EventCallback<SchedulerView> ViewChanged {get;set;}
+ [Parameter] public string TimeZoneId {get;set;}="UTC";
+ [Parameter] public DayOfWeek FirstDayOfWeek {get;set;}=DayOfWeek.Monday;
+ [Parameter] public int MultiDayCount {get;set;}=3;
+ [Parameter] public int StartHour {get;set;}=8;
+ [Parameter] public int EndHour {get;set;}=18;
+ [Parameter] public int SlotMinutes {get;set;}=30;
+ [Parameter] public bool ReadOnly {get;set;}
+ [Parameter] public string Height {get;set;}="600px";
+ private bool CanEdit=>Enabled&&!ReadOnly;
+ private SchedulerEvent? _draft;private SchedulerOccurrence? _selected,_dragged;private bool _isNew,_editSeries,_confirmDelete,_resize,_loading,_disposed;private string? _error;private CancellationTokenSource? _readRequest;private string? _readKey;private IReadOnlyList<SchedulerEvent>? _remote;
+ private IReadOnlyList<SchedulerOccurrence> _occurrences=Array.Empty<SchedulerOccurrence>();
+ private IReadOnlyList<SchedulerEvent> Source=>_remote??Events;
+ private readonly RadioGroupItem<bool>[] _editScopes=[new(false,"This occurrence"),new(true,"Entire series")];
+ private readonly SelectionItem[] _repeatOptions=[new("","Does not repeat"),new("FREQ=DAILY","Daily"),new("FREQ=WEEKLY","Weekly"),new("FREQ=MONTHLY","Monthly"),new("FREQ=YEARLY","Yearly")];
+ private void SetEditScope(bool series){_editSeries=series;if(_draft is null||_selected is null)return;if(series){_draft.Start=_selected.Event.Start;_draft.End=_selected.Event.End;_draft.TimeZoneId=_selected.Event.TimeZoneId;}else{_draft.Start=_selected.Start;_draft.End=_selected.End;_draft.TimeZoneId=TimeZoneId;}}
+ private string RepeatKey=>_draft?.RecurrenceRule??"";
+ private IReadOnlyList<SchedulerResource> Groups=>Resources.Count>0?Resources:[new("","Appointments")];
+ private IReadOnlyList<DateTime> Days=>Enumerable.Range(0,(int)(Range.End-Range.Start).TotalDays).Select(i=>Range.Start.AddDays(i)).Where(d=>View!=SchedulerView.WorkWeek||d.DayOfWeek is not (DayOfWeek.Saturday or DayOfWeek.Sunday)).ToArray();
+ public SchedulerRange Range{get{var date=Date.Date;var start=View==SchedulerView.Month?new DateTime(date.Year,date.Month,1):date;if(View is SchedulerView.Week or SchedulerView.WorkWeek or SchedulerView.Month)start=start.AddDays(-((7+(int)start.DayOfWeek-(int)FirstDayOfWeek)%7));var length=View switch{SchedulerView.Day=>1,SchedulerView.MultiDay=>MultiDayCount,SchedulerView.Month=>42,SchedulerView.Agenda=>30,_=>7};return new(start,start.AddDays(length),TimeZoneId);}}
+ private static string F(double n)=>n.ToString("0.###",CultureInfo.InvariantCulture);
+ protected override async Task OnParametersSetAsync(){if(StartHour<0||EndHour>24||StartHour>=EndHour||SlotMinutes<5||SlotMinutes>120||MultiDayCount is <1 or >31)throw new ArgumentException("Invalid scheduler slot settings.");var key=$"{Range.Start:O}:{Range.End:O}:{TimeZoneId}";if(OnRead is not null&&key!=_readKey){_readKey=key;await RefreshAsync();}else Rebuild();}
+ private void Rebuild(){try{_occurrences=SchedulerEngine.Expand(Source,Range);_error=null;}catch(Exception e){_occurrences=Array.Empty<SchedulerOccurrence>();_error=e.Message;}}
+ public async Task RefreshAsync(){if(OnRead is null){Rebuild();return;}_readRequest?.Cancel();var request=_readRequest=new();_loading=true;try{var rows=await OnRead(Range,request.Token);if(_disposed||request.IsCancellationRequested||!ReferenceEquals(_readRequest,request))return;_remote=rows;Rebuild();}catch(OperationCanceledException){}catch(Exception e){_error=e.Message;}finally{if(ReferenceEquals(_readRequest,request)){_loading=false;_readRequest=null;}request.Dispose();}}
+ private IEnumerable<SchedulerOccurrence> DayEvents(DateTime day,string? resource)=>_occurrences.Where(o=>o.Start<day.AddDays(1)&&o.End>day&&(resource is null||Resources.Count==0||o.Event.ResourceId==resource));
+ private sealed record Position(SchedulerOccurrence Item,int Lane,int Lanes);
+ private IEnumerable<Position> Positioned(DateTime day,string resource){var events=DayEvents(day,resource).Where(o=>!o.Event.AllDay&&o.Start<day.AddHours(EndHour)&&o.End>day.AddHours(StartHour)).ToArray();var lanes=new List<DateTime>();var positioned=new List<(SchedulerOccurrence Item,int Lane)>();foreach(var item in events){var lane=lanes.FindIndex(end=>end<=item.Start);if(lane<0){lane=lanes.Count;lanes.Add(item.End);}else lanes[lane]=item.End;positioned.Add((item,lane));}return positioned.Select(p=>new Position(p.Item,p.Lane,Math.Max(1,lanes.Count)));}
+ private string ResourceText(string? id)=>Resources.FirstOrDefault(r=>r.Id==id)?.Text??"";
+ private void ResourceChanged(string value){if(_draft is not null)_draft.ResourceId=value;}
+ private void RepeatChanged(string value){if(_draft is not null)_draft.RecurrenceRule=string.IsNullOrEmpty(value)?null:value;}
+ public async Task NavigateAsync(int direction){Date=View==SchedulerView.Month?Date.AddMonths(direction):Date.AddDays((View==SchedulerView.Day?1:View==SchedulerView.MultiDay?MultiDayCount:7)*direction);await DateChanged.InvokeAsync(Date);await RefreshAsync();}
+ private async Task TodayAsync(){Date=DateTime.Today;await DateChanged.InvokeAsync(Date);await RefreshAsync();}
+ private async Task ChangeView(SchedulerView view){View=view;await ViewChanged.InvokeAsync(view);await RefreshAsync();}
+ public Task NewAsync(DateTime start,string? resource){if(!CanEdit)return Task.CompletedTask;_selected=null;_isNew=true;_editSeries=false;_draft=new(){Start=start,End=start.AddMinutes(60),TimeZoneId=TimeZoneId,ResourceId=resource};return Task.CompletedTask;}
+ public Task EditAsync(SchedulerOccurrence occurrence){if(!CanEdit)return Task.CompletedTask;_selected=occurrence;_isNew=false;_editSeries=false;_draft=occurrence.Event.Clone();_draft.Start=occurrence.Start;_draft.End=occurrence.End;_draft.TimeZoneId=TimeZoneId;return Task.CompletedTask;}
+ private Task CloseEditor(){_draft=null;_selected=null;_confirmDelete=false;return Task.CompletedTask;}
+ private async Task SaveDraft(EditContext context){if(_draft is null)return;var item=_draft.Clone();var source=Source.Select(e=>e.Clone()).ToList();if(_selected?.Event.RecurrenceRule is not null&&!_editSeries){var parent=source.First(e=>e.Id==_selected.Event.Id);parent.ExcludedStarts.Add(_selected.OriginalStart);item.Id=Guid.NewGuid().ToString("N");item.SeriesId=parent.Id;item.RecurrenceRule=null;item.ExcludedStarts.Clear();source.Add(item);}else{var index=source.FindIndex(e=>e.Id==item.Id);if(index>=0)source[index]=item;else source.Add(item);}if(await Publish(source,item,_isNew?SchedulerChangeAction.Create:SchedulerChangeAction.Update))await CloseEditor();}
+ private async Task DeleteDraft(){if(_draft is null)return;var source=Source.Select(e=>e.Clone()).ToList();if(_selected?.Event.RecurrenceRule is not null&&!_editSeries)source.First(e=>e.Id==_selected.Event.Id).ExcludedStarts.Add(_selected.OriginalStart);else source.RemoveAll(e=>e.Id==_draft.Id||e.SeriesId==_draft.Id);if(await Publish(source,_draft,SchedulerChangeAction.Delete))await CloseEditor();}
+ private async Task<bool> Publish(List<SchedulerEvent> events,SchedulerEvent item,SchedulerChangeAction action){try{SchedulerEngine.Expand(events,Range);var args=new SchedulerChangingArgs(action,item.Clone());await Changing.InvokeAsync(args);if(args.Cancel)return false;Events=events;if(OnRead is not null)_remote=events;await EventsChanged.InvokeAsync(events);Rebuild();return true;}catch(Exception e){_error=e.Message;return false;}}
+ private void Drag(SchedulerOccurrence item,bool resize){if(!CanEdit)return;_dragged=item;_resize=resize;}
+ private async Task DropAsync(DateTime target,string? resource){if(_dragged is null||!CanEdit)return;var occurrence=_dragged;_dragged=null;await EditAsync(occurrence);if(_draft is null)return;if(_resize)_draft.End=target;else{var length=_draft.End-_draft.Start;_draft.Start=target;_draft.End=target+length;if(resource is not null)_draft.ResourceId=resource;}await SaveDraft(new EditContext(_draft));}
+ public void Dispose(){_disposed=true;_readRequest?.Cancel();}
+}

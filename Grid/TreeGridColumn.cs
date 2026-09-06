@@ -61,6 +61,8 @@ public class TreeGridColumn : ComponentBase, IDisposable
         TextAlign ?? (Type == ColumnType.Date ? Grid.TextAlign.Right : Grid.TextAlign.Left);
     [Parameter] public string? Format { get; set; }
     [Parameter] public bool Visible { get; set; } = true;
+    [Parameter] public bool IsFrozen { get; set; }
+    [Parameter] public FrozenColumnPosition FrozenPosition { get; set; } = FrozenColumnPosition.Left;
     [Parameter] public bool IsPrimaryKey { get; set; }
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowSorting { get; set; } = true;

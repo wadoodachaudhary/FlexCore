@@ -1,424 +1,49 @@
 @namespace Fx.ControlKit
-@using Microsoft.AspNetCore.Components.Web
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 
-<div class="@RootCssClass" style="@RootStyle" tabindex="@TabIndex" @onkeydown="HandleKeyDown">
-    @if (Nodes != null)
+<div class="@RootCssClass @(EnableVirtualization ? "fx-treeview-virtual" : "")" style="@RootStyle" @ref="_host"
+     role="tree" aria-label="@AriaLabel" aria-multiselectable="@(AllowMultiSelect ? "true" : "false")"
+     aria-activedescendant="@(_focusId is null ? null : NodeElementId(_focusId))" tabindex="@TabIndex" @onkeydown="HandleKeyDown">
+    @if(EnableVirtualization)
     {
-        @RenderNodes(Nodes, 0)
+        <Virtualize Items="@_visible" Context="info" ItemSize="@ItemSize" OverscanCount="4">@NodeRow(info)</Virtualize>
+    }
+    else
+    {
+        @foreach(var info in _visible){@NodeRow(info)}
     }
 </div>
+@if(_error is not null){<AlertControl Text="@_error" />}
 
 @code {
-    [Parameter] public List<TreeNode>? Nodes { get; set; }
-    [Parameter] public TreeNode? SelectedNode { get; set; }
-    [Parameter] public EventCallback<TreeNode> SelectedNodeChanged { get; set; }
-    [Parameter] public EventCallback<TreeNode> OnNodeClick { get; set; }
-    [Parameter] public EventCallback<TreeNode> OnNodeDoubleClick { get; set; }
-    [Parameter] public EventCallback<TreeNode> OnNodeActivated { get; set; }
-    [Parameter] public EventCallback<TreeNode> OnNodeExpand { get; set; }
-    [Parameter] public bool ShowCheckboxes { get; set; }
-    [Parameter] public bool ShowIcons { get; set; } = true;
-    [Parameter] public bool AllowMultiSelect { get; set; }
-    [Parameter] public bool ToggleOnNodeClick { get; set; } = true;
-    [Parameter] public string? CssClass { get; set; }
-    [Parameter] public string? Height { get; set; }
-    [Parameter] public bool UseVb6TreeStyle { get; set; }
-    [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.Yellow;
-    [Parameter] public int TreeIndentPixels { get; set; } = 16;
-    [Parameter] public int TabIndex { get; set; } = 0;
-
-    private bool IsVb6TreeStyle => UseVb6TreeStyle || HasCssClass("fx-treeview-vb6");
-    private string? RootStyle => Height != null ? $"height:{Height};overflow:auto;" : null;
-
-    private string RootCssClass
-    {
-        get
+    private RenderFragment NodeRow(TreeNodeInfo info)=>@<div @key="info.Node.Id" id="@NodeElementId(info.Node.Id)" data-node-id="@info.Node.Id"
+        class="@GetNodeCss(info.Node,info.Level) @(info.Node.Id==_focusId ? "fx-treeview-current" : "")" style="@(GetNodeStyle(info.Level)+(EnableVirtualization ? $"height:{ItemSize}px;min-height:{ItemSize}px;margin-block:0;box-sizing:border-box;" : ""))"
+        role="treeitem" aria-label="@info.Node.Text" aria-level="@(info.Level+1)" aria-posinset="@info.Position" aria-setsize="@info.SetSize"
+        aria-expanded="@(info.Node.HasChildren ? DisplayExpanded(info.Node) ? "true" : "false" : null)" aria-selected="@(info.Node.IsSelected ? "true" : "false")"
+        aria-checked="@(ShowCheckboxes ? info.Node.IsIndeterminate ? "mixed" : info.Node.IsChecked ? "true" : "false" : null)"
+        aria-disabled="@(info.Node.IsDisabled ? "true" : "false")" aria-busy="@(_loading.Contains(info.Node.Id) ? "true" : null)"
+        @onclick="e=>HandleNodeClick(info.Node,e)" @ondblclick="()=>HandleNodeDoubleClick(info.Node)"
+        draggable="@(AllowDragAndDrop&&!info.Node.IsDisabled ? "true" : "false")" @ondragstart="()=>_dragId=info.Node.Id" @ondragend="()=>_dragId=null"
+        @ondragover:preventDefault="@AllowDragAndDrop" @ondrop="()=>DropAsync(info.Node)">
+        <span class="@GetArrowCss(info.Node)" role="@(info.Node.HasChildren ? "button" : null)" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
+              aria-hidden="@(!info.Node.HasChildren ? "true" : null)" @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true"></span>
+        @if(ShowCheckboxes)
         {
-            var classes = new List<string> { "fx-treeview" };
-
-            if (IsVb6TreeStyle)
-            {
-                if (!HasCssClass("fx-treeview-vb6"))
-                    classes.Add("fx-treeview-vb6");
-
-                if (!HasFolderModifierClass())
-                    classes.Add(GetFolderStyleCss());
-            }
-
-            if (!string.IsNullOrWhiteSpace(CssClass))
-                classes.Add(CssClass.Trim());
-
-            return string.Join(" ", classes);
+            <span class="fx-treeview-check" @onclick:stopPropagation="true"><CheckBoxControl Checked="@info.Node.IsChecked" Indeterminate="@info.Node.IsIndeterminate" Disabled="@info.Node.IsDisabled"
+                CheckedChanged="v=>SetCheckedAsync(info.Node.Id,v)" TabIndex="-1" StopClickPropagation="true" StopKeyDownPropagation="true" /></span>
         }
-    }
-
-    private RenderFragment RenderNodes(List<TreeNode> nodes, int level) => builder =>
-    {
-        foreach (var node in nodes)
+        @if(ShowIcons&&!string.IsNullOrEmpty(GetRenderedIconCss(info.Node))){<span class="@GetRenderedIconCss(info.Node)" aria-hidden="true"></span>}
+        @if(_editingId==info.Node.Id)
         {
-            var capturedNode = node;
-            var capturedLevel = level;
-
-            builder.OpenElement(0, "div");
-            builder.AddAttribute(1, "class", GetNodeCss(capturedNode, capturedLevel));
-            builder.AddAttribute(2, "style", GetNodeStyle(capturedLevel));
-            builder.AddAttribute(3, "onclick", EventCallback.Factory.Create(this, () => HandleNodeClick(capturedNode)));
-            builder.AddAttribute(4, "ondblclick", EventCallback.Factory.Create(this, () => HandleNodeDoubleClick(capturedNode)));
-
-            // Expand/collapse arrow
-            builder.OpenElement(5, "span");
-            builder.AddAttribute(6, "class", GetArrowCss(capturedNode));
-            if (capturedNode.HasChildren)
-            {
-                builder.AddAttribute(7, "onclick", EventCallback.Factory.Create(this, () => HandleExpandClick(capturedNode)));
-                builder.AddEventStopPropagationAttribute(8, "onclick", true);
-            }
-            builder.CloseElement();
-
-            // Checkbox
-            if (ShowCheckboxes)
-            {
-                builder.OpenElement(9, "input");
-                builder.AddAttribute(10, "type", "checkbox");
-                builder.AddAttribute(11, "class", "fx-treeview-checkbox");
-                builder.AddAttribute(12, "checked", capturedNode.IsChecked);
-                builder.AddAttribute(13, "disabled", capturedNode.IsDisabled);
-                builder.AddAttribute(14, "onchange", EventCallback.Factory.Create<ChangeEventArgs>(this, e => HandleCheckChanged(capturedNode, e)));
-                builder.AddEventStopPropagationAttribute(15, "onclick", true);
-                builder.CloseElement();
-            }
-
-            // Icon
-            var iconCss = GetRenderedIconCss(capturedNode);
-            if (ShowIcons && !string.IsNullOrEmpty(iconCss))
-            {
-                builder.OpenElement(16, "span");
-                builder.AddAttribute(17, "class", iconCss);
-                builder.CloseElement();
-            }
-
-            // Text
-            builder.OpenElement(18, "span");
-            builder.AddAttribute(19, "class", "fx-treeview-text");
-            builder.AddContent(20, (MarkupString)capturedNode.Text);
-            builder.CloseElement();
-
-            builder.CloseElement(); // close node div
-
-            // Render children if expanded
-            if (capturedNode.HasChildren && capturedNode.IsExpanded)
-            {
-                builder.AddContent(21, RenderNodes(capturedNode.Children, capturedLevel + 1));
-            }
+            <span @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+                <TextBoxControl Value="@_editText" ValueChanged="v=>_editText=v??string.Empty" UpdateOnInput="true" AutoFocus="true" OnKeyDown="EditKeyDown" aria-label="Rename node" />
+                <ButtonControl OnClick="CommitEditAsync">Save</ButtonControl><ButtonControl OnClick="CancelEditAsync">Cancel</ButtonControl>
+            </span>
         }
-    };
-
-    private string GetNodeCss(TreeNode node, int level)
-    {
-        var css = "fx-treeview-node";
-        if (IsVb6TreeStyle)
-        {
-            css += " fx-treeview-vb6-node";
-            css += level == 0 ? " fx-treeview-root" : "";
-            css += node.HasChildren ? " fx-treeview-branch" : " fx-treeview-leaf";
-            css += node.IsExpanded ? " fx-treeview-expanded" : " fx-treeview-collapsed";
-        }
-        if (node.IsSelected || node == SelectedNode)
-            css += " fx-treeview-node-selected";
-        if (node.IsDisabled)
-            css += " fx-treeview-node-disabled";
-        if (node.IsBold)
-            css += " fx-treeview-node-bold";
-        return css;
-    }
-
-    private string GetNodeStyle(int level)
-    {
-        if (!IsVb6TreeStyle)
-            return $"padding-left:{level * 20}px;";
-
-        var indent = Math.Max(0, TreeIndentPixels);
-        var nodeLeft = level * indent;
-        return $"padding-left:{nodeLeft}px;--tree-depth:{level};--tree-indent:{indent}px;--tree-node-left:{nodeLeft}px;";
-    }
-
-    private string GetArrowCss(TreeNode node)
-    {
-        var css = "fx-treeview-arrow";
-        if (!node.HasChildren)
-            return css + " fx-treeview-arrow-hidden";
-
-        return node.IsExpanded
-            ? css + " fx-treeview-arrow-expanded"
-            : css + " fx-treeview-arrow-collapsed";
-    }
-
-    private string GetRenderedIconCss(TreeNode node)
-    {
-        var iconCss = GetIconCss(node);
-        if (!string.IsNullOrWhiteSpace(iconCss))
-            return "fx-treeview-icon " + iconCss;
-
-        if (!IsVb6TreeStyle)
-            return "";
-
-        return node.HasChildren
-            ? $"fx-treeview-icon fx-treeview-folder-icon {(node.IsExpanded ? "open" : "closed")}"
-            : "fx-treeview-icon fx-treeview-folder-spacer";
-    }
-
-    private string GetIconCss(TreeNode node)
-    {
-        if (node.IsExpanded && !string.IsNullOrEmpty(node.ExpandedIconCss))
-            return node.ExpandedIconCss;
-        return node.IconCss ?? "";
-    }
-
-    private string GetFolderStyleCss() => FolderStyle switch
-    {
-        TreeFolderStyle.None => "fx-treeview-no-folder",
-        TreeFolderStyle.Grey => "fx-treeview-grey-folder",
-        _ => "fx-treeview-yellow-folder"
-    };
-
-    private bool HasFolderModifierClass()
-    {
-        return HasCssClass("fx-treeview-yellow-folder")
-            || HasCssClass("fx-treeview-no-folder")
-            || HasCssClass("fx-treeview-grey-folder");
-    }
-
-    private bool HasCssClass(string cssClass)
-    {
-        if (string.IsNullOrWhiteSpace(CssClass))
-            return false;
-
-        return CssClass.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(value => string.Equals(value, cssClass, StringComparison.Ordinal));
-    }
-
-    private async Task HandleNodeClick(TreeNode node)
-    {
-        if (node.IsDisabled) return;
-
-        if (ToggleOnNodeClick && node.HasChildren)
-        {
-            node.IsExpanded = !node.IsExpanded;
-            if (node.IsExpanded && OnNodeExpand.HasDelegate)
-                await OnNodeExpand.InvokeAsync(node);
-        }
-
-        await SelectNodeAsync(node, invokeClick: true);
-    }
-
-    private async Task SelectNodeAsync(TreeNode node, bool invokeClick)
-    {
-        if (node.IsDisabled) return;
-
-        if (!AllowMultiSelect)
-        {
-            if (SelectedNode != null)
-                SelectedNode.IsSelected = false;
-            node.IsSelected = true;
-            SelectedNode = node;
-            if (SelectedNodeChanged.HasDelegate)
-                await SelectedNodeChanged.InvokeAsync(node);
-        }
-        else
-        {
-            node.IsSelected = !node.IsSelected;
-        }
-
-        if (invokeClick && OnNodeClick.HasDelegate)
-            await OnNodeClick.InvokeAsync(node);
-    }
-
-    private async Task HandleNodeDoubleClick(TreeNode node)
-    {
-        if (node.IsDisabled) return;
-
-        if (OnNodeDoubleClick.HasDelegate)
-            await OnNodeDoubleClick.InvokeAsync(node);
-    }
-
-    private async Task HandleKeyDown(KeyboardEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case "ArrowDown":
-            case "Down":
-                await MoveSelectionAsync(1);
-                break;
-            case "ArrowUp":
-            case "Up":
-                await MoveSelectionAsync(-1);
-                break;
-            case "Home":
-                await SelectVisibleNodeAsync(0);
-                break;
-            case "End":
-                await SelectVisibleNodeAsync(GetVisibleNodes().Count - 1);
-                break;
-            case "Enter":
-                await ActivateSelectedNodeAsync();
-                break;
-            case "ArrowRight":
-            case "Right":
-                await ExpandOrMoveToChildAsync();
-                break;
-            case "ArrowLeft":
-            case "Left":
-                await CollapseOrMoveToParentAsync();
-                break;
-        }
-    }
-
-    private async Task MoveSelectionAsync(int delta)
-    {
-        var visible = GetVisibleNodes();
-        if (visible.Count == 0)
-            return;
-
-        var selectedIndex = GetSelectedIndex(visible);
-        var targetIndex = selectedIndex < 0
-            ? (delta >= 0 ? 0 : visible.Count - 1)
-            : Math.Clamp(selectedIndex + delta, 0, visible.Count - 1);
-
-        await SelectVisibleNodeAsync(targetIndex, visible);
-    }
-
-    private async Task SelectVisibleNodeAsync(int index, List<VisibleTreeNode>? visible = null)
-    {
-        visible ??= GetVisibleNodes();
-        if (visible.Count == 0 || index < 0 || index >= visible.Count)
-            return;
-
-        await SelectNodeAsync(visible[index].Node, invokeClick: false);
-    }
-
-    private async Task ActivateSelectedNodeAsync()
-    {
-        var visible = GetVisibleNodes();
-        if (visible.Count == 0)
-            return;
-
-        var selectedIndex = GetSelectedIndex(visible);
-        if (selectedIndex < 0)
-        {
-            await SelectVisibleNodeAsync(0, visible);
-            return;
-        }
-
-        var node = visible[selectedIndex].Node;
-        if (OnNodeActivated.HasDelegate)
-            await OnNodeActivated.InvokeAsync(node);
-        else if (OnNodeDoubleClick.HasDelegate)
-            await OnNodeDoubleClick.InvokeAsync(node);
-    }
-
-    private async Task ExpandOrMoveToChildAsync()
-    {
-        var visible = GetVisibleNodes();
-        var selectedIndex = GetSelectedIndex(visible);
-        if (selectedIndex < 0)
-        {
-            await SelectVisibleNodeAsync(0, visible);
-            return;
-        }
-
-        var current = visible[selectedIndex].Node;
-        if (!current.HasChildren)
-            return;
-
-        if (!current.IsExpanded)
-        {
-            current.IsExpanded = true;
-            if (OnNodeExpand.HasDelegate)
-                await OnNodeExpand.InvokeAsync(current);
-            return;
-        }
-
-        var nextIndex = selectedIndex + 1;
-        if (nextIndex < visible.Count && visible[nextIndex].Parent == current)
-            await SelectVisibleNodeAsync(nextIndex, visible);
-    }
-
-    private async Task CollapseOrMoveToParentAsync()
-    {
-        var visible = GetVisibleNodes();
-        var selectedIndex = GetSelectedIndex(visible);
-        if (selectedIndex < 0)
-        {
-            await SelectVisibleNodeAsync(0, visible);
-            return;
-        }
-
-        var current = visible[selectedIndex].Node;
-        if (current.HasChildren && current.IsExpanded)
-        {
-            current.IsExpanded = false;
-            return;
-        }
-
-        var parent = visible[selectedIndex].Parent;
-        if (parent != null)
-            await SelectNodeAsync(parent, invokeClick: false);
-    }
-
-    private int GetSelectedIndex(List<VisibleTreeNode> visible)
-    {
-        for (var i = 0; i < visible.Count; i++)
-        {
-            if (visible[i].Node == SelectedNode || visible[i].Node.IsSelected)
-                return i;
-        }
-
-        return -1;
-    }
-
-    private List<VisibleTreeNode> GetVisibleNodes()
-    {
-        var result = new List<VisibleTreeNode>();
-
-        void AddVisible(List<TreeNode>? nodes, int level, TreeNode? parent)
-        {
-            if (nodes == null)
-                return;
-
-            foreach (var node in nodes)
-            {
-                if (!node.IsDisabled)
-                    result.Add(new VisibleTreeNode(node, level, parent));
-
-                if (node.HasChildren && node.IsExpanded)
-                    AddVisible(node.Children, level + 1, node);
-            }
-        }
-
-        AddVisible(Nodes, 0, null);
-        return result;
-    }
-
-    private sealed record VisibleTreeNode(TreeNode Node, int Level, TreeNode? Parent);
-
-    private async Task HandleCheckChanged(TreeNode node, ChangeEventArgs e)
-    {
-        if (node.IsDisabled) return;
-
-        if (e.Value is bool b)
-            node.IsChecked = b;
-        else if (bool.TryParse(e.Value?.ToString(), out var parsed))
-            node.IsChecked = parsed;
-
-        await Task.CompletedTask;
-    }
-
-    private async Task HandleExpandClick(TreeNode node)
-    {
-        if (node.IsDisabled) return;
-
-        node.IsExpanded = !node.IsExpanded;
-        if (node.IsExpanded && OnNodeExpand.HasDelegate)
-            await OnNodeExpand.InvokeAsync(node);
-    }
+        else if(NodeTemplate is not null){<span @onkeydown:stopPropagation="true">@NodeTemplate(info.Node)</span>}
+        else{<span class="fx-treeview-text">@info.Node.Text</span>}
+        @if(_loading.Contains(info.Node.Id)){<span role="status">Loading…</span>}
+    </div>;
 }

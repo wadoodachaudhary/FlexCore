@@ -1,0 +1,1 @@
+ .fx-button-group{display:inline-flex;gap:0}.fx-button-group.vertical{flex-direction:column}.fx-button-group ::deep .fx-selected{background:var(--fx-accent,#2465b9);color:white}.fx-button-group ::deep button{border-radius:0;min-height:28px}.fx-button-group ::deep button:focus-visible{outline:2px solid #2266cc;outline-offset:2px}

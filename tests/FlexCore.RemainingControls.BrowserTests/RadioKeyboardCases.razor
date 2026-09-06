@@ -1,0 +1,21 @@
+@page "/radio-keyboard-cases"
+@rendermode InteractiveServer
+
+<ButtonControl>Before unselected group</ButtonControl>
+<SegmentedControl Items="@_items" @bind-Value="_value" Orientation="FlexOrientation.Vertical" AriaLabel="Unselected segments" />
+<p id="unselected-value">@_value</p>
+
+<ButtonControl>Before disabled group</ButtonControl>
+<SegmentedControl Items="@_items" Value="first" Enabled="false" AriaLabel="Disabled segments" />
+<ButtonControl TabIndex="0">After disabled group</ButtonControl>
+
+@code {
+    private string _value = "";
+    private readonly SelectionItem[] _items =
+    [
+        new("unavailable", "Unavailable first", true),
+        new("first", "First"),
+        new("middle", "Unavailable middle", true),
+        new("last", "Last")
+    ];
+}

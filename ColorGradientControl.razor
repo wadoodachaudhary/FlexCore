@@ -1,0 +1,113 @@
+@namespace Fx.ControlKit
+@using System.Globalization
+@inherits FlexControlBase
+
+<div class="fx-color-gradient @CssClass" style="@ResolvedStyle" role="group" aria-label="Color gradient">
+    <div class="fx-hsv-surface"
+         style="width:@(SurfaceWidth)px;height:@(SurfaceHeight)px;background-color:hsl(@CssNumber(_color.Hue),100%,50%)"
+         role="group" aria-label="Saturation and brightness surface"
+         @onpointerdown="PickStart" @onpointermove="PickMove"
+         @onpointerup="()=>_picking=false" @onpointerleave="()=>_picking=false">
+        <span class="fx-hsv-point" style="left:@CssNumber(_color.Saturation*100)%;top:@CssNumber(100-_color.Brightness*100)%"></span>
+    </div>
+    <label class="fx-color-channel fx-color-hue">
+        Hue
+        <SliderControl Value="@_color.Hue" ValueChanged="v=>Change(_color with{Hue=v})"
+                       Min="0" Max="360" ShowValue="false" Disabled="@(!Enabled)"
+                       aria-label="Hue" aria-valuetext="@HueText" />
+        <span class="fx-color-channel-value">@HueText</span>
+    </label>
+    <label class="fx-color-channel" style="--fx-color-track:linear-gradient(to right,@SaturationStart,@SaturationEnd)">
+        Saturation
+        <SliderControl Value="@(_color.Saturation*100)" ValueChanged="v=>Change(_color with{Saturation=v/100})"
+                       ShowValue="false" Disabled="@(!Enabled)" aria-label="Saturation" aria-valuetext="@Percent(_color.Saturation)" />
+        <span class="fx-color-channel-value">@Percent(_color.Saturation)</span>
+    </label>
+    <label class="fx-color-channel" style="--fx-color-track:linear-gradient(to right,#000,@BrightnessEnd)">
+        Brightness
+        <SliderControl Value="@(_color.Brightness*100)" ValueChanged="v=>Change(_color with{Brightness=v/100})"
+                       ShowValue="false" Disabled="@(!Enabled)" aria-label="Brightness" aria-valuetext="@Percent(_color.Brightness)" />
+        <span class="fx-color-channel-value">@Percent(_color.Brightness)</span>
+    </label>
+    @if (Opacity)
+    {
+        <label class="fx-color-channel fx-color-opacity" style="--fx-color-track:linear-gradient(to right,@(OpaqueColor)00,@OpaqueColor)">
+            Opacity
+            <SliderControl Value="@(_color.Alpha*100)" ValueChanged="v=>Change(_color with{Alpha=v/100})"
+                           ShowValue="false" Disabled="@(!Enabled)" aria-label="Opacity" aria-valuetext="@Percent(_color.Alpha)" />
+            <span class="fx-color-channel-value">@Percent(_color.Alpha)</span>
+        </label>
+    }
+    <div class="fx-color-entry">
+        <div class="fx-color-preview" role="img" aria-label="Selected color @_color.ToHex()">
+            <span style="background:@_color.ToHex()"></span>
+        </div>
+        <TextBoxControl Value="@_draft" ValueChanged="v=>_draft=v" OnBlur="CommitAsync" Enabled="@Enabled" aria-label="Hex color" />
+    </div>
+    @if (_error is not null)
+    {
+        <span role="alert">@_error</span>
+    }
+</div>
+
+@code {
+    [Parameter] public string Value { get; set; } = "#3478C5";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public bool Opacity { get; set; } = true;
+
+    // Keep pointer coordinates in the same pixel space as the rendered surface.
+    private const int SurfaceWidth = 320;
+    private const int SurfaceHeight = 200;
+    private bool _picking;
+    private ColorValue _color = new(0, 0, 0);
+    private string? _last, _draft, _error;
+    private string HueText => $"{_color.Hue.ToString("0", CultureInfo.InvariantCulture)}°";
+    private string OpaqueColor => (_color with { Alpha = 1 }).ToHex();
+    private string SaturationStart => (_color with { Saturation = 0, Alpha = 1 }).ToHex();
+    private string SaturationEnd => (_color with { Saturation = 1, Alpha = 1 }).ToHex();
+    private string BrightnessEnd => (_color with { Brightness = 1, Alpha = 1 }).ToHex();
+    private static string CssNumber(double value) => value.ToString(CultureInfo.InvariantCulture);
+    private static string Percent(double value) => $"{(value * 100).ToString("0", CultureInfo.InvariantCulture)}%";
+
+    private Task PickStart(PointerEventArgs e)
+    {
+        _picking = Enabled && e.Button == 0;
+        return PickMove(e);
+    }
+
+    private Task PickMove(PointerEventArgs e) => _picking
+        ? Change(_color with
+        {
+            Saturation = Math.Clamp(e.OffsetX / SurfaceWidth, 0, 1),
+            Brightness = 1 - Math.Clamp(e.OffsetY / SurfaceHeight, 0, 1)
+        })
+        : Task.CompletedTask;
+
+    protected override void OnParametersSet()
+    {
+        if (_last == Value) return;
+        if (!ColorValue.TryParse(Value, out _color))
+            throw new ArgumentException("Use a hex RGB or RGBA color.");
+        _last = _draft = Value;
+    }
+
+    private async Task Change(ColorValue value)
+    {
+        if (!Enabled) return;
+        _color = value;
+        _draft = _last = Value = value.ToHex();
+        _error = null;
+        await ValueChanged.InvokeAsync(Value);
+    }
+
+    public async Task CommitAsync()
+    {
+        if (!Enabled) return;
+        if (!ColorValue.TryParse(_draft, out var value))
+        {
+            _error = "Enter a valid hex RGB or RGBA color.";
+            return;
+        }
+        await Change(value);
+    }
+}

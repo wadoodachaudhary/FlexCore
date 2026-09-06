@@ -1,0 +1,43 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Linq.Expressions
+@implements IDisposable
+<div class="fx-date-range @CssClass" style="@ResolvedStyle" role="group" aria-label="@AriaLabel">
+<DatePickerControl Value="@Value.Start" ValueChanged="StartChanged" ValidationChanged="StartError" MinDate="@Min" MaxDate="@Max" Enabled="@Enabled" AriaLabel="Start date" />
+<span aria-hidden="true">–</span>
+<DatePickerControl Value="@Value.End" ValueChanged="EndChanged" ValidationChanged="EndError" MinDate="@Min" MaxDate="@Max" Enabled="@Enabled" AriaLabel="End date" />
+<PopupControl @bind-IsOpen="_open" Enabled="@Enabled" AriaLabel="Choose date range">
+<Anchor Context="popup"><ButtonControl Disabled="@(!Enabled)" OnClick="()=>popup.ToggleAsync()" aria-expanded="@(popup.IsOpen ? "true" : "false")" aria-controls="@popup.PopupId">Choose range</ButtonControl></Anchor>
+<ChildContent><CalendarControl Range="@Value" RangeChanged="CalendarChanged" SelectionMode="CalendarSelectionMode.Range" Min="@Min" Max="@Max" DisabledDate="DisabledDate" /></ChildContent>
+</PopupControl>
+@if(Error is not null){<span role="alert" class="fx-range-error">@Error</span>}
+</div>
+@code {
+ [CascadingParameter] public EditContext? EditContext {get;set;}
+ [Parameter] public CalendarRange Value {get;set;}=new(null,null);
+ [Parameter] public EventCallback<CalendarRange> ValueChanged {get;set;}
+ [Parameter] public Expression<Func<CalendarRange>>? ValueExpression {get;set;}
+ [Parameter] public DateTime? Min {get;set;}
+ [Parameter] public DateTime? Max {get;set;}
+ [Parameter] public Func<DateTime,bool>? DisabledDate {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Date range";
+ public string? Error {get;private set;}
+ private string? _startError,_endError,_rangeError;
+ private void StartError(string? error){_startError=error;PublishValidation();}
+ private void EndError(string? error){_endError=error;PublishValidation();}
+ private void PublishValidation(){Error=_startError??_endError??_rangeError;if(ValueExpression is null||_messages is null)return;var field=FieldIdentifier.Create(ValueExpression);_messages.Clear(field);if(Error is not null)_messages.Add(field,Error);_context?.NotifyValidationStateChanged();}
+ private bool _open;private ValidationMessageStore? _messages;private EditContext? _context;
+ protected override void OnParametersSet(){if(Min>Max)throw new ArgumentException("Min must precede Max.");if(_context!=EditContext){_messages?.Clear();_context=EditContext;_messages=_context is null?null:new(_context);}}
+ private Task StartChanged(DateTime? value)=>SetValueAsync(Value with{Start=value});
+ private Task EndChanged(DateTime? value)=>SetValueAsync(Value with{End=value});
+ private async Task CalendarChanged(CalendarRange value){await SetValueAsync(value);if(value.End is not null&&Error is null)_open=false;}
+ public async Task SetValueAsync(CalendarRange value)
+ {
+  if(!Enabled)return;
+  _rangeError=value.Start>value.End?"Start date must not follow end date.":null;
+  if(value.Start<Min||value.End<Min||value.Start>Max||value.End>Max)_rangeError="The date range is outside the allowed bounds.";
+  if(_rangeError is null&&value.Start is {} start&&value.End is {} end&&DisabledDate is not null){for(var day=start.Date;day<=end.Date;day=day.AddDays(1)){if(DisabledDate(day)){_rangeError="The range includes a disabled date.";break;}if(day==DateTime.MaxValue.Date)break;}}
+  Value=value;PublishValidation();if(ValueExpression is not null)_context?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));await ValueChanged.InvokeAsync(Value);
+ }
+ public void Dispose(){_messages?.Clear();_context?.NotifyValidationStateChanged();}
+}

@@ -1,0 +1,20 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<span class="fx-toggle-host">
+<ButtonControl CssClass="@($"fx-toggle-button {(Selected ? "selected" : "")} {CssClass}")" Style="@ResolvedStyle" Disabled="@(!Enabled)"
+               aria-pressed="@(Selected ? "true" : "false")" OnClick="ToggleAsync" IconCss="@IconCss" Title="@Title" @attributes="AdditionalAttributes">
+    @ChildContent
+</ButtonControl>
+</span>
+@code {
+    [Parameter] public bool Selected { get; set; }
+    [Parameter] public EventCallback<bool> SelectedChanged { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string? IconCss { get; set; }
+    [Parameter] public EventCallback<MouseEventArgs> OnClick { get; set; }
+    private async Task ToggleAsync(MouseEventArgs args)
+    {
+        if(!Enabled)return;
+        Selected=!Selected;await SelectedChanged.InvokeAsync(Selected);await OnClick.InvokeAsync(args);
+    }
+}

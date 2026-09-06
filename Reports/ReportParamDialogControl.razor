@@ -193,7 +193,8 @@
     /// multi-value parameters with default values — the dual-list-box sourced
     /// from those defaults.
     /// </summary>
-    [Inject] private IReportPickListProvider? PickLists { get; set; }
+    [Inject] private IServiceProvider? Services { get; set; }
+    private IReportPickListProvider? PickLists => Services?.GetService(typeof(IReportPickListProvider)) as IReportPickListProvider;
 
     private bool _visible;
     private string _title = "";

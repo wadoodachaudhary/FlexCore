@@ -404,7 +404,9 @@ public partial class GridControl<TValue>
     }
 
     private bool IsFlatUntransformedServerView =>
-        _groupDescriptors.Count == 0
+        !AllowPaging
+        && (AutoPageRowThreshold <= 0 || !string.IsNullOrWhiteSpace(Height) || GetCurrentDataSourceCount() <= AutoPageRowThreshold)
+        && _groupDescriptors.Count == 0
         && string.IsNullOrEmpty(SearchText)
         && _expressionFilterRoot == null
         && !_columnStates.Values.Any(state => state.SortDirection.HasValue || state.FilterActive)

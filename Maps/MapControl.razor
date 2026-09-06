@@ -1,0 +1,55 @@
+@namespace Fx.ControlKit.Maps
+@inherits FlexControlBase
+@using System.Globalization
+<div class="fx-map @CssClass" style="@ResolvedStyle">
+<ToolbarControl><ButtonControl OnClick="()=>ZoomAsync(1)" Disabled="@(!Enabled||Zoom>=MaxZoom)" Title="Zoom in" aria-label="Zoom in">+</ButtonControl><ButtonControl OnClick="()=>ZoomAsync(-1)" Disabled="@(!Enabled||Zoom<=MinZoom)" Title="Zoom out" aria-label="Zoom out">−</ButtonControl><ButtonControl OnClick="FitAsync" Disabled="@(!Enabled||Markers.Count==0)">Fit markers</ButtonControl><CheckBoxControl @bind-Checked="_showShapes" Label="Shapes" /><CheckBoxControl @bind-Checked="_showMarkers" Label="Markers" /><span>Zoom @Zoom</span></ToolbarControl>
+<svg class="fx-map-canvas" viewBox="@($"0 0 {Width} {Height}")" width="@Width" height="@Height" role="application" aria-label="@AriaLabel" tabindex="@(Enabled?0:-1)" @onkeydown="KeyDown" @onkeydown:preventDefault="true" @onpointerdown="PanStart" @onpointermove="PanMove" @onpointerup="PanEnd" @onpointerleave="PanEnd">
+<rect width="100%" height="100%" fill="#e9f2f8" />
+@if(TileUrlTemplate is not null){@foreach(var tile in Tiles()){<image href="@tile.Url" x="@F(tile.X)" y="@F(tile.Y)" width="256" height="256" />}}
+@for(var lon=-180;lon<=180;lon+=30){var a=Screen(new(-80,lon));var b=Screen(new(80,lon));<line x1="@F(a.X)" y1="@F(a.Y)" x2="@F(b.X)" y2="@F(b.Y)" stroke="#bacddd" stroke-width=".5" />}
+@if(_showShapes){@foreach(var shape in Shapes){<path d="@Path(shape)" fill="@shape.Fill" stroke="@shape.Stroke" fill-rule="evenodd" role="button" tabindex="0" aria-label="@shape.Title" @onclick="()=>ShapeClick.InvokeAsync(shape)" @onkeydown="e=>ShapeKey(e,shape)"><title>@shape.Title</title></path>}}
+@if(_showMarkers){@foreach(var cluster in Clusters()){var pixel=Screen(cluster[0].Location);if(cluster.Count>1){<g role="button" tabindex="0" aria-label="@($"{cluster.Count} markers; zoom in")" @onclick="()=>ExpandCluster(cluster)" @onkeydown="e=>ClusterKey(e,cluster)"><circle cx="@F(pixel.X)" cy="@F(pixel.Y)" r="18" fill="#245d9d" /><text x="@F(pixel.X)" y="@F(pixel.Y+4)" text-anchor="middle" fill="white">@cluster.Count</text></g>}else{var marker=cluster[0];var radius=BubbleMarkers?Math.Clamp(Math.Sqrt(Math.Max(0,marker.Value))*4,5,40):7;<g role="button" tabindex="0" aria-label="@marker.Title" @onclick="()=>SelectMarker(marker)" @onkeydown="e=>MarkerKey(e,marker)"><circle cx="@F(pixel.X)" cy="@F(pixel.Y)" r="@F(radius)" fill="@marker.Color" fill-opacity=".8" stroke="white" stroke-width="2" /><title>@marker.Title</title>@if(MarkerTemplate is not null){<foreignObject x="@F(pixel.X+10)" y="@F(pixel.Y-12)" width="150" height="50">@MarkerTemplate(marker)</foreignObject>}</g>}}}
+</svg>
+<div class="fx-map-status"><span>@Attribution</span>@if(_selected is not null){<span role="status">@_selected.Title · @_selected.Location.Latitude.ToString("0.###"), @_selected.Location.Longitude.ToString("0.###")</span>}</div>
+</div>
+@code {
+ [Parameter] public GeoPoint Center {get;set;}=new(20,0);
+ [Parameter] public EventCallback<GeoPoint> CenterChanged {get;set;}
+ [Parameter] public int Zoom {get;set;}=2;
+ [Parameter] public EventCallback<int> ZoomChanged {get;set;}
+ [Parameter] public EventCallback<MapView> ViewChanged {get;set;}
+ [Parameter] public int MinZoom {get;set;}
+ [Parameter] public int MaxZoom {get;set;}=18;
+ [Parameter] public int Width {get;set;}=800;
+ [Parameter] public int Height {get;set;}=420;
+ [Parameter] public IReadOnlyList<MapMarker> Markers {get;set;}=Array.Empty<MapMarker>();
+ [Parameter] public IReadOnlyList<MapShape> Shapes {get;set;}=Array.Empty<MapShape>();
+ [Parameter] public string? TileUrlTemplate {get;set;}
+ [Parameter] public string Attribution {get;set;}="";
+ [Parameter] public bool ClusterMarkers {get;set;}
+ [Parameter] public bool BubbleMarkers {get;set;}
+ [Parameter] public RenderFragment<MapMarker>? MarkerTemplate {get;set;}
+ [Parameter] public EventCallback<MapMarker> MarkerClick {get;set;}
+ [Parameter] public EventCallback<MapShape> ShapeClick {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Map. Use arrow keys to pan and plus or minus to zoom.";
+ private bool _showShapes=true,_showMarkers=true,_panning;private double _x,_y;private MapMarker? _selected;
+ private static string F(double value)=>value.ToString("0.###",CultureInfo.InvariantCulture);
+ protected override void OnParametersSet(){if(MinZoom<0||MaxZoom>22||MaxZoom<MinZoom||Zoom<MinZoom||Zoom>MaxZoom||Width<1||Height<1)throw new ArgumentException("Invalid map dimensions or zoom bounds.");MapProjection.Project(Center,Zoom);if(Markers.Select(m=>m.Id).Distinct().Count()!=Markers.Count)throw new ArgumentException("Marker IDs must be unique.");}
+ private MapPixel Screen(GeoPoint point){var p=MapProjection.Project(point,Zoom);var c=MapProjection.Project(Center,Zoom);return new(p.X-c.X+Width/2d,p.Y-c.Y+Height/2d);}
+ private string Path(MapShape shape)=>string.Join(' ',shape.Paths.Select(points=>string.Join(' ',points.Select((p,i)=>{var v=Screen(p);return $"{(i==0?"M":"L")}{F(v.X)} {F(v.Y)}";}))+(shape.Closed?" Z":"")));
+ private sealed record Tile(double X,double Y,string Url);
+ private IEnumerable<Tile> Tiles(){var c=MapProjection.Project(Center,Zoom);var left=c.X-Width/2d;var top=c.Y-Height/2d;var count=1<<Zoom;for(int y=(int)Math.Floor(top/256);y<=(int)Math.Floor((top+Height)/256);y++)for(int x=(int)Math.Floor(left/256);x<=(int)Math.Floor((left+Width)/256);x++){if(y<0||y>=count)continue;var wrapped=(x%count+count)%count;yield return new(x*256-left,y*256-top,TileUrlTemplate!.Replace("{z}",Zoom.ToString(CultureInfo.InvariantCulture)).Replace("{x}",wrapped.ToString(CultureInfo.InvariantCulture)).Replace("{y}",y.ToString(CultureInfo.InvariantCulture)));}}
+ private IReadOnlyList<List<MapMarker>> Clusters(){var groups=new List<List<MapMarker>>();foreach(var marker in Markers){var point=Screen(marker.Location);if(point.X< -50||point.X>Width+50||point.Y< -50||point.Y>Height+50)continue;var group=ClusterMarkers&&Zoom<MaxZoom?groups.FirstOrDefault(g=>{var p=Screen(g[0].Location);return Math.Abs(p.X-point.X)<32&&Math.Abs(p.Y-point.Y)<32;}):null;if(group is null)groups.Add([marker]);else group.Add(marker);}return groups;}
+ public async Task ZoomAsync(int delta){if(!Enabled)return;Zoom=Math.Clamp(Zoom+delta,MinZoom,MaxZoom);await ZoomChanged.InvokeAsync(Zoom);await ViewChanged.InvokeAsync(new(Center,Zoom));}
+ public async Task PanAsync(double dx,double dy){if(!Enabled)return;var c=MapProjection.Project(Center,Zoom);Center=MapProjection.Unproject(new(c.X+dx,c.Y+dy),Zoom);Center=Center with{Latitude=Math.Clamp(Center.Latitude,-MapProjection.MaxLatitude,MapProjection.MaxLatitude)};await CenterChanged.InvokeAsync(Center);await ViewChanged.InvokeAsync(new(Center,Zoom));}
+ private void PanStart(PointerEventArgs e){if(!Enabled||e.Button!=0)return;_x=e.ClientX;_y=e.ClientY;_panning=true;}
+ private async Task PanMove(PointerEventArgs e){if(!_panning)return;var dx=_x-e.ClientX;var dy=_y-e.ClientY;_x=e.ClientX;_y=e.ClientY;await PanAsync(dx,dy);}
+ private void PanEnd()=>_panning=false;
+ private async Task KeyDown(KeyboardEventArgs e){switch(e.Key){case "ArrowLeft":await PanAsync(-40,0);break;case "ArrowRight":await PanAsync(40,0);break;case "ArrowUp":await PanAsync(0,-40);break;case "ArrowDown":await PanAsync(0,40);break;case "+":case "=":await ZoomAsync(1);break;case "-":await ZoomAsync(-1);break;}}
+ private async Task SelectMarker(MapMarker marker){if(!Enabled)return;_selected=marker;await MarkerClick.InvokeAsync(marker);}
+ private Task MarkerKey(KeyboardEventArgs e,MapMarker m)=>e.Key is "Enter" or " "?SelectMarker(m):Task.CompletedTask;
+ private Task ShapeKey(KeyboardEventArgs e,MapShape s)=>Enabled&&e.Key is "Enter" or " "?ShapeClick.InvokeAsync(s):Task.CompletedTask;
+ private Task ClusterKey(KeyboardEventArgs e,List<MapMarker> c)=>e.Key is "Enter" or " "?ExpandCluster(c):Task.CompletedTask;
+ private async Task ExpandCluster(List<MapMarker> markers){Center=markers[0].Location;await CenterChanged.InvokeAsync(Center);await ZoomAsync(2);}
+ public async Task FitAsync(){if(Markers.Count==0||!Enabled)return;Center=new(Markers.Average(m=>m.Location.Latitude),Markers.Average(m=>m.Location.Longitude));Zoom=MinZoom;for(int z=MaxZoom;z>=MinZoom;z--){Zoom=z;var pixels=Markers.Select(m=>Screen(m.Location)).ToArray();if(pixels.All(p=>p.X>=35&&p.X<=Width-35&&p.Y>=35&&p.Y<=Height-35))break;}await CenterChanged.InvokeAsync(Center);await ZoomChanged.InvokeAsync(Zoom);await ViewChanged.InvokeAsync(new(Center,Zoom));}
+}

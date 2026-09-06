@@ -1,0 +1,7 @@
+.fx-dock-manager{position:relative;display:flex;flex-direction:column;min-width:0;border:1px solid var(--fx-border,#cbd5e1);background:var(--fx-surface,#fff)}
+.fx-dock-manager ::deep .fx-dock-group{border:1px solid var(--fx-border,#cbd5e1);box-sizing:border-box;flex:1;min-height:0}
+.fx-dock-manager ::deep .fx-dock-tabs{background:var(--fx-subtle,#f1f5f9);padding:4px}
+.fx-dock-manager ::deep [role=tab][aria-selected=true]{background:var(--fx-primary,#2563eb);color:white}
+.fx-dock-auto-hidden{display:flex;gap:4px;padding:4px}
+.fx-dock-drawer{position:absolute;inset:36px auto 0 0;width:min(380px,100%);background:var(--fx-surface,#fff);box-shadow:4px 0 12px #0003;z-index:10;overflow:auto}
+.fx-dock-manager ::deep .fx-splitter{flex:1;min-height:0}

@@ -1,0 +1,19 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<div class="fx-chunk-progress @CssClass @Orientation.ToString().ToLowerInvariant()" style="@ResolvedStyle" role="progressbar" aria-label="@AriaLabel" aria-valuemin="@Min" aria-valuemax="@Max" aria-valuenow="@(Indeterminate?null:Math.Clamp(Value,Min,Max))" aria-valuetext="@(Indeterminate?"In progress":$"{Percent:0}%")">
+@for(var i=0;i<ChunkCount;i++){<span class="@(i < Completed ? "complete":null) @(Indeterminate?"indeterminate":null)" aria-hidden="true"></span>}
+@if(ShowValue){<output>@(Indeterminate?"…":$"{Percent:0}%")</output>}
+</div>
+@code {
+ [Parameter] public double Value {get;set;}
+ [Parameter] public double Min {get;set;}
+ [Parameter] public double Max {get;set;}=100;
+ [Parameter] public int ChunkCount {get;set;}=10;
+ [Parameter] public bool Indeterminate {get;set;}
+ [Parameter] public bool ShowValue {get;set;}=true;
+ [Parameter] public FlexOrientation Orientation {get;set;}
+ [Parameter] public string AriaLabel {get;set;}="Progress";
+ private double Percent=>100*(Math.Clamp(Value,Min,Max)-Min)/(Max-Min);
+ private int Completed=>(int)Math.Floor(ChunkCount*Percent/100);
+ protected override void OnParametersSet(){if(!double.IsFinite(Min)||!double.IsFinite(Max)||!double.IsFinite(Value)||Max<=Min||ChunkCount is <1 or >1000)throw new ArgumentOutOfRangeException(nameof(ChunkCount),"Use finite Min < Max and 1–1000 chunks.");}
+}

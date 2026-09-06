@@ -1,0 +1,171 @@
+@namespace Fx.ControlKit.Gantt
+@inherits FlexControlBase
+@using System.Globalization
+<div class="fx-gantt @CssClass" id="@Id" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    <ToolbarControl ShowCaptionsToggle="false">
+        <ButtonControl Disabled="@(!CanEdit)" OnClick="CreateAsync">Add task</ButtonControl>
+        <ButtonControl Disabled="@(!CanEdit||_selected==null)" OnClick="()=>EditAsync(_selected!)">Edit</ButtonControl>
+        <ButtonControl Disabled="@(!CanEdit||_selected==null)" OnClick="()=>ConfirmDeleteAsync(_selected!)">Delete</ButtonControl>
+        <ButtonControl OnClick="()=>_grid!.ExpandAllAsync()">Expand all</ButtonControl>
+        <ButtonControl OnClick="()=>_grid!.CollapseAllAsync()">Collapse all</ButtonControl>
+        <DropDownListControl TItem="string" TValue="string" DataSource="@(Enum.GetNames<GanttView>())" Value="@View.ToString()" ValueChanged="SetViewAsync" Width="100px" AriaLabel="Gantt timescale" />
+    </ToolbarControl>
+    @if(ErrorMessage!=null){<div role="alert" class="fx-gantt-error">@ErrorMessage</div>}
+    <TreeGridControl @ref="_grid" TValue="GanttTask" DataSource="@_tasks" IdMapping="Id" ParentIdMapping="ParentId" Height="@Height" CssClass="fx-gantt-tree"
+                     ToggleOnRowClick="false" RowSelected="e=>_selected=e.Data?.Id" RowDoubleClicked="e=>EditAsync(e.Data!.Id)" AllowSorting="false" AllowFiltering="false">
+        <TreeGridColumn Field="Title" HeaderText="Task" Width="240px" AllowEditing="false">
+            <Template Context="item">@if(TaskTemplate!=null){@TaskTemplate((GanttTask)item)}else{@(((GanttTask)item).Title)}</Template>
+        </TreeGridColumn>
+        <TreeGridColumn Field="Start" HeaderText="Start" Width="110px" Format="d" Type="ColumnType.Date" AllowEditing="false" />
+        <TreeGridColumn Field="End" HeaderText="End" Width="110px" Format="d" Type="ColumnType.Date" AllowEditing="false" />
+        <TreeGridColumn Field="Id" HeaderText="Timeline" Width="@($"{F(TimelineWidth)}px")" MinWidth="@($"{F(TimelineWidth)}px")" AllowEditing="false">
+            <HeaderTemplate>
+                <div class="fx-gantt-axis" style="@($"width:{F(TimelineWidth)}px")">
+                    @foreach(var tick in Ticks){<span style="@($"left:{F((tick-_start).TotalDays*DayWidth)}px")">@tick.ToString(View==GanttView.Year?"yyyy MMM":"MMM d",CultureInfo.CurrentCulture)</span>}
+                </div>
+            </HeaderTemplate>
+            <Template Context="item">
+                @{var task=Shown((GanttTask)item);var bar=Geometry(task);}
+                <div class="fx-gantt-timeline" style="@($"width:{F(TimelineWidth)}px;background-size:{F(DayWidth)}px 100%")">
+                    @DependencyLines(task)
+                    <div class="fx-gantt-task" style="@($"left:{F(bar.Left)}px;width:{F(bar.Width)}px;background:{task.Color}")" title="@($"{task.Title}: {task.Start:g} – {task.End:g}; {task.Progress}%")">
+                        <ButtonControl CssClass="fx-gantt-move" Disabled="@(!CanEdit)" OnClick="()=>EditAsync(task.Id)" @onmousedown="e=>BeginDrag(task,e,0)" PreventMouseDownDefault="true" aria-label="@($"Edit {task.Title}")">
+                            <span class="fx-gantt-progress" style="@($"width:{task.Progress}%")"></span><span class="fx-gantt-bar-label">@task.Title</span>
+                        </ButtonControl>
+                        @if(CanEdit&&AllowTaskDrag)
+                        {
+                            <ButtonControl CssClass="fx-gantt-resize start" @onmousedown="e=>BeginDrag(task,e,-1)" StopPropagation="true" PreventMouseDownDefault="true" @onkeydown="e=>ResizeKeyAsync(task,e,-1)" aria-label="@($"Resize start of {task.Title}")">⋮</ButtonControl>
+                            <ButtonControl CssClass="fx-gantt-resize end" @onmousedown="e=>BeginDrag(task,e,1)" StopPropagation="true" PreventMouseDownDefault="true" @onkeydown="e=>ResizeKeyAsync(task,e,1)" aria-label="@($"Resize end of {task.Title}")">⋮</ButtonControl>
+                        }
+                    </div>
+                </div>
+            </Template>
+        </TreeGridColumn>
+    </TreeGridControl>
+    @if(_draft!=null)
+    {
+        <DialogControl Visible="true" Header="@(_creating?"Add task":"Edit task")" Width="480px" OnClose="CancelEditAsync">
+            <FormControl Model="@_draft" OnValidSubmit="SaveEditAsync" SubmitText="Save task">
+                <ChildContent>
+                    <FormItemControl Field="Title" />
+                    <FormItemControl Field="Start" ShowTime="true" />
+                    <FormItemControl Field="End" ShowTime="true" />
+                    <FormItemControl Field="Progress" />
+                    <FormItemControl Field="ParentId" Label="Parent task">
+                        <Template Context="field"><DropDownListControl TItem="GanttTask" TValue="string" DataSource="@ParentChoices" TextFieldName="Title" ValueFieldName="Id" Value="@((string?)field.Value??string.Empty)" ValueChanged="v=>field.SetValueAsync(v)" AriaLabel="Parent task" Enabled="@CanEdit" Width="100%" /></Template>
+                    </FormItemControl>
+                    <FormItemControl Field="Predecessors" Label="Predecessor tasks">
+                        <Template Context="field"><MultiSelectComboControl DataSource="@DependencyChoices" SelectedValues="@SelectedDependencies" SelectedValuesChanged="v=>SetDependenciesAsync(field,v)" Disabled="@(!CanEdit)" Width="100%" Placeholder="Choose predecessor tasks" /></Template>
+                    </FormItemControl>
+                </ChildContent>
+                <ButtonsTemplate><ButtonControl OnClick="CancelEditAsync">Cancel</ButtonControl><ButtonControl ButtonType="submit" Disabled="@_changing">Save task</ButtonControl></ButtonsTemplate>
+            </FormControl>
+            @if(ErrorMessage!=null){<div role="alert">@ErrorMessage</div>}
+        </DialogControl>
+    }
+    @if(_deleteId!=null)
+    {
+        <DialogControl Visible="true" Header="Delete task?" OnClose="CancelDeleteAsync"><ChildContent>Delete @_tasks.First(t=>t.Id==_deleteId).Title?</ChildContent><FooterContent><ButtonControl OnClick="CancelDeleteAsync">Cancel</ButtonControl><ButtonControl OnClick="DeleteConfirmedAsync">Delete</ButtonControl></FooterContent></DialogControl>
+    }
+    @if(_dragOriginal!=null)
+    {
+        <div class="fx-gantt-drag-surface" @onmousemove="PreviewDrag" @onmouseup="CompleteDragAsync" @onmouseleave="CancelDrag" @onkeydown="DragKey" tabindex="0"></div>
+    }
+</div>
+@code {
+    [Parameter] public IReadOnlyList<GanttTask> Tasks {get;set;}=Array.Empty<GanttTask>();
+    [Parameter] public EventCallback<IReadOnlyList<GanttTask>> TasksChanged {get;set;}
+    [Parameter] public EventCallback<GanttTaskChangingArgs> TaskChanging {get;set;}
+    [Parameter] public bool AllowEditing {get;set;}=true;
+    [Parameter] public bool AllowTaskDrag {get;set;}=true;
+    [Parameter] public bool EnforceDependencies {get;set;}=true;
+    [Parameter] public GanttView View {get;set;}=GanttView.Week;
+    [Parameter] public EventCallback<GanttView> ViewChanged {get;set;}
+    [Parameter] public string Height {get;set;}="450px";
+    [Parameter] public RenderFragment<GanttTask>? TaskTemplate {get;set;}
+    public string? ErrorMessage {get;private set;}
+    private IReadOnlyList<GanttTask>? _lastTasks;
+    private List<GanttTask> _tasks=[];
+    private TreeGridControl<GanttTask>? _grid;
+    private string? _selected,_deleteId;
+    private GanttTask? _draft,_dragOriginal,_dragPreview;
+    private bool _creating,_changing;
+    private double _dragX;
+    private int _resizeEdge;
+    private DateTime _start=DateTime.Today,_end=DateTime.Today.AddDays(14);
+    private bool CanEdit=>Enabled&&AllowEditing&&!_changing;
+    private double DayWidth=>View switch{GanttView.Day=>72,GanttView.Week=>32,GanttView.Month=>8,_=>2};
+    private double TimelineWidth=>Math.Max(14,(_end-_start).TotalDays)*DayWidth;
+    private IEnumerable<DateTime> Ticks{get{var step=View switch{GanttView.Day=>1,GanttView.Week=>7,GanttView.Month=>30,_=>90};for(var d=_start;d<=_end;){yield return d;if((_end-d).TotalDays<step)break;d=d.AddDays(step);}}}
+    private static string F(double value)=>value.ToString("0.###",CultureInfo.InvariantCulture);
+    protected override void OnParametersSet()
+    {
+        if(!ReferenceEquals(Tasks,_lastTasks)){GanttSchedule.Validate(Tasks,false);_tasks=Tasks.Select(t=>t.Clone()).ToList();_lastTasks=Tasks;Recalculate();}
+    }
+    private void Recalculate()
+    {
+        _start=_tasks.Count>0?_tasks.Min(t=>t.Start).Date:DateTime.Today;
+        var end=_tasks.Count>0?_tasks.Max(t=>t.End).Date:CalendarDateMath.AddDays(_start,14);
+        _end=CalendarDateMath.AddDays(end,2);if(_end<=_start)_end=CalendarDateMath.AddDays(_start,1);
+    }
+    private GanttTask Shown(GanttTask task)=>_dragPreview?.Id==task.Id?_dragPreview:task;
+    private (double Left,double Width) Geometry(GanttTask task)=>TimelineScale.Bar(task.Start.Ticks/(double)TimeSpan.TicksPerDay,task.End.Ticks/(double)TimeSpan.TicksPerDay,_start.Ticks/(double)TimeSpan.TicksPerDay,_start.Ticks/(double)TimeSpan.TicksPerDay+TimelineWidth/DayWidth,TimelineWidth);
+    public Task EditAsync(string id){if(!CanEdit)return Task.CompletedTask;_draft=_tasks.First(t=>t.Id==id).Clone();_creating=false;ErrorMessage=null;return InvokeAsync(StateHasChanged);}
+    public Task CreateAsync(){if(!CanEdit)return Task.CompletedTask;_draft=new(){Start=_start,End=CalendarDateMath.AddDays(_start,1)};_creating=true;ErrorMessage=null;return InvokeAsync(StateHasChanged);}
+    private Task SetDependenciesAsync(FormFieldContext field,List<string> values)=>field.SetValueAsync(string.Join(",",_tasks.Where(t=>values.Contains(DependencyLabel(t))).Select(t=>t.Id)));
+    private IEnumerable<GanttTask> ParentChoices=>new[]{new GanttTask{Id="",Title="(No parent)"}}.Concat(_tasks.Where(t=>t.Id!=_draft?.Id));
+    private static string DependencyLabel(GanttTask task)=>$"{task.Title} [{task.Id}]";
+    private IEnumerable<string> DependencyChoices=>_tasks.Where(t=>t.Id!=_draft?.Id).Select(DependencyLabel);
+    private List<string> SelectedDependencies=>_tasks.Where(t=>_draft?.PredecessorIds.Contains(t.Id)==true).Select(DependencyLabel).ToList();
+    private Task CancelEditAsync(){_draft=null;ErrorMessage=null;return Task.CompletedTask;}
+    private async Task SaveEditAsync(){if(_draft!=null&&await ChangeAsync(_draft,_creating?GanttChangeAction.Create:GanttChangeAction.Update))_draft=null;}
+    private Task ConfirmDeleteAsync(string id){if(CanEdit)_deleteId=id;return Task.CompletedTask;}
+    private Task CancelDeleteAsync(){_deleteId=null;return Task.CompletedTask;}
+    private async Task DeleteConfirmedAsync(){if(_deleteId is {} id){var task=_tasks.First(t=>t.Id==id);_deleteId=null;await ChangeAsync(task,GanttChangeAction.Delete);}}
+    public async Task<bool> ChangeAsync(GanttTask task,GanttChangeAction action)
+    {
+        if(!CanEdit)return false;_changing=true;ErrorMessage=null;
+        try
+        {
+            var previous=_tasks.FirstOrDefault(t=>t.Id==task.Id);
+            if(action==GanttChangeAction.Create&&previous!=null||action!=GanttChangeAction.Create&&previous==null)throw new ArgumentException("Task ID does not match the requested operation.");
+            var next=_tasks.Select(t=>t.Clone()).ToList();
+            if(action==GanttChangeAction.Delete){if(next.Any(t=>t.ParentId==task.Id||t.PredecessorIds.Contains(task.Id)))throw new ArgumentException("Remove child tasks and dependency links before deleting this task.");next.RemoveAll(t=>t.Id==task.Id);}
+            else if(action==GanttChangeAction.Create)next.Add(task.Clone());else next[next.FindIndex(t=>t.Id==task.Id)]=task.Clone();
+            GanttSchedule.Validate(next,EnforceDependencies);
+            var args=new GanttTaskChangingArgs{Action=action,Previous=previous?.Clone(),Task=task.Clone()};await TaskChanging.InvokeAsync(args);if(args.Cancel)return false;
+            _tasks=next;Recalculate();await TasksChanged.InvokeAsync(_tasks.Select(t=>t.Clone()).ToArray());return true;
+        }
+        catch(Exception ex) when(ex is ArgumentException or System.ComponentModel.DataAnnotations.ValidationException){ErrorMessage=ex.Message;return false;}
+        finally{_changing=false;await InvokeAsync(StateHasChanged);}
+    }
+    private async Task SetViewAsync(string view){View=Enum.Parse<GanttView>(view);await ViewChanged.InvokeAsync(View);}
+    private void BeginDrag(GanttTask task,MouseEventArgs e,int edge){if(!CanEdit||!AllowTaskDrag||e.Button!=0)return;_dragOriginal=task.Clone();_dragPreview=task.Clone();_dragX=e.ClientX;_resizeEdge=edge;}
+    private static DateTime MoveDate(DateTime date,int days)=>CalendarDateMath.AddDays(date,days).Add(date.TimeOfDay);
+    private void PreviewDrag(MouseEventArgs e)
+    {
+        if(_dragOriginal==null)return;var days=(int)Math.Round((e.ClientX-_dragX)/DayWidth);_dragPreview=_dragOriginal.Clone();
+        if(_resizeEdge<=0)_dragPreview.Start=MoveDate(_dragOriginal.Start,days);
+        if(_resizeEdge>=0)_dragPreview.End=MoveDate(_dragOriginal.End,days);
+    }
+    private async Task CompleteDragAsync(MouseEventArgs e){PreviewDrag(e);var task=_dragPreview;CancelDrag();if(task!=null)await ChangeAsync(task,GanttChangeAction.Update);}
+    private void DragKey(KeyboardEventArgs e){if(e.Key=="Escape")CancelDrag();}
+    private void CancelDrag(){_dragOriginal=null;_dragPreview=null;}
+    private Task ResizeKeyAsync(GanttTask task,KeyboardEventArgs e,int edge)
+    {
+        if(e.Key is not ("ArrowLeft" or "ArrowRight"))return Task.CompletedTask;
+        var next=task.Clone();var days=e.Key=="ArrowLeft"?-1:1;if(edge<0)next.Start=MoveDate(next.Start,days);else next.End=MoveDate(next.End,days);
+        return ChangeAsync(next,GanttChangeAction.Update);
+    }
+    private RenderFragment DependencyLines(GanttTask task)=>builder=>
+    {
+        var visible=_grid?.GetVisibleRecords().ToList()??_tasks;var row=visible.FindIndex(t=>t.Id==task.Id);var to=Geometry(task).Left;
+        builder.OpenElement(0,"svg");builder.AddAttribute(1,"class","fx-gantt-links");builder.AddAttribute(2,"width",F(TimelineWidth));builder.AddAttribute(3,"height","34");builder.AddAttribute(4,"aria-hidden","true");
+        foreach(var id in task.PredecessorIds)
+        {
+            var index=visible.FindIndex(t=>t.Id==id);if(index<0)continue;var prior=Geometry(Shown(visible[index]));var from=prior.Left+prior.Width;var y=(index-row)*34+17;
+            builder.OpenElement(5,"path");builder.AddAttribute(6,"d",$"M{F(from)} {y}H{F(from+8)}V17H{F(to)}m-5 -4 5 4-5 4");builder.AddAttribute(7,"fill","none");builder.AddAttribute(8,"stroke","#64748b");builder.AddAttribute(9,"stroke-width","1.5");builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+}

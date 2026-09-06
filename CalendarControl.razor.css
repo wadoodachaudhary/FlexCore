@@ -1,0 +1,10 @@
+.fx-calendar{display:inline-flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--fx-border,#cbd5e1);border-radius:4px;background:var(--fx-surface,#fff);min-width:260px;color:var(--fx-text,#202630)}
+.fx-calendar-header{display:flex;justify-content:space-between;gap:4px}
+.fx-calendar-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));text-align:center}
+.period .fx-calendar-row{grid-template-columns:repeat(3,minmax(0,1fr))}
+.fx-calendar-cell{padding:2px}
+.fx-calendar-cell ::deep button{width:100%;min-width:0;padding:5px;border-color:transparent;background:transparent;color:inherit}
+.fx-calendar-cell.selected ::deep button{background:var(--fx-primary,#2563eb);color:white}
+.fx-calendar-cell.today ::deep button{box-shadow:inset 0 0 0 1px var(--fx-primary,#2563eb)}
+.fx-calendar-cell.outside{opacity:.5}
+.fx-calendar-cell ::deep button:focus-visible{outline:2px solid var(--fx-primary,#2563eb);outline-offset:0}

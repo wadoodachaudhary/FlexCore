@@ -1,0 +1,17 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<PopupControl IsOpen="@IsOpen" IsOpenChanged="IsOpenChanged" Anchor="Anchor" AnchorId="@AnchorId" Width="@Width" Placement="@Placement" Enabled="@Enabled" Visible="@Visible" CssClass="@CssClass" AriaLabel="@Header">
+    <ChildContent><section class="fx-popover"><header><strong>@Header</strong><ButtonControl Title="Close popover" aria-label="Close popover" OnClick="Close">×</ButtonControl></header><div>@ChildContent</div>@if(FooterContent is not null){<footer>@FooterContent</footer>}</section></ChildContent>
+</PopupControl>
+@code {
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback<bool> IsOpenChanged { get; set; }
+    [Parameter] public string Header { get; set; }="Details";
+    [Parameter] public RenderFragment<PopupAnchorContext>? Anchor { get; set; }
+    [Parameter] public string? AnchorId { get; set; }
+    [Parameter] public string Width { get; set; }="320px";
+    [Parameter] public PopupPlacement Placement { get; set; }=PopupPlacement.BottomStart;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+    private Task Close()=>IsOpenChanged.InvokeAsync(false);
+}

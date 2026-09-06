@@ -7,7 +7,7 @@ namespace Fx.ControlKit.Grid;
 
 /// <summary>
 /// TreeGridControl — hierarchical data grid with expand/collapse, parent/child mapping,
-/// and row selection. Equivalent to SyncFusion's SfTreeGrid.
+/// typed filtering, sibling sorting, paging, export, and row selection.
 /// </summary>
 public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOwner
 {
@@ -266,6 +266,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        foreach (var node in _flatNodes.Where(n => n.IsExpanded && NeedsChildLoad(n) && !IsLoading(n)).ToArray())
+            await SetNodeExpandedAsync(node, true);
         if (_columns.Count != _lastRenderedColumnCount)
         {
             _lastRenderedColumnCount = _columns.Count;
@@ -292,6 +294,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             catch { }
         }
 
+        if (treeScrollModule is not null && (FrozenColumns > 0 || ShowCheckboxes || _columns.Any(c => FrozenPosition(c) is not null)))
+            try { await treeScrollModule.InvokeVoidAsync("syncTreeGridLayout", _treeGridElement); } catch { }
+        if (_focusEditorPending && _focusEditor is not null)
+        {
+            _focusEditorPending = false; _pendingTreeFocus = false; _pendingKeyboardFocusNode = null;
+            await _focusEditor.FocusAsync();
+        }
+
         if (_pendingTreeFocus)
         {
             _pendingTreeFocus = false;
@@ -301,6 +311,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         else if (_pendingKeyboardFocusNode is { } pendingNode)
         {
             _pendingKeyboardFocusNode = null;
+            pendingNode = _flatNodes.FirstOrDefault(n => Equals(n.Id, pendingNode.Id)) ?? pendingNode;
             try
             {
                 if (treeScrollModule is not null)
@@ -544,7 +555,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private void EndLegacyThumbDrag() => _legacyThumbDragging = false;
 
-    internal List<TreeGridColumn> VisibleColumns => _columns.Where(IsColumnVisible).ToList();
+    internal List<TreeGridColumn> VisibleColumns => _columns.Where(IsColumnVisible).OrderBy(c => FrozenPosition(c) switch { FrozenColumnPosition.Left => 0, FrozenColumnPosition.Right => 2, _ => 1 }).ToList();
 
     internal string TreeGridCssClass
     {
@@ -877,10 +888,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     protected override void OnParametersSet()
     {
+        if (PageSize < 1) throw new ArgumentException("PageSize must be positive.");
         // Only rebuild the tree when DataSource actually changes, to preserve
         // expand/collapse state across re-renders triggered by StateHasChanged.
         if (!_treeBuilt || !ReferenceEquals(DataSource, _previousDataSource))
         {
+            var ownPublication = ReferenceEquals(DataSource, _publishedRecords) && _publishedRecords is not null;
+            _dataGeneration++; _loadedChildren.Clear(); _loadingChildren.Clear(); _expansionIntent.Clear(); _loadError = null;
+            _localRecords = null; _publishedRecords = null;
+            if (!ownPublication) { ClearEditSessions(); _completedChildLoads.Clear(); }
             // Preserve existing expand/collapse states before rebuilding
             Dictionary<object, bool>? expandStates = null;
             if (_treeBuilt && _flatNodes.Count > 0)
@@ -908,32 +924,40 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             _previousDataSource = DataSource;
             _treeBuilt = true;
         }
+        ReceiveCheckedItems();
     }
+
+    private static readonly object RootKey = new();
 
     // ── Tree Building ────────────────────────────────────────────────────
 
     private void BuildTree()
     {
-        _flatNodes.Clear();
-        if (DataSource == null || string.IsNullOrEmpty(IdMapping) || string.IsNullOrEmpty(ParentIdMapping))
+        var nextNodes = new List<TreeNode<TValue>>();
+        if ((DataSource == null && _localRecords == null) || string.IsNullOrEmpty(IdMapping) || string.IsNullOrEmpty(ParentIdMapping))
+        {
+            _flatNodes = nextNodes;
             return;
+        }
 
-        var items = DataSource.ToList();
+        var items = PreviewRecords.ToList();
         var idProp = typeof(TValue).GetProperty(IdMapping);
         var parentIdProp = typeof(TValue).GetProperty(ParentIdMapping);
-        if (idProp == null || parentIdProp == null) return;
+        if (idProp == null || parentIdProp == null) throw new ArgumentException("Invalid tree ID or parent mapping.");
 
         // Build lookup: parentId -> children
         var childrenMap = new Dictionary<object, List<(TValue Item, object Id)>>();
         var allItems = new List<(TValue Item, object? Id, object? ParentId)>();
 
+        var uniqueIds = new HashSet<object>();
         foreach (var item in items)
         {
             var id = idProp.GetValue(item);
+            if (id is null || !uniqueIds.Add(id)) throw new ArgumentException("Tree IDs must be non-null and unique.");
             var parentId = parentIdProp.GetValue(item);
             allItems.Add((item, id, parentId));
 
-            var parentKey = parentId ?? "__root__";
+            var parentKey = parentId ?? RootKey;
             if (!childrenMap.ContainsKey(parentKey))
                 childrenMap[parentKey] = new();
             childrenMap[parentKey].Add((item, id!));
@@ -946,7 +970,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         void AddNodes(object? parentKey, int level, IReadOnlyList<bool> ancestorLineContinuations)
         {
-            var key = parentKey ?? "__root__";
+            if (level > 512) throw new ArgumentException("Tree depth cannot exceed 512 levels.");
+            var key = parentKey ?? RootKey;
             if (!childrenMap.TryGetValue(key, out var children)) return;
             SortRows(children, row => row.Item);
 
@@ -954,9 +979,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             {
                 var (item, id) = children[index];
                 var hasChildren = (childrenMap.ContainsKey(id) && childrenMap[id].Count > 0)
-                    || (TreatAsParent?.Invoke(item) == true);
+                    || MayHaveUnloadedChildren(item, id);
                 var isLastSibling = index == children.Count - 1;
-                _flatNodes.Add(new TreeNode<TValue>
+                nextNodes.Add(new TreeNode<TValue>
                 {
                     Data = item,
                     Level = level,
@@ -981,9 +1006,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         {
             var root = roots[index];
             var hasChildren = (root.Id != null && childrenMap.ContainsKey(root.Id) && childrenMap[root.Id].Count > 0)
-                || (TreatAsParent?.Invoke(root.Item) == true);
+                || (root.Id is not null && MayHaveUnloadedChildren(root.Item, root.Id));
             var isLastSibling = index == roots.Count - 1;
-            _flatNodes.Add(new TreeNode<TValue>
+            nextNodes.Add(new TreeNode<TValue>
             {
                 Data = root.Item,
                 Level = 0,
@@ -998,9 +1023,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             if (hasChildren && root.Id != null)
                 AddNodes(root.Id, 1, new[] { !isLastSibling });
         }
+        if (nextNodes.Count != items.Count) throw new ArgumentException("Tree parent mappings contain a cycle.");
+        _flatNodes = nextNodes;
     }
 
     // ── Visible Nodes (respecting expand/collapse) ──────────────────────
+
+    /// <summary>Current display order after hierarchy expansion and sorting.</summary>
+    public IReadOnlyList<TValue> GetVisibleRecords() => VisibleNodes.Select(n => n.Data).ToArray();
 
     private IEnumerable<TreeNode<TValue>> VisibleNodes
     {
@@ -1028,7 +1058,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 return result;
 
             var included = BuildFilterInclusionSet();
-            return result.Where(included.Contains).ToList();
+            _filteredParentIds = included.Where(n => n.ParentId is not null).Select(n => n.ParentId!).ToHashSet();
+            return _flatNodes.Where(included.Contains).ToList();
         }
     }
 
@@ -1036,6 +1067,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task ToggleNode(TreeNode<TValue> node)
     {
+        if (!await FinishActiveEditorAsync()) return;
         await SetNodeExpandedAsync(node, !node.IsExpanded);
     }
 
@@ -1047,21 +1079,29 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task SetNodeExpandedAsync(TreeNode<TValue> node, bool expanded)
     {
-        if (!node.HasChildren || node.IsExpanded == expanded)
-            return;
-
-        node.IsExpanded = expanded;
-
+        if (node.Id is null || !node.HasChildren) return;
+        var id = node.Id;
+        _expansionIntent[id] = expanded;
+        if (IsLoading(node)) return;
+        if (expanded && NeedsChildLoad(node))
+        {
+            if (!await LoadNodeChildrenAsync(node)) return;
+            node = _flatNodes.First(n => Equals(n.Id, id));
+            expanded = _expansionIntent.GetValueOrDefault(id, true);
+        }
+        else if (node.IsExpanded == expanded) return;
+        node.IsExpanded = expanded && node.HasChildren;
         if (node.IsExpanded && Expanded.HasDelegate)
             await Expanded.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
         else if (!node.IsExpanded && Collapsed.HasDelegate)
             await Collapsed.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
-
         StateHasChanged();
     }
 
     private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
     {
+        if (_activeEdit is not null && !await FinishActiveEditorAsync()) return;
+        node = _flatNodes.FirstOrDefault(n => Equals(n.Id, node.Id)) ?? node;
         // (In-cell edits are cleared centrally in SelectNodeAsync — clicks on the
         // editor's own display button stop propagation and never land here.)
 
@@ -1139,6 +1179,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task HandleRowDoubleClick(TreeNode<TValue> node, int visibleIndex)
     {
+        if (EditSettingsRef?.AllowEditing == true && EditSettingsRef.AllowEditOnDblClick)
+        { await BeginEditFromUiAsync(node.Id!, VisibleColumns.ElementAtOrDefault(CurrentCellColumnIndex)?.Field); return; }
         await SelectNodeAsync(node, visibleIndex);
 
         if (RowDoubleClicked.HasDelegate)
@@ -1159,6 +1201,17 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
+        if (_activeEdit is not null) return;
+        if (e.Key == "F2" || (e.Key == "Enter" && EditSettingsRef?.EditOnEnterKey == true))
+        {
+            if (_selectedItem is not null) await BeginEditFromUiAsync(RecordId(_selectedItem), VisibleColumns.ElementAtOrDefault(CurrentCellColumnIndex)?.Field);
+            return;
+        }
+        if (e.Key is " " or "Spacebar" && ShowCheckboxes && _selectedItem is not null)
+        { var id = RecordId(_selectedItem); await SetRowCheckedAsync(id, !_checkedKeys.Contains(id)); return; }
+        if (e.CtrlKey && e.Key is "ArrowRight" or "ArrowLeft" && AllowRowDragAndDrop)
+        { if (e.Key == "ArrowRight") await IndentSelectedAsync(); else await OutdentSelectedAsync(); return; }
+
         if (OnHostKeyDown.HasDelegate)
             await OnHostKeyDown.InvokeAsync(e);
 
@@ -1412,6 +1465,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task SelectNodeAsync(TreeNode<TValue> node, int visibleIndex)
     {
         if (!AllowSelection) return;
+        if (_activeEdit is not null && !Equals(_activeEdit.Id, node.Id) && !await FinishActiveEditorAsync()) return;
+        node = _flatNodes.FirstOrDefault(n => Equals(n.Id, node.Id)) ?? node;
 
         // Selection moving off the row being edited (click, keyboard, or
         // programmatic) ends the in-cell edit.
@@ -1421,6 +1476,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         var prevSelected = _selectedItem;
         _selectedItem = node.Data;
         _selectedIndex = visibleIndex;
+        if (AllowPaging && visibleIndex >= 0) _page = visibleIndex / PageSize + 1;
 
         if (prevSelected != null && RowDeselected.HasDelegate)
             await RowDeselected.InvokeAsync(new TreeRowSelectEventArgs<TValue> { Data = prevSelected });
@@ -1468,6 +1524,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     public async Task ExpandAllAsync()
     {
+        if (!await FinishActiveEditorAsync()) return;
         foreach (var node in _flatNodes)
             if (node.HasChildren)
                 node.IsExpanded = true;
@@ -1476,6 +1533,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     public async Task CollapseAllAsync()
     {
+        if (!await FinishActiveEditorAsync()) return;
+        foreach (var id in _loadingChildren.Keys) _expansionIntent[id] = false;
         foreach (var node in _flatNodes)
             if (node.HasChildren)
                 node.IsExpanded = false;
@@ -1571,25 +1630,21 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     // ── Column Sorting / Filtering / Options ────────────────────────────
 
-    internal async Task HandleHeaderClickAsync(TreeGridColumn column)
+    internal async Task HandleHeaderClickAsync(TreeGridColumn column, MouseEventArgs? e = null)
     {
-        if (!AllowSorting || !column.AllowSorting || string.IsNullOrWhiteSpace(column.Field))
-            return;
-
+        if (!AllowSorting || !column.AllowSorting || string.IsNullOrWhiteSpace(column.Field)) return;
         var state = GetColumnState(column);
-        var nextDirection = state.SortDirection switch
+        var next = state.SortDirection switch
         {
             null => SortDirection.Ascending,
             SortDirection.Ascending => SortDirection.Descending,
             _ => (SortDirection?)null
         };
-
-        foreach (var columnState in _columnStates.Values)
-            columnState.SortDirection = null;
-
-        state.SortDirection = nextDirection;
-        RebuildPreservingExpansion();
-        await InvokeAsync(StateHasChanged);
+        var sorts = AllowMultiSorting && e?.ShiftKey == true ? _sorts.ToList() : [];
+        var index = sorts.FindIndex(s => s.Field == column.Field);
+        if (index >= 0) sorts.RemoveAt(index);
+        if (next.HasValue) sorts.Insert(index < 0 ? sorts.Count : index, new(column.Field, next.Value));
+        await SetSortsAsync(sorts);
     }
 
     internal string GetHeaderCellCss(TreeGridColumn column)
@@ -1600,7 +1655,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             parts.Add("fx-treegrid-header-sortable");
         if (state.SortDirection.HasValue)
             parts.Add("fx-treegrid-sorted");
-        if (state.FilterActive)
+        if (HasFilter(state))
             parts.Add("fx-treegrid-filtered");
         if (AllowResizing && column.AllowResizing)
             parts.Add("fx-treegrid-resizable");
@@ -1631,49 +1686,40 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
 
         _filterPopupField = column.Field;
-        _filterDraft = GetColumnState(column).FilterValue ?? "";
+        var state = GetColumnState(column);
+        _filterDraft = state.FilterValue ?? "";
+        _filterOperatorDraft = state.FilterActive ? state.FilterOperator : column.Type == ColumnType.Text ? TextFilterOperator.Contains : TextFilterOperator.Equals;
+        _secondFilterDraft = state.SecondFilterValue ?? "";
+        _secondOperatorDraft = state.SecondFilterOperator;
+        _logicalDraft = state.LogicalFilterOperator;
     }
 
     internal async Task ApplyFilterAsync(TreeGridColumn column)
     {
-        var state = GetColumnState(column);
-        state.FilterValue = string.IsNullOrWhiteSpace(_filterDraft) ? null : _filterDraft.Trim();
-        state.FilterOperator = TextFilterOperator.Contains;
+        await SetFilterAsync(new(column.Field, _filterOperatorDraft, _filterDraft,
+            _secondOperatorDraft, _secondFilterDraft, _logicalDraft));
         _filterPopupField = null;
-        await InvokeAsync(StateHasChanged);
     }
 
     internal async Task ClearFilterAsync(TreeGridColumn column)
     {
-        var state = GetColumnState(column);
-        state.FilterValue = null;
-        state.CheckedFilterValues.Clear();
-        state.UseCheckedFilter = false;
-        state.UseNumericBoundsFilter = false;
-        state.UseNumericRangeFilter = false;
-        _filterDraft = "";
-        _filterPopupField = null;
+        if (!await FinishActiveEditorAsync()) return;
+        _columnStates.Remove(GetColumnKey(column));
+        GetColumnState(column).SortDirection = _sorts.FirstOrDefault(s => s.Field == column.Field)?.Direction;
+        _filterDraft = ""; _filterPopupField = null; _page = 1;
         await InvokeAsync(StateHasChanged);
     }
 
     public async Task ClearFiltersAsync()
     {
-        foreach (var state in _columnStates.Values)
-        {
-            state.FilterValue = null;
-            state.CheckedFilterValues.Clear();
-            state.UseCheckedFilter = false;
-            state.UseNumericBoundsFilter = false;
-            state.UseNumericRangeFilter = false;
-        }
-
-        _filterDraft = "";
-        _filterPopupField = null;
+        if (!await FinishActiveEditorAsync()) return;
+        foreach (var column in _columns) await ClearFilterAsync(column);
         await InvokeAsync(StateHasChanged);
     }
 
     internal async Task SetColumnVisibleAsync(TreeGridColumn column, bool visible)
     {
+        if (!await FinishActiveEditorAsync()) return;
         if (string.IsNullOrWhiteSpace(column.Field))
             return;
 
@@ -1729,8 +1775,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         if (!string.IsNullOrWhiteSpace(column.MinWidth))
             parts.Add($"min-width:{column.MinWidth}");
-        parts.Add($"text-align:{column.TextAlign.ToString().ToLowerInvariant()}");
-        return string.Join(";", parts);
+        parts.Add($"text-align:{column.ResolvedTextAlign.ToString().ToLowerInvariant()}");
+        return string.Join(";", parts) + FrozenStyle(column);
     }
 
     internal string GetCellStyle(TreeGridColumn column)
@@ -1744,8 +1790,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         if (!string.IsNullOrWhiteSpace(column.MinWidth))
             parts.Add($"min-width:{column.MinWidth}");
-        parts.Add($"text-align:{column.TextAlign.ToString().ToLowerInvariant()}");
-        return string.Join(";", parts);
+        parts.Add($"text-align:{column.ResolvedTextAlign.ToString().ToLowerInvariant()}");
+        return string.Join(";", parts) + FrozenStyle(column);
     }
 
     internal string? GetCellTitle(TValue? item, TreeGridColumn column)
@@ -1757,7 +1803,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
-    private bool HasActiveFilters => _columnStates.Values.Any(s => s.FilterActive);
+    private bool HasActiveFilters => _columnStates.Values.Any(HasFilter);
 
     private void RebuildPreservingExpansion()
     {
@@ -1776,29 +1822,19 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     private void SortRows<TRow>(List<TRow> rows, Func<TRow, TValue> itemSelector)
     {
-        var sortState = _columnStates.Values.FirstOrDefault(s => s.SortDirection.HasValue);
-        if (sortState?.SortDirection == null || string.IsNullOrWhiteSpace(sortState.Field))
-            return;
-
-        rows.Sort((left, right) =>
-        {
-            var comparison = CompareColumnValues(itemSelector(left), itemSelector(right), sortState.Field);
-            return sortState.SortDirection == SortDirection.Descending ? -comparison : comparison;
-        });
+        if (_sorts.Count == 0) return;
+        var ordered = GridLocalSortPipeline.Apply(rows, _sorts,
+            (row, field) => GetPropertyValue(itemSelector(row), field), Comparer<object?>.Create(CompareValues)).ToList();
+        rows.Clear(); rows.AddRange(ordered);
     }
 
-    private int CompareColumnValues(TValue left, TValue right, string field)
+    private static int CompareValues(object? left, object? right)
     {
-        var leftValue = GetPropertyValue(left, field);
-        var rightValue = GetPropertyValue(right, field);
-        if (leftValue == null && rightValue == null) return 0;
-        if (leftValue == null) return -1;
-        if (rightValue == null) return 1;
-
-        if (leftValue is IComparable comparable && leftValue.GetType().IsInstanceOfType(rightValue))
-            return comparable.CompareTo(rightValue);
-
-        return string.Compare(leftValue.ToString(), rightValue.ToString(), StringComparison.CurrentCultureIgnoreCase);
+        if (left is null) return right is null ? 0 : -1;
+        if (right is null) return 1;
+        if (left is string a && right is string b) return StringComparer.CurrentCultureIgnoreCase.Compare(a, b);
+        if (left is IComparable comparable && left.GetType().IsInstanceOfType(right)) return comparable.CompareTo(right);
+        return StringComparer.CurrentCultureIgnoreCase.Compare(left.ToString(), right.ToString());
     }
 
     private HashSet<TreeNode<TValue>> BuildFilterInclusionSet()
@@ -1809,24 +1845,21 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             if (!NodeMatchesFilters(node))
                 continue;
 
-            IncludeNodeAndAncestors(node, included);
-            IncludeDescendants(node, included);
+            included.Add(node);
+            if (FilterHierarchyMode is TreeGridFilterHierarchyMode.Parent or TreeGridFilterHierarchyMode.Both)
+                IncludeNodeAndAncestors(node, included);
+            if (FilterHierarchyMode is TreeGridFilterHierarchyMode.Child or TreeGridFilterHierarchyMode.Both)
+                IncludeDescendants(node, included);
         }
 
+        // Keep added drafts reachable even when the current query excludes their initial values.
+        foreach (var added in _flatNodes.Where(n => Session(n)?.IsNew == true)) IncludeNodeAndAncestors(added, included);
         return included;
     }
 
-    private bool NodeMatchesFilters(TreeNode<TValue> node)
-    {
-        foreach (var state in _columnStates.Values.Where(s => s.FilterActive && !string.IsNullOrWhiteSpace(s.FilterValue)))
-        {
-            var value = GetPropertyValue(node.Data, state.Field)?.ToString() ?? "";
-            if (!value.Contains(state.FilterValue!, StringComparison.CurrentCultureIgnoreCase))
-                return false;
-        }
-
-        return true;
-    }
+    private bool NodeMatchesFilters(TreeNode<TValue> node) => GetFilters().All(filter =>
+        TreeGridQuery.Matches(GetPropertyValue(node.Data, filter.Field),
+            _columns.FirstOrDefault(c => c.Field == filter.Field)?.Type ?? ColumnType.Text, filter, FilterMatchCase));
 
     private void IncludeNodeAndAncestors(TreeNode<TValue> node, HashSet<TreeNode<TValue>> included)
     {

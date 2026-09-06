@@ -1,0 +1,31 @@
+@namespace Fx.ControlKit.AI
+@inherits FlexControlBase
+@implements IDisposable
+<div class="fx-chat @CssClass" style="height:@Height;@ResolvedStyle">
+<div class="fx-chat-messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation">
+@foreach(var message in Messages){<article @key="message.Id" class="@(message.IsUser?"user":"assistant")">
+@if(MessageTemplate is not null){@MessageTemplate(message)}else{<header><strong>@message.Author</strong><time datetime="@message.Timestamp.ToString("O")">@message.Timestamp.ToLocalTime().ToString("t")</time></header><p>@message.Text</p>@if(message.Attachments is not null){<span>@string.Join(", ",message.Attachments)</span>}}
+</article>}
+@if(_busy){<LoaderControl Text="Waiting for reply" />}
+</div>
+@if(_error is not null){<AlertControl Text="@_error" />}
+@if(Suggestions.Count>0){<ChipListControl Items="@Suggestions.Select((s,i)=>new ChipItem(i.ToString(),s)).ToArray()" SelectedIdsChanged="Suggest" Removable="false" />}
+<PromptBoxControl @bind-Value="_draft" Submit="SendAsync" Busy="@_busy" Cancel="CancelAsync" Enabled="@Enabled" AllowAttachments="@AllowAttachments" />
+</div>
+@code {
+ [Parameter] public IReadOnlyList<ChatMessage> Messages {get;set;}=Array.Empty<ChatMessage>();
+ [Parameter] public EventCallback<IReadOnlyList<ChatMessage>> MessagesChanged {get;set;}
+ [Parameter] public Func<ChatRequest,CancellationToken,Task<string>>? Reply {get;set;}
+ [Parameter] public EventCallback<PromptSubmission> MessageSent {get;set;}
+ [Parameter] public IReadOnlyList<string> Suggestions {get;set;}=Array.Empty<string>();
+ [Parameter] public RenderFragment<ChatMessage>? MessageTemplate {get;set;}
+ [Parameter] public string UserName {get;set;}="You";
+ [Parameter] public string AssistantName {get;set;}="Assistant";
+ [Parameter] public string Height {get;set;}="500px";
+ [Parameter] public bool AllowAttachments {get;set;}
+ private string? _draft,_error;private bool _busy,_disposed;private CancellationTokenSource? _request;
+ private void Suggest(IReadOnlyList<string> ids){if(ids.LastOrDefault() is {} id&&int.TryParse(id,out var i)&&i>=0&&i<Suggestions.Count)_draft=Suggestions[i];}
+ public async Task SendAsync(PromptSubmission submission){if(!Enabled||_busy||string.IsNullOrWhiteSpace(submission.Text))return;if(Reply is null&&!MessageSent.HasDelegate)throw new InvalidOperationException("Connect Reply or MessageSent to process messages.");_error=null;Messages=Messages.Append(new ChatMessage(Guid.NewGuid().ToString("N"),UserName,submission.Text,DateTimeOffset.Now,true,submission.Attachments.Select(f=>f.Name).ToArray())).ToArray();await MessagesChanged.InvokeAsync(Messages);await MessageSent.InvokeAsync(submission);if(Reply is null)return;var request=_request=new();_busy=true;try{var response=await Reply(new(submission,Messages.ToArray()),request.Token);if(_disposed||request.IsCancellationRequested||!ReferenceEquals(_request,request))return;Messages=Messages.Append(new ChatMessage(Guid.NewGuid().ToString("N"),AssistantName,response,DateTimeOffset.Now)).ToArray();await MessagesChanged.InvokeAsync(Messages);}catch(OperationCanceledException){}catch(Exception e){if(!_disposed)_error=e.Message;}finally{if(ReferenceEquals(_request,request)){_busy=false;_request=null;}request.Dispose();}}
+ public Task CancelAsync(){_request?.Cancel();_request=null;_busy=false;return InvokeAsync(StateHasChanged);}
+ public void Dispose(){_disposed=true;_request?.Cancel();}
+}

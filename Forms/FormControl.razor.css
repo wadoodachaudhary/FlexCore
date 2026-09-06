@@ -1,0 +1,5 @@
+.fx-form { display:flex;flex-direction:column;gap:12px;font:inherit;color:var(--fx-text,#212529); }
+.fx-form-items { display:grid;grid-template-columns:repeat(var(--fx-form-columns,1),minmax(0,1fr)); }
+@media(max-width:600px){.fx-form-items{grid-template-columns:minmax(0,1fr);}}
+
+@media(max-width:600px){.fx-form-items ::deep .fx-form-item{grid-column:1/-1!important}}

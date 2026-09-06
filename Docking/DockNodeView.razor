@@ -1,0 +1,42 @@
+@namespace Fx.ControlKit.Docking
+@if(Node.Children.Count==2)
+{
+    <SplitterControl @key="Node.Id" SizeMode="SplitterSizeMode.Proportional" PrimarySize="@Node.Ratio" PrimarySizeChanged="v=>Manager.ResizeAsync(Node.Id,v)" Vertical="@Node.Vertical" Height="100%" Width="100%" MinPrimary="5%" MaxPrimary="95%" MinSecondary="5%">
+        <PrimaryContent><DockNodeView Node="@Node.Children[0]" /></PrimaryContent>
+        <SecondaryContent><DockNodeView Node="@Node.Children[1]" /></SecondaryContent>
+    </SplitterControl>
+}
+else
+{
+    <section class="fx-dock-group" style="height:100%;min-width:0;display:flex;flex-direction:column" @ondragover:preventDefault="true" @ondrop="DropAsync">
+        <div class="fx-dock-tabs" role="tablist" style="display:flex;gap:4px;flex-wrap:wrap">
+            @foreach(var key in Node.Panels)
+            {
+                <span draggable="@Manager.Enabled" @ondragstart="()=>BeginDrag(key)" @ondragend="EndDrag">
+                    <ButtonControl Disabled="@(!Manager.Enabled)" role="tab" aria-selected="@(Active==key)" OnClick="()=>Manager.SelectAsync(Node.Id,key)">@Manager.Panel(key).Title</ButtonControl>
+                </span>
+            }
+        </div>
+        @if(Manager.DraggedPanel!=null)
+        {
+            <div class="fx-dock-targets" style="display:flex;flex-wrap:wrap;gap:4px">
+                @foreach(var position in Enum.GetValues<DockPosition>()){<span @ondragover:preventDefault="true" @ondrop="()=>DropAtAsync(position)" @ondrop:stopPropagation="true"><ButtonControl OnClick="()=>DropAtAsync(position)">@position</ButtonControl></span>}
+            </div>
+        }
+        @if(Active!=null)
+        {
+            <DockPanelActions PanelKey="@Active" />
+            <div role="tabpanel" aria-label="@Manager.Panel(Active).Title" style="overflow:auto;min-height:0;flex:1">@Manager.Panel(Active).Content</div>
+        }
+        else{<div style="padding:20px">Drop a pane here.</div>}
+    </section>
+}
+@code {
+    [CascadingParameter] public DockManagerControl Manager {get;set;}=default!;
+    [Parameter] public DockNode Node {get;set;}=default!;
+    private string? Active=>Node.ActivePanel??Node.Panels.FirstOrDefault();
+    private void BeginDrag(string key){Manager.DraggedPanel=key;Manager.RequestRender();}
+    private void EndDrag(){Manager.DraggedPanel=null;Manager.RequestRender();}
+    private Task DropAsync()=>DropAtAsync(DockPosition.Tab);
+    private Task DropAtAsync(DockPosition position)=>Manager.DraggedPanel is {} key?Manager.DockAsync(key,Node.Id,position):Task.CompletedTask;
+}

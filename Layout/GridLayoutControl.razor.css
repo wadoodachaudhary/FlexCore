@@ -1,0 +1,1 @@
+@media(max-width:600px){.fx-grid-layout.responsive{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:auto!important}.fx-grid-layout.responsive ::deep .fx-grid-layout-item{grid-column:1!important;grid-row:auto!important}}

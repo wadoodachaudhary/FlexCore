@@ -1,0 +1,22 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@implements IDisposable
+<span class="fx-tooltip-anchor @CssClass" style="@ResolvedStyle" @onmouseenter="Enter" @onmouseleave="Leave" @onfocusin="Enter" @onfocusout="Leave" aria-describedby="@(_open ? _tooltipId : null)">
+    <PopupControl IsOpen="@_open" IsOpenChanged="SetOpen" Placement="@Placement" FocusOnOpen="false" DismissOnOutsideClick="false" Role="tooltip" AriaLabel="@Text">
+        <Anchor>@ChildContent</Anchor>
+        <ChildContent><span id="@_tooltipId">@if (Content is not null) { @Content } else { @Text }</span></ChildContent>
+    </PopupControl>
+</span>
+@code {
+    [Parameter] public string Text { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Content { get; set; }
+    [Parameter] public int ShowDelay { get; set; } = 350;
+    [Parameter] public PopupPlacement Placement { get; set; } = PopupPlacement.TopStart;
+    private readonly string _tooltipId="fx-tooltip-"+Guid.NewGuid().ToString("N");
+    private bool _open; private CancellationTokenSource? _delay;
+    private async Task Enter() { _delay?.Cancel(); _delay?.Dispose(); var current=_delay=new(); try { await Task.Delay(Math.Max(0,ShowDelay),current.Token); if(Enabled){_open=true;await InvokeAsync(StateHasChanged);} } catch(OperationCanceledException) {} }
+    private void Leave() { _delay?.Cancel(); _open=false; }
+    private void SetOpen(bool value) => _open=value;
+    public void Dispose() { _delay?.Cancel(); _delay?.Dispose(); }
+}

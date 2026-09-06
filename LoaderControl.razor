@@ -1,0 +1,8 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@if(Visible){<span class="fx-loader @Type.ToString().ToLowerInvariant() @CssClass" style="--fx-loader-size:@Size;@Style" role="status" aria-label="@Text"><span aria-hidden="true"></span><span class="fx-loader-text">@Text</span></span>}
+@code {
+ [Parameter] public LoaderType Type {get;set;}
+ [Parameter] public string Size {get;set;}="24px";
+ [Parameter] public string Text {get;set;}="Loading";
+}

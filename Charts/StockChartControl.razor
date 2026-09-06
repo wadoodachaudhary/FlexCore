@@ -1,0 +1,82 @@
+@namespace Fx.ControlKit.Charts
+@inherits FlexControlBase
+<div class="fx-stock-chart @CssClass" id="@Id" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    <ToolbarControl ShowCaptionsToggle="false">
+        <DatePickerControl Value="@_start" ValueChanged="SetStartAsync" MinDate="@First" MaxDate="@_end" Enabled="@Enabled" AriaLabel="Stock chart start date" />
+        <DatePickerControl Value="@_end" ValueChanged="SetEndAsync" MinDate="@_start" MaxDate="@Last" Enabled="@Enabled" AriaLabel="Stock chart end date" />
+        <ButtonControl Disabled="@(!Enabled || _points.Length==0)" OnClick="()=>ZoomAsync(.5)">Zoom in</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled || _points.Length==0)" OnClick="()=>ZoomAsync(2)">Zoom out</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled || _start<=First)" OnClick="()=>PanAsync(-1)">Earlier</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled || _end>=Last)" OnClick="()=>PanAsync(1)">Later</ButtonControl>
+        <ButtonControl Disabled="@(!Enabled || _points.Length==0)" OnClick="()=>SetRangeAsync(First,Last)">All</ButtonControl>
+    </ToolbarControl>
+    @if(_points.Length==0){<div role="status">No financial data.</div>}
+    else
+    {
+        <ChartControl Type="@Type" Series="@VisibleSeries" Height="@Height" ValueFormat="@ValueFormat" />
+        @if(ShowNavigator)
+        {
+            <div class="fx-stock-navigator" aria-label="Financial navigator">
+                <ChartControl Type="ChartType.Line" Series="@NavigatorSeries" Height="90px" ShowAxisLabels="false" ShowValues="false" />
+                <label>Start <SliderControl Min="0" Max="@(_points.Length-1)" Value="@StartIndex" ValueChanged="i=>SetStartAsync(_points[(int)i].DateValue)" ShowValue="false" Disabled="@(!Enabled)" aria-label="Navigator start" /></label>
+                <label>End <SliderControl Min="0" Max="@(_points.Length-1)" Value="@EndIndex" ValueChanged="i=>SetEndAsync(_points[(int)i].DateValue)" ShowValue="false" Disabled="@(!Enabled)" aria-label="Navigator end" /></label>
+            </div>
+        }
+    }
+</div>
+@code {
+    [Parameter] public IEnumerable<ChartDataPoint> DataSource {get;set;}=Array.Empty<ChartDataPoint>();
+    [Parameter] public ChartType Type {get;set;}=ChartType.Candlestick;
+    [Parameter] public DateTime? Start {get;set;}
+    [Parameter] public DateTime? End {get;set;}
+    [Parameter] public EventCallback<StockChartRange> RangeChanged {get;set;}
+    [Parameter] public string Height {get;set;}="340px";
+    [Parameter] public string ValueFormat {get;set;}="N2";
+    [Parameter] public bool ShowNavigator {get;set;}=true;
+    private ChartDataPoint[] _points=[];
+    private DateTime? _start,_end,_lastStart,_lastEnd;
+    private bool _initialized;
+    private DateTime? First=>_points.FirstOrDefault()?.DateValue;
+    private DateTime? Last=>_points.LastOrDefault()?.DateValue;
+    private int StartIndex=>Math.Max(0,Array.FindIndex(_points,p=>p.DateValue>=_start));
+    private int EndIndex=>Math.Max(0,Array.FindLastIndex(_points,p=>p.DateValue<=_end));
+    private List<ChartSeries> VisibleSeries=>[new("Price",Type,_points.Where(p=>p.DateValue>=_start&&p.DateValue<=_end))];
+    private List<ChartSeries> NavigatorSeries=>[new("Close",ChartType.Line,_points.Select(p=>new ChartDataPoint(p.Label,p.Close){DateValue=p.DateValue}))];
+    protected override void OnParametersSet()
+    {
+        if(Type is not (ChartType.Candlestick or ChartType.Ohlc or ChartType.HighLow))throw new ArgumentException("StockChart Type must be Candlestick, Ohlc or HighLow.");
+        _points=DataSource.OrderBy(p=>p.DateValue).ToArray();
+        if(_points.Any(p=>!p.DateValue.HasValue))throw new ArgumentException("Each stock data point requires DateValue.");
+        if(Start>End)throw new ArgumentException("Stock chart Start must not exceed End.");
+        if(!_initialized||Start!=_lastStart)_start=Start??First;
+        if(!_initialized||End!=_lastEnd)_end=End??Last;
+        _start=Clamp(_start);_end=Clamp(_end);if(_start>_end)_start=_end;
+        _lastStart=Start;_lastEnd=End;_initialized=true;
+    }
+    private DateTime? Clamp(DateTime? date)=>First==null?null:date==null?First:date<First?First:date>Last?Last:date;
+    private Task SetStartAsync(DateTime? value)=>SetRangeAsync(value??First,value>_end?value:_end);
+    private Task SetEndAsync(DateTime? value)=>SetRangeAsync(value<_start?value:_start,value??Last);
+    public async Task SetRangeAsync(DateTime? start,DateTime? end)
+    {
+        if(!Enabled||_points.Length==0)return;
+        if(start>end)throw new ArgumentException("Start must not exceed End.");
+        _start=Clamp(start);_end=Clamp(end);await RangeChanged.InvokeAsync(new(_start!.Value,_end!.Value));await InvokeAsync(StateHasChanged);
+    }
+    public Task ZoomAsync(double factor)
+    {
+        if(!double.IsFinite(factor)||factor<=0)throw new ArgumentOutOfRangeException(nameof(factor));
+        if(_start==null||_end==null)return Task.CompletedTask;
+        var center=_start.Value.Ticks+(_end.Value.Ticks-_start.Value.Ticks)/2;
+        var half=Math.Max(TimeSpan.TicksPerDay,(_end.Value.Ticks-_start.Value.Ticks)*factor)/2;
+        return SetRangeAsync(SafeDate(center-half),SafeDate(center+half));
+    }
+    private static DateTime SafeDate(double ticks)=>ticks<=0?DateTime.MinValue:ticks>=DateTime.MaxValue.Ticks?DateTime.MaxValue:new DateTime((long)ticks);
+    public Task PanAsync(int direction)
+    {
+        if(_start==null||_end==null)return Task.CompletedTask;
+        var span=_end.Value.Ticks-_start.Value.Ticks;
+        var delta=Math.Sign(direction)*Math.Max(TimeSpan.TicksPerDay,span/2);
+        delta=Math.Clamp(delta,First!.Value.Ticks-_start.Value.Ticks,Last!.Value.Ticks-_end.Value.Ticks);
+        return SetRangeAsync(_start.Value.AddTicks(delta),_end.Value.AddTicks(delta));
+    }
+}

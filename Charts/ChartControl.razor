@@ -102,7 +102,7 @@
     else
     {
         @* === NEW SVG CHART MODE === *@
-        @if (_effectiveSeries.Count == 0 && Type != ChartType.Gauge && Type != ChartType.KpiCard)
+        @if (_effectiveSeries.Count == 0 && Type is not (ChartType.Gauge or ChartType.ArcGauge or ChartType.LinearGauge or ChartType.RadialGauge or ChartType.KpiCard))
         {
             <div class="fx-chart-empty">No data</div>
         }
@@ -122,6 +122,9 @@
                 case ChartType.Pie:
                 case ChartType.Donut:
                     @RenderPieDonut()
+                    break;
+                case ChartType.Sunburst:
+                    @RenderSunburst()
                     break;
                 case ChartType.Radar:
                     @RenderRadar()
@@ -290,6 +293,12 @@
 
     /// <summary>Gauge maximum value.</summary>
     [Parameter] public double? GaugeMax { get; set; }
+    [Parameter] public IReadOnlyList<GaugeRange> GaugeRanges { get; set; } = Array.Empty<GaugeRange>();
+    [Parameter] public IReadOnlyList<GaugePointer> GaugePointers { get; set; } = Array.Empty<GaugePointer>();
+    [Parameter] public bool GaugeCircular { get; set; }
+    [Parameter] public int GaugeTickCount { get; set; } = 5;
+    [Parameter] public bool GaugeShowValue { get; set; } = true;
+    [Parameter] public string GaugeLabelFormat { get; set; } = "0";
 
     /// <summary>KPI display value.</summary>
     [Parameter] public string? KpiValue { get; set; }
@@ -885,6 +894,37 @@
 
     #endregion
 
+    #region Render — Sunburst
+
+    private RenderFragment RenderSunburst() => __builder =>
+    {
+        var root = BuildSunburstFromSeries();
+        if (root == null) return;
+        <SunburstChartControl RootNode="@root" Height="@(Height ?? "360px")" EnableDrilldown="true" ShowBreadcrumb="true" />
+    };
+
+    private SunburstNode? BuildSunburstFromSeries()
+    {
+        if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return null;
+        var pts = _effectiveSeries[0].DataPoints;
+        var root = new SunburstNode(string.IsNullOrEmpty(Title) ? "Total" : Title, 0);
+        var groups = pts.GroupBy(p => string.IsNullOrEmpty(p.Category) ? "General" : p.Category);
+        int idx = 0;
+        foreach (var grp in groups)
+        {
+            var catNode = new SunburstNode(grp.Key, 0, GetSeriesColor(idx++));
+            foreach (var pt in grp)
+            {
+                var ptColor = pt.Color ?? SunburstColorHelper.Darken(catNode.Color ?? "#4a90e2", 0.08);
+                catNode.AddChild(new SunburstNode(pt.Label, pt.Value, pt.Value2 ?? 0, ptColor));
+            }
+            root.AddChild(catNode);
+        }
+        return root;
+    }
+
+    #endregion
+
     #region Render — Scatter / Bubble
 
     private RenderFragment RenderScatterBubble() => __builder =>
@@ -1019,54 +1059,9 @@
 
     #region Render — Gauge
 
-    private RenderFragment RenderGauge() => __builder =>
-    {
-        double min = GaugeMin ?? 0;
-        double max = GaugeMax ?? 100;
-        double val = GaugeValue ?? 0;
-        double pct = (val - min) / (max - min);
-        if (pct < 0) pct = 0;
-        if (pct > 1) pct = 1;
-
-        const double size = 300;
-        double cx = size / 2, cy = size * 0.6;
-        double radius = size * 0.38;
-
-        double startAngle = -225 * Math.PI / 180;
-        double endAngle = 45 * Math.PI / 180;
-        double totalSweep = endAngle - startAngle;
-        double valAngle = startAngle + pct * totalSweep;
-
-        double arcX1 = cx + radius * Math.Cos(startAngle);
-        double arcY1 = cy + radius * Math.Sin(startAngle);
-        double arcX2 = cx + radius * Math.Cos(endAngle);
-        double arcY2 = cy + radius * Math.Sin(endAngle);
-        double valX = cx + radius * Math.Cos(valAngle);
-        double valY = cy + radius * Math.Sin(valAngle);
-
-        <svg viewBox="0 0 @F0(size) @F0(size * 0.7)" preserveAspectRatio="xMidYMid meet"
-             style="height:@(Height ?? "200px");" xmlns="http://www.w3.org/2000/svg">
-
-            <path d="M@(F(arcX1)),@(F(arcY1)) A@(F(radius)),@(F(radius)) 0 1 1 @(F(arcX2)),@(F(arcY2))"
-                  fill="none" stroke="#e5e7eb" stroke-width="20" stroke-linecap="round" />
-
-            <path d="M@(F(arcX1)),@(F(arcY1)) A@(F(radius)),@(F(radius)) 0 @(pct > 0.5 ? "1" : "0") 1 @(F(valX)),@(F(valY))"
-                  fill="none" stroke="@GetSeriesColor(0)" stroke-width="20" stroke-linecap="round" />
-
-            @{
-                double needleLen = radius * 0.7;
-                double nx = cx + needleLen * Math.Cos(valAngle);
-                double ny = cy + needleLen * Math.Sin(valAngle);
-            }
-            <line x1="@F(cx)" y1="@F(cy)" x2="@F(nx)" y2="@F(ny)"
-                  stroke="#374151" stroke-width="2.5" stroke-linecap="round" />
-            <circle cx="@F(cx)" cy="@F(cy)" r="5" fill="#374151" />
-
-            @SvgText(F(cx), F(cy + 30), F0(val), anchor: "middle", fontSize: "24", fill: "#1f2937", fontWeight: "bold")
-            @SvgText(F(arcX1), F(arcY1 + 20), F0(min), anchor: "middle", fontSize: "10", fill: "#6b7280")
-            @SvgText(F(arcX2), F(arcY2 + 20), F0(max), anchor: "middle", fontSize: "10", fill: "#6b7280")
-        </svg>
-    };
+    private RenderFragment RenderGauge() => @<GaugeVisualControl Type="@Type" Value="@(GaugeValue ?? _effectiveSeries.FirstOrDefault()?.DataPoints.FirstOrDefault()?.Value ?? 0)"
+        Min="@(GaugeMin ?? 0)" Max="@(GaugeMax ?? 100)" Ranges="@GaugeRanges" Pointers="@GaugePointers" Circular="@GaugeCircular"
+        Color="@GetSeriesColor(0)" TickCount="@GaugeTickCount" ShowValue="@GaugeShowValue" LabelFormat="@GaugeLabelFormat" ValueFormat="@ValueFormat" Height="@(Height ?? "260px")" />;
 
     #endregion
 
@@ -1274,8 +1269,9 @@
             {
                 double start = pts[i].Value;
                 double end = pts[i].Value2 ?? start + 1;
-                double x1 = padL + (start - minStart) / (maxEnd - minStart) * plotW;
-                double x2 = padL + (end - minStart) / (maxEnd - minStart) * plotW;
+                var geometry = TimelineScale.Bar(start, end, minStart, maxEnd, plotW);
+                double x1 = padL + geometry.Left;
+                double x2 = x1 + geometry.Width;
                 double y = padT + i * rowH + rowH * 0.2;
                 double h = rowH * 0.6;
                 string color = GetPointColor(pts[i], 0, i);
@@ -1625,7 +1621,7 @@
         var pts = _effectiveSeries[0].DataPoints;
 
         double svgW = 600, svgH = Math.Max(120, pts.Count * 60.0);
-        double padL = 100, padR = 40, padT = 20, padB = 20;
+        double padL = 100, padR = 40, padT = 20;
         double plotW = svgW - padL - padR;
 
         double maxVal = pts.Max(p => Math.Max(p.Actual, p.Target)) * 1.2;
@@ -1779,57 +1775,7 @@
 
     #region Render — Advanced Gauges (Radial, Arc, Linear)
 
-    private RenderFragment RenderAdvancedGauges() => __builder =>
-    {
-        double val = _effectiveSeries.Count > 0 && _effectiveSeries[0].DataPoints.Count > 0 ? _effectiveSeries[0].DataPoints[0].Value : 75;
-        double min = 0;
-        double max = 100;
-        double pct = Math.Clamp((val - min) / (max - min), 0, 1);
-
-        double svgW = 320, svgH = Type == ChartType.LinearGauge ? 100 : 260;
-
-        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
-             style="height:@(Height ?? $"{svgH}px");" xmlns="http://www.w3.org/2000/svg">
-
-            @if (Type == ChartType.LinearGauge)
-            {
-                double barX = 40, barY = 40, barW = 240, barH = 18;
-                <rect x="@F(barX)" y="@F(barY)" width="@F(barW)" height="@F(barH)" fill="#e2e8f0" rx="9" />
-                <rect x="@F(barX)" y="@F(barY)" width="@F(barW * pct)" height="@F(barH)" fill="#2563eb" rx="9" />
-                @SvgText(F(barX + barW / 2), F(barY - 12), $"{val:F1}%", anchor: "middle", fontSize: "16", fill: "#1e293b", fontWeight: "bold")
-            }
-            else // Radial / Arc Gauge
-            {
-                double cx = svgW / 2.0;
-                double cy = svgH * 0.65;
-                double r = 85;
-                double startAngle = -140 * Math.PI / 180.0;
-                double totalAngle = 280 * Math.PI / 180.0;
-                double currentAngle = startAngle + totalAngle * pct;
-
-                double needleLen = r * 0.85;
-                double nx = cx + needleLen * Math.Cos(currentAngle);
-                double ny = cy + needleLen * Math.Sin(currentAngle);
-
-                <!-- Gauge Background Arc Track -->
-                <circle cx="@F(cx)" cy="@F(cy)" r="@F(r)" fill="none" stroke="#e2e8f0" stroke-width="16"
-                        stroke-dasharray="@F(2 * Math.PI * r * 0.77) @F(2 * Math.PI * r)" stroke-linecap="round"
-                        transform="rotate(130 @F(cx) @F(cy))" />
-
-                <!-- Gauge Active Value Arc Track -->
-                <circle cx="@F(cx)" cy="@F(cy)" r="@F(r)" fill="none" stroke="#2563eb" stroke-width="16"
-                        stroke-dasharray="@F(2 * Math.PI * r * 0.77 * pct) @F(2 * Math.PI * r)" stroke-linecap="round"
-                        transform="rotate(130 @F(cx) @F(cy))" />
-
-                <!-- Needle -->
-                <line x1="@F(cx)" y1="@F(cy)" x2="@F(nx)" y2="@F(ny)" stroke="#dc2626" stroke-width="3.5" />
-                <circle cx="@F(cx)" cy="@F(cy)" r="6" fill="#1e293b" />
-
-                <!-- Value Display -->
-                @SvgText(F(cx), F(cy + 40), $"{val:F1}", anchor: "middle", fontSize: "22", fill: "#1e293b", fontWeight: "bold")
-            }
-        </svg>
-    };
+    private RenderFragment RenderAdvancedGauges() => RenderGauge();
 
     #endregion
 

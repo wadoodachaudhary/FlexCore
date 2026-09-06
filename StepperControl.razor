@@ -1,0 +1,47 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+<nav class="fx-stepper @CssClass" style="@($"display:flex;gap:8px;flex-direction:{(Vertical?"column":"row")};{ResolvedStyle}")" aria-label="@AriaLabel" @attributes="AdditionalAttributes">
+    @for(var i=0;i<Steps.Count;i++)
+    {
+        var index=i;var step=Steps[i];
+        <ButtonControl @ref="_buttons[index]" @onkeydown="e=>KeyAsync(e,index)" Disabled="@(!CanSelect(index))" OnClick="()=>SelectAsync(index)" aria-current="@(Value==index?"step":null)" Title="@step.Description">
+            @if(StepTemplate!=null){@StepTemplate(new(){Step=step,StepIndex=index,IsFirst=index==0,IsLast=index==Steps.Count-1})}
+            else{<span>@(index+1). @step.Title</span>}
+            @if(InvalidSteps.Contains(index)){<span aria-label="Invalid step"> ⚠</span>}
+        </ButtonControl>
+    }
+</nav>
+@code {
+    [Parameter] public IReadOnlyList<WizardStepDescriptor> Steps {get;set;}=Array.Empty<WizardStepDescriptor>();
+    [Parameter] public int Value {get;set;}
+    [Parameter] public EventCallback<int> ValueChanged {get;set;}
+    [Parameter] public bool Linear {get;set;}=true;
+    [Parameter] public bool Vertical {get;set;}
+    [Parameter] public IReadOnlyCollection<int> DisabledSteps {get;set;}=Array.Empty<int>();
+    [Parameter] public IReadOnlyCollection<int> InvalidSteps {get;set;}=Array.Empty<int>();
+    [Parameter] public Func<int,int,Task<bool>>? CanNavigate {get;set;}
+    [Parameter] public string AriaLabel {get;set;}="Steps";
+    [Parameter] public RenderFragment<WizardStepContext>? StepTemplate {get;set;}
+    private readonly Dictionary<int,ButtonControl> _buttons=new();
+    private async Task KeyAsync(KeyboardEventArgs e,int index)
+    {
+        var direction=e.Key is "ArrowLeft" or "ArrowUp"?-1:e.Key is "ArrowRight" or "ArrowDown"?1:0;
+        if(direction==0)return;
+        for(var next=index+direction;next>=0&&next<Steps.Count;next+=direction)
+        {
+            if(!CanSelect(next))continue;
+            await SelectAsync(next);
+            if(Value==next&&_buttons.TryGetValue(next,out var button))await button.FocusAsync();
+            return;
+        }
+    }
+    private bool _changing;
+    private bool CanSelect(int index)=>Enabled&&!_changing&&index>=0&&index<Steps.Count&&!DisabledSteps.Contains(index)&&(!Linear||index<=Value+1)&&(!Linear||index<=Value||!InvalidSteps.Contains(Value));
+    public async Task SelectAsync(int index)
+    {
+        if(index==Value||!CanSelect(index))return;
+        _changing=true;
+        try{if(CanNavigate!=null&&!await CanNavigate(Value,index))return;Value=index;await ValueChanged.InvokeAsync(index);}
+        finally{_changing=false;await InvokeAsync(StateHasChanged);}
+    }
+}

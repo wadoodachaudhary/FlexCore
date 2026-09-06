@@ -1,0 +1,107 @@
+@namespace Fx.ControlKit.Spreadsheet
+@inherits FlexControlBase
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@using ClosedXML.Excel
+@using System.Globalization
+<div class="fx-spreadsheet @CssClass" style="@ResolvedStyle">
+<ToolbarControl>
+<FilePickerControl Label="Open workbook" Accept=".xlsx" OnChange="OpenFile" Enabled="@Enabled" />
+<ButtonControl OnClick="DownloadAsync">Save workbook</ButtonControl>
+<ButtonControl OnClick="@(()=>Command(()=>_document.Undo(),"Undo"))" Disabled="@(!CanEdit||!_document.CanUndo)">Undo</ButtonControl>
+<ButtonControl OnClick="@(()=>Command(()=>_document.Redo(),"Redo"))" Disabled="@(!CanEdit||!_document.CanRedo)">Redo</ButtonControl>
+<ButtonControl OnClick="CopyAsync">Copy</ButtonControl><ButtonControl OnClick="PasteAsync" Disabled="@(!CanEdit)">Paste</ButtonControl>
+<ButtonControl OnClick="@(()=>Format("bold",(!_document.Sheet.Cell(Selection.Row,Selection.Column).Style.Font.Bold).ToString()))" Disabled="@(!CanEdit)">Bold</ButtonControl>
+<ButtonControl OnClick="@(()=>Format("italic",(!_document.Sheet.Cell(Selection.Row,Selection.Column).Style.Font.Italic).ToString()))" Disabled="@(!CanEdit)">Italic</ButtonControl>
+<DropDownListControl TItem="string" TValue="string" DataSource="@_formats" Value="@_format" ValueChanged="FormatChanged" Enabled="@CanEdit" AriaLabel="Number format" />
+<ButtonControl DropDownContent="Tools" Disabled="@(!CanEdit)">Sheet tools</ButtonControl>
+<ButtonControl OnClick="OpenFilter" Disabled="@(!CanEdit||!AllowFiltering)">Filter column</ButtonControl>
+<ButtonControl OnClick="ClearFiltersAsync" Disabled="@(!CanEdit||!AllowFiltering||!_document.Sheet.AutoFilter.IsEnabled)">Clear filters</ButtonControl>
+<ButtonControl OnClick="@(()=>FreezeAsync(Selection.Top-1,Selection.Left-1))" Disabled="@(!CanEdit)">Freeze before selection</ButtonControl>
+<ButtonControl OnClick="@(()=>FreezeAsync(0,0))" Disabled="@(!CanEdit||(FrozenRows==0&&FrozenColumns==0))">Unfreeze panes</ButtonControl>
+</ToolbarControl>
+<div class="fx-formula-bar"><TextBoxControl Value="@Selection.RangeAddress" ValueChanged="AddressChanged" aria-label="Cell address" /><TextBoxControl @ref="_formula" Value="@_draft" ValueChanged="v=>_draft=v" UpdateOnInput="true" OnKeyDown="EditorKeyDown" Enabled="@CanEdit" aria-label="Formula" /><ButtonControl OnClick="CommitAsync" Disabled="@(!CanEdit)">Apply cell</ButtonControl></div>
+@if(_error is not null){<AlertControl Text="@_error" />}
+@{ var rows=ViewRows();var columns=ViewColumns(); }
+@if(FrozenRows>0||FrozenColumns>0){<p class="fx-sheet-state" role="status">Frozen: @FrozenRows rows, @FrozenColumns columns.</p>}
+@if(FrozenRows>=VisibleRows||FrozenColumns>=VisibleColumns){<p class="fx-sheet-state" role="status">The frozen area exceeds this window. Only the first @(VisibleRows-1) frozen rows and @(VisibleColumns-1) frozen columns can be shown. Increase VisibleRows or VisibleColumns to see more.</p>}
+@if(_document.Sheet.AutoFilter.IsEnabled){<p class="fx-sheet-state" role="status">Filter range: @_document.Sheet.AutoFilter.Range.RangeAddress.ToStringRelative(). Hidden rows are omitted.</p>}
+<div class="fx-sheet-scroll" style="height:@Height">
+<table role="grid" aria-label="@_document.ActiveSheet" aria-rowcount="@RowCount" aria-colcount="@ColumnCount" style="width:@(48+120*columns.Count)px">
+<colgroup><col style="width:48px" />@foreach(var c in columns){<col style="width:120px" />}</colgroup>
+<thead><tr><th class="fx-sheet-corner"></th>@foreach(var c in columns){<th scope="col" style="@StickyStyle(0,c,rows,columns)">@XLHelper.GetColumnLetterFromNumber(c)</th>}</tr></thead><tbody>
+@foreach(var r in rows){var row=r;<tr aria-rowindex="@r"><th scope="row" style="@StickyStyle(r,0,rows,columns)">@r</th>
+@foreach(var c in columns){var column=c;var cell=_document.Sheet.Cell(r,c);var merge=cell.MergedRange();
+// Clip merged cells to the rendered window; keep their original anchor's content.
+var anchorRow=merge is null?r:rows.FirstOrDefault(x=>x>=merge.RangeAddress.FirstAddress.RowNumber&&x<=merge.RangeAddress.LastAddress.RowNumber);
+var anchorColumn=merge is null?c:columns.FirstOrDefault(x=>x>=merge.RangeAddress.FirstAddress.ColumnNumber&&x<=merge.RangeAddress.LastAddress.ColumnNumber);
+if(r!=anchorRow||c!=anchorColumn){continue;}
+var rowSpan=merge is null?1:rows.Count(x=>x>=r&&x<=merge.RangeAddress.LastAddress.RowNumber);
+var colSpan=merge is null?1:columns.Count(x=>x>=c&&x<=merge.RangeAddress.LastAddress.ColumnNumber);
+var selected=r>=Selection.Top&&r<=Selection.Bottom&&c>=Selection.Left&&c<=Selection.Right;
+<td @key="(r,c)" @ref="_cells[(row,column)]" @onkeydown="GridKeyDown" @onkeydown:preventDefault="@(!_editing)" role="gridcell" tabindex="@(r==Selection.Row&&c==Selection.Column?0:-1)" aria-rowindex="@r" aria-colindex="@c" aria-selected="@(selected ? "true" : "false")" aria-label="@($"{XLHelper.GetColumnLetterFromNumber(c)}{r}")" class="@(selected?"selected":null)" style="@(CellStyle(cell)+StickyStyle(r,c,rows,columns))" colspan="@colSpan" rowspan="@rowSpan" @onclick="e=>SelectAsync(row,column,e.ShiftKey)" @ondblclick="()=>Edit(row,column)">
+<div class="fx-sheet-cell-content" style="height:@(rowSpan*30-5)px">
+@if(_editing&&r==Selection.Row&&c==Selection.Column){<div @onkeydown:stopPropagation="true"><TextBoxControl Value="@_draft" ValueChanged="v=>_draft=v" UpdateOnInput="true" AutoFocus="true" OnKeyDown="EditorKeyDown" aria-label="Edit cell" /></div>}else{@_document.DisplayText(merge?.FirstCell().Address.RowNumber??r,merge?.FirstCell().Address.ColumnNumber??c)}
+</div></td>}
+</tr>}
+</tbody></table>
+</div>
+<div class="fx-sheet-footer"><ButtonGroupControl Items="@_document.Workbook.Worksheets.Select(s=>new SelectionItem(s.Name,s.Name)).ToArray()" Values="@(new[]{_document.ActiveSheet})" ValuesChanged="ActivateSheet" /><ButtonControl OnClick="AddSheet" Disabled="@(!CanEdit)">+ Sheet</ButtonControl><ButtonControl OnClick="()=>MoveWindow(-VisibleRows,0)" Disabled="@(_rowStart<=FrozenRows+1)">Previous rows</ButtonControl><ButtonControl OnClick="()=>MoveWindow(VisibleRows,0)" Disabled="@(!HasNextRows)">Next rows</ButtonControl><ButtonControl OnClick="()=>MoveWindow(0,-VisibleColumns)" Disabled="@(_columnStart<=FrozenColumns+1)">Previous columns</ButtonControl><ButtonControl OnClick="()=>MoveWindow(0,VisibleColumns)" Disabled="@(!HasNextColumns)">Next columns</ButtonControl><span>Window starts at @XLHelper.GetColumnLetterFromNumber(Math.Min(ColumnCount,Math.Max(FrozenColumns+1,_columnStart)))@Math.Min(RowCount,Math.Max(FrozenRows+1,_rowStart))</span></div>
+@if(_filterOpen)
+{
+    <DialogControl Visible="true" Header="Filter worksheet column" Width="420px" OnClose="()=>_filterOpen=false">
+        <ChildContent>
+            <p>Range includes the header row. Filters on separate columns are combined. Text matching ignores case.</p>
+            <TextBoxControl Value="@_filterRange" ValueChanged="v=>_filterRange=v??string.Empty" UpdateOnInput="true" aria-label="Filter range" />
+            <TextBoxControl Value="@_filterColumn" ValueChanged="v=>_filterColumn=v??string.Empty" UpdateOnInput="true" aria-label="Filter column letter" />
+            <DropDownListControl TItem="SpreadsheetTextFilter" TValue="SpreadsheetTextFilter" DataSource="@(Enum.GetValues<SpreadsheetTextFilter>())" @bind-Value="_filterCondition" AriaLabel="Filter condition" />
+            <TextBoxControl Value="@_filterText" ValueChanged="v=>_filterText=v??string.Empty" UpdateOnInput="true" OnKeyDown="FilterKeyDown" aria-label="Filter text" />
+            @if(_error is not null){<AlertControl Text="@_error" />}
+        </ChildContent>
+        <FooterContent><ButtonControl OnClick="()=>_filterOpen=false">Cancel</ButtonControl><ButtonControl OnClick="ClearDialogFilterAsync">Clear column</ButtonControl><ButtonControl OnClick="ApplyDialogFilterAsync">Apply filter</ButtonControl></FooterContent>
+    </DialogControl>
+}
+
+</div>
+@code {
+ [Parameter] public byte[]? DocumentBytes {get;set;}
+ [Parameter] public EventCallback<SpreadsheetChange> Changed {get;set;}
+ [Parameter] public EventCallback<byte[]> Saved {get;set;}
+ [Parameter] public SpreadsheetSelection Selection {get;set;}=new();
+ [Parameter] public EventCallback<SpreadsheetSelection> SelectionChanged {get;set;}
+ [Parameter] public bool ReadOnly {get;set;}
+ [Parameter] public int RowCount {get;set;}=200;
+ [Parameter] public int ColumnCount {get;set;}=26;
+ [Parameter] public int VisibleRows {get;set;}=25;
+ [Parameter] public int VisibleColumns {get;set;}=10;
+ [Parameter] public string Height {get;set;}="500px";
+ [Parameter] public string FileName {get;set;}="workbook.xlsx";
+ public SpreadsheetDocument Document=>_document;
+ private readonly Dictionary<(int,int),ElementReference> _cells=new();private (int,int)? _focusCell;
+ private SpreadsheetDocument _document=new();private byte[]? _loaded;private bool _editing;private string? _draft,_error;private int _rowStart=1,_columnStart=1;private TextBoxControl? _formula;private BrowserInterop? _browser;private string _format="General";
+ private readonly string[] _formats=["General","0","0.00","#,##0.00","0%","$#,##0.00","yyyy-mm-dd"];
+ private bool CanEdit=>Enabled&&!ReadOnly;
+ protected override void OnParametersSet(){if(RowCount<1||RowCount>1048576||ColumnCount<1||ColumnCount>16384||VisibleRows<1||VisibleRows>200||VisibleColumns<1||VisibleColumns>100)throw new ArgumentException("Invalid worksheet viewport dimensions.");if(DocumentBytes is not null&&!ReferenceEquals(_loaded,DocumentBytes)){try{var next=new SpreadsheetDocument(DocumentBytes);_document.Dispose();_document=next;_loaded=DocumentBytes;Selection=new();_rowStart=_columnStart=1;_editing=false;_filterOpen=false;NormalizeView();_draft=_document.EditText(Selection.Row,Selection.Column);_error=null;}catch(Exception e){_error=e.Message;_loaded=DocumentBytes;}}}
+ private async Task Command(Action action,string name){if(!CanEdit)return;try{action();NormalizeView();_error=null;_draft=_document.EditText(Selection.Row,Selection.Column);await Changed.InvokeAsync(new(_document.ActiveSheet,Selection.RangeAddress,name));}catch(Exception e){_error=e.Message;}await InvokeAsync(StateHasChanged);}
+ public async Task SelectAsync(int row,int column,bool extend=false){if(row<1||row>RowCount||column<1||column>ColumnCount)return;if(_editing){await CommitAsync();if(_error is not null)return;}Selection=extend?Selection with{EndRow=row,EndColumn=column}:new(row,column,row,column);_draft=_document.EditText(Selection.Row,Selection.Column);EnsureInView(row,column);await SelectionChanged.InvokeAsync(Selection);await InvokeAsync(StateHasChanged);}
+ private void FocusCell(int row,int column){if(!_editing&&(row!=Selection.Row||column!=Selection.Column)){Selection=new(row,column,row,column);_draft=_document.EditText(row,column);}}
+ private async Task Edit(int row,int column){if(!CanEdit)return;await SelectAsync(row,column);_editing=true;}
+ public async Task CommitAsync(){if(!CanEdit)return;await Command(()=>_document.SetCell(Selection.Row,Selection.Column,_draft),"Edit");if(_error is null)_editing=false;}
+ private async Task EditorKeyDown(KeyboardEventArgs e){if(e.Key=="Escape"){_editing=false;_draft=_document.EditText(Selection.Row,Selection.Column);}else if(e.Key=="Enter"||e.Key=="Tab"){await CommitAsync();}}
+ private async Task GridKeyDown(KeyboardEventArgs e){if(_editing)return;if(e.CtrlKey||e.MetaKey){if(e.Key=="z")await Command(_document.Undo,"Undo");else if(e.Key=="y")await Command(_document.Redo,"Redo");return;}var row=e.ShiftKey?Selection.EndRow:Selection.Row;var col=e.ShiftKey?Selection.EndColumn:Selection.Column;switch(e.Key){case "ArrowDown":row=NextVisibleRow(row,1);break;case "ArrowUp":row=NextVisibleRow(row,-1);break;case "ArrowLeft":col=NextVisibleColumn(col,-1);break;case "ArrowRight":col=NextVisibleColumn(col,1);break;case "F2":case "Enter":_editing=CanEdit;return;case "Delete":await Command(()=>_document.Clear(Selection),"Clear");return;default:return;}await SelectAsync(Math.Clamp(row,1,RowCount),Math.Clamp(col,1,ColumnCount),e.ShiftKey);EnsureInView(row,col);_focusCell=e.ShiftKey?(Selection.EndRow,Selection.EndColumn):(Selection.Row,Selection.Column);}
+ private void AddressChanged(string? address){try{var range=_document.Sheet.Range(address??"A1").RangeAddress;Selection=new(range.FirstAddress.RowNumber,range.FirstAddress.ColumnNumber,range.LastAddress.RowNumber,range.LastAddress.ColumnNumber);_rowStart=Selection.Top;_columnStart=Selection.Left;_draft=_document.EditText(Selection.Row,Selection.Column);_error=null;}catch(Exception e){_error=e.Message;}}
+ private Task Format(string key,string value)=>Command(()=>_document.Format(Selection,key,value),"Format");
+ private async Task FormatChanged(string value){_format=value;await Format("number",value);}
+ private Task ActivateSheet(IReadOnlyList<string> values){if(values.FirstOrDefault() is {} name){_document.Activate(name);Selection=new();_rowStart=_columnStart=1;_draft=_document.EditText(1,1);}return Task.CompletedTask;}
+ private Task AddSheet(){var n=1;while(_document.Workbook.Worksheets.Any(s=>s.Name=="Sheet"+n))n++;return Command(()=>_document.AddSheet("Sheet"+n),"Add sheet");}
+
+ private async Task OpenFile(InputFileChangeEventArgs args){try{await using var stream=args.File.OpenReadStream(50*1024*1024);using var buffer=new System.IO.MemoryStream();await stream.CopyToAsync(buffer);var next=new SpreadsheetDocument(buffer.ToArray());_document.Dispose();_document=next;Selection=new();_rowStart=_columnStart=1;_draft=_document.EditText(1,1);_error=null;await Changed.InvokeAsync(new(_document.ActiveSheet,"A1","Open"));}catch(Exception e){_error=e.Message;}}
+ public Task<byte[]> SaveAsync()=>Task.FromResult(_document.Save());
+ public async Task DownloadAsync(){try{var bytes=await SaveAsync();await Saved.InvokeAsync(bytes);_browser??=new(JS);using var stream=new System.IO.MemoryStream(bytes);using var reference=new DotNetStreamReference(stream);await _browser.InvokeAsync<object?>("download",null,new{stream=reference,name=FileName,type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});}catch(Exception e){_error=e.Message;}}
+ public async Task CopyAsync(){try{_browser??=new(JS);await _browser.InvokeAsync<object?>("clipboardWrite",null,_document.Copy(Selection));}catch(JSException){_error="Clipboard unavailable. Select the formula text to copy a cell.";}}
+ public async Task PasteAsync(){try{_browser??=new(JS);var text=await _browser.InvokeAsync<string>("clipboardRead");await Command(()=>_document.SetRange(Selection,text),"Paste");}catch(JSException){_error="Clipboard unavailable. Paste into the formula bar to edit a cell.";}}
+ private string CellStyle(IXLCell cell){var style=cell.Style;var result=$"font-weight:{(style.Font.Bold?"bold":"normal")};font-style:{(style.Font.Italic?"italic":"normal")};white-space:{(style.Alignment.WrapText?"pre-wrap":"nowrap")};";if(style.Fill.BackgroundColor.ColorType==XLColorType.Color)result+=$"background:#{style.Fill.BackgroundColor.Color.R:X2}{style.Fill.BackgroundColor.Color.G:X2}{style.Fill.BackgroundColor.Color.B:X2};";if(style.Font.FontColor.ColorType==XLColorType.Color)result+=$"color:#{style.Font.FontColor.Color.R:X2}{style.Font.FontColor.Color.G:X2}{style.Font.FontColor.Color.B:X2};";return result;}
+ private RenderFragment Tools=>@<div class="fx-sheet-tools"><ButtonControl OnClick="@(()=>Command(()=>_document.InsertRow(Selection.Top),"Insert row"))">Insert row</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.DeleteRow(Selection.Top),"Delete row"))">Delete row</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.InsertColumn(Selection.Left),"Insert column"))">Insert column</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.DeleteColumn(Selection.Left),"Delete column"))">Delete column</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.FillDown(Selection),"Fill down"))">Fill down</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.Merge(Selection,true),"Merge"))">Merge selection</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.Merge(Selection,false),"Unmerge"))">Unmerge</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.Sort(Selection,true),"Sort"))">Sort ascending</ButtonControl><ButtonControl OnClick="@(()=>Command(()=>_document.Sort(Selection,false),"Sort"))">Sort descending</ButtonControl><ButtonControl OnClick="@(()=>Command(_document.DeleteSheet,"Delete sheet"))">Delete sheet</ButtonControl></div>;
+ protected override async Task OnAfterRenderAsync(bool firstRender){var rows=ViewRows();var columns=ViewColumns();foreach(var key in _cells.Keys.Where(k=>!rows.Contains(k.Item1)||!columns.Contains(k.Item2)).ToArray())_cells.Remove(key);if(_focusCell is {} target&&_cells.TryGetValue(target,out var cell)){_focusCell=null;await cell.FocusAsync(preventScroll:true);}}
+ public async ValueTask DisposeAsync(){_document.Dispose();if(_browser is not null)await _browser.DisposeAsync();}
+}

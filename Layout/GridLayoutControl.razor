@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit.Layout
+@inherits FlexControlBase
+<div class="fx-grid-layout @CssClass @(CollapseOnSmallScreen?"responsive":"")" id="@Id" style="@($"display:grid;grid-template-columns:{Columns};grid-template-rows:{Rows};gap:{Gap};align-items:{AlignItems};justify-items:{JustifyItems};{ResolvedStyle}")" @attributes="AdditionalAttributes">@ChildContent</div>
+@code {
+    [Parameter] public string Columns {get;set;}="repeat(2,minmax(0,1fr))";
+    [Parameter] public string Rows {get;set;}="auto";
+    [Parameter] public string Gap {get;set;}="12px";
+    [Parameter] public string AlignItems {get;set;}="stretch";
+    [Parameter] public string JustifyItems {get;set;}="stretch";
+    [Parameter] public bool CollapseOnSmallScreen {get;set;}=true;
+    [Parameter] public RenderFragment? ChildContent {get;set;}
+}

@@ -1,0 +1,22 @@
+.fx-pdf-viewer{display:flex;flex-direction:column;border:1px solid var(--fx-border,#cbd5e1);min-width:0;background:var(--fx-surface,#fff)}
+.fx-pdf-body{display:flex;min-height:0;overflow:hidden}.fx-pdf-sidebar{width:250px;flex:none;padding:10px;overflow:auto;border-right:1px solid var(--fx-border,#cbd5e1)}
+.fx-pdf-sidebar ::deep button{max-width:100%;white-space:normal}.fx-pdf-field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}.fx-pdf-field ::deep input{max-width:100%;box-sizing:border-box}
+.fx-pdf-viewport{flex:1;min-width:0;overflow:auto;background:#dce1e8;padding:16px}.fx-pdf-page{position:relative;background:white;box-shadow:0 2px 8px #0003;isolation:isolate}
+.fx-pdf-page canvas{display:block}.fx-pdf-text{position:absolute;inset:0;overflow:clip;line-height:1;text-align:initial;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;z-index:2}
+.fx-pdf-text ::deep :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0 0}
+.fx-pdf-text ::deep span:not(.markedContent){z-index:1}.fx-pdf-text ::deep ::selection{background:#2563eb66}.fx-pdf-text ::deep .fx-pdf-match{background:#ffcc0088}
+.fx-pdf-error{padding:10px;color:var(--fx-danger,#b42318)}
+@media(max-width:650px){.fx-pdf-sidebar{width:170px}}
+.fx-pdf-text{--min-font-size:1;--text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size));--min-font-size-inv:calc(1 / var(--min-font-size));letter-spacing:normal;word-spacing:normal}
+.fx-pdf-text ::deep span:not(.markedContent){--font-height:0;font-size:calc(var(--text-scale-factor) * var(--font-height));--scale-x:1;--rotate:0deg;transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));user-select:text}
+.fx-pdf-text ::deep .markedContent{display:contents}
+.fx-pdf-text[data-main-rotation="90"]{transform:rotate(90deg) translateY(-100%)}
+.fx-pdf-text[data-main-rotation="180"]{transform:rotate(180deg) translate(-100%,-100%)}
+.fx-pdf-text[data-main-rotation="270"]{transform:rotate(270deg) translateX(-100%)}
+.fx-pdf-search-layer{position:absolute;inset:0;pointer-events:none;z-index:3}
+.fx-pdf-search-layer ::deep .fx-pdf-match{position:absolute;background:#ffdd0060}
+.fx-pdf-search-layer ::deep .fx-pdf-active-match{background:#ff880070;outline:2px solid #ae4c00}
+.fx-pdf-bookmarks,.fx-pdf-bookmarks ul{list-style:none;padding-left:12px;margin:4px 0}
+.fx-pdf-bookmarks{padding-left:0}
+.fx-pdf-search-result ::deep [aria-current=true]{outline:2px solid #ae4c00;outline-offset:-2px}
+.fx-pdf-search-status{font-variant-numeric:tabular-nums}

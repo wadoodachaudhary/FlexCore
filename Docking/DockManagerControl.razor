@@ -1,0 +1,105 @@
+@namespace Fx.ControlKit.Docking
+@inherits FlexControlBase
+<CascadingValue Value="this" IsFixed="true">
+    <div class="fx-dock-manager @CssClass" id="@Id" style="@($"height:{Height};{ResolvedStyle}")" @attributes="AdditionalAttributes">
+        @if(_layout.AutoHidden.Count>0)
+        {
+            <div class="fx-dock-auto-hidden" aria-label="Unpinned panes">
+                @foreach(var key in _layout.AutoHidden){<ButtonControl Disabled="@(!Enabled)" OnClick="()=>ToggleDrawer(key)" aria-expanded="@(_drawer==key)">@Panel(key).Title</ButtonControl>}
+            </div>
+        }
+        <DockNodeView Node="@_layout.Root" />
+        @if(_drawer!=null && _layout.AutoHidden.Contains(_drawer))
+        {
+            <section class="fx-dock-drawer" aria-label="@Panel(_drawer).Title">
+                <DockPanelActions PanelKey="@_drawer" />
+                @Panel(_drawer).Content
+            </section>
+        }
+        @foreach(var pane in _layout.Floating)
+        {
+            var panel=Panel(pane.Panel);
+            <DialogControl @key="pane.Panel" Visible="true" Header="@panel.Title" IsModal="false" AutoFocus="false" ShowSystemMenu="false" ShowCloseIcon="@panel.Closable"
+                           Width="@pane.Width" Height="@pane.Height" Position="@pane.Position" PositionChanged="p=>SetFloatingAsync(pane.Panel,position:p)"
+                           WidthChanged="w=>SetFloatingAsync(pane.Panel,width:w)" HeightChanged="h=>SetFloatingAsync(pane.Panel,height:h)"
+                           OnClose="()=>CloseAsync(pane.Panel)" CloseOnEscape="@panel.Closable" Draggable="@Enabled" Resizable="@Enabled">
+                <ChildContent><DockPanelActions PanelKey="@pane.Panel" />@panel.Content</ChildContent>
+            </DialogControl>
+        }
+        @if(_layout.Closed.Count>0)
+        {
+            <ButtonControl Disabled="@(!Enabled)">
+                <ChildContent>Closed panes</ChildContent>
+                <DropDownContent>@foreach(var key in _layout.Closed){<ButtonControl OnClick="()=>DockAsync(key,_layout.Nodes().First(n=>n.Children.Count==0).Id,DockPosition.Tab)">@Panel(key).Title</ButtonControl>}</DropDownContent>
+            </ButtonControl>
+        }
+    </div>
+</CascadingValue>
+@code {
+    [Parameter] public IReadOnlyList<DockPanel> Panels {get;set;}=Array.Empty<DockPanel>();
+    [Parameter] public DockLayoutState? State {get;set;}
+    [Parameter] public EventCallback<DockLayoutState> StateChanged {get;set;}
+    [Parameter] public string Height {get;set;}="500px";
+    private DockLayoutState _layout=new();
+    private DockLayoutState? _last;
+    private string[] _keys=[];
+    private string? _drawer;
+    internal void RequestRender() => StateHasChanged();
+    internal string? DraggedPanel {get;set;}
+    internal DockLayoutState Layout=>_layout;
+    internal DockPanel Panel(string key)=>Panels.First(p=>p.Key==key);
+    protected override void OnParametersSet()
+    {
+        var keys=Panels.Select(p=>p.Key).ToArray();
+        if(keys.Any(string.IsNullOrWhiteSpace)||keys.Distinct().Count()!=keys.Length)throw new ArgumentException("Dock panels require unique nonempty keys.");
+        if(!ReferenceEquals(State,_last)||!keys.SequenceEqual(_keys))
+        {
+            if(State!=null){State.Validate(keys);_layout=State.Clone();}
+            else if(_keys.Length==0)_layout=new(){Root=new(){Panels=keys.ToList(),ActivePanel=keys.FirstOrDefault()}};
+            else
+            {
+                foreach(var removed in _keys.Except(keys))_layout.Remove(removed);
+                foreach(var added in keys.Except(_keys)){var leaf=_layout.Nodes().First(n=>n.Children.Count==0);leaf.Panels.Add(added);leaf.ActivePanel??=added;}
+                _layout.Compact();
+            }
+            _last=State;_keys=keys;
+        }
+    }
+    private async Task PublishAsync(DockLayoutState next)
+    {
+        next.Validate(_keys);_layout=next;DraggedPanel=null;
+        await StateChanged.InvokeAsync(next.Clone());await InvokeAsync(StateHasChanged);
+    }
+    public string SaveLayout()=>_layout.ToJson();
+    public Task RestoreLayoutAsync(string json){var layout=DockLayoutState.FromJson(json);layout.Validate(_keys);return Enabled?PublishAsync(layout):Task.CompletedTask;}
+    public async Task DockAsync(string key,string targetNodeId,DockPosition position=DockPosition.Tab)
+    {
+        if(!Enabled)return;_ = Panel(key);
+        var next=_layout.Clone();var target=next.Nodes().FirstOrDefault(n=>n.Id==targetNodeId&&n.Children.Count==0)??throw new ArgumentException("Choose a tab group as the dock target.");
+        next.Remove(key);
+        if(position==DockPosition.Tab||target.Panels.Count==0){target.Panels.Add(key);target.ActivePanel=key;}
+        else
+        {
+            var existing=new DockNode{Panels=target.Panels.ToList(),ActivePanel=target.ActivePanel};
+            var added=new DockNode{Panels=[key],ActivePanel=key};target.Panels=[];target.ActivePanel=null;
+            target.Vertical=position is DockPosition.Left or DockPosition.Right;target.Ratio=50;
+            target.Children=position is DockPosition.Left or DockPosition.Top?[added,existing]:[existing,added];
+        }
+        next.Compact();_drawer=null;await PublishAsync(next);
+    }
+    public Task FloatAsync(string key)
+    {
+        if(!Enabled||!Panel(key).Floatable)return Task.CompletedTask;
+        var next=_layout.Clone();next.Remove(key);next.Floating.Add(new(){Panel=key,Position=new(20*next.Floating.Count,20*next.Floating.Count)});next.Compact();_drawer=null;return PublishAsync(next);
+    }
+    public Task UnpinAsync(string key){if(!Enabled)return Task.CompletedTask;_ = Panel(key);var next=_layout.Clone();next.Remove(key);next.AutoHidden.Add(key);next.Compact();_drawer=null;return PublishAsync(next);}
+    public Task CloseAsync(string key){if(!Enabled||!Panel(key).Closable)return Task.CompletedTask;var next=_layout.Clone();next.Remove(key);next.Closed.Add(key);next.Compact();_drawer=null;return PublishAsync(next);}
+    internal Task SelectAsync(string nodeId,string key){if(!Enabled)return Task.CompletedTask;var next=_layout.Clone();var node=next.Nodes().First(n=>n.Id==nodeId);if(!node.Panels.Contains(key))throw new ArgumentException("Panel is not in this group.");node.ActivePanel=key;return PublishAsync(next);}
+    internal Task ResizeAsync(string id,double value){if(!Enabled)return Task.CompletedTask;var next=_layout.Clone();next.Nodes().First(n=>n.Id==id).Ratio=Math.Clamp(value,5,95);return PublishAsync(next);}
+    private Task SetFloatingAsync(string key,DialogPosition? position=null,string? width=null,string? height=null)
+    {
+        if(!Enabled)return Task.CompletedTask;var next=_layout.Clone();var pane=next.Floating.FirstOrDefault(p=>p.Panel==key);if(pane==null)return Task.CompletedTask;
+        if(position!=null)pane.Position=position;if(width!=null)pane.Width=width;if(height!=null)pane.Height=height;return PublishAsync(next);
+    }
+    private void ToggleDrawer(string key)=>_drawer=_drawer==key?null:key;
+}

@@ -65,6 +65,7 @@ export function enableTreeKeyboardNavigation(root) {
 
     root.addEventListener("keydown", event => {
         const target = event.target;
+        if (event.key === "Tab" && target?.closest?.(".fx-treegrid-batch-editor")) event.preventDefault();
         if (target !== root && !target?.classList?.contains("fx-treegrid-row")) return;
 
         if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
@@ -72,6 +73,10 @@ export function enableTreeKeyboardNavigation(root) {
         }
     }, { capture: true });
 
+    root.addEventListener("dragstart", event => {
+        const row = event.target.closest?.("tr[draggable='true']");
+        if (row && event.dataTransfer) { event.dataTransfer.setData("text/plain", row.dataset.nodeId); event.dataTransfer.effectAllowed = "move"; }
+    });
     keyboardNavigationRoots.add(root);
 }
 
@@ -105,4 +110,33 @@ export function focusTreeRow(scroller, row) {
 export function focusSelectedTreeRow(scroller) {
     const row = scroller?.querySelector("tr.fx-treegrid-selected");
     focusTreeRow(scroller, row);
+}
+
+// CSS provides sticky positioning; the DOM supplies actual widths after resizing.
+const treeGridLayouts = new WeakMap();
+export function syncTreeGridLayout(root) {
+    if (!root) return;
+    let layout = treeGridLayouts.get(root);
+    if (!layout) {
+        const update = () => {
+            root.style.setProperty("--fx-tree-toolbar-height", `${root.querySelector(".fx-treegrid-edit-toolbar")?.getBoundingClientRect().height || 0}px`);
+            const cells = [...root.querySelectorAll("thead th[data-tree-column]")];
+            for (const side of ["left", "right"]) {
+                let offset = side === "left" ? (root.querySelector("thead .fx-treegrid-check-cell")?.getBoundingClientRect().width || 0) : 0;
+                for (const cell of side === "left" ? cells : [...cells].reverse()) {
+                    if (cell.dataset.treeFrozen !== side) continue;
+                    root.style.setProperty(`--fx-tree-col-${cell.dataset.treeColumn}`, `${offset}px`);
+                    offset += cell.getBoundingClientRect().width;
+                }
+            }
+        };
+        const observer = new ResizeObserver(update);
+        layout = { observer, update, cells: [] }; treeGridLayouts.set(root, layout);
+    }
+    layout.observer.disconnect(); layout.observer.observe(root);
+    for (const cell of root.querySelectorAll("thead th")) layout.observer.observe(cell);
+    layout.update();
+}
+export function disposeTreeGridLayout(root) {
+    treeGridLayouts.get(root)?.observer.disconnect(); treeGridLayouts.delete(root);
 }

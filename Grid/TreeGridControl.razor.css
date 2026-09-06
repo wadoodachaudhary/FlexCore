@@ -1078,3 +1078,31 @@
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor .fx-treegrid-parent-text {
     color: #fff;
 }
+
+.fx-treegrid-pager,.fx-treegrid-sort-level { display:flex;align-items:center;gap:8px;padding:8px;flex-wrap:wrap; }
+.fx-treegrid-filter-popup { min-width:240px;display:flex;flex-direction:column;gap:6px; }
+
+/* Opt-in editing, hierarchy checks, row movement and column freezing. */
+.fx-treegrid-edit-toolbar { display:flex; flex-wrap:wrap; gap:6px; padding:8px; border-bottom:1px solid #ccd5e0; background:#f7f9fc; }
+.fx-treegrid-editor { display:inline-block; min-width:0; width:100%; vertical-align:middle; white-space:normal; }
+.fx-treegrid-editor ::deep .fx-form-item { margin:0; padding:0; }
+.fx-treegrid-editor ::deep .fx-textbox { width:100%; box-sizing:border-box; }
+.fx-treegrid-edit-form { display:grid; gap:12px; }
+.fx-treegrid-edit-actions td { padding:8px; white-space:normal; background:#f5f8ff; }
+.fx-treegrid-dirty > td[data-tree-field] { box-shadow:inset 0 -2px #d99923; }
+.fx-treegrid-check-cell { width:36px; min-width:36px; max-width:36px; box-sizing:border-box; text-align:center; position:sticky; left:0; z-index:2; background:#fff; }
+.fx-treegrid-check-cell ::deep .fx-checkbox-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+.fx-treegrid-checked > td { background:#edf4ff; }
+.fx-treegrid-row > [data-tree-frozen] { z-index:2; background:#fff; }
+.fx-treegrid-row.fx-treegrid-checked > [data-tree-frozen] { background:#edf4ff; }
+.fx-treegrid-selected > [data-tree-frozen], .fx-treegrid-selected > .fx-treegrid-check-cell { background:var(--fx-treegrid-selection-bg, #c4d8ef); }
+.fx-treegrid-header [data-tree-frozen], .fx-treegrid-header .fx-treegrid-check-cell { z-index:5; background:#eef1f5; }
+[data-tree-frozen="left"] { border-right:1px solid #9cacc0; }
+[data-tree-frozen="right"] { border-left:1px solid #9cacc0; }
+.fx-treegrid-drop-zones { display:flex; gap:3px; white-space:normal; }
+.fx-treegrid-drop-zone { padding:5px; border:1px dashed #2768ae; background:#edf4ff; color:#183f6b; flex:1; text-align:center; }
+.fx-treegrid-drop-zone:hover { background:#c4dcff; }
+
+.fx-treegrid-header { z-index:6; }
+.fx-treegrid:has(> .fx-treegrid-edit-toolbar) .fx-treegrid-options-rail { top:var(--fx-tree-toolbar-height,42px); }
+.fx-treegrid:has(> .fx-treegrid-edit-toolbar) .fx-treegrid-column-panel { top:calc(var(--fx-tree-toolbar-height,42px) + 27px); }

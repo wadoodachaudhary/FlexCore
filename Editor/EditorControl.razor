@@ -1,15 +1,46 @@
 @namespace Fx.ControlKit.Editor
+@using Fx.ControlKit
 
 @* The generalized rich-text editor. Owns a single contenteditable surface
    whose content is driven through JS interop helpers in editor-control.js.
    Host apps bolt their own floating toolbar / result panel / etc. on top. *@
 
+@if (ShowToolbar)
+{
+    <ToolbarControl ShowCaptionsToggle="false">
+        <ButtonControl Disabled="@(ReadOnly || !EnableHistory || !_history.CanUndo)" OnClick="UndoAsync">Undo</ButtonControl>
+        <ButtonControl Disabled="@(ReadOnly || !EnableHistory || !_history.CanRedo)" OnClick="RedoAsync">Redo</ButtonControl>
+        <ButtonControl PreventMouseDownDefault="true" Disabled="@ReadOnly" OnClick='() => ExecFormatCommandAsync("bold")'>Bold</ButtonControl>
+        <ButtonControl PreventMouseDownDefault="true" Disabled="@ReadOnly" OnClick='() => ExecFormatCommandAsync("italic")'>Italic</ButtonControl>
+        <ButtonControl PreventMouseDownDefault="true" Disabled="@ReadOnly" OnClick='() => ExecFormatCommandAsync("underline")'>Underline</ButtonControl>
+        <ButtonControl PreventMouseDownDefault="true" Disabled="@ReadOnly" OnClick="() => SetBlockAlignmentAsync(EditorAlignment.Left)">Align left</ButtonControl>
+        <ButtonControl PreventMouseDownDefault="true" Disabled="@ReadOnly" OnClick="() => SetBlockAlignmentAsync(EditorAlignment.Center)">Align center</ButtonControl>
+        <ButtonControl OnClick="OpenSearchAsync">Find / replace</ButtonControl>
+    </ToolbarControl>
+}
+@if (_searchOpen)
+{
+    <div class="fx-editor-search" role="search" aria-label="Search document">
+        <TextBoxControl @ref="_findInput" Value="@_query" ValueChanged='v => _query = v ?? ""' UpdateOnInput="true" OnKeyDown="SearchKeyDown" aria-label="Find text" />
+        <CheckBoxControl Label="Match case" @bind-Checked="_matchCase" />
+        <CheckBoxControl Label="Whole word" @bind-Checked="_wholeWord" />
+        <ButtonControl OnClick="SearchAsync">Find all</ButtonControl>
+        <ButtonControl Disabled="@(_matches.Count == 0)" OnClick="() => MoveSearchAsync(-1)">Previous match</ButtonControl>
+        <ButtonControl Disabled="@(_matches.Count == 0)" OnClick="() => MoveSearchAsync(1)">Next match</ButtonControl>
+        <TextBoxControl Value="@_replacement" ValueChanged='v => _replacement = v ?? ""' UpdateOnInput="true" Enabled="@(!ReadOnly)" OnKeyDown="SearchKeyDown" aria-label="Replacement text" />
+        <ButtonControl Disabled="@(ReadOnly || _matchIndex < 0)" OnClick="async () => await ReplaceCurrentAsync(_replacement)">Replace current</ButtonControl>
+        <ButtonControl Disabled="@(ReadOnly || _matches.Count == 0)" OnClick="async () => await ReplaceAllAsync(_replacement)">Replace all</ButtonControl>
+        <ButtonControl OnClick="CloseSearchAsync">Close search</ButtonControl>
+        <span role="status">@(_matchIndex < 0 ? $"{_matches.Count} matches" : $"Match {_matchIndex + 1} of {_matches.Count}")</span>
+    </div>
+}
 <div id="@EditorId"
      @key="_editorKey"
      class="fx-editor fx-pw-@PageWidthClass @(CssClass ?? string.Empty)"
      style="@EditorStyle"
-     contenteditable="true"
-     spellcheck="true"
+     contenteditable="@(ReadOnly ? "false" : "true")"
+     role="textbox" aria-label="@AriaLabel" aria-multiline="true" aria-readonly="@(ReadOnly ? "true" : "false")" tabindex="0"
+     spellcheck="@(SpellCheck ? "true" : "false")"
      @onmouseup="HandleMouseUpAsync"
      @oninput="HandleInputAsync">
 </div>
