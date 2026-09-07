@@ -16,7 +16,7 @@
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
-    <Description>General-purpose reusable Blazor controls — grids, tree-grids, editors, ribbon, toolbars, dialogs, charts, diagrams, reports, multi-select dual-list, notifications. Application-agnostic — every external dependency is exposed as an interface so host apps wire their own data layer, session model, and reporting engine.</Description>
+    <Description>Enterprise Blazor component suite for .NET — built 100% in C# and SVG, with no npm packages, no webpack pipeline, and no JavaScript interop bottlenecks. The data grid virtualizes tens of thousands of rows at 60 FPS with frozen columns, hierarchical tree grids, multi-column sorting, typed filtering, inline/dialog/batch editing, aggregate footers and native ClosedXML Excel export. Also includes charts, diagrams, a Crystal-compatible report writer, scheduler, pivot, MDI layout and 60+ further controls. Host-agnostic: every external dependency is a clean C# interface, so you wire your own EF Core, Dapper or SQL Server data layer. Designed for VB6 / WinForms / ActiveX modernizations that need desktop-grade behaviour on the web.</Description>
     <PackageTags>blazor;controls;grid;treegrid;reports;charts;ribbon;toolbar;dialog;notification;diagram;dotnet;razor</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
