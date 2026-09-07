@@ -15023,6 +15023,49 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     public IEnumerable<TValue> GetSelectedRecords() => GetSelectedRecordList();
 
+    /// <summary>
+    /// Returns loaded records matching the current filters and search, before paging.
+    /// With ItemsProvider this is the loaded provider window, not the entire database result.
+    /// </summary>
+    public IReadOnlyList<TValue> GetFilteredRecords() => FilteredData.ToList();
+
+    /// <summary>
+    /// Terminal-cell state for <see cref="GridTabNavigationMode.WrapRowsUntilEdge"/>,
+    /// rendered as data-fx-grid-tab-edge so the PageControl graph's capture-phase
+    /// keydown can tell whether this Tab leaves the grid ("first"/"last"/"both")
+    /// or belongs to the grid's own cell navigation ("none").
+    /// </summary>
+    private string TabTerminalEdgeState
+    {
+        get
+        {
+            var columns = VisibleColumns.ToList();
+            var rows = GetKeyboardNavigationRowItems();
+            // An empty grid has nothing to navigate — Tab passes straight through.
+            if (columns.Count == 0 || rows.Count == 0)
+                return "both";
+            if (!_activeCell.HasValue)
+                return "none";
+
+            var active = _activeCell.Value;
+            var item = GetItemAtResolvedRowIndex(active.RowIndex);
+            var displayRowIndex = item == null
+                ? -1
+                : ResolveKeyboardDisplayRowIndex(rows, item, active.RowIndex);
+            if (displayRowIndex < 0)
+                return "none";
+
+            var firstCell = columns.FindIndex(IsKeyboardNavigationTargetColumn);
+            if (firstCell < 0)
+                return "both";
+            var lastCell = FindLastKeyboardNavigationTargetColumnIndex(columns);
+
+            var atFirst = displayRowIndex == 0 && active.CellIndex <= firstCell;
+            var atLast = displayRowIndex == rows.Count - 1 && active.CellIndex >= lastCell;
+            return atFirst && atLast ? "both" : atFirst ? "first" : atLast ? "last" : "none";
+        }
+    }
+
     public Task<List<TValue>> GetSelectedRecordsAsync() =>
         Task.FromResult(GetSelectedRecordList());
 

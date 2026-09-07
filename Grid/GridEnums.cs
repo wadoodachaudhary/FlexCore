@@ -110,7 +110,14 @@ public enum GridTabNavigationMode
     /// </summary>
     WrapRows,
     /// <summary>Tab and Shift+Tab are left to an enclosing PageControl navigation graph.</summary>
-    PageControl
+    PageControl,
+    /// <summary>
+    /// Tab wraps within the grid until it reaches a terminal cell, then leaves for the
+    /// previous page node, Tab on the last navigable cell of the last row moves
+    /// to the next one. Without an enclosing PageControl graph this behaves as
+    /// <see cref="WrapRows"/>.
+    /// </summary>
+    WrapRowsUntilEdge
 }
 
 public enum ClipMode
