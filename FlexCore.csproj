@@ -20,7 +20,7 @@
     <PackageTags>blazor;controls;grid;treegrid;reports;charts;ribbon;toolbar;dialog;notification;diagram;dotnet;razor</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageProjectUrl>https://github.com/wadoodachaudhary/FlexCore</PackageProjectUrl>
+    <PackageProjectUrl>https://flexcoreui.com</PackageProjectUrl>
     <RepositoryUrl>https://github.com/wadoodachaudhary/FlexCore.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <Copyright>Copyright (c) 2026 FlexCore Contributors</Copyright>
