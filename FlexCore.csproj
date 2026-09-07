@@ -5,6 +5,9 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- FlexCore.csproj is at the repo root, so the SDK globs would otherwise pull
+         the satellite project back in and re-introduce its ClosedXML dependency. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.Documents/**</DefaultItemExcludes>
     <!-- Namespace and CSS prefix are unchanged from FlexCore — only the
          project / assembly / package name changes here. Source code stays
          under Fx.ControlKit.* so consumer code does not need any edits. -->
@@ -41,9 +44,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- FlexCore.Documents is a satellite of this same product, split out only so
+         apps that never open a document avoid ClosedXML and the pdf.js runtime.
+         It needs the same internals the controls had when they lived here (e.g.
+         BrowserInterop) — granting that is preferable to widening FlexCore's
+         public API just to accommodate the split. -->
+    <InternalsVisibleTo Include="FlexCore.Documents" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Ical.Net" Version="5.2.3" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
-    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
