@@ -12,7 +12,7 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.33</Version>
+    <Version>0.2.34</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>

@@ -1,4 +1,4 @@
-using ClosedXML.Excel;
+using Fx.ControlKit.Excel;
 using Microsoft.JSInterop;
 using System.Globalization;
 using System.Text;
@@ -264,36 +264,48 @@ public static class GridExporter
 
     private static byte[] BuildXlsx(GridExportTable table)
     {
-        using var workbook = new XLWorkbook();
-        var worksheet = workbook.Worksheets.Add(SanitizeSheetName(table.SheetName));
+        // Forwarded to FlexCore's native XlsxWriter. Same visual result as the
+        // previous ClosedXML implementation — bold shaded header, thin cell
+        // borders, highlight fill, number formats, alignment, column widths —
+        // without ClosedXML or its DocumentFormat.OpenXml chain.
+        var sheet = new XlsxSheet { Name = XlsxWriter.SanitizeSheetName(table.SheetName) };
         var formulaFields = BuildFormulaFieldMap(table.Columns);
         var rowIndex = 1;
 
         if (table.IncludeHeaderRow && table.Columns.Count > 0)
         {
-            worksheet.Row(rowIndex).Style.Font.Bold = true;
-            for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
+            var header = sheet.AddRow();
+            foreach (var column in table.Columns)
             {
-                var cell = worksheet.Cell(rowIndex, colIndex + 1);
-                cell.SetValue(table.Columns[colIndex].Header);
-                cell.Style.Font.Bold = true;
-                cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#eeeeee");
-                cell.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
-                cell.Style.Border.OutsideBorderColor = XLColor.FromHtml("#a6a6a6");
+                header.Add(new XlsxCell
+                {
+                    Value = column.Header,
+                    Bold = true,
+                    FillHex = "eeeeee",
+                    BorderHex = "a6a6a6"
+                });
             }
             rowIndex++;
         }
 
         foreach (var row in table.Rows)
         {
+            var line = sheet.AddRow();
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
-                var cell = worksheet.Cell(rowIndex, colIndex + 1);
                 var value = colIndex < row.XlsxValues.Count
                     ? row.XlsxValues[colIndex]
                     : colIndex < row.Values.Count
                         ? row.Values[colIndex]
                         : null;
+
+                var cell = new XlsxCell
+                {
+                    Bold = row.IsBold,
+                    FillHex = table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null,
+                    BorderHex = "e6e6e6"
+                };
+
                 if (row.UseColumnFormulas
                     && colIndex < table.Columns.Count
                     && TryTranslateSameRowFormula(
@@ -303,21 +315,12 @@ public static class GridExporter
                         rowIndex,
                         out var formula))
                 {
-                    cell.FormulaA1 = formula;
+                    cell.Formula = formula;
                 }
                 else
                 {
-                    SetCellValue(cell, value);
+                    cell.Value = value;
                 }
-
-                if (row.IsBold)
-                    cell.Style.Font.Bold = true;
-
-                if (table.HighlightColumnIndexes.Contains(colIndex))
-                    cell.Style.Fill.BackgroundColor = XLColor.FromHtml("#ffffc1");
-
-                cell.Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
-                cell.Style.Border.OutsideBorderColor = XLColor.FromHtml("#e6e6e6");
 
                 if (colIndex < table.Columns.Count)
                 {
@@ -325,32 +328,29 @@ public static class GridExporter
                     var sourceFormat = colIndex < row.XlsxFormats.Count
                         ? row.XlsxFormats[colIndex]
                         : column.Format;
-                    var numberFormat = ResolveXlsxNumberFormat(sourceFormat, value);
-                    if (!string.IsNullOrWhiteSpace(numberFormat))
-                        cell.Style.NumberFormat.Format = numberFormat;
-
-                    cell.Style.Alignment.Horizontal = column.TextAlign switch
+                    cell.NumberFormat = ResolveXlsxNumberFormat(sourceFormat, value);
+                    cell.Align = column.TextAlign switch
                     {
-                        TextAlign.Center => XLAlignmentHorizontalValues.Center,
-                        TextAlign.Right => XLAlignmentHorizontalValues.Right,
-                        _ => XLAlignmentHorizontalValues.Left
+                        TextAlign.Center => XlsxAlign.Center,
+                        TextAlign.Right => XlsxAlign.Right,
+                        _ => XlsxAlign.Left
                     };
                 }
+
+                line.Add(cell);
             }
             rowIndex++;
         }
 
+        // A column with no explicit width is left out of ColumnWidths so the writer
+        // sizes it from content, standing in for ClosedXML's AdjustToContents().
         for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
         {
             if (table.Columns[colIndex].Width is double width)
-                worksheet.Column(colIndex + 1).Width = ConvertPixelsToExcelColumnWidth(width);
-            else
-                worksheet.Column(colIndex + 1).AdjustToContents();
+                sheet.ColumnWidths[colIndex] = ConvertPixelsToExcelColumnWidth(width);
         }
 
-        using var stream = new MemoryStream();
-        workbook.SaveAs(stream);
-        return stream.ToArray();
+        return XlsxWriter.Write(sheet);
     }
 
     private static double ConvertPixelsToExcelColumnWidth(double width)
@@ -358,7 +358,7 @@ public static class GridExporter
         if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
             return 8.43;
 
-        // GridControl stores runtime widths as CSS pixels. ClosedXML expects
+        // GridControl stores runtime widths as CSS pixels. Excel expects
         // Excel's character-based column width, so passing pixels directly
         // makes normal grid columns become half-page-wide Excel columns.
         var excelWidth = (width - 5) / 7d;
@@ -1533,82 +1533,6 @@ public static class GridExporter
         return orientation == GridPdfOrientation.Landscape
             ? (Math.Max(size.Width, size.Height), Math.Min(size.Width, size.Height))
             : (Math.Min(size.Width, size.Height), Math.Max(size.Width, size.Height));
-    }
-
-    private static void SetCellValue(IXLCell cell, object? value)
-    {
-        switch (value)
-        {
-            case null:
-            case DBNull _:
-                return;
-            case string s:
-                cell.SetValue(s);
-                break;
-            case byte number:
-                cell.SetValue((int)number);
-                break;
-            case sbyte number:
-                cell.SetValue((int)number);
-                break;
-            case short number:
-                cell.SetValue((int)number);
-                break;
-            case ushort number:
-                cell.SetValue((int)number);
-                break;
-            case int i:
-                cell.SetValue(i);
-                break;
-            case uint number:
-                cell.SetValue((long)number);
-                break;
-            case long l:
-                cell.SetValue(l);
-                break;
-            case ulong number when number <= long.MaxValue:
-                cell.SetValue((long)number);
-                break;
-            case ulong number:
-                cell.SetValue((double)number);
-                break;
-            case decimal d:
-                cell.SetValue(d);
-                break;
-            case double d when !double.IsNaN(d) && !double.IsInfinity(d):
-                cell.SetValue(d);
-                break;
-            case double d:
-                cell.SetValue(d.ToString(CultureInfo.InvariantCulture));
-                break;
-            case float f when !float.IsNaN(f) && !float.IsInfinity(f):
-                cell.SetValue(f);
-                break;
-            case float f:
-                cell.SetValue(f.ToString(CultureInfo.InvariantCulture));
-                break;
-            case DateTime dt:
-                cell.SetValue(dt);
-                break;
-            case DateOnly date:
-                cell.SetValue(date.ToDateTime(TimeOnly.MinValue));
-                break;
-            case DateTimeOffset dateTimeOffset:
-                cell.SetValue(dateTimeOffset.DateTime);
-                break;
-            case TimeOnly time:
-                cell.SetValue(time.ToTimeSpan());
-                break;
-            case TimeSpan timeSpan:
-                cell.SetValue(timeSpan);
-                break;
-            case bool b:
-                cell.SetValue(b);
-                break;
-            default:
-                cell.SetValue(Convert.ToString(value, CultureInfo.CurrentCulture) ?? "");
-                break;
-        }
     }
 
     private static string EscapeDelimited(string value, string delimiter)
