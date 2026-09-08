@@ -121,7 +121,7 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: 0;
+    gap: 4px;
     min-height: 17px;
     margin: 0;
     padding-top: 1px;
@@ -149,9 +149,9 @@
 .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::before {
     content: "";
     position: absolute;
-    left: calc(var(--tree-node-left) - 8px);
-    top: 8px;
-    width: 9px;
+    left: calc(var(--tree-node-left) - var(--tree-indent) + 5px);
+    top: 50%;
+    width: calc(var(--tree-indent) - 5px);
     height: 1px;
     background-image: repeating-linear-gradient(
         to right,
@@ -165,10 +165,10 @@
 .fx-treeview-vb6 .fx-treeview-node:not(.fx-treeview-root)::after {
     content: "";
     position: absolute;
-    left: calc(var(--tree-node-left) - 8px);
-    top: -8px;
+    left: calc(var(--tree-node-left) - var(--tree-indent) + 5px);
+    top: -50%;
     width: 1px;
-    height: 17px;
+    height: 100%;
     background-image: repeating-linear-gradient(
         to bottom,
         var(--fx-tree-connector-color, #777) 0 1px,
@@ -184,7 +184,7 @@
     flex: 0 0 11px;
     width: 11px;
     height: 11px;
-    margin-right: 3px;
+    margin-right: 0;
     border: 1px solid var(--fx-tree-arrow-border, #666);
     background: var(--fx-tree-arrow-bg, #fff);
     color: var(--fx-tree-arrow-color, #000);
@@ -216,6 +216,21 @@
 
 .fx-treeview-vb6 .fx-treeview-arrow-hidden::before {
     content: "";
+}
+
+/* Leaves retain the arrow slot; extend their connector to the checkbox/icon. */
+.fx-treeview-vb6 .fx-treeview-node.fx-treeview-leaf:not(.fx-treeview-root)::before {
+    width: calc(var(--tree-indent) + 10px);
+}
+
+.fx-treeview-vb6 .fx-treeview-check {
+    flex: 0 0 auto;
+}
+
+.fx-treeview-vb6 .fx-treeview-check ::deep .fx-checkbox {
+    margin: 0;
+    gap: 0;
+    line-height: 1;
 }
 
 .fx-treeview-vb6 .fx-treeview-checkbox {

@@ -13,6 +13,17 @@ public enum PageNavigationNodeMode
     Descendants
 }
 
+/// <summary>Where focus enters a node when arriving from another node.</summary>
+public enum PageNavigationEntry
+{
+    /// <summary>First target when moving forward, last target when moving backward.</summary>
+    Directional,
+    /// <summary>Always enter at the first target (or first data cell of a grid).</summary>
+    First,
+    /// <summary>Always enter at the last target.</summary>
+    Last
+}
+
 /// <summary>Action performed when a page shortcut is pressed.</summary>
 public enum PageShortcutAction
 {
@@ -50,7 +61,8 @@ public sealed record PageNavigationNode(
     string? Next = null,
     string? Previous = null,
     PageNavigationNodeMode Mode = PageNavigationNodeMode.Auto,
-    IReadOnlyList<PageNavigationShortcut>? Shortcuts = null);
+    IReadOnlyList<PageNavigationShortcut>? Shortcuts = null,
+    PageNavigationEntry Entry = PageNavigationEntry.Directional);
 
 /// <summary>
 /// Defines page-level keyboard navigation. A node may represent one focusable

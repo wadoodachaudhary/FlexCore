@@ -1218,18 +1218,36 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleHostFocusSeed(FocusEventArgs _)
     {
-        if (!SeedActiveCellOnHostFocus || _activeCell != null)
+        if (!SeedActiveCellOnHostFocus && PageNavigationContext?.HandlesTabNavigation != true)
             return;
 
-        var firstRow = PagedData.FirstOrDefault();
+        var pageEntry = false;
+        if (PageNavigationContext?.HandlesTabNavigation == true)
+        {
+            try
+            {
+                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+                pageEntry = await _gridJsModule.InvokeAsync<bool>("takePageNavigationEntry", _gridFocusElement);
+            }
+            catch (JSException) { }
+            catch (InvalidOperationException) { }
+        }
+        if (!pageEntry && (!SeedActiveCellOnHostFocus || _activeCell != null))
+            return;
+
+        var firstRow = pageEntry
+            ? GetKeyboardNavigationRowItems().FirstOrDefault()
+            : PagedData.FirstOrDefault();
         if (firstRow == null)
             return;
 
-        var firstColumn = VisibleColumns.FirstOrDefault(column => !string.IsNullOrEmpty(column.Field));
+        var firstColumn = VisibleColumns.FirstOrDefault(IsKeyboardNavigationTargetColumn);
         if (firstColumn == null)
             return;
 
         await SelectProgrammaticCellAsync(firstRow, firstColumn.Field);
+        RememberKeyboardNavigationSource(firstRow, ResolveRowIndex(firstRow, 0), ResolveVisibleColumnIndex(firstColumn.Field));
+        _pendingActiveCellScrollIntoView = true;
         await InvokeAsync(StateHasChanged);
     }
 
