@@ -1055,6 +1055,12 @@ export function registerGridKeyboardTrap(gridRoot) {
     gridKeyboardTrapBindings.set(gridRoot, { onKeyDown, doc, clearPendingEditTyping, rememberPressedEditCell });
 }
 
+export function takePageNavigationEntry(gridElement) {
+    const entry = gridElement?.dataset.fxPageNavigationEntry;
+    if (gridElement) delete gridElement.dataset.fxPageNavigationEntry;
+    return entry === "first";
+}
+
 export function unregisterGridKeyboardTrap(gridRoot) {
     if (!gridRoot) return;
     const handlers = gridKeyboardTrapBindings.get(gridRoot);

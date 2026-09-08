@@ -168,6 +168,17 @@
             _initialFocusAttempts = InitialFocusMaxAttempts;
     }
 
+    /// <summary>Restart at the first available form target after New or Open.</summary>
+    public async Task<bool> FocusFirstNavigationTargetAsync()
+    {
+        if (!HandlesTabNavigation)
+            return false;
+
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<bool>(
+            "focusFirstPageNavigationTarget", _rootElement, BuildGraphDescriptors(), false);
+    }
+
     private async Task<IJSObjectReference> GetModuleAsync()
     {
         return _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
@@ -245,6 +256,7 @@
                 id = node.Id,
                 selector = node.Selector,
                 mode = node.Mode.ToString().ToLowerInvariant(),
+                entry = node.Entry.ToString().ToLowerInvariant(),
                 next = node.Next,
                 previous = node.Previous,
                 shortcuts = (node.Shortcuts ?? [])
@@ -272,7 +284,7 @@
     }
 
     private static string NodeSignature(PageNavigationNode node) =>
-        $"{node.Id}:{node.Selector}:{node.Order}:{node.Next}:{node.Previous}:{node.Mode}:" +
+        $"{node.Id}:{node.Selector}:{node.Order}:{node.Next}:{node.Previous}:{node.Mode}:{node.Entry}:" +
         string.Join(',', (node.Shortcuts ?? []).Select(shortcut =>
             $"{shortcut.Key}:{shortcut.Modifiers}:{shortcut.Action}:{shortcut.AllowInEditor}"));
 

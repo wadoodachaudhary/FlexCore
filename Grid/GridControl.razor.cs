@@ -1218,18 +1218,36 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleHostFocusSeed(FocusEventArgs _)
     {
-        if (!SeedActiveCellOnHostFocus || _activeCell != null)
+        if (!SeedActiveCellOnHostFocus && PageNavigationContext?.HandlesTabNavigation != true)
             return;
 
-        var firstRow = PagedData.FirstOrDefault();
+        var pageEntry = false;
+        if (PageNavigationContext?.HandlesTabNavigation == true)
+        {
+            try
+            {
+                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+                pageEntry = await _gridJsModule.InvokeAsync<bool>("takePageNavigationEntry", _gridFocusElement);
+            }
+            catch (JSException) { }
+            catch (InvalidOperationException) { }
+        }
+        if (!pageEntry && (!SeedActiveCellOnHostFocus || _activeCell != null))
+            return;
+
+        var firstRow = pageEntry
+            ? GetKeyboardNavigationRowItems().FirstOrDefault()
+            : PagedData.FirstOrDefault();
         if (firstRow == null)
             return;
 
-        var firstColumn = VisibleColumns.FirstOrDefault(column => !string.IsNullOrEmpty(column.Field));
+        var firstColumn = VisibleColumns.FirstOrDefault(IsKeyboardNavigationTargetColumn);
         if (firstColumn == null)
             return;
 
         await SelectProgrammaticCellAsync(firstRow, firstColumn.Field);
+        RememberKeyboardNavigationSource(firstRow, ResolveRowIndex(firstRow, 0), ResolveVisibleColumnIndex(firstColumn.Field));
+        _pendingActiveCellScrollIntoView = true;
         await InvokeAsync(StateHasChanged);
     }
 
@@ -15022,6 +15040,49 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public Task GoToPageAsync(int page) => GoToPage(page);
 
     public IEnumerable<TValue> GetSelectedRecords() => GetSelectedRecordList();
+
+    /// <summary>
+    /// Returns loaded records matching the current filters and search, before paging.
+    /// With ItemsProvider this is the loaded provider window, not the entire database result.
+    /// </summary>
+    public IReadOnlyList<TValue> GetFilteredRecords() => FilteredData.ToList();
+
+    /// <summary>
+    /// Terminal-cell state for <see cref="GridTabNavigationMode.WrapRowsUntilEdge"/>,
+    /// rendered as data-fx-grid-tab-edge so the PageControl graph's capture-phase
+    /// keydown can tell whether this Tab leaves the grid ("first"/"last"/"both")
+    /// or belongs to the grid's own cell navigation ("none").
+    /// </summary>
+    private string TabTerminalEdgeState
+    {
+        get
+        {
+            var columns = VisibleColumns.ToList();
+            var rows = GetKeyboardNavigationRowItems();
+            // An empty grid has nothing to navigate — Tab passes straight through.
+            if (columns.Count == 0 || rows.Count == 0)
+                return "both";
+            if (!_activeCell.HasValue)
+                return "none";
+
+            var active = _activeCell.Value;
+            var item = GetItemAtResolvedRowIndex(active.RowIndex);
+            var displayRowIndex = item == null
+                ? -1
+                : ResolveKeyboardDisplayRowIndex(rows, item, active.RowIndex);
+            if (displayRowIndex < 0)
+                return "none";
+
+            var firstCell = columns.FindIndex(IsKeyboardNavigationTargetColumn);
+            if (firstCell < 0)
+                return "both";
+            var lastCell = FindLastKeyboardNavigationTargetColumnIndex(columns);
+
+            var atFirst = displayRowIndex == 0 && active.CellIndex <= firstCell;
+            var atLast = displayRowIndex == rows.Count - 1 && active.CellIndex >= lastCell;
+            return atFirst && atLast ? "both" : atFirst ? "first" : atLast ? "last" : "none";
+        }
+    }
 
     public Task<List<TValue>> GetSelectedRecordsAsync() =>
         Task.FromResult(GetSelectedRecordList());

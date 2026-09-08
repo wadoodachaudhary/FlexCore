@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Collections.Generic;
 using ClosedXML.Excel;
+using Fx.ControlKit.Excel;
 
 namespace Fx.ControlKit.Data;
 
@@ -96,34 +97,25 @@ public class FilerControl
     /// </summary>
     public static void WriteExcel(Stream stream, DataTable dataTable, string sheetName = "Sheet1")
     {
-        using var workbook = new XLWorkbook();
-        var worksheet = workbook.Worksheets.Add(sheetName);
+        // Forwarded to FlexCore's native XlsxWriter — same output shape, no
+        // ClosedXML/OpenXml dependency on the write path. Signature unchanged.
+        var sheet = new XlsxSheet { Name = sheetName };
 
-        // Headers
-        for (int col = 0; col < dataTable.Columns.Count; col++)
-        {
-            worksheet.Cell(1, col + 1).SetValue(dataTable.Columns[col].ColumnName);
-        }
+        var header = sheet.AddRow();
+        for (var col = 0; col < dataTable.Columns.Count; col++)
+            header.Add(new XlsxCell { Value = dataTable.Columns[col].ColumnName });
 
-        // Data Rows
-        for (int row = 0; row < dataTable.Rows.Count; row++)
+        foreach (System.Data.DataRow dataRow in dataTable.Rows)
         {
-            for (int col = 0; col < dataTable.Columns.Count; col++)
+            var row = sheet.AddRow();
+            for (var col = 0; col < dataTable.Columns.Count; col++)
             {
-                var val = dataTable.Rows[row][col];
-                if (val != DBNull.Value && val != null)
-                {
-                    if (val is double d) worksheet.Cell(row + 2, col + 1).SetValue(d);
-                    else if (val is int i) worksheet.Cell(row + 2, col + 1).SetValue(i);
-                    else if (val is decimal dec) worksheet.Cell(row + 2, col + 1).SetValue(dec);
-                    else if (val is DateTime dt) worksheet.Cell(row + 2, col + 1).SetValue(dt);
-                    else if (val is bool b) worksheet.Cell(row + 2, col + 1).SetValue(b);
-                    else worksheet.Cell(row + 2, col + 1).SetValue(val.ToString());
-                }
+                var val = dataRow[col];
+                row.Add(new XlsxCell { Value = val == DBNull.Value ? null : val });
             }
         }
 
-        workbook.SaveAs(stream);
+        XlsxWriter.Write(stream, sheet);
     }
 
     /// <summary>

@@ -5,6 +5,9 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- FlexCore.csproj is at the repo root, so the SDK globs would otherwise pull
+         the satellite project back in and re-introduce its ClosedXML dependency. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.Documents/**</DefaultItemExcludes>
     <!-- Namespace and CSS prefix are unchanged from FlexCore — only the
          project / assembly / package name changes here. Source code stays
          under Fx.ControlKit.* so consumer code does not need any edits. -->
@@ -12,11 +15,11 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.33</Version>
+    <Version>0.2.35</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
-    <Description>General-purpose reusable Blazor controls — grids, tree-grids, editors, ribbon, toolbars, dialogs, charts, diagrams, reports, multi-select dual-list, notifications. Application-agnostic — every external dependency is exposed as an interface so host apps wire their own data layer, session model, and reporting engine.</Description>
+    <Description>Enterprise Blazor component suite for .NET — built 100% in C# and SVG, with no npm packages, no webpack pipeline, and no JavaScript interop bottlenecks. The data grid virtualizes tens of thousands of rows at 60 FPS with frozen columns, hierarchical tree grids, multi-column sorting, typed filtering, inline/dialog/batch editing, aggregate footers and native ClosedXML Excel export. Also includes charts, diagrams, a Crystal-compatible report writer, scheduler, pivot, MDI layout and 60+ further controls. Host-agnostic: every external dependency is a clean C# interface, so you wire your own EF Core, Dapper or SQL Server data layer. Designed for VB6 / WinForms / ActiveX modernizations that need desktop-grade behaviour on the web.</Description>
     <PackageTags>blazor;controls;grid;treegrid;reports;charts;ribbon;toolbar;dialog;notification;diagram;dotnet;razor</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -41,9 +44,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- FlexCore.Documents is a satellite of this same product, split out only so
+         apps that never open a document avoid ClosedXML and the pdf.js runtime.
+         It needs the same internals the controls had when they lived here (e.g.
+         BrowserInterop) — granting that is preferable to widening FlexCore's
+         public API just to accommodate the split. -->
+    <InternalsVisibleTo Include="FlexCore.Documents" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Ical.Net" Version="5.2.3" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
-    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>

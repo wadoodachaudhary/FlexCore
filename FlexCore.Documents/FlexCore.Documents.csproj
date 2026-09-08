@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Same namespace and fx-* CSS prefix as FlexCore — only the assembly and
+         package name differ, so moving a control between the two never changes
+         a consumer's `using` or markup. -->
+    <RootNamespace>Fx.ControlKit</RootNamespace>
+    <AssemblyName>FlexCore.Documents</AssemblyName>
+    <!-- NuGet metadata -->
+    <PackageId>FlexCore.Documents</PackageId>
+    <Version>0.2.35</Version>
+    <Authors>FlexCore Contributors</Authors>
+    <Company>FlexCore Contributors</Company>
+    <Product>FlexCore.Documents</Product>
+    <Description>Document controls for FlexCore — SpreadsheetControl (open, edit and round-trip real .xlsx workbooks with live formulas, styles and AutoFilters) and PdfViewerControl (search, bookmarks, zoom and rotation). Split out of the core FlexCore package so applications that do not open documents are not made to download ClosedXML, DocumentFormat.OpenXml and the vendored pdf.js runtime.</Description>
+    <PackageTags>blazor;spreadsheet;xlsx;excel;pdf;viewer;documents;dotnet;razor</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://flexcoreui.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wadoodachaudhary/FlexCore.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright (c) 2026 FlexCore Contributors</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ClosedXML lives HERE, not in FlexCore. SpreadsheetControl loads arbitrary
+         user workbooks and round-trips styles, formulas and AutoFilters, which is
+         exactly what ClosedXML exists for; FlexCore's own export path uses the
+         dependency-free Fx.ControlKit.Excel.XlsxWriter instead. -->
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FlexCore.csproj" />
+  </ItemGroup>
+
+</Project>

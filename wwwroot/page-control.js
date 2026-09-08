@@ -37,6 +37,7 @@ function normalizeNodes(nodes) {
             id: node.id,
             selector: node.selector,
             mode: ["element", "descendants"].includes(node.mode) ? node.mode : "auto",
+            entry: ["first", "last"].includes(node.entry) ? node.entry : "directional",
             next: typeof node.next === "string" && node.next.length > 0 ? node.next : null,
             previous: typeof node.previous === "string" && node.previous.length > 0 ? node.previous : null,
             shortcuts: Array.isArray(node.shortcuts)
@@ -117,12 +118,18 @@ function resolveLinkedTarget(currentTarget, direction, graph) {
         visited.add(targetId);
         const nodeTargets = graph.targetsByNode.get(targetId) ?? [];
         if (nodeTargets.length > 0)
-            return direction > 0 ? nodeTargets[0] : nodeTargets[nodeTargets.length - 1];
+            return entryTarget(nodeTargets, direction);
 
         targetId = graph.nodesById.get(targetId)?.[edgeName] ?? null;
     }
 
     return null;
+}
+
+function entryTarget(targets, direction) {
+    const entry = targets[0]?.node.entry;
+    return entry === "first" || (entry !== "last" && direction > 0)
+        ? targets[0] : targets[targets.length - 1];
 }
 
 function resolveNaturalTarget(targets, currentIndex, direction, wrap) {
@@ -170,6 +177,10 @@ function resolveShortcut(event, graph) {
 }
 
 function focusTarget(target, action = "focus") {
+    // The grid consumes this one-shot request on focus. Internal editor-to-host
+    // focus restoration must not reset the active cell.
+    if (target.node.entry === "first" && target.element.matches("[role='grid']"))
+        target.element.dataset.fxPageNavigationEntry = "first";
     target.element.focus({ preventScroll: true });
     if (action === "activate")
         target.element.click();
@@ -223,12 +234,15 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
         const currentIndex = resolveCurrentIndex(graph.targets, root.ownerDocument.activeElement);
         const direction = event.shiftKey ? -1 : 1;
         const currentTarget = currentIndex >= 0 ? graph.targets[currentIndex] : null;
-        const nextTarget = currentTarget
+        let nextTarget = currentTarget
             ? resolveLinkedTarget(currentTarget, direction, graph)
                 ?? resolveNaturalTarget(graph.targets, currentIndex, direction, wrap)
             : resolveNaturalTarget(graph.targets, currentIndex, direction, wrap);
 
         if (!nextTarget) return;
+
+        if (nextTarget.node !== currentTarget?.node)
+            nextTarget = entryTarget(graph.targetsByNode.get(nextTarget.node.id), direction);
 
         event.preventDefault();
         event.stopPropagation();
@@ -246,11 +260,11 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
 // Returns false when nothing is focusable YET (e.g. a grid node whose rows have
 // not arrived, so SeedActiveCellOnHostFocus has nothing to seed); the caller
 // retries on a later render.
-export function focusFirstPageNavigationTarget(root, nodeDefinitions) {
+export function focusFirstPageNavigationTarget(root, nodeDefinitions, preserveExistingFocus = true) {
     if (!root) return true;
     const doc = root.ownerDocument;
     const active = doc.activeElement;
-    if (active && active !== doc.body && active !== root && root.contains(active))
+    if (preserveExistingFocus && active && active !== doc.body && active !== root && root.contains(active))
         return true;
 
     const graph = collectTargets(root, normalizeNodes(nodeDefinitions));

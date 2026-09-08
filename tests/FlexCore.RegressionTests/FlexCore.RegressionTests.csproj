@@ -6,5 +6,6 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../../FlexCore.csproj" />
+    <ProjectReference Include="..\..\FlexCore.Documents\FlexCore.Documents.csproj" />
   </ItemGroup>
 </Project>

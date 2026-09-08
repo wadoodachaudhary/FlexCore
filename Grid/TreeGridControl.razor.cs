@@ -348,7 +348,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     [Inject] private IJSRuntime? LegacyScrollJs { get; set; }
 
-    private const string LegacyScrollBarJsModulePath = "./_content/FlexCore/legacy-scrollbar.js";
+    private const string LegacyScrollBarJsModulePath = "./_content/FlexKit/legacy-scrollbar.js";
     private IJSObjectReference? _legacyScrollModule;
     private bool _treeKeyboardNavigationEnabled;
 

@@ -1,11 +1,26 @@
 # FlexCore
 
-General-purpose, application-agnostic Blazor controls for .NET — grids, tree-grids, charts, diagrams, reports, dialogs, ribbons, toolbars, notifications, multi-select dual-list, editors, and more.
+**Enterprise Blazor component suite for .NET.** Built 100% in C# and SVG — no npm
+packages, no webpack pipeline, no JavaScript interop bottleneck between your data
+and the screen.
+
+[flexcoreui.com](https://flexcoreui.com) · `dotnet add package FlexCore`
 
 ```csharp
 using Fx.ControlKit.Grid;
 using Fx.ControlKit.Notifications;
 ```
+
+## Why FlexCore
+
+| | |
+|---|---|
+| **Ultra-fast virtualization** | Tens of thousands of rows at 60 FPS, without DOM bloat or leaked handlers. Excel-like keyboard navigation, instant sort and filter. |
+| **Zero JavaScript dependencies** | Pure C# and SVG. Nothing to `npm install`, nothing to bundle, no fragile interop serialization slowing your circuit. |
+| **Excel-grade grid** | Frozen columns, hierarchical tree grids, column reordering, aggregate footers, inline / dialog / batch editing, native ClosedXML export. |
+| **Legacy migration** | Built for VB6, WinForms, ActiveX-grid and Crystal Reports modernizations — desktop paradigms reproduced rather than approximated. |
+| **Adaptive layout & MDI** | IDE-style collapsible panels, splitters, tab strips and multi-document window management for power-user apps. |
+| **Pluggable & host-agnostic** | Every external dependency is a clean C# interface — wire your own EF Core, Dapper, SQL Server, session context or reporting back end. |
 
 ## Highlights
 
@@ -28,8 +43,6 @@ Forms and validation, Calendar/TimePicker, AutoComplete, Stepper, RadioGroup, To
 
 ## Install
 
-Once published to NuGet:
-
 ```bash
 dotnet add package FlexCore
 ```
@@ -42,29 +55,82 @@ Or reference the project directly:
 
 ## Quick start — a grid
 
+A sortable, filterable, groupable grid with typed columns:
+
 ```razor
 @using Fx.ControlKit.Grid
 
-<GridControl TValue="MyRow" DataSource="@rows"
+<GridControl TValue="Order" DataSource="@orders" Height="420px"
              AllowSelection="true" AllowSorting="true"
              AllowFiltering="true" AllowGrouping="true">
     <GridColumnsBase>
-        <GridColumn Field="Id"       HeaderText="ID"       Width="80px" />
-        <GridColumn Field="Name"     HeaderText="Name"     Width="200px" />
-        <GridColumn Field="Quantity" HeaderText="Qty"      Width="100px"
-                    Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" />
+        <GridColumn Field="Id"       HeaderText="ID"     Width="80px" />
+        <GridColumn Field="Customer" HeaderText="Customer" Width="220px" />
+        <GridColumn Field="Placed"   HeaderText="Placed" Width="120px"
+                    Type="ColumnType.Date" Format="d" />
+        <GridColumn Field="Total"    HeaderText="Total"  Width="120px"
+                    Type="ColumnType.Number" Format="C2" TextAlign="TextAlign.Right" />
     </GridColumnsBase>
 </GridControl>
 
 @code {
-    record MyRow(int Id, string Name, int Quantity);
-    List<MyRow> rows = new() { new(1,"Foo",10), new(2,"Bar",20) };
+    record Order(int Id, string Customer, DateTime Placed, decimal Total);
+    List<Order> orders = new() { /* ... */ };
 }
 ```
 
-Columns can alternatively be generated from model metadata. `Display`,
-`DisplayName`, `Editable`, `DisplayFormat`, `Key`, and `ScaffoldColumn` are
-honored; the feature is opt-in so existing dynamic layouts are unaffected.
+### Editing, frozen columns and an aggregate footer
+
+`EditSettingsRef` picks the editing style — `Inline`, `Dialog` or `Batch`.
+Frozen columns accumulate from each edge, so the ID stays pinned left and the
+status pinned right while the middle scrolls.
+
+```razor
+<GridControl TValue="Order" DataSource="@orders" Height="480px"
+             ItemKeySelector="o => o.Id"
+             AllowSorting="true" AllowMultiSorting="true"
+             AllowResizing="true" AllowColumnReorder="true"
+             ShowRowCountInFooter="true"
+             EditSettingsRef="@_edit"
+             AggregateRows="@_totals">
+    <GridColumnsBase>
+        <GridColumn Field="Id"       HeaderText="ID"    Width="80px"  IsFrozen="true" />
+        <GridColumn Field="Customer" HeaderText="Customer" Width="220px" />
+        <GridColumn Field="Qty"      HeaderText="Qty"   Width="90px"
+                    Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" />
+        <GridColumn Field="Total"    HeaderText="Total" Width="120px"
+                    Type="ColumnType.Number" Format="C2" TextAlign="TextAlign.Right" />
+        <GridColumn Field="Status"   HeaderText="Status" Width="110px"
+                    IsFrozen="true" FrozenPosition="FrozenColumnPosition.Right" />
+    </GridColumnsBase>
+</GridControl>
+
+@code {
+    readonly EditSettings _edit = new()
+    {
+        AllowEditing = true, AllowAdding = true, AllowDeleting = true,
+        Mode = EditMode.Inline
+    };
+
+    readonly List<AggregateRow> _totals = new()
+    {
+        new AggregateRow
+        {
+            ShowInFooter = true,
+            Columns =
+            {
+                new AggregateColumn { Field = "Qty",   Type = AggregateType.Sum, Format = "N0" },
+                new AggregateColumn { Field = "Total", Type = AggregateType.Sum, Format = "C2" }
+            }
+        }
+    };
+}
+```
+
+### Columns from model metadata
+
+`Display`, `DisplayName`, `Editable`, `DisplayFormat`, `Key` and `ScaffoldColumn`
+are honored. Opt-in, so existing dynamic layouts are unaffected.
 
 ```razor
 <GridControl TValue="MyAnnotatedRow" DataSource="@rows"
