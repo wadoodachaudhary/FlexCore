@@ -8,6 +8,8 @@
     box-sizing: border-box;
     font-family: 'MS Sans Serif', Tahoma, Arial, sans-serif;
     font-size: calc(11px * var(--fx-zoom, 1));
+    height: 100%;
+    min-height: 0;
 }
 
 /* Right-docked: pad on the other side so the box hugs the content area. */
@@ -25,17 +27,14 @@
     background: #fff;
     display: flex;
     flex-direction: column;
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     overflow: hidden;
     border: 1px solid #aca899;
-    /* Left-docked: thick blue accent on the right edge (faces the content). */
-    border-right: 2px solid #0066cc;
 }
 
 .fx-sidenav-right .fx-sidenav-container {
-    border-right: 1px solid #aca899;
-    /* Right-docked: accent flips to the left edge. */
-    border-left: 2px solid #0066cc;
+    border: 1px solid #aca899;
 }
 
 .fx-sidenav-subheader {
@@ -45,12 +44,15 @@
     padding: 4px 6px;
     border-bottom: 1px solid #cbd9ea;
     user-select: none;
+    flex-shrink: 0;
 }
 
 .fx-sidenav-list {
     background: #fff;
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 2px 0;
 }
 
