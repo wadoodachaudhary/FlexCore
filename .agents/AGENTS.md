@@ -20,7 +20,7 @@ These rules apply universally when coding, building, and debugging within the Ho
 - **JS Fallbacks Only**: Use JavaScript only if no C# or CSS equivalent exists. Wrap it in a lazily-imported module with a C# fallback. Avoid adding new script files or inline `<script>` blocks without explicit warning.
 
 ## 4. Sync Policy & Multi-Target Builds
-- **FlexKit ↔ FlexCore**: Do not mirror automatically. Sync between FlexKit and FlexCore only when explicitly requested; when requested, only project metadata (.csproj) and VCS (.git) may differ.
+- **FlexKit to FlexCore**: Always mirror FlexKit changes to FlexCore as part of the same work (owner directive 2026-09-10). Never copy FlexCore changes back to FlexKit unless explicitly requested. Preserve library-specific package/assembly/branding and VCS differences, and unrelated destination work.
 - **HomeFront Focus**: Primary focus is solely on HomeFront (`MobileSource/HomeFront`). No more updates to HomeFrontPB.
   - HomeFront path: `Components/Pages/Migrated/F*.razor`
 - **Build Checks**: After editing FlexKit, run non-incremental builds (`dotnet build --no-incremental`) on `HomeFront.sln` to catch compile regressions early. Rebuild `FlexCore.Showcase.sln` after FlexCore edits.
