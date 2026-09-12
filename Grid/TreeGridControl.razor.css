@@ -785,7 +785,7 @@
     font-weight: 400;
     background: #f0f0f0;
     border-bottom: 1px solid #aca899;
-    border-right: 1px solid #d4d0c8;
+    border-right: 1px solid #e6e6e6;
     color: #000;
 }
 .fx-treegrid-compact .fx-treegrid-header-content {
@@ -883,7 +883,7 @@
    .fx-treegrid-legacy-scroll / renders .fx-legacy-vscroll, so an existing
    consumer sees no change.
 
-   Win9x palette: #d4d0c8 face, white top/left highlight, #808080
+   Win9x palette: #e6e6e6 face, white top/left highlight, #808080
    bottom/right shadow, 16px wide — the Windows metric a VSFlexGrid used.
    ══════════════════════════════════════════════════════════════════════ */
 
@@ -909,7 +909,7 @@
     width: 16px;
     display: flex;
     flex-direction: column;
-    background: #d4d0c8;
+    background: #e6e6e6;
     border-left: 1px solid #808080;
     user-select: none;
     z-index: 3;
@@ -927,7 +927,7 @@
     font-size: calc(7px * var(--fx-zoom, 1));
     line-height: 14px;
     color: #000;
-    background: #d4d0c8;
+    background: #e6e6e6;
     border: 1px solid;
     border-color: #fff #808080 #808080 #fff;
     cursor: default;
@@ -940,7 +940,7 @@
 .fx-legacy-vscroll-track {
     position: relative;
     flex: 1 1 auto;
-    background: #e9e9e6;
+    background: #e9e9e9;
 }
 
 .fx-legacy-vscroll-thumb {
@@ -948,7 +948,7 @@
     left: 0;
     width: 100%;
     min-height: 12px;
-    background: #d4d0c8;
+    background: #e6e6e6;
     border: 1px solid;
     border-color: #fff #808080 #808080 #fff;
     cursor: default;
@@ -1025,10 +1025,39 @@
     vertical-align: top;
 }
 
+/* The current editable cell hosts its editor OVER the display (the cell keeps
+   its display so the overlay can be inert). Cursor phase: the closed editor is
+   visible but takes no mouse — clicks reach the display button underneath, the
+   two-click contract with no page code. Editing phase: the editor owns the cell. */
+.fx-treegrid-cell-with-editor:not([data-tree-frozen]) {
+    position: relative;
+}
 .fx-treegrid-cell-edit-host {
-    display: block;
-    width: 100%;
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: stretch;
+    z-index: 1;
+}
+.fx-treegrid-cell-edit-host.fx-treegrid-cell-edit-cursor {
+    pointer-events: none;
+}
+.fx-treegrid-cell-edit-host > * {
+    flex: 1 1 auto;
+    min-width: 0;
     height: 100%;
+    min-height: 0;
+}
+.fx-treegrid-cell-edit-display {
+    overflow: hidden;
+}
+/* Cell mode: the cursor rectangle must stay visible above an opaque closed editor. */
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor > .fx-treegrid-cell-edit-host {
+    box-shadow: inset 0 0 0 1px #000;
+    pointer-events: none;
+}
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor > .fx-treegrid-cell-edit-host.fx-treegrid-cell-edit-editing {
+    pointer-events: auto;
 }
 
 /* In-cell editors must FIT the row — percentage-height chains do not resolve
@@ -1052,11 +1081,11 @@
     background: transparent !important;
     color: inherit;
 }
-.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor {
-    background: #e3f2fd;
-}
+/* The current cell is a RECTANGLE, not a fill (vsFlexGrid focus rect; owner
+   directive 2026-09-10) — a fill read as a second selection left behind. */
+.fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor,
 .fx-treegrid-select-cell .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor {
-    background: #bbdefb;
+    box-shadow: inset 0 0 0 1px #000;
 }
 
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected,
@@ -1071,12 +1100,12 @@
 }
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor,
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor {
-    background: #0078d7 !important;
-    color: #fff;
+    color: inherit;
+    box-shadow: inset 0 0 0 1px #000;
 }
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected .fx-treegrid-cell-cursor .fx-treegrid-parent-text,
 .fx-treegrid-select-cell.fx-treegrid-compact .fx-treegrid-row.fx-treegrid-selected:hover .fx-treegrid-cell-cursor .fx-treegrid-parent-text {
-    color: #fff;
+    color: inherit;
 }
 
 .fx-treegrid-pager,.fx-treegrid-sort-level { display:flex;align-items:center;gap:8px;padding:8px;flex-wrap:wrap; }

@@ -66,7 +66,7 @@
     max-width: 16px;
     height: 100%;
     background: #f0f0f0;
-    border-left: 1px solid #d4d0c8;
+    border-left: 1px solid #e6e6e6;
     user-select: none;
     position: relative;
 }
@@ -82,8 +82,8 @@
     max-height: 16px;
     padding: 0;
     margin: 0;
-    background: #ece9d8;
-    border: 1px solid #d4d0c8;
+    background: #e6e6e6;
+    border: 1px solid #e6e6e6;
     border-top: 1px solid #ffffff;
     border-left: 1px solid #ffffff;
     border-bottom: 1px solid #999999;
@@ -94,11 +94,11 @@
 }
 
 .fx-scrollbar-arrow:not(:disabled):hover {
-    background: #dcd7c5;
+    background: #dcdcdc;
 }
 
 .fx-scrollbar-arrow:not(:disabled):active {
-    background: #c8c2b0;
+    background: #c8c8c8;
     border-top: 1px solid #999999;
     border-left: 1px solid #999999;
     border-bottom: 1px solid #ffffff;
@@ -139,8 +139,8 @@
     right: 0;
     width: 100%;
     min-height: 14px;
-    background: #ece9d8;
-    border: 1px solid #d4d0c8;
+    background: #e6e6e6;
+    border: 1px solid #e6e6e6;
     border-top: 1px solid #ffffff;
     border-left: 1px solid #ffffff;
     border-bottom: 1px solid #999999;
@@ -149,11 +149,11 @@
 }
 
 .fx-scrollbar-thumb:hover {
-    background: #dcd7c5;
+    background: #dcdcdc;
 }
 
 .fx-scrollbar-thumb.is-active {
-    background: #c8c2b0;
+    background: #c8c8c8;
     border-top: 1px solid #999999;
     border-left: 1px solid #999999;
     border-bottom: 1px solid #ffffff;

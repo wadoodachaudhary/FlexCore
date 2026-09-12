@@ -1,10 +1,12 @@
-export function measureDropdown(host, desiredMaxHeight = 180, margin = 8) {
+export function measureDropdown(host, desiredMaxHeight = 180, margin = 8, panelWidthOverride = 0, panelElement = null) {
     if (!host) {
         return { openUp: false, maxHeight: desiredMaxHeight, top: margin, left: margin, minWidth: 0 };
     }
 
     const rect = host.getBoundingClientRect();
-    const panel = host.querySelector(".fx-dropdown-panel");
+    // Callers whose popup is not a .fx-dropdown-panel (DropDownGridControl) pass the
+    // popup element so its REAL rendered height drives the flip and the placement.
+    const panel = panelElement || host.querySelector(".fx-dropdown-panel");
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
 
@@ -69,7 +71,9 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8) {
     const contentWidth = maxOptionWidth > 0
         ? Math.max(60, maxOptionWidth + borderX + (willScroll ? 14 : 0))
         : 0;
-    const panelWidth = minWidth;
+    // Fixed-position popups wider than their host (DropDownGridControl) pass their own
+    // width so the right-edge clamp keeps the whole popup on screen.
+    const panelWidth = panelWidthOverride > 0 ? panelWidthOverride : minWidth;
     const maxLeft = Math.max(margin, viewportWidth - margin - panelWidth);
     const left = Math.min(Math.max(margin, rect.left), maxLeft);
     const top = openUp
@@ -86,3 +90,30 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8) {
     };
 }
 
+
+// Focus leaving an OPEN list: one registration per open, judged after the
+// browser has settled the new focus — a move between the list's own options is
+// not a leave, and a window that lost focus (alt-tab) keeps its list. The
+// control decides what leaving means (commit the highlighted option / close).
+const focusLeaveWatchers = new WeakMap();
+export function watchFocusLeave(host, dotNetRef) {
+    if (!host || !dotNetRef || focusLeaveWatchers.has(host)) return;
+    const onFocusOut = () => {
+        setTimeout(() => {
+            if (!focusLeaveWatchers.has(host)) return;
+            const doc = host.ownerDocument;
+            if (!doc.hasFocus()) return;
+            const active = doc.activeElement;
+            if (active && host.contains(active)) return;
+            dotNetRef.invokeMethodAsync("OnListFocusLeftAsync").catch(() => { });
+        }, 0);
+    };
+    host.addEventListener("focusout", onFocusOut);
+    focusLeaveWatchers.set(host, onFocusOut);
+}
+export function unwatchFocusLeave(host) {
+    const onFocusOut = host && focusLeaveWatchers.get(host);
+    if (!onFocusOut) return;
+    host.removeEventListener("focusout", onFocusOut);
+    focusLeaveWatchers.delete(host);
+}

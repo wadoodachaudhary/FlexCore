@@ -6,7 +6,11 @@
 @inject IJSRuntime JSRuntime
 @implements IAsyncDisposable
 
-@if (Multiline)
+@if (HostCursorPhase)
+{
+    @* A hosted cell in the cursor phase shows its display, not an input. *@
+}
+else if (Multiline)
 {
     if (ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
         && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
@@ -15,6 +19,7 @@
                        Value="@Value"
                        ValueChanged="@ValueChanged"
                        ValueExpression="@ValueExpression"
+                       @onblur="@BlurDispatch"
                        @attributes="MergedAttributes" />
     }
     else
@@ -34,7 +39,7 @@
                   @onclick:stopPropagation="true"
                   @onmousedown:stopPropagation="true"
                   @onkeydown="@KeyDownDispatch"
-                  @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
+                  @onkeydown:stopPropagation="@KeyDownStopsPropagation"
                   @attributes="MergedAttributes"></textarea>
     }
 }
@@ -42,7 +47,7 @@ else
 {
     if (IsPasswordInput)
     {
-        <div class="fx-textbox fx-textbox-password-host">
+        <div class="fx-textbox fx-textbox-password-host" style="@HostWidthStyle">
             <input class="@ResolvedPasswordInputCssClass"
                    @bind:event="oninput"
                    @bind:get="EffectiveValue"
@@ -58,10 +63,14 @@ else
                    @onclick:stopPropagation="true"
                    @onmousedown:stopPropagation="true"
                    @onkeydown="@KeyDownDispatch"
-                   @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
+                   @onkeydown:stopPropagation="@KeyDownStopsPropagation"
                    @attributes="MergedAttributes" />
+            <canvas class="fx-textbox-password-reveal" hidden aria-hidden="true"
+                    width="1" height="1" @ref="_passwordRevealElement"></canvas>
+            @* Mouse-only affordance: keeps the form's tab order the same as a plain password box. *@
             <button type="button"
                     class="fx-textbox-password-toggle"
+                    tabindex="-1"
                     aria-label="@PasswordToggleLabel"
                     title="@PasswordToggleLabel"
                     aria-pressed="@_showPassword"
@@ -96,6 +105,7 @@ else
                    Value="@Value"
                    ValueChanged="@ValueChanged"
                    ValueExpression="@ValueExpression"
+                   @onblur="@BlurDispatch"
                    @attributes="MergedAttributes" />
     }
     else
@@ -122,7 +132,7 @@ else
                @onclick:stopPropagation="true"
                @onmousedown:stopPropagation="true"
                @onkeydown="@KeyDownDispatch"
-               @onkeydown:stopPropagation="@(!OnKeyDown.HasDelegate)"
+               @onkeydown:stopPropagation="@KeyDownStopsPropagation"
                @attributes="MergedAttributes" />
     }
 }
@@ -229,10 +239,22 @@ else
 
     [Parameter] public string? Placeholder { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    /// <summary>CSS width of the control (e.g. "250px", "100%"). Applied as an inline
+    /// style so it wins over any class width; for a password box it sizes the host
+    /// wrapper and the input fills it. Mirrors NumericTextBoxControl / DropDownListControl.
+    /// Before this existed the attribute fell through to the &lt;input&gt; as an HTML
+    /// <c>width</c> attribute, which browsers honour only for type=image.</summary>
+    [Parameter] public string? Width { get; set; }
     [Parameter] public bool Multiline { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public string InputType { get; set; } = "text";
+    /// <summary>Briefly reveal only the character just typed into a masked password
+    /// input. Browser-local; pasted, autofilled and programmatic values stay masked.</summary>
+    [Parameter] public bool RevealLastTypedCharacter { get; set; } = true;
+    /// <summary>Local password echo lifetime in milliseconds. Zero disables it;
+    /// values above 2000 are capped so an accidental setting cannot leave it visible.</summary>
+    [Parameter] public int PasswordRevealDurationMs { get; set; } = 400;
     [Parameter] public int? Rows { get; set; }
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
@@ -256,6 +278,75 @@ else
     [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback OnBlur { get; set; }
 
+    /// <summary>ClientBuffered form editors: with an <see cref="OnKeyDown"/> host the
+    /// client listener owns Enter/Tab/arrows (it prevents the default so a grid can
+    /// move its own active cell). Set this on a plain form field so Tab still commits
+    /// the draft and reports to <see cref="OnKeyDown"/> once, but the browser's native
+    /// focus traversal is left alone. Grid cell editors leave it false.</summary>
+    [Parameter] public bool KeepNativeTab { get; set; }
+
+    /// <summary>Set when this control is the editor of a hosted cell (a TreeGrid
+    /// cell-edit template): the host decides focus and the Tab stop, takes the
+    /// keys the box does not consume, and is told when the edit ends — the page
+    /// wires nothing. Cursor phase: renders NOTHING (the cell shows its display).
+    /// Editing phase: a browser-owned draft (ClientBuffered) starting from the
+    /// host's InitialText when typing began the edit, focused on mount; Enter /
+    /// Escape / Up / Down go to the host, blur ends the edit, Tab stays native.</summary>
+    [CascadingParameter] private ICellEditorHost? CellHost { get; set; }
+
+    private bool HostCursorPhase => CellHost is { IsEditing: false };
+    private bool HostEditing => CellHost is { IsEditing: true };
+    private bool EffectiveAutoFocus => AutoFocus || HostEditing;
+    private bool EffectiveKeepNativeTab => KeepNativeTab || CellHost is not null;
+    private TextBoxTypingBehavior EffectiveTypingBehavior =>
+        CellHost is null ? TypingBehavior : TextBoxTypingBehavior.ClientBuffered;
+    private bool HandlesNavigationKeys => OnKeyDown.HasDelegate || CellHost is not null;
+    private readonly System.Text.StringBuilder _relayedText = new();
+    private bool _disposed;
+
+    /// <summary>Under a host the input's Blazor keydown handler exists only until
+    /// the browser listener has attached (the pre-attach window): afterwards the
+    /// listener owns the commit keys and shortcut keys bubble natively to the page,
+    /// so no key is ever dispatched to both the input and the host tree.</summary>
+    private bool KeyDownBound => OnKeyDown.HasDelegate || (CellHost is not null && !_clientBufferedTypingAttached);
+    private bool KeyDownStopsPropagation => CellHost is null ? !OnKeyDown.HasDelegate : !_clientBufferedTypingAttached;
+
+    protected override void OnInitialized()
+    {
+        // Registered inside the mount render, before any key can arrive.
+        if (HostEditing)
+            CellHost!.AttachKeyRelay(RelayHostKeyAsync);
+    }
+
+    private async Task RelayHostKeyAsync(KeyboardEventArgs e)
+    {
+        if (!e.AltKey && !e.CtrlKey && !e.MetaKey && e.Key is { Length: 1 } && !char.IsControl(e.Key[0]))
+        {
+            // Typed before the input existed / had focus: appended to the browser
+            // draft once the listener is attached (order preserved).
+            if (_clientBufferedTypingAttached && !_disposed)
+            {
+                var module = await GetControlJsModuleAsync();
+                if (module != null)
+                    try { await module.InvokeVoidAsync("appendTypedText", _inputElement, e.Key); } catch { }
+            }
+            else
+                _relayedText.Append(e.Key);
+            return;
+        }
+        await OnNativeKeyDown(e);
+    }
+
+    /// <summary>Keys this control does not consume: the explicit handler first, then
+    /// the cell host (both, never either/or).</summary>
+    private async Task ForwardKeyAsync(KeyboardEventArgs e)
+    {
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+        if (CellHost is not null)
+            await CellHost.KeyDownAsync(e);
+    }
+
     [Parameter(CaptureUnmatchedValues = true)]
     public IDictionary<string, object>? AdditionalAttributes { get; set; }
 
@@ -269,12 +360,12 @@ else
     /// bound keydown to the server, so an always-bound handler cost one SignalR round
     /// trip per character on every textbox in the app for a handler that did nothing.</summary>
     private EventCallback<KeyboardEventArgs> KeyDownDispatch =>
-        OnKeyDown.HasDelegate
+        KeyDownBound
             ? EventCallback.Factory.Create<KeyboardEventArgs>(this, OnNativeKeyDown)
             : default;
 
     private EventCallback<FocusEventArgs> BlurDispatch =>
-        OnBlur.HasDelegate
+        OnBlur.HasDelegate || CellHost is not null
             ? EventCallback.Factory.Create<FocusEventArgs>(this, OnNativeBlur)
             : default;
 
@@ -295,18 +386,25 @@ else
 
     private async Task OnNativeKeyDown(KeyboardEventArgs e)
     {
+        // A hosted cell editor keeps its caret keys (owner 2026-09-11): Left / Right
+        // never leave the text, Up / Down are its start / end, Page keys stay local —
+        // none of them reaches the host (the browser listener keeps them local once
+        // attached; this covers the relay and the pre-attach binding).
+        if (CellHost is not null && !e.AltKey && !e.CtrlKey && !e.MetaKey
+            && e.Key is "ArrowUp" or "Up" or "ArrowDown" or "Down" or "ArrowLeft" or "Left" or "ArrowRight" or "Right" or "PageUp" or "PageDown")
+            return;
+
         // ClientBuffered normally sends the complete DOM value through its
         // client listener. During the brief mount window before that listener
         // attaches, this Blazor fallback receives the key instead; synchronize
         // the browser-owned value before the host commits Enter/Tab/navigation.
-        if (TypingBehavior == TextBoxTypingBehavior.ClientBuffered
+        if (EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered
             && IsClientBufferedCommitKey(e))
         {
             await SynchronizeClientBufferedDomValueAsync();
         }
 
-        if (OnKeyDown.HasDelegate)
-            await OnKeyDown.InvokeAsync(e);
+        await ForwardKeyAsync(e);
     }
 
     private static bool IsClientBufferedCommitKey(KeyboardEventArgs e)
@@ -336,11 +434,15 @@ else
         await SynchronizeClientBufferedDomValueAsync();
         if (OnBlur.HasDelegate)
             await OnBlur.InvokeAsync();
+        // Focus left a hosted editor (a page-level Tab, a click elsewhere): the
+        // edit is over. A blur fired by the editor's own removal never gets here —
+        // the renderer drops events of a disposed component.
+        CellHost?.EndEdit();
     }
 
     private async Task SynchronizeClientBufferedDomValueAsync()
     {
-        if (TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
+        if (EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
             return;
 
         var module = await GetControlJsModuleAsync();
@@ -351,6 +453,13 @@ else
         {
             var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
             var committedValue = value ?? string.Empty;
+            // Characters the host relayed before the browser listener attached are
+            // not in the DOM yet (they are appended after enableClientBufferedTyping
+            // returns): a commit key that arrives first must still carry them. The
+            // buffer stays, so an editor that survives the key still gets them into
+            // its draft; a disposed one discards them.
+            if (CellHost is not null && !_clientBufferedTypingAttached && _relayedText.Length > 0)
+                committedValue += _relayedText.ToString();
             if (MaxLength is > 0 && committedValue.Length > MaxLength.Value)
                 committedValue = committedValue[..MaxLength.Value];
 
@@ -397,16 +506,28 @@ else
                     await ValueChanged.InvokeAsync(committedValue);
             }
 
+            // A value-only flush: a page shortcut (Ctrl+S…) is about to bubble past a
+            // hosted editor and the page must act on the current draft. Nothing else.
+            if (string.Equals(key, "Sync", StringComparison.Ordinal))
+                return;
+
             if (string.Equals(key, "Blur", StringComparison.Ordinal))
             {
                 if (OnBlur.HasDelegate)
                     await OnBlur.InvokeAsync();
+                CellHost?.EndEdit();
                 return;
             }
 
-            if (OnKeyDown.HasDelegate)
+            // A hosted editor's caret keys never reach the host (see OnNativeKeyDown) —
+            // the browser listener keeps them local; this is the belt for the braces.
+            if (CellHost is not null && !altKey && !ctrlKey && !metaKey
+                && key is "ArrowUp" or "ArrowDown" or "ArrowLeft" or "ArrowRight" or "PageUp" or "PageDown")
+                return;
+
+            if (HandlesNavigationKeys)
             {
-                await OnKeyDown.InvokeAsync(new KeyboardEventArgs
+                await ForwardKeyAsync(new KeyboardEventArgs
                 {
                     Key = key,
                     ShiftKey = shiftKey,
@@ -419,6 +540,10 @@ else
     }
 
     private ElementReference _inputElement;
+    private ElementReference _passwordRevealElement;
+    private ElementReference _passwordRevealInput;
+    private bool _passwordRevealAttached;
+    private int _passwordRevealDurationMs;
     private IJSObjectReference? _controlJsModule;
     private bool _showTextContextMenu;
     private int _textContextMenuX;
@@ -428,6 +553,7 @@ else
     private bool _showPassword;
     private bool _clientBufferedTypingAttached;
     private bool _clientBufferedHandlesNavigationKeys;
+    private bool _clientBufferedKeepNativeTab;
 
     // Browser-owned draft: seed from Value once, then track native input.
     // Parent Value changes must not overwrite a live draft.
@@ -438,7 +564,7 @@ else
     /// browser's latest draft (independent of parent re-renders); otherwise it
     /// tracks the live <see cref="Value"/>.</summary>
     private bool UsesBrowserOwnedValue =>
-        Uncontrolled || TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+        Uncontrolled || EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered;
 
     private string? EffectiveValue => UsesBrowserOwnedValue ? _uncontrolledValue : Value;
 
@@ -453,7 +579,9 @@ else
     {
         if (UsesBrowserOwnedValue && !_uncontrolledInitialized)
         {
-            _uncontrolledValue = Value;
+            // Typing started a hosted edit: the typed text REPLACES the value
+            // (vsFlexGrid Editable — the first character begins the entry).
+            _uncontrolledValue = HostEditing && CellHost!.InitialText is { } initial ? initial : Value;
             _uncontrolledInitialized = true;
         }
         else if (!UsesBrowserOwnedValue)
@@ -476,26 +604,64 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // A hosted cell in the cursor phase rendered no input: no element to hand
+        // out, nothing to attach, no interop (every row move mounts one of these).
+        if (HostCursorPhase || _disposed)
+            return;
+
         ElementReferenceCaptured?.Invoke(_inputElement);
 
-        var wantsClientBufferedTyping = TypingBehavior == TextBoxTypingBehavior.ClientBuffered;
-        var handlesNavigationKeys = OnKeyDown.HasDelegate;
+        var wantsClientBufferedTyping = EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered;
+        var handlesNavigationKeys = HandlesNavigationKeys;
+        var keepNativeTab = EffectiveKeepNativeTab;
         var clientBindingChanged = wantsClientBufferedTyping != _clientBufferedTypingAttached
             || (wantsClientBufferedTyping
-                && handlesNavigationKeys != _clientBufferedHandlesNavigationKeys);
+                && (handlesNavigationKeys != _clientBufferedHandlesNavigationKeys
+                    || keepNativeTab != _clientBufferedKeepNativeTab));
+        var revealDuration = IsPasswordInput && Enabled && !_showPassword && RevealLastTypedCharacter
+            ? Math.Clamp(PasswordRevealDurationMs, 0, 2000) : 0;
+        var passwordBindingChanged = revealDuration != _passwordRevealDurationMs
+            || (_passwordRevealAttached && _passwordRevealInput.Id != _inputElement.Id);
 
         // Only AutoFocus seizes focus on load. SelectOnFocus must NOT auto-focus on render — otherwise a
         // second SelectOnFocus field (e.g. Description) steals focus from the AutoFocus field (Number).
         // SelectOnFocus still selects the text when the user actually focuses the field (OnInputFocus).
         var needsFirstRenderSetup = firstRender
-            && (AutoFocus || ReplaceOnFirstInput || TypingKeysStayLocal
+            && (EffectiveAutoFocus || ReplaceOnFirstInput || TypingKeysStayLocal
                 || (MaxLength is > 0 && OnPasteTruncated.HasDelegate));
-        if (!needsFirstRenderSetup && !clientBindingChanged)
+        if (!needsFirstRenderSetup && !clientBindingChanged && !passwordBindingChanged)
             return;
 
         var module = await GetControlJsModuleAsync();
-        if (module == null)
+        // Disposed while the import was in flight (a cell editor whose edit ended
+        // before it finished mounting): its element is gone — every call below
+        // would fault the renderer.
+        if (module == null || _disposed)
             return;
+
+        if (passwordBindingChanged)
+        {
+            try
+            {
+                if (_passwordRevealAttached)
+                    await module.InvokeVoidAsync("configurePasswordReveal", _passwordRevealInput, null, 0);
+                _passwordRevealAttached = false;
+                _passwordRevealDurationMs = 0;
+                if (revealDuration > 0)
+                {
+                    await module.InvokeVoidAsync("configurePasswordReveal", _inputElement, _passwordRevealElement, revealDuration);
+                    _passwordRevealInput = _inputElement;
+                    _passwordRevealAttached = true;
+                    _passwordRevealDurationMs = revealDuration;
+                }
+            }
+            catch
+            {
+                // Progressive enhancement: the native password input remains masked.
+                _passwordRevealAttached = false;
+                _passwordRevealDurationMs = 0;
+            }
+        }
 
         if (clientBindingChanged)
         {
@@ -508,15 +674,34 @@ else
                         "enableClientBufferedTyping",
                         _inputElement,
                         _clientBufferedTypingRef,
-                        handlesNavigationKeys);
+                        handlesNavigationKeys,
+                        keepNativeTab,
+                        // A hosted cell editor: lands its draft before a page shortcut
+                        // (Ctrl+S…) bubbles on, and keeps its caret keys (arrows, Page)
+                        // local — the host moves rows on Tab, Enter and Escape only.
+                        CellHost is not null);
                     _clientBufferedTypingAttached = true;
                     _clientBufferedHandlesNavigationKeys = handlesNavigationKeys;
+                    _clientBufferedKeepNativeTab = keepNativeTab;
+                    if (CellHost is not null && !_disposed)
+                    {
+                        // Characters relayed by the host before the listener existed.
+                        if (_relayedText.Length > 0)
+                        {
+                            var relayed = _relayedText.ToString();
+                            _relayedText.Clear();
+                            try { await module.InvokeVoidAsync("appendTypedText", _inputElement, relayed); } catch { }
+                        }
+                        // The pre-attach Blazor keydown binding comes off now (KeyDownBound).
+                        StateHasChanged();
+                    }
                 }
                 else
                 {
                     await module.InvokeVoidAsync("disableClientBufferedTyping", _inputElement);
                     _clientBufferedTypingAttached = false;
                     _clientBufferedHandlesNavigationKeys = false;
+                    _clientBufferedKeepNativeTab = false;
                 }
             }
             catch
@@ -525,20 +710,34 @@ else
             }
         }
 
-        if (!needsFirstRenderSetup)
+        if (!needsFirstRenderSetup || _disposed)
             return;
 
-        if (ReplaceOnFirstInput)
-            await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
-        if (TypingKeysStayLocal && !wantsClientBufferedTyping)
-            await module.InvokeVoidAsync("suppressTypingKeyDispatch", _inputElement);
-        if (MaxLength is > 0 && OnPasteTruncated.HasDelegate)
+        // Best effort from here: the element can be gone (an edit that ended mid-mount).
+        try
         {
-            _pasteNoticeRef ??= DotNetObjectReference.Create(this);
-            await module.InvokeVoidAsync("enableMaxLengthPasteNotice", _inputElement, _pasteNoticeRef, MaxLength.Value);
+            if (ReplaceOnFirstInput)
+                await module.InvokeVoidAsync("enableReplaceOnFirstInput", _inputElement);
+            if (TypingKeysStayLocal && !wantsClientBufferedTyping)
+                await module.InvokeVoidAsync("suppressTypingKeyDispatch", _inputElement);
+            if (MaxLength is > 0 && OnPasteTruncated.HasDelegate)
+            {
+                _pasteNoticeRef ??= DotNetObjectReference.Create(this);
+                await module.InvokeVoidAsync("enableMaxLengthPasteNotice", _inputElement, _pasteNoticeRef, MaxLength.Value);
+            }
+            if (EffectiveAutoFocus && !_disposed)
+            {
+                // Hosted: the host focuses only while it still owns the keyboard.
+                if (CellHost is not null)
+                    await CellHost.FocusAsync(_inputElement, SelectOnFocus);
+                else
+                    await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+            }
         }
-        if (AutoFocus)
-            await module.InvokeVoidAsync("focus", _inputElement, SelectOnFocus);
+        catch
+        {
+            // Disposed or detached mid-mount.
+        }
     }
 
     private string ResolvedCssClass
@@ -566,6 +765,9 @@ else
             return string.Join(" ", classes);
         }
     }
+
+    private string? HostWidthStyle =>
+        string.IsNullOrWhiteSpace(Width) ? null : $"width:{Width};";
 
     private IReadOnlyDictionary<string, object> MergedAttributes
     {
@@ -606,9 +808,18 @@ else
             // Marks the input for the pre-attach typing shield in
             // textbox-control.js: typing keys stay local from the very first
             // render, before enableClientBufferedTyping's round trip lands.
-            if (TypingBehavior == TextBoxTypingBehavior.ClientBuffered)
+            if (EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered)
                 merged["data-fx-cb-pending"] = "1";
 
+            if (!string.IsNullOrWhiteSpace(Width))
+            {
+                // Password boxes size the wrapper (HostWidthStyle) and the input fills it.
+                var width = IsPasswordInput ? "100%" : Width;
+                var existing = merged.TryGetValue("style", out var st) ? st?.ToString()?.Trim() : null;
+                merged["style"] = string.IsNullOrEmpty(existing)
+                    ? $"width:{width};"
+                    : $"width:{width};{existing}{(existing.EndsWith(';') ? "" : ";")}";
+            }
             return merged;
         }
     }
@@ -761,10 +972,19 @@ else
 
     private async ValueTask<IJSObjectReference?> GetControlJsModuleAsync()
     {
+        if (_controlJsModule != null) return _controlJsModule;
         try
         {
-            return _controlJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
+            var module = await JSRuntime.InvokeAsync<IJSObjectReference>(
                 "import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/textbox-control.js"));
+            if (_disposed)
+            {
+                // Torn down while the import was in flight (a cell edit that ended
+                // mid-mount): nobody would dispose it later.
+                try { await module.DisposeAsync(); } catch { }
+                return null;
+            }
+            return _controlJsModule = module;
         }
         catch
         {
@@ -774,6 +994,13 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
+        CellHost?.AttachKeyRelay(null);
+        if (_passwordRevealAttached && _controlJsModule != null)
+        {
+            try { await _controlJsModule.InvokeVoidAsync("configurePasswordReveal", _passwordRevealInput, null, 0); }
+            catch { }
+        }
         if (_clientBufferedTypingAttached && _controlJsModule != null)
         {
             try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }

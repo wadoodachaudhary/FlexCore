@@ -28,7 +28,12 @@
         <div class="@OverlayCssClass"
              @onmousemove="HandleDragMove"
              @onmouseup="EndDragAsync"
-             @onmouseleave="EndDragAsync"></div>
+             @onmouseleave="EndDragAsync">
+            @if (ResizeOnRelease)
+            {
+                <div class="fx-splitter-server-guide" style="@ServerGuideStyle"></div>
+            }
+        </div>
     }
 </div>
 
@@ -43,8 +48,12 @@
     [Parameter] public double PrimarySize { get; set; } = 240;
     [Parameter] public EventCallback<double> PrimarySizeChanged { get; set; }
 
-    /// <summary>Fires once when a drag finishes, unlike <see cref="PrimarySizeChanged"/> which
-    /// fires on every move. Persist from here so a drag is one write, not hundreds.</summary>
+    /// <summary>Show a browser-local guide during dragging and resize only the panes on
+    /// release. Set false for the older server-driven live resizing behavior.</summary>
+    [Parameter] public bool ResizeOnRelease { get; set; } = true;
+
+    /// <summary>Fires once when a drag finishes. PrimarySizeChanged also fires only on
+    /// release unless ResizeOnRelease is false. Persist from here, not on every move.</summary>
     [Parameter] public EventCallback<double> OnResizeCommitted { get; set; }
 
     [Parameter] public double MinPrimarySize { get; set; } = 80;
@@ -89,6 +98,18 @@
     private double _runtimePrimarySize = 240;
     private double _containerPx;
     private double? _defaultSize;
+    private double _previewSize;
+    private double _previewPosition;
+    private bool _committingPreview;
+    private bool _disposed;
+    private DotNetObjectReference<SplitterControl>? _previewRef;
+    private PreviewOptions? _previewOptions;
+    private long _previewRevision;
+    private string? _previewElementId;
+
+    private sealed record PreviewOptions(bool Vertical, bool Proportional, double MinPrimarySize,
+        double MaxPrimarySize, string? MinPrimary, string? MaxPrimary, string? MinSecondary,
+        bool ShrinkPrimaryToContent, bool Disabled);
 
     private bool Proportional => SizeMode == SplitterSizeMode.Proportional;
 
@@ -99,11 +120,14 @@
         _defaultSize ??= DefaultPrimarySize ?? _runtimePrimarySize;
     }
 
+    protected override bool ShouldRender() => !_committingPreview;
+
     // A percentage constraint cannot be resolved until the container has been measured, so
     // measure once the element exists and re-clamp; otherwise a "60%" ceiling would not bite
     // until the user happened to drag.
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        await ConfigurePreviewAsync();
         if (!NeedsContainerMeasure || _isDragging)
             return;
 
@@ -134,7 +158,7 @@
         Proportional
         || MinPrimary?.Contains('%') == true
         || MaxPrimary?.Contains('%') == true
-        || MinSecondary?.Contains('%') == true;
+        || !string.IsNullOrWhiteSpace(MinSecondary);
 
     private string RootCssClass
     {
@@ -198,15 +222,77 @@
     private string OverlayCssClass =>
         Vertical ? "fx-splitter-overlay" : "fx-splitter-overlay fx-splitter-overlay-horizontal";
 
+    private string ServerGuideStyle => Vertical
+        ? $"left:{_previewPosition.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;top:0;height:100%;width:2px"
+        : $"top:{_previewPosition.ToString(System.Globalization.CultureInfo.InvariantCulture)}px;left:0;width:100%;height:2px";
+
+    private async Task ConfigurePreviewAsync()
+    {
+        if (_disposed) return;
+        try
+        {
+            if (!ResizeOnRelease)
+            {
+                if (_previewOptions != null && _module != null)
+                    await _module.InvokeVoidAsync("disableSplitterPreview", _rootElement);
+                _previewOptions = null;
+                return;
+            }
+
+            var options = new PreviewOptions(Vertical, Proportional, MinPrimarySize, MaxPrimarySize,
+                MinPrimary, MaxPrimary, MinSecondary, ShrinkPrimaryToContent, Disabled);
+            if (options == _previewOptions && _previewElementId == _rootElement.Id) return;
+            _module ??= await ImportModuleAsync();
+            _previewRef ??= DotNetObjectReference.Create(this);
+            await _module.InvokeVoidAsync("enableSplitterPreview", _rootElement, _previewRef, options, ++_previewRevision);
+            _previewOptions = options;
+            _previewElementId = _rootElement.Id;
+        }
+        catch (JSException) { /* Keep the server event fallback usable. */ }
+        catch (InvalidOperationException) { /* Prerendering has no browser. */ }
+        catch (TaskCanceledException) { }
+    }
+
+    private ValueTask<IJSObjectReference> ImportModuleAsync() =>
+        JsRuntime.InvokeAsync<IJSObjectReference>("import",
+            FxJsAsset.Versioned($"./_content/{typeof(SplitterControl).Assembly.GetName().Name}/splitter-control.js"));
+
+    [JSInvokable]
+    public async Task<bool> CommitSplitterResizeAsync(double size, double containerPx, long revision)
+    {
+        var accepted = false;
+        await InvokeAsync(async () =>
+        {
+            if (_disposed || Disabled || !ResizeOnRelease || revision != _previewRevision
+                || !double.IsFinite(size) || !double.IsFinite(containerPx) || containerPx <= 0)
+                return;
+
+            _containerPx = containerPx;
+            // Parent bindings may render synchronously. Keep pane contents out of those
+            // intermediate passes and publish one settled splitter render at the end.
+            _committingPreview = true;
+            try { await ApplySizeAsync(ClampSize(size)); }
+            finally
+            {
+                _committingPreview = false;
+                if (!_disposed) StateHasChanged();
+            }
+            accepted = true;
+        });
+        return accepted;
+    }
+
     private async Task BeginDrag(MouseEventArgs e)
     {
-        if (Disabled)
+        if (Disabled || e.Button != 0)
             return;
 
         _containerPx = await MeasureContainerAsync();
         _isDragging = true;
         _dragStartPosition = Vertical ? e.ClientX : e.ClientY;
         _dragStartSize = _runtimePrimarySize;
+        _previewSize = _runtimePrimarySize;
+        _previewPosition = _dragStartPosition;
     }
 
     private async Task HandleDragMove(MouseEventArgs e)
@@ -219,6 +305,13 @@
         var delta = Proportional && _containerPx > 0 ? deltaPx / _containerPx * 100d : deltaPx;
 
         var nextSize = ClampSize(_dragStartSize + delta);
+        if (ResizeOnRelease)
+        {
+            _previewSize = nextSize;
+            _previewPosition = _dragStartPosition + (Proportional && _containerPx > 0
+                ? (nextSize - _dragStartSize) / 100d * _containerPx : nextSize - _dragStartSize);
+            return;
+        }
         if (Math.Abs(nextSize - _runtimePrimarySize) < 0.01)
             return;
 
@@ -232,8 +325,11 @@
         if (!_isDragging)
             return;
 
+        await HandleDragMove(e);
         _isDragging = false;
-        if (OnResizeCommitted.HasDelegate)
+        if (ResizeOnRelease)
+            await ApplySizeAsync(_previewSize);
+        else if (OnResizeCommitted.HasDelegate)
             await OnResizeCommitted.InvokeAsync(_runtimePrimarySize);
     }
 
@@ -285,8 +381,7 @@
 
         try
         {
-            _module ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", $"./_content/{GetType().Assembly.GetName().Name}/splitter-control.js");
+            _module ??= await ImportModuleAsync();
             return await _module.InvokeAsync<double>("measureSplitter", _rootElement, Vertical);
         }
         catch
@@ -334,7 +429,8 @@
         {
             var available = Proportional ? 100d : _containerPx;
             if (available > 0)
-                max = Math.Min(max, available - secondaryFloor);
+                max = Math.Min(max, available - secondaryFloor - (Proportional
+                    ? (_containerPx > 0 ? Math.Max(1, SplitterSize) / _containerPx * 100d : 0) : Math.Max(1, SplitterSize)));
         }
 
         if (max < min) max = min;
@@ -343,9 +439,13 @@
 
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         if (_module is null)
             return;
 
+        try { await _module.InvokeVoidAsync("disableSplitterPreview", _rootElement); }
+        catch { }
+        _previewRef?.Dispose();
         try { await _module.DisposeAsync(); }
         catch { }
     }

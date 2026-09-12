@@ -230,7 +230,7 @@
     max-width: 100%;
     min-width: 0;
     min-height: 0;
-    background: var(--fx-bg-color, #d4d0c8);
+    background: var(--fx-bg-color, #e6e6e6);
     overflow: hidden;
     display: flex;
     flex-direction: column;

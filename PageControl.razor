@@ -52,6 +52,7 @@
     /// zoom scope (CSS variable + scaled base font); nested ones inherit it —
     /// re-declaring the em-based size would compound the factor.</summary>
     [CascadingParameter] private PageControl? AncestorPageControl { get; set; }
+    [CascadingParameter] private PopupFocusScope? PopupFocusScope { get; set; }
 
     private ElementReference _rootElement;
     private IJSObjectReference? _module;
@@ -124,6 +125,12 @@
 
     protected override void OnInitialized()
     {
+        // An explicit page tab order owns popup entry before descendant grids
+        // claim their default first-cell focus. Grid-only popups are unchanged.
+        if (FocusFirstNodeOnLoad && HandlesTabNavigation)
+            PopupFocusScope?.TryClaim(takeDomFocus =>
+                takeDomFocus ? TryFocusFirstNodeAsync() : Task.CompletedTask);
+
         // Resolved lazily so PageControl still works in apps that have not
         // registered a ZoomService (same pattern as GridControl's optional services).
         _zoomService = Services.GetService(typeof(ZoomService)) as ZoomService;

@@ -4598,6 +4598,18 @@ function gridPreviewColor(gridRoot) {
     return v || "#b6c8dd";
 }
 
+// HighlightSelectedRows as rendered on the grid root. This library writes it as
+// data-fx-row-highlight; the same flag has shipped as
+// data-fx-highlight-selected-rows, so accept either and keep the historical
+// default (true when the attribute is absent, e.g. a null root).
+function gridHighlightsSelectedRows(gridRoot) {
+    const ds = gridRoot?.dataset;
+    if (!ds) return true;
+    if (ds.fxHighlightSelectedRows !== undefined) return ds.fxHighlightSelectedRows !== "false";
+    if (ds.fxRowHighlight !== undefined) return ds.fxRowHighlight !== "false";
+    return true;
+}
+
 function setRowPreview(tr, on, color) {
     tr.classList.toggle("fx-drag-preview", on);
     // Paint the CELLS as well as the row: some grids render opaque td

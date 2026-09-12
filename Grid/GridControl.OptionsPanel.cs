@@ -39,7 +39,7 @@ public partial class GridControl<TValue>
     private static readonly GridThemeGalleryItem[] GridThemeGallery =
     [
         new(GridTheme.Default, "Default", "Light", "#e9e9e9", "#ffffff", "#ffffff", "#9a9a9a"),
-        new(GridTheme.Vb6Windows, "VB6 Windows", "Light", "#d4d0c8", "#ffffff", "#ffffff", "#808080"),
+        new(GridTheme.Vb6Windows, "VB6 Windows", "Light", "#eeeeee", "#ffffff", "#ffffff", "#808080"),
         new(GridTheme.ExcelLightBlue, "Light Blue", "Light", "#d9eaf7", "#ffffff", "#edf7fd", "#5aa7d8"),
         new(GridTheme.ExcelLightGreen, "Light Green", "Light", "#e2f0d9", "#ffffff", "#f1f8eb", "#70ad47"),
         new(GridTheme.ExcelLightOrange, "Light Orange", "Light", "#fce4d6", "#ffffff", "#fff3ec", "#ed7d31"),

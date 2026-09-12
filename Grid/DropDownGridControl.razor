@@ -14,7 +14,7 @@
                placeholder="@Placeholder"
                readonly
                disabled="@Disabled"
-               tabindex="@(Disabled ? -1 : 0)"
+               tabindex="@(Disabled || CellHost is not null ? -1 : 0)"
                @onmousedown="HandleInputWrapMouseDown"
                @onmousedown:stopPropagation="true"
                @onclick="ToggleDropdown"
@@ -33,6 +33,9 @@
         @* Fixed backdrop (same scheme as DropDownListControl): outside clicks
            close the popup instead of leaking into the page underneath. *@
         <button type="button" class="fx-dropdown-grid-backdrop" tabindex="-1" aria-hidden="true" @onclick="ClosePopupAsync"></button>
+        @* The popup's own grid (and any editor inside it) is not the cell's editor:
+           shield it from the cell host cascade. *@
+        <CascadingValue TValue="ICellEditorHost" Value="null">
         <div class="fx-dropdown-grid-popup shadow @(ShowColumnHeaders ? "" : "fx-dropdown-grid-headerless")"
              style="@ComputedPopupStyle"
              @ref="_popupRef"
@@ -72,5 +75,6 @@
                 </GridControl>
             </div>
         </div>
+        </CascadingValue>
     }
 </div>

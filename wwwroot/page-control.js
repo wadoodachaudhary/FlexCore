@@ -12,6 +12,18 @@ const focusableSelector = [
 const navigationOverlaySelector =
     ".fx-dropdown-panel, .fx-dropdown-backdrop, .fx-context-menu, [role='menu'], [role='listbox']";
 
+// A composite control that is ONE page-level Tab stop (a tree: VB6
+// TabBehavior=0 — Tab leaves it, it never walks its cells). Its internal
+// focusables — in-cell editors, their popup triggers, click targets — are
+// never separate stops, whatever node mode encloses it. Tab from anywhere
+// inside it, an editor's open list included, leaves the composite; the
+// editor's popup closes itself when focus leaves the editor.
+const tabStopSelector = "[data-fx-tab-stop]";
+
+// A dialog rendered inside the page runs its own modal Tab loop
+// (dialog-control.js); the page graph must not pull focus behind it.
+const nestedDialogSelector = "[role='dialog']";
+
 function isVisible(element) {
     if (!(element instanceof HTMLElement) || element.hidden) return false;
     if (element.getClientRects().length === 0) return false;
@@ -24,6 +36,13 @@ function isFocusable(element) {
     if (element.matches("[disabled], [aria-disabled='true']")) return false;
     if (element.tabIndex < 0 || !isVisible(element)) return false;
     return !element.closest(navigationOverlaySelector);
+}
+
+function isInsideTabStop(element, region) {
+    // The tab-stop element itself stays a candidate; anything nested in one
+    // (below the region being enumerated) does not.
+    const stop = element.parentElement?.closest(tabStopSelector);
+    return !!stop && stop !== region && region.contains(stop);
 }
 
 function normalizeNodes(nodes) {
@@ -47,11 +66,14 @@ function normalizeNodes(nodes) {
 }
 
 function candidatesForRegion(region, mode) {
-    if (mode === "element")
+    // A tab stop is one stop whatever the node mode says.
+    if (mode === "element" || region.matches(tabStopSelector))
         return isFocusable(region) ? [region] : [];
 
     const descendants = () =>
-        Array.from(region.querySelectorAll(focusableSelector)).filter(isFocusable);
+        Array.from(region.querySelectorAll(focusableSelector))
+            .filter(isFocusable)
+            .filter(element => !isInsideTabStop(element, region));
 
     if (mode === "descendants")
         return descendants();
@@ -95,8 +117,21 @@ function collectTargets(root, nodes) {
 }
 
 function resolveCurrentIndex(targets, activeElement) {
-    return targets.findIndex(target =>
-        target.element === activeElement || target.element.contains(activeElement));
+    // The focused element itself wins. Otherwise the INNERMOST target that
+    // contains it: a focusable container (a tree host with tabindex) precedes
+    // its own descendants in document order, so "first container" resolved an
+    // editor inside the tree to the tree, and "next" walked straight back into
+    // that editor — Tab never left.
+    const exact = targets.findIndex(target => target.element === activeElement);
+    if (exact >= 0) return exact;
+
+    let best = -1;
+    for (let i = 0; i < targets.length; i++) {
+        const element = targets[i].element;
+        if (!element.contains(activeElement)) continue;
+        if (best < 0 || targets[best].element.contains(element)) best = i;
+    }
+    return best;
 }
 
 function isNodeBoundary(target, targetsByNode, direction) {
@@ -194,8 +229,13 @@ export function registerPageNavigationGraph(root, nodeDefinitions, wrap = true) 
     const onKeyDown = event => {
         if (event.target instanceof Element
             && event.target.closest("[data-fx-page-control]") !== root) return;
-        if (event.target instanceof Element
-            && event.target.closest(navigationOverlaySelector)) return;
+        if (event.target instanceof Element) {
+            const dialog = event.target.closest(nestedDialogSelector);
+            if (dialog && dialog !== root && root.contains(dialog)) return;
+
+            const overlay = event.target.closest(navigationOverlaySelector);
+            if (overlay && !(event.key === "Tab" && overlay.closest(tabStopSelector))) return;
+        }
 
         const graph = collectTargets(root, nodes);
         if (graph.targets.length === 0) return;
