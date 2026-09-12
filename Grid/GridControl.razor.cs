@@ -12403,11 +12403,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (string.IsNullOrWhiteSpace(_renameColumnField))
                 return "Column";
 
-            // The column's DISPLAY caption (e.g. "Community"), not the raw
-            // colkey ("Area") — QA reads the title as the column's name.
-            var col = EffectiveColumns.FirstOrDefault(c =>
-                string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
-            return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
+            return _renameColumnField;
         }
     }
 
