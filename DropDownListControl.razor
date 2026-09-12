@@ -25,7 +25,7 @@
                    @key="_editableInputGeneration"
                    @ref="_editableInputRef"
                    disabled="@(!Enabled)"
-                   tabindex="@TabIndex"
+                   tabindex="@EffectiveTabIndex"
                    maxlength="@MaxLength"
                    value="@_editableRenderedText"
                    placeholder="@Placeholder"
@@ -47,7 +47,7 @@
                 @ref="_buttonRef"
                 class="@ButtonCssClass"
                 disabled="@(!Enabled)"
-                tabindex="@TabIndex"
+                tabindex="@EffectiveTabIndex"
                 aria-label="@AriaLabel"
                 aria-haspopup="listbox"
                 aria-expanded="@_isOpen"
@@ -63,15 +63,26 @@
         </button>
     }
 
-    @if (_isOpen && Enabled)
+    @if (_isOpen && Enabled && _panelRevealed)
     {
+        @* Not before the reveal: the fixed backdrop covers the trigger, so a re-click during
+           the open->measure->focus->reveal round trips landed here and CLOSED the list the
+           user had not yet seen (for a grid cell: committed and tore the editor down). *@
         <button type="button"
                 class="fx-dropdown-backdrop"
                 tabindex="-1"
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
+    }
 
-        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+    @if (_isOpen && Enabled)
+    {
+        @* Hosted, non-editable: the options are focused programmatically, so a press
+           on the panel (its scrollbar) must not move focus to the nearest focusable
+           ancestor — that is outside the cell host, and the focus-leave watcher would
+           close the list and commit the highlighted option. A form list and the
+           editable input keep their own contracts. *@
+        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onmousedown:preventDefault="@(!Editable && CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = DataSource.ToList();
@@ -132,6 +143,21 @@
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool OpenOnRender { get; set; }
 
+    /// <summary>Set when this control is the editor of a hosted cell (a TreeGrid
+    /// cell-edit template): the host decides focus, opening and the Tab stop, takes
+    /// the keys the list does not consume, and is told when the edit ends — the
+    /// page wires nothing. Cursor phase: closed, no focus, no Tab stop. Editing
+    /// phase: focus on mount; the list opens when the host asks or when typing
+    /// started the edit (the typed prefix highlights its first match).</summary>
+    [CascadingParameter] private ICellEditorHost? CellHost { get; set; }
+
+    private bool EffectiveAutoFocus => CellHost is null ? AutoFocus : CellHost.IsEditing;
+    private bool EffectiveOpenOnRender => CellHost is null
+        ? OpenOnRender
+        : CellHost.IsEditing && (OpenOnRender || CellHost.OpenOnRender || CellHost.InitialText is not null);
+    private int? EffectiveTabIndex => TabIndex ?? (CellHost is null ? null : -1);
+    private bool _hostInitialTextApplied;
+
     /// <summary>Size the open panel to its widest option text instead of the
     /// host width. Grid cell editors opt in: their host is the CELL, so a wide
     /// column otherwise forces an equally wide popup (and a narrow one truncates
@@ -181,6 +207,13 @@
     private bool _hasMeasuredGeometry;
     private int _highlightedIndex = -1;
     private bool _pendingHighlightScroll;
+    // The panel stays invisible (opacity 0) from open until the highlighted
+    // option has been scrolled into view, so the list paints ALREADY parked on
+    // the current value instead of opening at the top and then jumping (owner
+    // 2026-09-08: "it opens the dropdown and then scrolls and selects the
+    // item, which causes a visual jitter"). Opacity, not visibility — a hidden
+    // element cannot take the focus that does the scrolling.
+    private bool _panelRevealed;
     private readonly Dictionary<int, ElementReference> _optionRefs = new();
     private ElementReference _hostRef;
     private ElementReference _buttonRef;
@@ -213,7 +246,7 @@
     }
     private string _typeSelectBuffer = "";
     private DateTime _typeSelectLastInputUtc = DateTime.MinValue;
-    private static readonly TimeSpan TypeSelectResetDelay = TimeSpan.FromSeconds(1);
+    private TimeSpan TypeSelectResetDelay => CellHost is null ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(2.5);
 
     private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", _openUp ? "fx-dropdown-open-up" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
     private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", Editable ? "fx-dropdown-editable" : null, !Enabled ? "disabled" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
@@ -238,6 +271,15 @@
             }
             if (_panelMaxHeight is > 0)
                 parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (!_panelRevealed)
+            {
+                // Invisible until parked on the current value (see _panelRevealed) — and
+                // INERT: an opacity-0 element is still hit-testable, and this panel stacks
+                // above the backdrop, so without this a click in its footprint selected an
+                // option the user never saw. pointer-events comes back with the reveal.
+                parts.Add("opacity:0");
+                parts.Add("pointer-events:none");
+            }
             return parts.Count == 0 ? string.Empty : string.Join(";", parts) + ";";
         }
     }
@@ -310,14 +352,54 @@
             return;
         }
 
-        if (OpenOnRender && !_openOnRenderInitialized)
+        if (EffectiveOpenOnRender && !_openOnRenderInitialized)
         {
             OpenDropdown();
             _openOnRenderInitialized = true;
         }
 
+        // Typing started the hosted edit: the list opens with the highlight on the
+        // first option matching the typed prefix (VB6 ComboSearch); more characters
+        // arrive through the host's key relay and refine it. No value is written
+        // until the user picks.
+        if (!_hostInitialTextApplied && CellHost is { IsEditing: true, InitialText: { Length: > 0 } prefix })
+        {
+            _hostInitialTextApplied = true;
+            _typeSelectBuffer = prefix;
+            _typeSelectLastInputUtc = DateTime.UtcNow;
+            var match = FindTypeSelectMatchIndex(GetMaterializedItems(), prefix, cycleFromCurrent: false);
+            if (_isOpen && match >= 0)
+            {
+                _highlightedIndex = match;
+                _highlightMovedByKeyboard = true;
+                _pendingHighlightScroll = true;
+            }
+        }
+
         if (Editable && !_editableInputFocused && _editableText != EditableDisplayText)
             ResetEditableDomText(EditableDisplayText, refocus: false);
+    }
+
+    protected override void OnInitialized()
+    {
+        // Registered inside the mount render, before any key can arrive: keys the
+        // user presses before this instance has focus reach it through the host.
+        if (CellHost is { IsEditing: true })
+            CellHost.AttachKeyRelay(RelayHostKeyAsync);
+    }
+
+    private Task RelayHostKeyAsync(KeyboardEventArgs e) =>
+        Editable ? HandleEditableKeyDown(e) : HandleButtonKeyDown(e);
+
+    /// <summary>Keys this control does not consume: the explicit handler first, then
+    /// the cell host (both, never either/or — a page handler that only watches
+    /// Escape must not swallow the host's navigation).</summary>
+    private async Task ForwardKeyAsync(KeyboardEventArgs e)
+    {
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+        if (CellHost is not null)
+            await CellHost.KeyDownAsync(e);
     }
 
     /// <summary>True while the current press STARTED on this control — set on the
@@ -383,7 +465,14 @@
         if (Enabled)
         {
             if (_isOpen)
+            {
+                // A re-click on the arrow while the list is open-but-unrevealed is the user
+                // reacting to "nothing happened" during the reveal round trips; closing
+                // here handed them a list that never appeared. It reveals momentarily.
+                if (!_panelRevealed)
+                    return;
                 await CloseAsync();
+            }
             else
                 OpenDropdown();
         }
@@ -403,6 +492,7 @@
         _hasMeasuredGeometry = false;
         InitializeHighlightedIndex();
         _pendingHighlightScroll = true;
+        _panelRevealed = false;
     }
 
     private void ResetDropdownGeometry()
@@ -414,7 +504,9 @@
         _needsGeometryRefresh = false;
     }
 
-    private async Task CloseAsync()
+    private Task CloseAsync() => CloseAsync(returnFocus: true);
+
+    private async Task CloseAsync(bool returnFocus, bool endEdit = true)
     {
         if (!_isOpen)
             return;
@@ -426,6 +518,51 @@
         ClearTypeSelectBuffer();
         if (Closed.HasDelegate)
             await Closed.InvokeAsync();
+
+        // The list closing ends a hosted cell edit (a pick, Escape, a click away);
+        // the host takes the keyboard back. Without a host: an open non-editable
+        // panel moves DOM focus onto an option button; when the panel unmounts that
+        // focus fell to <body> and the keyboard lost its place (no-trap rule, owner
+        // spec 2026-09-01; restored after the 2026-09-07 FlexCore sync dropped it).
+        // Hand focus back to the trigger — not when focus has already gone
+        // elsewhere (OnListFocusLeftAsync).
+        if (CellHost is not null)
+        {
+            if (endEdit) CellHost.EndEdit();
+        }
+        else if (returnFocus && !Editable)
+            await FocusAsync();
+    }
+
+    // Focus leaving an OPEN non-editable list — a page-level Tab, a programmatic
+    // move (mouse presses elsewhere land on the backdrop): Windows/VB6 combo,
+    // leaving commits the option the keyboard highlighted, otherwise just closes.
+    // One JS registration per open (the browser settles the new focus first and
+    // ignores moves between the list's own options), not a server event per
+    // highlight move. Focus is never pulled back.
+    private DotNetObjectReference<DropDownListControl<TValue, TItem>>? _selfRef;
+    private bool _focusLeaveWatched;
+
+    [JSInvokable]
+    public async Task OnListFocusLeftAsync()
+    {
+        if (!_isOpen || Editable)
+            return;
+
+        if (_highlightMovedByKeyboard)
+        {
+            var items = GetMaterializedItems();
+            if (_highlightedIndex >= 0 && _highlightedIndex < items.Count)
+            {
+                var item = items[_highlightedIndex];
+                await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, returnFocus: false);
+                if (Closed.HasDelegate)
+                    await Closed.InvokeAsync();
+                return;
+            }
+        }
+
+        await CloseAsync(returnFocus: false);
     }
 
     private async Task HandleButtonKeyDown(KeyboardEventArgs e)
@@ -436,13 +573,19 @@
         if (await TryDelegateNavigationKeyAsync(e))
             return;
 
-        if (e.Key is "Enter" or " " || string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase) || (e.AltKey && e.Key is "ArrowDown" or "Down"))
+        if (e.Key is "Enter" or "NumpadEnter" or " " || string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase) || (e.AltKey && e.Key is "ArrowDown" or "Down"))
         {
             if (_isOpen)
             {
                 await CommitCurrentSelectionAsync();
-                if (OnKeyDown.HasDelegate)
-                    await OnKeyDown.InvokeAsync(e);
+                await ForwardKeyAsync(e);
+            }
+            else if (CellHost is not null && e.Key is "Enter" or "NumpadEnter")
+            {
+                // vsFlexGrid edit mode: Enter on a CLOSED combo editor finishes the
+                // edit (ComboCloseUp FinishEdit applies to the dropped list only);
+                // F4 / Alt+Down / Space stay the open keys.
+                await ForwardKeyAsync(e);
             }
             else
             {
@@ -452,7 +595,23 @@
         }
         else if (e.Key == "Escape")
         {
-            await CloseAsync();
+            if (_isOpen)
+                await CloseAsync();
+            // Closed: nothing to close here — forward so a host that mounts
+            // this control as an in-cell editor can dismiss it (no-trap rule,
+            // owner spec 2026-09-01).
+            else
+                await ForwardKeyAsync(e);
+        }
+        else if (e.Key == "Tab" && _isOpen && CellHost is not null)
+        {
+            // The button still holds focus while the option focus step is in flight
+            // (or the list is empty): Tab commits the highlighted option, then the host
+            // ends the edit and moves to the next / previous row (TabBehavior=1) — as
+            // from an option, never a dead key outside a page graph.
+            _highlightMovedByKeyboard = false;
+            await CommitCurrentSelectionAsync(endEdit: false);
+            await ForwardKeyAsync(e);
         }
         else if (e.Key == "ArrowDown")
         {
@@ -484,11 +643,26 @@
         if (await TryDelegateNavigationKeyAsync(e))
             return;
 
-        if (e.Key is "Enter" or " ")
+        if (e.Key is "Enter" or "NumpadEnter" or " ")
         {
             await CommitCurrentSelectionAsync();
-            if (OnKeyDown.HasDelegate)
-                await OnKeyDown.InvokeAsync(e);
+            await ForwardKeyAsync(e);
+        }
+        else if (e.Key == "Tab")
+        {
+            // VB6 combo semantics: Tab on an open list commits the highlighted
+            // option (the option's preventDefault already ate the focus move —
+            // without this branch Tab was a dead key on an open standalone list).
+            // Under a cell host the pick is followed by the move: the host ends the
+            // edit and goes to the next / previous row (TabBehavior=1).
+            if (CellHost is not null)
+            {
+                _highlightMovedByKeyboard = false;
+                await CommitCurrentSelectionAsync(endEdit: false);
+                await ForwardKeyAsync(e);
+            }
+            else
+                await CommitCurrentSelectionAsync();
         }
         else if (e.Key == "Escape")
         {
@@ -694,6 +868,7 @@
         {
             _highlightedIndex = matchIndex;
             _pendingHighlightScroll = true;
+            _highlightMovedByKeyboard = true;
             return true;
         }
 
@@ -754,16 +929,30 @@
 
     private async Task<bool> TryDelegateNavigationKeyAsync(KeyboardEventArgs e)
     {
-        if (!OnKeyDown.HasDelegate)
+        if (!OnKeyDown.HasDelegate && CellHost is null)
+            return false;
+
+        // An OPEN list under a cell host keeps Tab (the host ignores it — Tab belongs
+        // to the page): the button and option branches commit the highlighted item,
+        // close and end the edit (VB6 ComboCloseUp FinishEdit), so Tab is never a
+        // dead key where no page-level Tab handler intercepts it — whether or not the
+        // page also wired OnKeyDown beside the host. GridControl batch editors have no
+        // host and still receive Tab through OnKeyDown as before.
+        if (_isOpen && e.Key == "Tab" && CellHost is not null)
             return false;
 
         var isGridNavigationKey = e.Key == "Tab"
             || (e.Key is "ArrowLeft" or "ArrowRight"
+                // Under a cell host an OPEN list keeps Left / Right (its popup owns them;
+                // VB6's dropped combo ignores them) and an EDITABLE one keeps them for its
+                // caret (a text editor never yields them) — a closed list yields them to
+                // the host, which applies the outline key.
+                && (CellHost is null || (!_isOpen && !Editable))
                 && !e.AltKey
                 && !e.CtrlKey
                 && !e.MetaKey
                 && !e.ShiftKey)
-            || (DelegateVerticalArrows && !_isOpen
+            || ((DelegateVerticalArrows || CellHost is not null) && !_isOpen
                 && (e.Key is "ArrowDown" or "ArrowUp" or "Down" or "Up")
                 && !e.AltKey
                 && !e.CtrlKey
@@ -773,7 +962,13 @@
         if (!isGridNavigationKey)
             return false;
 
-        await OnKeyDown.InvokeAsync(e);
+        // A host that takes Tab from an open list commits the editor itself; the
+        // focus-out that follows must not commit the highlighted option on top
+        // (HandleHostFocusOutAsync) — the host may already have moved on.
+        if (_isOpen && e.Key == "Tab")
+            _highlightMovedByKeyboard = false;
+
+        await ForwardKeyAsync(e);
         return true;
     }
 
@@ -810,7 +1005,7 @@
         }
     }
 
-    private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true)
+    private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true, bool returnFocus = true, bool endEdit = true)
     {
         _suppressNextEditableBlurCommit = false;
         var newValue = ConvertToValue(strVal);
@@ -819,24 +1014,38 @@
         if (Editable)
             ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: _editableInputFocused);
 
+        var wasOpen = false;
         if (closeAfterSelect)
         {
+            wasOpen = _isOpen;
             _isOpen = false;
             ResetDropdownGeometry();
             _highlightedIndex = -1;
             ClearTypeSelectBuffer();
+            // Same focus hand-back as CloseAsync: a pick (click or Enter on an
+            // option) unmounts the focused option — return to the trigger, before
+            // the notifications as always. A hosted pick ends the edit instead.
+            if (wasOpen && returnFocus && !Editable && CellHost is null)
+                await FocusAsync();
         }
 
         // The list still closed and the editable text still reset above — only the
         // notifications are skipped, so the UX of a re-pick is unchanged.
-        if (SuppressUnchangedValueChange && unchanged)
-            return;
+        if (!(SuppressUnchangedValueChange && unchanged))
+        {
+            if (ValueChanged.HasDelegate)
+                await ValueChanged.InvokeAsync(newValue);
 
-        if (ValueChanged.HasDelegate)
-            await ValueChanged.InvokeAsync(newValue);
+            if (ValueChange.HasDelegate)
+                await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
+        }
 
-        if (ValueChange.HasDelegate)
-            await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item });
+        // A pick from the OPEN list ends a hosted cell edit (VB6 ComboCloseUp); a
+        // closed-list arrow step only changes the value and keeps editing (VB6 edit
+        // mode). ValueChanged went first: a host that tears the editor down there
+        // never sees a focus call.
+        if (wasOpen && CellHost is not null && endEdit)
+            CellHost.EndEdit();
     }
 
     private async Task MoveSelectionAsync(int delta)
@@ -854,6 +1063,7 @@
 
             _highlightedIndex = nextIndex;
             _pendingHighlightScroll = true;
+            _highlightMovedByKeyboard = true;
         }
         else
         {
@@ -884,6 +1094,7 @@
         {
             _highlightedIndex = first ? 0 : items.Count - 1;
             _pendingHighlightScroll = true;
+            _highlightMovedByKeyboard = true;
         }
         else
         {
@@ -924,12 +1135,15 @@
             }
         }
 
-        if (AutoFocus && !_autoFocusApplied && Enabled)
+        if (EffectiveAutoFocus && !_autoFocusApplied && Enabled)
         {
             _autoFocusApplied = true;
             try
             {
-                if (Editable)
+                // Hosted: the host focuses only while it still owns the keyboard.
+                if (CellHost is not null)
+                    await CellHost.FocusAsync(Editable ? _editableInputRef : _buttonRef);
+                else if (Editable)
                     await _editableInputRef.FocusAsync(preventScroll: true);
                 else
                     await _buttonRef.FocusAsync(preventScroll: true);
@@ -947,7 +1161,10 @@
             {
                 var module = await GetDropdownJsModuleAsync();
                 if (module == null)
+                {
+                    await RevealPanelAsync();
                     return;
+                }
 
                 var geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
                 var panelWidth = PanelFitContentWidth && geometry.ContentWidth > 0
@@ -973,6 +1190,7 @@
             catch
             {
                 ResetDropdownGeometry();
+                await RevealPanelAsync();
                 return;
             }
         }
@@ -989,7 +1207,10 @@
             {
                 try
                 {
-                    await optionRef.FocusAsync();
+                    if (CellHost is not null)
+                        await CellHost.FocusAsync(optionRef);
+                    else
+                        await optionRef.FocusAsync();
                 }
                 catch
                 {
@@ -997,6 +1218,43 @@
                 }
             }
         }
+
+        if (_isOpen && !_panelRevealed && !_pendingHighlightScroll)
+            await RevealPanelAsync();
+
+        if (_isOpen && !Editable && !_focusLeaveWatched)
+        {
+            _focusLeaveWatched = true;
+            try
+            {
+                var module = await GetDropdownJsModuleAsync();
+                if (module is not null)
+                {
+                    _selfRef ??= DotNetObjectReference.Create(this);
+                    await module.InvokeVoidAsync("watchFocusLeave", _hostRef, _selfRef);
+                }
+            }
+            catch { }
+        }
+        else if (!_isOpen && _focusLeaveWatched)
+        {
+            _focusLeaveWatched = false;
+            try
+            {
+                var module = await GetDropdownJsModuleAsync();
+                if (module is not null)
+                    await module.InvokeVoidAsync("unwatchFocusLeave", _hostRef);
+            }
+            catch { }
+        }
+    }
+
+    private async Task RevealPanelAsync()
+    {
+        if (_panelRevealed)
+            return;
+        _panelRevealed = true;
+        await InvokeAsync(StateHasChanged);
     }
 
     private async ValueTask<IJSObjectReference?> GetDropdownJsModuleAsync()
@@ -1004,7 +1262,7 @@
         try
         {
             return _dropdownJsModule ??= await JSRuntime.InvokeAsync<IJSObjectReference>(
-                "import", $"./_content/{typeof(DropDownListControl<TValue, TItem>).Assembly.GetName().Name}/dropdown-list-control.js");
+                "import", FxJsAsset.Versioned($"./_content/{typeof(DropDownListControl<TValue, TItem>).Assembly.GetName().Name}/dropdown-list-control.js"));
         }
         catch
         {
@@ -1014,11 +1272,16 @@
 
     public async ValueTask DisposeAsync()
     {
+        CellHost?.AttachKeyRelay(null);
+        _selfRef?.Dispose();
+        _selfRef = null;
         if (_dropdownJsModule is null)
             return;
 
         try
         {
+            if (_focusLeaveWatched)
+                await _dropdownJsModule.InvokeVoidAsync("unwatchFocusLeave", _hostRef);
             await _dropdownJsModule.DisposeAsync();
         }
         catch
@@ -1037,12 +1300,12 @@
         public double ContentWidth { get; set; }
     }
 
-    private async Task CommitCurrentSelectionAsync()
+    private async Task CommitCurrentSelectionAsync(bool endEdit = true)
     {
         var items = GetMaterializedItems();
         if (items.Count == 0)
         {
-            await CloseAsync();
+            await CloseAsync(returnFocus: true, endEdit: endEdit);
             return;
         }
 
@@ -1053,7 +1316,7 @@
             index = 0;
 
         var item = items[index];
-        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item);
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, endEdit: endEdit);
     }
 
     private int FindSelectedIndex(IReadOnlyList<TItem> items)

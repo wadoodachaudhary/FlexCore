@@ -47,7 +47,7 @@
     --fx-grid-table-border-color: var(--fx-grid-line-color);
     --fx-grid-header-bg: #f0f0f0;
     --fx-grid-header-hover-bg: var(--fx-sidebar-item-hover-bg, #dcdcdc);
-    --fx-grid-header-selected-bg: var(--fx-grid-row-selected-bg, #d4d0c8);
+    --fx-grid-header-selected-bg: var(--fx-grid-row-selected-bg, #e6e6e6);
     --fx-grid-header-text-color: var(--fx-grid-header-color, #212529);
     --fx-grid-header-border-color: var(--fx-border-color, #9a9a9a);
     --fx-grid-header-highlight-color: var(--fx-btn-border-color, #ffffff);
@@ -197,6 +197,33 @@
     cursor: pointer;
 }
 
+/* A Type=CheckBox data cell hosts an inline-flex <label class="fx-checkbox">
+   that is TALLER than the cell's line box (15px box in a ~12px line). On the
+   default vertical-align:baseline the label's bottom sits on the text
+   baseline, so the box hugs the cell's TOP edge and all the slack (the font
+   descent, ~2.6px) collects underneath — in the first row that is 0px from
+   the header's bottom border (owner 2026-09-08: "touching the row header").
+   Centre the box on the line instead; text cells are unaffected. Kept as
+   inline alignment (NOT a flex td) so table layout and the sticky-header
+   scroll geometry (getGridVisibleTop / snapGridTopToWholeRow) are untouched. */
+.fx-grid .fx-grid-table td.fx-cell:has(> .fx-checkbox),
+.fx-grid ::deep .fx-grid-table td.fx-cell:has(> .fx-checkbox) {
+    /* Zero the strut so the label is the ONLY thing sizing the line box; the
+       td's own vertical-align:middle then centres that line box exactly,
+       independent of font size, line-height or row height. vertical-align:
+       middle on the label alone lands it at baseline + x-height/2, which
+       measured 4.2px above / 1.3px below in default-density rows.
+       !important (plus the extra table hop for specificity): host pages
+       legitimately pin `.fx-cell { line-height: Npx !important }` for VB6 row
+       heights (FVendor does), which otherwise out-ranks this and leaves the
+       box sitting low. A check-box cell must own its line box regardless. */
+    line-height: 0 !important;
+}
+.fx-grid td.fx-cell > .fx-checkbox,
+.fx-grid ::deep td.fx-cell > .fx-checkbox {
+    vertical-align: middle;
+}
+
 .fx-grid input[type="checkbox"]:checked::after,
 .fx-grid ::deep input[type="checkbox"]:checked::after {
     content: "";
@@ -248,13 +275,13 @@
     --fx-grid-table-border-color: var(--fx-grid-line-color);
     --fx-grid-header-bg: #eeeeee;
     --fx-grid-header-hover-bg: #dcdcdc;
-    --fx-grid-header-selected-bg: #d4d0c8;
+    --fx-grid-header-selected-bg: #e6e6e6;
     --fx-grid-header-text-color: #000;
     --fx-grid-row-hover-bg: #e8e8e8;
     --fx-grid-alt-row-bg: #fff;
     --fx-grid-cell-border-color: var(--fx-grid-line-color);
     --fx-grid-cell-border-right-color: var(--fx-grid-line-color);
-    --fx-grid-selected-row-bg: #d4d0c8;
+    --fx-grid-selected-row-bg: #e6e6e6;
     --fx-grid-selected-row-hover-bg: #c8c8c8;
     --fx-grid-selected-row-border: #808080;
     --fx-grid-selected-row-color: inherit;
@@ -362,13 +389,13 @@
 .fx-grid-theme-vb6-windows ::deep .fx-pivot-hdr-total,
 .fx-grid-theme-vb6-windows ::deep .fx-pivot-cell-total,
 .fx-grid-theme-vb6-windows ::deep .fx-pivot-cell-subtotal-grand {
-    background: #d4d0c8;
+    background: #e6e6e6;
     border-color: #808080;
     color: #000;
 }
 
 .fx-grid ::deep .fx-pivot-table thead th:has(.fx-pivot-sort) {
-    background: var(--fx-grid-header-selected-bg, #d4d0c8);
+    background: var(--fx-grid-header-selected-bg, #e6e6e6);
     color: var(--fx-grid-header-text-color, #000);
 }
 
@@ -2296,7 +2323,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 }
 .fx-grid ::deep .fx-cell.fx-typeahead-preview-cell,
 .fx-cell.fx-typeahead-preview-cell {
-    background: #fff9e6 !important;
+    background: #f0f0f0 !important;
     box-shadow: none;
     color: #1f2937;
     font-weight: 700;
@@ -2724,7 +2751,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 
 /* ── Edit Row ─────────────────────────────────────────────────────── */
 .fx-edit-row {
-    background: #fff9e6 !important;
+    background: #f0f0f0 !important;
 }
 .fx-edit-cell {
     padding: 4px 6px;
@@ -2756,7 +2783,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-edit-actions-row td {
     padding: 4px 6px;
     border-top: 0;
-    background: #fff9e6;
+    background: #f0f0f0;
 }
 .fx-edit-actions {
     display: flex;
@@ -3171,14 +3198,14 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-filter-popup-btn.fx-primary {
     /* Theme-driven (VB6 default theme = grey face, black default-button outline) —
        hardcoded Bootstrap blue violated the host's legacy look. */
-    background: var(--fx-btn-bg, #d4d0c8);
+    background: var(--fx-btn-bg, #e6e6e6);
     color: var(--fx-btn-color, #000);
     border: var(--fx-btn-border, 1px solid);
     border-color: var(--fx-btn-border-color, #ffffff #404040 #404040 #ffffff);
     outline: 1px solid var(--fx-text-color, #000);
 }
 .fx-filter-popup-btn.fx-primary:hover {
-    background: var(--fx-btn-hover-bg, #d4d0c8);
+    background: var(--fx-btn-hover-bg, #e6e6e6);
 }
 
 /* ── Dialog (Edit Mode) ───────────────────────────────────────────── */
@@ -3275,14 +3302,14 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 }
 .fx-dialog-btn.fx-primary {
     /* Theme-driven — see .fx-filter-popup-btn.fx-primary note. */
-    background: var(--fx-btn-bg, #d4d0c8);
+    background: var(--fx-btn-bg, #e6e6e6);
     color: var(--fx-btn-color, #000);
     border: var(--fx-btn-border, 1px solid);
     border-color: var(--fx-btn-border-color, #ffffff #404040 #404040 #ffffff);
     outline: 1px solid var(--fx-text-color, #000);
 }
 .fx-dialog-btn.fx-primary:hover {
-    background: var(--fx-btn-hover-bg, #d4d0c8);
+    background: var(--fx-btn-hover-bg, #e6e6e6);
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -3792,7 +3819,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     z-index: 1100;
     min-width: 165px;
     padding: 3px 0;
-    border: 1px solid #d4d0c8;
+    border: 1px solid #e6e6e6;
     background: #f8f8f8;
     box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.22);
     color: #000;
@@ -3918,11 +3945,13 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     align-self: start;
 }
 
-.fx-grid-rename-input {
+.fx-grid-rename-input-host {
     grid-area: input;
+    min-width: 0;
 }
 
-.fx-grid-rename-input {
+.fx-grid-rename-input-host ::deep .fx-grid-rename-input {
+    box-sizing: border-box;
     min-width: 0;
     height: 22px;
     padding: 2px 4px;
@@ -4290,11 +4319,12 @@ tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell {
 }
 
 
-/* While the batch editor owns the cell, the … edit button would wrap under
-   the enlarged editor text (owner screenshot 2026-08-12) — hide it for the
-   duration; it returns with the normal cell on commit/cancel. */
-.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn,
-.fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn,
+/* While the batch editor owns the cell, TEMPLATE-side buttons would wrap
+   under the enlarged editor text (owner screenshot 2026-08-12) — hide those
+   for the duration; they return with the normal cell on commit/cancel.
+   The grid's own editor-appended .fx-cell-edit-btn is NOT hidden any more:
+   VB6 ComboList "|..." keeps the picker button visible while editing (owner
+   directive 2026-08-30), so it pins to the cell's right edge below. */
 .fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-action-btn,
 .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-action-btn,
 .fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-grid-popup-btn,
@@ -4302,6 +4332,59 @@ tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell {
 .fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .poindex-btn,
 .fx-cell.fx-batch-editing.fx-batch-editing .poindex-btn {
     display: none !important;
+}
+
+/* VB6 "|..." combo parity: the … picker button stays visible DURING editing.
+   Absolute-positioned at the cell's right edge so the full-width editor input
+   cannot wrap it to a second line (the 2026-08-12 wrap); same 3D affordance
+   as the active-cell action button. */
+.fx-grid ::deep .fx-cell.fx-batch-editing,
+.fx-cell.fx-batch-editing {
+    position: relative;
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn,
+.fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 50%;
+    right: 1px;
+    transform: translateY(-50%);
+    width: 16px;
+    min-width: 16px;
+    height: 12px;
+    margin: 0;
+    padding: 0 2px;
+    border: 1px solid;
+    border-color: #ffffff #7f7f7f #7f7f7f #ffffff;
+    border-radius: 0;
+    background: #ececec;
+    box-shadow:
+        inset 1px 1px 0 #ffffff,
+        inset -1px -1px 0 #b5b5b5;
+    color: #111;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: calc(9px * var(--fx-zoom, 1));
+    font-weight: 600;
+    line-height: 10px;
+    z-index: 2;
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn:hover,
+.fx-cell.fx-batch-editing.fx-batch-editing .fx-cell-edit-btn:hover {
+    background: #f5f5f5;
+}
+.fx-grid ::deep .fx-cell.fx-batch-editing.fx-batch-editing .fx-batch-input,
+.fx-cell.fx-batch-editing.fx-batch-editing .fx-batch-input {
+    padding-right: 20px;
+}
+
+/* Rejected required-list entry: flash the refused text red for ~2s before
+   the Enter path discards it (VB6 shows its warning, then blanks). */
+.fx-grid ::deep .fx-batch-input.fx-batch-input-invalid,
+.fx-batch-input.fx-batch-input-invalid {
+    color: #b00020 !important;
 }
 
 /* Passive VB6-style row-header strip (GridRowSelectorHandleShape.Flat). */
@@ -4312,7 +4395,7 @@ td.fx-row-selector-cell-flat {
 }
 .fx-grid ::deep td.fx-row-selector-cell-flat.fx-row-selector-emphasis,
 td.fx-row-selector-cell-flat.fx-row-selector-emphasis {
-    background: linear-gradient(#fdf6d8, #f0e6b0) !important;
+    background: linear-gradient(#d0d0d0, #b6b6b6) !important;
 }
 
 /* Opt-in VB6 flat-cell focus. Grid lines remain visible, but selecting or

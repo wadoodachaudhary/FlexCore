@@ -34,6 +34,13 @@
     padding-right: 24px !important;
 }
 
+/* Only a transient glyph is drawn; the native input stays a password field. */
+.fx-textbox-password-reveal {
+    position: absolute;
+    pointer-events: none;
+    user-select: none;
+}
+
 .fx-textbox-password-toggle {
     position: absolute;
     top: 1px;

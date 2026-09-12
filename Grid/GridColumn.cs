@@ -23,8 +23,32 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public string? MinWidth { get; set; }
     [Parameter] public string? MaxWidth { get; set; }
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
-    [Parameter] public TextAlign TextAlign { get; set; } = TextAlign.Left;
-    [Parameter] public TextAlign HeaderTextAlign { get; set; } = TextAlign.Left;
+    /// <summary>Cell text alignment. Unset defaults by column type:
+    /// <see cref="ColumnType.CheckBox"/> columns centre (vsFlexGrid
+    /// flexcpChecked parity — the check box sits in the middle of its cell,
+    /// HHM-901); <see cref="ColumnType.Date"/> columns right-align (vsFlexGrid
+    /// flexDTDate parity, HHM-920); everything else left-aligns. Set explicitly to override —
+    /// except that on a CheckBox column only Right is honoured as an
+    /// override (see <see cref="ResolvedTextAlign"/> for why).
+    /// Mirrors <see cref="TreeGridColumn.TextAlign"/>.</summary>
+    [Parameter] public TextAlign? TextAlign { get; set; }
+    [Parameter] public TextAlign HeaderTextAlign { get; set; } = Grid.TextAlign.Left;
+
+    /// <summary>The alignment actually applied: the explicit
+    /// <see cref="TextAlign"/> when set, else the per-type default.
+    /// Library readers must use this, never the raw parameter.</summary>
+    public TextAlign ResolvedTextAlign =>
+        Type == ColumnType.CheckBox
+            // A check box has no meaningful left-aligned form (vsFlexGrid
+            // flexcpChecked cells are always centred), and layout-driven hosts
+            // pass the enum default Left on EVERY column — so on CheckBox
+            // columns only an explicit Right counts as an override; Left (set
+            // or unset) resolves to Center. Honouring Left here would defeat
+            // the default for every layout-driven grid (HHM-901).
+            ? (TextAlign == Grid.TextAlign.Right ? Grid.TextAlign.Right : Grid.TextAlign.Center)
+            // Date columns right-align (vsFlexGrid flexDTDate parity, HHM-920).
+            // Restored 2026-09-08: the 2026-09-07 FlexCore sync had dropped it.
+            : (TextAlign ?? (Type == ColumnType.Date ? Grid.TextAlign.Right : Grid.TextAlign.Left));
     /// <summary>
     /// Optional .NET display format. Numeric columns default to plain ungrouped
     /// text when this is blank; set values such as <c>N0</c>, <c>N2</c>, or
@@ -303,7 +327,7 @@ public class GridColumn : ComponentBase, IDisposable
             parts.Add($"width:{Width}");
         if (!string.IsNullOrEmpty(MinWidth)) parts.Add($"min-width:{MinWidth}");
         if (!string.IsNullOrEmpty(MaxWidth)) parts.Add($"max-width:{MaxWidth}");
-        var effectiveTextAlign = UsesMappedEditOptionDisplay() ? TextAlign.Left : TextAlign;
+        var effectiveTextAlign = UsesMappedEditOptionDisplay() ? Grid.TextAlign.Left : ResolvedTextAlign;
         parts.Add($"text-align:{effectiveTextAlign.ToString().ToLower()}");
         parts.Add("padding:0 4px");
         parts.Add("overflow:hidden");

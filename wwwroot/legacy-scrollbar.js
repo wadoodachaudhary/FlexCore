@@ -60,17 +60,63 @@ const keyboardNavigationRoots = new WeakSet();
  * Events from editors and buttons are left untouched.
  * @param {Element} root the TreeGrid root element
  */
-export function enableTreeKeyboardNavigation(root) {
+export function enableTreeKeyboardNavigation(root, scroller, dotNetRef) {
     if (!root || keyboardNavigationRoots.has(root)) return;
+
+    // Focus leaving the tree while a cell is being edited (a page-level Tab, a
+    // click elsewhere) ends the edit; the server ignores a stale generation, so
+    // the focusout Chrome fires when a finished editor is REMOVED is harmless.
+    // Checked after the browser has settled the new focus: a move inside the
+    // tree (into the editor or its popup) is not a leave, and a window that
+    // lost focus (alt-tab) keeps its edit, as VB6 does.
+    if (dotNetRef) {
+        root.addEventListener("focusout", () => {
+            const generation = root.dataset.fxCellEditing;
+            if (generation === undefined) return;
+            setTimeout(() => {
+                if (root.dataset.fxCellEditing !== generation) return;
+                const doc = root.ownerDocument;
+                if (!doc.hasFocus()) return;
+                const active = doc.activeElement;
+                if (active && active !== root && root.contains(active)) return;
+                dotNetRef.invokeMethodAsync("OnCellEditFocusLeftAsync", Number(generation)).catch(() => { });
+            }, 0);
+        });
+    }
 
     root.addEventListener("keydown", event => {
         const target = event.target;
-        if (event.key === "Tab" && target?.closest?.(".fx-treegrid-batch-editor")) event.preventDefault();
-        if (target !== root && !target?.classList?.contains("fx-treegrid-row")) return;
+        if (event.key === "Tab" && target?.closest?.(".fx-treegrid-batch-editor")) { event.preventDefault(); return; }
+        const onRootOrRow = target === root || !!target?.classList?.contains("fx-treegrid-row");
+        const inEditHost = !!target?.closest?.(".fx-treegrid-cell-edit-host");
+        const onDisplay = !!target?.classList?.contains("fx-treegrid-cell-edit-display");
+
+        if (event.key === "Tab") {
+            // A property grid (wrap-until-edge) walks its rows on Tab: the browser's own
+            // focus move must not happen unless the edge attribute releases the key in
+            // that direction — the page graph's test (page-control.js), mirrored. Other
+            // trees are one page stop and keep the native / graph Tab.
+            if (root.dataset.fxGridTabNavigation !== "wrap-until-edge" || event.altKey || event.ctrlKey || event.metaKey) return;
+            const edge = root.dataset.fxGridTabEdge ?? "none";
+            const releases = edge === "both" || (event.shiftKey ? edge === "first" : edge === "last");
+            const inScope = onRootOrRow || onDisplay || (inEditHost && !target.closest("[data-fx-key-scope]"));
+            if (!releases && inScope) event.preventDefault();
+            return;
+        }
 
         if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
-            event.preventDefault();
+            // Rows, the root and the non-text parts of a cell editor (a list's button
+            // and options, a display button): the browser would scroll the pane. A
+            // text input keeps its caret keys (Up / Down = start / end of the text).
+            const textTarget = target instanceof HTMLTextAreaElement
+                || (target instanceof HTMLInputElement && !target.readOnly
+                    && !["button", "checkbox", "radio", "submit", "reset"].includes(target.type));
+            if ((onRootOrRow || onDisplay || inEditHost) && !textTarget) event.preventDefault();
+            return;
         }
+
+        // Space toggles the current folder (VB6): never page-scroll as well.
+        if (event.key === " " && onRootOrRow) event.preventDefault();
     }, { capture: true });
 
     root.addEventListener("dragstart", event => {
@@ -88,8 +134,11 @@ export function enableTreeKeyboardNavigation(root) {
  */
 export function focusTreeRow(scroller, row) {
     if (!row) return;
-
-    row.focus({ preventScroll: true });
+    // A keyboard row move never pulls focus back from another page control (a Tab
+    // or a click that landed while the move was rendering) — but the row it moved
+    // to is still scrolled into view: the selection moved either way.
+    if (treeOwnsFocus(row.closest("[data-fx-tab-stop]") ?? scroller))
+        row.focus({ preventScroll: true });
     if (!scroller || !scroller.getBoundingClientRect) return;
 
     const viewportRect = scroller.getBoundingClientRect();
@@ -139,4 +188,46 @@ export function syncTreeGridLayout(root) {
 }
 export function disposeTreeGridLayout(root) {
     treeGridLayouts.get(root)?.observer.disconnect(); treeGridLayouts.delete(root);
+}
+
+/**
+ * Returns keyboard focus to a TreeGrid after its in-cell editor closed — only
+ * when focus is still inside the tree or was lost with the editor (body). An
+ * editor that closes on blur after a page-level Tab must not pull focus back.
+ * @param {Element} root the TreeGrid root (tabindex=0)
+ */
+export function focusTreeIfFocusLost(root) {
+    if (!root) return;
+    if (treeOwnsFocus(root))
+        root.focus({ preventScroll: true });
+}
+
+// Focus is still the tree's to place: inside it, or lost (body / nothing).
+function treeOwnsFocus(root) {
+    if (!root) return true;
+    const doc = root.ownerDocument;
+    const active = doc.activeElement;
+    return !active || active === doc.body || active === doc.documentElement || root.contains(active);
+}
+
+/**
+ * A hosted cell editor's focus step (autofocus, the hand-over to an open list):
+ * focuses the element only while the tree still owns the keyboard — never after
+ * focus moved on to another control while the editor was mounting. Returns
+ * whether the element was focused (false: the host ends the edit).
+ * @param {Element} root the TreeGrid root
+ * @param {HTMLElement} element the editor element
+ * @param {boolean} selectText select the text as it is focused
+ */
+export function focusIfTreeOwnsFocus(root, element, selectText) {
+    // Focus moved on to another control: the caller ends the edit.
+    if (!treeOwnsFocus(root)) return false;
+    // Still the tree's keyboard, but this element is gone (a re-render replaced it):
+    // there is nothing to focus and nothing to end.
+    if (!element || !element.isConnected) return true;
+    try {
+        element.focus({ preventScroll: true });
+        if (selectText && typeof element.select === "function") element.select();
+    } catch { }
+    return true;
 }

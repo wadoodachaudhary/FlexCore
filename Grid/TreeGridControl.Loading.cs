@@ -62,8 +62,10 @@ public partial class TreeGridControl<TValue> : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed) return;   // a host may dispose twice (an explicit call, then the renderer)
         ClearEditSessions();
         _disposed = true; _loadLifetime.Cancel(); _loadLifetime.Dispose();
+        _selfRef?.Dispose(); _selfRef = null;
         if (_legacyScrollModule is not null)
             try { await _legacyScrollModule.InvokeVoidAsync("disposeTreeGridLayout", _treeGridElement); await _legacyScrollModule.DisposeAsync(); } catch (JSDisconnectedException) { }
     }

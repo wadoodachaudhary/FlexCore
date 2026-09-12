@@ -14,8 +14,74 @@
 .fx-row.fx-drag-preview > td,
 .fx-row.fx-drag-preview .fx-cell,
 td.fx-drag-preview-cell {
-    background: var(--fx-grid-selected-row-bg, #b6c8dd) !important;
+    background: var(--fx-grid-selected-row-bg, #f5f5f5) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
+}
+
+/* An in-cell DROPDOWN editor is absolutely positioned, so it adds no height to
+   its cell, and the editing cell drops its padding. On an EMPTY cell — the
+   blank "new" row of a combo column — the cell then collapses to 0px and the
+   closed editor shows only its 2px of borders: a hairline with no arrow, which
+   looks like the dropdown is missing until Enter opens the list.
+   One line of zero-width in-flow content restores the cell's height so the
+   editor's height:100% has something to resolve against. Cells that already
+   have text are unaffected. */
+.fx-cell.fx-batch-dropdown-editing::before,
+.fx-grid .fx-cell.fx-batch-dropdown-editing::before {
+    content: "\00a0";
+    display: inline-block;
+    width: 0;
+    overflow: hidden;
+    /* Top-aligned: on the baseline this box stacked on the line strut's descent
+       (the editing cell runs line-height:normal), so the row GREW the instant a
+       dropdown cell entered editing — visible as a row-height jump in dense
+       grids. Top alignment keeps the restored height without the stacking. */
+    vertical-align: top;
+}
+
+/* Password display cell: masked value + always-visible reveal toggle */
+.fx-grid .fx-cell-password-content {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    min-width: 0;
+}
+
+.fx-grid .fx-cell-password-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-grid .fx-cell-password-toggle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: #666;
+}
+
+.fx-grid .fx-cell-password-toggle:hover {
+    color: #000;
+}
+
+.fx-grid .fx-cell-password-toggle svg {
+    width: 13px;
+    height: 13px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 /* Window-spacer skeleton shimmer: a soft highlight sweeping the outrun region

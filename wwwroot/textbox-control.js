@@ -14,12 +14,169 @@ export function focus(element, selectText) {
 export function select(element) {
     if (!element || typeof element.select !== "function") return;
     requestAnimationFrame(() => {
+        // This arrives one interop round-trip after the focus event. If the user has
+        // already typed by then (WAN latency), selecting would make the next key replace
+        // their text — same guard as the grid's deferred select/caret helpers.
+        if (element.dataset?.fxUserTyped === "1"
+            || element.value !== (element.getAttribute("value") ?? ""))
+            return;
         try { element.select(); } catch { }
     });
 }
 
 const replaceOnFirstInputState = new WeakMap();
 const clientBufferedTypingBindings = new WeakMap();
+
+const passwordRevealBindings = new WeakMap();
+
+// Only the freshly typed glyph is painted. Never switch the input to text or
+// copy the password into another DOM node. All masking timers run locally.
+export function configurePasswordReveal(input, canvas, durationMs) {
+    if (!input) return;
+    passwordRevealBindings.get(input)?.();
+    passwordRevealBindings.delete(input);
+    if (!canvas || durationMs <= 0 || input.type !== "password") return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const duration = Math.min(2000, durationMs);
+    let pending = null, active = null, timer = 0, frame = 0, caret = -1;
+    let probe = null;
+    let measuredFont = "", bulletAdvance = 0;
+    const listeners = [];
+    const listen = (target, name, handler) => {
+        target.addEventListener(name, handler, true);
+        listeners.push(() => target.removeEventListener(name, handler, true));
+    };
+    const hide = () => {
+        clearTimeout(timer);
+        cancelAnimationFrame(frame);
+        timer = frame = 0;
+        caret = -1;
+        pending = null;
+        active = null;
+        canvas.hidden = true;
+        context.clearRect(0, 0, canvas.width, canvas.height);
+    };
+    const canReveal = () => input.isConnected && canvas.isConnected
+        && document.activeElement === input && !document.hidden
+        && input.type === "password" && !input.disabled && !input.readOnly;
+    const draw = (character, start, end) => {
+        canvas.hidden = true;
+        if (!canReveal() || input.selectionStart !== end || input.selectionEnd !== end
+            || input.value.slice(start, end) !== character) { hide(); return; }
+        const style = getComputedStyle(input);
+        // Non-horizontal/RTL layouts retain ordinary native masking.
+        if (style.direction !== "ltr" || style.writingMode !== "horizontal-tb") return;
+        const rect = input.getBoundingClientRect();
+        const host = canvas.parentElement;
+        if (!host || !input.offsetWidth || !input.offsetHeight) return;
+        const hostRect = host.getBoundingClientRect();
+        const sx = rect.width / input.offsetWidth, sy = rect.height / input.offsetHeight;
+        const number = name => parseFloat(style[name]) || 0;
+        const left = number("borderLeftWidth") + number("paddingLeft");
+        const right = number("borderLeftWidth") + input.clientWidth - number("paddingRight");
+        const height = input.clientHeight - number("paddingTop") - number("paddingBottom");
+        if (height <= 0 || right <= left) return;
+
+        // Measure native password bullet advances, not an assumed font/glyph.
+        // The disabled measuring input contains ONLY dummy characters, never a secret.
+        if (!probe) {
+            probe = document.createElement("input");
+            probe.type = "password";
+            probe.disabled = true;
+            probe.tabIndex = -1;
+            probe.setAttribute("aria-hidden", "true");
+            probe.style.cssText = "position:fixed!important;visibility:hidden!important;pointer-events:none!important;left:0!important;top:0!important;width:0!important;min-width:0!important;max-width:0!important;padding:0!important;border:0!important;box-sizing:content-box!important;";
+            host.appendChild(probe);
+        }
+        // Equal mask glyphs have a constant advance. Cache a long sample so
+        // scrollWidth rounding is negligible and typing needs no measuring reflows.
+        const fontKey = `${style.font}|${style.letterSpacing}`;
+        if (fontKey !== measuredFont) {
+            probe.style.font = style.font;
+            probe.style.letterSpacing = style.letterSpacing;
+            probe.value = "x".repeat(256);
+            bulletAdvance = probe.scrollWidth / 256;
+            probe.value = "";
+            measuredFont = fontKey;
+        }
+        const before = Array.from(input.value.slice(0, start)).length * bulletAdvance;
+        const after = Array.from(input.value.slice(0, end)).length * bulletAdvance;
+        const total = Array.from(input.value).length * bulletAdvance;
+        const available = right - left;
+        const align = style.textAlign === "right" || style.textAlign === "end"
+            ? Math.max(0, available - total)
+            : style.textAlign === "center" ? Math.max(0, (available - total) / 2) : 0;
+        const x = left + align + before - input.scrollLeft;
+        const cellWidth = after - before;
+        if (cellWidth <= 0 || x < left - 1 || x + cellWidth > right + 1) return;
+        let background = style.backgroundColor;
+        for (let ancestor = input.parentElement; ancestor && background === "rgba(0, 0, 0, 0)"; ancestor = ancestor.parentElement)
+            background = getComputedStyle(ancestor).backgroundColor;
+        if (background === "rgba(0, 0, 0, 0)") background = "#fff";
+        const ratio = window.devicePixelRatio || 1;
+        canvas.width = Math.ceil(cellWidth * ratio);
+        canvas.height = Math.ceil(height * ratio);
+        canvas.style.width = `${cellWidth}px`;
+        canvas.style.height = `${height}px`;
+        canvas.style.left = `${(rect.left - hostRect.left) / sx - host.clientLeft + x}px`;
+        canvas.style.top = `${(rect.top - hostRect.top) / sy - host.clientTop + number("borderTopWidth") + number("paddingTop")}px`;
+        context.scale(ratio, ratio);
+        context.fillStyle = background;
+        context.fillRect(0, 0, cellWidth, height);
+        context.font = style.font;
+        context.fillStyle = style.color;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(character, cellWidth / 2, height / 2, cellWidth);
+        canvas.hidden = false;
+    };
+    const scheduleDraw = () => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+            frame = 0;
+            if (active) draw(active.character, active.start, active.start + active.character.length);
+        });
+    };
+    listen(input, "beforeinput", event => {
+        hide();
+        if (canReveal() && event.isTrusted && !event.isComposing && event.inputType === "insertText"
+            && typeof event.data === "string" && Array.from(event.data).length === 1) {
+            pending = { character: event.data, start: input.selectionStart, end: input.selectionEnd, length: input.value.length };
+        }
+    });
+    listen(input, "input", event => {
+        const typed = pending;
+        hide();
+        if (!typed || !event.isTrusted || event.isComposing || event.inputType !== "insertText"
+            || event.data !== typed.character || typed.start == null || typed.end == null
+            || input.value.length !== typed.length - (typed.end - typed.start) + typed.character.length) return;
+        caret = typed.start + typed.character.length;
+        active = typed;
+        scheduleDraw();
+        timer = setTimeout(hide, duration);
+    });
+    for (const name of ["blur", "keydown", "pointerdown", "paste", "drop", "cut", "copy", "change", "compositionstart"])
+        listen(input, name, hide);
+    // Native inputs can scroll the caret after input/RAF. Reposition the one
+    // glyph without extending its original expiry, rather than cancelling it.
+    listen(input, "scroll", () => { if (active) scheduleDraw(); });
+    listen(document, "selectionchange", () => {
+        if (caret >= 0 && (input.selectionStart !== caret || input.selectionEnd !== caret)) hide();
+    });
+    listen(document, "visibilitychange", hide);
+    listen(window, "blur", hide);
+    listen(window, "resize", hide);
+    const observer = new MutationObserver(hide);
+    observer.observe(input, { attributes: true, attributeFilter: ["type", "value", "disabled", "readonly", "style", "class"] });
+    hide();
+    passwordRevealBindings.set(input, () => {
+        hide();
+        listeners.forEach(remove => remove());
+        observer.disconnect();
+        probe?.remove();
+    });
+}
 
 // ── Pre-attach typing shield ────────────────────────────────────────────────
 // enableClientBufferedTyping arrives one interop round-trip AFTER a
@@ -183,6 +340,16 @@ export async function applyTextContextCommand(element, command) {
 
 export function getTextValue(element) {
     return typeof element.value === "string" ? element.value : "";
+}
+
+// Characters the user typed before this input had focus (a cell editor's mount
+// takes round trips): appended to the browser-owned draft as if typed, so the
+// later select-on-focus never replaces them and the caret sits after them.
+export function appendTypedText(element, text) {
+    if (!element || !text) return;
+    element.value = (element.value ?? "") + text;
+    element.dataset.fxUserTyped = "1";
+    try { element.dispatchEvent(new Event("input", { bubbles: true })); } catch { }
 }
 
 function getTextSelection(element) {
@@ -364,19 +531,23 @@ export function suppressTypingKeyDispatch(el) {
 
 // Opt-in Blazor Server fast path. The browser owns ordinary text mutations and
 // sends one completed value to TextBoxControl on navigation, Enter, or blur.
-export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys) {
+export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys, keepNativeTab, hosted) {
     if (!el || !dotNetRef) return;
 
     let binding = clientBufferedTypingBindings.get(el);
     if (binding) {
         binding.dotNetRef = dotNetRef;
         binding.handlesNavigationKeys = !!handlesNavigationKeys;
+        binding.keepNativeTab = !!keepNativeTab;
+        binding.hosted = !!hosted;
         return;
     }
 
     binding = {
         dotNetRef,
         handlesNavigationKeys: !!handlesNavigationKeys,
+        keepNativeTab: !!keepNativeTab,
+        hosted: !!hosted,
         commitPending: false,
         composing: false,
         cleanup: null
@@ -384,7 +555,10 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
 
     const commit = (key, event) => {
         if (binding.commitPending) return;
-        binding.commitPending = true;
+        // A value-only flush ("Sync") never holds the commit that may follow it
+        // (a blur, an Enter): it lands the draft and steps aside.
+        const holds = key !== "Sync";
+        if (holds) binding.commitPending = true;
 
         try {
             const invocation = binding.dotNetRef.invokeMethodAsync(
@@ -399,11 +573,11 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
             Promise.resolve(invocation)
                 .catch(() => { })
                 .finally(() => {
-                    if (el.isConnected)
+                    if (holds && el.isConnected)
                         binding.commitPending = false;
                 });
         } catch {
-            binding.commitPending = false;
+            if (holds) binding.commitPending = false;
         }
     };
 
@@ -417,8 +591,26 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
 
         // Preserve application shortcuts such as Ctrl+S; only Ctrl/Cmd+Home/End
         // belongs to the grid's navigation contract.
-        if ((event.altKey || event.ctrlKey || event.metaKey) && !controlBoundaryKey)
+        if ((event.altKey || event.ctrlKey || event.metaKey) && !controlBoundaryKey) {
+            // A hosted cell editor: a page shortcut is about to bubble past the host,
+            // so land the draft first (no preventDefault / stopPropagation — the chord
+            // still reaches the page). Editing chords (copy, paste, undo, select-all)
+            // stay browser-only.
+            if (binding.hosted && !event.altKey && key.length === 1
+                && /[a-z]/i.test(key) && !"acvxzy".includes(key.toLowerCase()))
+                commit("Sync", event);
             return;
+        }
+
+        // A hosted cell editor keeps its caret keys (Up / Down = start / end of the
+        // text, Left / Right never leave it, Shift+arrows select): local, never a
+        // commit. PageUp / PageDown would scroll the page — swallowed.
+        if (binding.hosted && (key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft"
+            || key === "ArrowRight" || key === "PageUp" || key === "PageDown")) {
+            event.stopPropagation();
+            if (key === "PageUp" || key === "PageDown") event.preventDefault();
+            return;
+        }
 
         const hasCollapsedCaret = typeof el.selectionStart === "number"
             && typeof el.selectionEnd === "number"
@@ -427,6 +619,15 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys)
             && hasCollapsedCaret
             && ((key === "ArrowLeft" && el.selectionStart <= 0)
                 || (key === "ArrowRight" && el.selectionEnd >= (el.value?.length ?? 0)));
+
+        // Form fields (KeepNativeTab): Tab commits the draft and reaches the host
+        // once, but the default is NOT prevented so the browser moves focus itself.
+        // The blur that follows is deduplicated by commitPending.
+        if (key === "Tab" && binding.keepNativeTab) {
+            event.stopPropagation();
+            commit(key, event);
+            return;
+        }
 
         let commits = key === "Enter"
             || key === "NumpadEnter"

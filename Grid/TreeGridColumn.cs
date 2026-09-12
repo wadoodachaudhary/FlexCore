@@ -12,12 +12,14 @@ public interface ITreeGridControlOwner
 }
 
 /// <summary>
-/// Context handed to a <see cref="TreeGridColumn.CellEditTemplate"/> while its
-/// cell is in edit mode. The CONTROL owns the two-click contract, activation
-/// state, and focus return — the template only renders the editor and calls
-/// <see cref="CloseEditor"/> when done.
+/// The cell editor host handed to a <see cref="TreeGridColumn.CellEditTemplate"/>
+/// (see <see cref="ICellEditorHost"/> for the two-phase contract). The tree creates
+/// ONE context per phase of the current editable cell and keys the template on
+/// <see cref="Generation"/>, so the editor is a fresh instance in each phase. FlexKit
+/// editors receive it as a cascading <see cref="ICellEditorHost"/> and wire
+/// themselves; the members below stay for templates that wire explicitly.
 /// </summary>
-public sealed class TreeGridCellEditContext
+public sealed class TreeGridCellEditContext : ICellEditorHost
 {
     /// <summary>The row's data item.</summary>
     public required object Item { get; init; }
@@ -25,17 +27,51 @@ public sealed class TreeGridCellEditContext
     /// <summary>The column field being edited.</summary>
     public required string Field { get; init; }
 
-    /// <summary>True when the user clicked the cell AGAIN while the editor swap
-    /// was still in flight (the Blazor Server double-click race): a popup editor
-    /// should open immediately — pass this to e.g. DropDownListControl's
-    /// OpenOnRender. False on a plain first activation (two-click contract:
-    /// the editor mounts closed).</summary>
+    /// <summary>False in the cursor phase (the cell is current; a popup editor shows
+    /// closed and inert), true while the cell is being edited.</summary>
+    public bool IsEditing { get; init; }
+
+    /// <summary>Editing phase: the editor opens its list / calendar as soon as it
+    /// mounts — Enter on the cell, or a second click on the current cell.</summary>
     public bool OpenOnRender { get; init; }
 
-    /// <summary>Ends the edit: clears the active-cell state and returns keyboard
-    /// focus to the tree host (no-trap rule). Call from the editor's commit,
-    /// close, and Escape paths.</summary>
+    /// <summary>The character(s) that started this edit when the user typed on the
+    /// current cell (vsFlexGrid Editable=flexEDKbdMouse): a text editor starts its
+    /// entry with them, replacing the value; a list highlights the first match.
+    /// Null when Enter, F2 or a click started the edit.</summary>
+    public string? InitialText { get; init; }
+
+    /// <summary>Bumped on every phase change; the template is keyed on it.</summary>
+    public int Generation { get; init; }
+
+    internal object? NodeId { get; init; }
+
+    /// <summary>Ends the edit (the value was committed, the entry cancelled or the
+    /// popup closed): the cell returns to the cursor phase and the tree takes the
+    /// keyboard back unless focus has moved elsewhere on the page. Ignored once
+    /// this context is no longer the tree's current one.</summary>
     public required Action CloseEditor { get; init; }
+
+    /// <summary>The tree's own editing keys — the keys an editor does not consume:
+    /// Enter commits and stays on the row, Escape leaves the edit, Tab / Shift+Tab and
+    /// Up / Down end the edit and move, Right / Left end it and act on the outline
+    /// (see <see cref="ICellEditorHost.KeyDownAsync"/>).</summary>
+    public required Func<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs, Task> EditorKeyDown { get; init; }
+
+    /// <summary>The tree's guarded focus step (see <see cref="ICellEditorHost.FocusAsync"/>).</summary>
+    public required Func<Microsoft.AspNetCore.Components.ElementReference, bool, Task> FocusEditor { get; init; }
+
+    /// <summary>Keys that reach the tree root while the editing editor is mounting or
+    /// has not taken focus yet are handed here (see <see cref="AttachKeyRelay"/>).</summary>
+    internal Func<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs, Task>? Relay { get; private set; }
+
+    public void EndEdit() => CloseEditor();
+
+    public Task KeyDownAsync(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e) => EditorKeyDown(e);
+
+    public Task FocusAsync(Microsoft.AspNetCore.Components.ElementReference element, bool selectText = false) => FocusEditor(element, selectText);
+
+    public void AttachKeyRelay(Func<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs, Task>? relay) => Relay = relay;
 }
 
 /// <summary>

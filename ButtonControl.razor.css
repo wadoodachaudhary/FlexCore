@@ -18,7 +18,7 @@
 }
 
 .fx-button:active:not(:disabled) {
-    background: var(--fx-btn-active-bg, #d4d0c8);
+    background: var(--fx-btn-active-bg, #b6b6b6);
 }
 
 .fx-button:disabled {

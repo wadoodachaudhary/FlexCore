@@ -5,7 +5,12 @@
      style="@(string.IsNullOrEmpty(Height) ? "" : $"height:{Height};") @(string.IsNullOrEmpty(Width) ? "" : $"width:{Width};")"
      @ref="_treeGridElement"
      tabindex="@TabIndex"
+     data-fx-tab-stop
+     data-fx-cell-editing="@(IsEditingCell ? _cellEditGeneration : null)"
+     data-fx-grid-tab-navigation="@(IsPropertyGrid ? "wrap-until-edge" : null)"
+     data-fx-grid-tab-edge="@(IsPropertyGrid ? PropertyGridTabEdge : null)"
      @onkeydown="HandleKeyDown"
+     @onfocus="HandleRootFocusAsync"
      @onmousemove="HandleColumnResizeMove"
      @onmouseup="EndColumnResize"
      @onmouseleave="EndColumnResize">
@@ -322,7 +327,7 @@
                         {
                             @* No title tooltip — the floating chip read as a stuck
                                selection next to the hover tint (owner directive 2026-08-01). *@
-                            <td data-tree-field="@col.Field" data-tree-column="@colIdx" data-tree-frozen="@FrozenSide(col)" @onclick="() => HandleCellClickAsync(node, col, currentIdx)" @onclick:stopPropagation="@(EditSettingsRef is not null)" class="fx-treegrid-cell @(colIdx == ResolvedTreeColumnIndex ? "fx-treegrid-node-cell" : "") @(isSelected && IsCursorColumn(colIdx) ? "fx-treegrid-cell-cursor" : "")"
+                            <td data-tree-field="@col.Field" data-tree-column="@colIdx" data-tree-frozen="@FrozenSide(col)" @onclick="() => HandleCellClickAsync(node, col, currentIdx)" @onclick:stopPropagation="@(EditSettingsRef is not null)" class="fx-treegrid-cell @(colIdx == ResolvedTreeColumnIndex ? "fx-treegrid-node-cell" : "") @(isSelected && (IsCursorColumn(colIdx) || IsCellEditHost(node, col)) ? "fx-treegrid-cell-cursor" : "") @(isSelected && IsCellEditHost(node, col) ? "fx-treegrid-cell-with-editor" : "")"
                                 style="@GetCellStyle(col) @(IsCompact ? ";height:14px;padding:0 2px;line-height:14px;" : "")">
                                 @if (colIdx == ResolvedTreeColumnIndex)
                                 {
@@ -722,35 +727,40 @@
         </div>
     };
 
-    // In-cell edit rendering (CellEditTemplate columns). Active cell → the
-    // column's editor template (keyed to the node so switching rows remounts a
-    // fresh editor); otherwise → the display content wrapped in the activation
-    // click target. Propagation stops so the row-click handler never sees
-    // activation clicks (state + race logic live in the partial class).
+    // In-cell edit rendering (CellEditTemplate columns). Every editable cell
+    // renders its display inside the activation click target (tabindex -1: the
+    // tree is the one Tab stop). The CURRENT editable cell also renders the
+    // column's editor over it, keyed on the phase generation: in the cursor phase
+    // the editor is closed and inert (clicks fall through to the display button —
+    // the two-click contract), in the editing phase it owns the cell. The editor
+    // receives its host through the cascade; the state machine lives in the
+    // partial class.
     private RenderFragment RenderEditableCell(TreeNode<TValue> node, TreeGridColumn col) => __builder =>
     {
-        @if (IsCellEditActive(node, col))
+        var context = GetCellEditContext(node, col);
+        <button type="button"
+                tabindex="-1"
+                class="fx-treegrid-cell-edit-display @(col.CellEditDisplayCssClass ?? "")"
+                @onmousedown:stopPropagation="true"
+                @onclick:stopPropagation="true"
+                @ondblclick:stopPropagation="true"
+                @onclick="e => ActivateCellEditFromClickAsync(node, col, e)">
+            @if (col.Template != null)
+            {
+                @col.Template((object)DisplayRecord(node)!)
+            }
+            else
+            {
+                @GetCellDisplayValue(DisplayRecord(node), col)
+            }
+        </button>
+        @if (context is not null)
         {
-            <span class="fx-treegrid-cell-edit-host" @key="node">
-                @col.CellEditTemplate!(BuildCellEditContext(node, col))
+            <span class="fx-treegrid-cell-edit-host @(context.IsEditing ? "fx-treegrid-cell-edit-editing" : "fx-treegrid-cell-edit-cursor")" @key="context.Generation">
+                <CascadingValue TValue="ICellEditorHost" Value="context" IsFixed="true">
+                    @col.CellEditTemplate!(context)
+                </CascadingValue>
             </span>
-        }
-        else
-        {
-            <button type="button"
-                    class="fx-treegrid-cell-edit-display @(col.CellEditDisplayCssClass ?? "")"
-                    @onmousedown:stopPropagation="true"
-                    @onclick:stopPropagation="true"
-                    @onclick="() => ActivateCellEdit(node, col)">
-                @if (col.Template != null)
-                {
-                    @col.Template((object)DisplayRecord(node)!)
-                }
-                else
-                {
-                    @GetCellDisplayValue(DisplayRecord(node), col)
-                }
-            </button>
         }
     };
 }

@@ -15,7 +15,6 @@
     align-items: center;
     flex-wrap: wrap;                 /* never push actions/tools off-screen */
     gap: 4px 6px;
-    background: #d4d0c8;
     padding: 5px 8px;
     border: 2px solid;
     border-color: #ffffff #808080 #808080 #ffffff;
@@ -33,7 +32,7 @@
     height: 26px;
     padding: 0 7px;
     font-size: calc(12px * var(--fx-zoom, 1));
-    background: #d4d0c8;
+    background: #e6e6e6;
     border: 2px solid;
     border-color: #ffffff #808080 #808080 #ffffff;   /* raised 3D */
     color: #000;
@@ -42,8 +41,8 @@
     line-height: 1;
     white-space: nowrap;
 }
-.fx-draw-tool:hover, .fx-draw-btn:hover { background: #e0ddd5; }
-.fx-draw-tool.active { border-color: #808080 #ffffff #ffffff #808080; background: #c8c4bc; }
+.fx-draw-tool:hover, .fx-draw-btn:hover { background: #e0e0e0; }
+.fx-draw-tool.active { border-color: #808080 #ffffff #ffffff #808080; background: #c8c8c8; }
 .fx-draw-btn:disabled { color: #808080; cursor: default; }
 
 .fx-draw-color {
@@ -62,14 +61,14 @@
 .fx-draw-colorwrap { position: relative; }
 .fx-draw-colorbtn {
     display: inline-flex; align-items: center; gap: 3px; height: 26px; padding: 0 5px;
-    background: #d4d0c8; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff; cursor: pointer;
+    background: #e6e6e6; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff; cursor: pointer;
 }
 .fx-draw-colorswatch { width: 16px; height: 16px; border: 1px solid #808080; display: inline-block; }
 .fx-draw-caret { font-size: calc(9px * var(--fx-zoom, 1)); }
 .fx-draw-colorpop {
     position: absolute; top: 28px; left: 0; z-index: 30;
     display: grid; grid-template-columns: repeat(4, 22px); gap: 3px; padding: 5px;
-    background: #d4d0c8; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff;
+    background: #e6e6e6; border: 2px solid; border-color: #ffffff #808080 #808080 #ffffff;
     box-shadow: 0 4px 10px rgba(0,0,0,.3);
 }
 .fx-draw-backdrop { position: fixed; inset: 0; z-index: 29; background: transparent; }

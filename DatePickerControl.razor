@@ -24,16 +24,19 @@
                    @onblur="OnInputBlur"
                    @onkeydown="OnInputKeyDown"
                    @ondblclick="OnInputDoubleClick"
+                   tabindex="@(CellHost is null ? null : -1)"
                    placeholder="@ResolvedPlaceholder"
                    aria-label="@AriaLabel"
+                   aria-expanded="@(_isOpen ? "true" : "false")"
                    aria-invalid="@(_validationMessage != null ? "true" : null)"
                    disabled="@(!Enabled)" />
             @if (ShowTriggerButton)
             {
                 <button type="button"
                         class="fx-datepicker-trigger"
-                        tabindex="@(_skipCalendarButtonOnNextTab ? -1 : 0)"
-                        @onclick="ToggleDropdown"
+                        tabindex="@(CellHost is not null || _skipCalendarButtonOnNextTab ? -1 : 0)"
+                        @onmousedown:preventDefault="true"
+                        @onclick="OnTriggerClick"
                         @onfocus="HandleTriggerFocus"
                         @onblur="HandleTriggerBlur"
                         @onkeydown="HandleTriggerKeyDown"
@@ -56,23 +59,30 @@
         {
             @* The manual popover promotes this wrapper to the browser top layer.
                It remains in Blazor's DOM tree, unlike a body portal, so normal
-               render/disposal cleanup remains safe. *@
+               render/disposal cleanup remains safe.
+               Mouse presses anywhere in the calendar keep focus in the date
+               input (the keyboard never loses its place, and a blur while the
+               calendar is open can only mean focus went elsewhere — see
+               OnInputBlur). ShowTime's embedded time box must take focus, so
+               there only the buttons suppress it. *@
             <div @ref="_popupLayerElement"
                  @key="_dropdownOpenKey"
                  popover="manual"
                  class="fx-datepicker-popup-layer">
-                <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onclick="CloseDropdown"></button>
+                <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onmousedown:preventDefault="true" @onclick="CloseDropdown"></button>
 
+                <CascadingValue TValue="ICellEditorHost" Value="null">
                 <div @ref="_dropdownElement"
-                     class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")">
+                     class="fx-datepicker-dropdown @(_expanded && ShowCalendarSidebar ? "expanded" : "minimal")"
+                     @onmousedown:preventDefault="@(!ShowTime)">
                 <!-- Left Section: Main Calendar -->
                 <div class="fx-calendar-main">
-                    <button type="button" class="fx-nav-btn fx-nav-prev" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
-                    <button type="button" class="fx-nav-btn fx-nav-next" @onclick="NextMonth" title="Next Month" aria-label="Next month">►</button>
+                    <button type="button" class="fx-nav-btn fx-nav-prev" @onmousedown:preventDefault="true" @onclick="PrevMonth" title="Previous Month" aria-label="Previous month">◄</button>
+                    <button type="button" class="fx-nav-btn fx-nav-next" @onmousedown:preventDefault="true" @onclick="NextMonth" title="Next Month" aria-label="Next month">►</button>
 
                     @if (ShowCalendarSidebar)
                     {
-                        <button type="button" class="fx-expand-btn" @onclick="ToggleExpand" title="Toggle Sidebar">
+                        <button type="button" class="fx-expand-btn" @onmousedown:preventDefault="true" @onclick="ToggleExpand" title="Toggle Sidebar">
                             @(_expanded ? "◀" : "▶")
                         </button>
                     }
@@ -119,6 +129,7 @@
                                                     class="@cellClass"
                                                     disabled="@isDisabled"
                                                     tabindex="-1"
+                                                    @onmousedown:preventDefault="true"
                                                     @onclick="() => SelectDay(date)">
                                                 <span class="fx-day-number">@date.Day</span>
                                             </button>
@@ -129,7 +140,7 @@
                         </div>
                     </div>
 
-                    <button type="button" class="fx-today-link" @onclick="() => SelectShortcut(DateTime.Today)">
+                    <button type="button" class="fx-today-link" @onmousedown:preventDefault="true" @onclick="() => SelectShortcut(DateTime.Today)">
                         Today: @TodayText
                     </button>
 
@@ -150,15 +161,15 @@
                         <div class="fx-sidebar-section">
                             <span class="fx-section-title">Shortcuts</span>
                             <div class="fx-shortcuts-grid">
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today)">Today</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(-1))">Yesterday</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(1))">Tomorrow</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetStartOfWeek())">Start of Week</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetEndOfWeek())">End of Week</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(7))">Next Week</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1))">Start of Month</button>
-                                <button type="button" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1).AddDays(-1))">End of Month</button>
-                                <button type="button" class="fx-shortcut-btn fx-clear-btn" @onclick="ClearValue">Clear Date</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today)">Today</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(-1))">Yesterday</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(1))">Tomorrow</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetStartOfWeek())">Start of Week</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(GetEndOfWeek())">End of Week</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(DateTime.Today.AddDays(7))">Next Week</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1))">Start of Month</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn" @onclick="() => SelectShortcut(new DateTime(DateTime.Today.Year, DateTime.Today.Month, 1).AddMonths(1).AddDays(-1))">End of Month</button>
+                                <button type="button" @onmousedown:preventDefault="true" class="fx-shortcut-btn fx-clear-btn" @onclick="ClearValue">Clear Date</button>
                             </div>
                         </div>
 
@@ -172,6 +183,7 @@
                                     var isCurrent = _viewMonth == monthIdx;
                                     <button type="button"
                                             class="fx-month-btn @(isCurrent ? "active" : "")"
+                                            @onmousedown:preventDefault="true"
                                             @onclick="() => SelectMonthShortcut(monthIdx)">
                                         @CultureInfo.CurrentCulture.DateTimeFormat.GetAbbreviatedMonthName(monthIdx)
                                     </button>
@@ -183,8 +195,8 @@
                         <div class="fx-sidebar-section">
                             <span class="fx-section-title">Years (@_decadeStart - @(_decadeStart + 11))</span>
                             <div class="fx-decade-header">
-                                <button type="button" class="fx-decade-nav" @onclick="PrevDecade">◀</button>
-                                <button type="button" class="fx-decade-nav" @onclick="NextDecade">▶</button>
+                                <button type="button" class="fx-decade-nav" @onmousedown:preventDefault="true" @onclick="PrevDecade">◀</button>
+                                <button type="button" class="fx-decade-nav" @onmousedown:preventDefault="true" @onclick="NextDecade">▶</button>
                             </div>
                             <div class="fx-years-grid">
                                 @for (int y = _decadeStart; y < _decadeStart + 12; y++)
@@ -193,6 +205,7 @@
                                     var isCurrent = _viewYear == yearVal;
                                     <button type="button"
                                             class="fx-year-btn @(isCurrent ? "active" : "")"
+                                            @onmousedown:preventDefault="true"
                                             @onclick="() => SelectYearShortcut(yearVal)">
                                         @yearVal
                                     </button>
@@ -202,6 +215,7 @@
                     </div>
                 }
                 </div>
+                </CascadingValue>
             </div>
         }
     </div>
@@ -224,6 +238,42 @@
     [Parameter] public CultureInfo? Culture { get; set; }
     [Parameter] public bool ShowTriggerButton { get; set; } = true;
     [Parameter] public bool OpenCalendarOnDoubleClick { get; set; }
+
+    /// <summary>Focus the date input when the control first renders (an in-cell
+    /// editor that has just mounted must take the keyboard). Applied once —
+    /// later re-renders never pull focus back.</summary>
+    [Parameter] public bool AutoFocus { get; set; }
+
+    /// <summary>Open the calendar when this becomes true, once (latched) — the
+    /// in-cell-editor contract shared with DropDownListControl: Enter on a date
+    /// cell drops the calendar, and a fast second click that raced the editor
+    /// swap still opens it. Checked every render, like the dropdown.</summary>
+    [Parameter] public bool OpenOnRender { get; set; }
+    private bool _autoFocusApplied;
+    private bool _openOnRenderLatched;
+
+    /// <summary>Text the input starts with instead of the formatted
+    /// <see cref="Value"/>, applied once when the control mounts: an in-cell
+    /// editor started by typing a character begins its entry with that
+    /// character (vsFlexGrid Editable). It is a draft — Enter, blur or a
+    /// navigation key parses it; Escape discards it.</summary>
+    [Parameter] public string? InitialText { get; set; }
+    private bool _initialTextApplied;
+
+    /// <summary>Set when this control is the editor of a hosted cell (a TreeGrid
+    /// cell-edit template): the host decides focus, opening and the Tab stop, takes
+    /// the keys the picker does not consume, and is told when the edit ends — the
+    /// page wires nothing. Cursor phase: closed, no focus, no Tab stop. Editing
+    /// phase: focus on mount; the calendar opens when the host asks AND the value
+    /// is blank (typed text is the entry for a filled date); typing that started
+    /// the edit seeds the text.</summary>
+    [CascadingParameter] private ICellEditorHost? CellHost { get; set; }
+
+    private bool EffectiveAutoFocus => CellHost is null ? AutoFocus : CellHost.IsEditing;
+    private bool EffectiveOpenOnRender => CellHost is null
+        ? OpenOnRender
+        : CellHost.IsEditing && (OpenOnRender || CellHost.OpenOnRender) && string.IsNullOrWhiteSpace(_inputText);
+    private string? EffectiveInitialText => InitialText ?? (CellHost is { IsEditing: true } ? CellHost.InitialText : null);
 
     /// <summary>
     /// The DOM owns the text while typing: the input renders its initial
@@ -309,19 +359,155 @@
         _valueInitialized = true;
         _lastParameterValue = Value;
         _decadeStart = (_viewYear / 12) * 12;
+
+        if (!_initialTextApplied)
+        {
+            _initialTextApplied = true;
+            if (EffectiveInitialText is { } initial)
+                _inputText = initial;
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        // Registered inside the mount render, before any key can arrive: keys the
+        // user presses before this instance has focus reach it through the host.
+        if (CellHost is { IsEditing: true })
+            CellHost.AttachKeyRelay(RelayHostKeyAsync);
+    }
+
+    private async Task RelayHostKeyAsync(KeyboardEventArgs e)
+    {
+        if (!e.AltKey && !e.CtrlKey && !e.MetaKey && e.Key is { Length: 1 } && !char.IsControl(e.Key[0]))
+        {
+            // The input is not focused yet (the text would otherwise have gone
+            // straight into it), so a re-render carrying the new text is safe.
+            var wasOpen = _isOpen;
+            if (wasOpen)
+            {
+                // Typing switches to text entry (the OnInputTextChange rule): with the
+                // calendar open, Enter / Space would pick the highlighted DAY over the
+                // typed text. The open path had claimed the autofocus for its own
+                // focus step, which is gated on the calendar being open — re-arm it.
+                CloseDropdown();
+                _focusInputAfterOpen = false;
+                _autoFocusApplied = false;
+            }
+            // Once the input exists in the browser the character is appended THERE
+            // (its input event carries it back): a key the user types into the
+            // freshly focused input in the same instant is then kept in DOM order
+            // instead of being overwritten by a render carrying the server's text.
+            // Before the first render is acknowledged no focus call is in flight, so
+            // the rendered text is safe — and it keeps the typed start's open-on-render
+            // rule (non-blank text never summons the calendar).
+            if (_rendered && await AppendTypedTextAsync(e.Key))
+            {
+                if (wasOpen) StateHasChanged();
+                return;
+            }
+            _inputText += e.Key;
+            _validationMessage = null;
+            InputValueChanged?.Invoke(_inputText);
+            StateHasChanged();
+            return;
+        }
+        await OnInputKeyDown(e);
+    }
+
+    /// <summary>The picker's own focus step: under a cell host it goes through the host,
+    /// which focuses only while it still owns the keyboard.</summary>
+    private async Task FocusInputForHostAsync()
+    {
+        try
+        {
+            if (CellHost is not null)
+                await CellHost.FocusAsync(_inputElement);
+            else
+                await _inputElement.FocusAsync(preventScroll: true);
+        }
+        catch { }
+    }
+
+    private static string TextJsModulePath =>
+        FxJsAsset.Versioned($"./_content/{typeof(DatePickerControl).Assembly.GetName().Name}/textbox-control.js");
+    private IJSObjectReference? _textJsModule;
+    private bool _rendered;
+    // Text appended in the browser whose input event has not come back yet.
+    private bool _domAppendPending;
+
+    /// <summary>Appends a relayed character to the browser's input as if typed (the
+    /// TextBox's appendTypedText); false when the browser cannot be reached.</summary>
+    private async Task<bool> AppendTypedTextAsync(string text)
+    {
+        try
+        {
+            _textJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", TextJsModulePath);
+            await _textJsModule.InvokeVoidAsync("appendTypedText", _inputElement, text);
+            _domAppendPending = true;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>A commit or row key arriving while an appended character's input event
+    /// is still in flight would act on a draft missing that character: read the input
+    /// back first (the read is ordered after the append on the same connection).</summary>
+    private async Task SyncInputTextFromDomAsync()
+    {
+        _domAppendPending = false;
+        if (_textJsModule is null) return;
+        try
+        {
+            var text = await _textJsModule.InvokeAsync<string?>("getTextValue", _inputElement);
+            if (text is not null && text != _inputText)
+            {
+                _inputText = text;
+                _validationMessage = null;
+                InputValueChanged?.Invoke(_inputText);
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>Keys this control does not consume: the explicit handler first, then
+    /// the cell host (both, never either/or).</summary>
+    private async Task ForwardKeyAsync(KeyboardEventArgs e)
+    {
+        if (OnKeyDown.HasDelegate)
+            await OnKeyDown.InvokeAsync(e);
+        if (CellHost is not null)
+            await CellHost.KeyDownAsync(e);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
+        {
+            _rendered = true;
             ElementReferenceCaptured?.Invoke(_inputElement);
+        }
+
+        if (EffectiveOpenOnRender && !_openOnRenderLatched && Enabled)
+        {
+            _openOnRenderLatched = true;
+            _autoFocusApplied = true;   // opening focuses the input itself
+            OpenDropdown();
+            StateHasChanged();
+            return;
+        }
+
+        if (EffectiveAutoFocus && !_autoFocusApplied && Enabled)
+        {
+            _autoFocusApplied = true;
+            await FocusInputForHostAsync();
+        }
 
         if (_isOpen && Enabled)
         {
             if (_focusInputAfterOpen)
             {
                 _focusInputAfterOpen = false;
-                try { await _inputElement.FocusAsync(preventScroll: true); } catch { }
+                await FocusInputForHostAsync();
             }
             await PositionDropdownAsync();
         }
@@ -364,6 +550,26 @@
         }
     }
 
+    /// <summary>Mouse on the 📅 trigger. Under a cell host the press never moves
+    /// focus (the trigger is no Tab stop and its mousedown is suppressed), so no blur
+    /// commits a typed draft: commit it here before the calendar seeds its highlight
+    /// from <see cref="Value"/> — otherwise it opens on the stale date and Enter /
+    /// Space picks that over the typed text. An invalid draft keeps its message and
+    /// opens nothing. Without a host the click only toggles, as before: a grid batch
+    /// editor tracks its draft itself, and parsing here would raise ValueChanged into
+    /// its commit and unmount it before the calendar opened.</summary>
+    private async Task OnTriggerClick()
+    {
+        if (!Enabled) return;
+        if (CellHost is not null && !_isOpen && _inputText != (Value.HasValue ? FormatDate(Value.Value) : ""))
+        {
+            await ParseInputText(true);
+            if (_validationMessage != null)
+                return;
+        }
+        ToggleDropdown();
+    }
+
     private void OpenDropdown()
     {
         _skipCalendarButtonOnNextTab = false;
@@ -396,6 +602,11 @@
     private async Task OnInputTextChange(ChangeEventArgs e)
     {
         _skipCalendarButtonOnNextTab = false;
+        _domAppendPending = false;
+        // Typing switches to text entry: with the calendar still open, Enter and
+        // Space would pick the highlighted DAY instead of the typed date.
+        if (_isOpen)
+            CloseDropdown();
         _inputText = e.Value?.ToString() ?? "";
         _validationMessage = null;
         InputValueChanged?.Invoke(_inputText);
@@ -404,15 +615,37 @@
 
     private async Task OnInputBlur()
     {
+        // Focus left the control with the calendar open (a page-level Tab, a
+        // programmatic move — presses inside the calendar never blur the input):
+        // close it and commit the typed text, rather than leave an orphaned
+        // popup behind. ShowTime's time box takes focus legitimately.
+        if (_isOpen && !ShowTime)
+        {
+            CloseDropdown();
+            await ParseInputText(true);
+            CellHost?.EndEdit();
+            return;
+        }
+
         if (_isOpen || _tabbingToTrigger || _skipCalendarButtonOnNextTab)
             return;
 
         await ParseInputText(true);
+        // Focus left a hosted editor (a page-level Tab, a click elsewhere): the
+        // edit is over. The host only takes the keyboard back when focus was lost.
+        CellHost?.EndEdit();
     }
 
     private async Task OnInputKeyDown(KeyboardEventArgs e)
     {
-        if (Enabled
+        if (_domAppendPending && e.Key is "Enter" or "NumpadEnter" or "Tab")
+            await SyncInputTextFromDomAsync();
+
+        // Tab is about to land on this control's own 📅 button (the next Tab stop):
+        // the blur that follows must not commit yet. Under a cell host the button is
+        // no Tab stop (tabindex -1) — Tab leaves the tree and the blur commits.
+        if (CellHost is null
+            && Enabled
             && ShowTriggerButton
             && !_isOpen
             && !_skipCalendarButtonOnNextTab
@@ -477,16 +710,57 @@
 
         if (e.Key is "Enter" or "NumpadEnter")
         {
+            // Owner spec (2026-08-16): typed text commits on Enter; Enter on a
+            // BLANK field summons the calendar instead, when the calendar is a
+            // visible option. The 2026-09-07 FlexCore sync dropped this, so Enter
+            // on an empty date never opened anything. The key is consumed — a
+            // host must not also treat it as "done".
+            if (ShowTriggerButton && Enabled && string.IsNullOrWhiteSpace(_inputText))
+            {
+                OpenDropdown();
+                return;
+            }
             await ParseInputText(true);
             _skipCalendarButtonOnNextTab = _validationMessage == null;
+            // Invalid text stays for correction (VB6 ValidateEdit Cancel): a host
+            // that treats Enter as "done" must not close over it and drop it.
+            if (_validationMessage != null)
+                return;
         }
         else if (e.Key == "Escape")
         {
             CloseDropdown();
+            // Under a cell host Escape cancels the edit (vsFlexGrid): the draft reverts
+            // to the value, so a later blur re-parses the same value and commits
+            // nothing. A form field keeps its typed text, as before.
+            if (CellHost is not null)
+            {
+                _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
+                _validationMessage = null;
+                InputValueChanged?.Invoke(_inputText);
+                if (ValidationChanged.HasDelegate) await ValidationChanged.InvokeAsync(null);
+            }
+        }
+        else if (CellHost is not null && !e.AltKey && !e.CtrlKey && !e.MetaKey
+                 && e.Key is "ArrowUp" or "Up" or "ArrowDown" or "Down" or "ArrowLeft" or "Left" or "ArrowRight" or "Right")
+        {
+            // A hosted date editor keeps its caret keys (owner 2026-09-11): Left / Right
+            // never leave the text, Up / Down are its start / end. Only Tab, Enter and
+            // Escape reach the host. (A grid editor — no host, OnKeyDown wired — is
+            // untouched: its own path commits and moves.)
+            return;
+        }
+        else if (e.Key == "Tab" && CellHost is not null && !e.AltKey && !e.CtrlKey && !e.MetaKey)
+        {
+            // Tab moves rows (vsFlexGrid TabBehavior=1) and the host unmounts this
+            // control: commit the draft first. Invalid text keeps the editor with its
+            // message showing (VB6 ValidateEdit Cancel).
+            await ParseInputText(true);
+            if (_validationMessage != null)
+                return;
         }
 
-        if (OnKeyDown.HasDelegate)
-            await OnKeyDown.InvokeAsync(e);
+        await ForwardKeyAsync(e);
     }
 
     private void HandleTriggerFocus()
@@ -768,12 +1042,14 @@
 
         await UpdateValue(date);
         CloseDropdown();
+        CellHost?.EndEdit();
     }
 
     private async Task ClearValue()
     {
         await UpdateValue(null);
         CloseDropdown();
+        CellHost?.EndEdit();
     }
 
     // --- Time Picker Handlers ---
@@ -851,6 +1127,7 @@
             await UpdateValue(null);
         }
         CloseDropdown();
+        CellHost?.EndEdit();
     }
 
     private void SelectMonthShortcut(int month)
@@ -888,6 +1165,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        CellHost?.AttachKeyRelay(null);
         if (_controlJsModule != null)
         {
             try
@@ -898,6 +1176,10 @@
             {
                 // Best-effort cleanup.
             }
+        }
+        if (_textJsModule != null)
+        {
+            try { await _textJsModule.DisposeAsync(); } catch { }
         }
     }
 }

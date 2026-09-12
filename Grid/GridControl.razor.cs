@@ -1311,6 +1311,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int _batchEditRowIndex = -1;
     private string? _batchEditField;
     private string? _batchEditValue;
+    // Enter on a required-list validation miss flashes the refused text red
+    // for ~2s (owner spec 2026-08-30, VB6 MsgBox-then-blank analog) before the
+    // edit is discarded; this flag styles the editor input during the flash.
+    private bool _batchEditInvalidFlash;
     // True only after the user actually mutated the input value via oninput.
     // Gates the multi-row fan-out so that auto-fired commits (Blazor blur
     // cascade, focus round-trips) at click time can't blast the cell's
@@ -5421,7 +5425,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         // Commit any in-progress batch cell edit when clicking away
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
         ClearTypeSearchBuffer();
         _typeSearchHeaderField = null; // a row click retargets type-search to the clicked cell
         ClearKeyboardNavigationSource();
@@ -5575,7 +5580,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 // Capture the browser-owned text before this path commits and
                 // removes the current editor.
                 await SynchronizeClientBufferedBatchEditorValueAsync();
-                await CommitBatchEdit();
+                if (!await CommitBatchEdit())
+                    return;
                 StateHasChanged();   // commit teardown must not wait for the click render
             }
 
@@ -5646,6 +5652,31 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     ClearRetargetedBatchEditClickSuppression();
                 }
             }
+            else if (isPlainMouseDown && CanStartMouseDownDateCalendarEdit(mouseDownColumn, item))
+            {
+                // A date cell whose calendar is a visible option shows its editor
+                // (input + calendar button) on the FIRST click, like the closed
+                // dropdown above — the affordance must be visible on selection,
+                // not only after a double-click.
+                var wasBatchEditingCell = !string.IsNullOrWhiteSpace(mouseDownColumn?.Field)
+                    && IsBatchEditing(item, mouseDownColumn.Field);
+                if (!wasBatchEditingCell)
+                    ArmRetargetedBatchEditClickSuppression(item, mouseDownColumn!.Field);
+                var started = await TryStartBatchEdit(item, resolvedRowIndex, mouseDownColumn!, args.ClientX, openDropdownOnRender: false, selectAllOnStart: true);
+                if (started && !wasBatchEditingCell)
+                {
+                    // Focus the HOST until the editor's input takes over: keys
+                    // typed during the mount round-trip land on the host, where
+                    // the pending-editor bridge routes them into the editor's
+                    // DOM value. Without this they die on <body> and the first
+                    // typed character is eaten.
+                    await FocusGridHostAsync();
+                }
+                else if (!started && !wasBatchEditingCell)
+                {
+                    ClearRetargetedBatchEditClickSuppression();
+                }
+            }
         }
 
         // Data cells stop mousedown propagation so popup/template buttons do
@@ -5682,6 +5713,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && col.Type != ColumnType.CheckBox
             && HasEditOptions(col, item)
             && col.OpenEditOptionsOnEdit;
+    }
+
+    private bool CanStartMouseDownDateCalendarEdit(GridColumn? col, TValue item)
+    {
+        return col != null
+            && EditSettingsRef?.AllowEditing == true
+            && EditSettingsRef.Mode == EditMode.Batch
+            && col.AllowEditing
+            && !col.IsPrimaryKey
+            && !string.IsNullOrEmpty(col.Field)
+            && col.Type == ColumnType.Date
+            && col.OpenDateCalendarOnDoubleClick
+            && !HasEditOptions(col, item);
     }
 
     private void ArmRetargetedBatchEditClickSuppression(TValue item, string? field)
@@ -5931,7 +5975,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var col = _cellContextMenuColumn;
         if (!IsCellEditableForItem(item, col))
             return false;
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return false;
 
         var candidateValue = Convert.ToString(newValue, CultureInfo.CurrentCulture) ?? string.Empty;
         if (!TryResolveRequiredEditValue(col, item, candidateValue, out var ctxResolved, out var ctxMessage))
@@ -6988,7 +7033,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleRowSelectorHandleClick(TValue item, int rowIndex, MouseEventArgs args)
     {
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
         ClearKeyboardNavigationSource();
         if (!args.ShiftKey)
             ClearKeyboardRangeSelectionAnchor();
@@ -7015,7 +7061,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!CanStartRowReorder(item))
             return;
 
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
         ClearTypeSearchBuffer();
         ClearCellDragState();
         _selectedCells.Clear();
@@ -7290,7 +7337,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !string.IsNullOrEmpty(clickedCol.Field)
             && IsBatchEditing(item, clickedCol.Field);
         if (!clickingActiveEditCell && !clickWillStartBatchEdit)
-            await CommitBatchEdit();
+        {
+            if (!await CommitBatchEdit())
+                return;
+        }
         if (SelectionSettingsRef?.Mode != SelectionMode.Cell)
         {
             // Row-selection grids use _activeCell for the dotted edit cue.
@@ -7599,7 +7649,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task ActivateCheckboxCellAsync(TValue item, int rowIndex, int cellIndex, bool focusGridHost)
     {
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
 
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         SetActiveCell(resolvedRowIndex, cellIndex);
@@ -8034,7 +8085,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // open, defer trailing-row maintenance until the new target is anchored;
         // otherwise an inline-new-row promotion can insert the blank template
         // row under the user's pointer before the click finishes.
-        await CommitBatchEdit(deferTrailingNewRowEnsure: true);
+        if (!await CommitBatchEdit(deferTrailingNewRowEnsure: true))
+            return false;
 
         if (col.Type == ColumnType.CheckBox)
         {
@@ -8124,7 +8176,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
 
         var newValue = e?.Value is bool changedValue
             ? changedValue
@@ -8756,8 +8809,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return true;
 
         UpdateBatchEditValue(_batchEditItem, _batchEditField, options[matchIndex].Value);
-        await CommitBatchEdit();
-        await FocusGridHostAsync();
+        if (await CommitBatchEdit())
+            await FocusGridHostAsync();
         await InvokeAsync(StateHasChanged);
         return true;
     }
@@ -8817,8 +8870,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 3, "ValueChanged", EventCallback.Factory.Create<string>(this, async value =>
             {
                 UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
-                await CommitBatchEdit(editItem, editField);
-                await FocusGridHostAsync();
+                if (await CommitBatchEdit(editItem, editField))
+                    await FocusGridHostAsync();
             }));
             // +2px so the closed control covers the cell's right grid-line and
             // the arrow sits flush with the cell border (no ~2px gap). The
@@ -8831,8 +8884,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 7, "OpenOnArrowClickOnly", true);
             builder.AddAttribute(sequence + 8, "Closed", EventCallback.Factory.Create(this, async () =>
             {
-                await CommitBatchEdit(editItem, editField);
-                await FocusGridHostAsync();
+                if (await CommitBatchEdit(editItem, editField))
+                    await FocusGridHostAsync();
             }));
             builder.AddAttribute(sequence + 9, "OnKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, e => HandleBatchEditKeyDown(editItem, editField, e)));
             builder.AddAttribute(sequence + 10, "TextFieldName", nameof(GridEditOption.Text));
@@ -8845,7 +8898,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // Popup sizes to the option text, not the cell: a wide column no longer
             // drags a wide panel with it, and a narrow one no longer truncates choices.
             builder.AddAttribute(sequence + 17, "PanelFitContentWidth", true);
+            // A CLOSED option-list editor is only the focused-cell cue: it must
+            // retain the grid's browse-mode Up/Down navigation just like VB6.
+            // Once its list is open, DropDownListControl keeps the arrows itself.
+            builder.AddAttribute(sequence + 18, "DelegateVerticalArrows", true);
             builder.AddAttribute(sequence + 13, "Editable", col.AllowCustomEditOptionValue);
+            // A custom-value combo is a free-text input: without the column cap it
+            // accepts an unbounded paste and the save dies on the DB length.
+            if (col.MaxLength is > 0)
+                builder.AddAttribute(sequence + 16, "MaxLength", col.MaxLength.Value);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
             builder.AddComponentReferenceCapture(sequence + 15, component =>
                 _batchDropdownEditorRef = component as DropDownListControl<string, GridEditOption>);
@@ -8865,8 +8926,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 2, "ValueChanged", EventCallback.Factory.Create<DateTime?>(this, async value =>
             {
                 UpdateBatchEditValue(editItem, editField, FormatBatchEditDateValue(value));
-                await CommitBatchEdit(editItem, editField);
-                await FocusGridHostAsync();
+                if (await CommitBatchEdit(editItem, editField))
+                    await FocusGridHostAsync();
             }));
             builder.AddAttribute(sequence + 3, "Format", string.IsNullOrWhiteSpace(col.Format) ? "MM/dd/yyyy" : col.Format);
             builder.AddAttribute(sequence + 4, "CssClass", "fx-batch-datepicker");
@@ -8899,7 +8960,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.SetKey(_batchEditGeneration);
             builder.OpenComponent<TextBoxControl>(sequence);
             builder.AddAttribute(sequence + 1, "InputType", inputType);
-            builder.AddAttribute(sequence + 2, "CssClass", "fx-batch-input");
+            builder.AddAttribute(sequence + 2, "CssClass",
+                _batchEditInvalidFlash ? "fx-batch-input fx-batch-input-invalid" : "fx-batch-input");
             builder.AddAttribute(sequence + 3, "Value", _batchEditValue);
             // Uncontrolled: the DOM owns the text while typing so parent
             // re-renders cannot revert characters or reset the caret. The
@@ -9002,9 +9064,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    private async Task CommitBatchEdit(bool deferTrailingNewRowEnsure = false)
+    private async Task<bool> CommitBatchEdit(bool deferTrailingNewRowEnsure = false)
     {
-        if (_batchEditItem == null || string.IsNullOrEmpty(_batchEditField)) return;
+        if (_batchEditItem == null || string.IsNullOrEmpty(_batchEditField)) return true;
 
         var primary = _batchEditItem;
         var field = _batchEditField;
@@ -9062,9 +9124,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             else
                 await ApplyPendingBatchEditFocusAsync();
 
-            // FlexCore's CommitBatchEdit returns Task (FlexKit's returns Task<bool>),
-            // so the rejection stops the commit here rather than reporting it upward.
-            return;
+            return false;
         }
 
         if (_batchEditDirty)
@@ -9135,7 +9195,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 if (!TryValidateBatchProperty(target, field, newValue, out var batchValidationMessage))
                 {
                     await RejectBatchValidationAsync(primary, field, batchValidationMessage);
-                    return;
+                    return false;
                 }
             }
         }
@@ -9212,6 +9272,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await EnsureTrailingNewRowAfterBatchCommitAsync(deferTrailingNewRowEnsure);
         else if (!deferTrailingNewRowEnsure)
             await FlushDeferredTrailingNewRowEnsureAsync();
+
+        return true;
     }
 
     private void RestoreMultiSelectionAfterBatchCommit(
@@ -9286,11 +9348,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && !IsActiveBatchEditSource(item, col?.Field);
     }
 
-    private Task CommitBatchEdit(TValue item, string? field)
+    private Task<bool> CommitBatchEdit(TValue item, string? field)
     {
         return IsActiveBatchEditSource(item, field)
             ? CommitBatchEdit()
-            : Task.CompletedTask;
+            : Task.FromResult(true);
     }
 
     private static DateTime? ParseBatchEditDateValue(string? value)
@@ -9347,6 +9409,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void CaptureBatchEditInputRef(ElementReference er)
     {
         _batchEditInputRef = er;
+        // Relay keys can be processed BEFORE this capture (the push no-ops with
+        // no ref), and the date editor's mount snapshot only renders parseable
+        // values — flush the buffered text into the fresh input so a character
+        // typed during the mount round-trip is never lost.
+        if (_batchEditDirty)
+            _ = InvokeAsync(PushBatchEditorDomValueAsync);
         if (_pendingBatchEditFocus && !_batchEditFocusInFlight)
             _ = InvokeAsync(ApplyPendingBatchEditFocusAsync);
     }
@@ -9518,6 +9586,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (_batchEditItem != null
             && !string.IsNullOrWhiteSpace(_batchEditField)
+            && BatchEditorOwnsHorizontalArrowKeys(sourceItem, sourceField)
             && IsNativeEditorCaretNavigationKey(e))
         {
             var shouldLeaveEditor = await ShouldNavigateOutOfBatchEditorOnHorizontalArrowAsync(e);
@@ -9543,7 +9612,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (hasLiveEdit)
             {
-                await CommitBatchEdit();
+                if (!await CommitBatchEdit())
+                    return;
             }
             else if (!TryResolveActiveCellNavigationSource(ref item, ref rowIndex, ref colIndex)
                 && !TryResolveLastCommittedNavigationSource(ref item, ref rowIndex, ref colIndex))
@@ -9614,7 +9684,38 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var item = _batchEditItem;
             var rowIndex = _batchEditRowIndex;
             var colIndex = ResolveVisibleColumnIndex(_batchEditField);
-            await CommitBatchEdit();
+            if (!await CommitBatchEdit())
+            {
+                // VB6 ENTER on an entry that fails the required-list check
+                // (MMain.ValidateField miss → MsgBox → Cancel): the typed text
+                // is DISCARDED and control returns to the grid with the cursor
+                // on the cell — the entry never sticks and the user is never
+                // trapped in the editor. The pill is the web's MsgBox; per the
+                // owner spec the refused text first FLASHES red for ~2s so the
+                // user sees what was rejected, then it is discarded.
+                if (_validationStatusMessage != null && _batchEditItem != null)
+                {
+                    var pillMessage = _validationStatusMessage;
+                    var flashItem = _batchEditItem;
+                    var flashField = _batchEditField;
+                    _batchEditInvalidFlash = true;
+                    await InvokeAsync(StateHasChanged);
+                    await Task.Delay(2000);
+                    _batchEditInvalidFlash = false;
+                    // The user may have Escaped or re-targeted during the
+                    // flash — only discard the edit that was flashed.
+                    if (flashItem == null || string.IsNullOrEmpty(flashField)
+                        || !IsBatchEditing(flashItem, flashField))
+                    {
+                        await InvokeAsync(StateHasChanged);
+                        return;
+                    }
+                    await CancelActiveBatchEditAsync();
+                    _validationStatusMessage = pillMessage;
+                    await InvokeAsync(StateHasChanged);
+                }
+                return;
+            }
             if (item != null && colIndex >= 0)
             {
                 if (EnterAdvancesToNextCell && !e.ShiftKey)
@@ -9640,27 +9741,54 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         else if (e.Key == "Escape")
         {
-            // Cancel edit without saving
-            _batchEditItem = default;
-            _batchEditRowIndex = -1;
-            _batchEditField = null;
-            _batchEditValue = null;
-            _batchEditReplaceOnFirstInput = false;
-            _batchDropdownOpenOnRender = false;
-            _batchDropdownEditorRef = null;
-            ClearBatchDropdownTypeSelectBuffer();
-            _pendingBatchEditFocus = false;
-            _pendingBatchEditSelectAll = false;
-            _pendingBatchEditClientX = null;
-            _batchEditHostKeyHandoffOpen = false;
-            _pendingBatchEditScrollIntoView = false;
-            // The render tears down the focused input — without an explicit
-            // refocus the browser drops focus to BODY and every following
-            // arrow key scrolls the page instead of navigating (the commit
-            // path above already refocuses).
-            await FocusGridHostAsync();
-            await InvokeAsync(StateHasChanged);
+            await CancelActiveBatchEditAsync();
         }
+    }
+
+    /// <summary>Cancel the open batch edit without saving and put the cursor back
+    /// on the canceled cell (VB6: Escape leaves .Row/.Col on the cell). Shared by
+    /// the editor's own Escape branch and the grid-host Escape fallback — the
+    /// latter is what frees an editor whose commit keeps failing list validation
+    /// while DOM focus sits on the host instead of the input.</summary>
+    private async Task CancelActiveBatchEditAsync()
+    {
+        var item = _batchEditItem;
+        var rowIndex = _batchEditRowIndex;
+        var colIndex = ResolveVisibleColumnIndex(_batchEditField);
+
+        _validationStatusMessage = null;
+        _batchEditItem = default;
+        _batchEditRowIndex = -1;
+        _batchEditField = null;
+        _batchEditValue = null;
+        _batchEditReplaceOnFirstInput = false;
+        _batchDropdownOpenOnRender = false;
+        _batchDropdownEditorRef = null;
+        ClearBatchDropdownTypeSelectBuffer();
+        _pendingBatchEditFocus = false;
+        _pendingBatchEditSelectAll = false;
+        _pendingBatchEditClientX = null;
+        _batchEditHostKeyHandoffOpen = false;
+        _pendingBatchEditScrollIntoView = false;
+
+        // A rejected commit (validation pill) may have left _activeCell on the
+        // cell the user clicked while the editor stayed put — cancel restores
+        // the cursor to the canceled cell, same as the Enter path above.
+        if (item != null && colIndex >= 0)
+        {
+            SetActiveCell(rowIndex, colIndex);
+            RememberKeyboardNavigationSource(item, rowIndex, colIndex);
+            _lastSelectedCell = (rowIndex, colIndex);
+            _lastSelectedItem = item;
+            _lastSelectedRowIndex = rowIndex;
+        }
+
+        // The render tears down the focused input — without an explicit
+        // refocus the browser drops focus to BODY and every following
+        // arrow key scrolls the page instead of navigating (the commit
+        // path above already refocuses).
+        await FocusGridHostAsync();
+        await InvokeAsync(StateHasChanged);
     }
 
     private async Task HandleBatchDateCalendarButtonKeyDown(TValue sourceItem, string? sourceField, KeyboardEventArgs e)
@@ -9673,7 +9801,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var rowIndex = _batchEditRowIndex;
         var colIndex = ResolveVisibleColumnIndex(_batchEditField);
 
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return;
 
         if (item == null || rowIndex < 0 || colIndex < 0)
         {
@@ -9698,7 +9827,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (item == null || rowIndex < 0 || colIndex < 0)
             return false;
 
-        await CommitBatchEdit();
+        if (!await CommitBatchEdit())
+            return false;
 
         SetActiveCell(rowIndex, colIndex);
         RememberKeyboardNavigationSource(item, rowIndex, colIndex);
@@ -10318,7 +10448,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // target and copy the old cell value into it.
         var committedEditor = _batchEditItem != null;
         if (committedEditor)
-            await CommitBatchEdit();
+        {
+            if (!await CommitBatchEdit())
+                return false;
+        }
 
         if (IsPagingActive && _pageState.PageSize > 0)
         {
@@ -10461,6 +10594,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
 
         return e.Key is "ArrowLeft" or "ArrowRight";
+    }
+
+    private bool BatchEditorOwnsHorizontalArrowKeys(object? item, string? field)
+    {
+        var column = ResolveBatchEditColumn(field);
+        if (column == null)
+            return true;
+
+        // Text/date inputs and editable combos own Left/Right for caret movement.
+        // A non-editable option list has no caret: while it is CLOSED the arrows
+        // belong to GridControl's browse-mode cell navigation.
+        return column.AllowCustomEditOptionValue || !HasEditOptions(column, item);
     }
 
     private async Task<bool> ShouldNavigateOutOfBatchEditorOnHorizontalArrowAsync(KeyboardEventArgs e)
@@ -10746,7 +10891,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
-        if (EventsRef?.OnHostKeyDown.HasDelegate == true)
+        // Left/Right belong to a text caret while a text-capable editor is open.
+        // A closed, non-editable option-list button has no caret and must keep
+        // grid browse-mode navigation. The editor's own handler already declines
+        // to navigate text keys, but the same keydown can also reach this host.
+        if (_batchEditItem != null
+            && BatchEditorOwnsHorizontalArrowKeys(_batchEditItem, _batchEditField)
+            && IsNativeEditorCaretNavigationKey(e))
+            return;
+
+        // An Enter that belongs to an open or pending batch editor never goes to
+        // the page's host-key callback. The ServerBacked one-shot above covers
+        // the commit-then-bubble interleave, but on a ClientBuffered grid nothing
+        // arms it, and in the attach gap / single-click+type pending window the
+        // editor's JS stopPropagation isn't in place yet — so one physical Enter
+        // both committed the buffered text AND fired the host action (e.g.
+        // FInboxCustomQuote: Enter = BuildQuote, so the modal popped over the
+        // commit). Only the callback is skipped: the pending-commit and dropdown
+        // handoff paths below still receive the key unchanged.
+        var editorOwnsEnter = (e.Key == "Enter" || e.Key == "NumpadEnter")
+            && (_batchEditItem != null || _pendingBatchEditFocus || _batchEditHostKeyHandoffOpen);
+
+        if (!editorOwnsEnter && EventsRef?.OnHostKeyDown.HasDelegate == true)
             await EventsRef.OnHostKeyDown.InvokeAsync(e);
 
         if (await TryHandleCellContextShortcutAsync(e))
@@ -10764,6 +10930,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.Key == "Escape" && _isEditing)
         {
             CancelEdit();
+            return;
+        }
+
+        // Host-level Escape for an open BATCH edit. Normally the editor's own
+        // keydown handles Escape, but when its commit keeps failing list
+        // validation the DOM focus can end up on the host (click-away, focus
+        // races) — without this branch Escape was a dead key and the invalid
+        // editor could not be dismissed at all (every click elsewhere re-failed
+        // the commit and bailed).
+        if (e.Key == "Escape" && _batchEditItem != null)
+        {
+            await CancelActiveBatchEditAsync();
             return;
         }
 
@@ -12225,11 +12403,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (string.IsNullOrWhiteSpace(_renameColumnField))
                 return "Column";
 
-            // The column's DISPLAY caption (e.g. "Community"), not the raw
-            // colkey ("Area") — QA reads the title as the column's name.
-            var col = EffectiveColumns.FirstOrDefault(c =>
-                string.Equals(c.Field, _renameColumnField, StringComparison.OrdinalIgnoreCase));
-            return col != null ? HeaderColumnDisplay(col) : _renameColumnField;
+            return _renameColumnField;
         }
     }
 
@@ -12638,6 +12812,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _showHeaderContextMenu = false;
         _showRenameColumn = true;
         _showInsertColumnSubmenu = false;
+    }
+
+    private Task HeaderMenuRenameKeyDown(KeyboardEventArgs e)
+    {
+        // TextBoxControl publishes the complete browser draft before this callback.
+        if (e.Key is "Enter" or "NumpadEnter") return HeaderMenuCommitRename();
+        if (e.Key == "Escape") HeaderMenuCancelRename();
+        return Task.CompletedTask;
     }
 
     private async Task HeaderMenuCommitRename()
@@ -14392,7 +14574,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static string GetEditorInputStyle(GridColumn col)
     {
-        var align = col.TextAlign switch
+        var align = col.ResolvedTextAlign switch
         {
             TextAlign.Center => "center",
             TextAlign.Right => "right",
@@ -15843,7 +16025,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             table.Columns.Add(new GridExportColumn(
                 HeaderColumnDisplay(col),
                 format: col.Format,
-                textAlign: col.TextAlign,
+                textAlign: col.ResolvedTextAlign,
                 width: width > 0 ? width : null,
                 printCellIcon: col.PrintCellIcon)
             {
@@ -16138,7 +16320,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         else
         {
             await SynchronizeClientBufferedBatchEditorValueAsync();
-            await CommitBatchEdit();
+            if (!await CommitBatchEdit())
+                return;
         }
         if (_isEditing)
             await SaveEdit();

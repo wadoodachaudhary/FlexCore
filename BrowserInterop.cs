@@ -9,7 +9,10 @@ internal sealed class BrowserInterop(IJSRuntime runtime) : IAsyncDisposable
     {
         // Teardown must not import a module that never loaded successfully.
         if (action == "dispose" && _module is null) return default!;
-        _module ??= await runtime.InvokeAsync<IJSObjectReference>("import", "./_content/FlexKit/browser-capabilities.js");
+        // The path follows the assembly (FlexKit or FlexCore) — a literal 404s in the
+        // other library, and the failure is silent.
+        _module ??= await runtime.InvokeAsync<IJSObjectReference>(
+            "import", $"./_content/{typeof(BrowserInterop).Assembly.GetName().Name}/browser-capabilities.js");
         try { return await _module.InvokeAsync<T>("invoke", action, element, data, callback); }
         catch (Exception error) when (action == "dispose" && error is JSException or JSDisconnectedException or TaskCanceledException)
         {
