@@ -7,27 +7,24 @@
 
 @if (Visible)
 {
-    <div class="fx-inputdlg-overlay" @onclick="Cancel">
-        <div class="fx-inputdlg @CssClass" @onclick:stopPropagation="true">
-            <div class="fx-inputdlg-header">
-                <span>@Title</span>
-                <button class="fx-inputdlg-close" @onclick="Cancel">&times;</button>
+    <DialogControl Visible="true" Header="@Title" OnClose="Cancel"
+                   Width="calc(420px * var(--fx-zoom, 1))" Resizable="false"
+                   CssClass="@($"fx-dialog-classic fx-inputdlg {CssClass}")">
+        <div class="fx-inputdlg-layout">
+            <label class="fx-inputdlg-label" for="@_inputId">@Prompt</label>
+            <div class="fx-inputdlg-editor">
+                <TextBoxControl @ref="_input" @bind-Value="InputValue" id="@_inputId"
+                                InputType="@InputType" Placeholder="@Placeholder" MaxLength="@MaxLength"
+                                Width="100%" CssClass="fx-textbox-classic" AutoFocus="true"
+                                TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                KeepNativeTab="true" OnKeyDown="HandleKeyDown" />
             </div>
-            <div class="fx-inputdlg-body">
-                @if (!string.IsNullOrEmpty(Prompt))
-                {
-                    <label class="fx-inputdlg-label">@Prompt</label>
-                }
-                <input type="@InputType" class="fx-inputdlg-input" @bind="InputValue"
-                       placeholder="@Placeholder" maxlength="@MaxLength"
-                       @onkeydown="HandleKeyDown" />
-            </div>
-            <div class="fx-inputdlg-footer">
-                <button class="fx-inputdlg-btn fx-inputdlg-btn-primary" @onclick="Confirm">OK</button>
-                <button class="fx-inputdlg-btn" @onclick="Cancel">Cancel</button>
+            <div class="fx-inputdlg-actions">
+                <ButtonControl CssClass="fx-button-classic" OnClick="Confirm">OK</ButtonControl>
+                <ButtonControl CssClass="fx-button-classic" OnClick="Cancel">Cancel</ButtonControl>
             </div>
         </div>
-    </div>
+    </DialogControl>
 }
 
 @code {
@@ -43,6 +40,9 @@
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<string?>? _tcs;
+    private TextBoxControl? _input;
+    private readonly string _inputId = $"fx-inputdlg-{Guid.NewGuid():N}";
+    private bool _confirming;
 
     public Task<string?> ShowAsync(string prompt, string title = "Input", string defaultValue = "")
     {
@@ -57,22 +57,30 @@
 
     private async Task Confirm()
     {
-        Visible = false;
-        if (VisibleChanged.HasDelegate)
-            await VisibleChanged.InvokeAsync(false);
-        if (OnResult.HasDelegate)
-            await OnResult.InvokeAsync(InputValue);
-        _tcs?.TrySetResult(InputValue);
+        if (!Visible || _confirming) return;
+        _confirming = true;
+        try
+        {
+            if (_input is not null)
+                await _input.FlushClientBufferedValueAsync();
+            await CompleteAsync(InputValue);
+        }
+        finally { _confirming = false; }
     }
 
-    private async Task Cancel()
+    private Task Cancel() => CompleteAsync(null);
+
+    private async Task CompleteAsync(string? result)
     {
+        if (!Visible) return;
+        var completion = _tcs;
+        _tcs = null;
         Visible = false;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
-            await OnResult.InvokeAsync(null);
-        _tcs?.TrySetResult(null);
+            await OnResult.InvokeAsync(result);
+        completion?.TrySetResult(result);
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)

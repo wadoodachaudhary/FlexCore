@@ -484,6 +484,9 @@ else
     /// <summary>Focuses the input through Blazor's element API.</summary>
     public ValueTask FocusAsync(bool preventScroll = true) => _inputElement.FocusAsync(preventScroll);
 
+    /// <summary>Publish the current browser draft before a form confirms without waiting for blur.</summary>
+    public Task FlushClientBufferedValueAsync() => SynchronizeClientBufferedDomValueAsync();
+
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
         string? value,
