@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
-<PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><RootNamespace>FlexKitTester</RootNamespace></PropertyGroup>
-<ItemGroup><ProjectReference Include="../../FlexCore.csproj" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/TreeViewBench.razor" Link="Components/Pages/ControlBenches/TreeViewBench.razor" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/TreeGridOperationsBench.razor" Link="Components/Pages/ControlBenches/TreeGridOperationsBench.razor" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/TreeGridBench.razor" Link="Components/Pages/ControlBenches/TreeGridBench.razor" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/ControlBenchFrame.razor*" Link="Components/Pages/ControlBenches/%(Filename)%(Extension)" />
-</ItemGroup></Project>
