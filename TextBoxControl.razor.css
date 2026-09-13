@@ -30,7 +30,7 @@
     vertical-align: middle;
 }
 
-.fx-textbox-password-input {
+.fx-textbox-password-host:has(.fx-textbox-password-toggle) > .fx-textbox-password-input {
     padding-right: 24px !important;
 }
 
