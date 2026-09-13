@@ -68,6 +68,8 @@ else
             <canvas class="fx-textbox-password-reveal" hidden aria-hidden="true"
                     width="1" height="1" @ref="_passwordRevealElement"></canvas>
             @* Mouse-only affordance: keeps the form's tab order the same as a plain password box. *@
+            @if (ShowPasswordToggle)
+            {
             <button type="button"
                     class="fx-textbox-password-toggle"
                     tabindex="-1"
@@ -96,6 +98,7 @@ else
                     </svg>
                 }
             </button>
+            }
         </div>
     }
     else if (ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
@@ -252,6 +255,7 @@ else
     /// <summary>Briefly reveal only the character just typed into a masked password
     /// input. Browser-local; pasted, autofilled and programmatic values stay masked.</summary>
     [Parameter] public bool RevealLastTypedCharacter { get; set; } = true;
+    [Parameter] public bool ShowPasswordToggle { get; set; } = true;
     /// <summary>Local password echo lifetime in milliseconds. Zero disables it;
     /// values above 2000 are capped so an accidental setting cannot leave it visible.</summary>
     [Parameter] public int PasswordRevealDurationMs { get; set; } = 400;
@@ -571,7 +575,7 @@ else
     private bool IsPasswordInput =>
         !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
 
-    private string EffectiveInputType => IsPasswordInput && _showPassword ? "text" : InputType;
+    private string EffectiveInputType => IsPasswordInput && ShowPasswordToggle && _showPassword ? "text" : InputType;
 
     private string PasswordToggleLabel => _showPassword ? "Hide password" : "Show password";
 
@@ -922,6 +926,7 @@ else
 
     private void TogglePasswordVisibility()
     {
+        if (!ShowPasswordToggle || !Enabled) return;
         _suppressNextNativeInputRender = false;
         _showPassword = !_showPassword;
     }

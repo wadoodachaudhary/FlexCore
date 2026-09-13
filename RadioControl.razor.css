@@ -15,3 +15,8 @@
 .fx-radio-label {
     user-select: none;
 }
+
+.fx-radio input[type="radio"]:focus + .fx-radio-label {
+    outline: 1px dotted currentColor;
+    outline-offset: 1px;
+}

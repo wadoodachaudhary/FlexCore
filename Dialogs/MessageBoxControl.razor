@@ -1,4 +1,5 @@
 @namespace Fx.ControlKit.Dialogs
+@using Microsoft.AspNetCore.Components.Web
 
 @*
     MessageBoxControl — standard message box dialog.
@@ -7,12 +8,14 @@
 
 @if (Visible)
 {
-    <div class="@OverlayClass" @onclick="HandleOverlayClick" @onkeydown="HandleKeyDown">
-        <div class="@MessageBoxClass" role="dialog" aria-modal="true" aria-labelledby="@TitleId" @onclick:stopPropagation="true">
-            <div class="fx-msgbox-header">
+    <div class="@OverlayClass" @onclick="HandleOverlayClick" @onkeydown="HandleKeyDown"
+         @onmousemove="HandleDragMove" @onmouseup="HandleDragEnd" @onmouseleave="HandleDragEnd">
+        <div class="@MessageBoxClass" style="@PositionStyle" role="dialog" aria-modal="true" aria-labelledby="@TitleId" @onclick:stopPropagation="true">
+            <div class="fx-msgbox-header" @onmousedown="HandleDragStart" @onmousedown:preventDefault="true">
                 <span id="@TitleId">@Title</span>
                 <button @ref="_closeButton" type="button" class="fx-msgbox-close" aria-label="Close" title="Close"
                         tabindex="-1"
+                        @onmousedown:stopPropagation="true"
                         @onclick="Close"
                         @onkeydown="e => HandleDialogButtonKeyDown(e, CloseButtonIndex)"
                         @onkeydown:preventDefault="true"
@@ -75,6 +78,14 @@
     [Parameter] public MessageBoxLook Look { get; set; } = MessageBoxLook.VB6;
     [Parameter] public EventCallback<MessageBoxResult> OnResult { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public bool Draggable { get; set; } = true;
+    [Parameter] public bool CloseOnOverlayClick { get; set; }
+
+    private bool _isDragging;
+    private bool _suppressOverlayClick;
+    private double _offsetX, _offsetY, _dragStartX, _dragStartY;
+    private double _dragStartOffsetX, _dragStartOffsetY;
+    private string PositionStyle => FormattableString.Invariant($"transform:translate({_offsetX}px,{_offsetY}px)");
 
     private TaskCompletionSource<MessageBoxResult>? _tcs;
     private MessageBoxLook? _activeLook;
@@ -121,6 +132,7 @@
         RequiredConfirmationText = requiredConfirmationText;
         _confirmationChecked = false;
         _primaryButtonFocused = false;
+        ResetPosition();
         Visible = true;
         _tcs = new TaskCompletionSource<MessageBoxResult>();
         StateHasChanged();
@@ -139,6 +151,7 @@
     private async Task CloseWith(MessageBoxResult result)
     {
         Visible = false;
+        ResetPosition();
         _activeLook = null;
         RequiredConfirmationText = null;
         _confirmationChecked = false;
@@ -151,7 +164,51 @@
     }
 
     private Task Close() => CloseWith(MessageBoxResult.Cancel);
-    private Task HandleOverlayClick() => Close();
+    private Task HandleOverlayClick()
+    {
+        if (_suppressOverlayClick)
+        {
+            _suppressOverlayClick = false;
+            return Task.CompletedTask;
+        }
+        return CloseOnOverlayClick ? Close() : Task.CompletedTask;
+    }
+
+    private void HandleDragStart(MouseEventArgs e)
+    {
+        if (!Draggable || e.Button != 0) return;
+        _isDragging = true;
+        _suppressOverlayClick = false;
+        _dragStartX = e.ClientX;
+        _dragStartY = e.ClientY;
+        _dragStartOffsetX = _offsetX;
+        _dragStartOffsetY = _offsetY;
+    }
+
+    private void HandleDragMove(MouseEventArgs e)
+    {
+        if (!_isDragging) return;
+        if ((e.Buttons & 1) == 0)
+        {
+            HandleDragEnd(e);
+            return;
+        }
+        _offsetX = _dragStartOffsetX + e.ClientX - _dragStartX;
+        _offsetY = _dragStartOffsetY + e.ClientY - _dragStartY;
+    }
+
+    private void HandleDragEnd(MouseEventArgs e)
+    {
+        if (!_isDragging) return;
+        _isDragging = false;
+        _suppressOverlayClick = true;
+    }
+
+    private void ResetPosition()
+    {
+        _isDragging = _suppressOverlayClick = false;
+        _offsetX = _offsetY = 0;
+    }
     private Task HandleKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
         => e.Key switch
         {

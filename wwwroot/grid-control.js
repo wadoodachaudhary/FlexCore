@@ -2157,7 +2157,8 @@ export function registerGridWindowScroll(
                 ? Math.max(0.1, Math.min(2, Number(wheelScrollScale)))
                 : 1,
             !!enableScrollBoundarySlowdown,
-            !!enableAdaptiveWheelScrollPacing);
+            !!enableAdaptiveWheelScrollPacing,
+            () => { scheduled = false; });
     }
 
     // Initial window sync — viewport height is known now that we're in the DOM.
@@ -2185,7 +2186,8 @@ function createDeferredGridScrollbar(
     configuredRowHeight,
     wheelScrollScale,
     enableScrollBoundarySlowdown,
-    enableAdaptiveWheelScrollPacing) {
+    enableAdaptiveWheelScrollPacing,
+    cancelScheduledSample) {
     const gridRoot = scrollEl.closest(".fx-grid");
     if (!gridRoot || !lane || !thumb) return null;
     const upButton = lane.querySelector(".fx-grid-deferred-vscroll-up");
@@ -2579,7 +2581,7 @@ function createDeferredGridScrollbar(
         if (Math.abs(scrollEl.scrollTop - before) > 0.25) {
             scrollEl.__gridBoundaryGuardSuppressTop = scrollEl.scrollTop;
             // Cancel any generic rAF sample scheduled before this guarded move.
-            scheduled = false;
+            cancelScheduledSample();
         }
         return scrollEl.scrollTop;
     };
