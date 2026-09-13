@@ -13,9 +13,10 @@
         <div class="fx-inputdlg-layout">
             <label class="fx-inputdlg-label" for="@_inputId">@Prompt</label>
             <div class="fx-inputdlg-editor">
-                <TextBoxControl @ref="_input" @bind-Value="InputValue" id="@_inputId"
+                @* DialogControl owns initial focus; a second pass can steal it back after Tab. *@
+                <TextBoxControl @key="_inputId" @ref="_input" @bind-Value="InputValue" id="@_inputId"
                                 InputType="@InputType" Placeholder="@Placeholder" MaxLength="@MaxLength"
-                                Width="100%" CssClass="fx-textbox-classic" AutoFocus="true"
+                                Width="100%" CssClass="fx-textbox-classic" AutoFocus="false"
                                 TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
                                 KeepNativeTab="true" OnKeyDown="HandleKeyDown" />
             </div>
@@ -40,8 +41,9 @@
     [Parameter] public string? CssClass { get; set; }
 
     private TaskCompletionSource<string?>? _tcs;
+    private (TaskCompletionSource<string?>? Completion, string? Result)? _pendingResult;
     private TextBoxControl? _input;
-    private readonly string _inputId = $"fx-inputdlg-{Guid.NewGuid():N}";
+    private string _inputId = $"fx-inputdlg-{Guid.NewGuid():N}";
     private bool _confirming;
 
     public Task<string?> ShowAsync(string prompt, string title = "Input", string defaultValue = "")
@@ -49,10 +51,12 @@
         Prompt = prompt;
         Title = title;
         InputValue = defaultValue;
+        _inputId = $"fx-inputdlg-{Guid.NewGuid():N}";
         Visible = true;
-        _tcs = new TaskCompletionSource<string?>();
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _tcs = completion;
         StateHasChanged();
-        return _tcs.Task;
+        return completion.Task;
     }
 
     private async Task Confirm()
@@ -70,22 +74,31 @@
 
     private Task Cancel() => CompleteAsync(null);
 
-    private async Task CompleteAsync(string? result)
+    private Task CompleteAsync(string? result)
     {
-        if (!Visible) return;
-        var completion = _tcs;
+        if (!Visible) return Task.CompletedTask;
+        _pendingResult = (_tcs, result);
         _tcs = null;
         Visible = false;
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // A chained prompt must not reopen until the closed dialog has rendered.
+        if (Visible || _pendingResult is not { } pending) return;
+        _pendingResult = null;
+        _input = null;
         if (VisibleChanged.HasDelegate)
             await VisibleChanged.InvokeAsync(false);
         if (OnResult.HasDelegate)
-            await OnResult.InvokeAsync(result);
-        completion?.TrySetResult(result);
+            await OnResult.InvokeAsync(pending.Result);
+        pending.Completion?.TrySetResult(pending.Result);
     }
 
     private async Task HandleKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter") await Confirm();
-        else if (e.Key == "Escape") await Cancel();
     }
 }

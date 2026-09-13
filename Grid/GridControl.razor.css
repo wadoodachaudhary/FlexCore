@@ -1755,6 +1755,9 @@
     position: sticky;
     top: 0;
     z-index: 2;
+    background: var(--fx-grid-header-bg, #fff);
+    /* Collapsed table borders leave a subpixel gap above the sticky header. */
+    box-shadow: 0 -1px 0 var(--fx-grid-header-bg, #fff);
     border-bottom: 1px solid var(--fx-grid-header-border-color);
 }
 .fx-header-cell {

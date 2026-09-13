@@ -52,6 +52,19 @@
     cursor: not-allowed;
 }
 
+.fx-toolbar-btn-arrow {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 3.5px solid transparent;
+    border-right: 3.5px solid transparent;
+    border-top: 4.5px solid currentColor;
+    margin-left: 4px;
+    align-self: center;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
 /* Vertical layout — used by report toolbar (icon on top, label under) */
 .fx-toolbar-btn.fx-toolbar-btn--vertical {
     flex-direction: column;

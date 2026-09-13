@@ -32,7 +32,7 @@
     min-width: 0;
 }
 
-.fx-inputdlg-actions ::deep .fx-button:focus-visible {
+.fx-inputdlg-actions ::deep .fx-button.fx-button-classic:focus-visible:not(:disabled) {
     outline: 1px dotted #000;
     outline-offset: -4px;
 }
