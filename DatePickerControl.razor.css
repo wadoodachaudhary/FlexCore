@@ -23,6 +23,7 @@
 
 .fx-datepicker-input {
     flex: 1 1 auto;
+    min-width: 0;
     border: none;
     outline: none;
     padding: 1px 4px;
@@ -60,6 +61,7 @@
 
 .fx-datepicker-trigger {
     width: 20px;
+    flex-shrink: 0;
     height: 100%;
     box-sizing: border-box;
     padding: 0;

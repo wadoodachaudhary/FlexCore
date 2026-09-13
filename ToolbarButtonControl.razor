@@ -24,6 +24,11 @@
     {
         <span class="fx-toolbar-btn-label">@Label</span>
     }
+
+    @if (HasDropdown || Dropdown)
+    {
+        <span class="fx-toolbar-btn-arrow" aria-hidden="true"></span>
+    }
 </button>
 
 @code {
@@ -44,6 +49,8 @@
     [Parameter] public bool Large { get; set; }
     [Parameter] public bool Selected { get; set; }
     [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool HasDropdown { get; set; }
+    [Parameter] public bool Dropdown { get; set; }
     [Parameter] public EventCallback OnClick { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
