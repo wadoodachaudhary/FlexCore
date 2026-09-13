@@ -5,6 +5,8 @@ FlexKit; preserve project-specific files and build FlexCore.Showcase after edits
 
 ## 2026-09-12 Control Verification
 
+- HHM-1018: Mirrored the classic InputDialogControl composition and TextBoxControl `FlushClientBufferedValueAsync` from FlexKit. The prompt uses client-buffered typing, explicit OK flush, and native Tab traversal; GridControl is unchanged.
+
 - MessageBoxControl is draggable and keeps background-click dismissal opt-in via `CloseOnOverlayClick`; keyboard behavior is unchanged.
 - RadioControl labels display a dotted focus outline without changing layout.
 - TextBoxControl `ShowPasswordToggle` defaults to true; false hides the toggle and forces masked display even if previously revealed. `RevealLastTypedCharacter` remains a separate option.
