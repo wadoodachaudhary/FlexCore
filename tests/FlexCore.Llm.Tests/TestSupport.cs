@@ -28,13 +28,18 @@ public sealed record CannedResponse(HttpStatusCode Status, string Body, string C
 
 public sealed class FakeHttpMessageHandler : HttpMessageHandler
 {
+    private readonly object _lock = new();
     private readonly Queue<CannedResponse> _responses = new();
 
     public List<RecordedRequest> Requests { get; } = new();
 
     public FakeHttpMessageHandler Enqueue(params CannedResponse[] responses)
     {
-        foreach (var response in responses) _responses.Enqueue(response);
+        lock (_lock)
+        {
+            foreach (var response in responses) _responses.Enqueue(response);
+        }
+
         return this;
     }
 
@@ -43,14 +48,18 @@ public sealed class FakeHttpMessageHandler : HttpMessageHandler
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         var body = request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken);
-        Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers, body));
-
-        if (_responses.Count == 0)
+        CannedResponse canned;
+        lock (_lock)
         {
-            throw new InvalidOperationException($"No canned response for {request.Method} {request.RequestUri}");
+            Requests.Add(new RecordedRequest(request.Method, request.RequestUri!, request.Headers, body));
+            if (_responses.Count == 0)
+            {
+                throw new InvalidOperationException($"No canned response for {request.Method} {request.RequestUri}");
+            }
+
+            canned = _responses.Dequeue();
         }
 
-        var canned = _responses.Dequeue();
         if (canned.Delay is { } delay)
         {
             await Task.Delay(delay, cancellationToken);
