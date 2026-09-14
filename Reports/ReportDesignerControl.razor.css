@@ -2341,3 +2341,7 @@
     font: calc(12px * var(--fx-zoom, 1)) Consolas, "Courier New", monospace;
     box-sizing: border-box;
 }
+.fx-rd-visual-expert { display:flex; flex-direction:column; gap:12px; overflow:auto; padding:12px; }
+.fx-rd-run-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.fx-rd-picture-preview { width:100%; height:260px; object-fit:contain; background:#fff; }
+.fx-rd-rich-preview { flex-shrink:0; outline:1px solid #aaa; max-width:100%; }

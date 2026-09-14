@@ -448,6 +448,17 @@
 
     private async Task FinishAsync()
     {
+        try
+        {
+            ReportDesignerXmlSerializer.BuildSelectionFormula(new ReportDesignerDocument { Filters = _filters });
+        }
+        catch (Exception error) when (error is FormatException or NotSupportedException or OverflowException)
+        {
+            _stepIndex = 2;
+            _sqlValidationMessage = "Report was not created: " + error.Message;
+            _sqlValidationSucceeded = false;
+            return;
+        }
         if (_displayFields.Count == 0)
             _displayFields = AvailableSelectedTableFields.Select(CloneField).ToList();
 
@@ -460,7 +471,7 @@
             Summaries = _summaries.Select(summary => new ReportDesignerSummary { Field = CloneField(summary.Field), Operation = summary.Operation }).ToList(),
             Filters = _filters.Select(filter => new ReportDesignerFilter { Field = CloneField(filter.Field), Operator = filter.Operator, Value = filter.Value }).ToList(),
             Links = _links.Select(CloneLink).ToList(),
-            CustomSql = string.IsNullOrWhiteSpace(_customSql) ? BuildCurrentSql() : _customSql,
+            CustomSql = _sqlEditedByUser ? _customSql : "",
             TemplateName = _selectedTemplate
         };
 
@@ -656,10 +667,10 @@
 
     private Task RegenerateSql()
     {
-        _customSql = BuildCurrentSql();
         _sqlEditedByUser = false;
         _sqlValidationMessage = "";
         _sqlValidationSucceeded = null;
+        _customSql = BuildCurrentSql();
         return Task.CompletedTask;
     }
 
@@ -689,7 +700,8 @@
 
         try
         {
-            var table = executor.Execute(_customSql, null);
+            var query = ReportDesignerSqlBuilder.BuildQuery(_selectedTables, ReportFields, _links, _filters, topRows: 100);
+            var table = executor.Execute(_sqlEditedByUser ? _customSql : query.Sql, query.Parameters);
             _sqlValidationMessage = $"SQL valid. Returned {table.Rows.Count} rows and {table.Columns.Count} columns.";
             _sqlValidationSucceeded = true;
         }
@@ -705,21 +717,30 @@
         if (_sqlEditedByUser)
             return;
 
-        _customSql = BuildCurrentSql();
         _sqlValidationMessage = "";
         _sqlValidationSucceeded = null;
+        _customSql = BuildCurrentSql();
     }
 
     private string BuildCurrentSql()
     {
-        return ReportDesignerSqlBuilder.BuildSql(_selectedTables, ReportFields, _links, _filters);
+        try { return ReportDesignerSqlBuilder.BuildSql(_selectedTables, ReportFields, _links, _filters); }
+        catch (Exception error) when (error is FormatException or InvalidDataException or NotSupportedException or OverflowException)
+        {
+            _sqlValidationMessage = "Query is incomplete: " + error.Message;
+            _sqlValidationSucceeded = false;
+            return "";
+        }
     }
 
     private static ReportDesignerDataTable CloneTable(ReportDesignerDataTable table)
     {
         return new ReportDesignerDataTable
         {
+            Id = table.Id,
             Name = table.Name,
+            SourceName = table.SourceName,
+            CommandText = table.CommandText,
             Schema = table.Schema,
             Fields = table.Fields.Select(CloneField).ToList()
         };
@@ -729,10 +750,13 @@
     {
         return new ReportDesignerField
         {
+            Id = field.Id,
             Name = field.Name,
             Table = field.Table,
             LongName = field.LongName,
             Formula = field.Formula,
+            Expression = field.Expression,
+            Syntax = field.Syntax,
             Type = field.Type,
             IsFormula = field.IsFormula
         };
@@ -742,6 +766,7 @@
     {
         return new ReportDesignerDataLink
         {
+            Id = link.Id,
             LeftTable = link.LeftTable,
             LeftField = link.LeftField,
             RightTable = link.RightTable,

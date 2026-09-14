@@ -419,6 +419,8 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        _designerPreview?.Dispose();
+        _designerPreview = null;
         try
         {
             if (_reportJsModule is not null)
@@ -608,6 +610,8 @@ else
                 foreach (var kv in _lastParameters)
                     if (!sqlParams.ContainsKey(kv.Key)) sqlParams[kv.Key] = kv.Value;
             AutoInjectSessionParameters(sqlParams, drillDef.Sql);
+            foreach (var parameter in drillDef.FixedParameters)
+                sqlParams[parameter.Key] = parameter.Value;
 
             // Log what we're about to run — critical for debugging empty
             // drill-downs. Console.WriteLine bypasses the Serilog
@@ -643,6 +647,7 @@ else
             var tab = new ReportTab
             {
                 Title = node.Label,
+                RuntimeDiagnostics = drillDef.RuntimeDiagnostics,
                 Path = fullPath.ToList(),
                 Pages = RenderHtmlPages(drillDef, dt, visibleCols),
                 Tree = BuildGroupTree(dt, drillDef, rowsPerPage),
@@ -755,6 +760,8 @@ else
                     if (!sqlParams.ContainsKey(kv.Key)) sqlParams[kv.Key] = kv.Value;
             AddLinkedSubreportParameters(sqlParams, subDef, linkedParameterValues);
             AutoInjectSessionParameters(sqlParams, subDef.Sql);
+            foreach (var parameter in subDef.FixedParameters)
+                sqlParams[parameter.Key] = parameter.Value;
 
             var filterStr = string.Join(", ", filters.Select(f => $"{f.Table}.{f.Field}={f.Value}"));
             Logger.LogInformation("Subreport {Title} filters: {Filters}", title, filterStr);
@@ -775,6 +782,7 @@ else
             var tab = new ReportTab
             {
                 Title = tabTitle,
+                RuntimeDiagnostics = subDef.RuntimeDiagnostics,
                 SourceXmlPath = sourceKey,
                 FieldFilters = filters.ToList(),
                 Pages = RenderHtmlPages(subDef, dt, visibleCols),
@@ -922,18 +930,32 @@ else
     // Crystal XML Report rendering (CR definition exported as .xml)
     // ═══════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Loads a Crystal Reports XML definition, parses it into a <see cref="ReportDefinition"/>,
-    /// and renders it as an HTML report (Option 4).
-    ///
-    /// Use when the report runtime is NOT available (Linux, macOS, containers) — the XML
-    /// export contains enough metadata (tables, joins, WHERE formula, groups, parameters,
-    /// detail columns) to rebuild the report as a SQL-driven HTML table.
-    /// </summary>
-    /// <param name="xmlFilePath">Absolute path to the Crystal Reports .xml export.</param>
-    /// <param name="parameters">Parameter values (e.g. <c>{"Worksheet", 12345}</c>, <c>{"TenantId", 1}</c>).</param>
-    public async Task ShowXmlReport(string xmlFilePath, Dictionary<string, object>? parameters = null)
+    private ReportDesignerPreview? _designerPreview;
+
+    /// <summary>Runs an isolated snapshot, including external subreports, without saving the design.</summary>
+    public async Task ShowDesignerReport(ReportDesignerDocument document, Dictionary<string, object>? parameters = null)
     {
+        var snapshot = ReportDesignerPreview.Create(document);
+        var previous = _designerPreview;
+        _designerPreview = snapshot;
+        try
+        {
+            await ShowXmlReport(snapshot.XmlPath, parameters, positioned: true);
+        }
+        finally
+        {
+            previous?.Dispose();
+        }
+    }
+
+    /// <summary>Loads Crystal XML; positioned=true preserves band/object geometry instead of using table columns.</summary>
+    public async Task ShowXmlReport(string xmlFilePath, Dictionary<string, object>? parameters = null, bool positioned = false)
+    {
+        if (_designerPreview is not null && !string.Equals(_designerPreview.XmlPath, xmlFilePath, StringComparison.Ordinal))
+        {
+            _designerPreview.Dispose();
+            _designerPreview = null;
+        }
         IsLoading = true;
         ErrorMessage = null;
         PdfDataUrl = "";
@@ -944,7 +966,7 @@ else
         try
         {
             // Parse the Crystal Reports XML into a ReportDefinition
-            var definition = XmlLoader.Load(xmlFilePath);
+            var definition = positioned ? XmlLoader.LoadPositioned(xmlFilePath) : XmlLoader.Load(xmlFilePath);
 
             // Track source path + parameters so drill-down tabs can re-query.
             _xmlFilePath = xmlFilePath;
@@ -1039,6 +1061,8 @@ else
             // Auto-inject configured session parameters (see ReportOptions.SessionAutoInjectParameters; extend
             // via ReportOptions.SessionAutoInjectParameters for other well-known keys).
             AutoInjectSessionParameters(sqlParams, definition.Sql);
+            foreach (var parameter in definition.FixedParameters)
+                sqlParams[parameter.Key] = parameter.Value;
 
             // Log what we're about to run so users can see parameter values when a query
             // unexpectedly returns 0 rows (column type mismatch, wrong session value, etc).
@@ -1050,6 +1074,42 @@ else
             var dt = db.Execute(definition.Sql, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             Logger.LogInformation("Main report returned {Rows} rows", dt.Rows.Count);
+
+            if (definition.PositionedLayout is { } layout)
+            {
+                var session = new ReportLayoutSession(layout, dt, sqlParams, (child, values) =>
+                {
+                    var childParameters = new Dictionary<string, object>(values);
+                    AutoInjectSessionParameters(childParameters, child.Sql);
+                    foreach (var parameter in child.FixedParameters) childParameters[parameter.Key] = parameter.Value;
+                    var childRows = db.Execute(child.Sql, childParameters);
+                    GuardRowLimit(childRows);
+                    return childRows;
+                });
+                int[]? heights = null;
+                if (session.Measurements.Count > 0)
+                {
+                    try
+                    {
+                        await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
+                        if (module is not null)
+                        {
+                            var measured = new List<int>();
+                            foreach (var batch in session.Measurements.Chunk(250))
+                                measured.AddRange(await module.InvokeAsync<int[]>("measureText", (object)batch));
+                            heights = measured.ToArray();
+                        }
+                    }
+                    catch (Exception error) when (error is JSException or InvalidOperationException)
+                    { Logger.LogWarning(error, "Browser report text measurement unavailable"); }
+                }
+                var result = session.Paginate(heights);
+                Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
+                    RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
+                _lastParameters = new Dictionary<string, object>(sqlParams);
+                OnRenderComplete?.Invoke();
+                return;
+            }
 
             // Render to HTML pages
             var visibleColumns = definition.Columns.Where(c => !c.Hidden).ToList();
@@ -1095,6 +1155,7 @@ else
             {
                 Title = "Main Report",
                 Path = new(),  // empty path = no drill
+                RuntimeDiagnostics = definition.RuntimeDiagnostics,
                 Pages = RenderHtmlPages(definition, dt, visibleColumns),
                 Tree = BuildGroupTree(treeData, definition, rowsPerPage),
                 CurrentPage = 1,
@@ -2401,13 +2462,14 @@ else
         html.AppendLine("</tbody>");
 
         // Grand total (if last page and aggregates defined)
-        if (isLastPage && def.Groups.Any(g => g.Aggregates.Count > 0))
+        var grandTotals = def.GrandTotals.Count > 0 ? def.GrandTotals : def.Groups.SelectMany(g => g.Aggregates).ToList();
+        if (isLastPage && grandTotals.Count > 0)
         {
             html.AppendLine("<tfoot>");
             html.Append("<tr class='fx-rpt-grand-total'>");
             foreach (var col in columns)
             {
-                var agg = def.Groups.SelectMany(g => g.Aggregates).FirstOrDefault(a => a.Field == col.Field);
+                var agg = grandTotals.FirstOrDefault(a => a.Field == col.Field);
                 if (agg != null)
                 {
                     var val = ComputeAggregate(allRows, agg);
@@ -3010,6 +3072,18 @@ else
         }
         else if (Tabs.Count > 0 && ActiveTab != null && ActiveTab.Pages.Count > 0)
         {
+            @if (ActiveTab.RuntimeDiagnostics.Count > 0)
+            {
+                <details class="fx-report-runtime-diagnostics" open>
+                    <summary>Runtime limitations (@ActiveTab.RuntimeDiagnostics.Count)</summary>
+                    <ul>
+                        @foreach (var diagnostic in ActiveTab.RuntimeDiagnostics)
+                        {
+                            <li>@diagnostic</li>
+                        }
+                    </ul>
+                </details>
+            }
             @if (Tabs.Count > 1)
             {
                 <div class="fx-report-tab-bar">
@@ -3031,10 +3105,17 @@ else
                 </div>
             }
             <div class="fx-report-pages">
-                <div class="fx-report-page @(ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
+                <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
                     @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
                 </div>
             </div>
+            @if (ActiveTab.PositionedPage is { } pageSize)
+            {
+                <style>@($"@page fx-positioned {{ size:{ReportObjectRenderer.Number((pageSize.ContentWidthTwips + pageSize.MarginLeftTwips + pageSize.MarginRightTwips) / 15d)}px {ReportObjectRenderer.Number((pageSize.ContentHeightTwips + pageSize.MarginTopTwips + pageSize.MarginBottomTwips) / 15d)}px; margin:0; }}")</style>
+                <div class="fx-report-positioned-print" aria-hidden="true">
+                    @foreach (var html in ActiveTab.Pages) { @((MarkupString)html) }
+                </div>
+            }
         }
         else
         {

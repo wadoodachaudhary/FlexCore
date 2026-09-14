@@ -608,3 +608,12 @@
     text-align: left;
 }
 .fx-rpt-export-menu .fx-rpt-export-items button:hover { background: #f0f0f0; }
+.fx-report-page.positioned { padding:0; width:max-content; min-height:0; }
+.fx-report-positioned-print { display:none; }
+@media print {
+    .fx-report-page.positioned { display:none; }
+    .fx-report-positioned-print { display:block; }
+    .fx-report-positioned-print ::deep article { page:fx-positioned; }
+    .fx-report-positioned-print ::deep article:last-child { break-after:auto !important; }
+    .fx-report-runtime-diagnostics { display:none; }
+}

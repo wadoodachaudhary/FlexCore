@@ -112,10 +112,7 @@
     height: 100%;
 }
 
-.fx-toolbar ::deep .fx-menu-split,
-.fx-toolbar ::deep .tbar-open-split,
-.fx-toolbar ::deep .fitems-view-split,
-.fx-toolbar ::deep .vpl-view-split {
+.fx-toolbar ::deep .fx-menu-split {
     display: inline-flex;
     align-items: stretch;
     box-sizing: border-box;
@@ -125,18 +122,12 @@
     transition: border-color 0.12s ease, background-color 0.12s ease;
 }
 
-.fx-toolbar ::deep .fx-menu-split:hover,
-.fx-toolbar ::deep .tbar-open-split:hover,
-.fx-toolbar ::deep .fitems-view-split:hover,
-.fx-toolbar ::deep .vpl-view-split:hover {
+.fx-toolbar ::deep .fx-menu-split:hover {
     border-color: #ced4da;
     background: rgba(0, 0, 0, 0.02);
 }
 
-.fx-toolbar ::deep .fx-menu-primary,
-.fx-toolbar ::deep .tbar-open-primary,
-.fx-toolbar ::deep .fitems-view-primary,
-.fx-toolbar ::deep .vpl-view-primary {
+.fx-toolbar ::deep .fx-menu-primary {
     display: inline-flex;
     flex-direction: column;
     align-items: center;
@@ -155,18 +146,12 @@
     box-sizing: border-box;
 }
 
-.fx-toolbar ::deep .fx-menu-primary:hover:not(:disabled),
-.fx-toolbar ::deep .tbar-open-primary:hover:not(:disabled),
-.fx-toolbar ::deep .fitems-view-primary:hover:not(:disabled),
-.fx-toolbar ::deep .vpl-view-primary:hover:not(:disabled) {
+.fx-toolbar ::deep .fx-menu-primary:hover:not(:disabled) {
     background: #e9ecef !important;
     border-color: #ced4da !important;
 }
 
-.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger,
-.fx-toolbar ::deep .tbar-split-arrow,
-.fx-toolbar ::deep .fitems-view-arrow,
-.fx-toolbar ::deep .vpl-view-arrow {
+.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -188,18 +173,12 @@
     transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.fx-toolbar ::deep .fx-menu-split:hover .fx-menu-trigger,
-.fx-toolbar ::deep .tbar-open-split:hover .tbar-split-arrow,
-.fx-toolbar ::deep .fitems-view-split:hover .fitems-view-arrow,
-.fx-toolbar ::deep .vpl-view-split:hover .vpl-view-arrow {
+.fx-toolbar ::deep .fx-menu-split:hover .fx-menu-trigger {
     border-left-color: #ced4da !important;
 }
 
 /* Hovering / Selecting the arrow button — VB6 Bevel Button look */
-.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger:hover:not(:disabled),
-.fx-toolbar ::deep .tbar-split-arrow:hover:not(:disabled),
-.fx-toolbar ::deep .fitems-view-arrow:hover:not(:disabled),
-.fx-toolbar ::deep .vpl-view-arrow:hover:not(:disabled) {
+.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger:hover:not(:disabled) {
     background: #e2e8f0 !important;
     border: 1px solid #7b9ebd !important;
     box-shadow: inset 1px 1px 0 rgba(255, 255, 255, 0.9), inset -1px -1px 0 rgba(0, 0, 0, 0.1) !important;
@@ -207,13 +186,7 @@
 
 /* Active / Pressed / Menu Open state on the arrow button — VB6 sunken bevel look */
 .fx-toolbar ::deep .fx-menu-split .fx-menu-trigger.active,
-.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger:active:not(:disabled),
-.fx-toolbar ::deep .tbar-split-arrow.active,
-.fx-toolbar ::deep .tbar-split-arrow:active:not(:disabled),
-.fx-toolbar ::deep .fitems-view-arrow.active,
-.fx-toolbar ::deep .fitems-view-arrow:active:not(:disabled),
-.fx-toolbar ::deep .vpl-view-arrow.active,
-.fx-toolbar ::deep .vpl-view-arrow:active:not(:disabled) {
+.fx-toolbar ::deep .fx-menu-split .fx-menu-trigger:active:not(:disabled) {
     background: #cbd5e1 !important;
     border: 1px solid #5a82b8 !important;
     box-shadow: inset 1px 1px 2px rgba(0, 0, 0, 0.28) !important;

@@ -35,7 +35,7 @@ namespace Fx.ControlKit.Reports;
 /// Layout fidelity is approximate — we render a tabular list, not an absolutely positioned Crystal layout.
 /// </para>
 /// </summary>
-public class CrystalXmlReportLoader
+public partial class CrystalXmlReportLoader
 {
     private readonly ILogger<CrystalXmlReportLoader> _logger;
     private readonly ReportOptions _options;
@@ -127,6 +127,13 @@ public class CrystalXmlReportLoader
         return LoadInternal(xmlFilePath, drillPath: null);
     }
 
+    /// <summary>Retains Crystal bands and selects detail-level values for native positioned pagination.</summary>
+    public ReportDefinition LoadPositioned(string xmlFilePath)
+    {
+        var report = XDocument.Load(xmlFilePath).Root ?? throw new InvalidDataException("Missing report root.");
+        return LoadPositionedSource(report, Path.GetFullPath(xmlFilePath), new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
+    }
+
     private ReportDefinition LoadInternal(
         string xmlFilePath,
         IReadOnlyList<DrillDownFilter>? drillPath,
@@ -145,7 +152,8 @@ public class CrystalXmlReportLoader
         string xmlFilePath,
         IReadOnlyList<DrillDownFilter>? drillPath,
         IReadOnlyList<ReportFieldFilter>? fieldFilters = null,
-        string? reportIdOverride = null)
+        string? reportIdOverride = null,
+        ReportDesignerDocument? positionedDesign = null)
     {
         var subreportObjects = ExtractSubreportObjects(report, xmlFilePath);
         var flexKitCustomSql = ExtractFlexKitCustomSql(report);
@@ -160,13 +168,17 @@ public class CrystalXmlReportLoader
         foreach (var sr in report.Descendants("SubReports").ToList())
             sr.Remove();
 
+        var sourceName = ((string?)report.Attribute("Name") ?? "").Trim();
+        var reportTitle = ((string?)report.Element("Summaryinfo")?.Attribute("ReportTitle") ?? "").Trim();
+        var identity = string.IsNullOrEmpty(sourceName)
+            ? Path.GetFileNameWithoutExtension(xmlFilePath) : Path.GetFileNameWithoutExtension(sourceName);
         var definition = new ReportDefinition
         {
             ReportId = string.IsNullOrWhiteSpace(reportIdOverride)
-                ? Path.GetFileNameWithoutExtension(xmlFilePath)
+                ? identity
                 : reportIdOverride,
             Title = string.IsNullOrWhiteSpace(reportIdOverride)
-                ? Path.GetFileNameWithoutExtension(xmlFilePath).Replace("_", " ")
+                ? (string.IsNullOrEmpty(reportTitle) ? identity.Replace("_", " ") : reportTitle)
                 : reportIdOverride,
             SourceRptFile = string.IsNullOrWhiteSpace(reportIdOverride)
                 ? xmlFilePath
@@ -195,6 +207,7 @@ public class CrystalXmlReportLoader
             {
                 "PaperLegal" => ReportPaperSize.Legal,
                 "PaperA4" => ReportPaperSize.A4,
+                "PaperA3" => ReportPaperSize.A3,
                 "PaperTabloid" => ReportPaperSize.Tabloid,
                 _ => ReportPaperSize.Letter
             };
@@ -235,6 +248,17 @@ public class CrystalXmlReportLoader
         var tables = ParseTables(report);
         var tableLinks = ParseTableLinks(report);
         var parameters = ParseParameters(report);
+        if (positionedDesign is not null)
+        {
+            definition.Parameters = parameters;
+            definition.PositionedLayout = BuildPositionedLayout(positionedDesign, report, definition.RuntimeDiagnostics);
+            var projections = definition.PositionedLayout.Projections;
+            definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
+                : BuildSql(tables, tableLinks, "", "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
+                throw new NotSupportedException("Positioned rendering needs field projections from the report model; custom SQL reports currently use the tabular viewer.");
+            return definition;
+        }
         var detailFields = ParseDetailFields(report);
         // Column headers can live in PageHeader OR GroupHeader sections (Crystal's choice varies by report).
         var headerLabels = ParseHeaderLabels(report);
@@ -244,7 +268,34 @@ public class CrystalXmlReportLoader
         // Formula fields: {@Name} → SQL expression. Translated ahead of everything else so
         // RecordSelectionFormula / Groups / SortFields can inline their expressions.
         var formulaFields = ParseFormulaFields(report);
+        foreach (var formula in report.Element("DataDefinition")?.Element("FormulaFieldDefinitions")?.Elements("FormulaFieldDefinition") ?? [])
+            foreach (var diagnostic in CheckFormulaCapability(formula.Value, (string?)formula.Attribute("Syntax") ?? "Crystal"))
+                definition.RuntimeDiagnostics.Add($"{(string?)formula.Attribute("FormulaName")}: {diagnostic}");
+        foreach (var diagnostic in definition.RuntimeDiagnostics)
+            _logger.LogWarning("Report runtime capability: {Diagnostic}", diagnostic);
         var whereSql = ConvertRecordSelectionFormula(report, formulaFields);
+        if (report.Element("FlexKitReportDesigner")?.Element("Selection") is not null)
+        {
+            var selection = new ReportDesignerDocument();
+            ReportDesignerXmlSerializer.ParseFilters(report, selection);
+            var canonical = report.Element("DataDefinition")?.Element("RecordSelectionFormula")?.Value ?? "";
+            if (canonical != ReportDesignerXmlSerializer.BuildSelectionFormula(selection))
+                throw new InvalidDataException("Designer selection metadata and RecordSelectionFormula disagree. Reconcile the selection before running this report.");
+            var filterQuery = ReportDesignerSqlBuilder.BuildFilterQuery(selection.Filters, field =>
+            {
+                if (field.IsFormula && formulaFields.TryGetValue("@" + field.Name.TrimStart('@'), out var expression))
+                    return "(" + expression + ")";
+                var reference = ParseCrystalFieldRef(field.Reference)
+                    ?? throw new NotSupportedException($"Unsupported selection field: {field.Reference}");
+                return $"[{reference.Table.Replace("]", "]]", StringComparison.Ordinal)}].[{reference.Field.Replace("]", "]]", StringComparison.Ordinal)}]";
+            });
+            var baseWhere = ConvertRecordSelectionFormula(report, formulaFields, selection.RecordSelectionFormula);
+            whereSql = string.IsNullOrWhiteSpace(baseWhere) ? filterQuery.Sql
+                : string.IsNullOrWhiteSpace(filterQuery.Sql) ? baseWhere : $"({baseWhere}) AND ({filterQuery.Sql})";
+            definition.FixedParameters = filterQuery.Parameters;
+            if (parameters.Any(parameter => definition.FixedParameters.ContainsKey(parameter.Name)))
+                throw new InvalidDataException("A report parameter conflicts with the reserved __fxFilter prefix.");
+        }
 
         // --- Detect "drill-down" reports (Detail section suppressed at level 0) ---
         // In Crystal Reports, when a report has EnableSuppress="drilldowngrouplevel=0" on the
@@ -424,6 +475,12 @@ public class CrystalXmlReportLoader
             exposedGroups = groups;
         }
         definition.Groups = BuildReportGroups(exposedGroups, summaryFields);
+        definition.GrandTotals = summaryFields.Where(summary => string.IsNullOrEmpty(summary.GroupField))
+            .Select(summary => new ReportAggregate
+            {
+                Field = MapAggregateField(summary.Field), AggregateType = MapAggregateType(summary.Operation),
+                Format = summary.Operation == "Count" ? "N0" : "C2", Label = summary.Operation + ":"
+            }).ToList();
 
         _logger.LogInformation(
             "Parsed Crystal XML report: {File} ({Tables} tables, {Cols} cols, {Groups} groups, {Params} params)",
@@ -456,7 +513,7 @@ public class CrystalXmlReportLoader
     /// is a Crystal <c>&lt;Command&gt;</c> table — an embedded SELECT used as a derived
     /// subquery instead of a real table (e.g. PO Integration Status Report v1).
     /// </summary>
-    private sealed record TableInfo(string Alias, string Name, string? CommandSql = null);
+    private sealed record TableInfo(string Alias, string Name, string? CommandSql = null, string? QualifiedName = null);
     private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination);
     /// <summary>
     /// One field rendered in a Crystal Detail section.
@@ -492,7 +549,7 @@ public class CrystalXmlReportLoader
     private sealed record GroupInfo(
         string Table, string Field, string? FormulaName,
         bool IsVisible = true, bool PageBreakBefore = false,
-        string DescriptionTable = "", string DescriptionField = "");
+        string DescriptionTable = "", string DescriptionField = "", string SortDirection = "Ascending");
     private sealed record SortFieldInfo(string Table, string Field, string? FormulaName, string Direction, string SortType);
     private sealed record SummaryFieldInfo(string Operation, string Field, string GroupField);
     private sealed record SubreportParameterLinkInfo(
@@ -829,12 +886,13 @@ public class CrystalXmlReportLoader
         return report.Descendants("Table")
             .Where(t => t.Parent?.Name.LocalName == "Tables")
             .Select(t => new TableInfo(
-                Alias: (string?)t.Attribute("Alias") ?? "",
+                Alias: (string?)t.Attribute("Alias") ?? (string?)t.Attribute("Name") ?? "",
                 Name: (string?)t.Attribute("Name") ?? "",
                 // Crystal "Command" tables (ClassName="CrystalReports.CommandTable") carry
                 // their SELECT in a child <Command> element. When present, the SQL builder
                 // wraps it as a derived subquery: FROM (<sql>) AS Alias.
-                CommandSql: (t.Element("Command")?.Value)?.Trim()))
+                CommandSql: (t.Element("Command")?.Value)?.Trim(),
+                QualifiedName: (string?)t.Attribute("QualifiedName")))
             .Where(t => !string.IsNullOrWhiteSpace(t.Name))
             .ToList();
     }
@@ -1919,6 +1977,10 @@ public class CrystalXmlReportLoader
         {
             var g = groupElements[groupIndex];
             var condField = (string?)g.Attribute("ConditionField") ?? "";
+            var direction = (string?)g.Attribute("SortDirection") ?? (string?)g.Attribute("ConditionSortDirection")
+                ?? report.Element("DataDefinition")?.Element("SortFields")?.Elements("SortField")
+                    .Where(sort => (string?)sort.Attribute("Field") == condField && (string?)sort.Attribute("SortType") == "GroupSortField")
+                    .Select(sort => (string?)sort.Attribute("SortDirection")).FirstOrDefault() ?? "Ascending";
 
             // Visibility — corresponding GroupHeader area
             bool visible = true;
@@ -2015,14 +2077,14 @@ public class CrystalXmlReportLoader
             {
                 list.Add(new GroupInfo("", "", "@" + formulaMatch.Groups[1].Value.Trim(),
                     IsVisible: visible, PageBreakBefore: pageBreak,
-                    DescriptionTable: descTable, DescriptionField: descField));
+                    DescriptionTable: descTable, DescriptionField: descField, SortDirection: direction));
                 continue;
             }
             var parsed = ParseCrystalFieldRef(condField);
             if (parsed.HasValue)
                 list.Add(new GroupInfo(parsed.Value.Table, parsed.Value.Field, null,
                     IsVisible: visible, PageBreakBefore: pageBreak,
-                    DescriptionTable: descTable, DescriptionField: descField));
+                    DescriptionTable: descTable, DescriptionField: descField, SortDirection: direction));
         }
         return list;
     }
@@ -2197,6 +2259,46 @@ public class CrystalXmlReportLoader
             map[name.Groups[1].Value] = sql;
         }
         return map;
+    }
+
+    /// <summary>
+    /// Conservative subset diagnostics shared by the designer and loader. This is not
+    /// a complete Crystal parser or database validation; unknown constructs remain in XML.
+    /// </summary>
+    public static IReadOnlyList<string> CheckFormulaCapability(string expression, string syntax = "Crystal")
+    {
+        var diagnostics = new List<string>();
+        if (!CrystalFormula.IsCrystalSyntax(syntax))
+            diagnostics.Add($"'{syntax}' syntax is preserved but is not fully supported by the native runtime.");
+        if (string.IsNullOrWhiteSpace(expression))
+            return [.. diagnostics, "Formula expression is empty."];
+        // Shield references/literals before inspecting keywords, operators and parentheses.
+        var text = Regex.Replace(expression, "\"(?:\"\"|[^\"])*\"|'(?:''|[^'])*'|//[^\\r\\n]*|\\{[^}]+\\}",
+            match => match.Value.StartsWith("//", StringComparison.Ordinal) ? " " : " 0 ");
+        var depth = 0;
+        foreach (var character in text)
+        {
+            if (character == '(') depth++;
+            if (character == ')' && --depth < 0) break;
+        }
+        if (depth != 0 || text.IndexOfAny(['{', '}', '"', '\'']) >= 0)
+            diagnostics.Add("Unbalanced parentheses, field reference, or string literal.");
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "if", "then", "else", "and", "or", "not", "true", "false", "IsNull", "Date", "CurrentDate", "CurrentDateTime", "CurrentTime",
+            "Year", "Month", "Day", "DayOfWeek", "WeekDay", "DayOfYear", "ToText", "CStr", "ToNumber", "Val", "Mid", "Left", "Right", "Len",
+            "UpperCase", "LowerCase", "Trim", "Sum", "Average", "Avg", "Minimum", "Min", "Maximum", "Max", "Count"
+        };
+        foreach (var term in Regex.Matches(text, @"\b[A-Za-z_]\w*\b").Select(match => match.Value).Distinct(StringComparer.OrdinalIgnoreCase))
+            if (!allowed.Contains(term)) diagnostics.Add($"'{term}' is outside the checked runtime formula subset.");
+        if (text.Contains(":=", StringComparison.Ordinal) || text.TrimEnd().TrimEnd(';').Contains(';'))
+            diagnostics.Add("Assignments and multi-statement formulas require a native formula evaluator.");
+        if (Regex.IsMatch(text.TrimEnd().TrimEnd(';').TrimEnd(), @"[+*/=<>-]$|[+*/]\s*[*/]"))
+            diagnostics.Add("Incomplete arithmetic expression.");
+        if (Regex.IsMatch(text, @"\bIf\b", RegexOptions.IgnoreCase)
+            && (!Regex.IsMatch(text, @"\bThen\b", RegexOptions.IgnoreCase) || !Regex.IsMatch(text, @"\bElse\b", RegexOptions.IgnoreCase)))
+            diagnostics.Add("The runtime requires complete If/Then/Else expressions.");
+        return diagnostics;
     }
 
     /// <summary>
@@ -2407,11 +2509,8 @@ public class CrystalXmlReportLoader
         // UpperCase / LowerCase / Trim
         expr = Regex.Replace(expr, @"\bUpperCase\s*\(", "UPPER(", RegexOptions.IgnoreCase);
         expr = Regex.Replace(expr, @"\bLowerCase\s*\(", "LOWER(", RegexOptions.IgnoreCase);
-        expr = Regex.Replace(expr, @"\bTrim\s*\(", "LTRIM(RTRIM(", RegexOptions.IgnoreCase);
-        //  NB: the extra closing paren for Trim is left to the formula author — if Trim({x})
-        //  becomes LTRIM(RTRIM({x}), we emit LTRIM(RTRIM(x). The outer closing paren that
-        //  closed Trim originally now closes the inner RTRIM. The LTRIM needs one more. This
-        //  is rarely used in the reports we're translating; leave as-is for now.
+        expr = Regex.Replace(expr, @"\bTrim\s*\(\s*([^()]+?)\s*\)",
+            match => $"LTRIM(RTRIM({match.Groups[1].Value.Trim()}))", RegexOptions.IgnoreCase);
 
         // IsNull in top-level expressions (outside If/Then)
         expr = Regex.Replace(expr, @"\bIsNull\s*\(\s*([^)]+?)\s*\)",
@@ -2430,7 +2529,7 @@ public class CrystalXmlReportLoader
         {
             var formula = (string?)s.Attribute("FormulaName") ?? "";
             var op = (string?)s.Attribute("Operation") ?? "Sum";
-            var m = Regex.Match(formula, @"^\w+\s*\(\s*(\{[^}]+\})\s*,\s*(\{[^}]+\})\s*\)$");
+            var m = Regex.Match(formula, @"^\w+\s*\(\s*(\{[^}]+\})\s*(?:,\s*(\{[^}]+\}))?\s*\)$");
             if (!m.Success) continue;
 
             var field = ParseCrystalFieldRef(m.Groups[1].Value);
@@ -2451,9 +2550,9 @@ public class CrystalXmlReportLoader
     /// Handles: <c>{tbl.field}</c> → <c>tbl.field</c>, <c>{?Param}</c> → <c>@Param</c>,
     /// <c>{@Formula}</c> → inlined formula SQL, Crystal function calls, and Crystal operators.
     /// </summary>
-    private string ConvertRecordSelectionFormula(XElement report, Dictionary<string, string> formulaFields)
+    private string ConvertRecordSelectionFormula(XElement report, Dictionary<string, string> formulaFields, string? expression = null)
     {
-        var formula = (string?)report.Element("DataDefinition")?.Element("RecordSelectionFormula") ?? "";
+        var formula = expression ?? (string?)report.Element("DataDefinition")?.Element("RecordSelectionFormula") ?? "";
         formula = formula.Trim();
         if (string.IsNullOrWhiteSpace(formula)) return "";
 
@@ -2844,13 +2943,13 @@ public class CrystalXmlReportLoader
                 if (formulaFields.TryGetValue(g.FormulaName, out var sql))
                 {
                     var key = $"({sql})";
-                    if (seen.Add(key)) parts.Add(key);
+                    if (seen.Add(key)) parts.Add(key + (g.SortDirection.StartsWith("Descending", StringComparison.OrdinalIgnoreCase) ? " DESC" : ""));
                 }
             }
             else
             {
                 var key = $"[{g.Table}].{g.Field}";
-                if (seen.Add(key)) parts.Add(key);
+                if (seen.Add(key)) parts.Add(key + (g.SortDirection.StartsWith("Descending", StringComparison.OrdinalIgnoreCase) ? " DESC" : ""));
             }
         }
         foreach (var s in sortFields.Where(s => s.SortType == "RecordSortField"))
@@ -3048,32 +3147,37 @@ public class CrystalXmlReportLoader
         while (remaining.Count > 0)
         {
             TableInfo? pick = null;
-            TableLinkInfo? pickLink = null;
+            List<TableLinkInfo> pickLinks = [];
 
-            foreach (var t in remaining)
+            foreach (var t in remaining.OrderBy(table => links.FindIndex(link =>
+                link.Source.Any(field => field.Table == table.Alias) || link.Destination.Any(field => field.Table == table.Alias))))
             {
-                var candidate = FindLinkFor(links, t.Alias, joinedAliases);
-                if (candidate != null)
+                var candidates = FindLinksFor(links, t.Alias, joinedAliases).ToList();
+                if (candidates.Count > 0)
                 {
                     pick = t;
-                    pickLink = candidate;
+                    pickLinks = candidates;
                     break;
                 }
             }
 
             if (pick == null)
             {
-                // No reachable table left — emit remaining as CROSS JOINs (unusual, but lets SQL parse).
-                foreach (var t in remaining)
-                {
-                    sb.Append($" CROSS JOIN {RenderTableSource(t)}");
-                    joinedAliases.Add(t.Alias);
-                }
-                remaining.Clear();
-                break;
+                // Start the next disconnected component, then follow its links normally.
+                var disconnected = remaining[0];
+                sb.Append($" CROSS JOIN {RenderTableSource(disconnected)}");
+                joinedAliases.Add(disconnected.Alias);
+                remaining.RemoveAt(0);
+                continue;
             }
 
-            var joinKeyword = pickLink!.JoinType switch
+            var joinTypes = pickLinks.Select(link => link.JoinType).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            // An inner link requires a match even when another edge allows a null
+            // destination. All its predicates must constrain the same joined row.
+            var requiredMatch = joinTypes.Any(type => type is "Equal" or "Inner");
+            if (joinTypes.Count != 1 && !requiredMatch)
+                throw new NotSupportedException($"Mixed join directions for '{pick.Alias}' require an explicit SQL command.");
+            var joinKeyword = (requiredMatch ? "Equal" : joinTypes[0]) switch
             {
                 "LeftOuter" => "LEFT JOIN",
                 "RightOuter" => "RIGHT JOIN",
@@ -3082,13 +3186,18 @@ public class CrystalXmlReportLoader
             };
             sb.Append($" {joinKeyword} {RenderTableSource(pick)} ON ");
             var onParts = new List<string>();
-            for (int k = 0; k < Math.Min(pickLink.Source.Count, pickLink.Destination.Count); k++)
+            foreach (var link in pickLinks)
             {
-                var s = pickLink.Source[k];
-                var d = pickLink.Destination[k];
-                onParts.Add($"[{s.Table}].{s.Field} = [{d.Table}].{d.Field}");
+                if (link.Source.Count != link.Destination.Count || link.Source.Count == 0)
+                    throw new InvalidDataException("Crystal table link has unmatched field pairs.");
+                for (int k = 0; k < link.Source.Count; k++)
+                {
+                    var s = link.Source[k];
+                    var d = link.Destination[k];
+                    onParts.Add($"[{s.Table}].{s.Field} = [{d.Table}].{d.Field}");
+                }
             }
-            sb.Append(string.Join(" AND ", onParts));
+            sb.Append(string.Join(" AND ", onParts.Distinct(StringComparer.OrdinalIgnoreCase)));
 
             joinedAliases.Add(pick.Alias);
             remaining.Remove(pick);
@@ -3104,7 +3213,7 @@ public class CrystalXmlReportLoader
         return sb.ToString();
     }
 
-    private static TableLinkInfo? FindLinkFor(List<TableLinkInfo> links, string alias, HashSet<string> joined)
+    private static IEnumerable<TableLinkInfo> FindLinksFor(List<TableLinkInfo> links, string alias, HashSet<string> joined)
     {
         // A usable link must involve `alias` on one side and something already joined on the other.
         foreach (var link in links)
@@ -3114,14 +3223,16 @@ public class CrystalXmlReportLoader
 
             if (dstAliases.Contains(alias, StringComparer.OrdinalIgnoreCase) &&
                 srcAliases.Any(a => joined.Contains(a)))
-                return link;
+                yield return link;
 
             if (srcAliases.Contains(alias, StringComparer.OrdinalIgnoreCase) &&
                 dstAliases.Any(a => joined.Contains(a)))
                 // swap — the unjoined side should be on the right
-                return new TableLinkInfo(link.JoinType, link.Destination, link.Source);
+                yield return new TableLinkInfo(link.JoinType switch
+                {
+                    "LeftOuter" => "RightOuter", "RightOuter" => "LeftOuter", _ => link.JoinType
+                }, link.Destination, link.Source);
         }
-        return null;
     }
 
     private List<ReportGroup> BuildReportGroups(List<GroupInfo> groups, List<SummaryFieldInfo> summaries)
@@ -3134,7 +3245,7 @@ public class CrystalXmlReportLoader
         // a subtotal — same expectation the VB6 Crystal viewer raises.
         var defaultAggregates = new List<(string Field, ReportAggregateType Op)>();
         var seenAggKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var s in summaries)
+        foreach (var s in summaries.Where(summary => !string.IsNullOrEmpty(summary.GroupField)))
         {
             var key = s.Operation + "::" + s.Field;
             if (seenAggKeys.Add(key))
@@ -3155,6 +3266,8 @@ public class CrystalXmlReportLoader
             var rg = new ReportGroup
             {
                 Field = alias,
+                SortDirection = g.SortDirection.StartsWith("Descending", StringComparison.OrdinalIgnoreCase)
+                    ? ReportSortDirection.Descending : ReportSortDirection.Ascending,
                 ShowHeader = true,
                 // ShowFooter is set BELOW after aggregates are populated —
                 // groups with no subtotals would otherwise produce a phantom
@@ -3279,9 +3392,11 @@ public class CrystalXmlReportLoader
     private string RenderTableSource(TableInfo t)
     {
         if (!string.IsNullOrWhiteSpace(t.CommandSql))
-            return $"({t.CommandSql}) AS [{t.Alias}]";
+            return $"({t.CommandSql.TrimEnd(';')}) AS [{t.Alias.Replace("]", "]]", StringComparison.Ordinal)}]";
 
-        var qualified = QualifyTable(t.Name);
+        var qualified = !string.IsNullOrWhiteSpace(t.QualifiedName) && t.QualifiedName.Contains('.')
+            ? string.Join(".", t.QualifiedName.Split('.').Select(part => "[" + part.Trim('[', ']').Replace("]", "]]", StringComparison.Ordinal) + "]"))
+            : QualifyTable(t.Name);
         return string.Equals(t.Alias, t.Name, StringComparison.Ordinal)
             ? qualified
             : $"{qualified} AS [{t.Alias}]";

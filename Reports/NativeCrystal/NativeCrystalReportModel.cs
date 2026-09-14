@@ -346,6 +346,7 @@ public sealed class CrystalReportSectionModel
 
 public sealed class CrystalSectionFormatModel
 {
+    public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public bool EnableKeepTogether { get; set; } = true;
 
     public bool EnableNewPageAfter { get; set; }
@@ -369,6 +370,11 @@ public sealed class CrystalSectionFormatModel
 
 public sealed class CrystalReportObjectModel
 {
+    public int PictureStorageIndex { get; set; } = -1;
+    public int PictureAspect { get; set; } = 1;
+    public string ImageDataUrl { get; set; } = "";
+    public string PictureDiagnostic { get; set; } = "";
+    public List<CrystalTextRunModel> TextRuns { get; } = [];
     public string ElementName { get; set; } = "";
 
     public string Name { get; set; } = "";
@@ -406,10 +412,14 @@ public sealed class CrystalReportObjectModel
     public CrystalColorModel Color { get; set; } = CrystalColorModel.Black();
 
     public bool HasFont { get; set; }
+    internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
+    public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
 }
 
 public sealed class CrystalObjectFormatModel
 {
+    internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
+    public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string CssClass { get; set; } = "";
 
     public bool EnableCanGrow { get; set; }
@@ -425,6 +435,8 @@ public sealed class CrystalObjectFormatModel
 
 public sealed class CrystalBorderModel
 {
+    internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
+    public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string BottomLineStyle { get; set; } = "NoLine";
 
     public bool HasDropShadow { get; set; }
@@ -439,6 +451,8 @@ public sealed class CrystalBorderModel
 
     public CrystalColorModel BorderColor { get; set; } = CrystalColorModel.Black();
 }
+
+public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color);
 
 public sealed class CrystalFontModel
 {

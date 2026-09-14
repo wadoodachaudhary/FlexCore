@@ -2131,6 +2131,11 @@
 .fx-row {
     transition: background 0.1s;
 }
+/* Instant row feedback clears and paints in one frame, without a fading trail. */
+.fx-grid[data-fx-instant-row-feedback] ::deep .fx-row,
+.fx-grid[data-fx-instant-row-feedback] ::deep .fx-row > td {
+    transition: none !important;
+}
 .fx-row.fx-hover:hover {
     background: var(--fx-grid-row-hover-bg) !important;
 }

@@ -527,6 +527,12 @@ internal static class CrystalReportXmlWriter
             }
 
             writer.WriteEndElement();
+            if (area.Format.ConditionFormulas.Count > 0)
+            {
+                writer.WriteStartElement("SectionAreaConditionFormulas");
+                foreach (var condition in area.Format.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
+                writer.WriteEndElement();
+            }
             writer.WriteStartElement("Sections");
             foreach (var section in area.Sections)
         {
@@ -545,7 +551,11 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "EnableSuppressIfBlank", LowerBool(section.Format.EnableSuppressIfBlank));
             Attr(writer, "EnableUnderlaySection", LowerBool(section.Format.EnableUnderlaySection));
             writer.WriteStartElement("SectionAreaConditionFormulas");
-            if (!string.IsNullOrWhiteSpace(section.Format.EnableSuppressConditionFormula))
+            if (section.Format.ConditionFormulas.Count > 0)
+            {
+                foreach (var condition in section.Format.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
+            }
+            else if (!string.IsNullOrWhiteSpace(section.Format.EnableSuppressConditionFormula))
             {
                 Attr(writer, "EnableSuppress", section.Format.EnableSuppressConditionFormula);
             }
@@ -617,6 +627,25 @@ internal static class CrystalReportXmlWriter
             writer.WriteStartElement("Text");
             writer.WriteString(reportObject.Text);
             writer.WriteEndElement();
+            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0) ||
+                reportObject.TextRuns.Select(run => (run.FontFamily, run.Size, run.Bold, run.Italic, run.Underline, run.Color)).Distinct().Skip(1).Any())
+            {
+                writer.WriteStartElement("FlexKitVisual");
+                foreach (var run in reportObject.TextRuns)
+                {
+                    writer.WriteStartElement("Run");
+                    Attr(writer, "Binding", run.Binding);
+                    Attr(writer, "Font", run.FontFamily);
+                    Attr(writer, "Size", run.Size.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    Attr(writer, "Bold", LowerBool(run.Bold));
+                    Attr(writer, "Italic", LowerBool(run.Italic));
+                    Attr(writer, "Underline", LowerBool(run.Underline));
+                    Attr(writer, "Color", run.Color);
+                    writer.WriteString(run.Text);
+                    writer.WriteEndElement();
+                }
+                writer.WriteEndElement();
+            }
         }
 
         if (reportObject.ElementName is "TextObject" or "FieldHeadingObject" or "FieldObject")
@@ -624,12 +653,23 @@ internal static class CrystalReportXmlWriter
             WriteColor(writer, "Color", reportObject.Color);
             WriteFont(writer, reportObject.Font);
             writer.WriteStartElement("FontColorConditionFormulas");
+            foreach (var condition in reportObject.FontConditionFormulas) Attr(writer, condition.Key, condition.Value);
+            writer.WriteEndElement();
+        }
+
+        if (reportObject.ElementName == "PictureObject")
+        {
+            writer.WriteStartElement("FlexKitVisual");
+            Attr(writer, "ImageFit", "fill");
+            if (reportObject.PictureDiagnostic.Length > 0) Attr(writer, "Diagnostic", reportObject.PictureDiagnostic);
+            if (reportObject.ImageDataUrl.Length > 0) writer.WriteElementString("Image", reportObject.ImageDataUrl);
             writer.WriteEndElement();
         }
 
         WriteBorder(writer, reportObject.Border);
         WriteObjectFormat(writer, reportObject.Format);
         writer.WriteStartElement("ObjectFormatConditionFormulas");
+        foreach (var condition in reportObject.Format.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
         writer.WriteEndElement();
         writer.WriteEndElement();
     }
@@ -644,6 +684,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "TopLineStyle", border.TopLineStyle);
 
         writer.WriteStartElement("BorderConditionFormulas");
+        foreach (var condition in border.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
         writer.WriteEndElement();
         WriteColor(writer, "BackgroundColor", border.BackgroundColor);
         WriteColor(writer, "BorderColor", border.BorderColor);

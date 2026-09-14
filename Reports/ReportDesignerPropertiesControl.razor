@@ -13,7 +13,7 @@
 
                 @if (selected.Kind.Equals("Text", StringComparison.OrdinalIgnoreCase) || selected.Kind.Equals("FieldHeading", StringComparison.OrdinalIgnoreCase))
                 {
-                    <label>Text<textarea @bind="selected.Text" @bind:event="oninput" @bind:after="NotifyChangedAsync"></textarea></label>
+                    <label>Text<Fx.ControlKit.TextAreaControl Value="selected.Text" ValueChanged="value => ChangeTextAsync(selected, value)" Enabled="@(selected.Visual.Runs.Count == 0 && SelectedSection?.ReadOnly != true)" Rows="3" /></label>
                 }
                 else if (selected.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase))
                 {
@@ -28,10 +28,10 @@
 
             <div class="fx-rd-property-card grid2">
                 <h3>Position</h3>
-                <label>Left<input type="number" @bind="selected.LeftTwips" @bind:after="NotifyChangedAsync" /></label>
-                <label>Top<input type="number" @bind="selected.TopTwips" @bind:after="NotifyChangedAsync" /></label>
-                <label>Width<input type="number" @bind="selected.WidthTwips" @bind:after="NotifyChangedAsync" /></label>
-                <label>Height<input type="number" @bind="selected.HeightTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Left<NumericTextBoxControl TValue="int" Value="selected.LeftTwips" ValueChanged="value => ChangePositionAsync(selected, value, 0)" Min="0" Enabled="@(!selected.LockSizePosition)" /></label>
+                <label>Top<NumericTextBoxControl TValue="int" Value="selected.TopTwips" ValueChanged="value => ChangePositionAsync(selected, value, 1)" Min="0" Enabled="@(!selected.LockSizePosition)" /></label>
+                <label>Width<NumericTextBoxControl TValue="int" Value="selected.WidthTwips" ValueChanged="value => ChangePositionAsync(selected, value, 2)" Min="0" Enabled="@(!selected.LockSizePosition)" /></label>
+                <label>Height<NumericTextBoxControl TValue="int" Value="selected.HeightTwips" ValueChanged="value => ChangePositionAsync(selected, value, 3)" Min="0" Enabled="@(!selected.LockSizePosition)" /></label>
             </div>
         }
         else if (SelectedSection is not null)
@@ -40,8 +40,8 @@
             <div class="fx-rd-property-card">
                 <h3>Section</h3>
                 <label>Name<input @bind="section.Name" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
-                <label>Kind<input @bind="section.Kind" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
-                <label>Height<input type="number" @bind="section.HeightTwips" @bind:after="NotifyChangedAsync" /></label>
+                <label>Kind<TextBoxControl Value="@(section.Kind)" ReadOnly="true" /></label>
+                <label>Height<NumericTextBoxControl TValue="int" Value="section.HeightTwips" ValueChanged="value => ChangeSectionHeightAsync(section, value)" Min="0" /></label>
                 <label>Background<input type="color" @bind="section.BackgroundColor" @bind:after="NotifyChangedAsync" /></label>
                 <label class="check"><input type="checkbox" @bind="section.IsSuppressed" @bind:after="NotifyChangedAsync" /> Suppressed</label>
                 <label class="check"><input type="checkbox" @bind="section.KeepTogether" @bind:after="NotifyChangedAsync" /> Keep Together</label>
@@ -52,10 +52,7 @@
             <h3>Page</h3>
             <label>Title<input @bind="Document.Title" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
             <label>Orientation
-                <select @bind="Document.Page.Orientation" @bind:after="NotifyChangedAsync">
-                    <option>Portrait</option>
-                    <option>Landscape</option>
-                </select>
+                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "Portrait", "Landscape" })" Value="@Document.Page.Orientation" ValueChanged="ChangeOrientationAsync" />
             </label>
             <label>Width<input type="number" @bind="Document.Page.ContentWidthTwips" @bind:after="NotifyChangedAsync" /></label>
             <label>Height<input type="number" @bind="Document.Page.ContentHeightTwips" @bind:after="NotifyChangedAsync" /></label>
@@ -68,6 +65,42 @@
     [Parameter] public ReportDesignerSection? SelectedSection { get; set; }
     [Parameter] public ReportDesignerElement? SelectedElement { get; set; }
     [Parameter] public EventCallback Changed { get; set; }
+
+    private async Task ChangeTextAsync(ReportDesignerElement element, string? value)
+    {
+        if (element.Visual.Runs.Count > 0 || SelectedSection?.ReadOnly == true) return;
+        element.Text = value ?? "";
+        await NotifyChangedAsync();
+    }
+
+    private async Task ChangePositionAsync(ReportDesignerElement element, int value, int coordinate)
+    {
+        if (element.LockSizePosition || value < 0)
+            return;
+        switch (coordinate)
+        {
+            case 0: element.LeftTwips = value; break;
+            case 1: element.TopTwips = value; break;
+            case 2: element.WidthTwips = value; break;
+            case 3: element.HeightTwips = value; break;
+        }
+        var section = Document.Sections.FirstOrDefault(item => item.Id == element.SectionId);
+        if (section is not null)
+            section.HeightTwips = Math.Max(section.HeightTwips, element.TopTwips + element.HeightTwips);
+        await NotifyChangedAsync();
+    }
+
+    private async Task ChangeSectionHeightAsync(ReportDesignerSection section, int value)
+    {
+        section.HeightTwips = Math.Max(Math.Max(0, value), section.Elements.Select(element => element.TopTwips + element.HeightTwips).DefaultIfEmpty(0).Max());
+        await NotifyChangedAsync();
+    }
+
+    private async Task ChangeOrientationAsync(string? value)
+    {
+        ReportDesignerEditing.SetOrientation(Document.Page, value ?? "Portrait");
+        await NotifyChangedAsync();
+    }
 
     private async Task NotifyChangedAsync()
     {

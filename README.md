@@ -174,8 +174,9 @@ with `ShowColumnVirtualizationFallback="false"`.
 ### Custom multi-column sorting
 
 With `AllowSorting="true"`, the standard right-click header context menu includes
-**Multi-sort → Custom Sort...**. `AllowMultiSorting` defaults to `true`; set it to
-`false` to restrict a grid to one sort column. The section appears alongside the
+**Multi-sort → Custom Sort...** by default. `AllowMultiSorting` defaults to `true`; set it to
+`false` to restrict a grid to one sort column. To keep multi-column sorting but leave the
+option out of a grid's menu, set `ShowMultiSortMenu="false"`. The section appears alongside the
 grouping/expand/collapse commands when grouping is enabled and does not require
 `ShowColumnMenu`. Hosts can also open the same FlexCore dialog with
 `await grid.OpenSortDialogAsync()`.
