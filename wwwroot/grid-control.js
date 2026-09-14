@@ -4494,7 +4494,7 @@ const gridPaintArbiters = new WeakMap();
 function gridPaintArbiter(gridRoot) {
     let state = gridPaintArbiters.get(gridRoot);
     if (!state) {
-        state = { generation: 0, owner: null, pointerDown: false, cancelKeyboard: null };
+        state = { generation: 0, owner: null, pointerDown: false, cancelKeyboard: null, cancelPointer: null };
         gridPaintArbiters.set(gridRoot, state);
     }
     return state;
@@ -4502,6 +4502,7 @@ function gridPaintArbiter(gridRoot) {
 
 function beginGridPaintGesture(gridRoot, owner) {
     const state = gridPaintArbiter(gridRoot);
+    state.cancelPointer?.();
     // A new gesture invalidates the previous one's deferred sweeps (the
     // generation bump makes them no-ops) — so the battlefield must be swept
     // HERE, or paints whose only cleaner was that sweep are orphaned
@@ -4701,6 +4702,10 @@ function clearSelectedLook(gridRoot, exceptTr) {
 export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex, anchorField) {
     if (!gridRoot || !dotNetRef) return;
     unregisterGridDragSelection(gridRoot);
+    // A delayed arm can arrive after mouse-up outside the grid (no click).
+    // There is no drag to track, and repainting its anchor would leave a ghost.
+    if (mode === "row" && gridRoot.hasAttribute("data-fx-instant-row-feedback")
+        && !gridPaintArbiter(gridRoot).pointerDown) return;
 
     const doc = gridRoot.ownerDocument || document;
     let lastIdx = anchorIndex, moved = false, ended = false, raf = 0, pending = null;
@@ -4880,11 +4885,88 @@ function sweepStalePreviewPaints(exceptTr) {
     }
 }
 
-export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false) {
+export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false, dotNetRef = null) {
     if (!gridRoot || gridInstantFeedbackBindings.has(gridRoot)) return;
     const doc = gridRoot.ownerDocument || document;
     let netTimer = 0;
+    let rowPreview = null;
+    const arbiter = gridPaintArbiter(gridRoot);
+    const releaseRowPreview = (clear = true) => {
+        if (!rowPreview) return;
+        rowPreview = null;
+        if (clear) clearGridDragPreview(gridRoot);
+    };
+    arbiter.cancelPointer = releaseRowPreview;
+    if (!cellMode) gridRoot.dataset.fxInstantRowFeedback = "true";
+
+    const reconcileRowPreview = () => {
+        const preview = rowPreview;
+        if (!preview) return;
+        if (!isCurrentGridPaintGesture(gridRoot, "pointer", preview.generation)
+            || !gridRoot.contains(preview.row)) {
+            releaseRowPreview();
+            return;
+        }
+        if (preview.requested && Number(gridRoot.dataset.fxPointerPaintAck) >= preview.generation) {
+            releaseRowPreview();
+            return;
+        }
+        // A late render may overwrite the old row's inline mute. Restore it
+        // before paint; only write changed styles so the observer converges.
+        const foreignPaints = new Set([
+            ...gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected, tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active"),
+            ...paintedPreviewEls
+        ]);
+        foreignPaints.forEach(el => {
+            if (!gridRoot.contains(el) || el.closest("tr") === preview.row) return;
+            const mute = node => {
+                if (node.style.getPropertyValue("background-color") !== "transparent"
+                    || node.style.getPropertyPriority("background-color") !== "important"
+                    || node.style.getPropertyValue("box-shadow") !== "none"
+                    || node.style.getPropertyValue("outline") !== "none") muteSelectedLook(node);
+            };
+            mute(el);
+            if (el.tagName === "TR") [...el.children].forEach(mute);
+        });
+        if ([preview.row, ...preview.row.children].some(el => el.style.backgroundColor !== preview.color))
+            setRowPreview(preview.row, true, preview.color);
+    };
+    const observer = new MutationObserver(reconcileRowPreview);
+    observer.observe(gridRoot, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ["class", "style", "data-fx-pointer-paint-ack"]
+    });
+
+    // This document listener is installed after Blazor's delegated click
+    // listener. Its acknowledgement travels behind the original click.
+    // A disposed grid's element reference can no longer reach unregister, so the
+    // document listeners remove themselves once the grid has left the page.
+    const onClick = e => {
+        if (!gridRoot.isConnected) { unregisterGridInstantSelectionFeedback(gridRoot); return; }
+        const preview = rowPreview;
+        if (!preview || preview.requested || !gridRoot.contains(e.target)) return;
+        preview.requested = true;
+        queueMicrotask(() => {
+            if (rowPreview !== preview) return;
+            dotNetRef.invokeMethodAsync("AcknowledgePointerSelectionPaintAsync", preview.generation)
+                .catch(() => { if (rowPreview === preview) releaseRowPreview(); });
+        });
+    };
+    const onMove = e => {
+        if (!gridRoot.isConnected) { unregisterGridInstantSelectionFeedback(gridRoot); return; }
+        if (!rowPreview || !(e.buttons & 1)) return;
+        const tr = e.target.closest?.("tbody tr.fx-row[data-ari]");
+        // The existing range painter takes over a real drag. Do not sweep
+        // its mutes or paints while handing it the gesture.
+        if (gridDragSelectionBindings.has(gridRoot)
+            && tr && gridRoot.contains(tr) && tr !== rowPreview.row) releaseRowPreview(false);
+    };
+    const onKeyDown = () => releaseRowPreview();
+    doc.addEventListener("click", onClick);
+    doc.addEventListener("pointermove", onMove, true);
+    gridRoot.addEventListener("keydown", onKeyDown, true);
     const onDown = e => {
+        releaseRowPreview();
         if (e.button !== 0) return;
         // Track the PHYSICAL press for every primary-button pointerdown,
         // modifier presses included: while the button is down no sweep may
@@ -4893,8 +4975,11 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
         // the user's finger and clearing the press paint).
         const arbiter = gridPaintArbiter(gridRoot);
         arbiter.pointerDown = true;
-        const releasePointer = () => {
+        const releasePointer = event => {
             arbiter.pointerDown = false;
+            if (event.type !== "pointerup"
+                || (rowPreview && event.target.closest?.("tr.fx-row") !== rowPreview.row))
+                releaseRowPreview();
             doc.removeEventListener("pointerup", releasePointer, true);
             doc.removeEventListener("pointercancel", releasePointer, true);
             window.removeEventListener("blur", releasePointer);
@@ -4965,6 +5050,9 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
             sweepStalePreviewPaints(tr);
             clearSelectedLook(gridRoot, tr);
             setRowPreview(tr, true, color);
+            if (dotNetRef) {
+                rowPreview = { row: tr, generation: gestureGeneration, color: tr.style.backgroundColor, requested: false };
+            }
         }
 
         // Self-healing for plain-click grids (no drag capture registered, so
@@ -4974,6 +5062,7 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
         const net = () => {
             // A newer gesture owns the paints now — this net is obsolete.
             if (!isCurrentGridPaintGesture(gridRoot, "pointer", gestureGeneration)) return;
+            if (rowPreview) return; // The matching server render, not a timer, owns handoff.
             // A physically live gesture (button still down, or a drag in
             // progress) owns its paints — sweeping now un-mutes the old
             // selection and repaints it under the user's cursor. Defer.
@@ -4985,6 +5074,13 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false)
     gridRoot.addEventListener("pointerdown", onDown, true);
     gridInstantFeedbackBindings.set(gridRoot, () => {
         clearTimeout(netTimer);
+        observer.disconnect();
+        releaseRowPreview();
+        if (arbiter.cancelPointer === releaseRowPreview) arbiter.cancelPointer = null;
+        delete gridRoot.dataset.fxInstantRowFeedback;
+        doc.removeEventListener("click", onClick);
+        doc.removeEventListener("pointermove", onMove, true);
+        gridRoot.removeEventListener("keydown", onKeyDown, true);
         gridRoot.removeEventListener("pointerdown", onDown, true);
     });
 }

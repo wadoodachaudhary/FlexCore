@@ -305,6 +305,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool AllowSorting { get; set; }
     /// <summary>Allow multiple sort levels on sortable grids. Hosts can opt out explicitly.</summary>
     [Parameter] public bool AllowMultiSorting { get; set; } = true;
+    /// <summary>Show the Multi-sort group (Custom Sort...) in the header right-click menu. On by default
+    /// whenever AllowSorting and AllowMultiSorting are; a page sets it false to leave the option out of
+    /// its menu while keeping multi-column sorting.</summary>
+    [Parameter] public bool ShowMultiSortMenu { get; set; } = true;
     [Parameter] public bool AllowFiltering { get; set; }
     /// <summary>
     /// When enabled, column filter popups render dual condition inputs (Condition 1 + AND/OR + Condition 2)
@@ -1422,12 +1426,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     protected override bool ShouldRender()
     {
-        // Row-window callbacks promise JS that a DOM acknowledgement token will
+        // Window and pointer-paint callbacks promise JS that an acknowledgement token will
         // be painted. A stale editor-owned one-shot suppression must never eat
         // that authoritative render or the client scroll queue can wait forever.
-        if (_authoritativeWindowRenderPending)
+        if (_authoritativeWindowRenderPending || _pointerPaintRenderPending)
         {
             _authoritativeWindowRenderPending = false;
+            _pointerPaintRenderPending = false;
             _suppressNextRenderOnce = false;
             return true;
         }
@@ -5414,6 +5419,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // ── Selection ────────────────────────────────────────────────────────
 
     private async Task HandleRowClick(TValue item, int rowIndex, MouseEventArgs? mouseArgs = null)
+        => await TrackPointerSelectionAsync(() => HandleRowClickCore(item, rowIndex, mouseArgs));
+
+    private async Task HandleRowClickCore(TValue item, int rowIndex, MouseEventArgs? mouseArgs)
     {
         if (_cellClickHandledForPress)
         {
@@ -6696,8 +6704,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement,
-                SelectionSettingsRef?.Mode == SelectionMode.Cell);
+                SelectionSettingsRef?.Mode == SelectionMode.Cell, _gridDotNetRef);
             _instantFeedbackRegistered = true;
         }
         catch
@@ -7190,6 +7199,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private async Task HandleCellClick(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
+        => await TrackPointerSelectionAsync(() => HandleCellClickCore(item, rowIndex, cellIndex, args));
+
+    private async Task HandleCellClickCore(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         _cellClickHandledForPress = true;
         if (ConsumeKeyActivationClickSuppression())
@@ -16502,6 +16514,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
+            // First, so it reaches the browser before the grid's DOM is removed. Its
+            // document-level listeners would otherwise keep this grid alive (the JS side
+            // also removes them itself once the grid is disconnected).
+            if (_instantFeedbackRegistered && _gridJsModule != null)
+            {
+                _instantFeedbackRegistered = false;
+                await _gridJsModule.InvokeVoidAsync("unregisterGridInstantSelectionFeedback", _gridHostElement);
+            }
             if (_headerDragPreviewRegistered && _gridJsModule != null)
             {
                 await _gridJsModule.InvokeVoidAsync("unregisterHeaderDragPreview", _gridHostElement);

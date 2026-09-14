@@ -9,6 +9,9 @@ public class ReportTab
 {
     /// <summary>Title shown on the tab (e.g. "Main Report", "ANDAV01C01", "400 Drywall").</summary>
     public string Title { get; set; } = "";
+    public ReportDesignerPage? PositionedPage { get; set; }
+
+    public List<string> RuntimeDiagnostics { get; set; } = new();
 
     /// <summary>Drill-down path for this tab — empty for the main report.</summary>
     public List<DrillDownFilter> Path { get; set; } = new();

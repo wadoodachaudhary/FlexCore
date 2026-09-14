@@ -9,6 +9,11 @@
         #7fa6d2;
 }
 
+.fx-rd-canvas-tools { display:flex; align-items:center; gap:8px; height:32px; position:sticky; top:0; z-index:5; background:#e8ecef; color:#222; }
+.fx-rd-inch-ruler { height:25px; position:relative; background:#f3f4f5; color:#333; overflow:hidden; }
+.fx-rd-inch-ruler span { position:absolute; border-left:1px solid #555; padding-left:3px; font-size:11px; }
+.fx-rd-band-stage { position:absolute; inset:0 auto auto 0; transform-origin:top left; }
+
 .fx-rd-canvas ::deep .fx-grid.fx-rd-canvas-grid {
     display: inline-flex;
     min-width: 0;
@@ -93,9 +98,8 @@
     width: 100%;
     height: 100%;
     min-height: 22px;
-    overflow: hidden;
-    border-top: 2px solid #111;
-    border-bottom: 1px solid #111;
+    overflow: visible;
+    box-shadow: inset 0 -1px #777;
     background-image: none;
 }
 
@@ -128,18 +132,29 @@
     position: absolute;
     display: block;
     margin: 0;
-    padding: 0 2px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-    border: 1px solid transparent;
+    padding: 0;
+    overflow: visible;
+    border: 0;
     background: transparent;
-    cursor: default;
+    cursor: move;
     text-align: left;
+    touch-action:none;
+    user-select:none;
 }
 
+.fx-rd-object-content { pointer-events:none; }
+.fx-rd-handle { position:absolute; width:6px; height:6px; background:white; border:1px solid #222; z-index:3; box-sizing:border-box; }
+.fx-rd-handle-nw { left:-3px; top:-3px; cursor:nwse-resize; }
+.fx-rd-handle-n { left:calc(50% - 3px); top:-3px; cursor:ns-resize; }
+.fx-rd-handle-ne { right:-3px; top:-3px; cursor:nesw-resize; }
+.fx-rd-handle-e { right:-3px; top:calc(50% - 3px); cursor:ew-resize; }
+.fx-rd-handle-se { right:-3px; bottom:-3px; cursor:nwse-resize; }
+.fx-rd-handle-s { left:calc(50% - 3px); bottom:-3px; cursor:ns-resize; }
+.fx-rd-handle-sw { left:-3px; bottom:-3px; cursor:nesw-resize; }
+.fx-rd-handle-w { left:-3px; top:calc(50% - 3px); cursor:ew-resize; }
+
 .fx-rd-object:hover {
-    border-color: #4d77aa;
+    outline:1px solid #4d77aa;
 }
 
 .fx-rd-object.selected {

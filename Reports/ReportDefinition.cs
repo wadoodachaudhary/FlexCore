@@ -7,6 +7,7 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 public class ReportDefinition
 {
+    public ReportPositionedLayout? PositionedLayout { get; set; }
     /// <summary>Report identifier (typically the .rpt filename without extension).</summary>
     public string ReportId { get; set; } = "";
 
@@ -43,6 +44,15 @@ public class ReportDefinition
 
     /// <summary>Parameter definitions (values injected at runtime).</summary>
     public List<ReportParameter> Parameters { get; set; } = new();
+
+    /// <summary>Bound constants from designer selection conditions, separate from user prompts.</summary>
+    public Dictionary<string, object> FixedParameters { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Explicit report-scoped summaries, including reports without groups.</summary>
+    public List<ReportAggregate> GrandTotals { get; set; } = new();
+
+    /// <summary>Known runtime limitations; preserved XML is not a guarantee of executable semantics.</summary>
+    public List<string> RuntimeDiagnostics { get; set; } = new();
 
     /// <summary>Page orientation: Portrait or Landscape.</summary>
     public ReportOrientation Orientation { get; set; } = ReportOrientation.Portrait;
@@ -389,7 +399,7 @@ public sealed record ReportParameterChoice(string Description, string Value);
 
 public enum ReportOrientation { Portrait, Landscape }
 
-public enum ReportPaperSize { Letter, Legal, A4, Tabloid }
+public enum ReportPaperSize { Letter, Legal, A4, Tabloid, A3 }
 
 public enum ReportAlignment { Left, Center, Right }
 

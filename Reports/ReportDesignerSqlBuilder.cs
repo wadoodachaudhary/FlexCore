@@ -1,16 +1,26 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Fx.ControlKit.Reports;
 
 internal static class ReportDesignerSqlBuilder
 {
+    internal sealed record Query(string Sql, Dictionary<string, object> Parameters);
+
     public static string BuildSql(
         IReadOnlyList<ReportDesignerDataTable> tables,
         IReadOnlyList<ReportDesignerField> displayFields,
         IReadOnlyList<ReportDesignerDataLink> links,
         IReadOnlyList<ReportDesignerFilter> filters,
-        int topRows = 100)
+        int topRows = 0) => BuildQuery(tables, displayFields, links, filters, topRows).Sql;
+
+    public static Query BuildQuery(
+        IReadOnlyList<ReportDesignerDataTable> tables,
+        IReadOnlyList<ReportDesignerField> displayFields,
+        IReadOnlyList<ReportDesignerDataLink> links,
+        IReadOnlyList<ReportDesignerFilter> filters,
+        int topRows = 0)
     {
         var selectedTables = tables
             .Where(table => !string.IsNullOrWhiteSpace(table.Name))
@@ -18,7 +28,7 @@ internal static class ReportDesignerSqlBuilder
             .Select(group => group.First())
             .ToList();
         if (selectedTables.Count == 0)
-            return "";
+            return new Query("", new());
 
         var fields = displayFields.Count > 0
             ? displayFields
@@ -40,11 +50,16 @@ internal static class ReportDesignerSqlBuilder
         sb.AppendLine(string.Join("," + Environment.NewLine + "       ", selectFields));
         sb.AppendLine(BuildFromAndJoins(selectedTables, links));
 
-        var where = BuildWhere(filters, selectedTables);
-        if (!string.IsNullOrWhiteSpace(where))
-            sb.AppendLine("WHERE " + where);
+        var where = BuildFilterQuery(filters, field =>
+        {
+            var table = ResolveFieldTable(field, selectedTables)
+                ?? throw new InvalidDataException($"Filter source not found: {field.Reference}");
+            return $"{QuoteIdentifier(TableAlias(table))}.{QuoteIdentifier(field.Name)}";
+        });
+        if (!string.IsNullOrWhiteSpace(where.Sql))
+            sb.AppendLine("WHERE " + where.Sql);
 
-        return sb.ToString().TrimEnd();
+        return new Query(sb.ToString().TrimEnd(), where.Parameters);
     }
 
     public static IReadOnlyList<string> GetFieldNamesForTable(
@@ -95,27 +110,38 @@ internal static class ReportDesignerSqlBuilder
         var sb = new StringBuilder();
         sb.Append("FROM ").Append(QualifiedTable(tables[0])).Append(" AS ").Append(QuoteIdentifier(TableAlias(tables[0])));
 
-        foreach (var table in tables.Skip(1))
+        var remaining = tables.Skip(1).ToList();
+        while (remaining.Count > 0)
         {
+            var table = remaining.OrderBy(candidate => links.ToList().FindIndex(link =>
+                    string.Equals(link.LeftTable, candidate.Name, StringComparison.OrdinalIgnoreCase) || string.Equals(link.RightTable, candidate.Name, StringComparison.OrdinalIgnoreCase)))
+                .FirstOrDefault(candidate => links.Any(link => ConnectsJoinedTable(link, TableAlias(candidate), joined)))
+                ?? remaining[0];
             var tableAlias = TableAlias(table);
-            var link = links.FirstOrDefault(candidate => ConnectsJoinedTable(candidate, tableAlias, joined));
-            if (link == null)
+            var connecting = links.Where(candidate => ConnectsJoinedTable(candidate, tableAlias, joined)).ToList();
+            if (connecting.Count == 0)
             {
                 sb.AppendLine();
                 sb.Append("CROSS JOIN ").Append(QualifiedTable(table)).Append(" AS ").Append(QuoteIdentifier(tableAlias));
                 joined.Add(tableAlias);
+                remaining.Remove(table);
                 continue;
             }
 
+            var joinKinds = connecting.Select(link => OrientedJoin(link, tableAlias)).Distinct().ToList();
+            var requiredMatch = joinKinds.Contains("INNER JOIN");
+            if (joinKinds.Count != 1 && !requiredMatch)
+                throw new NotSupportedException($"Mixed join directions for '{tableAlias}' require an explicit SQL command.");
             sb.AppendLine();
-            sb.Append(JoinKeyword(link.JoinType))
+            sb.Append(requiredMatch ? "INNER JOIN" : joinKinds[0])
                 .Append(' ')
                 .Append(QualifiedTable(table))
                 .Append(" AS ")
                 .Append(QuoteIdentifier(tableAlias))
                 .Append(" ON ")
-                .Append(JoinCondition(link));
+                .Append(string.Join(" AND ", connecting.Select(JoinCondition).Distinct(StringComparer.OrdinalIgnoreCase)));
             joined.Add(tableAlias);
+            remaining.Remove(table);
         }
 
         return sb.ToString();
@@ -132,20 +158,30 @@ internal static class ReportDesignerSqlBuilder
         return $"{QuoteIdentifier(link.LeftTable)}.{QuoteIdentifier(link.LeftField)} = {QuoteIdentifier(link.RightTable)}.{QuoteIdentifier(link.RightField)}";
     }
 
-    private static string BuildWhere(IReadOnlyList<ReportDesignerFilter> filters, IReadOnlyList<ReportDesignerDataTable> tables)
+    private static string OrientedJoin(ReportDesignerDataLink link, string newAlias)
+    {
+        var keyword = JoinKeyword(link.JoinType);
+        if (!string.Equals(link.LeftTable, newAlias, StringComparison.OrdinalIgnoreCase)) return keyword;
+        return keyword switch { "LEFT OUTER JOIN" => "RIGHT OUTER JOIN", "RIGHT OUTER JOIN" => "LEFT OUTER JOIN", _ => keyword };
+    }
+
+    internal static Query BuildFilterQuery(IReadOnlyList<ReportDesignerFilter> filters, Func<ReportDesignerField, string> resolve)
     {
         var parts = new List<string>();
+        var parameters = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         foreach (var filter in filters)
         {
-            if (string.IsNullOrWhiteSpace(filter.Field.Name))
-                continue;
-
-            var table = ResolveFieldTable(filter.Field, tables);
-            if (table == null)
-                continue;
-
-            var lhs = $"{QuoteIdentifier(TableAlias(table))}.{QuoteIdentifier(filter.Field.Name)}";
-            var value = FormatFilterValue(filter.Value);
+            var lhs = resolve(filter.Field);
+            var reference = Regex.Match(filter.Value, @"^\{\?([^}]+)\}$");
+            string value;
+            if (reference.Success)
+                value = "@" + Regex.Replace(reference.Groups[1].Value, @"[^A-Za-z0-9_]", "");
+            else
+            {
+                var name = "__fxFilter" + parameters.Count.ToString(CultureInfo.InvariantCulture);
+                value = "@" + name;
+                parameters[name] = TypedFilterValue(filter.Value, filter.Field.Type);
+            }
             parts.Add(filter.Operator switch
             {
                 "is not equal to" => $"{lhs} <> {value}",
@@ -157,11 +193,12 @@ internal static class ReportDesignerSqlBuilder
                 "does not contain" => $"{lhs} NOT LIKE '%' + {value} + '%'",
                 "begins with" => $"{lhs} LIKE {value} + '%'",
                 "ends with" => $"{lhs} LIKE '%' + {value}",
-                _ => $"{lhs} = {value}"
+                "is equal to" => $"{lhs} = {value}",
+                _ => throw new NotSupportedException($"Unsupported selection operator: {filter.Operator}")
             });
         }
 
-        return string.Join(" AND ", parts);
+        return new Query(string.Join(" AND ", parts), parameters);
     }
 
     private static ReportDesignerDataTable? ResolveFieldTable(
@@ -186,9 +223,12 @@ internal static class ReportDesignerSqlBuilder
 
     private static string QualifiedTable(ReportDesignerDataTable table)
     {
+        if (!string.IsNullOrWhiteSpace(table.CommandText))
+            return "(" + table.CommandText.Trim().TrimEnd(';') + ")";
+        var sourceName = string.IsNullOrWhiteSpace(table.SourceName) ? table.Name : table.SourceName;
         return string.IsNullOrWhiteSpace(table.Schema)
-            ? QuoteIdentifier(table.Name)
-            : $"{QuoteIdentifier(table.Schema)}.{QuoteIdentifier(table.Name)}";
+            ? QuoteIdentifier(sourceName)
+            : $"{QuoteIdentifier(table.Schema)}.{QuoteIdentifier(sourceName)}";
     }
 
     private static string JoinKeyword(string? joinType)
@@ -207,11 +247,14 @@ internal static class ReportDesignerSqlBuilder
         return "[" + (value ?? "").Replace("]", "]]", StringComparison.Ordinal) + "]";
     }
 
-    private static string FormatFilterValue(string value)
+    internal static object TypedFilterValue(string value, string type)
     {
-        if (decimal.TryParse(value, NumberStyles.Any, CultureInfo.InvariantCulture, out _))
-            return value;
-
-        return "'" + (value ?? "").Replace("'", "''", StringComparison.Ordinal) + "'";
+        var kind = type.ToLowerInvariant();
+        if (kind.Contains("number") || kind.Contains("decimal") || kind.Contains("currency") || kind.Contains("int") || kind.Contains("long"))
+            return decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture);
+        if (kind.Contains("boolean") || kind == "bool") return bool.Parse(value);
+        if (kind.Contains("date")) return DateTime.Parse(value, CultureInfo.InvariantCulture);
+        if (kind.Contains("time")) return TimeSpan.Parse(value, CultureInfo.InvariantCulture);
+        return value;
     }
 }

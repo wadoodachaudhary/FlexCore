@@ -26,10 +26,13 @@ public sealed class ReportDesignerDocument
     public List<ReportDesignerSubreport> Subreports { get; set; } = new();
     public List<ReportDesignerDataLink> Links { get; set; } = new();
     public string CustomSql { get; set; } = "";
+    public string RecordSelectionFormula { get; set; } = "";
     public bool IsDirty { get; set; }
     public string StatusMessage { get; set; } = "";
 
     internal XDocument? SourceDocument { get; set; }
+    internal ReportDesignerDocument? OriginalDesign { get; set; }
+    internal Dictionary<string, XElement> SourceItems { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, XElement> SourceSections { get; } = new(StringComparer.Ordinal);
     internal Dictionary<string, XElement> SourceObjects { get; } = new(StringComparer.Ordinal);
 
@@ -71,11 +74,17 @@ public sealed class ReportDesignerDocument
             .Select((field, index) => new ReportDesignerGroup
             {
                 Name = $"Group #{index + 1}: {field.DisplayName}",
-                Condition = $"{{{field.DisplayName}}}",
+                Condition = field.Reference,
                 SortDirection = "Ascending"
             })
             .ToList();
         document.Summaries = wizard.Summaries.Select(CloneSummary).ToList();
+        foreach (var summary in wizard.Summaries.Where(summary => string.IsNullOrWhiteSpace(summary.GroupName)))
+            foreach (var group in document.Groups)
+                document.Summaries.Add(new ReportDesignerSummary
+                {
+                    Field = CloneField(summary.Field), Operation = summary.Operation, GroupName = group.Condition
+                });
         document.Filters = wizard.Filters.Select(CloneFilter).ToList();
         document.Links = wizard.Links.Select(CloneLink).ToList();
         document.CustomSql = wizard.CustomSql ?? "";
@@ -134,6 +143,9 @@ public sealed class ReportDesignerDocument
             var field = wizard.GroupFields[index];
             var groupHeader = NewSection($"group-header-{index + 1}", $"GroupHeaderSection{index + 1}", "GroupHeader", 560);
             var groupFooter = NewSection($"group-footer-{index + 1}", $"GroupFooterSection{index + 1}", "GroupFooter", 420);
+            groupHeader.AreaName = $"GroupHeaderArea{index + 1}";
+            groupFooter.AreaName = $"GroupFooterArea{index + 1}";
+            groupHeader.GroupId = groupFooter.GroupId = document.Groups[index].Id;
             AddText(groupHeader, $"GroupHeaderLabel{index + 1}", $"Group #{index + 1}: {field.Name}", 240, 150, 4200, 360, 20m, true, "#5b789c");
             groupHeaderSections.Add(groupHeader);
             groupFooterSections.Insert(0, groupFooter);
@@ -147,11 +159,12 @@ public sealed class ReportDesignerDocument
 
         foreach (var groupFooter in groupFooterSections)
         {
-            AddSummaryObjects(groupFooter, wizard.Summaries, document.Page.ContentWidthTwips);
+            var groupIndex = groupHeaderSections.Count - groupFooterSections.IndexOf(groupFooter) - 1;
+            AddSummaryObjects(groupFooter, document.Summaries.Where(summary => summary.GroupName == document.Groups[groupIndex].Condition).ToList(), document.Page.ContentWidthTwips);
             sections.Add(groupFooter);
         }
 
-        AddSummaryObjects(reportFooter, wizard.Summaries, document.Page.ContentWidthTwips);
+        AddSummaryObjects(reportFooter, document.Summaries.Where(summary => string.IsNullOrWhiteSpace(summary.GroupName)).ToList(), document.Page.ContentWidthTwips);
         sections.Add(reportFooter);
         sections.Add(pageFooter);
 
@@ -201,7 +214,12 @@ public sealed class ReportDesignerDocument
         var top = 90;
         foreach (var summary in summaries)
         {
-            AddText(section, $"Summary{summary.Field.Name}", $"{summary.Operation} of {summary.Field.DisplayName}", 240, top, contentWidthTwips - 720, 260, 10m, true, "#6b6b6b");
+            section.Elements.Add(new ReportDesignerElement
+            {
+                SectionId = section.Id, Name = $"Summary{summary.Field.Name}{section.Elements.Count}", Kind = "Field",
+                Binding = ReportDesignerXmlSerializer.SummaryBinding(summary), LeftTwips = 240, TopTwips = top,
+                WidthTwips = Math.Max(240, contentWidthTwips - 720), HeightTwips = 260, FontSize = 10m, Bold = true
+            });
             top += 280;
         }
     }
@@ -254,7 +272,7 @@ public sealed class ReportDesignerDocument
             SectionId = section.Id,
             Name = name,
             Kind = "Field",
-            Binding = $"{{{field.DisplayName}}}",
+            Binding = field.Reference,
             LeftTwips = left,
             TopTwips = top,
             WidthTwips = width,
@@ -290,7 +308,10 @@ public sealed class ReportDesignerDocument
     {
         return new ReportDesignerDataTable
         {
+            Id = table.Id,
             Name = table.Name,
+            SourceName = table.SourceName,
+            CommandText = table.CommandText,
             Schema = table.Schema,
             Fields = table.Fields.Select(CloneField).ToList()
         };
@@ -300,10 +321,13 @@ public sealed class ReportDesignerDocument
     {
         return new ReportDesignerField
         {
+            Id = field.Id,
             Name = field.Name,
             Table = field.Table,
             LongName = field.LongName,
             Formula = field.Formula,
+            Expression = field.Expression,
+            Syntax = field.Syntax,
             Type = field.Type,
             IsFormula = field.IsFormula
         };
@@ -323,6 +347,7 @@ public sealed class ReportDesignerDocument
     {
         return new ReportDesignerSummary
         {
+            Id = summary.Id,
             Field = CloneField(summary.Field),
             Operation = summary.Operation,
             GroupName = summary.GroupName
@@ -333,6 +358,7 @@ public sealed class ReportDesignerDocument
     {
         return new ReportDesignerDataLink
         {
+            Id = link.Id,
             LeftTable = link.LeftTable,
             LeftField = link.LeftField,
             RightTable = link.RightTable,
@@ -361,6 +387,8 @@ public sealed class ReportDesignerSection
     public string Name { get; set; } = "Section";
     public string Kind { get; set; } = "Detail";
     public string AreaName { get; set; } = "";
+    public string AreaId { get; set; } = "";
+    public string GroupId { get; set; } = "";
     public int HeightTwips { get; set; } = 360;
     public bool HideForDrillDown { get; set; }
     public bool IsSuppressed { get; set; }
@@ -407,6 +435,7 @@ public sealed class ReportDesignerElement
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
     public ReportDesignerHighlightRule HighlightRule { get; set; } = new();
+    public ReportObjectVisual Visual { get; set; } = new();
 
     public string DisplayText
     {
@@ -427,6 +456,7 @@ public sealed class ReportDesignerElement
         return new ReportDesignerElement
         {
             Id = Guid.NewGuid().ToString("N"),
+            SourceKey = SourceKey,
             SectionId = sectionId,
             Name = name,
             Kind = Kind,
@@ -452,6 +482,7 @@ public sealed class ReportDesignerElement
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
+            Visual = Visual.Clone(),
             HighlightRule = HighlightRule.Clone()
         };
     }
@@ -481,36 +512,48 @@ public sealed class ReportDesignerHighlightRule
     };
 }
 
-public sealed class ReportDesignerField
+public abstract class ReportDesignerSourceItem
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+}
+
+public sealed class ReportDesignerField : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Table { get; set; } = "";
     public string LongName { get; set; } = "";
+    /// <summary>Legacy field-binding value. Formula expression text lives in Expression.</summary>
     public string Formula { get; set; } = "";
+    public string Expression { get; set; } = "";
+    public string Syntax { get; set; } = "Crystal";
     public string Type { get; set; } = "";
     public bool IsFormula { get; set; }
     public string DisplayName => string.IsNullOrWhiteSpace(Table) ? Name : $"{Table}.{Name}";
+    public string Reference => IsFormula ? $"{{@{Name.TrimStart('@')}}}" : $"{{{DisplayName}}}";
 }
 
-public sealed class ReportDesignerDataTable
+public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Schema { get; set; } = "";
+    public string SourceName { get; set; } = "";
+    public string CommandText { get; set; } = "";
     public List<ReportDesignerField> Fields { get; set; } = new();
     public string DisplayName => string.IsNullOrWhiteSpace(Schema) ? Name : $"{Schema}.{Name}";
 }
 
-public sealed class ReportDesignerSummary
+public sealed class ReportDesignerSummary : ReportDesignerSourceItem
 {
     public ReportDesignerField Field { get; set; } = new();
     public string Operation { get; set; } = "Sum";
     public string GroupName { get; set; } = "";
 }
 
-public sealed class ReportDesignerSort
+public sealed class ReportDesignerSort : ReportDesignerSourceItem
 {
     public ReportDesignerField Field { get; set; } = new();
     public string Direction { get; set; } = "Ascending";
+    public string SortType { get; set; } = "RecordSortField";
 }
 
 public sealed class ReportDesignerFilter
@@ -533,7 +576,7 @@ public sealed class ReportCreationWizardResult
     public string TemplateName { get; set; } = "No Template";
 }
 
-public sealed class ReportDesignerParameter
+public sealed class ReportDesignerParameter : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Prompt { get; set; } = "";
@@ -542,7 +585,7 @@ public sealed class ReportDesignerParameter
     public bool AllowMultiple { get; set; }
 }
 
-public sealed class ReportDesignerGroup
+public sealed class ReportDesignerGroup : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Condition { get; set; } = "";
@@ -555,7 +598,7 @@ public sealed class ReportDesignerSubreport
     public string FileName { get; set; } = "";
 }
 
-public sealed class ReportDesignerDataLink
+public sealed class ReportDesignerDataLink : ReportDesignerSourceItem
 {
     public string LeftTable { get; set; } = "";
     public string LeftField { get; set; } = "";
@@ -592,7 +635,7 @@ public static class ReportDesignerMetrics
 /// <summary>
 /// Parser and writer for the Crystal XML subset used by the FlexKit report designer.
 /// </summary>
-public static class ReportDesignerXmlSerializer
+public static partial class ReportDesignerXmlSerializer
 {
     private const string MetadataElementName = "FlexKitReportDesigner";
 
@@ -607,11 +650,13 @@ public static class ReportDesignerXmlSerializer
     public static ReportDesignerDocument FromXml(string xml, string? sourceName = null, string? sourcePath = null)
     {
         if (string.IsNullOrWhiteSpace(xml))
-            return ReportDesignerDocument.CreateBlank();
+            throw new InvalidDataException("The report XML is empty.");
 
         var sourceDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report XML: missing root element.");
         var reportDefinition = Child(root, "ReportDefinition");
+        if (root.Name != "Report" || reportDefinition is null || Child(reportDefinition, "Areas") is null)
+            throw new InvalidDataException("Expected a Crystal Report containing ReportDefinition/Areas.");
 
         var document = new ReportDesignerDocument
         {
@@ -638,7 +683,10 @@ public static class ReportDesignerXmlSerializer
         if (document.Sections.Count == 0)
             document.Sections.AddRange(ReportDesignerDocument.CreateBlank(document.Title).Sections);
 
+        ReportDesignerEditing.AssignSectionGroups(document);
+
         document.StatusMessage = $"Loaded {document.Sections.Count} sections and {document.Elements.Count()} objects.";
+        document.OriginalDesign = SnapshotDesign(document);
         return document;
     }
 
@@ -646,10 +694,7 @@ public static class ReportDesignerXmlSerializer
     {
         ArgumentNullException.ThrowIfNull(document);
 
-        var sourceDocument = document.SourceDocument ?? BuildSourceDocument(document);
-        ApplyDesignerToSource(document, sourceDocument);
-        document.SourceDocument = sourceDocument;
-        return sourceDocument.ToString(SaveOptions.None);
+        return SerializePreservingSource(document).ToString(SaveOptions.None);
     }
 
     private static XDocument BuildSourceDocument(ReportDesignerDocument document)
@@ -677,25 +722,22 @@ public static class ReportDesignerXmlSerializer
         root.Add(new XElement("ReportDefinition", areas));
 
         var built = new XDocument(root);
-        document.SourceSections.Clear();
-        document.SourceObjects.Clear();
-
         foreach (var section in document.Sections)
         {
-            var area = CreateAreaElement(section);
+            var area = areas.Elements("Area").FirstOrDefault(candidate =>
+                Attribute(candidate, "Name") == section.AreaName && Attribute(candidate, "Kind") == section.Kind);
+            if (area is null)
+            {
+                area = CreateAreaElement(section);
+                areas.Add(area);
+            }
             var sectionElement = CreateSectionElement(section);
             area.Element("Sections")!.Add(sectionElement);
-            areas.Add(area);
-            section.SourceKey = section.Id;
-            document.SourceSections[section.SourceKey] = sectionElement;
-
             var objects = sectionElement.Element("ReportObjects")!;
             foreach (var element in section.Elements)
             {
-                var objectElement = CreateObjectElement(element);
-                element.SourceKey = element.Id;
+                var objectElement = BuildObject(element);
                 objects.Add(objectElement);
-                document.SourceObjects[element.SourceKey] = objectElement;
             }
         }
 
@@ -716,21 +758,13 @@ public static class ReportDesignerXmlSerializer
                 })
                 .ToList();
 
-        return new XElement("Database",
-            BuildTableLinksElement(document),
-            new XElement("Tables",
-                tables.Select(table =>
-                    new XElement("Table",
-                        new XAttribute("Name", table.Name),
-                        new XAttribute("Alias", table.Name),
-                        new XAttribute("QualifiedName", string.IsNullOrWhiteSpace(table.Schema) ? table.Name : $"{table.Schema}.{table.Name}"),
-                        new XElement("Fields",
-                            table.Fields.Select(field =>
-                                new XElement("Field",
-                                    new XAttribute("Name", field.Name),
-                                    new XAttribute("ShortName", field.Name),
-                                    new XAttribute("LongName", string.IsNullOrWhiteSpace(field.LongName) ? field.DisplayName : field.LongName),
-                                    new XAttribute("Type", string.IsNullOrWhiteSpace(field.Type) ? "String" : field.Type))))))));
+        return new XElement("Database", BuildTableLinksElement(document),
+            new XElement("Tables", tables.Select(table =>
+            {
+                var node = BuildTable(table);
+                node.Add(new XElement("Fields", table.Fields.Select(BuildDatabaseField)));
+                return node;
+            })));
     }
 
     private static XElement BuildTableLinksElement(ReportDesignerDocument document)
@@ -742,11 +776,12 @@ public static class ReportDesignerXmlSerializer
                     !string.IsNullOrWhiteSpace(link.LeftField) &&
                     !string.IsNullOrWhiteSpace(link.RightTable) &&
                     !string.IsNullOrWhiteSpace(link.RightField))
-                .Select(link =>
+                .GroupBy(link => (link.LeftTable, link.RightTable, link.JoinType))
+                .Select(links =>
                     new XElement("TableLink",
-                        new XAttribute("JoinType", ToCrystalJoinType(link.JoinType)),
-                        new XElement("SourceFields", BuildLinkField(link.LeftTable, link.LeftField)),
-                        new XElement("DestinationFields", BuildLinkField(link.RightTable, link.RightField)))));
+                        new XAttribute("JoinType", ToCrystalJoinType(links.Key.JoinType)),
+                        new XElement("SourceFields", links.Select(link => BuildLinkField(link.LeftTable, link.LeftField))),
+                        new XElement("DestinationFields", links.Select(link => BuildLinkField(link.RightTable, link.RightField))))));
     }
 
     private static XElement BuildLinkField(string table, string field)
@@ -762,138 +797,28 @@ public static class ReportDesignerXmlSerializer
     private static XElement BuildDataDefinitionElement(ReportDesignerDocument document)
     {
         return new XElement("DataDefinition",
-            new XElement("Groups",
-                document.Groups.Select(group =>
-                    new XElement("Group",
-                        new XAttribute("Name", group.Name),
-                        new XAttribute("ConditionField", group.Condition),
-                        new XAttribute("SortDirection", group.SortDirection)))),
-            new XElement("RecordSelection",
-                document.Filters.Select(filter =>
-                    new XElement("Filter",
-                        new XAttribute("Field", filter.Field.DisplayName),
-                        new XAttribute("Operator", filter.Operator),
-                        new XAttribute("Value", filter.Value)))),
-            new XElement("SortFields",
-                document.Sorts.Select(sort =>
-                    new XElement("SortField",
-                        new XAttribute("Field", sort.Field.DisplayName),
-                        new XAttribute("Direction", sort.Direction)))),
-            new XElement("SummaryFieldDefinitions",
-                document.Summaries.Select(summary =>
-                    new XElement("SummaryFieldDefinition",
-                        new XAttribute("Field", summary.Field.DisplayName),
-                        new XAttribute("Operation", summary.Operation),
-                        new XAttribute("GroupName", summary.GroupName)))),
-            new XElement("FormulaFieldDefinitions",
-                document.Fields.Where(field => field.IsFormula).Select(field =>
-                    new XElement("FormulaFieldDefinition",
-                        new XAttribute("Name", field.Name),
-                        new XAttribute("FormulaName", string.IsNullOrWhiteSpace(field.Formula) ? $"@{field.Name}" : field.Formula),
-                        new XAttribute("ValueType", string.IsNullOrWhiteSpace(field.Type) ? "Formula" : field.Type)))),
-            new XElement("ParameterFieldDefinitions",
-                document.Parameters.Select(parameter =>
-                    new XElement("ParameterFieldDefinition",
-                        new XAttribute("Name", parameter.Name),
-                        new XAttribute("PromptText", parameter.Prompt),
-                        new XAttribute("ValueType", parameter.Type),
-                        new XAttribute("OptionalPrompt", Lower(!parameter.Required)),
-                        new XAttribute("EnableAllowMultipleValue", Lower(parameter.AllowMultiple))))));
+            new XElement("Groups", document.Groups.Select(BuildGroup)),
+            new XElement("RecordSelectionFormula", BuildSelectionFormula(document)),
+            new XElement("SortFields", document.Sorts.Select(BuildSort)),
+            new XElement("SummaryFields", document.Summaries.Select(BuildSummary)),
+            new XElement("FormulaFieldDefinitions", document.Fields.Where(field => field.IsFormula).Select(BuildFormula)),
+            new XElement("ParameterFieldDefinitions", document.Parameters.Select(BuildParameter)));
     }
 
     private static ReportDesignerField CloneField(ReportDesignerField field)
     {
         return new ReportDesignerField
         {
+            Id = field.Id,
             Name = field.Name,
             Table = field.Table,
             LongName = field.LongName,
             Formula = field.Formula,
+            Expression = field.Expression,
+            Syntax = field.Syntax,
             Type = field.Type,
             IsFormula = field.IsFormula
         };
-    }
-
-    private static void ApplyDesignerToSource(ReportDesignerDocument document, XDocument sourceDocument)
-    {
-        var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report XML: missing root element.");
-
-        root.SetAttributeValue("Name", string.IsNullOrWhiteSpace(document.Title) ? document.SourceName : document.Title);
-        ApplyPrintOptions(root, document.Page);
-        ApplyDatabaseDefinition(root, document);
-        ApplyDataDefinition(root, document);
-
-        foreach (var section in document.Sections)
-        {
-            var sectionElement = ResolveSectionElement(document, root, section);
-            ApplySection(section, sectionElement);
-
-            var objectsElement = EnsureChild(sectionElement, "ReportObjects");
-            var retainedObjects = new HashSet<XElement>();
-            foreach (var element in section.Elements)
-            {
-                element.SectionId = section.Id;
-                var objectElement = ResolveObjectElement(document, objectsElement, element);
-                ApplyElement(element, objectElement);
-                retainedObjects.Add(objectElement);
-            }
-
-            foreach (var objectElement in objectsElement.Elements().Where(IsReportObjectElement).ToList())
-            {
-                if (!retainedObjects.Contains(objectElement))
-                    objectElement.Remove();
-            }
-        }
-
-        UpsertDesignerMetadata(root, document);
-    }
-
-    private static XElement ResolveSectionElement(ReportDesignerDocument document, XElement root, ReportDesignerSection section)
-    {
-        if (!string.IsNullOrWhiteSpace(section.SourceKey) &&
-            document.SourceSections.TryGetValue(section.SourceKey, out var existing) && existing.Document != null)
-            return existing;
-
-        var byName = root.Descendants("Section").FirstOrDefault(item =>
-            string.Equals(Attribute(item, "Name"), section.Name, StringComparison.OrdinalIgnoreCase));
-        if (byName != null)
-        {
-            section.SourceKey = section.Id;
-            document.SourceSections[section.SourceKey] = byName;
-            return byName;
-        }
-
-        var reportDefinition = Child(root, "ReportDefinition") ?? EnsureChild(root, "ReportDefinition");
-        var areas = Child(reportDefinition, "Areas") ?? EnsureChild(reportDefinition, "Areas");
-        var area = CreateAreaElement(section);
-        var sectionElement = CreateSectionElement(section);
-        area.Element("Sections")!.Add(sectionElement);
-        areas.Add(area);
-        section.SourceKey = section.Id;
-        document.SourceSections[section.SourceKey] = sectionElement;
-        return sectionElement;
-    }
-
-    private static XElement ResolveObjectElement(ReportDesignerDocument document, XElement objectsElement, ReportDesignerElement element)
-    {
-        if (!string.IsNullOrWhiteSpace(element.SourceKey) &&
-            document.SourceObjects.TryGetValue(element.SourceKey, out var existing) && existing.Document != null)
-            return existing;
-
-        var byName = objectsElement.Elements().FirstOrDefault(item =>
-            string.Equals(Attribute(item, "Name"), element.Name, StringComparison.OrdinalIgnoreCase));
-        if (byName != null)
-        {
-            element.SourceKey = element.Id;
-            document.SourceObjects[element.SourceKey] = byName;
-            return byName;
-        }
-
-        var objectElement = CreateObjectElement(element);
-        objectsElement.Add(objectElement);
-        element.SourceKey = element.Id;
-        document.SourceObjects[element.SourceKey] = objectElement;
-        return objectElement;
     }
 
     private static void ApplyPrintOptions(XElement root, ReportDesignerPage page)
@@ -911,53 +836,9 @@ public static class ReportDesignerXmlSerializer
         margins.SetAttributeValue("topMargin", page.MarginTopTwips);
     }
 
-    private static void ApplyDatabaseDefinition(XElement root, ReportDesignerDocument document)
-    {
-        ReplaceRootChild(root, "Database", BuildDatabaseElement(document));
-    }
-
-    private static void ApplyDataDefinition(XElement root, ReportDesignerDocument document)
-    {
-        ReplaceRootChild(root, "DataDefinition", BuildDataDefinitionElement(document));
-    }
-
-    private static void ReplaceRootChild(XElement root, string name, XElement replacement)
-    {
-        var existing = Child(root, name);
-        if (existing != null)
-        {
-            existing.ReplaceWith(replacement);
-            return;
-        }
-
-        root.Add(replacement);
-    }
-
-    private static void ApplySection(ReportDesignerSection section, XElement sectionElement)
-    {
-        sectionElement.SetAttributeValue("Name", section.Name);
-        sectionElement.SetAttributeValue("Kind", section.Kind);
-        sectionElement.SetAttributeValue("Height", section.HeightTwips);
-
-        var format = Child(sectionElement, "SectionFormat") ?? EnsureChild(sectionElement, "SectionFormat");
-        format.SetAttributeValue("EnableHideForDrillDown", Lower(section.HideForDrillDown));
-        format.SetAttributeValue("EnableNewPageAfter", Lower(section.NewPageAfter));
-        format.SetAttributeValue("EnableNewPageBefore", Lower(section.NewPageBefore));
-        format.SetAttributeValue("EnablePrintAtBottomOfPage", Lower(section.PrintAtBottomOfPage));
-        format.SetAttributeValue("EnableResetPageNumberAfter", Lower(section.ResetPageNumberAfter));
-        format.SetAttributeValue("EnableSuppress", Lower(section.IsSuppressed));
-        format.SetAttributeValue("EnableSuppressIfBlank", Lower(section.SuppressIfBlank));
-        format.SetAttributeValue("EnableUnderlaySection", Lower(section.UnderlayFollowingSections));
-        format.SetAttributeValue("EnableKeepTogether", Lower(section.KeepTogether));
-        format.SetAttributeValue("ReadOnly", Lower(section.ReadOnly));
-        format.SetAttributeValue("RelativePositions", Lower(section.RelativePositions));
-
-        var background = Child(format, "BackgroundColor") ?? EnsureChild(format, "BackgroundColor");
-        SetColorElement(background, section.BackgroundColor, alphaWhenTransparent: 0);
-    }
-
     private static void ApplyElement(ReportDesignerElement element, XElement objectElement)
     {
+        ReportObjectVisual.Write(element.Visual, objectElement);
         objectElement.SetAttributeValue("Name", string.IsNullOrWhiteSpace(element.Name) ? element.Kind : element.Name);
         objectElement.SetAttributeValue("Kind", string.IsNullOrWhiteSpace(element.Kind) ? InferKindFromObjectElement(objectElement) : element.Kind);
         objectElement.SetAttributeValue("Top", element.TopTwips);
@@ -1029,51 +910,6 @@ public static class ReportDesignerXmlSerializer
         }
     }
 
-    private static void UpsertDesignerMetadata(XElement root, ReportDesignerDocument document)
-    {
-        root.Elements(MetadataElementName).Remove();
-
-        var sections = new XElement("Sections",
-            document.Sections.Select(section =>
-                new XElement("Section",
-                    new XAttribute("Id", section.Id),
-                    new XAttribute("Name", section.Name),
-                    new XAttribute("Kind", section.Kind),
-                    new XAttribute("HeightTwips", section.HeightTwips),
-                    new XAttribute("Suppressed", Lower(section.IsSuppressed)),
-                    section.Elements.Select(element =>
-                        new XElement("Object",
-                            new XAttribute("Id", element.Id),
-                            new XAttribute("Name", element.Name),
-                            new XAttribute("Kind", element.Kind),
-                            new XAttribute("LeftTwips", element.LeftTwips),
-                            new XAttribute("TopTwips", element.TopTwips),
-                            new XAttribute("WidthTwips", element.WidthTwips),
-                            new XAttribute("HeightTwips", element.HeightTwips),
-                            new XAttribute("FormatString", element.FormatString ?? ""),
-                            new XAttribute("LockFormat", Lower(element.LockFormat)),
-                            new XAttribute("LockSizePosition", Lower(element.LockSizePosition)),
-                            new XAttribute("IndentTwips", element.IndentTwips))))));
-
-        var links = new XElement("Links",
-            document.Links.Select(link =>
-                new XElement("Link",
-                    new XAttribute("LeftTable", link.LeftTable ?? ""),
-                    new XAttribute("LeftField", link.LeftField ?? ""),
-                    new XAttribute("RightTable", link.RightTable ?? ""),
-                    new XAttribute("RightField", link.RightField ?? ""),
-                    new XAttribute("JoinType", link.JoinType ?? ""))));
-        var sql = new XElement("Sql",
-            new XAttribute("Query", document.CustomSql ?? ""));
-
-        root.Add(new XElement(MetadataElementName,
-            new XAttribute("Version", "1"),
-            new XAttribute("SavedUtc", DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture)),
-            sections,
-            links,
-            sql));
-    }
-
     private static XElement CreateAreaElement(ReportDesignerSection section)
     {
         return new XElement("Area",
@@ -1123,6 +959,7 @@ public static class ReportDesignerXmlSerializer
             var kind when string.Equals(kind, "Subreport", StringComparison.OrdinalIgnoreCase) => "SubreportObject",
             var kind when string.Equals(kind, "Box", StringComparison.OrdinalIgnoreCase) => "BoxObject",
             var kind when string.Equals(kind, "Line", StringComparison.OrdinalIgnoreCase) => "LineObject",
+            var kind when string.Equals(kind, "Picture", StringComparison.OrdinalIgnoreCase) => "PictureObject",
             _ => "FieldObject"
         };
 
@@ -1169,6 +1006,7 @@ public static class ReportDesignerXmlSerializer
         foreach (var area in Child(reportDefinition, "Areas")?.Elements("Area") ?? Enumerable.Empty<XElement>())
         {
             var areaName = Attribute(area, "Name") ?? "";
+            var areaId = Guid.NewGuid().ToString("N");
             foreach (var sectionElement in Child(area, "Sections")?.Elements("Section") ?? Enumerable.Empty<XElement>())
             {
                 var sectionName = Attribute(sectionElement, "Name") ?? "Section";
@@ -1181,6 +1019,7 @@ public static class ReportDesignerXmlSerializer
                     Name = sectionName,
                     Kind = Attribute(sectionElement, "Kind") ?? Attribute(area, "Kind") ?? "Detail",
                     AreaName = areaName,
+                    AreaId = areaId,
                     HeightTwips = ParseInt(Attribute(sectionElement, "Height"), 360),
                     HideForDrillDown = ParseBool(Attribute(format, "EnableHideForDrillDown")),
                     IsSuppressed = ParseBool(Attribute(format, "EnableSuppress")),
@@ -1251,6 +1090,7 @@ public static class ReportDesignerXmlSerializer
             if (string.Equals(kind, "Subreport", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(element.Text))
                 element.Text = string.IsNullOrWhiteSpace(element.SubreportName) ? "Subreport" : element.SubreportName;
 
+            element.Visual = ReportObjectVisual.Read(objectElement);
             document.SourceObjects[element.SourceKey] = objectElement;
             section.Elements.Add(element);
         }
@@ -1264,8 +1104,11 @@ public static class ReportDesignerXmlSerializer
             var dataTable = new ReportDesignerDataTable
             {
                 Name = tableName,
-                Schema = ParseSchemaName(Attribute(table, "QualifiedName"))
+                Schema = ParseSchemaName(Attribute(table, "QualifiedName")),
+                SourceName = Attribute(table, "Name") ?? tableName,
+                CommandText = Child(table, "Command")?.Value ?? ""
             };
+            document.SourceItems[dataTable.Id] = table;
 
             foreach (var field in Child(table, "Fields")?.Elements("Field") ?? Enumerable.Empty<XElement>())
             {
@@ -1279,6 +1122,7 @@ public static class ReportDesignerXmlSerializer
                 };
                 document.Fields.Add(designerField);
                 dataTable.Fields.Add(CloneField(designerField));
+                document.SourceItems[designerField.Id] = field;
             }
 
             if (!string.IsNullOrWhiteSpace(dataTable.Name))
@@ -1287,14 +1131,18 @@ public static class ReportDesignerXmlSerializer
 
         foreach (var formula in Child(Child(root, "DataDefinition"), "FormulaFieldDefinitions")?.Elements("FormulaFieldDefinition") ?? Enumerable.Empty<XElement>())
         {
-            var name = Attribute(formula, "Name") ?? Attribute(formula, "FormulaName") ?? "Formula";
-            document.Fields.Add(new ReportDesignerField
+            var name = (Attribute(formula, "Name") ?? Attribute(formula, "FormulaName") ?? "Formula").Trim('{', '}').TrimStart('@');
+            var designerField = new ReportDesignerField
             {
                 Name = name.TrimStart('@'),
                 Formula = Attribute(formula, "FormulaName") ?? $"{{@{name.TrimStart('@')}}}",
+                Expression = formula.Value,
+                Syntax = Attribute(formula, "Syntax") ?? "Crystal",
                 Type = Attribute(formula, "ValueType") ?? "Formula",
                 IsFormula = true
-            });
+            };
+            document.Fields.Add(designerField);
+            document.SourceItems[designerField.Id] = formula;
         }
     }
 
@@ -1309,14 +1157,16 @@ public static class ReportDesignerXmlSerializer
             {
                 var source = sourceFields[index];
                 var destination = destinationFields[index];
-                document.Links.Add(new ReportDesignerDataLink
+                var link = new ReportDesignerDataLink
                 {
                     LeftTable = source.Table,
                     LeftField = source.Field,
                     RightTable = destination.Table,
                     RightField = destination.Field,
                     JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType"))
-                });
+                };
+                document.Links.Add(link);
+                document.SourceItems[link.Id] = tableLink;
             }
         }
 
@@ -1390,14 +1240,16 @@ public static class ReportDesignerXmlSerializer
     {
         foreach (var parameter in Child(Child(root, "DataDefinition"), "ParameterFieldDefinitions")?.Elements("ParameterFieldDefinition") ?? Enumerable.Empty<XElement>())
         {
-            document.Parameters.Add(new ReportDesignerParameter
+            var designerParameter = new ReportDesignerParameter
             {
                 Name = Attribute(parameter, "Name") ?? "",
                 Prompt = Attribute(parameter, "PromptText") ?? Attribute(parameter, "Prompt") ?? "",
                 Type = Attribute(parameter, "ParameterValueKind") ?? Attribute(parameter, "ValueType") ?? "",
-                Required = !ParseBool(Attribute(parameter, "OptionalPrompt")),
+                Required = !ParseBool(Attribute(parameter, "IsOptionalPrompt") ?? Attribute(parameter, "OptionalPrompt")),
                 AllowMultiple = ParseBool(Attribute(parameter, "EnableAllowMultipleValue")) || ParseBool(Attribute(parameter, "AllowMultipleValue"))
-            });
+            };
+            document.Parameters.Add(designerParameter);
+            document.SourceItems[designerParameter.Id] = parameter;
         }
     }
 
@@ -1409,12 +1261,14 @@ public static class ReportDesignerXmlSerializer
             if (string.IsNullOrWhiteSpace(condition))
                 condition = group.Descendants("Field").Select(field => Attribute(field, "FormulaName")).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
 
-            document.Groups.Add(new ReportDesignerGroup
+            var designerGroup = new ReportDesignerGroup
             {
                 Name = Attribute(group, "Name") ?? condition,
                 Condition = condition,
                 SortDirection = Attribute(group, "SortDirection") ?? Attribute(group, "ConditionSortDirection") ?? "Ascending"
-            });
+            };
+            document.Groups.Add(designerGroup);
+            document.SourceItems[designerGroup.Id] = group;
         }
     }
 
@@ -1427,42 +1281,51 @@ public static class ReportDesignerXmlSerializer
             if (string.IsNullOrWhiteSpace(field.DisplayName))
                 continue;
 
-            document.Sorts.Add(new ReportDesignerSort
+            var designerSort = new ReportDesignerSort
             {
                 Field = CloneField(field),
-                Direction = Attribute(sort, "Direction") ?? Attribute(sort, "SortDirection") ?? "Ascending"
-            });
+                Direction = (Attribute(sort, "SortDirection") ?? Attribute(sort, "Direction") ?? "Ascending").Replace("Order", "", StringComparison.Ordinal),
+                SortType = Attribute(sort, "SortType") ?? "RecordSortField"
+            };
+            document.Sorts.Add(designerSort);
+            document.SourceItems[designerSort.Id] = sort;
         }
     }
 
     private static void ParseSummaries(XElement root, ReportDesignerDocument document)
     {
-        foreach (var summary in Child(Child(root, "DataDefinition"), "SummaryFieldDefinitions")?.Elements("SummaryFieldDefinition") ?? Enumerable.Empty<XElement>())
+        var data = Child(root, "DataDefinition");
+        foreach (var summary in (Child(data, "SummaryFields") ?? Child(data, "SummaryFieldDefinitions"))?.Elements("SummaryFieldDefinition") ?? Enumerable.Empty<XElement>())
         {
-            var fieldName = Attribute(summary, "Field") ?? Attribute(summary, "FieldName") ?? Attribute(summary, "DataSource") ?? "";
+            var formula = Regex.Match(Attribute(summary, "FormulaName") ?? "", @"^\w+\s*\(\s*(\{[^}]+\})\s*(?:,\s*(\{[^}]+\}))?\s*\)$");
+            var fieldName = Attribute(summary, "SummarizedField") ?? Attribute(summary, "Field") ?? Attribute(summary, "FieldName") ?? Attribute(summary, "DataSource") ?? formula.Groups[1].Value;
             var field = ResolveDesignerField(document, fieldName);
             if (string.IsNullOrWhiteSpace(field.DisplayName))
                 continue;
 
-            document.Summaries.Add(new ReportDesignerSummary
+            var designerSummary = new ReportDesignerSummary
             {
                 Field = CloneField(field),
                 Operation = Attribute(summary, "Operation") ?? Attribute(summary, "SummaryOperation") ?? "Sum",
-                GroupName = Attribute(summary, "GroupName") ?? Attribute(summary, "Group") ?? ""
-            });
+                GroupName = formula.Groups[2].Success ? formula.Groups[2].Value : Attribute(summary, "GroupName") ?? ""
+            };
+            document.Summaries.Add(designerSummary);
+            document.SourceItems[designerSummary.Id] = summary;
         }
     }
 
-    private static void ParseFilters(XElement root, ReportDesignerDocument document)
+    internal static void ParseFilters(XElement root, ReportDesignerDocument document)
     {
-        foreach (var filter in Child(Child(root, "DataDefinition"), "RecordSelection")?.Elements("Filter") ?? Enumerable.Empty<XElement>())
+        var selection = Child(root, MetadataElementName)?.Element("Selection");
+        document.RecordSelectionFormula = Attribute(selection, "BaseFormula") ?? Child(Child(root, "DataDefinition"), "RecordSelectionFormula")?.Value ?? "";
+        foreach (var filter in (selection ?? Child(Child(root, "DataDefinition"), "RecordSelection"))?.Elements("Filter") ?? Enumerable.Empty<XElement>())
         {
             var fieldName = Attribute(filter, "Field") ?? "";
             if (string.IsNullOrWhiteSpace(fieldName))
                 continue;
 
             var field = ResolveDesignerField(document, fieldName);
-
+            field.Type = Attribute(filter, "FieldType") ?? field.Type;
             document.Filters.Add(new ReportDesignerFilter
             {
                 Field = CloneField(field),
@@ -1485,7 +1348,9 @@ public static class ReportDesignerXmlSerializer
                    string.Equals(candidate.DisplayName, cleaned, StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(candidate.Name, cleaned, StringComparison.OrdinalIgnoreCase) ||
                    string.Equals(candidate.Formula.Trim('{', '}').TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase))
-               ?? new ReportDesignerField { Name = cleaned };
+               ?? (ParseCrystalFieldReference(fieldName) is { } reference
+                   ? new ReportDesignerField { Name = reference.Field, Table = reference.Table }
+                   : new ReportDesignerField { Name = cleaned, IsFormula = fieldName.Trim().StartsWith("{@", StringComparison.Ordinal) });
     }
 
     private static void ParseSubreports(XElement root, ReportDesignerDocument document)

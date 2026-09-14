@@ -139,6 +139,7 @@ public static class NativeCrystalRptConverter
         }
 
         model.Name = NormalizeReportName(model.Name, fallbackName);
+        CrystalPictureStorage.Apply(model, streams, prefix, options.Progress);
         return model;
     }
 
