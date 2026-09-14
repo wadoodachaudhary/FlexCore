@@ -8,6 +8,9 @@
     <!-- FlexCore.csproj is at the repo root, so the SDK globs would otherwise pull
          the satellite project back in and re-introduce its ClosedXML dependency. -->
     <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.Documents/**</DefaultItemExcludes>
+    <!-- FlexCore.Llm is a second satellite (pure library, no Blazor); keep its
+         sources out of this project's globs for the same reason. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.Llm/**</DefaultItemExcludes>
     <!-- Namespace and CSS prefix are unchanged from FlexCore — only the
          project / assembly / package name changes here. Source code stays
          under Fx.ControlKit.* so consumer code does not need any edits. -->
