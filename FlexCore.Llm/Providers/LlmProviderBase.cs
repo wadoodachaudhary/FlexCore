@@ -55,8 +55,22 @@ public abstract class LlmProviderBase : ILlmProvider
     public abstract Task<ChatResult> ChatAsync(ChatRequest request, CancellationToken cancellationToken);
     public abstract IAsyncEnumerable<ChatDelta> StreamAsync(ChatRequest request, CancellationToken cancellationToken);
 
+    /// <summary>Configured default model + <c>Models</c>, or the catalog entries for this provider. Overridden where a provider has more than one model list (Hugging Face router vs dedicated).</summary>
+    public virtual IReadOnlyList<ModelInfo> ConfiguredModels
+    {
+        get
+        {
+            var settings = Settings;
+            var ids = new List<string>();
+            if (settings.DefaultModel is { } d) ids.Add(d);
+            ids.AddRange(settings.Models);
+            return Describe(ids.Count == 0 ? ModelCatalog.ForProvider(Key).Select(m => m.Id) : ids);
+        }
+    }
+
+    /// <summary>Providers with <see cref="LlmCapabilities.ListModels"/> override this with a live listing; the rest answer with <see cref="ConfiguredModels"/>.</summary>
     public virtual Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
-        => throw NotSupported(LlmCapabilities.ListModels);
+        => Task.FromResult(ConfiguredModels);
 
     public virtual Task<ImageResult> GenerateImageAsync(ImageRequest request, CancellationToken cancellationToken)
         => throw NotSupported(LlmCapabilities.ImageGeneration);
@@ -79,12 +93,43 @@ public abstract class LlmProviderBase : ILlmProvider
            ?? DefaultEndpoint
            ?? throw new LlmConfigurationException($"{Key} has no endpoint configured.", Key);
 
+    /// <summary>
+    /// The model id to send: the request's, else <see cref="DefaultModelFor"/>,
+    /// else the configured default, else the catalog default — normalised by
+    /// <see cref="NormalizeModel"/> and mapped through the configured aliases
+    /// and the Ollama family defaults.
+    /// </summary>
     protected string ResolveModel(ProviderSettings settings, ModelRef model)
     {
-        if (model.HasModel) return model.Model;
-        var fallback = settings.DefaultModel ?? ModelCatalog.DefaultModel(Key);
-        return fallback ?? throw new LlmConfigurationException($"No model was given and {Key} has no default model configured.", Key, model);
+        var id = model.HasModel
+            ? model.Model
+            : DefaultModelFor(settings)
+              ?? settings.DefaultModel
+              ?? ModelCatalog.DefaultModel(Key)
+              ?? throw new LlmConfigurationException($"No model was given and {Key} has no default model configured.", Key, model);
+
+        id = NormalizeModel(id.Trim());
+        if (settings.Aliases.TryGetValue(id, out var alias) && !string.IsNullOrWhiteSpace(alias))
+        {
+            return NormalizeModel(alias.Trim());
+        }
+
+        return ModelCatalog.ResolveAlias(Key, id) ?? id;
     }
+
+    /// <summary>Provider-specific default model ahead of the configured one (Azure deployment, Hugging Face dedicated model); null defers.</summary>
+    protected virtual string? DefaultModelFor(ProviderSettings settings) => null;
+
+    /// <summary>Provider-specific id clean-up (Anthropic separators, the legacy <c>cloud-ollama:</c> prefix).</summary>
+    protected virtual string NormalizeModel(string id) => id;
+
+    /// <summary>Catalog entries for the ids when known, plain <see cref="ModelInfo"/>s otherwise; blank and duplicate ids dropped.</summary>
+    protected IReadOnlyList<ModelInfo> Describe(IEnumerable<string> ids)
+        => ids.Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(id => ModelCatalog.Find(new ModelRef(Key, id)) ?? new ModelInfo(Key, id))
+            .ToList();
 
     protected int? ResolveMaxOutputTokens(ChatRequest request, ProviderSettings settings)
         => request.MaxOutputTokens ?? settings.MaxOutputTokens ?? GlobalMaxOutputTokens;
@@ -296,6 +341,13 @@ public abstract class LlmProviderBase : ILlmProvider
         builder.Path = path.Length == 0 ? "/" : path;
         return builder.Uri.ToString().TrimEnd('/');
     }
+
+    /// <summary>True for Azure OpenAI / Azure AI Services hosts, which take an <c>api-key</c> header and Azure-shaped paths.</summary>
+    protected static bool IsAzureHost(string? endpoint)
+        => !string.IsNullOrWhiteSpace(endpoint)
+           && Uri.TryCreate(endpoint.Trim(), UriKind.Absolute, out var uri)
+           && (uri.Host.EndsWith(".openai.azure.com", StringComparison.OrdinalIgnoreCase)
+               || uri.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase));
 
     protected static string? ExtrasString(IReadOnlyDictionary<string, object?>? extras, string key)
         => extras is not null && extras.TryGetValue(key, out var value) && value is not null ? Convert.ToString(value) : null;

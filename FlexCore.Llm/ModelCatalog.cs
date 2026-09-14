@@ -10,6 +10,9 @@ namespace Fx.ControlKit.Llm;
 /// </summary>
 public static class ModelCatalog
 {
+    /// <summary><see cref="ModelInfo.Metadata"/> key marking a Hugging Face model served by a dedicated endpoint rather than the router.</summary>
+    public const string DedicatedEndpointMetadata = "dedicated";
+
     private const LlmCapabilities Text = LlmCapabilities.Chat | LlmCapabilities.Streaming | LlmCapabilities.JsonMode | LlmCapabilities.Tools;
     private const LlmCapabilities Frontier = Text | LlmCapabilities.JsonSchema | LlmCapabilities.Vision | LlmCapabilities.Reasoning;
 
@@ -70,6 +73,8 @@ public static class ModelCatalog
         M(ProviderKeys.HuggingFace, "Qwen/Qwen3-235B-A22B:nscale", "Qwen3 235B (nscale)", 128_000, 8_000, Text),
         M(ProviderKeys.HuggingFace, "alpindale/WizardLM-2-8x22B:novita", "WizardLM-2 8x22B (novita)", 64_000, 6_000, Text),
         M(ProviderKeys.HuggingFace, "moonshotai/Kimi-K2.6:novita", "Kimi K2.6 (novita)", 64_000, 4_000, Text),
+        // Hugging Face dedicated Inference Endpoint (not offered by the router)
+        M(ProviderKeys.HuggingFace, "MaziyarPanahi/calme-3.2-instruct-78b", "Calme 3.2 Instruct 78B", 32_000, 4_000, Text) with { Metadata = new Dictionary<string, string> { [DedicatedEndpointMetadata] = "true" } },
 
         // Ollama — local tags
         M(ProviderKeys.Ollama, "deepseek-coder:33b", "DeepSeek Coder 33B", 16_000, 4_096, Text),
@@ -84,6 +89,7 @@ public static class ModelCatalog
         M(ProviderKeys.Ollama, "gemma3:4b", "Gemma 3 4B", 32_000, 4_096, Text | LlmCapabilities.Vision),
         M(ProviderKeys.Ollama, "phi3:medium", "Phi-3 Medium", 16_000, 3_000, Text),
         M(ProviderKeys.Ollama, "wizardlm2:7b", "WizardLM-2 7B", 16_000, 3_000, Text),
+        M(ProviderKeys.Ollama, "wizardlm2:8x22b", "WizardLM-2 8x22B", 64_000, 4_096, Text),
         // Ollama — cloud-proxied tags served by the local daemon via ollama.com
         M(ProviderKeys.Ollama, "deepseek-v4-pro:cloud", "DeepSeek V4 Pro (cloud)", 64_000, 8_192, Text | LlmCapabilities.Reasoning),
         M(ProviderKeys.Ollama, "gemma4:31b-cloud", "Gemma 4 31B (cloud)", 128_000, 8_192, Text | LlmCapabilities.Vision),
@@ -100,6 +106,32 @@ public static class ModelCatalog
         [ProviderKeys.HuggingFace] = "Qwen/Qwen3-32B:nscale",
         [ProviderKeys.Ollama] = "deepseek-v4-pro:cloud",
     };
+
+    // The model an Ollama family name stands for when no tag is given — the
+    // same defaults GhostWriter's Qwen/DeepSeek/Mistral/WizardLM/Phi/Llama/Gemma
+    // providers used. Overridable per deployment through Llm:Ollama:Aliases.
+    private static readonly Dictionary<string, string> FamilyDefaults = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["qwen"] = "qwen3:8b",
+        ["deepseek"] = "deepseek-r1:14b",
+        ["mistral"] = "mistral:7b",
+        ["wizardlm"] = "wizardlm2:7b",
+        ["phi"] = "phi3:medium",
+        ["llama"] = "llama3.1:8b",
+        ["gemma"] = "gemma3:4b",
+    };
+
+    /// <summary>Family name → default Ollama tag (<c>qwen</c> → <c>qwen3:8b</c>, <c>phi</c> → <c>phi3:medium</c>, …).</summary>
+    public static IReadOnlyDictionary<string, string> OllamaFamilyDefaults => FamilyDefaults;
+
+    /// <summary>The tag an Ollama family alias resolves to, or null when <paramref name="model"/> is not an alias (or the provider is not Ollama).</summary>
+    public static string? ResolveAlias(string providerKey, string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        var key = ProviderKeys.Normalize(providerKey);
+        if (key is not (ProviderKeys.Ollama or ProviderKeys.OllamaCloud)) return null;
+        return FamilyDefaults.TryGetValue(model.Trim(), out var tag) ? tag : null;
+    }
 
     public static IEnumerable<ModelInfo> ForProvider(string providerKey)
     {

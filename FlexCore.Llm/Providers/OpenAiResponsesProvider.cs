@@ -17,9 +17,18 @@ namespace Fx.ControlKit.Llm.Providers;
 /// <c>prompt_tokens</c>), with <c>input_tokens_details.cached_tokens</c>
 /// moved to <see cref="LlmUsage.CacheRead"/>. gpt-5*, o-series and codex
 /// models get <c>reasoning.effort</c> and never <c>temperature</c>.
+/// <para>
+/// When the configured endpoint is an Azure host (<c>*.openai.azure.com</c>,
+/// <c>*.services.ai.azure.com</c>) the same Responses API is addressed as
+/// <c>/openai/v1/responses</c> with an <c>api-key</c> header — or a bearer
+/// token from the <see cref="ITokenProvider"/> when no key is configured —
+/// which is how a single <c>openai</c> setting can point at either service.
+/// </para>
 /// </summary>
 public sealed class OpenAiResponsesProvider : LlmProviderBase
 {
+    public const string AzureTokenScope = "https://cognitiveservices.azure.com/.default";
+
     private static readonly string[] KnownLeaves = { "/responses", "/chat/completions", "/images/generations", "/embeddings", "/models" };
 
     public OpenAiResponsesProvider(
@@ -37,16 +46,34 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
         | LlmCapabilities.Vision | LlmCapabilities.ImageGeneration | LlmCapabilities.Embeddings | LlmCapabilities.Tools
         | LlmCapabilities.Reasoning | LlmCapabilities.PromptCaching | LlmCapabilities.ListModels;
 
-    public override bool IsConfigured => Settings.HasApiKey || Authenticator is not null;
+    public override bool IsConfigured
+    {
+        get
+        {
+            var settings = Settings;
+            return settings.HasApiKey || Authenticator is not null || (IsAzureEndpoint(settings) && TokenProvider is not null);
+        }
+    }
 
     protected override string? DefaultEndpoint => "https://api.openai.com/v1";
+    protected override AuthMode DefaultAuthMode => IsAzureEndpoint(Settings) ? AuthMode.ApiKeyHeader : AuthMode.Bearer;
+    protected override string DefaultHeaderName => IsAzureEndpoint(Settings) ? "api-key" : "Authorization";
+
+    /// <summary>True when the configured endpoint is an Azure OpenAI / Azure AI Services host.</summary>
+    public static bool IsAzureEndpoint(ProviderSettings settings) => IsAzureHost(settings.Endpoint);
+
+    private Task AuthAsync(HttpRequestMessage http, ProviderSettings settings, CancellationToken cancellationToken)
+        => IsAzureEndpoint(settings)
+            ? ApplyAuthAsync(http, settings with { TokenScope = settings.TokenScope ?? AzureTokenScope }, cancellationToken, allowTokenProvider: true)
+            : ApplyAuthAsync(http, settings, cancellationToken);
 
     private string BaseUrl(ProviderSettings settings)
     {
-        var stripped = StripLeaves(ResolveEndpoint(settings), KnownLeaves);
+        var raw = ResolveEndpoint(settings);
+        var stripped = StripLeaves(raw, KnownLeaves);
         if (Uri.TryCreate(stripped, UriKind.Absolute, out var uri) && uri.AbsolutePath.TrimEnd('/').Length == 0)
         {
-            return new UriBuilder(uri) { Path = "/v1" }.Uri.ToString().TrimEnd('/');
+            return new UriBuilder(uri) { Path = IsAzureHost(raw) ? "/openai/v1" : "/v1" }.Uri.ToString().TrimEnd('/');
         }
 
         return stripped;
@@ -263,7 +290,7 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
         var body = BuildBody(request, model, CollectSystem(request), ResolveMaxOutputTokens(request, settings), ResolveTemperature(request), stream: false);
 
         using var http = JsonPost(Combine(BaseUrl(settings), "responses"), body);
-        await ApplyAuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
+        await AuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
 
         var watch = Stopwatch.StartNew();
         var response = await SendForBodyAsync(CreateClient(), http, requested, cancellationToken).ConfigureAwait(false);
@@ -278,7 +305,7 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
         var body = BuildBody(request, model, CollectSystem(request), ResolveMaxOutputTokens(request, settings), ResolveTemperature(request), stream: true);
 
         using var http = JsonPost(Combine(BaseUrl(settings), "responses"), body, accept: "text/event-stream");
-        await ApplyAuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
+        await AuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
 
         using var response = await SendForStreamAsync(CreateClient(), http, requested, cancellationToken).ConfigureAwait(false);
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
@@ -343,7 +370,7 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
     {
         var settings = Settings;
         using var http = new HttpRequestMessage(HttpMethod.Get, Combine(BaseUrl(settings), "models"));
-        await ApplyAuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
+        await AuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
         var body = await SendForBodyAsync(CreateClient(), http, null, cancellationToken).ConfigureAwait(false);
         return OpenAiChatWire.ParseModelList(body, Key);
     }
@@ -378,7 +405,7 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
         var requested = request.Model with { Provider = Key, Model = model };
 
         using var http = JsonPost(Combine(BaseUrl(settings), "images/generations"), BuildImageBody(request, model));
-        await ApplyAuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
+        await AuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
 
         var client = CreateClient();
         var watch = Stopwatch.StartNew();
@@ -430,7 +457,7 @@ public sealed class OpenAiResponsesProvider : LlmProviderBase
         var requested = request.Model with { Provider = Key, Model = model };
 
         using var http = JsonPost(Combine(BaseUrl(settings), "embeddings"), OpenAiChatWire.BuildEmbeddingBody(request, model));
-        await ApplyAuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
+        await AuthAsync(http, settings, cancellationToken).ConfigureAwait(false);
 
         var watch = Stopwatch.StartNew();
         var body = await SendForBodyAsync(CreateClient(), http, requested, cancellationToken).ConfigureAwait(false);

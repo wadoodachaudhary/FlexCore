@@ -80,15 +80,29 @@ public readonly record struct ModelRef(string Provider, string Model)
         var split = trimmed.IndexOf(':');
         if (split > 0)
         {
-            var provider = ProviderKeys.Normalize(trimmed[..split]);
-            if (provider is not null)
+            var head = trimmed[..split];
+            var tail = trimmed[(split + 1)..].Trim();
+            var provider = ProviderKeys.Normalize(head);
+            if (provider is not null && !IsOllamaMistralTag(provider, head, tail))
             {
-                return new ModelRef(provider, trimmed[(split + 1)..].Trim());
+                return new ModelRef(provider, tail);
             }
         }
 
         return new ModelRef(string.Empty, trimmed);
     }
+
+    // "mistral:7b", "mistral:latest" and "mistral:7b-instruct-q4_0" are Ollama
+    // tags for the Mistral 7B weights, not Mistral AI's API: its ids never start
+    // with a digit and never use the bare "latest"/"instruct"/"text" tags.
+    private static bool IsOllamaMistralTag(string provider, string head, string tail)
+        => provider == ProviderKeys.Mistral
+           && string.Equals(head, "mistral", StringComparison.OrdinalIgnoreCase)
+           && tail.Length > 0
+           && (char.IsDigit(tail[0])
+               || tail.Equals("latest", StringComparison.OrdinalIgnoreCase)
+               || tail.Equals("instruct", StringComparison.OrdinalIgnoreCase)
+               || tail.Equals("text", StringComparison.OrdinalIgnoreCase));
 
     public static bool TryParse(string? value, out ModelRef result)
     {

@@ -8,6 +8,9 @@ namespace Fx.ControlKit.Llm;
 /// upstream, and connection-level <see cref="HttpRequestException"/>s.
 /// Timeouts and the caller's own cancellation are never retried. A streaming
 /// call is retried only while nothing has been yielded yet.
+/// <see cref="ModelFallback"/> adds an opt-in second axis: when a provider
+/// refuses the model itself (<see cref="LlmHttpException.IsModelAccessError"/>)
+/// the call is repeated with the next candidate model.
 /// </summary>
 public sealed class RetryPolicy
 {
@@ -25,12 +28,35 @@ public sealed class RetryPolicy
     /// <summary>Test seam; defaults to <see cref="Task.Delay(TimeSpan, CancellationToken)"/>.</summary>
     public Func<TimeSpan, CancellationToken, Task> Delay { get; init; } = Task.Delay;
 
+    /// <summary>Null (the default) disables model fallback.</summary>
+    public ModelFallbackPolicy? ModelFallback { get; init; }
+
     public static RetryPolicy FromOptions(RetryOptions options) => new()
     {
         MaxAttempts = Math.Max(1, options.MaxAttempts),
         BaseDelay = TimeSpan.FromSeconds(Math.Max(0, options.BaseDelaySeconds)),
         MaxDelay = TimeSpan.FromSeconds(Math.Max(0, options.MaxDelaySeconds)),
         UseJitter = options.UseJitter,
+        ModelFallback = options.FallbackModels is { Count: > 0 } models
+            ? new ModelFallbackPolicy
+            {
+                Models = models.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()).ToArray(),
+                Providers = options.FallbackProviders.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray(),
+                IncludeConfiguredModels = options.FallbackIncludesConfiguredModels,
+            }
+            : null,
+    };
+
+    /// <summary>A copy of this policy with a different model-fallback chain (null removes it).</summary>
+    public RetryPolicy WithModelFallback(ModelFallbackPolicy? fallback) => new()
+    {
+        MaxAttempts = MaxAttempts,
+        BaseDelay = BaseDelay,
+        MaxDelay = MaxDelay,
+        UseJitter = UseJitter,
+        ShouldRetry = ShouldRetry,
+        Delay = Delay,
+        ModelFallback = fallback,
     };
 
     public bool IsTransient(Exception error)
@@ -68,4 +94,30 @@ public sealed class RetryPolicy
 
     internal static TimeSpan? RetryAfterOf(Exception error)
         => error is LlmHttpException http ? http.RetryAfter : null;
+}
+
+/// <summary>
+/// Which models to try, in order, when a provider answers 403/404 saying the
+/// requested model is not available to the API key. Candidates are the
+/// provider's configured <c>Models</c> (when <see cref="IncludeConfiguredModels"/>)
+/// followed by <see cref="Models"/>; each is tried once per call.
+/// </summary>
+public sealed class ModelFallbackPolicy
+{
+    /// <summary>The chain GhostWriter used for public OpenAI: gpt-5.4 → gpt-5.2 → gpt-5 → gpt-4.1 → gpt-4.1-mini → gpt-4o-mini.</summary>
+    public static readonly IReadOnlyList<string> OpenAiChain = new[] { "gpt-5.4", "gpt-5.2", "gpt-5", "gpt-4.1", "gpt-4.1-mini", "gpt-4o-mini" };
+
+    /// <summary>Fallback models, in order. A <c>provider:model</c> entry applies to that provider only.</summary>
+    public IReadOnlyList<string> Models { get; init; } = Array.Empty<string>();
+
+    /// <summary>Also try the provider's configured default model and <c>Models</c> list before <see cref="Models"/>.</summary>
+    public bool IncludeConfiguredModels { get; init; } = true;
+
+    /// <summary>Provider keys the chain applies to. Empty means every provider; the default is OpenAI only, where refusals by model are common.</summary>
+    public IReadOnlyList<string> Providers { get; init; } = new[] { ProviderKeys.OpenAi };
+
+    public static ModelFallbackPolicy OpenAiDefaults => new() { Models = OpenAiChain };
+
+    public bool AppliesTo(string providerKey)
+        => Providers.Count == 0 || Providers.Any(p => string.Equals(ProviderKeys.Normalize(p) ?? p, providerKey, StringComparison.OrdinalIgnoreCase));
 }

@@ -1,3 +1,4 @@
+using Fx.ControlKit.Llm.Chunking;
 using Fx.ControlKit.Llm.Configuration;
 using Fx.ControlKit.Llm.Pricing;
 using Fx.ControlKit.Llm.Providers;
@@ -15,7 +16,10 @@ public static class ServiceCollectionExtensions
     /// Registers <see cref="ILlmClient"/>, every built-in provider, a named
     /// <see cref="HttpClient"/> per provider (with no client-side timeout —
     /// the library applies its own), the environment-first credential
-    /// resolver, <see cref="ILlmPricing"/> and <see cref="ILlmContextBudget"/>.
+    /// resolver, <see cref="ILlmPricing"/>, <see cref="ILlmContextBudget"/>,
+    /// <see cref="ILlmRequestOverrides"/>, <see cref="IChunkPlanner"/> and the
+    /// <see cref="IModelConfigStore"/> (a JSON store when
+    /// <see cref="LlmOptions.ModelConfigDirectory"/> is set, otherwise a no-op).
     /// <see cref="LlmOptions"/> binds from the <c>Llm</c> section of
     /// <paramref name="configuration"/>.
     /// </summary>
@@ -51,6 +55,17 @@ public static class ServiceCollectionExtensions
         services.TryAddSingleton<ILlmPricing>(LlmPricing.Default);
         services.TryAddSingleton<ILlmContextBudget>(LlmContextBudget.Default);
         services.TryAddSingleton(sp => RetryPolicy.FromOptions(sp.GetRequiredService<IOptions<LlmOptions>>().Value.Retry));
+        services.TryAddSingleton<ILlmRequestOverrides>(sp => new LlmRequestOverrides(
+            sp.GetRequiredService<IOptionsMonitor<LlmOptions>>(), sp.GetRequiredService<ILlmContextBudget>()));
+        services.TryAddSingleton<IModelConfigStore>(sp =>
+        {
+            var directory = sp.GetRequiredService<IOptions<LlmOptions>>().Value.ModelConfigDirectory;
+            return string.IsNullOrWhiteSpace(directory)
+                ? NullModelConfigStore.Instance
+                : new JsonFileModelConfigStore(directory, null, sp.GetService<ILogger<JsonFileModelConfigStore>>());
+        });
+        services.TryAddSingleton<IChunkPlanner>(sp => new ChunkPlanner(
+            sp.GetRequiredService<ILlmContextBudget>(), sp.GetRequiredService<IModelConfigStore>()));
 
         services.AddSingleton<ILlmProvider>(sp => Configure(sp, new OpenAiResponsesProvider(
             sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ICredentialResolver>(), sp.GetService<ITokenProvider>(),
@@ -87,7 +102,9 @@ public static class ServiceCollectionExtensions
             sp.GetRequiredService<RetryPolicy>(),
             sp.GetRequiredService<ICredentialResolver>(),
             sp.GetServices<ILlmCallObserver>(),
-            sp.GetService<ILogger<LlmClient>>()));
+            sp.GetService<ILogger<LlmClient>>(),
+            sp.GetRequiredService<ILlmRequestOverrides>(),
+            sp.GetRequiredService<IModelConfigStore>()));
 
         configure?.Invoke(new LlmBuilder(services));
         return services;
@@ -102,7 +119,7 @@ public static class ServiceCollectionExtensions
     }
 }
 
-/// <summary>Fluent hooks for the pieces a host supplies: Entra tokens, custom auth, observers, extra providers, HttpClient tweaks.</summary>
+/// <summary>Fluent hooks for the pieces a host supplies: Entra tokens, custom auth, observers, call logs, model-config storage, extra providers, HttpClient tweaks.</summary>
 public sealed class LlmBuilder
 {
     internal LlmBuilder(IServiceCollection services) => Services = services;
@@ -151,6 +168,71 @@ public sealed class LlmBuilder
     /// <summary>Logs every call at Information (Warning on failure) with provider, model, elapsed, usage and estimated cost.</summary>
     public LlmBuilder AddLoggingObserver() => AddObserver<LoggingLlmCallObserver>();
 
+    /// <summary>Delivers an <see cref="LlmCallRecord"/> for every finished call to <paramref name="record"/> (a database insert, typically).</summary>
+    public LlmBuilder AddCallRecorder(Action<LlmCallRecord> record) => AddCallRecorder(new DelegateCallRecordSink(record));
+
+    public LlmBuilder AddCallRecorder(ILlmCallRecordSink sink)
+    {
+        Services.AddSingleton(sink);
+        return EnsureCallRecording();
+    }
+
+    public LlmBuilder AddCallRecorder<TSink>() where TSink : class, ILlmCallRecordSink
+    {
+        Services.AddSingleton<ILlmCallRecordSink, TSink>();
+        return EnsureCallRecording();
+    }
+
+    /// <summary>Keeps the last <paramref name="capacity"/> records in an <see cref="InMemoryCallLog"/> singleton that pages can inject.</summary>
+    public LlmBuilder AddInMemoryCallLog(int capacity = 500)
+    {
+        Services.TryAddSingleton(new InMemoryCallLog(capacity));
+        Services.AddSingleton<ILlmCallRecordSink>(sp => sp.GetRequiredService<InMemoryCallLog>());
+        return EnsureCallRecording();
+    }
+
+    private LlmBuilder EnsureCallRecording()
+    {
+        Services.TryAddSingleton(sp => new CallRecordingObserver(sp.GetServices<ILlmCallRecordSink>(), sp.GetService<ILlmPricing>()));
+        Services.TryAddEnumerable(ServiceDescriptor.Singleton<ILlmCallObserver, CallRecordingObserver>(sp => sp.GetRequiredService<CallRecordingObserver>()));
+        return this;
+    }
+
+    /// <summary>Per-user model settings in <c>{rootDirectory}/{user}/llm-models.json</c>, seeded from <see cref="ModelConfigSeeds.Default"/> unless <paramref name="seeds"/> is given.</summary>
+    public LlmBuilder UseJsonModelConfigStore(string rootDirectory, IReadOnlyDictionary<string, LlmModelConfig>? seeds = null)
+    {
+        Services.Replace(ServiceDescriptor.Singleton<IModelConfigStore>(sp =>
+            new JsonFileModelConfigStore(rootDirectory, seeds, sp.GetService<ILogger<JsonFileModelConfigStore>>())));
+        return this;
+    }
+
+    public LlmBuilder UseInMemoryModelConfigStore(IReadOnlyDictionary<string, LlmModelConfig>? seeds = null)
+    {
+        Services.Replace(ServiceDescriptor.Singleton<IModelConfigStore>(new InMemoryModelConfigStore(seeds)));
+        return this;
+    }
+
+    public LlmBuilder UseModelConfigStore<T>() where T : class, IModelConfigStore
+    {
+        Services.Replace(ServiceDescriptor.Singleton<IModelConfigStore, T>());
+        return this;
+    }
+
+    public LlmBuilder UseRequestOverrides<T>() where T : class, ILlmRequestOverrides
+    {
+        Services.Replace(ServiceDescriptor.Singleton<ILlmRequestOverrides, T>());
+        return this;
+    }
+
+    /// <summary>Retries a call with the next model when the provider refuses the requested one; see <see cref="ModelFallbackPolicy"/>.</summary>
+    public LlmBuilder UseModelFallback(ModelFallbackPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        Services.Replace(ServiceDescriptor.Singleton(sp =>
+            RetryPolicy.FromOptions(sp.GetRequiredService<IOptions<LlmOptions>>().Value.Retry).WithModelFallback(policy)));
+        return this;
+    }
+
     /// <summary>Registers an extra or replacement adapter; a later registration for the same key wins.</summary>
     public LlmBuilder AddProvider<T>() where T : class, ILlmProvider
     {
@@ -192,6 +274,12 @@ public sealed class LlmBuilder
     public LlmBuilder UseContextBudget<T>() where T : class, ILlmContextBudget
     {
         Services.Replace(ServiceDescriptor.Singleton<ILlmContextBudget, T>());
+        return this;
+    }
+
+    public LlmBuilder UseChunkPlanner<T>() where T : class, IChunkPlanner
+    {
+        Services.Replace(ServiceDescriptor.Singleton<IChunkPlanner, T>());
         return this;
     }
 

@@ -54,6 +54,26 @@ public sealed class LlmHttpException : LlmException
         }
     }
 
+    /// <summary>
+    /// A 403/404 whose body says the model is unknown to, or not enabled for,
+    /// this API key (<c>model_not_found</c>, "does not have access to model",
+    /// Anthropic's <c>not_found_error</c>). <see cref="ModelFallbackPolicy"/>
+    /// moves to the next candidate model on exactly these.
+    /// </summary>
+    public bool IsModelAccessError
+    {
+        get
+        {
+            if (StatusCode is not (HttpStatusCode.Forbidden or HttpStatusCode.NotFound)) return false;
+            if (ResponseBody is null) return false;
+            return ResponseBody.Contains("model_not_found", StringComparison.OrdinalIgnoreCase)
+                || ResponseBody.Contains("does not have access to model", StringComparison.OrdinalIgnoreCase)
+                || ResponseBody.Contains("do not have access to model", StringComparison.OrdinalIgnoreCase)
+                || ResponseBody.Contains("does not exist or you do not have access", StringComparison.OrdinalIgnoreCase)
+                || (ResponseBody.Contains("not_found_error", StringComparison.OrdinalIgnoreCase) && ResponseBody.Contains("model", StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     private static string BuildMessage(string providerKey, HttpStatusCode statusCode, string? body)
     {
         var snippet = string.IsNullOrWhiteSpace(body) ? string.Empty : body.Trim();

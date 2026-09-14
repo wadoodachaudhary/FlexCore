@@ -50,6 +50,15 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
 
     private string BaseUrl(ProviderSettings settings) => StripLeaves(ResolveEndpoint(settings), "/v1/messages", "/v1/models", "/v1");
 
+    /// <summary>Anthropic ids use hyphens only; <c>claude_sonnet_4.6</c> and <c>claude-sonnet-4.6</c> become <c>claude-sonnet-4-6</c>.</summary>
+    public static string NormalizeModelId(string model)
+    {
+        if (string.IsNullOrWhiteSpace(model) || !model.Contains("claude", StringComparison.OrdinalIgnoreCase)) return model;
+        return model.Replace('_', '-').Replace('.', '-');
+    }
+
+    protected override string NormalizeModel(string id) => NormalizeModelId(id);
+
     private async Task<HttpRequestMessage> PrepareAsync(string url, JsonObject? body, ProviderSettings settings, string? accept, CancellationToken cancellationToken)
     {
         var http = body is null ? new HttpRequestMessage(HttpMethod.Get, url) : JsonPost(url, body, accept);
@@ -464,7 +473,7 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
             foreach (var item in data.EnumerateArray())
             {
                 var id = Json.GetString(item, "id");
-                if (string.IsNullOrEmpty(id)) continue;
+                if (string.IsNullOrEmpty(id) || !id.StartsWith("claude", StringComparison.OrdinalIgnoreCase)) continue;
                 DateTimeOffset? created = DateTimeOffset.TryParse(Json.GetString(item, "created_at"), out var when) ? when : null;
                 var known = ModelCatalog.Find(new ModelRef(Key, id));
                 list.Add(new ModelInfo(Key, id)
@@ -477,6 +486,7 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
             }
         }
 
-        return list;
+        // An empty listing (a key scoped to no models) falls back to the configured list, as GhostWriter's picker does.
+        return list.Count > 0 ? list : ConfiguredModels;
     }
 }

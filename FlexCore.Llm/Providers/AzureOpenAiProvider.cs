@@ -11,7 +11,10 @@ namespace Fx.ControlKit.Llm.Providers;
 /// with the key in an <c>api-key</c> header or — when no key is configured —
 /// a bearer token from the host's <see cref="ITokenProvider"/>. The deployment
 /// is <c>Llm:AzureOpenAi:Deployment</c> when set, otherwise the model id.
-/// Embeddings and image generation use the same deployment path.
+/// Embeddings and image generation use the same deployment path. Azure has
+/// no data-plane listing that matches deployments, so
+/// <see cref="ILlmProvider.ListModelsAsync"/> answers with the configured
+/// deployment and models (no <see cref="LlmCapabilities.ListModels"/> flag).
 /// </summary>
 public sealed class AzureOpenAiProvider : LlmProviderBase
 {
@@ -31,7 +34,7 @@ public sealed class AzureOpenAiProvider : LlmProviderBase
     public override LlmCapabilities Capabilities =>
         LlmCapabilities.Chat | LlmCapabilities.Streaming | LlmCapabilities.JsonMode | LlmCapabilities.JsonSchema
         | LlmCapabilities.Vision | LlmCapabilities.ImageGeneration | LlmCapabilities.Embeddings | LlmCapabilities.Tools
-        | LlmCapabilities.Reasoning | LlmCapabilities.PromptCaching | LlmCapabilities.ListModels;
+        | LlmCapabilities.Reasoning | LlmCapabilities.PromptCaching;
 
     public override bool IsConfigured
     {
@@ -45,6 +48,22 @@ public sealed class AzureOpenAiProvider : LlmProviderBase
     protected override string? DefaultEndpoint => null;
     protected override AuthMode DefaultAuthMode => AuthMode.ApiKeyHeader;
     protected override string DefaultHeaderName => "api-key";
+
+    /// <summary>The configured default model, else the deployment name (a deployment is addressable as a model id).</summary>
+    protected override string? DefaultModelFor(ProviderSettings settings) => settings.DefaultModel ?? settings.Deployment;
+
+    public override IReadOnlyList<ModelInfo> ConfiguredModels
+    {
+        get
+        {
+            var settings = Settings;
+            var ids = new List<string>();
+            if (settings.DefaultModel is { } d) ids.Add(d);
+            if (settings.Deployment is { } dep) ids.Add(dep);
+            ids.AddRange(settings.Models);
+            return Describe(ids);
+        }
+    }
 
     /// <summary>The resource root (<c>https://name.openai.azure.com</c>) regardless of what path the configured URL carried.</summary>
     internal static string ResourceRoot(string endpoint)
@@ -99,18 +118,6 @@ public sealed class AzureOpenAiProvider : LlmProviderBase
         {
             yield return delta;
         }
-    }
-
-    /// <summary>Azure has no per-key model listing that matches deployments; this returns the configured deployment/models.</summary>
-    public override Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
-    {
-        var settings = Settings;
-        var ids = new List<string>();
-        if (settings.DefaultModel is { } d) ids.Add(d);
-        if (settings.Deployment is { } dep) ids.Add(dep);
-        ids.AddRange(settings.Models);
-        IReadOnlyList<ModelInfo> list = ids.Distinct(StringComparer.OrdinalIgnoreCase).Select(id => new ModelInfo(Key, id)).ToList();
-        return Task.FromResult(list);
     }
 
     public override async Task<ImageResult> GenerateImageAsync(ImageRequest request, CancellationToken cancellationToken)

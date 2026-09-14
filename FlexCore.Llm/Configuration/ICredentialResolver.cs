@@ -24,6 +24,16 @@ public sealed record ProviderSettings(
     string? Password,
     IReadOnlyDictionary<string, string> Headers)
 {
+    private static readonly IReadOnlyDictionary<string, string> NoAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Hugging Face dedicated-endpoint model (see <see cref="LlmProviderOptions.DedicatedModel"/>).</summary>
+    public string? DedicatedDefaultModel { get; init; }
+
+    public IReadOnlyList<string> DedicatedModels { get; init; } = Array.Empty<string>();
+
+    /// <summary>Model aliases from configuration (<see cref="LlmProviderOptions.Aliases"/>).</summary>
+    public IReadOnlyDictionary<string, string> Aliases { get; init; } = NoAliases;
+
     public bool HasApiKey => !string.IsNullOrWhiteSpace(ApiKey);
     public bool HasEndpoint => !string.IsNullOrWhiteSpace(Endpoint);
     public bool HasBasicCredentials => !string.IsNullOrWhiteSpace(Username);
@@ -67,12 +77,6 @@ public sealed class EnvironmentFirstCredentialResolver : ICredentialResolver
         apiKey ??= FirstEnv(names?.ApiKey) ?? Clean(configured.ApiKey);
 
         var timeoutSeconds = configured.TimeoutSeconds;
-        var models = new List<string>();
-        foreach (var raw in (names?.Models ?? Array.Empty<string>()).Select(_environment))
-        {
-            models.AddRange(SplitList(raw));
-        }
-        models.AddRange(configured.Models.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()));
 
         return new ProviderSettings(
             ProviderKey: key,
@@ -84,12 +88,28 @@ public sealed class EnvironmentFirstCredentialResolver : ICredentialResolver
             Deployment: FirstEnv(names?.Deployment) ?? Clean(configured.Deployment),
             TokenScope: FirstEnv(names?.TokenScope) ?? Clean(configured.TokenScope),
             DefaultModel: FirstEnv(names?.DefaultModel) ?? Clean(configured.DefaultModel),
-            Models: models.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Models: ModelList(names?.Models, configured.Models),
             Timeout: timeoutSeconds is > 0 ? TimeSpan.FromSeconds(timeoutSeconds.Value) : null,
             MaxOutputTokens: configured.MaxOutputTokens,
             Username: FirstEnv(names?.Username) ?? Clean(configured.Username),
             Password: FirstEnv(names?.Password) ?? Clean(configured.Password),
-            Headers: new Dictionary<string, string>(configured.Headers, StringComparer.OrdinalIgnoreCase));
+            Headers: new Dictionary<string, string>(configured.Headers, StringComparer.OrdinalIgnoreCase))
+        {
+            DedicatedDefaultModel = FirstEnv(names?.DedicatedModel) ?? Clean(configured.DedicatedModel),
+            DedicatedModels = ModelList(names?.DedicatedModels, configured.DedicatedModels),
+            Aliases = new Dictionary<string, string>(configured.Aliases, StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    private string[] ModelList(string[]? environmentNames, List<string> configured)
+    {
+        var models = new List<string>();
+        foreach (var raw in (environmentNames ?? Array.Empty<string>()).Select(_environment))
+        {
+            models.AddRange(SplitList(raw));
+        }
+        models.AddRange(configured.Where(m => !string.IsNullOrWhiteSpace(m)).Select(m => m.Trim()));
+        return models.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private string? FirstEnv(string[]? names)

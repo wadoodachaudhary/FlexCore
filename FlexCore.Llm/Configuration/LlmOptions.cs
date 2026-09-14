@@ -36,6 +36,19 @@ public sealed class LlmOptions
     /// <summary>Applied when a request has no temperature. Null leaves it to the provider.</summary>
     public double? Temperature { get; set; }
 
+    /// <summary>
+    /// Per-model tuning matched by name: output cap, timeout, retry-once on
+    /// timeout, chunk size and named context limits. See <see cref="RequestOverrideOptions"/>.
+    /// </summary>
+    public List<RequestOverrideOptions> RequestOverrides { get; set; } = new();
+
+    /// <summary>
+    /// When set, per-user model settings (<see cref="LlmModelConfig"/>) are
+    /// stored as <c>{directory}/{user}/llm-models.json</c> and applied to every
+    /// call — timeout, output cap and default temperature. Empty disables the store.
+    /// </summary>
+    public string? ModelConfigDirectory { get; set; }
+
     /// <summary>The sub-section for a canonical provider key or alias; null for unknown keys.</summary>
     public LlmProviderOptions? GetProvider(string providerKey) => ProviderKeys.Normalize(providerKey) switch
     {
@@ -78,7 +91,7 @@ public sealed class LlmProviderOptions
     /// <summary>Header for <see cref="Configuration.AuthMode.ApiKeyHeader"/>; defaults per provider.</summary>
     public string? HeaderName { get; set; }
 
-    /// <summary>Azure <c>api-version</c> query value; Anthropic <c>anthropic-version</c>.</summary>
+    /// <summary>Azure <c>api-version</c> query value; Anthropic <c>anthropic-version</c>; Gemini <c>v1beta</c>/<c>v1</c>.</summary>
     public string? ApiVersion { get; set; }
 
     /// <summary>Azure OpenAI deployment name. Falls back to the model id.</summary>
@@ -91,6 +104,15 @@ public sealed class LlmProviderOptions
 
     /// <summary>Models to offer in pickers; providers whose API cannot list models return these from <see cref="ILlmProvider.ListModelsAsync"/>.</summary>
     public List<string> Models { get; set; } = new();
+
+    /// <summary>Hugging Face only: the model a dedicated Inference Endpoint serves (used when <see cref="Endpoint"/> is not the router).</summary>
+    public string? DedicatedModel { get; set; }
+
+    /// <summary>Hugging Face only: models offered when <see cref="Endpoint"/> is a dedicated endpoint rather than the router.</summary>
+    public List<string> DedicatedModels { get; set; } = new();
+
+    /// <summary>Model aliases resolved before the call (<c>qwen</c> → <c>qwen3:32b</c>). Ollama has built-in family defaults these override.</summary>
+    public Dictionary<string, string> Aliases { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public int? TimeoutSeconds { get; set; }
 
@@ -111,4 +133,13 @@ public sealed class RetryOptions
     public double BaseDelaySeconds { get; set; } = 1.0;
     public double MaxDelaySeconds { get; set; } = 30.0;
     public bool UseJitter { get; set; } = true;
+
+    /// <summary>Models tried in order when the provider refuses the requested one (403/404 model access); empty disables the chain.</summary>
+    public List<string> FallbackModels { get; set; } = new();
+
+    /// <summary>Providers the chain applies to; empty means all.</summary>
+    public List<string> FallbackProviders { get; set; } = new() { ProviderKeys.OpenAi };
+
+    /// <summary>Try the provider's configured default model and <c>Models</c> before <see cref="FallbackModels"/>.</summary>
+    public bool FallbackIncludesConfiguredModels { get; set; } = true;
 }

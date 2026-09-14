@@ -22,8 +22,14 @@ public sealed record LlmCallContext(
     int MessageCount,
     DateTimeOffset StartedAt)
 {
+    /// <summary>The model currently being tried; changes when <see cref="ModelFallbackPolicy"/> moves to the next candidate.</summary>
+    public ModelRef Model { get; internal set; } = Model;
+
     /// <summary>1-based attempt number; incremented by the retry policy before each retry.</summary>
     public int Attempt { get; internal set; } = 1;
+
+    /// <summary><see cref="ChatRequest.UserId"/> of the call, for per-user logs.</summary>
+    public string? UserId { get; init; }
 }
 
 public sealed record LlmCallOutcome(

@@ -20,6 +20,9 @@ namespace Fx.ControlKit.Llm.Providers;
 /// </summary>
 public sealed class OllamaProvider : LlmProviderBase
 {
+    /// <summary><see cref="ModelInfo.Metadata"/> key set to "true" on tags the local daemon proxies to ollama.com.</summary>
+    public const string CloudProxiedMetadata = "cloud";
+
     private const string LegacyCloudPrefix = "cloud-ollama:";
 
     // Everything else in Extras is an Ollama model option (num_ctx, top_p,
@@ -66,10 +69,104 @@ public sealed class OllamaProvider : LlmProviderBase
         return ApplyAuthAsync(http, effective, cancellationToken);
     }
 
-    private string ModelFor(ProviderSettings settings, ModelRef model)
+    private string ModelFor(ProviderSettings settings, ModelRef model) => ResolveModel(settings, model);
+
+    /// <summary>Drops the legacy <c>cloud-ollama:</c> picker prefix so the daemon sees the raw tag; family aliases (<c>qwen</c> → <c>qwen3:8b</c>) are applied by the base resolver afterwards.</summary>
+    protected override string NormalizeModel(string id)
+        => id.StartsWith(LegacyCloudPrefix, StringComparison.OrdinalIgnoreCase) ? id[LegacyCloudPrefix.Length..].Trim() : id;
+
+    /// <summary>Ollama 0.4+ lists cloud-proxied models from the local daemon with a <c>:cloud</c> tag (or a <c>-cloud</c> tag suffix); they run on ollama.com but are addressed through the local endpoint.</summary>
+    public static bool IsCloudProxied(string? tag)
+        => !string.IsNullOrWhiteSpace(tag)
+           && (tag.EndsWith(":cloud", StringComparison.OrdinalIgnoreCase) || tag.EndsWith("-cloud", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// A readable label for a tag: <c>deepseek-r1:14b</c> → "DeepSeek R1 14B",
+    /// <c>phi3:medium</c> → "Phi 3 Medium", <c>gemma4:e4b</c> → "Gemma 4 Efficient 4B",
+    /// <c>deepseek-v4-pro:cloud</c> → "DeepSeek V4 Pro (Cloud)". Unknown families come back unchanged.
+    /// </summary>
+    public static string DisplayNameFor(string tag)
     {
-        var id = ResolveModel(settings, model);
-        return id.StartsWith(LegacyCloudPrefix, StringComparison.OrdinalIgnoreCase) ? id[LegacyCloudPrefix.Length..] : id;
+        if (string.IsNullOrWhiteSpace(tag)) return tag;
+        var lower = tag.ToLowerInvariant();
+
+        if (lower.EndsWith(":cloud", StringComparison.Ordinal))
+        {
+            var baseTag = tag[..^":cloud".Length];
+            if (lower.StartsWith("gemma4:", StringComparison.Ordinal)) return DisplayNameFor(baseTag) + " (Cloud)";
+            var pretty = string.Join(' ', baseTag
+                .Split('-', StringSplitOptions.RemoveEmptyEntries)
+                .Select(seg => char.ToUpperInvariant(seg[0]) + seg[1..]));
+            pretty = pretty.Replace("Deepseek", "DeepSeek", StringComparison.Ordinal).Replace("Gpt", "GPT", StringComparison.Ordinal);
+            return $"{pretty} (Cloud)";
+        }
+
+        if (lower.StartsWith("deepseek-r1:", StringComparison.Ordinal)) return $"DeepSeek R1 {Size(tag)}";
+        if (lower.StartsWith("qwen3:", StringComparison.Ordinal)) return $"Qwen 3 {Size(tag)}";
+        if (lower.StartsWith("qwen2.5-coder:", StringComparison.Ordinal)) return $"Qwen 2.5 Coder {Size(tag)}";
+        if (lower.StartsWith("mistral-nemo:", StringComparison.Ordinal)) return $"Mistral Nemo {Size(tag)}";
+        if (lower.StartsWith("mistral:", StringComparison.Ordinal)) return $"Mistral {Size(tag)}";
+        if (lower.StartsWith("wizardlm2:", StringComparison.Ordinal)) return $"WizardLM 2 {Size(tag)}";
+        if (lower.StartsWith("wizard-vicuna-uncensored:", StringComparison.Ordinal)) return $"Wizard Vicuna Uncensored {Size(tag)}";
+        if (lower.StartsWith("wizard-vicuna:", StringComparison.Ordinal)) return $"Wizard Vicuna {Size(tag)}";
+        if (lower.StartsWith("wizardlm:", StringComparison.Ordinal)) return $"WizardLM {Size(tag)}";
+        if (lower.StartsWith("wizardcoder:", StringComparison.Ordinal)) return $"WizardCoder {Size(tag)}";
+
+        if (lower.StartsWith("llama", StringComparison.Ordinal))
+        {
+            var version = new string(Prefix(tag).Where(ch => char.IsDigit(ch) || ch == '.').ToArray());
+            return ($"Llama {version}".TrimEnd() + " " + Size(tag)).Trim();
+        }
+
+        if (lower.StartsWith("gemma4:", StringComparison.Ordinal) || lower == "gemma4")
+        {
+            var colon = tag.IndexOf(':');
+            if (colon < 0 || colon == tag.Length - 1) return "Gemma 4";
+            var t = tag[(colon + 1)..];
+            if (t.Equals("latest", StringComparison.OrdinalIgnoreCase)) return "Gemma 4";
+            if (t.StartsWith('e') && t.Length > 1 && char.IsDigit(t[1]))
+            {
+                var digits = new string(t.Skip(1).TakeWhile(char.IsDigit).ToArray());
+                return $"Gemma 4 Efficient {digits}B";
+            }
+
+            return t.EndsWith('b') || t.EndsWith('B') ? $"Gemma 4 {t[..^1]}B" : $"Gemma 4 {t}";
+        }
+
+        if (lower.StartsWith("gemma", StringComparison.Ordinal))
+        {
+            var prefix = Prefix(tag);
+            var suffix = prefix.Length > 5 ? " " + prefix[5..] : string.Empty;
+            return $"Gemma{suffix} {Size(tag)}".Trim();
+        }
+
+        if (lower.StartsWith("phi", StringComparison.Ordinal))
+        {
+            var prefix = Prefix(tag);
+            var version = prefix.Length > 3 ? " " + prefix[3..] : string.Empty;
+            var colon = tag.IndexOf(':');
+            var t = colon > 0 && colon + 1 < tag.Length ? tag[(colon + 1)..] : string.Empty;
+            var suffix = t.Equals("medium", StringComparison.OrdinalIgnoreCase) || t.Equals("mini", StringComparison.OrdinalIgnoreCase) || t.Equals("small", StringComparison.OrdinalIgnoreCase)
+                ? " " + char.ToUpperInvariant(t[0]) + t[1..].ToLowerInvariant()
+                : " " + Size(tag);
+            return $"Phi{version}{suffix}".Trim();
+        }
+
+        return tag;
+
+        static string Prefix(string id)
+        {
+            var colon = id.IndexOf(':');
+            return colon > 0 ? id[..colon] : id;
+        }
+
+        static string Size(string id)
+        {
+            var idx = id.IndexOf(':');
+            if (idx < 0 || idx >= id.Length - 1) return id;
+            var suffix = id[(idx + 1)..];
+            return suffix.EndsWith('b') || suffix.EndsWith('B') ? $"{suffix[..^1]}B" : suffix;
+        }
     }
 
     public JsonObject BuildBody(ChatRequest request, string model, int? maxOutputTokens, double? temperature, bool stream)
@@ -343,11 +440,12 @@ public sealed class OllamaProvider : LlmProviderBase
                 }
 
                 if (item.TryGetProperty("size", out var size) && size.ValueKind == JsonValueKind.Number) metadata["size"] = size.GetRawText();
+                if (IsCloudProxied(name)) metadata[CloudProxiedMetadata] = "true";
                 var known = ModelCatalog.Find(new ModelRef(ProviderKeys.Ollama, name));
                 DateTimeOffset? modified = DateTimeOffset.TryParse(Json.GetString(item, "modified_at"), out var when) ? when : null;
                 list.Add(new ModelInfo(Key, name)
                 {
-                    DisplayName = known?.DisplayName,
+                    DisplayName = known?.DisplayName ?? DisplayNameFor(name),
                     ContextTokens = known?.ContextTokens,
                     MaxOutputTokens = known?.MaxOutputTokens,
                     Created = modified,

@@ -3,9 +3,9 @@ namespace Fx.ControlKit.Llm;
 /// <summary>
 /// What applications inject. Routes each call to the provider named by the
 /// request's <see cref="ModelRef.Provider"/> (inferring it from the model id
-/// when absent), applies the <see cref="RetryPolicy"/> and per-request
-/// timeout, and reports every call to the registered
-/// <see cref="ILlmCallObserver"/>s.
+/// when absent), fills in per-model defaults (user model config, request
+/// overrides), applies the <see cref="RetryPolicy"/> and per-request timeout,
+/// and reports every call to the registered <see cref="ILlmCallObserver"/>s.
 /// </summary>
 public interface ILlmClient
 {
@@ -28,6 +28,14 @@ public interface ILlmClient
     Task<ImageResult> GenerateImageAsync(ImageRequest request, CancellationToken cancellationToken = default);
 
     Task<EmbeddingResult> EmbedAsync(EmbeddingRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One cheap authenticated call — the model list where the provider has
+    /// one, otherwise a one-token chat with its default model — bypassing
+    /// retries, so a settings page can show configured / reachable / rejected.
+    /// Never throws for provider failures; they come back as the probe status.
+    /// </summary>
+    Task<ProviderProbe> ProbeAsync(string providerKey, CancellationToken cancellationToken = default);
 }
 
 public static class LlmClientExtensions
@@ -49,4 +57,16 @@ public static class LlmClientExtensions
     /// <summary>Every registered provider whose configuration is present.</summary>
     public static IEnumerable<ILlmProvider> ConfiguredProviders(this ILlmClient client)
         => client.Providers.Where(p => p.IsConfigured);
+
+    /// <summary>Probes every provider (only the configured ones by default) in parallel.</summary>
+    public static async Task<IReadOnlyList<ProviderProbe>> ProbeAllAsync(this ILlmClient client, bool configuredOnly = true, CancellationToken cancellationToken = default)
+    {
+        var providers = configuredOnly ? client.ConfiguredProviders() : client.Providers;
+        var probes = await Task.WhenAll(providers.Select(p => client.ProbeAsync(p.Key, cancellationToken))).ConfigureAwait(false);
+        return probes;
+    }
+
+    /// <summary>Starts a conversation on <paramref name="model"/>; each <see cref="ChatSession.AskAsync(string, CancellationToken)"/> appends to it.</summary>
+    public static ChatSession StartSession(this ILlmClient client, ModelRef model, string? system = null, ChatSessionOptions? options = null)
+        => new(client, model, system, options);
 }

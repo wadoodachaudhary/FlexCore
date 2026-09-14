@@ -9,7 +9,10 @@ namespace Fx.ControlKit.Llm;
 /// A provider throws <see cref="NotSupportedException"/> from any member whose
 /// flag is missing from <see cref="Capabilities"/> (for example
 /// <see cref="GenerateImageAsync"/> on Anthropic). Check the flag before
-/// calling when the model is user-selected.
+/// calling when the model is user-selected. The one exception is
+/// <see cref="ListModelsAsync"/>: a provider without
+/// <see cref="LlmCapabilities.ListModels"/> (no listing API — Azure OpenAI,
+/// Azure AI Foundry) returns <see cref="ConfiguredModels"/> instead of throwing.
 /// </para>
 /// </summary>
 public interface ILlmProvider
@@ -22,10 +25,14 @@ public interface ILlmProvider
     /// <summary>True when the key/endpoint this provider needs are present (environment first, then configuration).</summary>
     bool IsConfigured { get; }
 
+    /// <summary>The models named in configuration (default model + <c>Models</c>), or the <see cref="ModelCatalog"/> entries for this provider when none are; never a network call.</summary>
+    IReadOnlyList<ModelInfo> ConfiguredModels => ModelCatalog.ForProvider(Key).ToList();
+
     Task<ChatResult> ChatAsync(ChatRequest request, CancellationToken cancellationToken);
 
     IAsyncEnumerable<ChatDelta> StreamAsync(ChatRequest request, CancellationToken cancellationToken);
 
+    /// <summary>Live listing when the provider has <see cref="LlmCapabilities.ListModels"/>; otherwise <see cref="ConfiguredModels"/>.</summary>
     Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken);
 
     Task<ImageResult> GenerateImageAsync(ImageRequest request, CancellationToken cancellationToken);

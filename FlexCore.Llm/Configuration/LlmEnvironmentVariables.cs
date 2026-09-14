@@ -12,7 +12,9 @@ public sealed record ProviderEnvironmentNames(
     string[] Username,
     string[] Password,
     string[] Deployment,
-    string[] TokenScope)
+    string[] TokenScope,
+    string[]? DedicatedModel = null,
+    string[]? DedicatedModels = null)
 {
     public static readonly string[] NoNames = Array.Empty<string>();
 }
@@ -117,7 +119,9 @@ public static class LlmEnvironmentVariables
                 ApiVersion: None,
                 DefaultModel: new[] { "HUGGINGFACE_MODEL", "HF_MODEL" },
                 Models: new[] { "HUGGINGFACE_MODELS", "HF_MODELS" },
-                Username: None, Password: None, Deployment: None, TokenScope: None),
+                Username: None, Password: None, Deployment: None, TokenScope: None,
+                DedicatedModel: new[] { "HUGGINGFACE_DEDICATED_MODEL", "HF_DEDICATED_MODEL" },
+                DedicatedModels: new[] { "HUGGINGFACE_DEDICATED_MODELS", "HF_DEDICATED_MODELS" }),
 
             [ProviderKeys.Groq] = new(
                 ApiKey: new[] { "GROQ_API_KEY" },

@@ -129,6 +129,13 @@ public sealed record ChatRequest
     /// </summary>
     public IReadOnlyDictionary<string, object?>? Extras { get; init; }
 
+    /// <summary>
+    /// Identity of the person the call is made for. Selects their per-model
+    /// settings from the <see cref="Configuration.IModelConfigStore"/> and is
+    /// carried to observers; never sent to a provider.
+    /// </summary>
+    public string? UserId { get; init; }
+
     public static ChatRequest FromPrompt(ModelRef model, string user, string? system = null)
         => new() { Model = model, Messages = new[] { ChatMessage.User(user) }, System = system };
 
