@@ -78,6 +78,24 @@ public class ClientBehaviourTests
     }
 
     [Fact]
+    public async Task Fallback_never_retries_the_model_the_provider_actually_sent_and_leaves_embeddings_alone()
+    {
+        // No model in the request: the provider sends its catalog default (gpt-5.4), which heads the chain too.
+        var host = new TestHost().Env("OPENAI_API_KEY", "k");
+        host.Enqueue(CannedResponse.Error(HttpStatusCode.NotFound, ModelNotFound), CannedResponse.Ok(OpenAiOk));
+        var client = Build(host, new RetryPolicy { MaxAttempts = 1, ModelFallback = ModelFallbackPolicy.OpenAiDefaults });
+
+        await client.ChatAsync(TestHost.Prompt("openai:"));
+
+        Assert.Equal(new[] { "gpt-5.4", "gpt-5.2" }, host.Handler.Requests.Select(r => r.Json.GetProperty("model").GetString()));
+
+        // A refused embedding model has no chat stand-in: the error surfaces after one call.
+        host.Enqueue(CannedResponse.Error(HttpStatusCode.NotFound, ModelNotFound));
+        await Assert.ThrowsAsync<LlmHttpException>(() => client.EmbedAsync(new EmbeddingRequest { Model = ModelRef.Parse("openai:text-embedding-9"), Inputs = new[] { "x" } }));
+        Assert.Equal(3, host.Handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task Stream_walks_the_fallback_chain_before_the_first_delta()
     {
         var sse = Streams.Sse(

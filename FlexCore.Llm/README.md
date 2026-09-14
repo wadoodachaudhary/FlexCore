@@ -259,7 +259,10 @@ cap) and `DefaultTemperature` for the model when the request leaves them
 unset; the chunk planner reads `ContextTokens`, `ChunkChars` and
 `ChunkOnlyWhenTooLarge`. Files written by GhostWriter's store load unchanged.
 `ModelConfigSeeds.Default` is the seed table; pass your own to
-`UseJsonModelConfigStore(path, seeds)`.
+`UseJsonModelConfigStore(path, seeds)`. A user file that exists but cannot be
+read or parsed is logged once per read and answered with the seeds; `Save` and
+`Delete` for that user throw instead of overwriting it, and `ResetToDefaults`
+is the explicit way to replace it.
 
 ### Chunking text that does not fit
 
@@ -304,7 +307,10 @@ On a 403/404 whose body says the model is unknown or not enabled for the key
 (`LlmHttpException.IsModelAccessError`) the call is repeated with the
 provider's configured `Models`, then the policy's list; each observer sees an
 `OnRetrying` per hop and `ChatResult.Resolved` names the model that answered.
-Off unless configured (`Llm:Retry:FallbackModels` or the builder).
+Chat and streaming calls only — an embedding or image model that is refused
+surfaces its error — and the id the provider actually sent (its default when
+the request named none) is never tried again. Off unless configured
+(`Llm:Retry:FallbackModels` or the builder).
 
 ### Call log
 

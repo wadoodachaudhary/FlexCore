@@ -15,7 +15,7 @@ namespace Fx.ControlKit.Llm.Configuration;
 /// <param name="DisplayName">Label for pickers; null falls back to the catalog name.</param>
 /// <param name="ContextTokens">Estimated window (input + output) in tokens; null uses the <see cref="Pricing.ILlmContextBudget"/> table.</param>
 /// <param name="ChunkChars">Target chunk size in characters when the text must be split (or when <see cref="ChunkOnlyWhenTooLarge"/> is false).</param>
-/// <param name="TimeoutSeconds">Wall-clock cap per call; 0 leaves the provider/global timeout in force.</param>
+/// <param name="TimeoutSeconds">Wall-clock cap per call. <see cref="Sanitized"/> (applied on every save and load) replaces a non-positive value with <see cref="DefaultTimeoutSeconds"/>, so a stored entry always carries a timeout.</param>
 /// <param name="MaxOutputTokens">Output cap; 0 means no cap from this config.</param>
 /// <param name="DefaultTemperature">Temperature when the request sets none; clamped to 0–2.</param>
 /// <param name="ChunkOnlyWhenTooLarge">True splits only when the text exceeds the window; false always splits to <see cref="ChunkChars"/>.</param>

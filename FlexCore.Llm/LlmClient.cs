@@ -309,7 +309,7 @@ public sealed class LlmClient : ILlmClient
                     continue;
                 }
 
-                if (failure is LlmHttpException http && NextFallbackModel(provider, http, tried) is { } fallback)
+                if (failure is LlmHttpException http && NextFallbackModel(call, provider, http, tried) is { } fallback)
                 {
                     var next = call.Attempt + 1;
                     _logger.LogWarning("{Provider} refused model {Model}; trying {Fallback}", provider.Key, call.Model.Model, fallback);
@@ -378,7 +378,7 @@ public sealed class LlmClient : ILlmClient
                 Notify(o => o.OnRetrying(call, ex, next, TimeSpan.Zero));
                 call.Attempt = next;
             }
-            catch (LlmHttpException ex) when (!cancellationToken.IsCancellationRequested && NextFallbackModel(provider, ex, tried) is { } fallback)
+            catch (LlmHttpException ex) when (!cancellationToken.IsCancellationRequested && NextFallbackModel(call, provider, ex, tried) is { } fallback)
             {
                 var next = call.Attempt + 1;
                 _logger.LogWarning("{Provider} refused model {Model}; trying {Fallback}", provider.Key, call.Model.Model, fallback);
@@ -394,11 +394,21 @@ public sealed class LlmClient : ILlmClient
         }
     }
 
-    /// <summary>The next untried candidate from the fallback chain, or null when the error is not a model refusal or the chain is exhausted/disabled.</summary>
-    private string? NextFallbackModel(ILlmProvider provider, LlmHttpException error, HashSet<string> tried)
+    /// <summary>
+    /// The next untried candidate from the fallback chain, or null when the
+    /// error is not a model refusal, the chain is exhausted/disabled, or the
+    /// call is not a chat (the chain names chat models; an embedding or image
+    /// model that is refused has no sensible stand-in).
+    /// </summary>
+    private string? NextFallbackModel(LlmCallContext call, ILlmProvider provider, LlmHttpException error, HashSet<string> tried)
     {
         var policy = _retry.ModelFallback;
         if (policy is null || !error.IsModelAccessError || !policy.AppliesTo(provider.Key)) return null;
+        if (call.Operation is not (LlmOperation.Chat or LlmOperation.Stream)) return null;
+
+        // The provider reports the id it actually sent (its configured or
+        // catalog default when the request named none); never try that again.
+        if (error.Model is { HasModel: true } sent) tried.Add(sent.Model);
 
         var candidates = new List<string>();
         if (policy.IncludeConfiguredModels)

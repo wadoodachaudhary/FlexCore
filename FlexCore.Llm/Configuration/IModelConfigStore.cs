@@ -33,25 +33,40 @@ public interface IModelConfigStore
     void ResetToDefaults(string? userId);
 }
 
-/// <summary>Shared bookkeeping for the stores: seeds, per-user maps, sanitising and locking. Subclasses supply persistence.</summary>
+/// <summary>
+/// Shared bookkeeping for the stores: seeds, per-user maps, sanitising and
+/// locking. Subclasses supply persistence. Every read and write of a user's
+/// map happens under one lock — <see cref="LlmClient"/> calls
+/// <see cref="Find"/> on every chat while a settings page may be saving.
+/// A user whose entries cannot be read is served the seeds (logged) and
+/// cannot be saved until the read succeeds or <see cref="ResetToDefaults"/>
+/// replaces the unreadable data, so a transient read failure never turns
+/// into an overwrite of what the user had.
+/// </summary>
 public abstract class ModelConfigStoreBase : IModelConfigStore
 {
     private readonly object _lock = new();
     private readonly Dictionary<string, Dictionary<string, LlmModelConfig>> _byUser = new(StringComparer.OrdinalIgnoreCase);
 
-    protected ModelConfigStoreBase(IReadOnlyDictionary<string, LlmModelConfig>? seeds = null)
+    protected ModelConfigStoreBase(IReadOnlyDictionary<string, LlmModelConfig>? seeds = null, ILogger? logger = null)
     {
         Seeds = seeds ?? ModelConfigSeeds.Default;
+        Logger = logger ?? NullLogger.Instance;
     }
 
     public IReadOnlyDictionary<string, LlmModelConfig> Seeds { get; }
+
+    protected ILogger Logger { get; }
 
     public LlmModelConfig? Find(string? userId, string? modelId)
     {
         var key = (modelId ?? string.Empty).Trim();
         if (key.Length == 0) return null;
-        var map = LoadForUser(userId);
-        if (map.TryGetValue(key, out var own)) return own;
+        lock (_lock)
+        {
+            if (LoadForRead(userId).TryGetValue(key, out var own)) return own;
+        }
+
         return Seeds.TryGetValue(key, out var seeded) ? seeded : null;
     }
 
@@ -60,7 +75,12 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
 
     public IReadOnlyList<LlmModelConfig> GetAll(string? userId)
     {
-        var snapshot = new Dictionary<string, LlmModelConfig>(LoadForUser(userId), StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, LlmModelConfig> snapshot;
+        lock (_lock)
+        {
+            snapshot = new Dictionary<string, LlmModelConfig>(LoadForRead(userId), StringComparer.OrdinalIgnoreCase);
+        }
+
         foreach (var pair in Seeds)
         {
             if (!snapshot.ContainsKey(pair.Key)) snapshot[pair.Key] = pair.Value;
@@ -79,7 +99,7 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
         var sanitized = config.Sanitized();
         lock (_lock)
         {
-            var map = LoadForUserNoLock(userId);
+            var map = LoadForWrite(userId);
             map[sanitized.Id] = sanitized;
             Persist(userId, map);
         }
@@ -92,7 +112,7 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
         if (string.IsNullOrWhiteSpace(modelId)) return false;
         lock (_lock)
         {
-            var map = LoadForUserNoLock(userId);
+            var map = LoadForWrite(userId);
             if (!map.Remove(modelId.Trim())) return false;
             Persist(userId, map);
             return true;
@@ -103,13 +123,18 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
     {
         lock (_lock)
         {
-            var map = Seeds.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
-            _byUser[UserKey(userId)] = map;
+            var map = SeedCopy();
             Persist(userId, map);
+            _byUser[UserKey(userId)] = map;
         }
     }
 
-    /// <summary>Reads the persisted entries for a user; null when nothing has been stored yet (the seeds are then written out).</summary>
+    /// <summary>
+    /// Reads the persisted entries for a user; null when nothing has been
+    /// stored yet (the seeds are then written out). Throw when the stored
+    /// data exists but cannot be read — reads then fall back to the seeds and
+    /// writes are refused until it can.
+    /// </summary>
     protected abstract Dictionary<string, LlmModelConfig>? Load(string? userId);
 
     protected abstract void Persist(string? userId, Dictionary<string, LlmModelConfig> map);
@@ -117,12 +142,27 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
     protected static string UserKey(string? userId)
         => string.IsNullOrWhiteSpace(userId) ? "anonymous" : userId.Trim().ToLowerInvariant();
 
-    private Dictionary<string, LlmModelConfig> LoadForUser(string? userId)
+    private Dictionary<string, LlmModelConfig> SeedCopy()
+        => Seeds.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+
+    // Caller holds _lock. A read failure is logged and answered with an
+    // uncached seed copy, so the next call tries the store again.
+    private Dictionary<string, LlmModelConfig> LoadForRead(string? userId)
     {
-        lock (_lock) return LoadForUserNoLock(userId);
+        try
+        {
+            return LoadForWrite(userId);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not read the model configs for {User}; answering with the seeded defaults.", UserKey(userId));
+            return SeedCopy();
+        }
     }
 
-    private Dictionary<string, LlmModelConfig> LoadForUserNoLock(string? userId)
+    // Caller holds _lock. Propagates a read failure so a write never replaces
+    // entries that could not be read.
+    private Dictionary<string, LlmModelConfig> LoadForWrite(string? userId)
     {
         var key = UserKey(userId);
         if (_byUser.TryGetValue(key, out var existing)) return existing;
@@ -130,14 +170,14 @@ public abstract class ModelConfigStoreBase : IModelConfigStore
         var map = Load(userId);
         if (map is null)
         {
-            map = Seeds.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+            map = SeedCopy();
             try
             {
                 Persist(userId, map);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // In-memory state stands in until the next successful write.
+                Logger.LogWarning(ex, "Could not write the seeded model configs for {User}; in-memory state stands in until the next successful write.", key);
             }
         }
 
@@ -178,44 +218,35 @@ public sealed class JsonFileModelConfigStore : ModelConfigStoreBase
         PropertyNameCaseInsensitive = true,
     };
 
-    private readonly ILogger _logger;
-
     public JsonFileModelConfigStore(string rootDirectory, IReadOnlyDictionary<string, LlmModelConfig>? seeds = null, ILogger<JsonFileModelConfigStore>? logger = null)
-        : base(seeds)
+        : base(seeds, logger)
     {
         if (string.IsNullOrWhiteSpace(rootDirectory)) throw new ArgumentException("A root directory is required.", nameof(rootDirectory));
         RootDirectory = Path.GetFullPath(rootDirectory);
-        _logger = logger ?? NullLogger<JsonFileModelConfigStore>.Instance;
     }
 
     public string RootDirectory { get; }
 
     public string PathFor(string? userId) => Path.Combine(RootDirectory, SanitizeUserId(userId), FileName);
 
+    /// <summary>Null when the file does not exist; throws when it exists but cannot be read or parsed (the base then serves seeds and refuses writes).</summary>
     protected override Dictionary<string, LlmModelConfig>? Load(string? userId)
     {
         var path = PathFor(userId);
-        try
-        {
-            if (!File.Exists(path)) return null;
-            var json = File.ReadAllText(path);
-            var map = new Dictionary<string, LlmModelConfig>(StringComparer.OrdinalIgnoreCase);
-            if (string.IsNullOrWhiteSpace(json)) return map;
+        if (!File.Exists(path)) return null;
+        var json = File.ReadAllText(path);
+        var map = new Dictionary<string, LlmModelConfig>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json)) return map;
 
-            var loaded = JsonSerializer.Deserialize<List<LlmModelConfig>>(json, JsonOptions);
-            foreach (var entry in loaded ?? new List<LlmModelConfig>())
-            {
-                if (string.IsNullOrWhiteSpace(entry.Id)) continue;
-                map[entry.Id.Trim()] = entry.Sanitized();
-            }
-
-            return map;
-        }
-        catch (Exception ex)
+        var loaded = JsonSerializer.Deserialize<List<LlmModelConfig>>(json, JsonOptions)
+                     ?? throw new InvalidDataException($"{path} does not hold a JSON array of model configs.");
+        foreach (var entry in loaded)
         {
-            _logger.LogWarning(ex, "Could not read model configs from {Path}; using the seeded defaults.", path);
-            return Seeds.ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(entry.Id)) continue;
+            map[entry.Id.Trim()] = entry.Sanitized();
         }
+
+        return map;
     }
 
     protected override void Persist(string? userId, Dictionary<string, LlmModelConfig> map)

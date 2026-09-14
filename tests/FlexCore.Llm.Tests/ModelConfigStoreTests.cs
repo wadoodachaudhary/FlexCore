@@ -66,6 +66,68 @@ public class ModelConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void An_unreadable_file_serves_seeds_refuses_writes_and_is_replaced_only_by_reset()
+    {
+        var directory = Path.Combine(_root, "anonymous");
+        Directory.CreateDirectory(directory);
+        var path = Path.Combine(directory, JsonFileModelConfigStore.FileName);
+        File.WriteAllText(path, "[{\"id\":\"qwen3:32b\",\"timeoutSeconds\":30}");   // truncated: not JSON
+        var store = new JsonFileModelConfigStore(_root);
+
+        // Reads degrade to the seeds instead of failing the LLM call that asked.
+        Assert.Equal(240, store.Get(null, "qwen3:32b").TimeoutSeconds);
+        Assert.Contains(store.GetAll(null), c => c.Id == "gpt-5.4");
+
+        // A write must not replace what could not be read.
+        Assert.ThrowsAny<Exception>(() => store.Save(null, new LlmModelConfig("qwen3:32b", TimeoutSeconds: 5)));
+        Assert.ThrowsAny<Exception>(() => store.Delete(null, "qwen3:32b"));
+        Assert.Equal("[{\"id\":\"qwen3:32b\",\"timeoutSeconds\":30}", File.ReadAllText(path));
+
+        // Once the file is readable again the same store picks it up (nothing stale was cached).
+        File.WriteAllText(path, "[{\"id\":\"qwen3:32b\",\"timeoutSeconds\":30}]");
+        Assert.Equal(30, store.Get(null, "qwen3:32b").TimeoutSeconds);
+        store.Save(null, new LlmModelConfig("qwen3:32b", TimeoutSeconds: 5));
+        Assert.Equal(5, new JsonFileModelConfigStore(_root).Get(null, "qwen3:32b").TimeoutSeconds);
+
+        // Reset is the explicit way past unreadable data.
+        File.WriteAllText(path, "garbage");
+        var broken = new JsonFileModelConfigStore(_root);
+        Assert.ThrowsAny<Exception>(() => broken.Save(null, new LlmModelConfig("x")));
+        broken.ResetToDefaults(null);
+        Assert.Equal(240, broken.Get(null, "qwen3:32b").TimeoutSeconds);
+        broken.Save(null, new LlmModelConfig("x", TimeoutSeconds: 9));
+        Assert.Equal(9, new JsonFileModelConfigStore(_root).Find(null, "x")!.TimeoutSeconds);
+    }
+
+    [Fact]
+    public async Task Concurrent_finds_and_saves_do_not_corrupt_the_map()
+    {
+        var store = new InMemoryModelConfigStore(new Dictionary<string, LlmModelConfig>());
+        using var cts = new CancellationTokenSource();
+        var writer = Task.Run(() =>
+        {
+            for (var i = 0; !cts.IsCancellationRequested; i++)
+            {
+                store.Save("u", new LlmModelConfig($"model-{i % 50}", TimeoutSeconds: i + 1));
+                if (i % 7 == 0) store.Delete("u", $"model-{(i + 3) % 50}");
+            }
+        });
+
+        var readers = Enumerable.Range(0, 4).Select(_ => Task.Run(() =>
+        {
+            for (var i = 0; i < 20_000; i++)
+            {
+                store.Find("u", $"model-{i % 50}");
+                if (i % 100 == 0) store.GetAll("u");
+            }
+        })).ToArray();
+
+        await Task.WhenAll(readers);
+        cts.Cancel();
+        await writer;
+    }
+
+    [Fact]
     public void In_memory_store_and_null_store()
     {
         var memory = new InMemoryModelConfigStore(new Dictionary<string, LlmModelConfig>());
