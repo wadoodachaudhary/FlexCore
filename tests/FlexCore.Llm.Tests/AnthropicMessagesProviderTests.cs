@@ -186,6 +186,25 @@ public class AnthropicMessagesProviderTests
         var ex = await Assert.ThrowsAsync<LlmResponseException>(async () => await Streams.Collect(Provider(host).StreamAsync(TestHost.Prompt("anthropic:claude-sonnet-4-6"), CancellationToken.None)));
 
         Assert.Contains("Overloaded", ex.Message);
+        Assert.Equal("overloaded_error", ex.ErrorType);
+        Assert.True(ex.IsTransient, "an in-band overloaded_error is the HTTP 529 equivalent and must be retryable");
+        Assert.True(new RetryPolicy().IsTransient(ex));
+    }
+
+    [Theory]
+    [InlineData("overloaded_error", true)]
+    [InlineData("overloaded", true)]
+    [InlineData("rate_limit_error", true)]
+    [InlineData("api_error", false)]
+    [InlineData("invalid_request_error", false)]
+    [InlineData(null, false)]
+    public void In_band_error_types_classify_as_transient_or_not(string? errorType, bool transient)
+    {
+        var ex = new LlmResponseException("x", "anthropic", errorType: errorType);
+
+        Assert.Equal(transient, ex.IsTransient);
+        Assert.Equal(transient, new RetryPolicy().IsTransient(ex));
+        Assert.False(new LlmResponseException("x", "anthropic", errorType: "overloaded_error", transient: false).IsTransient);
     }
 
     [Fact]

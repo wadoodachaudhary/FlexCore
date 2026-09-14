@@ -350,8 +350,11 @@ HTTP round trip.
 ## Behaviour
 
 - **Retry** — 429 (honouring `Retry-After`), 502, 503, 504, 529, "overloaded"
-  bodies and connection failures, exponential back-off with jitter; a stream is
-  retried only before its first delta.
+  bodies, connection failures, and in-band error events that report the same
+  conditions after an HTTP 200 (Anthropic's streamed `overloaded_error` /
+  `rate_limit_error`, surfaced as `LlmResponseException.IsTransient`);
+  exponential back-off with jitter. A stream is retried only before its first
+  delta — an error after text has been yielded is raised, never replayed.
 - **Timeout** — request → model config → override → provider → `Llm:TimeoutSeconds`,
   applied through a linked token and raised as `LlmTimeoutException`; the
   caller's own cancellation stays an `OperationCanceledException`.

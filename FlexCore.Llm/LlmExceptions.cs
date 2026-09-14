@@ -105,14 +105,49 @@ public sealed class LlmConfigurationException : LlmException
     }
 }
 
-/// <summary>The provider returned a 2xx whose body could not be understood, or an in-band error event.</summary>
+/// <summary>
+/// The provider returned a 2xx whose body could not be understood, or an
+/// in-band error event. Some providers report capacity failures this way
+/// after the HTTP 200 has already been sent (Anthropic's SSE
+/// <c>error</c> event with <c>overloaded_error</c> or
+/// <c>rate_limit_error</c>); <see cref="IsTransient"/> marks those so
+/// <see cref="RetryPolicy"/> retries them exactly as it retries HTTP 429/529.
+/// </summary>
 public sealed class LlmResponseException : LlmException
 {
-    public LlmResponseException(string message, string providerKey, ModelRef? model = null, string? rawJson = null, Exception? inner = null)
+    public LlmResponseException(
+        string message,
+        string providerKey,
+        ModelRef? model = null,
+        string? rawJson = null,
+        Exception? inner = null,
+        string? errorType = null,
+        bool? transient = null)
         : base(message, providerKey, model, inner)
     {
         RawJson = rawJson;
+        ErrorType = errorType;
+        IsTransient = transient ?? IsTransientErrorType(errorType);
     }
 
     public string? RawJson { get; }
+
+    /// <summary>The provider's own error code for an in-band error (Anthropic's <c>error.type</c>), null when the body simply could not be parsed.</summary>
+    public string? ErrorType { get; }
+
+    /// <summary>
+    /// True for an in-band capacity failure — the HTTP 529 / 429 equivalents
+    /// <c>overloaded_error</c>, <c>overloaded</c> and <c>rate_limit_error</c>.
+    /// <see cref="RetryPolicy"/> retries exactly these; a stream that has
+    /// already yielded a delta is never restarted regardless.
+    /// </summary>
+    public bool IsTransient { get; }
+
+    /// <summary>Whether an in-band error code names an overloaded or rate-limited upstream.</summary>
+    public static bool IsTransientErrorType(string? errorType)
+    {
+        if (string.IsNullOrWhiteSpace(errorType)) return false;
+        return string.Equals(errorType, "rate_limit_error", StringComparison.OrdinalIgnoreCase)
+            || errorType.Contains("overloaded", StringComparison.OrdinalIgnoreCase);
+    }
 }

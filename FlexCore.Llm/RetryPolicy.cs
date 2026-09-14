@@ -5,7 +5,10 @@ namespace Fx.ControlKit.Llm;
 /// <summary>
 /// Exponential back-off for transient provider failures: HTTP 429 (honouring
 /// <c>Retry-After</c>), 502, 503, 504, 529, bodies reporting an overloaded
-/// upstream, and connection-level <see cref="HttpRequestException"/>s.
+/// upstream, in-band error events that report the same conditions after an
+/// HTTP 200 (<see cref="LlmResponseException.IsTransient"/> — Anthropic's
+/// streamed <c>overloaded_error</c> / <c>rate_limit_error</c>), and
+/// connection-level <see cref="HttpRequestException"/>s.
 /// Timeouts and the caller's own cancellation are never retried. A streaming
 /// call is retried only while nothing has been yielded yet.
 /// <see cref="ModelFallback"/> adds an opt-in second axis: when a provider
@@ -65,6 +68,7 @@ public sealed class RetryPolicy
         return error switch
         {
             LlmHttpException http => http.IsTransient,
+            LlmResponseException response => response.IsTransient,
             LlmTimeoutException => false,
             OperationCanceledException => false,
             HttpRequestException => true,

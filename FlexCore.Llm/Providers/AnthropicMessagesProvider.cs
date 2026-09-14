@@ -276,8 +276,7 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
         var root = doc.RootElement;
         if (Json.GetString(root, "type") == "error")
         {
-            var error = Json.GetObject(root, "error");
-            throw new LlmResponseException($"anthropic returned an error: {(error is { } e ? Json.GetString(e, "message") : null) ?? body}", ProviderKeys.Anthropic, requested, body);
+            throw InBandError(root, "anthropic returned an error", requested, body);
         }
 
         var text = new StringBuilder();
@@ -323,6 +322,15 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
 
         var served = Json.GetString(root, "model");
         return new ChatResult(text.ToString(), requested with { Model = served ?? requested.Model }, ParseUsage(root), finish, toolCalls.Count == 0 ? null : toolCalls, elapsed, body);
+    }
+
+    /// <summary>An <c>{"type":"error","error":{"type":...,"message":...}}</c> body or SSE event as an exception that keeps the provider's error type.</summary>
+    private static LlmResponseException InBandError(JsonElement root, string prefix, ModelRef requested, string raw)
+    {
+        var error = Json.GetObject(root, "error");
+        var message = error is { } e ? Json.GetString(e, "message") : null;
+        var errorType = error is { } t ? Json.GetString(t, "type") : null;
+        return new LlmResponseException($"{prefix}: {message ?? raw}", ProviderKeys.Anthropic, requested, raw, errorType: errorType);
     }
 
     private int MaxTokensFor(ChatRequest request, ProviderSettings settings)
@@ -443,10 +451,12 @@ public sealed class AnthropicMessagesProvider : LlmProviderBase
                     break;
 
                 case "error":
-                {
-                    var error = Json.GetObject(root, "error");
-                    throw new LlmResponseException($"anthropic stream error: {(error is { } e ? Json.GetString(e, "message") : null) ?? evt.Data}", Key, requested, evt.Data);
-                }
+                    // Anthropic can report overloaded_error / rate_limit_error
+                    // in-band after the HTTP 200. The exception carries the
+                    // error type so RetryPolicy retries it like a 529/429;
+                    // LlmClient only restarts a stream that has yielded
+                    // nothing yet, so text already shown is never replayed.
+                    throw InBandError(root, "anthropic stream error", requested, evt.Data);
             }
         }
 

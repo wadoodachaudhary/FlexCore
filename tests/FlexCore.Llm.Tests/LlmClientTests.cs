@@ -132,6 +132,97 @@ public class LlmClientTests
         await Assert.ThrowsAsync<LlmTimeoutException>(async () => await Streams.Collect(client.StreamAsync(timeoutRequest)));
     }
 
+    private const string AnthropicMessageStart = """{"type":"message_start","message":{"id":"m","model":"claude-sonnet-4-6","usage":{"input_tokens":3,"output_tokens":0}}}""";
+
+    private static string AnthropicStreamError(string errorType)
+        => "error|" + $$$"""{"type":"error","error":{"type":"{{{errorType}}}","message":"upstream {{{errorType}}}"}}""";
+
+    private static string AnthropicOkStream(string text) => Streams.Sse(
+        "message_start|" + AnthropicMessageStart,
+        "content_block_start|" + """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+        "content_block_delta|" + $$$"""{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{{{text}}}"}}""",
+        "content_block_stop|" + """{"type":"content_block_stop","index":0}""",
+        "message_delta|" + """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}""",
+        "message_stop|" + """{"type":"message_stop"}""");
+
+    [Theory]
+    [InlineData("overloaded_error")]
+    [InlineData("rate_limit_error")]
+    [InlineData("overloaded")]
+    public async Task Anthropic_in_band_capacity_error_before_the_first_delta_is_retried(string errorType)
+    {
+        var (client, host, observer, delays) = Build();
+        host.Enqueue(
+            CannedResponse.Sse(Streams.Sse("message_start|" + AnthropicMessageStart, AnthropicStreamError(errorType))),
+            CannedResponse.Sse(AnthropicOkStream("ok")));
+
+        var deltas = await Streams.Collect(client.StreamAsync(TestHost.Prompt("anthropic:claude-sonnet-4-6")));
+
+        Assert.Equal("ok", Streams.Text(deltas));
+        Assert.Equal(FinishReasons.Stop, deltas[^1].FinishReason);
+        Assert.Equal(2, host.Handler.Requests.Count);
+        Assert.Equal(new[] { TimeSpan.FromSeconds(1) }, delays);
+        Assert.Equal(new[] { "started:anthropic:claude-sonnet-4-6:14", "retry:2:1", "completed:2" }, observer.Events);
+    }
+
+    [Fact]
+    public async Task Anthropic_in_band_error_after_a_text_delta_is_raised_not_retried()
+    {
+        var (client, host, observer, delays) = Build();
+        // Only one canned stream: a second request would fail the fake handler with "No canned response".
+        host.Enqueue(CannedResponse.Sse(Streams.Sse(
+            "message_start|" + AnthropicMessageStart,
+            "content_block_start|" + """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "content_block_delta|" + """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}""",
+            AnthropicStreamError("overloaded_error"))));
+
+        var seen = new List<ChatDelta>();
+        var ex = await Assert.ThrowsAsync<LlmResponseException>(async () =>
+        {
+            await foreach (var delta in client.StreamAsync(TestHost.Prompt("anthropic:claude-sonnet-4-6"))) seen.Add(delta);
+        });
+
+        Assert.Equal("Hel", Streams.Text(seen));
+        Assert.True(ex.IsTransient, "the error itself is transient; it is the yielded text that forbids a restart");
+        Assert.Equal("overloaded_error", ex.ErrorType);
+        Assert.Contains("upstream overloaded_error", ex.Message);
+        Assert.Single(host.Handler.Requests);
+        Assert.Empty(delays);
+        Assert.Equal(new[] { "started:anthropic:claude-sonnet-4-6:14", "failed:LlmResponseException" }, observer.Events);
+    }
+
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("api_error")]
+    [InlineData("authentication_error")]
+    public async Task Anthropic_non_capacity_in_band_errors_are_not_retried(string errorType)
+    {
+        var (client, host, _, delays) = Build();
+        host.Enqueue(CannedResponse.Sse(Streams.Sse("message_start|" + AnthropicMessageStart, AnthropicStreamError(errorType))));
+
+        var ex = await Assert.ThrowsAsync<LlmResponseException>(async () => await Streams.Collect(client.StreamAsync(TestHost.Prompt("anthropic:claude-sonnet-4-6"))));
+
+        Assert.False(ex.IsTransient);
+        Assert.Equal(errorType, ex.ErrorType);
+        Assert.Single(host.Handler.Requests);
+        Assert.Empty(delays);
+    }
+
+    [Fact]
+    public async Task Anthropic_in_band_overloaded_on_a_non_streaming_200_is_retried()
+    {
+        var (client, host, observer, _) = Build();
+        host.Enqueue(
+            CannedResponse.Ok("""{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"""),
+            CannedResponse.Ok("""{"type":"message","content":[{"type":"text","text":"claude"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}"""));
+
+        var result = await client.ChatAsync(TestHost.Prompt("anthropic:claude-sonnet-4-6"));
+
+        Assert.Equal("claude", result.Text);
+        Assert.Equal(2, host.Handler.Requests.Count);
+        Assert.Contains("completed:2", observer.Events);
+    }
+
     [Fact]
     public async Task Provider_is_inferred_from_bare_model_ids()
     {
