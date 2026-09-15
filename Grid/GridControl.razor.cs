@@ -407,6 +407,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool EnterAdvancesToNextCell { get; set; }
 
     [Parameter] public bool AllowPaging { get; set; }
+    /// <summary>False makes the grid cursor-only: clicks and keys move the
+    /// active cell, editing and the click events still work, but no row or
+    /// cell is ever selected and no selection event fires.</summary>
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public bool HighlightSelectedRows { get; set; } = true;
     /// <summary>
@@ -7259,9 +7262,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
             _selectedItems.Clear();
 
-        if (!AllowSelection)
-            return;
-
+        // AllowSelection=false is a cursor-only grid: the click still commits a
+        // stray editor, can start an edit (single click, second click on the
+        // active cell, checkbox toggle) and focuses the host — only the row
+        // and cell SELECTION steps below are skipped.
         var isCtrl = args.CtrlKey || args.MetaKey;
         var isShift = args.ShiftKey;
         var isPlainCellClick = !isCtrl && !isShift;
@@ -7364,8 +7368,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // Handle row selection for Row-mode grids.
         // Cell clicks use stopPropagation so the <tr> onclick (HandleRowClick)
         // does NOT fire — we must handle selection here.
-        if (SelectionSettingsRef?.Mode != SelectionMode.Cell &&
-            SelectionSettingsRef?.CheckboxOnly != true)
+        if (SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && SelectionSettingsRef?.CheckboxOnly != true)
         {
             var isPlainClick = !args.CtrlKey && !args.MetaKey && !args.ShiftKey;
             // FullMultiSelect preserves a multi-row selection when the user
@@ -7386,10 +7390,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             if (!preserveSelection)
             {
+                // OnRecordClick is a click event, not a selection step: a cursor-only
+                // grid raises it too, as the <tr> path (HandleRowClickCore) does.
                 if (EventsRef?.OnRecordClick.HasDelegate == true)
                     await EventsRef.OnRecordClick.InvokeAsync(new CellClickEventArgs<TValue> { Data = item, RowIndex = rowIndex, Column = clickedCol?.Field ?? "" });
 
-                await SelectRow(item, rowIndex, args);
+                if (AllowSelection)
+                    await SelectRow(item, rowIndex, args);
             }
         }
 
@@ -7429,6 +7436,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
+        if (AllowSelection && !await SelectCellFromPointerAsync(item, resolvedRowIndex, cellIndex, isCtrl, isShift))
+            return;
+
+        if (isEditableCell && shouldStartEditOnClick && clickedCol?.Type != ColumnType.CheckBox)
+        {
+            await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX, openDropdownOnRender: shouldOpenDropdownOnEdit, selectAllOnStart: true);
+            return;
+        }
+
+        await FocusGridHostAsync();
+    }
+
+    /// <summary>Cell-mode selection for a pointer click on a cell: the
+    /// CellSelecting veto, the plain / Ctrl / Shift cell set (or the
+    /// one-column mass-edit set), CellSelected and the selection-changed
+    /// notice. False when a consumer vetoed the selection.</summary>
+    private async Task<bool> SelectCellFromPointerAsync(TValue item, int resolvedRowIndex, int cellIndex, bool isCtrl, bool isShift)
+    {
         if (EventsRef?.CellSelecting.HasDelegate == true)
         {
             var selectingArgs = new CellSelectingEventArgs<TValue>
@@ -7439,7 +7464,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             };
             await EventsRef.CellSelecting.InvokeAsync(selectingArgs);
             if (selectingArgs.Cancel)
-                return;
+                return false;
         }
 
         if (SingleCellColumnMassEditEnabled)
@@ -7492,14 +7517,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         await NotifySelectionChangedAsync(GridSelectionChangeSource.Pointer);
-
-        if (isEditableCell && shouldStartEditOnClick && clickedCol?.Type != ColumnType.CheckBox)
-        {
-            await StartBatchEdit(item, resolvedRowIndex, clickedCol!, args.ClientX, openDropdownOnRender: shouldOpenDropdownOnEdit, selectAllOnStart: true);
-            return;
-        }
-
-        await FocusGridHostAsync();
+        return true;
     }
 
     private void SelectSingleCellColumnMassEditCells(int rowIndex, int cellIndex, bool isCtrl, bool isShift)
@@ -11278,21 +11296,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _hasTypeSearchMatch = true;
         _pendingActiveCellScrollIntoView = true;
 
-        if (EventsRef?.RowSelected.HasDelegate == true)
-            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = matchItem, RowIndex = resolvedRowIndex });
-
-        if (EventsRef?.CellSelected.HasDelegate == true)
+        // A cursor-only grid (AllowSelection=false) only moves the active cell.
+        if (AllowSelection)
         {
-            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
-            {
-                Data = matchItem,
-                RowIndex = resolvedRowIndex,
-                CellIndex = targetColumnIndex,
-                CurrentValue = GetPropertyValue(matchItem, targetColumn.Field)
-            });
-        }
+            if (EventsRef?.RowSelected.HasDelegate == true)
+                await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = matchItem, RowIndex = resolvedRowIndex });
 
-        await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+            if (EventsRef?.CellSelected.HasDelegate == true)
+            {
+                await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+                {
+                    Data = matchItem,
+                    RowIndex = resolvedRowIndex,
+                    CellIndex = targetColumnIndex,
+                    CurrentValue = GetPropertyValue(matchItem, targetColumn.Field)
+                });
+            }
+
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        }
         await FocusGridHostAsync();
         await InvokeAsync(StateHasChanged);
     }
@@ -16269,6 +16291,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             string.Equals(column.Field, field, StringComparison.OrdinalIgnoreCase));
         if (cellIndex < 0)
             return;
+
+        // With selection off the grid keeps only its cursor: the active cell
+        // moves (edit cue, arrow origin) but nothing joins the selection and no
+        // selection event fires, so a view-only grid never reports a row it
+        // does not show as selected.
+        if (!AllowSelection)
+        {
+            _lastSelectedItem = item;
+            _lastSelectedRowIndex = rowIndex;
+            _activeCell = (rowIndex, cellIndex);
+            _lastSelectedCell = (rowIndex, cellIndex);
+            return;
+        }
 
         // Keyboard navigation funnels here — honor the RowSelecting veto the
         // same way the mouse path (SelectRow) does, or a consumer's cancel

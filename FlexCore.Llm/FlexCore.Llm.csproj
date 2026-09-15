@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Same Fx.ControlKit.* root as FlexCore — this is a satellite of the same
+         product, split out so it carries no Blazor or UI dependency at all. Apps
+         that only need model access (GhostWriter, Mutarjim) reference this
+         alone; nothing here references FlexCore.csproj. -->
+    <RootNamespace>Fx.ControlKit.Llm</RootNamespace>
+    <AssemblyName>FlexCore.Llm</AssemblyName>
+    <!-- NuGet metadata -->
+    <PackageId>FlexCore.Llm</PackageId>
+    <Version>0.2.42</Version>
+    <Authors>FlexCore Contributors</Authors>
+    <Company>FlexCore Contributors</Company>
+    <Product>FlexCore.Llm</Product>
+    <Description>Provider-neutral LLM client for FlexCore applications. One ILlmClient routes chat, streaming, tool use, JSON mode, embeddings and image generation to OpenAI (Responses and Chat Completions), Azure OpenAI, Azure AI Foundry, Anthropic, Google Gemini, Ollama, Hugging Face, Groq, xAI and Mistral through raw HttpClient wire adapters — no provider SDKs. Includes retry with Retry-After, per-request timeouts, call observers for logging and pricing, a USD pricing table, context-window budgets and a built-in model catalog.</Description>
+    <PackageTags>llm;openai;anthropic;claude;gemini;ollama;azure;groq;mistral;huggingface;xai;dotnet</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://flexcoreui.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wadoodachaudhary/FlexCore.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright (c) 2026 FlexCore Contributors</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="FlexCore.Llm.Tests" />
+  </ItemGroup>
+
+</Project>

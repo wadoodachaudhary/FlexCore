@@ -4613,6 +4613,20 @@ function gridHighlightsSelectedRows(gridRoot) {
     return true;
 }
 
+// AllowSelection as rendered on the grid root (data-fx-allow-selection);
+// absent = true, the historical default.
+function gridAllowsSelection(gridRoot) {
+    const v = gridRoot?.dataset?.fxAllowSelection;
+    return v === undefined || v !== "false";
+}
+
+// Whether keyboard navigation may paint the destination ROW client-side. The
+// server paints no row look when selection is off or row highlighting is
+// off, so a preview there would only flash and vanish at the settle render.
+function gridPaintsNavigationRow(gridRoot) {
+    return gridAllowsSelection(gridRoot) && gridHighlightsSelectedRows(gridRoot);
+}
+
 function setRowPreview(tr, on, color) {
     tr.classList.toggle("fx-drag-preview", on);
     // Paint the CELLS as well as the row: some grids render opaque td
@@ -5258,12 +5272,18 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
     // instead of re-triggering itself forever.
     const isEffectivelyMuted = el =>
         el.style.getPropertyValue("background-color") === "transparent";
+    const isCueMuted = el => el.style.getPropertyValue("box-shadow") === "none";
+    // A bare active cell (no selection class on the TD) carries only the cue:
+    // its background is the consumer's (a td-level tint, say), so only the
+    // cue is muted and the background is left alone.
+    const isBareActiveCell = el => el.tagName === "TD" && el.classList.contains("fx-cell-active")
+        && !el.classList.contains("fx-cell-selected") && !el.classList.contains("fx-cell-row-selected");
     // Nav-owned mute: same inline overrides as muteSelectedLook but WITHOUT
     // the data-fx-muted marker / paintedPreviewEls enrollment — the drag
     // path's post-click safety sweep RESTORES marked rows still backed by a
     // selection class, resurrecting exactly what this path just muted.
-    const navMuteLook = el => {
-        el.style.setProperty("background-color", "transparent", "important");
+    const navMuteLook = (el, cueOnly = false) => {
+        if (!cueOnly) el.style.setProperty("background-color", "transparent", "important");
         el.style.setProperty("box-shadow", "none", "important");
         el.style.setProperty("outline", "none", "important");
         navMuted.add(el);
@@ -5274,7 +5294,8 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
             .forEach(el => {
                 const tr = el.closest("tr");
                 if (tr === targetTr) return;
-                if (!isEffectivelyMuted(el)) navMuteLook(el);
+                if (isBareActiveCell(el)) { if (!isCueMuted(el)) navMuteLook(el, true); }
+                else if (!isEffectivelyMuted(el)) navMuteLook(el);
                 // The row shade is often a SERVER-WRITTEN INLINE STYLE on the
                 // tr (gItems paint model) — mute the row AND its cells.
                 if (el.tagName === "TR") {
@@ -5294,7 +5315,8 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         const tr = gridRoot.querySelector(`tr.fx-row[data-ari="${lastPreview.ari}"]`);
         if (!tr) return paintedRowTr;
         const trBg = tr.style.backgroundColor;
-        if (tr !== paintedRowTr || !trBg || trBg === "transparent") {
+        if (gridPaintsNavigationRow(gridRoot)
+            && (tr !== paintedRowTr || !trBg || trBg === "transparent")) {
             setRowPreview(tr, true, gridPreviewColor(gridRoot));
             paintedRowTr = tr;
         }
@@ -5315,10 +5337,10 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
 
     const muteCue = (td, keepRowTint = false) => {
         if (!td) return;
-        td.style.setProperty(
-            "background",
-            keepRowTint ? gridPreviewColor(gridRoot) : "transparent",
-            "important");
+        if (keepRowTint)
+            td.style.setProperty("background", gridPreviewColor(gridRoot), "important");
+        else if (!isBareActiveCell(td))
+            td.style.setProperty("background", "transparent", "important");
         td.style.setProperty("box-shadow", "none", "important");
         painted.push(td);
     };
@@ -5524,16 +5546,22 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // Selection follows the active cell: move the ROW look client-side too,
         // or it trails at the sync cadence and visibly lags a held key.
         const newTr = target.closest("tr");
+        const paintRow = gridPaintsNavigationRow(gridRoot);
         clearCuePaints();
-        if (paintedRowTr && paintedRowTr !== newTr) setRowPreview(paintedRowTr, false, "");
+        if (paintedRowTr && (!paintRow || paintedRowTr !== newTr)) {
+            setRowPreview(paintedRowTr, false, "");
+            paintedRowTr = null;
+        }
         // Mute the old selection look in the same frame — both row-mode
         // (tr.fx-selected) and cell-mode (row shade on TD classes) variants —
         // tracking every muted element locally.
         muteForeignSelection(newTr);
-        setRowPreview(newTr, true, gridPreviewColor(gridRoot));
-        paintedRowTr = newTr;
+        if (paintRow) {
+            setRowPreview(newTr, true, gridPreviewColor(gridRoot));
+            paintedRowTr = newTr;
+        }
         const oldActive = gridRoot.querySelector("td.fx-cell-active");
-        muteCue(oldActive, oldActive?.closest("tr") === newTr);
+        muteCue(oldActive, paintRow && oldActive?.closest("tr") === newTr);
         // The old cell's server-rendered adornments (the "..." popup button)
         // must leave in the SAME frame as the cursor, not at the sync render.
         if (oldActive && oldActive !== target) {
