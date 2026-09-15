@@ -11296,21 +11296,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _hasTypeSearchMatch = true;
         _pendingActiveCellScrollIntoView = true;
 
-        if (EventsRef?.RowSelected.HasDelegate == true)
-            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = matchItem, RowIndex = resolvedRowIndex });
-
-        if (EventsRef?.CellSelected.HasDelegate == true)
+        // A cursor-only grid (AllowSelection=false) only moves the active cell.
+        if (AllowSelection)
         {
-            await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
-            {
-                Data = matchItem,
-                RowIndex = resolvedRowIndex,
-                CellIndex = targetColumnIndex,
-                CurrentValue = GetPropertyValue(matchItem, targetColumn.Field)
-            });
-        }
+            if (EventsRef?.RowSelected.HasDelegate == true)
+                await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = matchItem, RowIndex = resolvedRowIndex });
 
-        await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+            if (EventsRef?.CellSelected.HasDelegate == true)
+            {
+                await EventsRef.CellSelected.InvokeAsync(new CellSelectEventArgs<TValue>
+                {
+                    Data = matchItem,
+                    RowIndex = resolvedRowIndex,
+                    CellIndex = targetColumnIndex,
+                    CurrentValue = GetPropertyValue(matchItem, targetColumn.Field)
+                });
+            }
+
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        }
         await FocusGridHostAsync();
         await InvokeAsync(StateHasChanged);
     }

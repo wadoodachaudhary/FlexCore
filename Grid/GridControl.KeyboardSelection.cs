@@ -51,7 +51,7 @@ public partial class GridControl<TValue>
             if (_batchEditItem != null)
                 return false; // Validation retained the editor.
         }
-        if (!_selectedItems.Contains(item) && EventsRef?.RowSelecting.HasDelegate == true)
+        if (AllowSelection && !_selectedItems.Contains(item) && EventsRef?.RowSelecting.HasDelegate == true)
         {
             var args = new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex };
             await EventsRef.RowSelecting.InvokeAsync(args);
@@ -65,9 +65,13 @@ public partial class GridControl<TValue>
             if (targetPage != _pageState.CurrentPage)
                 await GoToPage(targetPage);
         }
-        _selectedItems.Clear();
-        _selectedItems.Add(item);
-        _selectedCells.Clear();
+        // A cursor-only grid (AllowSelection=false) only moves the active cell here.
+        if (AllowSelection)
+        {
+            _selectedItems.Clear();
+            _selectedItems.Add(item);
+            _selectedCells.Clear();
+        }
         _lastSelectedItem = item;
         _lastSelectedRowIndex = rowIndex;
         _lastSelectedCell = (rowIndex, RowSelectionCellIndex);
@@ -76,9 +80,12 @@ public partial class GridControl<TValue>
         ResetRowSelectionTypeAheadTarget();
         _focusedGroupPath = null;
         _pendingActiveCellScrollIntoView = requestRender;
-        if (EventsRef?.RowSelected.HasDelegate == true)
-            await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex });
-        await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        if (AllowSelection)
+        {
+            if (EventsRef?.RowSelected.HasDelegate == true)
+                await EventsRef.RowSelected.InvokeAsync(new RowSelectEventArgs<TValue> { Data = item, RowIndex = rowIndex });
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard);
+        }
         if (committedEditor)
             await FocusGridHostAsync();
         if (requestRender)
