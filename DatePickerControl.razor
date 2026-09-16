@@ -18,7 +18,8 @@
             <input type="text"
                    class="fx-datepicker-input"
                    @ref="_inputElement"
-                   value="@_inputText"
+                   value="@(CellHost is null ? _inputText : _hostDomText)"
+                   data-fx-host-typing="@(CellHost is null ? null : "1")"
                    @oninput="OnInputTextChange"
                    @onfocus="HandleInputFocus"
                    @onblur="OnInputBlur"
@@ -341,6 +342,7 @@
     protected override void OnParametersSet()
     {
         base.OnParametersSet();
+        var textBefore = _inputText;
         if (Uncontrolled)
         {
             // Initial value only — a parent re-render must not wipe the text
@@ -365,6 +367,12 @@
             _initialTextApplied = true;
             if (EffectiveInitialText is { } initial)
                 _inputText = initial;
+        }
+
+        if (CellHost is not null)
+        {
+            if (!_rendered) _hostDomText = _inputText;
+            else if (_inputText != textBefore) _ = PushDraftAsync();
         }
     }
 
@@ -406,6 +414,7 @@
                 return;
             }
             _inputText += e.Key;
+            _hostDomText = _inputText;
             _validationMessage = null;
             InputValueChanged?.Invoke(_inputText);
             StateHasChanged();
@@ -434,31 +443,55 @@
     private bool _rendered;
     // Text appended in the browser whose input event has not come back yet.
     private bool _domAppendPending;
+    // Under a cell host the browser owns the draft: this is the text the input was
+    // mounted with and it never changes afterwards, so no render can overwrite what
+    // the user typed into the focused input in the same instant (the input event
+    // brings the typed text back). Text changed HERE goes to the input by JS.
+    private string _hostDomText = "";
+
+    private async Task<IJSObjectReference?> TextJsModuleAsync()
+    {
+        try { return _textJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", TextJsModulePath); }
+        catch { return null; }
+    }
+
+    /// <summary>A text change that originates on the server under a cell host (a format,
+    /// a revert, a calendar pick): pushed into the browser's input instead of rendered,
+    /// since the rendered value is frozen at mount.</summary>
+    private async Task PushDraftAsync()
+    {
+        if (CellHost is null) return;
+        if (!_rendered) { _hostDomText = _inputText; return; }
+        if (await TextJsModuleAsync() is not { } module) return;
+        try { await module.InvokeVoidAsync("setTextValue", _inputElement, _inputText); } catch { }
+    }
 
     /// <summary>Appends a relayed character to the browser's input as if typed (the
     /// TextBox's appendTypedText); false when the browser cannot be reached.</summary>
     private async Task<bool> AppendTypedTextAsync(string text)
     {
+        if (await TextJsModuleAsync() is not { } module) return false;
         try
         {
-            _textJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", TextJsModulePath);
-            await _textJsModule.InvokeVoidAsync("appendTypedText", _inputElement, text);
+            await module.InvokeVoidAsync("appendTypedText", _inputElement, text);
             _domAppendPending = true;
             return true;
         }
         catch { return false; }
     }
 
-    /// <summary>A commit or row key arriving while an appended character's input event
-    /// is still in flight would act on a draft missing that character: read the input
-    /// back first (the read is ordered after the append on the same connection).</summary>
+    /// <summary>A commit or row key arriving while the browser's draft is ahead of this
+    /// text (an appended character's input event still in flight, a key typed in the
+    /// same instant) would act on a draft missing those characters: read the input
+    /// back first (the read is ordered after the browser's own work on the same
+    /// connection).</summary>
     private async Task SyncInputTextFromDomAsync()
     {
         _domAppendPending = false;
-        if (_textJsModule is null) return;
+        if (await TextJsModuleAsync() is not { } module) return;
         try
         {
-            var text = await _textJsModule.InvokeAsync<string?>("getTextValue", _inputElement);
+            var text = await module.InvokeAsync<string?>("getTextValue", _inputElement);
             if (text is not null && text != _inputText)
             {
                 _inputText = text;
@@ -638,7 +671,7 @@
 
     private async Task OnInputKeyDown(KeyboardEventArgs e)
     {
-        if (_domAppendPending && e.Key is "Enter" or "NumpadEnter" or "Tab")
+        if (e.Key is "Enter" or "NumpadEnter" or "Tab" && (_domAppendPending || (CellHost is not null && _rendered)))
             await SyncInputTextFromDomAsync();
 
         // Tab is about to land on this control's own 📅 button (the next Tab stop):
@@ -738,6 +771,7 @@
                 _inputText = Value.HasValue ? FormatDate(Value.Value) : "";
                 _validationMessage = null;
                 InputValueChanged?.Invoke(_inputText);
+                await PushDraftAsync();
                 if (ValidationChanged.HasDelegate) await ValidationChanged.InvokeAsync(null);
             }
         }
@@ -842,6 +876,7 @@
             if (formatIfValid)
             {
                 _inputText = FormatDate(parsed);
+                await PushDraftAsync();
             }
         }
         else if (DateTime.TryParse(_inputText.Trim(), EffectiveCulture, DateTimeStyles.AllowWhiteSpaces, out var parsedFallback)
@@ -853,6 +888,7 @@
             if (formatIfValid)
             {
                 _inputText = FormatDate(parsedFallback);
+                await PushDraftAsync();
             }
         }
         else
@@ -917,6 +953,7 @@
         var changed = Value != newValue;
         Value = newValue;
         _inputText = newValue.HasValue ? FormatDate(newValue.Value) : "";
+        await PushDraftAsync();
 
         if (changed && ValueChanged.HasDelegate)
         {

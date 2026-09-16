@@ -1521,17 +1521,37 @@ export function measureGridMetrics(gridRoot) {
     const bodyViewportEl = getGridVerticalViewportElement(gridRoot);
     if (!bodyViewportEl) return null;
 
+    const metrics = readGridMetrics(gridRoot, bodyViewportEl);
+    if (metrics) return metrics;
+
+    // No settled layout yet (a host sized in this same frame). One animation frame is
+    // usually enough for that layout to exist, and waiting for it here costs a frame
+    // where a retry from the server costs a round trip. rAF is paused while the
+    // document is hidden, though: report "not settled" at once instead of parking the
+    // interop call, and back the frame up with a timer for a tab hidden between
+    // scheduling and painting — that frame never runs.
+    const doc = gridRoot.ownerDocument || document;
+    if (doc.hidden) return null;
+    return new Promise(resolve => {
+        const settle = () => resolve(readGridMetrics(gridRoot, bodyViewportEl));
+        const frame = requestAnimationFrame(() => { clearTimeout(backstop); settle(); });
+        const backstop = setTimeout(() => { cancelAnimationFrame(frame); settle(); }, 250);
+    });
+}
+
+// null means the layout is not settled (nothing was measured; the next render
+// retries); a metrics object with rowPx 0 means a settled layout with fewer than
+// two rows, which the server retries only once the row set changes.
+function readGridMetrics(gridRoot, bodyViewportEl) {
     // SETTLED-LAYOUT GATE. A grid can render rows before it has been given its final
     // box — behind a modal, inside a pane that has not been sized yet — and in that
     // state both the row pitch and the header height are wrong (measured 16.5px in a
     // transient layout where the settled values were 14px and 16px). The tell is that
     // the scrollport is taller than the grid that contains it, which a settled layout
-    // can never be. Report "not measurable" so the caller retries on a later render
-    // instead of locking in a transient reading for the lifetime of the grid.
+    // can never be; a root with no box at all has not been laid out. Neither reading
+    // is worth locking in for the lifetime of the grid.
     const rootHeight = gridRoot.getBoundingClientRect().height;
-    if (rootHeight <= 0 || bodyViewportEl.clientHeight > rootHeight + 1) {
-        return { headerPx: 0, rowPx: 0, viewportPx: 0 };
-    }
+    if (rootHeight <= 0 || bodyViewportEl.clientHeight > rootHeight + 1) return null;
 
     // How much of the scrollport's top the header occupies ONCE PINNED — which is its
     // own height plus its `top` offset, NOT getGridVisibleTop()'s bottom-minus-top.
@@ -5639,4 +5659,65 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         flushPreviewPosition();
         releasePreview();
     }, true);
+}
+
+/**
+ * First-render sequencer: in ONE interop round trip, every standing binding the
+ * grid still needs, the geometry read, the pending reveal, the window reader and
+ * focus. Each step is the export the server also calls on its own; `opts` names the
+ * steps this grid still needs. Ordering them here is the point — the reveal lands
+ * before the reader is registered, so the reader's initial sync reads the revealed
+ * scrollTop instead of pulling a pre-positioned row window back to the top, and the
+ * reader is sized from the row pitch measured a moment earlier in the same call.
+ *
+ * Returns { initialized, metrics, groupHeaderPx, windowRegistered, revealed, focused }.
+ */
+export async function initializeGridHost(gridRoot, scrollEl, focusEl, dotNetRef, windowRef, deferredLane, deferredThumb, opts) {
+    const o = opts || {};
+    const result = { initialized: false, metrics: null, groupHeaderPx: 0, windowRegistered: false, revealed: false, focused: false };
+    if (!gridRoot) return result;
+    result.initialized = true;
+
+    if (o.keyboardTrap) registerGridKeyboardTrap(gridRoot);
+    if (o.instantSelection) registerGridInstantSelectionFeedback(gridRoot, !!o.cellMode, dotNetRef);
+    if (o.scrollSync) registerGridScrollSync(gridRoot);
+    if (o.headerDragPreview) registerHeaderDragPreview(gridRoot);
+    if (o.rowDragAutoScroll) registerRowDragSelectionAutoScroll(gridRoot, dotNetRef);
+    if (o.scrollbarActivity) registerScrollbarActivity(gridRoot);
+    if (o.activeCellScrollSync) registerActiveCellScrollSync(gridRoot);
+    if (o.clientNavigation) registerClientNavigationPreview(gridRoot, windowRef);
+
+    if (o.measure) result.metrics = await measureGridMetrics(gridRoot);
+    if (o.measureGroupHeader) result.groupHeaderPx = measureGridGroupHeaderHeight(scrollEl);
+
+    // The resolution GridControl applies once it adopts the read: a consumer-set
+    // height wins, then the measured pitch, then the value the grid rendered with.
+    const rowHeight = o.useMeasuredRowHeight && result.metrics && result.metrics.rowPx > 0
+        ? result.metrics.rowPx
+        : Math.max(1, o.rowHeight || 16);
+
+    const revealRowIndex = Number.isInteger(o.revealRowIndex) ? o.revealRowIndex : -1;
+    if (revealRowIndex >= 0) {
+        result.revealed = scrollSelectedGridRowToTop(
+            gridRoot, revealRowIndex, Math.max(0, revealRowIndex * rowHeight), true);
+    }
+
+    const w = o.windowScroll;
+    if (w && scrollEl && windowRef) {
+        registerGridWindowScroll(
+            scrollEl, windowRef, w.scrollTrack, deferredLane, deferredThumb,
+            w.boundaryGuard, w.boundaryTelemetry, w.overscanRows, w.guardRows,
+            rowHeight, w.wheelScale, w.boundarySlowdown, w.adaptivePacing);
+        result.windowRegistered = true;
+    }
+
+    // Focus follows a landed reveal (or none requested), the server's own order; a
+    // reveal still pending keeps its focus pending with it.
+    if (o.focus && focusEl && typeof focusEl.focus === "function" && (revealRowIndex < 0 || result.revealed)) {
+        try {
+            focusEl.focus({ preventScroll: true });
+            result.focused = (focusEl.ownerDocument || document).activeElement === focusEl;
+        } catch (_) { /* focus is best-effort */ }
+    }
+    return result;
 }

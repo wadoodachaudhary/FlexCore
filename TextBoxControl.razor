@@ -817,6 +817,10 @@ else
             // render, before enableClientBufferedTyping's round trip lands.
             if (EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered)
                 merged["data-fx-cb-pending"] = "1";
+            // The cell host's type-ahead (legacy-scrollbar.js) hands characters typed
+            // before this input existed straight to it.
+            if (CellHost is not null)
+                merged["data-fx-host-typing"] = "1";
 
             if (!string.IsNullOrWhiteSpace(Width))
             {

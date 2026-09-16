@@ -28,6 +28,16 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// <summary>Start with all nodes collapsed.</summary>
     [Parameter] public bool EnableCollapseAll { get; set; }
 
+    /// <summary>When false a new DataSource renders every node at its initial state
+    /// (collapsed when EnableCollapseAll) instead of inheriting the previous tree's
+    /// expansion by node Id.</summary>
+    [Parameter] public bool PreserveExpansionOnDataChange { get; set; } = true;
+
+    /// <summary>Space on the selected node toggles its expansion (vsFlexGrid has no
+    /// built-in outline key). A host that gives Space its own meaning through
+    /// OnHostKeyDown turns this off.</summary>
+    [Parameter] public bool SpaceTogglesExpansion { get; set; } = true;
+
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
@@ -920,7 +930,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             if (!ownPublication) { ClearEditSessions(); _completedChildLoads.Clear(); }
             // Preserve existing expand/collapse states before rebuilding
             Dictionary<object, bool>? expandStates = null;
-            if (_treeBuilt && _flatNodes.Count > 0)
+            if (PreserveExpansionOnDataChange && _treeBuilt && _flatNodes.Count > 0)
             {
                 expandStates = new Dictionary<object, bool>();
                 foreach (var node in _flatNodes)
@@ -1552,6 +1562,30 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         return Task.CompletedTask;
     }
 
+    /// <summary>Characters the browser held back while the editor was still being
+    /// mounted (the root's type-ahead in legacy-scrollbar.js) for an editor with no
+    /// text input to take them (a list): each is handed over as a typed key, in
+    /// order, then the commit key typed behind them (Enter / Tab), if any. Ignored
+    /// for an edit that already ended.</summary>
+    [JSInvokable]
+    public async Task RelayTypedTextAsync(int generation, string text, string trailingKey)
+    {
+        if (string.IsNullOrEmpty(text) || generation != _cellEditGeneration
+            || CurrentCellEditContext() is not { IsEditing: true } ctx) return;
+        foreach (var ch in text)
+        {
+            if (!await RelayKeyAsync(ctx, ch.ToString())) return;
+        }
+        if (!string.IsNullOrEmpty(trailingKey)) await RelayKeyAsync(ctx, trailingKey);
+    }
+
+    private async Task<bool> RelayKeyAsync(TreeGridCellEditContext ctx, string key)
+    {
+        var e = new KeyboardEventArgs { Key = key, Type = "keydown" };
+        await (ctx.Relay is { } relay ? relay(e) : HandleCellEditorKeyDownAsync(ctx, e));
+        return ReferenceEquals(CurrentCellEditContext(), ctx);
+    }
+
     private async Task HandleRowDoubleClick(TreeNode<TValue> node, int visibleIndex)
     {
         if (EditSettingsRef?.AllowEditing == true && EditSettingsRef.AllowEditOnDblClick)
@@ -1657,7 +1691,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             case "Spacebar":
                 // VB6 VSFlexGrid parity: Space toggles the current node's
                 // collapse/expand state (FInboxJobs gData_KeyDown vbKeySpace).
-                await ToggleSelectedNodeAsync();
+                if (SpaceTogglesExpansion) await ToggleSelectedNodeAsync();
                 break;
             case "ArrowRight":
             case "Right":

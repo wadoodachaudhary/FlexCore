@@ -7,6 +7,7 @@
      tabindex="@TabIndex"
      data-fx-tab-stop
      data-fx-cell-editing="@(IsEditingCell ? _cellEditGeneration : null)"
+     data-fx-cell-editable="@(_columns.Any(c => c.CellEditTemplate != null) ? "" : null)"
      data-fx-grid-tab-navigation="@(IsPropertyGrid ? "wrap-until-edge" : null)"
      data-fx-grid-tab-edge="@(IsPropertyGrid ? PropertyGridTabEdge : null)"
      @onkeydown="HandleKeyDown"
