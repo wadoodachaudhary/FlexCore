@@ -271,6 +271,19 @@
             }
             if (_panelMaxHeight is > 0)
                 parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (!_hasMeasuredGeometry && !_panelRevealed)
+            {
+                // First paint of an open, before measureDropdown has answered: the list must
+                // add no scrollable overflow to an ancestor. A dialog root is overflow:auto,
+                // and the unmeasured box (CSS 180px, hanging below the host) reaching past
+                // its edge grew a scrollbar and reflowed the whole dialog for a round trip,
+                // then flipped upward once measured. Collapsed to its borders at the host's
+                // top edge it still lays out its options, so scrollHeight and the option
+                // sizes measure the same; the module-null and error paths reveal without
+                // measuring, which is why _panelRevealed also lifts this.
+                parts.Add("top:0");
+                parts.Add("max-height:0");
+            }
             if (!_panelRevealed)
             {
                 // Invisible until parked on the current value (see _panelRevealed) — and
