@@ -818,8 +818,8 @@ internal static class CrystalReportContentsParser
 
         reader.SkipRestOfRecord();
 
-        runningTotal.ResetConditionType = ReadRunningTotalCondition(reader);
-        runningTotal.EvaluationConditionType = ReadRunningTotalCondition(reader);
+        (runningTotal.ResetConditionType, runningTotal.ResetConditionField, runningTotal.ResetConditionGroup) = ReadRunningTotalCondition(reader, fieldReferences);
+        (runningTotal.EvaluationConditionType, runningTotal.EvaluationConditionField, runningTotal.EvaluationConditionGroup) = ReadRunningTotalCondition(reader, fieldReferences);
         if (reader.BytesLeftInRecord >= 2)
         {
             _ = reader.LoadBoolean();
@@ -829,23 +829,25 @@ internal static class CrystalReportContentsParser
         return runningTotal;
     }
 
-    private static int ReadRunningTotalCondition(TslvArchiveReader reader)
+    private static (int Type, string Field, int Group) ReadRunningTotalCondition(TslvArchiveReader reader, FieldReferenceTable fieldReferences)
     {
         if (reader.BytesLeftInRecord <= 0)
         {
-            return 0;
+            return (0, "", 0);
         }
 
         var conditionType = reader.LoadEnum();
+        var field = "";
+        var group = 0;
         switch (conditionType)
         {
             case 1:
-                SkipFieldReference(reader);
+                field = ReadFieldReference(reader, fieldReferences);
                 break;
             case 2:
                 if (reader.BytesLeftInRecord >= 2)
                 {
-                    _ = reader.LoadUInt16();
+                    group = reader.LoadUInt16();
                 }
                 break;
             case 3:
@@ -856,7 +858,7 @@ internal static class CrystalReportContentsParser
                 break;
         }
 
-        return conditionType;
+        return (conditionType, field, group);
     }
 
     private static string SkipFieldLikeRecord(TslvArchiveReader reader)
@@ -1311,6 +1313,12 @@ internal static class CrystalReportContentsParser
                 continue;
             }
 
+            if (next.Type is 180 or 185)
+            {
+                reportObjects.Add(ReadUnsupportedObject(reader, endType));
+                continue;
+            }
+
             if (IsReportObjectStart(next.Type))
             {
                 var reportObject = ReadReportObject(reader, next.Type, fieldReferences, dataDefinition);
@@ -1365,6 +1373,76 @@ internal static class CrystalReportContentsParser
         var name = reader.BytesLeftInRecord > 0 ? reader.LoadString() ?? "" : "";
         reader.SkipRestOfRecord();
         return new CrystalSectionHeader(name, height);
+    }
+
+    private static CrystalReportObjectModel ReadUnsupportedObject(TslvArchiveReader reader, int sectionEndType)
+    {
+        var start = reader.CurrentRecord!;
+        var kind = start.Type == 180 ? "Chart" : "CrossTab";
+        var source = new CrystalUnsupportedObjectSource
+        {
+            Offset = start.Offset, RecordType = start.Type, Schema = start.Schema
+        };
+        var reportObject = new CrystalReportObjectModel
+        {
+            ElementName = kind + "Object", Kind = kind, Name = kind + "@" + start.Offset,
+            UnsupportedSource = source
+        };
+
+        // Legacy ChartObject -> AnalysisObject (179) -> OleObject (174) -> base (158).
+        // Legacy CrossTabObject -> GridObject (184) -> base (158).
+        ReadMetadata("identity/size", reader.Fork(), probe =>
+        {
+            if (kind == "Chart")
+            {
+                probe.LoadNextRecord(179, 1792, 181);
+                probe.LoadNextRecord(174, 1792, 181);
+            }
+            else probe.LoadNextRecord(184, 1792, 186);
+            probe.LoadNextRecord(158, 1792, start.Type + 1);
+            reportObject.Width = Math.Abs(probe.LoadInt32());
+            reportObject.Height = Math.Abs(probe.LoadInt32());
+            if (probe.BytesLeftInRecord >= 8) { probe.LoadInt32(); probe.LoadInt32(); }
+            reportObject.Name = probe.LoadString() ?? reportObject.Name;
+        });
+
+        reader.SkipRestOfRecord();
+        var nestedEnds = new Stack<int>();
+        while (reader.BytesLeftInRecord > 0)
+        {
+            var next = reader.Fork().LoadAnyRecord();
+            // An incomplete object must not consume the next object or section.
+            if (next.Type == sectionEndType || next.Type is 101 or 139 || SectionKind(next.Type).Length > 0) break;
+            if (nestedEnds.Count == 0 && (next.Type is 255 or 163 or 172 or 177 or 180 or 182 or 185 or 187 or 386
+                || IsReportObjectStart(next.Type))) break;
+            // Cross-tab column/row/cell bodies contain their own report objects and common records.
+            // Chart definitions likewise own all records through their matching terminator.
+            if (next.Type is 206 or 210 or 215 or 296) nestedEnds.Push(next.Type + 1);
+            reader.LoadAnyRecord();
+            if (nestedEnds.Count == 0 && next.Type == 190)
+                ReadMetadata("position", reader.Fork(), probe =>
+                {
+                    reportObject.Left = probe.LoadInt32Compressed();
+                    reportObject.Top = probe.LoadInt32Compressed();
+                });
+            else if (nestedEnds.Count == 0 && next.Type == 253)
+                ReadMetadata("format", reader.Fork(), probe => reportObject.Format = ReadObjectFormat(probe));
+            else if (nestedEnds.Count == 0 && next.Type == 237)
+                ReadMetadata("border", reader.Fork(), probe => reportObject.Border = ReadObjectBorder(probe));
+            reader.SkipRestOfRecord();
+            if (nestedEnds.TryPeek(out var nestedEnd) && next.Type == nestedEnd) nestedEnds.Pop();
+            if (next.Type == start.Type + 1) { source.Complete = nestedEnds.Count == 0; break; }
+        }
+        source.ArchiveBytes = reader.CopyRange(start.Offset, reader.Position - start.Offset);
+        if (!source.Complete) source.MetadataDiagnostics.Add("Object end record is missing; retained bytes stop before the next object/section.");
+        return reportObject;
+
+        void ReadMetadata(string label, TslvArchiveReader probe, Action<TslvArchiveReader> read)
+        {
+            try { read(probe); }
+            catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException)
+            { source.MetadataDiagnostics.Add($"Could not fully decode {label}: {ex.Message}"); }
+        }
     }
 
     private static bool IsReportObjectStart(int recordType)

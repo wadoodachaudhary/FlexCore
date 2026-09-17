@@ -2345,3 +2345,12 @@
 .fx-rd-run-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
 .fx-rd-picture-preview { width:100%; height:260px; object-fit:contain; background:#fff; }
 .fx-rd-rich-preview { flex-shrink:0; outline:1px solid #aaa; max-width:100%; }
+.fx-rd-layout-tools, .fx-rd-section-actions { display:flex; align-items:center; gap:3px; flex-wrap:wrap; min-height:30px; }
+.fx-rd-file-picker { position:relative; display:inline-flex; width:24px; height:24px; overflow:hidden; }
+.fx-rd-file-picker ::deep input[type="file"] { position:absolute; inset:0; opacity:0; cursor:pointer; }
+.fx-rd-tool-host { flex-shrink:0; }
+@media (max-width:700px) {
+    .fx-rd-toolbar-row { flex-wrap:wrap; row-gap:2px; }
+}
+.fx-rd-section-actions label { display:flex; align-items:center; gap:4px; font-size:12px; }
+.fx-rd-validation-error { color:#a52222; white-space:normal; overflow-wrap:anywhere; }

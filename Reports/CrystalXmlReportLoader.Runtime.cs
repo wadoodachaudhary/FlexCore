@@ -101,9 +101,16 @@ public partial class CrystalXmlReportLoader
         }
         foreach (var running in data?.Descendants("RunningTotalFieldDefinition") ?? [])
         {
-            if ((string?)running.Attribute("EvaluationConditionType") != "NoCondition" || (string?)running.Attribute("ResetConditionType") != "NoCondition")
-            { diagnostics.Add($"{(string?)running.Attribute("Name")}: conditional running-total evaluation/reset is not implemented."); continue; }
-            layout.RunningTotals[(string?)running.Attribute("FormulaName") ?? ""] = new((string?)running.Attribute("Operation") ?? "Sum", (string?)running.Attribute("SummarizedField") ?? "", "");
+            ReportRunningTotalCondition ReadCondition(string prefix)
+            {
+                var metadata = running.Element("FlexKitRunningTotalConditions");
+                var formula = (string?)metadata?.Attribute(prefix + "Formula");
+                return new((string?)running.Attribute(prefix + "ConditionType") ?? "NoCondition",
+                    (string?)metadata?.Attribute(prefix + "Field") ?? "", (int?)metadata?.Attribute(prefix + "Group") ?? 0,
+                    string.IsNullOrWhiteSpace(formula) ? null : CrystalFormula.Compile(formula));
+            }
+            layout.RunningTotals[(string?)running.Attribute("FormulaName") ?? ""] = new((string?)running.Attribute("Operation") ?? "Sum", (string?)running.Attribute("SummarizedField") ?? "", "")
+            { Evaluation = ReadCondition("Evaluation"), Reset = ReadCondition("Reset") };
         }
         foreach (var section in document.Sections)
         {
@@ -113,19 +120,27 @@ public partial class CrystalXmlReportLoader
             var repeat = area?.Element("GroupAreaFormat") ?? format?.Element("GroupAreaFormat");
             var sections = xml.Parent?.Elements("Section").ToList() ?? [];
             layout.Areas[section.Id] = new(Flag(format, "EnableSuppress"), Flag(repeat, "EnableRepeatGroupHeader"),
-                ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"), ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"));
+                ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"), ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"),
+                ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableResetPageNumberAfter"), Flag(repeat, "EnableKeepGroupTogether"));
             layout.SectionConditions[section.Id] = ReadConditions(xml.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))
                 .Concat(xml.Elements("SectionFormat").Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))), diagnostics);
             layout.AreaConditions[section.Id] = ReadConditions((area?.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? [])
                 .Concat(format?.Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? []), diagnostics);
             foreach (var element in section.Elements)
                 if (document.SourceObjects.TryGetValue(element.SourceKey, out var objectXml))
-                    layout.ObjectConditions[element.Id] = ReadConditions(objectXml.Descendants().Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")), diagnostics);
-            if (section.ResetPageNumberAfter) diagnostics.Add($"{section.Name}: page-number resets are not yet evaluated.");
+                {
+                    // Analysis definitions contain their own cell/series formulas. They are opaque;
+                    // only the outer object's formatting and suppression can affect its placeholder.
+                    var containers = ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
+                        ? objectXml.Descendants()
+                        : objectXml.Elements().Concat(objectXml.Elements().Where(e => e.Name.LocalName is "ObjectFormat" or "Border" or "Font").Descendants());
+                    layout.ObjectConditions[element.Id] = ReadConditions(containers.Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")), diagnostics);
+                }
         }
         var references = document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))
             .Concat(document.Groups.Select(g => g.Condition)).Concat(document.Sorts.Select(s => s.Field.Reference))
             .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).Select(s => s.Field))
+            .Concat(layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation, t.Reset }).SelectMany(c => (c.Formula?.References ?? []).Prepend(c.Field)))
             .Concat(layout.RecordSelection?.References ?? []).Concat(layout.GroupSelection?.References ?? [])
             .Concat(layout.SectionConditions.Values.Concat(layout.AreaConditions.Values).Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values).SelectMany(f => f.References))
             .Concat(report.Descendants("SubReportLink").Select(l => (string?)l.Attribute("MainReportFieldName") ?? ""))
@@ -138,7 +153,6 @@ public partial class CrystalXmlReportLoader
             if (reference.Length == 0 || !seen.Add(reference)) continue;
             if (layout.Formulas.TryGetValue(reference, out var formula))
             {
-                if (formula.UsesEvaluationDirectives) diagnostics.Add($"{reference}: Crystal's complete read/print-pass scheduling is not implemented; native evaluation uses dependency and band order.");
                 foreach (var dependency in formula.References) pending.Enqueue(dependency);
                 continue;
             }
@@ -147,6 +161,7 @@ public partial class CrystalXmlReportLoader
             if (groupName.Success) { layout.GroupNames[reference] = groupName.Groups[1].Value; pending.Enqueue(groupName.Groups[1].Value); continue; }
             AddProjection(layout, reference);
         }
+        layout.Diagnostics.AddRange(diagnostics);
         return layout;
     }
     private static Dictionary<string, CrystalFormula> ReadConditions(IEnumerable<XElement> containers, List<string> diagnostics)
@@ -161,7 +176,8 @@ public partial class CrystalXmlReportLoader
                 if (entry.Text.TrimStart().StartsWith("//", StringComparison.Ordinal) && !entry.Text.Contains('\n'))
                     diagnostics.Add($"{container.Name}/{entry.Name}: the XML contains only a line comment; reconvert the RPT to retain formula line breaks.");
                 var formula = CrystalFormula.Compile(entry.Text);
-                if (formula.UsesEvaluationDirectives) diagnostics.Add($"{container.Name}/{entry.Name}: Crystal's complete read/print-pass scheduling is not implemented.");
+                if (formula.UsesPersistentVariables && formula.EvaluationTime is CrystalEvaluationTime.BeforeReadingRecords or CrystalEvaluationTime.WhileReadingRecords)
+                    diagnostics.Add($"{container.Name}/{entry.Name}: early-pass variable assignments in inline formatting formulas require a named formula field dependency.");
                 conditions[entry.Name] = formula;
             }
         }

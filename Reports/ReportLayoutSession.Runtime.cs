@@ -7,18 +7,23 @@ public sealed partial class ReportLayoutSession
 {
     private sealed class RuntimeState
     {
+        public DateTime PrintTime { get; init; } = DateTime.Now;
         public Dictionary<string, object?> Shared { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, DataTable Data)> Queries { get; } = [];
         public int Instances { get; set; }
         public int QueryRows { get; set; }
         public bool HasPageConditions { get; set; }
+        public bool HasGrowingText { get; set; }
         public Dictionary<string, Func<int, int, bool, string>> PageValues { get; } = new();
+        public bool PhysicalSchedule { get; set; }
+        public List<ReportLayoutSession> Sessions { get; } = [];
+        public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
+        public Dictionary<PrintBandKey, bool> PrintedVisibility { get; set; } = new();
     }
     private readonly RuntimeState _state;
     private readonly int _depth;
     private readonly Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? _executeSubreport;
     private readonly Dictionary<string, object?> _globals = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string Name, int Row), object?> _formulaCache = new();
     private readonly Dictionary<(string Name, int Row), object?> _bandFormulaCache = new();
     private readonly HashSet<(string Name, int Row)> _evaluating = new();
     private readonly Dictionary<(string Name, bool Page), bool> _dependencies = new();
@@ -42,24 +47,15 @@ public sealed partial class ReportLayoutSession
     {
         var key = (reference, page);
         if (_dependencies.TryGetValue(key, out var cached)) return cached;
-        if (!_layout.Formulas.TryGetValue(reference, out var formula)) return false;
+        if (!_layout.Formulas.TryGetValue(reference, out var formula)) return page && SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm";
         stack ??= new(StringComparer.OrdinalIgnoreCase);
         if (!stack.Add(reference)) throw new InvalidDataException($"Circular formula reference '{reference}'.");
-        var result = (page ? formula.UsesPageContext : formula.UsesVariables) || formula.References.Any(r => DependsOn(r, page, stack));
+        var result = (page ? formula.UsesPageContext : formula.UsesPersistentVariables) || formula.References.Any(r => DependsOn(r, page, stack));
         stack.Remove(reference);
         return _dependencies[key] = result;
     }
 
-    private object? FormulaValue(string reference, int row)
-    {
-        var cache = DependsOn(reference, false) ? _bandFormulaCache : _formulaCache;
-        var key = (reference.ToUpperInvariant(), row);
-        var pageDependent = DependsOn(reference, true);
-        if (!pageDependent && cache.TryGetValue(key, out var value)) return value;
-        if (_evaluating.Count >= 64 || !_evaluating.Add(key)) throw new InvalidDataException($"Circular/excessively nested formula '{reference}'.");
-        try { var result = _layout.Formulas[reference].Evaluate(Context(row)); if (!pageDependent) cache[key] = result; return result; }
-        finally { _evaluating.Remove(key); }
-    }
+    private object? FormulaValue(string reference, int row) => ScheduledValue(reference, row);
 
     private void PrepareRows()
     {
@@ -80,9 +76,10 @@ public sealed partial class ReportLayoutSession
             return left.Index.CompareTo(right.Index);
         });
         _rows = keys.Select(k => k.Data).ToArray(); ClearValues();
+        _summaryRows = _rows;
         if (_layout.GroupSelection is { } groupSelection)
         {
-            if (groupSelection.UsesVariables || groupSelection.UsesPageContext || groupSelection.References.Any(r => DependsOn(r, false) || DependsOn(r, true)))
+            if (groupSelection.RequiresPrintPass || groupSelection.UsesPersistentVariables || groupSelection.UsesPageContext || groupSelection.References.Any(r => r.StartsWith("{#", StringComparison.Ordinal) || NeedsPrintState(r) || DependsOn(r, true)))
                 throw new NotSupportedException("Group selection cannot use print-time state.");
             _rows = _rows.Where((_, index) => CrystalFormula.Boolean(groupSelection.Evaluate(Context(index)))).ToArray();
             ClearValues();
@@ -90,16 +87,14 @@ public sealed partial class ReportLayoutSession
     }
     private void RequireReadTime(CrystalFormula formula, string name)
     {
-        if (formula.UsesVariables || formula.UsesPageContext || HasAggregates(formula, new(StringComparer.OrdinalIgnoreCase)) || formula.References.Any(r => DependsOn(r, false) || DependsOn(r, true)))
+        if (formula.RequiresPrintPass || RequiredTime(formula) == CrystalEvaluationTime.WhilePrintingRecords)
             throw new NotSupportedException(name + " cannot depend on print-time formulas.");
     }
-    private bool HasAggregates(CrystalFormula formula, HashSet<string> seen) => formula.UsesAggregates || formula.References
-        .Where(seen.Add).Any(reference => _layout.Formulas.TryGetValue(reference, out var dependency) && HasAggregates(dependency, seen));
-    private void ClearValues() { _formulaCache.Clear(); _bandFormulaCache.Clear(); _groupRanges.Clear(); _summaryCache.Clear(); }
+    private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
 
     private string DeferredPageValue(string reference, int row, string format)
     {
-        if (DependsOn(reference, false)) throw new NotSupportedException("Page formulas cannot mutate shared/global variables during pagination.");
+        if (NeedsPrintState(reference)) throw new NotSupportedException("Page formulas cannot mutate shared/global variables during pagination.");
         var token = Guid.NewGuid().ToString("N") + "-formula";
         _state.PageValues[token] = (page, count, repeated) =>
         {
@@ -123,7 +118,13 @@ public sealed partial class ReportLayoutSession
         Conditions(table, id, true).Any(c => c.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase));
     private object? ConditionValue(CrystalFormula formula, int row, bool pageOnly, string? currentField = null)
     {
-        if (pageOnly && (formula.UsesVariables || formula.References.Any(r => DependsOn(r, false))))
+        if (formula.EvaluationTime is { } requested && requested < RequiredTime(formula))
+            throw new InvalidDataException($"Conditional formula {requested} cannot depend on later-pass values.");
+        if (formula.UsesPersistentVariables && formula.EvaluationTime is CrystalEvaluationTime.BeforeReadingRecords or CrystalEvaluationTime.WhileReadingRecords)
+            throw new NotSupportedException("Early-pass variable assignments in inline formatting formulas are not scheduled. Use a named formula field dependency.");
+        if (_preparingFurniture && !_replayingPrint && formula.WritesPersistentVariables)
+            throw new NotSupportedException("Page header/footer formatting cannot assign persistent variables during speculative measurement.");
+        if (pageOnly && !_replayingPrint && NeedsPrintState(formula))
             throw new NotSupportedException("Page-dependent formatting cannot mutate shared/global variables.");
         return formula.Evaluate(Context(row, currentField: currentField));
     }
@@ -135,16 +136,19 @@ public sealed partial class ReportLayoutSession
             HeightTwips = source.HeightTwips, IsSuppressed = source.IsSuppressed, HideForDrillDown = source.HideForDrillDown,
             PrintAtBottomOfPage = source.PrintAtBottomOfPage, SuppressIfBlank = source.SuppressIfBlank, UnderlayFollowingSections = source.UnderlayFollowingSections,
             RelativePositions = source.RelativePositions, NewPageBefore = source.NewPageBefore, NewPageAfter = source.NewPageAfter,
+            ResetPageNumberAfter = source.ResetPageNumberAfter,
             KeepTogether = source.KeepTogether, BackgroundColor = source.BackgroundColor, Elements = source.Elements
         };
         var states = pageOnly ? _suppression.GetValueOrDefault((source.Id, row)) :
-            (Area: !PageSuppresses(_layout.AreaConditions, source.Id) && _layout.Areas.GetValueOrDefault(source.Id)?.Suppressed == true,
-                Section: !PageSuppresses(_layout.SectionConditions, source.Id) && source.IsSuppressed,
-                AreaHidden: _layout.Areas.GetValueOrDefault(source.Id)?.Hidden == true, SectionHidden: source.HideForDrillDown);
+            (Area: !PageSuppresses(_layout.AreaConditions, source.Id) && !MutableCondition(_layout.AreaConditions, source.Id, "EnableSuppress") && _layout.Areas.GetValueOrDefault(source.Id)?.Suppressed == true,
+                Section: !PageSuppresses(_layout.SectionConditions, source.Id) && !MutableCondition(_layout.SectionConditions, source.Id, "EnableSuppress") && source.IsSuppressed,
+                AreaHidden: !MutableCondition(_layout.AreaConditions, source.Id, "EnableHideForDrillDown") && _layout.Areas.GetValueOrDefault(source.Id)?.Hidden == true,
+                SectionHidden: !MutableCondition(_layout.SectionConditions, source.Id, "EnableHideForDrillDown") && source.HideForDrillDown);
         foreach (var entry in Conditions(_layout.AreaConditions, source.Id, pageOnly).Select(c => (Condition: c, Area: true))
                      .Concat(Conditions(_layout.SectionConditions, source.Id, pageOnly).Select(c => (Condition: c, Area: false))))
         {
             var condition = entry.Condition;
+            if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value) || VisibilityProperty(condition.Key) && UsesPage(condition.Value))) continue;
             var value = ConditionValue(condition.Value, row, pageOnly);
             switch (condition.Key.ToLowerInvariant())
             {
@@ -152,6 +156,7 @@ public sealed partial class ReportLayoutSession
                 case "enablehidefordrilldown": if (entry.Area) states.AreaHidden = CrystalFormula.Boolean(value); else states.SectionHidden = CrystalFormula.Boolean(value); break;
                 case "enablenewpagebefore": section.NewPageBefore = CrystalFormula.Boolean(value); break;
                 case "enablenewpageafter": section.NewPageAfter = CrystalFormula.Boolean(value); break;
+                case "enableresetpagenumberafter": section.ResetPageNumberAfter = CrystalFormula.Boolean(value); break;
                 case "enablekeeptogether": section.KeepTogether = CrystalFormula.Boolean(value); break;
                 case "enablesuppressifblank": section.SuppressIfBlank = CrystalFormula.Boolean(value); break;
                 case "enableprintatbottomofpage": section.PrintAtBottomOfPage = CrystalFormula.Boolean(value); break;
@@ -174,10 +179,9 @@ public sealed partial class ReportLayoutSession
         if (!pageOnly && PageSuppresses(_layout.ObjectConditions, source.Id)) element.IsSuppressed = false;
         foreach (var condition in Conditions(_layout.ObjectConditions, source.Id, pageOnly))
         {
+            if (_physicalPageSchedule && !_replayingPrint && NeedsPrintState(condition.Value)) continue;
             var value = ConditionValue(condition.Value, row, pageOnly, source.Binding);
             var fontCondition = condition.Key.ToLowerInvariant() is "color" or "fontcolor" or "bold" or "enablebold" or "italic" or "enableitalic" or "underline" or "enableunderline" or "size" or "fontsize" or "name" or "fontname" or "style";
-            if (pageOnly && fontCondition && element.Visual.Runs.Count > 0)
-                throw new NotSupportedException("Page-dependent rich-text run formatting is not implemented.");
             switch (condition.Key.ToLowerInvariant())
             {
                 case "enablesuppress": element.IsSuppressed = CrystalFormula.Boolean(value); break;
@@ -222,6 +226,7 @@ public sealed partial class ReportLayoutSession
         {
             var field = string.IsNullOrWhiteSpace(rule.FieldName) ? element.Binding : rule.FieldName;
             if (!field.StartsWith('{')) field = "{" + field + "}";
+            if (_physicalPageSchedule && !_replayingPrint && NeedsPrintState(field)) return element;
             var value = Value(field, row);
             object? right = rule.Value;
             if (value is not string && decimal.TryParse(rule.Value, NumberStyles.Any, CultureInfo.CurrentCulture, out var number)) right = number;
@@ -244,13 +249,15 @@ public sealed partial class ReportLayoutSession
         return element;
     }
 
-    private Band ForPage(Band source, int page, int count, bool repeated = false)
+    private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null)
     {
-        var previousPage = _formulaPage; var previousCount = _formulaPages; var previousRepeat = _repeatedHeader;
+        source = ApplyPrintedItems(source, physicalPage, repeated);
+        var sectionOwner = source.Owner ?? this;
+        var previousPage = sectionOwner._formulaPage; var previousCount = sectionOwner._formulaPages; var previousRepeat = sectionOwner._repeatedHeader;
         try
         {
-            _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated;
-            var section = ApplySectionConditions(source.Section, source.Row, true);
+            sectionOwner._formulaPage = page; sectionOwner._formulaPages = count; sectionOwner._repeatedHeader = repeated;
+            var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true);
             var items = new List<Item>();
             foreach (var item in source.Items)
             {
@@ -258,19 +265,30 @@ public sealed partial class ReportLayoutSession
                 var oldPage = owner._formulaPage; var oldCount = owner._formulaPages; var oldRepeat = owner._repeatedHeader;
                 try
                 {
-                    owner._formulaPage = page; owner._formulaPages = count; owner._repeatedHeader = repeated;
+                    owner._formulaPage = objectPage ?? page; owner._formulaPages = count; owner._repeatedHeader = repeated;
                     var element = owner.ApplyObjectConditions(item.Element, item.Row, true);
                     if (element.IsSuppressed) continue;
                     var resized = element.CanGrow != item.Element.CanGrow || element.FontSize != item.Element.FontSize || element.FontFamily != item.Element.FontFamily;
-                    if (resized) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
-                    var html = element.Text != item.Element.Text || element.Kind != item.Element.Kind ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString)) : item.Html;
-                    items.Add(item with { Element = element, Html = html, Measurement = resized || html != item.Html ? -2 : item.Measurement });
+                    if (resized && _textMetrics is null) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
+                    var richChanged = element.Visual.Runs.Count > 0 && owner.Conditions(owner._layout.ObjectConditions, element.Id, true).Any();
+                    var template = item.TemplateHtml ?? item.Html;
+                    var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
+                        ? RestylePrintedRuns(template, element)
+                        : richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
+                            ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString)) : template;
+                    html = ResolvePageValues(html.Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                        .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                        .Replace(owner._pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
+                        .Replace(owner._countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), page, count, repeated);
+                    items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement });
                 }
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
             }
-            return source with { Section = section, Items = items, Suppressed = !Visible(section), RepeatedHeader = repeated };
+            var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
+            var hidden = _state.PrintedVisibility.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var visible) && !visible;
+            return source with { Section = section, Items = items, Suppressed = !Visible(section) || hidden, RepeatedHeader = repeated };
         }
-        finally { _formulaPage = previousPage; _formulaPages = previousCount; _repeatedHeader = previousRepeat; }
+        finally { sectionOwner._formulaPage = previousPage; sectionOwner._formulaPages = previousCount; sectionOwner._repeatedHeader = previousRepeat; }
     }
     private static string FormulaColor(object? value)
     {
@@ -336,8 +354,8 @@ public sealed partial class ReportLayoutSession
             if (filters.All(f => candidate.Table.Columns.Contains(f.Alias) ? f.Value is not (null or DBNull) && candidate[f.Alias] is not DBNull && CrystalFormula.Compare(candidate[f.Alias], f.Value) == 0
                 : throw new InvalidDataException($"Subreport link column '{f.Alias}' is missing."))) filtered.ImportRow(candidate);
         var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1);
-        if (child._layout.SectionConditions.Values.Concat(child._layout.AreaConditions.Values).SelectMany(c => c.Values).Any(child.UsesPage))
-            throw new NotSupportedException("Page-dependent inline subreport section formatting is not implemented.");
+        if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
+            _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
         foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);
         return child;
     }

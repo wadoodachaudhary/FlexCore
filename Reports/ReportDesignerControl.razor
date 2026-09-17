@@ -65,6 +65,14 @@
                 }
             </div>
         }
+        <div class="fx-rd-layout-tools">
+            @foreach (var tool in LayoutTools)
+            {
+                <ToolbarButtonControl IconCss="@tool.Icon" Title="@tool.Title" Disabled="@(SelectedObjects.Count < tool.Minimum)" OnClick="() => ExecuteToolbarCommandAsync(tool.Command)" />
+            }
+            <label title="Move selection to section">Section <DropDownListControl TValue="string" TItem="ReportDesignerSection" DataSource="@_document.Sections" TextFieldName="Name" ValueFieldName="Id"
+                                 Value="@_moveSectionId" ValueChanged="MoveObjectsToSectionAsync" Width="190px" Enabled="@(SelectedObjects.Count > 0)" /></label>
+        </div>
     </ToolbarControl>
 
     <div class="fx-rd-shell">
@@ -94,9 +102,10 @@
                     <ReportDesignerCanvasControl Document="@_document"
                                                  SelectedSection="@_selectedSection"
                                                  SelectedElement="@_selectedElement"
+                                                 SelectedElementIds="@_selectedElementIds"
                                                  SectionSelected="SelectSection"
                                                  ElementSelected="SelectElement"
-                                                 SectionResized="OnSectionResizedAsync" ElementChanged="OnSectionResizedAsync" />
+                                                 SectionResized="OnSectionResizedAsync" ElementChanged="OnCanvasElementsChangedAsync" CommandRequested="ExecuteToolbarCommandAsync" />
                 }
             </div>
         </main>
@@ -196,7 +205,8 @@
     private List<TreeNode> _reportExplorerNodes = new();
     private TreeNode? _selectedExplorerNode;
     private string? _insertionFieldReference;
-    private bool CanInsertField => _document.Fields.Any(item => item.Reference == _insertionFieldReference);
+    private IEnumerable<ReportDesignerField> InsertionFields => _document.Fields.Concat(_document.RunningTotals.Select(total => new ReportDesignerField { Name = "#" + total.Name }));
+    private bool CanInsertField => InsertionFields.Any(item => item.Reference == _insertionFieldReference);
     private bool _showNewReportWizard;
     private string _activeDocumentTab = DesignDocumentTab;
     private string? _activeExpert;
@@ -554,6 +564,7 @@
 
     private static bool IsToolbarCommandImplemented(string command)
     {
+        if (command.StartsWith("arrange-", StringComparison.Ordinal) || command.StartsWith("layer-", StringComparison.Ordinal) || command == "duplicate") return true;
         return command is
             "new" or "save" or "export" or "preview" or "reload" or "code" or "design" or
             "print" or "browseData" or "find" or
@@ -574,6 +585,9 @@
 
     private async Task ExecuteToolbarCommandAsync(string command)
     {
+        if (command.StartsWith("arrange-", StringComparison.Ordinal)) { await ArrangeSelectionAsync(command[8..]); return; }
+        if (command.StartsWith("layer-", StringComparison.Ordinal)) { await ArrangeSelectionAsync(command); return; }
+        if (command == "duplicate") { await DuplicateSelected(); return; }
         switch (command)
         {
             case "new":
@@ -987,10 +1001,13 @@
         _expertSorts = _document.Sorts.Select(CloneSort).ToList();
         _expertSortFields = _expertSorts.Select(sort => CloneField(sort.Field)).ToList();
         _expertSummaries = _document.Summaries.Select(CloneSummary).ToList();
+        _expertRunningTotals = CloneTotals(_document.RunningTotals);
+        _totalError = "";
         _expertSummaryFields = _expertSummaries.Select(summary => CloneField(summary.Field)).ToList();
         _expertFormulaFields = _document.Fields.Where(field => field.IsFormula).Select(CloneField).ToList();
         _expertParameters = _document.Parameters.Select(CloneParameter).ToList();
         _expertSections = _document.Sections.Select(CloneSectionForExpert).ToList();
+        _sectionError = "";
         _expertLinks = _document.Links.Select(CloneLink).ToList();
         _expertSqlValidationMessage = "";
         _expertSqlValidationSucceeded = null;
@@ -1028,7 +1045,9 @@
 
     private async Task ApplyExpertAsync()
     {
-        if (_activeExpert == "image" && !ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl))
+        if (_activeExpert is TextFormatExpert or HighlightingExpert && !CanFormatSelection()) return;
+        if (_activeExpert == RunningTotalExpert && !ApplyRunningTotals()) return;
+        if (_activeExpert == "image" && _expertVisual.VectorImage is null && !ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl))
         { _visualError = "Choose a supported image first."; return; }
         if (_activeExpert == PageExpert && ReportDesignerEditing.ValidatePage(_expertPage) is string pageError)
         {
@@ -1126,7 +1145,6 @@
                 _document.CustomSql = _expertSqlEditedByUser ? _expertSql : "";
                 break;
             case RunningTotalExpert:
-                _document.Summaries = _expertSummaries.Select(CloneSummary).ToList();
                 break;
         }
 
@@ -1162,9 +1180,9 @@
         <InputFile OnChange="ReadPictureAsync" accept="image/png,image/jpeg,image/gif,image/webp" />
         <label>Fit <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "contain", "cover", "fill" })" @bind-Value="_expertVisual.ImageFit" Width="140px" /></label>
         @if (!string.IsNullOrEmpty(_visualError)) { <div role="alert">@_visualError</div> }
-        @if (ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl))
+        @if (ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl) || _expertVisual.VectorImage is not null)
         {
-            <img class="fx-rd-picture-preview" src="@_expertVisual.ImageDataUrl" alt="Picture preview" />
+            <img class="fx-rd-picture-preview" src="@(ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl) ? _expertVisual.ImageDataUrl : _expertVisual.VectorImage!.ToDataUrl())" alt="Picture preview" />
         }
     </div>;
 
@@ -1177,6 +1195,7 @@
             using var bytes = new MemoryStream();
             await stream.CopyToAsync(bytes);
             _expertVisual.ImageDataUrl = ReportObjectVisual.EmbedImage(bytes.ToArray());
+            _expertVisual.VectorImage = null;
         }
         catch (Exception error) when (error is IOException or InvalidDataException)
         { _visualError = error.Message; }
@@ -1316,6 +1335,17 @@
             }
         </div>
         <div class="fx-rd-section-options">
+            <div class="fx-rd-section-actions">
+                <ToolbarButtonControl IconCss="bi bi-plus-lg" Title="Insert subsection" OnClick='() => SectionCommandAsync("insert")' />
+                <ToolbarButtonControl IconCss="bi bi-trash" Title="Delete empty subsection" OnClick='() => SectionCommandAsync("delete")' />
+                <ToolbarButtonControl IconCss="bi bi-arrow-up" Title="Move subsection up" OnClick='() => SectionCommandAsync("up")' />
+                <ToolbarButtonControl IconCss="bi bi-arrow-down" Title="Move subsection down" OnClick='() => SectionCommandAsync("down")' />
+                <ToolbarButtonControl IconCss="bi bi-arrows-collapse" Title="Fit section to objects" OnClick='() => SectionCommandAsync("fit")' />
+                <ToolbarButtonControl IconCss="bi bi-union" Title="Merge with following subsection" OnClick='() => SectionCommandAsync("merge")' />
+                <label>Split (twips) <NumericTextBoxControl TValue="int" @bind-Value="_splitAtTwips" Min="15" Width="90px" /></label>
+                <ToolbarButtonControl IconCss="bi bi-scissors" Title="Split section at twips" OnClick='() => SectionCommandAsync("split")' />
+            </div>
+            @if (_sectionError.Length > 0) { <p class="fx-rd-validation-error" role="alert">@_sectionError</p> }
             <div class="fx-rd-expert-tabs"><span class="active">Common</span><span>Paging</span><span>Color</span></div>
             @if (ActiveExpertSection is not null)
             {
@@ -1606,26 +1636,34 @@
     </div>;
 
     private RenderFragment RenderRunningTotalExpert() => @<div class="fx-rd-expert">
-        <MultiSelectDualListControl TItem="ReportDesignerField"
-                                    Items="@AllDesignerFields"
-                                    SelectedItems="@_expertSummaryFields"
-                                    SelectedItemsChanged="OnExpertSummaryFieldsChanged"
-                                    LeftHeader="Available Fields:"
-                                    RightHeader="Running Total Fields:"
-                                    KeySelector="@FieldKey"
-                                    LabelSelector="@FieldLabel"
-                                    VisibleRows="11"
-                                    Height="280px"
-                                    CssClass="fx-rd-expert-dual" />
-        @if (ActiveExpertSummary is not null)
+        <div class="fx-rd-bottom-row">
+            <DropDownListControl TValue="string" TItem="ReportDesignerRunningTotal" DataSource="_expertRunningTotals" Value="@(ActiveRunningTotal?.Id)" ValueChanged="value => _activeExpertItemIndex = _expertRunningTotals.FindIndex(t => t.Id == value)" TextFieldName="Name" ValueFieldName="Id" Width="240px" />
+            <button type="button" title="Add running total" @onclick="AddRunningTotalAsync"><i class="bi bi-plus-lg"></i></button>
+            <button type="button" title="Delete running total" disabled="@(ActiveRunningTotal is null)" @onclick="DeleteRunningTotalAsync"><i class="bi bi-trash"></i></button>
+        </div>
+        @if (ActiveRunningTotal is { } total)
         {
-            var summary = ActiveExpertSummary;
             <div class="fx-rd-bottom-row">
-                <span>Type of summary:</span>
-                <DropDownListControl TValue="string" TItem="string" DataSource="@SummaryOperations" Value="@summary.Operation" ValueChanged="value => summary.Operation = value ?? SummaryOperations[0]" Width="150px" CssClass="fx-rd-expert-dd" />
-                <span>Reset:</span>
-                <TextBoxControl Value="@summary.GroupName" ValueChanged="value => summary.GroupName = value ?? string.Empty" CssClass="fx-rd-expert-input" />
+                <span>Name</span><TextBoxControl @bind-Value="total.Name" ReadOnly="@(_document.RunningTotals.Any(t => t.Id == total.Id))" />
+                <DropDownListControl TValue="string" TItem="string" DataSource="@SummaryOperations" @bind-Value="total.Operation" Width="150px" />
             </div>
+            <div class="fx-rd-bottom-row"><span>Field</span><DropDownListControl TValue="string" TItem="ReportDesignerField" DataSource="@AllDesignerFields" @bind-Value="total.Field" ValueFieldName="Reference" TextFieldName="DisplayName" Width="300px" /></div>
+            @foreach (var (label, condition) in new[] { ("Evaluate", total.Evaluation), ("Reset", total.Reset) })
+            {
+                <div class="fx-rd-bottom-row">
+                    <span>@label</span><DropDownListControl TValue="string" TItem="string" DataSource="TotalConditions" @bind-Value="condition.Type" Width="180px" />
+                    @if (condition.Type == "OnChangeOfField")
+                    { <DropDownListControl TValue="string" TItem="ReportDesignerField" DataSource="@AllDesignerFields" @bind-Value="condition.Field" ValueFieldName="Reference" TextFieldName="DisplayName" Width="240px" /> }
+                    @if (condition.Type == "OnChangeOfGroup")
+                    { <NumericTextBoxControl TValue="int" @bind-Value="condition.Group" Min="1" Max="@Math.Max(1, _document.Groups.Count)" /> }
+                    @if (condition.Type == "UseFormula")
+                    { <TextBoxControl @bind-Value="condition.Formula" /> }
+                </div>
+            }
+        }
+        @if (_totalError.Length > 0)
+        {
+            <div role="alert">@_totalError</div>
         }
     </div>;
 
@@ -2030,16 +2068,14 @@
 
     private void ApplyTextFormatExpert()
     {
-        if (_selectedElement is not null && _expertTextFormat is not null && !_selectedElement.LockFormat)
-            ApplyElementFormat(_expertTextFormat, _selectedElement);
+        if (_expertTextFormat is not null && CanFormatSelection())
+            foreach (var element in SelectedObjects) ApplyElementFormat(_expertTextFormat, element);
     }
 
     private void ApplyHighlightingExpert()
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.HighlightRule = _expertHighlightRule.Clone();
+        if (CanFormatSelection())
+            foreach (var element in SelectedObjects) element.HighlightRule = _expertHighlightRule.Clone();
     }
 
     private async Task FindNextInReportAsync()
@@ -2142,30 +2178,10 @@
 
     private void ApplySectionExpert()
     {
-        foreach (var edited in _expertSections)
-        {
-            var section = _document.Sections.FirstOrDefault(candidate =>
-                string.Equals(candidate.Id, edited.Id, StringComparison.Ordinal) ||
-                string.Equals(candidate.Name, edited.Name, StringComparison.OrdinalIgnoreCase));
-            if (section is null)
-                continue;
-
-            if (section.HeightTwips != edited.HeightTwips)
-                section.HeightTwips = Math.Max(Math.Max(0, edited.HeightTwips),
-                    section.Elements.Select(element => element.TopTwips + element.HeightTwips).DefaultIfEmpty(0).Max());
-            section.HideForDrillDown = edited.HideForDrillDown;
-            section.IsSuppressed = edited.IsSuppressed;
-            section.PrintAtBottomOfPage = edited.PrintAtBottomOfPage;
-            section.SuppressIfBlank = edited.SuppressIfBlank;
-            section.UnderlayFollowingSections = edited.UnderlayFollowingSections;
-            section.ReadOnly = edited.ReadOnly;
-            section.RelativePositions = edited.RelativePositions;
-            section.NewPageBefore = edited.NewPageBefore;
-            section.NewPageAfter = edited.NewPageAfter;
-            section.ResetPageNumberAfter = edited.ResetPageNumberAfter;
-            section.KeepTogether = edited.KeepTogether;
-            section.BackgroundColor = edited.BackgroundColor;
-        }
+        _document.Sections = _expertSections.Select(ReportDesignerEditing.CloneSection).ToList();
+        _selectedSection = _document.Sections.FirstOrDefault(s => s.Id == _selectedSection?.Id) ?? _document.Sections.FirstOrDefault();
+        _selectedElement = _document.Elements.FirstOrDefault(e => e.Id == _selectedElement?.Id);
+        _selectedElementIds.IntersectWith(_document.Elements.Select(e => e.Id));
     }
 
     private void ApplyFormulaExpert()
@@ -2257,32 +2273,25 @@
 
     private async Task OnFontFamilyChanged(string? value)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat || string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrWhiteSpace(value))
             return;
-
-        _selectedElement.FontFamily = value;
-        foreach (var run in _selectedElement.Visual.Runs) run.FontFamily = value;
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => { element.FontFamily = value; foreach (var run in element.Visual.Runs) run.FontFamily = value; });
     }
 
     private async Task OnFontSizeChanged(decimal value)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat || value <= 0)
+        if (value <= 0)
             return;
-
-        _selectedElement.FontSize = value;
-        foreach (var run in _selectedElement.Visual.Runs) run.FontSize = value;
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => { element.FontSize = value; foreach (var run in element.Visual.Runs) run.FontSize = value; });
     }
 
     private async Task AdjustSelectedFontSizeAsync(decimal delta)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.FontSize = Math.Clamp((_selectedElement.FontSize <= 0 ? 10m : _selectedElement.FontSize) + delta, 4m, 144m);
-        foreach (var run in _selectedElement.Visual.Runs) run.FontSize = Math.Clamp(run.FontSize + delta, 4m, 144m);
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element =>
+        {
+            element.FontSize = Math.Clamp((element.FontSize <= 0 ? 10m : element.FontSize) + delta, 4m, 144m);
+            foreach (var run in element.Visual.Runs) run.FontSize = Math.Clamp(run.FontSize + delta, 4m, 144m);
+        });
     }
 
     private string FormatButtonCss(string command)
@@ -2300,35 +2309,44 @@
 
     private async Task ToggleSelectedElementBool(string propertyName)
     {
-        if (_selectedElement is null || (_selectedElement.LockFormat && propertyName is not nameof(ReportDesignerElement.LockFormat) and not nameof(ReportDesignerElement.LockSizePosition)))
-            return;
-
+        if (_selectedElement is null) return;
+        var value = propertyName switch
+        {
+            nameof(ReportDesignerElement.Bold) => !_selectedElement.Bold,
+            nameof(ReportDesignerElement.Italic) => !_selectedElement.Italic,
+            nameof(ReportDesignerElement.Underline) => !_selectedElement.Underline,
+            nameof(ReportDesignerElement.IsSuppressed) => !_selectedElement.IsSuppressed,
+            nameof(ReportDesignerElement.LockFormat) => !_selectedElement.LockFormat,
+            nameof(ReportDesignerElement.LockSizePosition) => !_selectedElement.LockSizePosition,
+            _ => false
+        };
+        await FormatSelectionAsync(element =>
+        {
         switch (propertyName)
         {
             case nameof(ReportDesignerElement.Bold):
-                _selectedElement.Bold = !_selectedElement.Bold;
-                foreach (var run in _selectedElement.Visual.Runs) run.Bold = _selectedElement.Bold;
+                element.Bold = value;
+                foreach (var run in element.Visual.Runs) run.Bold = value;
                 break;
             case nameof(ReportDesignerElement.Italic):
-                _selectedElement.Italic = !_selectedElement.Italic;
-                foreach (var run in _selectedElement.Visual.Runs) run.Italic = _selectedElement.Italic;
+                element.Italic = value;
+                foreach (var run in element.Visual.Runs) run.Italic = value;
                 break;
             case nameof(ReportDesignerElement.Underline):
-                _selectedElement.Underline = !_selectedElement.Underline;
-                foreach (var run in _selectedElement.Visual.Runs) run.Underline = _selectedElement.Underline;
+                element.Underline = value;
+                foreach (var run in element.Visual.Runs) run.Underline = value;
                 break;
             case nameof(ReportDesignerElement.IsSuppressed):
-                _selectedElement.IsSuppressed = !_selectedElement.IsSuppressed;
+                element.IsSuppressed = value;
                 break;
             case nameof(ReportDesignerElement.LockFormat):
-                _selectedElement.LockFormat = !_selectedElement.LockFormat;
+                element.LockFormat = value;
                 break;
             case nameof(ReportDesignerElement.LockSizePosition):
-                _selectedElement.LockSizePosition = !_selectedElement.LockSizePosition;
+                element.LockSizePosition = value;
                 break;
         }
-
-        await MarkDirtyAsync();
+        }, propertyName is nameof(ReportDesignerElement.LockFormat) or nameof(ReportDesignerElement.LockSizePosition));
     }
 
     private string AlignmentButtonCss(string alignment)
@@ -2340,11 +2358,7 @@
 
     private async Task SetSelectedAlignmentAsync(string alignment)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.HorizontalAlignment = alignment;
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => element.HorizontalAlignment = alignment);
     }
 
     private static string NormalizeAlignment(string alignment)
@@ -2360,21 +2374,16 @@
 
     private async Task CycleSelectedTextColorAsync()
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.TextColor = NextColor(_selectedElement.TextColor, ["#000000", "#007a7a", "#0033cc", "#800000", "#666666"]);
-        foreach (var run in _selectedElement.Visual.Runs) run.Color = _selectedElement.TextColor;
-        await MarkDirtyAsync();
+        if (_selectedElement is null) return;
+        var color = NextColor(_selectedElement.TextColor, ["#000000", "#007a7a", "#0033cc", "#800000", "#666666"]);
+        await FormatSelectionAsync(element => { element.TextColor = color; foreach (var run in element.Visual.Runs) run.Color = color; });
     }
 
     private async Task CycleSelectedFillColorAsync()
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.BackgroundColor = NextColor(_selectedElement.BackgroundColor, ["transparent", "#ffffff", "#fff2cc", "#d9ead3", "#cfe2f3", "#d9d2e9"]);
-        await MarkDirtyAsync();
+        if (_selectedElement is null) return;
+        var color = NextColor(_selectedElement.BackgroundColor, ["transparent", "#ffffff", "#fff2cc", "#d9ead3", "#cfe2f3", "#d9d2e9"]);
+        await FormatSelectionAsync(element => element.BackgroundColor = color);
     }
 
     private static string NextColor(string current, IReadOnlyList<string> colors)
@@ -2517,6 +2526,7 @@
         _selectedSection = _document.Sections.FirstOrDefault();
         _selectedElement = null;
         _status = _document.StatusMessage;
+        _selectedElementIds.Clear();
         _activeDocumentTab = DesignDocumentTab;
         RebuildExplorerNodes();
         if (resetHistory)
@@ -2536,18 +2546,25 @@
         _selectedSection = section;
         _selectedElement = null;
         UpdateExplorerSelection();
+        _selectedElementIds.Clear();
     }
 
     private void SelectElement(ReportDesignerSection section, ReportDesignerElement element)
     {
         _selectedSection = section;
         _selectedElement = element;
+        _selectedElementIds.Clear(); _selectedElementIds.Add(element.Id);
         UpdateExplorerSelection();
     }
 
     private void SelectElement(ReportDesignerElementSelection selection)
     {
-        SelectElement(selection.Section, selection.Element);
+        if (selection.Elements is null) { SelectElement(selection.Section, selection.Element); return; }
+        _selectedSection = selection.Section;
+        _selectedElementIds.Clear(); _selectedElementIds.UnionWith(selection.Elements.Select(e => e.Id));
+        _selectedElement = selection.Elements.Contains(selection.Element) ? selection.Element : selection.Elements.LastOrDefault();
+        _moveSectionId = selection.Section.Id;
+        UpdateExplorerSelection();
     }
 
     private void ShowExplorerTab(string tab)
@@ -2627,7 +2644,7 @@
 
     private async Task AddFieldElement()
     {
-        var field = _document.Fields.FirstOrDefault(field => field.Reference == _insertionFieldReference);
+        var field = InsertionFields.FirstOrDefault(field => field.Reference == _insertionFieldReference);
         if (field != null)
             await AddFieldElement(field);
     }
@@ -2635,6 +2652,7 @@
     private async Task AddFieldElement(ReportDesignerField field)
     {
         var section = GetActiveSection();
+        if (section.ReadOnly) { _status = "The destination section is read-only."; return; }
         var binding = field.Reference;
         var element = new ReportDesignerElement
         {
@@ -2644,57 +2662,35 @@
             Binding = binding,
             LeftTwips = 240,
             TopTwips = Math.Max(0, section.Elements.Count * 280),
-            WidthTwips = 2160,
+            WidthTwips = Math.Min(2160, Math.Max(15, _document.Page.ContentWidthTwips - 240)),
             HeightTwips = 240,
             TextColor = "#000000"
         };
 
         section.Elements.Add(element);
+        section.HeightTwips = Math.Max(section.HeightTwips, element.TopTwips + element.HeightTwips);
         SelectElement(section, element);
         await MarkDirtyAsync();
     }
 
     private async Task DuplicateSelected()
     {
-        if (_selectedElement is null || _selectedSection is null)
-            return;
-
-        var clone = _selectedElement.CloneFor(_selectedSection.Id, NextObjectName(_selectedElement.Name));
-        _selectedSection.Elements.Add(clone);
-        SelectElement(_selectedSection, clone);
-        await MarkDirtyAsync();
+        await PasteObjectsAsync(true);
     }
 
     private void CopySelected()
     {
-        if (_selectedElement is null)
-            return;
-
-        _clipboardElement = CloneElementForClipboard(_selectedElement);
-        _status = $"Copied {_selectedElement.Name}.";
+        CopyObjects();
     }
 
     private async Task CutSelected()
     {
-        if (_selectedElement is null || _selectedSection is null)
-            return;
-
-        _clipboardElement = CloneElementForClipboard(_selectedElement);
-        await RemoveSelected();
-        _status = "Cut selected object.";
+        await DeleteObjectsAsync(true);
     }
 
     private async Task PasteSelected()
     {
-        if (_clipboardElement is null)
-            return;
-
-        var section = GetActiveSection();
-        var clone = _clipboardElement.CloneFor(section.Id, NextObjectName(_clipboardElement.Name));
-        section.Elements.Add(clone);
-        SelectElement(section, clone);
-        await MarkDirtyAsync();
-        _status = $"Pasted {clone.Name}.";
+        await PasteObjectsAsync();
     }
 
     private async Task ApplyOrCaptureFormatPainterAsync()
@@ -2709,9 +2705,8 @@
             return;
         }
 
-        ApplyElementFormat(_formatPainterElement, _selectedElement);
+        await FormatSelectionAsync(element => ApplyElementFormat(_formatPainterElement, element));
         _formatPainterElement = null;
-        await MarkDirtyAsync();
     }
 
     private async Task UndoAsync()
@@ -2755,29 +2750,17 @@
 
     private async Task AdjustSelectedIndentAsync(int deltaTwips)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.IndentTwips = Math.Max(0, _selectedElement.IndentTwips + deltaTwips);
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => element.IndentTwips = Math.Max(0, element.IndentTwips + deltaTwips));
     }
 
     private async Task SetSelectedFormatAsync(string format)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.FormatString = format;
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => element.FormatString = format);
     }
 
     private async Task AdjustSelectedDecimalsAsync(int delta)
     {
-        if (_selectedElement is null || _selectedElement.LockFormat)
-            return;
-
-        _selectedElement.FormatString = AdjustFormatDecimals(_selectedElement.FormatString, delta);
-        await MarkDirtyAsync();
+        await FormatSelectionAsync(element => element.FormatString = AdjustFormatDecimals(element.FormatString, delta));
     }
 
     private static string AdjustFormatDecimals(string format, int delta)
@@ -2793,12 +2776,7 @@
 
     private async Task RemoveSelected()
     {
-        if (_selectedElement is null || _selectedSection is null)
-            return;
-
-        _selectedSection.Elements.Remove(_selectedElement);
-        _selectedElement = null;
-        await MarkDirtyAsync();
+        await DeleteObjectsAsync();
     }
 
     private static ReportDesignerElement CloneElementForClipboard(ReportDesignerElement element)
@@ -2837,12 +2815,8 @@
 
     private async Task NudgeSelected(int dxTwips, int dyTwips)
     {
-        if (_selectedElement is null || _selectedElement.LockSizePosition)
-            return;
-
-        _selectedElement.LeftTwips = Math.Max(0, _selectedElement.LeftTwips + dxTwips);
-        _selectedElement.TopTwips = Math.Max(0, _selectedElement.TopTwips + dyTwips);
-        await MarkDirtyAsync();
+        try { if (ReportDesignerEditing.MoveSelection(_document, SelectedObjects.Select(e => e.Id), dxTwips, dyTwips)) await MarkDirtyAsync(); }
+        catch (InvalidOperationException ex) { _status = ex.Message; }
     }
 
     private ReportDesignerSection GetActiveSection()
@@ -2971,6 +2945,9 @@
             groupNameFields.Children.Add(NewExplorerNode(GetGroupExplorerLabel(group.value, group.index + 1), "fx-explorer-icon-field used", tag: group.value, isDisabled: true));
 
         var specialFields = NewExplorerNode("Special Fields", "fx-explorer-icon-special");
+        var runningFields = NewExplorerNode("Running Total Fields", "fx-explorer-icon-total", isExpanded: true);
+        foreach (var total in _document.RunningTotals)
+            runningFields.Children.Add(NewExplorerNode(total.Name, "fx-explorer-icon-field", tag: new ReportDesignerField { Name = "#" + total.Name }));
         foreach (var fieldName in SpecialFieldNames)
             specialFields.Children.Add(NewExplorerNode(fieldName, "fx-explorer-icon-field", isDisabled: true));
 
@@ -2980,7 +2957,7 @@
             formulaFields,
             NewExplorerNode("SQL Expression Fields", "fx-explorer-icon-sql", isExpanded: true),
             parameterFields,
-            NewExplorerNode("Running Total Fields", "fx-explorer-icon-total", isExpanded: true),
+            runningFields,
             groupNameFields,
             specialFields
         ];
@@ -3217,6 +3194,8 @@
     private string GetReportSectionExplorerLabel(ReportDesignerSection section)
     {
         var label = SectionDisplayName(section.Kind);
+        var sectionDocument = _expertSections.Contains(section) ? new ReportDesignerDocument { Sections = _expertSections } : _document;
+        label += ReportDesignerEditing.SectionSuffix(sectionDocument, section);
         if (section.Kind.Equals("GroupHeader", StringComparison.OrdinalIgnoreCase) ||
             section.Kind.Equals("GroupFooter", StringComparison.OrdinalIgnoreCase))
         {
@@ -3458,29 +3437,7 @@
 
     private static ReportDesignerSection CloneSectionForExpert(ReportDesignerSection section)
     {
-        return new ReportDesignerSection
-        {
-            Id = section.Id,
-            SourceKey = section.SourceKey,
-            Name = section.Name,
-            Kind = section.Kind,
-            AreaName = section.AreaName,
-            AreaId = section.AreaId,
-            GroupId = section.GroupId,
-            HeightTwips = section.HeightTwips,
-            HideForDrillDown = section.HideForDrillDown,
-            IsSuppressed = section.IsSuppressed,
-            PrintAtBottomOfPage = section.PrintAtBottomOfPage,
-            SuppressIfBlank = section.SuppressIfBlank,
-            UnderlayFollowingSections = section.UnderlayFollowingSections,
-            ReadOnly = section.ReadOnly,
-            RelativePositions = section.RelativePositions,
-            NewPageBefore = section.NewPageBefore,
-            NewPageAfter = section.NewPageAfter,
-            ResetPageNumberAfter = section.ResetPageNumberAfter,
-            KeepTogether = section.KeepTogether,
-            BackgroundColor = section.BackgroundColor
-        };
+        return ReportDesignerEditing.CloneSection(section);
     }
 
     private string GetReportFileName()

@@ -558,6 +558,8 @@ public sealed class TslvArchiveReader
 
     public TslvRecordHeader LoadAnyRecord()
     {
+        var enclosingEnd = Position + BytesLeftInRecord;
+        EnsureCurrentRecordBytes(2);
         var recordOffset = Position;
         var first = ReadByte();
         var second = ReadByte();
@@ -582,6 +584,9 @@ public sealed class TslvArchiveReader
             4 => ReadInt32Unchecked(),
             _ => throw new InvalidDataException("Invalid TSLV record length field.")
         };
+
+        if (length < 0 || Position > enclosingEnd || length > enclosingEnd - Position)
+            throw new InvalidDataException($"TSLV record {type} extends beyond its enclosing record or stream.");
 
         if (simpleEncrypted)
         {
@@ -614,6 +619,20 @@ public sealed class TslvArchiveReader
 
         return header;
     }
+
+    // Metadata probing must not change the main reader's position, stack or encryption state.
+    internal TslvArchiveReader Fork()
+    {
+        var copy = new TslvArchiveReader(_bytes, _defaultSchema)
+        {
+            Position = Position, _simpleKey = _simpleKey, _enhancedStrings = _enhancedStrings,
+            _readObjectIds = _readObjectIds, _readEnumsAsInt32 = _readEnumsAsInt32
+        };
+        foreach (var frame in _records.Reverse()) copy._records.Push(frame);
+        return copy;
+    }
+
+    internal byte[] CopyRange(int offset, int count) => _bytes.AsSpan(offset, count).ToArray();
 
     public TslvRecordHeader LoadNextRecord(int type, int maxSchema, int stopType)
     {

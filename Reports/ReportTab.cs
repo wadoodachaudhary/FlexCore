@@ -24,6 +24,8 @@ public class ReportTab
 
     /// <summary>Rendered HTML pages for this tab.</summary>
     public List<string> Pages { get; set; } = new();
+    /// <summary>Data from this tab's execution snapshot; exporting never reruns its query.</summary>
+    public Func<Fx.ControlKit.Grid.GridExportTable>? CreateDataExport { get; set; }
 
     /// <summary>Currently-viewed page index (1-based) within this tab.</summary>
     public int CurrentPage { get; set; } = 1;

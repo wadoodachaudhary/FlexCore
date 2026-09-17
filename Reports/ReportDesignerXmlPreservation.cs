@@ -47,6 +47,7 @@ public static partial class ReportDesignerXmlSerializer
         var summaryContainer = Child(data, "SummaryFields") is not null ? "SummaryFields"
             : Child(data, "SummaryFieldDefinitions") is not null ? "SummaryFieldDefinitions" : "SummaryFields";
         MergeData(summaryContainer, before.Summaries, document.Summaries, BuildSummary);
+        MergeData("RunningTotalFieldDefinitions", before.RunningTotals, document.RunningTotals, BuildRunningTotal);
         MergeData("FormulaFieldDefinitions", before.Fields.Where(field => field.IsFormula).ToList(),
             document.Fields.Where(field => field.IsFormula).ToList(), BuildFormula);
         MergeData("ParameterFieldDefinitions", before.Parameters, document.Parameters, BuildParameter);
@@ -188,7 +189,7 @@ public static partial class ReportDesignerXmlSerializer
         {
             var original = before.Sections.FirstOrDefault(candidate => candidate.Id == section.Id);
             var node = original is not null && sources.TryGetValue(section.Id, out var existing)
-                ? existing : CreateSectionElement(section);
+                ? existing : SectionWithPrototype(section);
             var area = node.Parent?.Parent;
             if (area is null || (original is not null && (original.AreaName != section.AreaName || original.Kind != section.Kind)))
                 area = areas.Elements("Area").Concat(desiredAreas).FirstOrDefault(candidate =>
@@ -214,6 +215,16 @@ public static partial class ReportDesignerXmlSerializer
             ReplaceManaged(parent, managed, desiredSections[area]);
         }
         ReplaceManaged(areas, originalAreas, desiredAreas);
+
+        XElement SectionWithPrototype(ReportDesignerSection section)
+        {
+            var original = before.Sections.FirstOrDefault(item => item.SourceKey == section.SourceKey && section.SourceKey.Length > 0);
+            if (original is null || !after.SourceSections.TryGetValue(section.SourceKey, out var prototype)) return CreateSectionElement(section);
+            var copy = new XElement(prototype);
+            PatchShape(copy, CreateSectionElement(original), CreateSectionElement(section));
+            copy.Element("ReportObjects")?.Remove(); copy.Add(new XElement("ReportObjects"));
+            return copy;
+        }
 
         XElement BuildWithPrototype(ReportDesignerElement element)
         {

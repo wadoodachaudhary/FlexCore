@@ -143,6 +143,9 @@
 }
 
 .fx-rd-object-content { pointer-events:none; }
+.fx-rd-selection-bounds { position:absolute; outline:1px dashed #254e80; pointer-events:none; }
+.fx-rd-selection-bounds .fx-rd-handle { pointer-events:auto; }
+.fx-rd-marquee { position:absolute; border:1px solid #254e80; background:#4a91c522; pointer-events:none; box-sizing:border-box; }
 .fx-rd-handle { position:absolute; width:6px; height:6px; background:white; border:1px solid #222; z-index:3; box-sizing:border-box; }
 .fx-rd-handle-nw { left:-3px; top:-3px; cursor:nwse-resize; }
 .fx-rd-handle-n { left:calc(50% - 3px); top:-3px; cursor:ns-resize; }

@@ -22,6 +22,7 @@ public sealed class ReportDesignerDocument
     public List<ReportDesignerGroup> Groups { get; set; } = new();
     public List<ReportDesignerSort> Sorts { get; set; } = new();
     public List<ReportDesignerSummary> Summaries { get; set; } = new();
+    public List<ReportDesignerRunningTotal> RunningTotals { get; set; } = new();
     public List<ReportDesignerFilter> Filters { get; set; } = new();
     public List<ReportDesignerSubreport> Subreports { get; set; } = new();
     public List<ReportDesignerDataLink> Links { get; set; } = new();
@@ -615,6 +616,7 @@ public sealed class ReportDesignerElementSelection
 {
     public ReportDesignerSection Section { get; set; } = default!;
     public ReportDesignerElement Element { get; set; } = default!;
+    public IReadOnlyList<ReportDesignerElement>? Elements { get; set; }
 }
 
 public static class ReportDesignerMetrics
@@ -674,6 +676,7 @@ public static partial class ReportDesignerXmlSerializer
         ParseGroups(root, document);
         ParseSorts(root, document);
         ParseSummaries(root, document);
+        ParseRunningTotals(root, document);
         ParseFilters(root, document);
         ParseSubreports(root, document);
 
@@ -801,6 +804,7 @@ public static partial class ReportDesignerXmlSerializer
             new XElement("RecordSelectionFormula", BuildSelectionFormula(document)),
             new XElement("SortFields", document.Sorts.Select(BuildSort)),
             new XElement("SummaryFields", document.Summaries.Select(BuildSummary)),
+            new XElement("RunningTotalFieldDefinitions", document.RunningTotals.Select(BuildRunningTotal)),
             new XElement("FormulaFieldDefinitions", document.Fields.Where(field => field.IsFormula).Select(BuildFormula)),
             new XElement("ParameterFieldDefinitions", document.Parameters.Select(BuildParameter)));
     }
@@ -884,6 +888,7 @@ public static partial class ReportDesignerXmlSerializer
 
         var objectFormat = Child(objectElement, "ObjectFormat") ?? EnsureChild(objectElement, "ObjectFormat");
         objectFormat.SetAttributeValue("EnableCanGrow", Lower(element.CanGrow));
+        objectFormat.SetAttributeValue("EnableCloseAtPageBreak", Lower(element.Visual.CloseAtPageBreak));
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
         objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
@@ -1265,7 +1270,9 @@ public static partial class ReportDesignerXmlSerializer
             {
                 Name = Attribute(group, "Name") ?? condition,
                 Condition = condition,
-                SortDirection = Attribute(group, "SortDirection") ?? Attribute(group, "ConditionSortDirection") ?? "Ascending"
+                SortDirection = Attribute(group, "SortDirection") ?? Attribute(group, "ConditionSortDirection") ??
+                    (string?)root.Element("DataDefinition")?.Element("SortFields")?.Elements("SortField")
+                        .FirstOrDefault(s => (string?)s.Attribute("SortType") == "GroupSortField" && (string?)s.Attribute("Field") == condition)?.Attribute("SortDirection") ?? "Ascending"
             };
             document.Groups.Add(designerGroup);
             document.SourceItems[designerGroup.Id] = group;
@@ -1401,6 +1408,8 @@ public static partial class ReportDesignerXmlSerializer
     private static string InferKindFromObjectElement(XElement objectElement)
     {
         var kind = Attribute(objectElement, "Kind");
+        if (ReportObjectCapabilities.UnsupportedCrystalKind(kind, objectElement.Name.LocalName) is { } unsupportedKind)
+            return unsupportedKind;
         if (!string.IsNullOrWhiteSpace(kind))
             return kind!;
 

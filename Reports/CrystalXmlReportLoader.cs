@@ -186,6 +186,8 @@ public partial class CrystalXmlReportLoader
             SubreportLinks = subreportObjects.Select(ToReportSubreportLink).ToList()
         };
 
+        definition.RuntimeDiagnostics.AddRange(ReportObjectCapabilities.ReadDiagnostics(report, positionedDesign is not null));
+
         // --- Title + subtitle from ReportHeader / PageHeader (centered + bold TextObjects) ---
         // Crystal reports conventionally place the title (e.g. "Budget Report") in a centered
         // bold TextObject at the top of the PageHeader, and a subtitle ("By Group and Phase")

@@ -26,3 +26,9 @@ public interface IReportDataExecutor
     /// </param>
     DataTable Execute(string sql, IDictionary<string, object>? parameters);
 }
+
+/// <summary>Optional structured execution for hosts that supply report-specific data fixtures.</summary>
+public interface IReportDefinitionDataExecutor : IReportDataExecutor
+{
+    DataTable Execute(ReportDefinition definition, IDictionary<string, object>? parameters);
+}

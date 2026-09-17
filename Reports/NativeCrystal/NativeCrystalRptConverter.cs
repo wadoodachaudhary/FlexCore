@@ -139,6 +139,17 @@ public static class NativeCrystalRptConverter
         }
 
         model.Name = NormalizeReportName(model.Name, fallbackName);
+        foreach (var section in model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections))
+        foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
+        {
+            var source = obj.UnsupportedSource!;
+            source.Stream = contents?.FullPath ?? prefix + "Contents";
+            var message = $"{obj.Kind} conversion preserves available identity, bounds, common formatting and opaque TSLV bytes; chart data/series and cross-tab grouping/cells are not interpreted or rendered."
+                + (source.MetadataDiagnostics.Count == 0 ? "" : " " + string.Join(" ", source.MetadataDiagnostics));
+            var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_UNSUPPORTED_OBJECT", model.Name, section.Name, obj.Name, obj.Kind, message);
+            model.ConversionDiagnostics.Add(diagnostic);
+            options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{section.Name}/{obj.Name}: {message}");
+        }
         CrystalPictureStorage.Apply(model, streams, prefix, options.Progress);
         return model;
     }
