@@ -337,7 +337,7 @@ export function unregisterPageNavigation(root) {
     pageNavigationBindings.delete(root);
 }
 
-// --- Page zoom shortcuts (Ctrl++ / Ctrl+-) -------------------------------
+// --- Page zoom shortcuts (Ctrl++ / Ctrl+- / Ctrl+0) ----------------------
 // One document-level listener serves every registered PageControl so a chord
 // zooms exactly once per keypress no matter how many page roots are nested.
 
@@ -355,9 +355,14 @@ function resolveZoomDirection(event) {
     // fallback covers browsers that report the base key for Ctrl+Shift+=.
     const key = event.key;
     const code = event.code;
+    // Ctrl+= (the unshifted key under the +) zooms in as well, so the app owns both
+    // directions of the chord the browser would otherwise take (HHM-1028).
     if (key === "+" || key === "Add" || code === "NumpadAdd"
-        || (key === "=" && code === "Equal" && event.shiftKey)) return "in";
-    if (key === "-" || key === "Subtract" || code === "NumpadSubtract") return "out";
+        || (key === "=" && code === "Equal")) return "in";
+    if (key === "-" || key === "Subtract" || code === "NumpadSubtract" || code === "Minus") return "out";
+    // Ctrl+0 returns to the default zoom (HHM-1028). The browser resets ITS zoom on
+    // the same chord, and that is wanted too: the key is not consumed for "reset".
+    if (key === "0") return "reset";
     return null;
 }
 
@@ -404,8 +409,10 @@ export function registerPageZoomShortcuts(root, token, dotNetRef) {
         const target = resolveZoomTarget(event);
         if (!target) return;
 
-        event.preventDefault();
-        event.stopPropagation();
+        if (direction !== "reset") {
+            event.preventDefault();
+            event.stopPropagation();
+        }
         // Fire-and-forget; the circuit can drop between keydown and dispatch.
         target.invokeMethodAsync("OnZoomShortcutAsync", direction).catch(() => { });
     };

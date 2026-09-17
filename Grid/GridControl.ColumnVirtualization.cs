@@ -437,7 +437,8 @@ public partial class GridControl<TValue>
 
     private async Task EnsureGridColumnWindowRegisteredAsync()
     {
-        if (_gridJsModule == null)
+        var module = await GetGridJsModuleAsync();
+        if (module == null)
             return;
 
         var active = TryCreateColumnVirtualizationLayout(out var layout, out _);
@@ -445,7 +446,7 @@ public partial class GridControl<TValue>
         {
             if (_columnWindowScrollRegistered)
             {
-                await _gridJsModule.InvokeVoidAsync("unregisterGridColumnWindow", _scrollElement);
+                await module.InvokeVoidAsync("unregisterGridColumnWindow", _scrollElement);
                 _columnWindowScrollRegistered = false;
                 _registeredColumnWindowSignature = null;
             }
@@ -457,7 +458,7 @@ public partial class GridControl<TValue>
             return;
 
         _windowSelfRef ??= DotNetObjectReference.Create(this);
-        await _gridJsModule.InvokeVoidAsync(
+        await module.InvokeVoidAsync(
             "registerGridColumnWindow",
             _scrollElement,
             _windowSelfRef);

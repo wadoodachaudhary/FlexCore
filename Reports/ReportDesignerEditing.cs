@@ -1,6 +1,6 @@
 namespace Fx.ControlKit.Reports;
 
-public static class ReportDesignerEditing
+public static partial class ReportDesignerEditing
 {
     public static int GetGroupNumber(ReportDesignerDocument document, ReportDesignerSection section) =>
         document.Groups.FindIndex(group => group.Id == section.GroupId) + 1;
@@ -23,16 +23,19 @@ public static class ReportDesignerEditing
     /// <summary>Reorders whole areas, retaining subsections and refusing destructive group removal.</summary>
     public static void ApplyGroups(ReportDesignerDocument document, List<ReportDesignerGroup> groups)
     {
+        var previousGroups = document.Groups.ToList();
         if (document.Groups.Select(group => group.Id).SequenceEqual(groups.Select(group => group.Id)))
         {
             document.Groups = groups;
+            SyncGroupReferences();
             return;
         }
         var removed = document.Groups.Where(group => groups.All(next => next.Id != group.Id)).ToList();
         foreach (var group in removed)
         {
             if (document.Sections.Any(section => section.GroupId == group.Id && section.Elements.Count != 0) ||
-                document.Summaries.Any(summary => summary.GroupName == group.Condition))
+                document.Summaries.Any(summary => summary.GroupName == group.Condition) ||
+                document.RunningTotals.SelectMany(t => new[] { t.Evaluation, t.Reset }).Any(c => c.Type == "OnChangeOfGroup" && c.Group == previousGroups.IndexOf(group) + 1))
                 throw new InvalidOperationException($"Group '{group.Condition}' still owns report objects or summaries. Remove those dependencies before deleting the group.");
         }
         if (document.Sections.Any(section => section.Kind is "GroupHeader" or "GroupFooter" && string.IsNullOrEmpty(section.GroupId)))
@@ -49,6 +52,17 @@ public static class ReportDesignerEditing
         document.Sorts.RemoveAll(sort => sort.SortType == "GroupSortField" && removedConditions.Contains(sort.Field.Reference));
         document.Groups = groups;
         document.Sections = sections;
+        SyncGroupReferences();
+
+        void SyncGroupReferences()
+        {
+            foreach (var group in groups)
+                foreach (var sort in document.Sorts.Where(s => s.SortType == "GroupSortField" && s.Field.Reference == group.Condition))
+                    sort.Direction = group.SortDirection;
+            foreach (var condition in document.RunningTotals.SelectMany(t => new[] { t.Evaluation, t.Reset }))
+                if (condition.Type == "OnChangeOfGroup" && condition.Group > 0 && condition.Group <= previousGroups.Count)
+                    condition.Group = groups.FindIndex(g => g.Id == previousGroups[condition.Group - 1].Id) + 1;
+        }
 
         List<ReportDesignerSection> Bands(string kind, IEnumerable<ReportDesignerGroup> order) => order.SelectMany(group =>
         {

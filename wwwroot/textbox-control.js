@@ -352,6 +352,13 @@ export function appendTypedText(element, text) {
     try { element.dispatchEvent(new Event("input", { bubbles: true })); } catch { }
 }
 
+/** Replaces the text of an input the browser owns (a hosted draft) with text the
+ *  server changed itself — a format or a revert; no input event, the server knows. */
+export function setTextValue(element, text) {
+    if (!element) return;
+    element.value = text ?? "";
+}
+
 function getTextSelection(element) {
     try {
         const valueLength = getTextValue(element).length;

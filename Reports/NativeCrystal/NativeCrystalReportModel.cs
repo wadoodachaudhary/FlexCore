@@ -15,6 +15,9 @@ public sealed class CrystalReportModel
     public List<CrystalSubreportLinkModel> SubreportLinks { get; } = [];
 
     public List<CrystalReportModel> Subreports { get; } = [];
+
+    /// <summary>Capability warnings for this report; embedded reports have their own list.</summary>
+    public List<CrystalConversionDiagnostic> ConversionDiagnostics { get; } = [];
 }
 
 public sealed class CrystalSubreportLinkModel
@@ -301,8 +304,12 @@ public sealed class CrystalRunningTotalFieldModel
     public int OperationParameter { get; set; }
 
     public int EvaluationConditionType { get; set; }
+    public string EvaluationConditionField { get; set; } = "";
+    public int EvaluationConditionGroup { get; set; }
 
     public int ResetConditionType { get; set; }
+    public string ResetConditionField { get; set; } = "";
+    public int ResetConditionGroup { get; set; }
 
     public string FormulaName => "{#" + Name + "}";
 }
@@ -368,11 +375,29 @@ public sealed class CrystalSectionFormatModel
     public string EnableSuppressConditionFormula { get; set; } = "";
 }
 
+public sealed record CrystalConversionDiagnostic(string Code, string ReportName, string SectionName,
+    string ObjectName, string Kind, string Message);
+
+/// <summary>Opaque bytes from the decoded Contents stream, including TSLV record headers.</summary>
+public sealed class CrystalUnsupportedObjectSource
+{
+    public string Stream { get; set; } = "";
+    public int Offset { get; init; }
+    public int RecordType { get; init; }
+    public int Schema { get; init; }
+    public byte[] ArchiveBytes { get; set; } = [];
+    public bool Complete { get; set; }
+    public List<string> MetadataDiagnostics { get; } = [];
+}
+
 public sealed class CrystalReportObjectModel
 {
+    public CrystalUnsupportedObjectSource? UnsupportedSource { get; set; }
+
     public int PictureStorageIndex { get; set; } = -1;
     public int PictureAspect { get; set; } = 1;
     public string ImageDataUrl { get; set; } = "";
+    public ReportVectorImage? VectorImage { get; set; }
     public string PictureDiagnostic { get; set; } = "";
     public List<CrystalTextRunModel> TextRuns { get; } = [];
     public string ElementName { get; set; } = "";

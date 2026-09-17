@@ -1233,7 +1233,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             try
             {
-                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+                _gridJsModule ??= await ImportGridJsModuleAsync();
                 pageEntry = await _gridJsModule.InvokeAsync<bool>("takePageNavigationEntry", _gridFocusElement);
             }
             catch (JSException) { }
@@ -1478,8 +1478,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("setBatchEditorValue", _batchEditInputRef, _batchEditValue ?? string.Empty);
         }
         catch { /* editor unmounted mid-bridge */ }
@@ -1498,7 +1497,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             var value = await _gridJsModule.InvokeAsync<string?>("getBatchEditorValue", _batchEditInputRef);
             if (IsActiveBatchEditSource(editItem, editField))
                 UpdateBatchEditValue(editItem, editField, value ?? string.Empty);
@@ -1509,10 +1508,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
-    // Lazy-imported ES module from wwwroot/grid-control.js. We only
-    // pay the import round-trip the first time SelectAllOnEdit fires;
-    // subsequent edits reuse the module reference.
+    // Lazy-imported ES module from wwwroot/grid-control.js, requested through
+    // ImportGridJsModuleAsync so every caller shares one in-flight import.
     private IJSObjectReference? _gridJsModule;
+    private Task<IJSObjectReference>? _gridJsModuleImport;
+
+    // First-render host initialization (InitializeGridInteropAsync). Render passes
+    // that overlap on Blazor Server await this same task instead of each issuing
+    // the registrations again.
+    private Task<bool>? _gridInteropInit;
     private ElementReference _gridHostElement;
     private ElementReference _gridFocusElement;
     private PivotControl<TValue>? _pivotControlRef;
@@ -2554,6 +2558,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// source changes, so a reload re-measures (font/theme/row-height can change with it).</summary>
     private bool _gridMetricsMeasured;
 
+    /// <summary>Row-set signature of the last SETTLED read that found no row pitch
+    /// (fewer than two rows laid out). The read is not repeated while this still matches
+    /// the current rows: it would return the same zeros on every render. A host without
+    /// a settled layout reads as null instead and is never recorded here, so it retries
+    /// on its next render. Cleared by a data-source change, a host refresh and live
+    /// scroll geometry.</summary>
+    private int? _gridMetricsAttemptSignature;
+
+    /// <summary>Bumped by every reset that must own the next measurement (data-source
+    /// change, host refresh). A read that was in flight across a bump describes the
+    /// previous rows and is neither adopted nor recorded.</summary>
+    private int _gridMetricsResetGeneration;
+
+    /// <summary>Set by <see cref="ArmGridMetricsRetry"/>; a read that started before the
+    /// arm must not record its attempt, or the retry the arm promised is lost.</summary>
+    private bool _gridMetricsRetryArmed;
+
+    /// <summary>The scroll reader's last reported geometry, so a row pitch adopted after
+    /// the reader's initial sync can re-run the same window computation.</summary>
+    private double _lastWindowScrollTop;
+    private double _lastWindowClientHeight;
+
     /// <summary>
     /// Resolved data-row height (px) used to size the spacer rows and translate
     /// scrollTop into a row index. Honors <see cref="RowHeight"/> when the consumer
@@ -3035,6 +3061,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task OnGridWindowScrollAsync(double scrollTop, double clientHeight)
     {
+        ArmGridMetricsRetry();
         if (UsesItemsProvider)
         {
             if (await LoadProviderWindowForScrollAsync(scrollTop, clientHeight)
@@ -3067,6 +3094,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
+        ArmGridMetricsRetry();
         if (UsesItemsProvider)
         {
             if (await LoadProviderWindowForScrollAsync(
@@ -3114,6 +3142,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection,
         long requestToken)
     {
+        ArmGridMetricsRetry();
         if (UsesItemsProvider)
         {
             // Recovery must always republish a DOM acknowledgement. It only
@@ -3201,6 +3230,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         int scrollDirection = 0,
         bool forceRecenter = false)
     {
+        _lastWindowScrollTop = scrollTop;
+        _lastWindowClientHeight = clientHeight;
+
         var overscanRows = deferredCommit
             ? DeferredScrollReleaseOverscanRows
             : EffectiveWindowOverscanRows;
@@ -3762,22 +3794,24 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 StateHasChanged();
         }
 
-        // Import once, then pipeline independent first-render hooks together. On
-        // Blazor Server, awaiting each hook serially made a newly opened picker
-        // sit unselected for one network round trip per hook.
-        if (_gridJsModule == null)
-        {
-            try
-            {
-                _gridJsModule = await JsRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", GridJsModulePath);
-            }
-            catch (Exception)
-            {
-                // Best-effort. A later render retries initialization.
-            }
-        }
+        // The initial selection's active cell is seeded BEFORE any first-render focus
+        // can be issued: the focus event reaches HandleHostFocusSeed ahead of the
+        // interop result, and its guard is the active cell.
+        ApplyPendingInitialSelectionCell();
 
+        // First render: one import and one initializeGridHost round trip carry every
+        // standing listener, the geometry read, the window reader (sized from that
+        // read inside the same call) and the pending initial reveal/focus. On Blazor
+        // Server each dependent interop call costs a network round trip, and render
+        // passes that overlap here would otherwise each issue the whole set again.
+        var interopInit = _gridInteropInit ??= InitializeGridInteropAsync();
+        if (!await interopInit && ReferenceEquals(_gridInteropInit, interopInit))
+            _gridInteropInit = null;
+
+        // Incremental paths. Every hook early-outs on its own flag, so after a
+        // completed initialization this only reaches the browser for a registration
+        // that failed, a measurement a data reload cleared, or a binding that follows
+        // runtime state (filter popup, column window).
         if (_gridJsModule != null)
         {
             await Task.WhenAll(
@@ -3794,11 +3828,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 EnsureGridColumnWindowRegisteredAsync());
         }
 
-        // MUST precede EnsureGridWindowScrollRegisteredAsync: registering the scroll
-        // reader fires an immediate initial sync, and that sync sizes the row window
-        // from _rowHeightPx. Measure first, or the window is sized from the 16px
-        // fallback and then re-sized — one extra full re-render — the moment the
-        // measured pitch (14px here) arrives and changes the visible-row count.
+        // Incremental reader registration and rebind. Runs after the hooks above so
+        // a pitch adopted by EnsureGridMetricsMeasuredAsync on this pass is what the
+        // rebind check compares; the first-render registration is inside
+        // InitializeGridInteropAsync, which re-syncs the window itself when the
+        // pitch it adopts differs from the one its initial sync used.
         await EnsureGridWindowScrollRegisteredAsync();
 
         // Once columns have rendered for the first time after a new
@@ -3877,49 +3911,42 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// height into CSS as <c>--fx-grid-header-h</c> so <c>scroll-padding-top</c> keeps
     /// the browser's own scroll-into-view clear of the header.
     ///
-    /// Runs at most once per grid: it retries each render only while no data rows have
-    /// been rendered yet (an empty grid has nothing to measure), and stops for good on
-    /// the first successful read. <see cref="ClearSelectionIfDataSourceChanged"/> clears
-    /// the flag so a data reload re-measures.
+    /// Succeeds at most once per grid. A read that finds no row pitch (fewer than two
+    /// rows, or a host whose layout is not settled) is retried only after the row set
+    /// changes, a data-source change or host refresh, or live scroll geometry — see
+    /// <see cref="_gridMetricsAttemptSignature"/> — never on every render.
+    /// <see cref="ClearSelectionIfDataSourceChanged"/> clears the flag so a data
+    /// reload re-measures.
     /// </summary>
     private async Task EnsureGridMetricsMeasuredAsync()
     {
         if (_gridMetricsMeasured)
             return;
 
+        var attemptSignature = ComputeGridMetricsAttemptSignature();
+        if (_gridMetricsAttemptSignature == attemptSignature)
+            return;
+
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            var module = _gridJsModule ??= await ImportGridJsModuleAsync();
 
-            var metrics = await _gridJsModule.InvokeAsync<GridMetrics?>(
+            var resetGeneration = _gridMetricsResetGeneration;
+            _gridMetricsRetryArmed = false;
+            var metrics = await module.InvokeAsync<GridMetrics?>(
                 "measureGridMetrics", _gridHostElement);
 
             if (metrics is null)
                 return;
 
-            _measuredHeaderPx = metrics.HeaderPx;
-            _measuredViewportPx = metrics.ViewportPx;
-
-            // RowPx is 0 until data rows exist. Leave the flag clear so the next render
-            // re-measures, rather than locking in a header-only read of an empty grid.
-            if (metrics.RowPx > 0)
-            {
-                _measuredRowHeightPx = metrics.RowPx;
-                _gridMetricsMeasured = true;
-            }
+            AdoptGridMetricsRead(metrics, attemptSignature, resetGeneration);
 
             // Grouped windowing sizes header entries from a real measurement; the
             // one-time correction re-renders so the spacer math snaps exact.
-            if (UseGroupedRowWindowing && _measuredGroupHeaderPx <= 0 && _gridJsModule != null)
+            if (UseGroupedRowWindowing && _measuredGroupHeaderPx <= 0)
             {
-                var headerRowPx = await _gridJsModule.InvokeAsync<double>(
-                    "measureGridGroupHeaderHeight", _scrollElement);
-                if (headerRowPx > 0)
-                {
-                    _measuredGroupHeaderPx = headerRowPx;
-                    StateHasChanged();
-                }
+                ApplyMeasuredGroupHeaderHeight(await module.InvokeAsync<double>(
+                    "measureGridGroupHeaderHeight", _scrollElement));
             }
         }
         catch (Exception)
@@ -3929,8 +3956,251 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    /// <summary>
+    /// The one rule for a read that came back from the browser. A reset that landed
+    /// while the read was in flight (data-source change, host refresh) owns the next
+    /// measurement: the read describes the previous rows and is neither adopted nor
+    /// recorded. Otherwise the read is adopted, and when it found no row pitch its
+    /// attempt is recorded under the signature captured BEFORE the read — unless a
+    /// retry was armed in flight, which the record would silently cancel.
+    /// </summary>
+    private void AdoptGridMetricsRead(GridMetrics metrics, int attemptSignature, int resetGeneration)
+    {
+        if (resetGeneration != _gridMetricsResetGeneration)
+            return;
+
+        if (!ApplyGridMetrics(metrics) && !_gridMetricsRetryArmed)
+            _gridMetricsAttemptSignature = attemptSignature;
+    }
+
+    /// <summary>Adopts a <c>measureGridMetrics</c> read. The header and scrollport
+    /// heights are taken from any read; the row pitch (and the measured flag) only when
+    /// at least two rows were laid out. Returns whether the pitch was adopted.</summary>
+    private bool ApplyGridMetrics(GridMetrics metrics)
+    {
+        _measuredHeaderPx = metrics.HeaderPx;
+        _measuredViewportPx = metrics.ViewportPx;
+
+        if (metrics.RowPx <= 0)
+            return false;
+
+        _measuredRowHeightPx = metrics.RowPx;
+        _gridMetricsMeasured = true;
+        _gridMetricsAttemptSignature = null;
+        return true;
+    }
+
+    private void ApplyMeasuredGroupHeaderHeight(double headerRowPx)
+    {
+        if (headerRowPx <= 0)
+            return;
+
+        _measuredGroupHeaderPx = headerRowPx;
+        StateHasChanged();
+    }
+
+    /// <summary>What the rows in the DOM depend on: a differing value means a new
+    /// read can find what the last one did not.</summary>
+    private int ComputeGridMetricsAttemptSignature()
+        => HashCode.Combine(
+            HasAnyData,
+            GetCurrentDataSourceCount(),
+            _lastWindowListSignature,
+            _winStart,
+            _winCount);
+
+    /// <summary>The scroll reader reported live viewport geometry, so a read that found
+    /// no row pitch may now succeed; the next render is allowed to retry it.</summary>
+    private void ArmGridMetricsRetry()
+    {
+        if (_gridMetricsMeasured)
+            return;
+
+        _gridMetricsAttemptSignature = null;
+        _gridMetricsRetryArmed = true;
+    }
+
     /// <summary>DOM geometry returned by <c>measureGridMetrics</c> in grid-control.js.</summary>
     private sealed record GridMetrics(double HeaderPx, double RowPx, double ViewportPx);
+
+    /// <summary>What <c>initializeGridHost</c> in grid-control.js did in its single
+    /// round trip. <c>Initialized</c> is false when the host element was not in the
+    /// DOM, in which case none of the requested steps ran. A null <c>Metrics</c> means
+    /// the host had no settled layout (nothing was attempted; the next render retries);
+    /// zeros mean a settled layout with no row pitch yet.</summary>
+    private sealed record GridHostInitResult(
+        bool Initialized,
+        GridMetrics? Metrics,
+        double GroupHeaderPx,
+        bool WindowRegistered,
+        bool Revealed,
+        bool Focused);
+
+    /// <summary>
+    /// First-render host initialization in ONE interop round trip. Each step is the
+    /// export the incremental <c>Ensure*</c> methods call on their own, requested here
+    /// only while its flag is still clear, and the flags are set from the result so
+    /// those methods early-out afterwards. Ordering the steps inside the browser is
+    /// what removes the dependent waits: the reveal lands before the window reader is
+    /// registered (its initial sync then reads the revealed scrollTop instead of
+    /// pulling a pre-positioned window back to the top), the reader is registered
+    /// with the row pitch measured a moment earlier, and focus follows the reveal, so
+    /// <see cref="ApplyPendingRowRevealAsync"/> and
+    /// <see cref="CompleteInitialSelectionAsync"/> have nothing left to send.
+    /// Re-armed by <see cref="ArmGridInteropInit"/> for new data-dependent steps.
+    /// Returns false when nothing ran, so the caller can arm a retry.
+    /// </summary>
+    private async Task<bool> InitializeGridInteropAsync()
+    {
+        var module = await GetGridJsModuleAsync();
+        if (module == null)
+            return false;
+
+        var keyboardTrap = !_gridKeyboardTrapRegistered;
+        var instantSelection = !_instantFeedbackRegistered && AllowSelection;
+        var scrollSync = !_gridScrollSyncRegistered;
+        var headerDragPreview = !_headerDragPreviewRegistered;
+        var rowDragAutoScroll = !_rowDragSelectionAutoScrollRegistered;
+        var scrollbarActivity = !_scrollbarActivityRegistered;
+        var activeCellScrollSync = !_activeCellScrollSyncRegistered;
+        var clientNavigation = !_clientNavPreviewRegistered && UseClientNavigationPreview;
+        var measure = !_gridMetricsMeasured;
+        var measureGroupHeader = UseGroupedRowWindowing && _measuredGroupHeaderPx <= 0;
+        var registerWindow = !_windowScrollRegistered && (UseRowWindowing || UseGroupedRowWindowing);
+        var windowConfig = GetWindowScrollConfig();
+        // Grouped windowing resolves the reveal against the grouped stream first
+        // (see ApplyPendingRowRevealAsync), so it keeps the server-side path.
+        var revealRowIndex = _pendingRowRevealIndex.HasValue && !UseGroupedRowWindowing
+            ? _pendingRowRevealIndex.Value
+            : -1;
+        var revealToken = _pendingRowRevealToken;
+        // Focus is delegated only together with the reveal (or when none is pending):
+        // a reveal kept on the server side lands after this call, and focus must
+        // follow it, as CompleteInitialSelectionAsync orders them.
+        var focus = _pendingInitialSelectionFocus
+            && (revealRowIndex >= 0 || !_pendingRowRevealIndex.HasValue);
+        // The pitch the reader's initial sync will run with on the server: that sync
+        // reaches the server ahead of this call's result, so a pitch adopted from the
+        // result has to re-run the window computation itself (below).
+        var syncRowHeight = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var attemptSignature = ComputeGridMetricsAttemptSignature();
+        var resetGeneration = _gridMetricsResetGeneration;
+
+        _gridDotNetRef ??= DotNetObjectReference.Create(this);
+        _windowSelfRef ??= DotNetObjectReference.Create(this);
+
+        GridHostInitResult? result;
+        try
+        {
+            _gridMetricsRetryArmed = false;
+            result = await module.InvokeAsync<GridHostInitResult?>(
+                "initializeGridHost",
+                _gridHostElement,
+                _scrollElement,
+                _gridFocusElement,
+                _gridDotNetRef,
+                _windowSelfRef,
+                _deferredScrollLaneElement,
+                _deferredScrollThumbElement,
+                new
+                {
+                    keyboardTrap,
+                    instantSelection,
+                    cellMode = SelectionSettingsRef?.Mode == SelectionMode.Cell,
+                    scrollSync,
+                    headerDragPreview,
+                    rowDragAutoScroll,
+                    scrollbarActivity,
+                    activeCellScrollSync,
+                    clientNavigation,
+                    measure,
+                    measureGroupHeader,
+                    useMeasuredRowHeight = RowHeight <= 0,
+                    rowHeight = syncRowHeight,
+                    windowScroll = registerWindow
+                        ? new
+                        {
+                            scrollTrack = windowConfig.ScrollTrack,
+                            boundaryGuard = windowConfig.BoundaryGuard,
+                            boundaryTelemetry = windowConfig.BoundaryTelemetry,
+                            overscanRows = windowConfig.OverscanRows,
+                            guardRows = windowConfig.GuardRows,
+                            wheelScale = windowConfig.WheelScale,
+                            boundarySlowdown = windowConfig.BoundarySlowdown,
+                            adaptivePacing = windowConfig.AdaptivePacing
+                        }
+                        : null,
+                    revealRowIndex,
+                    focus
+                });
+        }
+        catch (Exception)
+        {
+            // Best-effort. The Ensure* hooks that follow in OnAfterRenderAsync issue
+            // whatever is still unregistered on their own.
+            return false;
+        }
+
+        if (result is not { Initialized: true })
+            return false;
+
+        if (keyboardTrap) _gridKeyboardTrapRegistered = true;
+        if (instantSelection) _instantFeedbackRegistered = true;
+        if (scrollSync) _gridScrollSyncRegistered = true;
+        if (headerDragPreview) _headerDragPreviewRegistered = true;
+        if (rowDragAutoScroll) _rowDragSelectionAutoScrollRegistered = true;
+        if (scrollbarActivity) _scrollbarActivityRegistered = true;
+        if (activeCellScrollSync) _activeCellScrollSyncRegistered = true;
+        if (clientNavigation) _clientNavPreviewRegistered = true;
+
+        if (result.Metrics is { } metrics)
+            AdoptGridMetricsRead(metrics, attemptSignature, resetGeneration);
+        ApplyMeasuredGroupHeaderHeight(result.GroupHeaderPx);
+
+        // The reader's initial sync already ran on the server with syncRowHeight; when
+        // the adopted pitch differs, the window and its spacer rows were sized from the
+        // wrong pitch and nothing else would re-render them. Re-run the same window
+        // computation with the adopted pitch — the one render the measured-first
+        // ordering always paid.
+        var adoptedRowHeight = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        if (result.WindowRegistered && Math.Abs(adoptedRowHeight - syncRowHeight) > 0.5)
+        {
+            if (_lastWindowClientHeight > 0)
+                UpdateGridWindow(_lastWindowScrollTop, _lastWindowClientHeight);
+            StateHasChanged();
+        }
+
+        // Recorded after the metrics were adopted so the snapshot holds the pitch the
+        // reader was registered with; EnsureGridWindowScrollRegisteredAsync compares
+        // against it on every render.
+        if (result.WindowRegistered)
+            RecordWindowScrollRegistration(windowConfig, Math.Round(adoptedRowHeight));
+
+        // A reveal or selection requested while the call was in flight carries a
+        // newer token and keeps its pending state.
+        if (_pendingRowRevealToken == revealToken)
+        {
+            if (result.Revealed)
+            {
+                _pendingRowRevealIndex = null;
+                _pendingRowRevealAttempts = 0;
+            }
+            if (result.Focused)
+                _pendingInitialSelectionFocus = false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Lets the next render fold new data-dependent work (a measurement, the
+    /// window reader, a reveal, focus) into one <c>initializeGridHost</c> call. An
+    /// initialization still in flight keeps its task so two never overlap; its
+    /// leftovers reach the browser through the incremental hooks instead.</summary>
+    private void ArmGridInteropInit()
+    {
+        if (_gridInteropInit is { IsCompleted: true })
+            _gridInteropInit = null;
+    }
 
     /// <summary>Set once <c>registerActiveCellScrollSync</c> has attached its
     /// MutationObserver to this grid's root element.</summary>
@@ -3952,8 +4222,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync(
                 "registerActiveCellScrollSync", _gridHostElement);
             _activeCellScrollSyncRegistered = true;
@@ -3963,6 +4232,46 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // Best-effort. Keyboard scroll still works via the post-render pass,
             // just one frame late.
         }
+    }
+
+    /// <summary>The reader configuration handed to <c>registerGridWindowScroll</c>: one
+    /// source for the registration call, the recorded snapshot and the rebind check.</summary>
+    private readonly record struct WindowScrollConfig(
+        bool ScrollTrack,
+        bool BoundaryGuard,
+        bool BoundaryTelemetry,
+        bool BoundarySlowdown,
+        bool AdaptivePacing,
+        int OverscanRows,
+        int GuardRows,
+        double WheelScale);
+
+    private WindowScrollConfig GetWindowScrollConfig()
+    {
+        var boundaryGuard = EnableScrollBoundaryGuard && !ScrollTrack;
+        var boundarySlowdown = EnableScrollBoundarySlowdown && boundaryGuard;
+        return new WindowScrollConfig(
+            ScrollTrack,
+            boundaryGuard,
+            EnableScrollBoundaryTelemetry && !ScrollTrack,
+            boundarySlowdown,
+            EnableAdaptiveWheelScrollPacing && boundarySlowdown,
+            Math.Max(0, EffectiveWindowOverscanRows),
+            Math.Max(0, WindowRefreshGuardRows),
+            double.IsFinite(WheelScrollScale) ? Math.Clamp(WheelScrollScale, 0.1d, 2d) : 1d);
+    }
+
+    private void RecordWindowScrollRegistration(WindowScrollConfig config, double effectiveRowHeight)
+    {
+        _lastRegisteredScrollTrack = config.ScrollTrack;
+        _lastRegisteredBoundaryGuard = config.BoundaryGuard;
+        _lastRegisteredBoundarySlowdown = config.BoundarySlowdown;
+        _lastRegisteredAdaptivePacing = config.AdaptivePacing;
+        _lastRegisteredWheelScale = config.WheelScale;
+        _lastRegisteredOverscanRows = config.OverscanRows;
+        _lastRegisteredGuardRows = config.GuardRows;
+        _lastRegisteredRowHeight = effectiveRowHeight;
+        _windowScrollRegistered = true;
     }
 
     /// <summary>
@@ -3992,21 +4301,18 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             if (UseRowWindowing || UseGroupedRowWindowing)
             {
-                var effectiveWheelScale = double.IsFinite(WheelScrollScale)
-                    ? Math.Clamp(WheelScrollScale, 0.1d, 2d)
-                    : 1d;
-
+                var config = GetWindowScrollConfig();
                 var effectiveRowHeight = Math.Round(_rowHeightPx <= 0 ? 16 : _rowHeightPx);
 
                 if (_windowScrollRegistered)
                 {
-                    bool configChanged = _lastRegisteredScrollTrack != ScrollTrack
-                        || _lastRegisteredBoundaryGuard != (EnableScrollBoundaryGuard && !ScrollTrack)
-                        || _lastRegisteredBoundarySlowdown != (EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack)
-                        || _lastRegisteredAdaptivePacing != (EnableAdaptiveWheelScrollPacing && EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack)
-                        || Math.Abs(_lastRegisteredWheelScale - effectiveWheelScale) > 0.001
-                        || _lastRegisteredOverscanRows != Math.Max(0, EffectiveWindowOverscanRows)
-                        || _lastRegisteredGuardRows != Math.Max(0, WindowRefreshGuardRows)
+                    bool configChanged = _lastRegisteredScrollTrack != config.ScrollTrack
+                        || _lastRegisteredBoundaryGuard != config.BoundaryGuard
+                        || _lastRegisteredBoundarySlowdown != config.BoundarySlowdown
+                        || _lastRegisteredAdaptivePacing != config.AdaptivePacing
+                        || Math.Abs(_lastRegisteredWheelScale - config.WheelScale) > 0.001
+                        || _lastRegisteredOverscanRows != config.OverscanRows
+                        || _lastRegisteredGuardRows != config.GuardRows
                         || Math.Abs(_lastRegisteredRowHeight - effectiveRowHeight) > 0.5;
 
                     if (!configChanged)
@@ -4023,37 +4329,25 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         return;
                 }
 
-                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", GridJsModulePath);
+                _gridJsModule ??= await ImportGridJsModuleAsync();
                 _windowSelfRef ??= DotNetObjectReference.Create(this);
                 await _gridJsModule.InvokeVoidAsync(
                     "registerGridWindowScroll",
                     _scrollElement,
                     _windowSelfRef,
-                    ScrollTrack,
+                    config.ScrollTrack,
                     _deferredScrollLaneElement,
                     _deferredScrollThumbElement,
-                    EnableScrollBoundaryGuard && !ScrollTrack,
-                    EnableScrollBoundaryTelemetry && !ScrollTrack,
-                    Math.Max(0, EffectiveWindowOverscanRows),
-                    Math.Max(0, WindowRefreshGuardRows),
+                    config.BoundaryGuard,
+                    config.BoundaryTelemetry,
+                    config.OverscanRows,
+                    config.GuardRows,
                     _rowHeightPx <= 0 ? 16 : _rowHeightPx,
-                    effectiveWheelScale,
-                    EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack,
-                    EnableAdaptiveWheelScrollPacing
-                        && EnableScrollBoundarySlowdown
-                        && EnableScrollBoundaryGuard
-                        && !ScrollTrack);
+                    config.WheelScale,
+                    config.BoundarySlowdown,
+                    config.AdaptivePacing);
 
-                _lastRegisteredScrollTrack = ScrollTrack;
-                _lastRegisteredBoundaryGuard = EnableScrollBoundaryGuard && !ScrollTrack;
-                _lastRegisteredBoundarySlowdown = EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack;
-                _lastRegisteredAdaptivePacing = EnableAdaptiveWheelScrollPacing && EnableScrollBoundarySlowdown && EnableScrollBoundaryGuard && !ScrollTrack;
-                _lastRegisteredWheelScale = effectiveWheelScale;
-                _lastRegisteredOverscanRows = Math.Max(0, EffectiveWindowOverscanRows);
-                _lastRegisteredGuardRows = Math.Max(0, WindowRefreshGuardRows);
-                _lastRegisteredRowHeight = effectiveRowHeight;
-                _windowScrollRegistered = true;
+                RecordWindowScrollRegistration(config, effectiveRowHeight);
             }
             else if (_windowScrollRegistered && _gridJsModule != null)
             {
@@ -4116,8 +4410,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             var fallbackTop = UseGroupedRowWindowing && _groupedActiveEntryTopPx >= 0
                 ? Math.Max(0, _groupedActiveEntryTopPx - 2 * _rowHeightPx)
                 : Math.Max(0, displayRowIndex * _rowHeightPx);
@@ -4156,8 +4449,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("ensureActiveGridCellVisible", _gridHostElement);
         }
         catch (Exception)
@@ -4196,8 +4488,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var groupedTarget = Math.Max(0, _groupedPrefixPx![idx] - 2 * _rowHeightPx);
             try
             {
-                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", GridJsModulePath);
+                _gridJsModule ??= await ImportGridJsModuleAsync();
                 await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, groupedTarget);
             }
             catch (Exception)
@@ -4240,8 +4531,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var targetScrollTop = Math.Max(0, (displayIndex - 2) * _rowHeightPx);
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, targetScrollTop);
         }
         catch (Exception)
@@ -4495,12 +4785,38 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private static string GridJsModulePath =>
         FxJsAsset.Versioned($"./_content/{typeof(GridControl<TValue>).Assembly.GetName().Name}/grid-control.js");
 
+    /// <summary>
+    /// Single-flight import of grid-control.js. Every caller that needs the module
+    /// awaits the same pending import, so render passes that overlap on Blazor Server
+    /// request it once per grid instance. A failed import clears the pending task and
+    /// rethrows, so each caller keeps its own best-effort handling and a later one
+    /// retries.
+    /// </summary>
+    private async Task<IJSObjectReference> ImportGridJsModuleAsync()
+    {
+        if (_gridJsModule != null)
+            return _gridJsModule;
+
+        var import = _gridJsModuleImport ??= JsRuntime
+            .InvokeAsync<IJSObjectReference>("import", GridJsModulePath)
+            .AsTask();
+        try
+        {
+            return _gridJsModule ??= await import;
+        }
+        catch
+        {
+            if (ReferenceEquals(_gridJsModuleImport, import))
+                _gridJsModuleImport = null;
+            throw;
+        }
+    }
+
     private async ValueTask<IJSObjectReference?> GetGridJsModuleAsync()
     {
         try
         {
-            return _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            return await ImportGridJsModuleAsync();
         }
         catch
         {
@@ -4837,6 +5153,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _pendingInitialSelectionNotification = NotifyInitialSelectionChanged;
         _pendingRowRevealIndex = requestedIndex;
         _pendingRowRevealToken++;
+        ArmGridInteropInit();
     }
 
     private void SyncPrintDefaults()
@@ -4918,6 +5235,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // A new data source can bring a different row height (RowHeightSelector, a
         // theme swap on the host form) — re-measure instead of trusting the old pitch.
         _gridMetricsMeasured = false;
+        _gridMetricsAttemptSignature = null;
+        _gridMetricsResetGeneration++;
+        ArmGridInteropInit();
         ClearTransientSelectionState(clearRows: true);
         _pendingFirstRowSelection = AutoSelectFirstRow;
     }
@@ -6355,8 +6675,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("clearTextSelection");
         }
         catch (Exception)
@@ -6377,8 +6696,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_gridKeyboardTrapRegistered) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("registerGridKeyboardTrap", _gridHostElement);
             _gridKeyboardTrapRegistered = true;
         }
@@ -6394,8 +6712,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_gridScrollSyncRegistered) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("registerGridScrollSync", _gridHostElement);
             _gridScrollSyncRegistered = true;
         }
@@ -6415,8 +6732,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_headerDragPreviewRegistered) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("registerHeaderDragPreview", _gridHostElement);
             _headerDragPreviewRegistered = true;
         }
@@ -6438,8 +6754,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_rowDragSelectionAutoScrollRegistered) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerRowDragSelectionAutoScroll", _gridHostElement, _gridDotNetRef);
             _rowDragSelectionAutoScrollRegistered = true;
@@ -6460,8 +6775,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_scrollbarActivityRegistered) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("registerScrollbarActivity", _gridHostElement);
             _scrollbarActivityRegistered = true;
         }
@@ -6476,8 +6790,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_filterPopupField == null) return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("registerFilterPopupDrag", _gridHostElement);
         }
         catch (Exception)
@@ -6490,7 +6803,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("clampMenuIntoViewport", menu);
         }
         catch
@@ -6502,7 +6815,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerGridDragSelection",
                 _gridHostElement, _gridDotNetRef, mode, anchorVisibleIndex, anchorField ?? "");
@@ -6623,7 +6936,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             _windowSelfRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerClientNavigationPreview", _gridHostElement, _windowSelfRef);
             _clientNavPreviewRegistered = true;
@@ -6706,7 +7019,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerGridInstantSelectionFeedback", _gridHostElement,
                 SelectionSettingsRef?.Mode == SelectionMode.Cell, _gridDotNetRef);
@@ -8379,7 +8692,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         bool activated;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             activated = await _gridJsModule.InvokeAsync<bool>(
                 "activateActiveCellPopup", _gridHostElement, ari, column.Field);
         }
@@ -9480,8 +9793,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             try
             {
-                _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                    "import", GridJsModulePath);
+                _gridJsModule ??= await ImportGridJsModuleAsync();
 
                 if (selectAll)
                 {
@@ -10197,7 +10509,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             return await _gridJsModule.InvokeAsync<bool>("focusAdjacentOutsideGrid", _gridHostElement, backwards);
         }
         catch
@@ -10645,8 +10957,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             return await _gridJsModule.InvokeAsync<bool>(
                 "isInputCaretAtHorizontalBoundary",
                 _batchEditInputRef,
@@ -10930,19 +11241,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && IsNativeEditorCaretNavigationKey(e))
             return;
 
-        // An Enter that belongs to an open or pending batch editor never goes to
-        // the page's host-key callback. The ServerBacked one-shot above covers
+        // A key that belongs to an open or pending batch editor — Enter, and the
+        // typing keys the editor owns (characters, Backspace, Delete) — never goes
+        // to the page's host-key callback. The ServerBacked one-shot above covers
         // the commit-then-bubble interleave, but on a ClientBuffered grid nothing
         // arms it, and in the attach gap / single-click+type pending window the
         // editor's JS stopPropagation isn't in place yet — so one physical Enter
         // both committed the buffered text AND fired the host action (e.g.
         // FInboxCustomQuote: Enter = BuildQuote, so the modal popped over the
-        // commit). Only the callback is skipped: the pending-commit and dropdown
-        // handoff paths below still receive the key unchanged.
-        var editorOwnsEnter = (e.Key == "Enter" || e.Key == "NumpadEnter")
-            && (_batchEditItem != null || _pendingBatchEditFocus || _batchEditHostKeyHandoffOpen);
+        // commit), and one Delete typed into the not-yet-focused editor would also
+        // run the host's own Delete. Only the callback is skipped: the
+        // pending-commit and dropdown handoff paths below still receive the key
+        // unchanged.
+        var editorOwnsHostKey = (_batchEditItem != null || _pendingBatchEditFocus || _batchEditHostKeyHandoffOpen)
+            && (e.Key is "Enter" or "NumpadEnter" || IsEditorOwnedTypingKey(e));
 
-        if (!editorOwnsEnter && EventsRef?.OnHostKeyDown.HasDelegate == true)
+        if (!editorOwnsHostKey && EventsRef?.OnHostKeyDown.HasDelegate == true)
             await EventsRef.OnHostKeyDown.InvokeAsync(e);
 
         if (await TryHandleCellContextShortcutAsync(e))
@@ -12928,7 +13242,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("activateMenuItem", menu);
         }
         catch (Exception)
@@ -12940,7 +13254,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             await _gridJsModule.InvokeVoidAsync("focusMenuItem", menu, mode);
         }
         catch (Exception)
@@ -12981,7 +13295,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         double available = 0;
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             available = await _gridJsModule.InvokeAsync<double>("measureGridAvailableWidth", _gridHostElement);
         }
         catch
@@ -14320,8 +14634,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>(
-                "import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             _gridDotNetRef ??= DotNetObjectReference.Create(this);
             await _gridJsModule.InvokeVoidAsync("registerGridResizeCapture", _gridHostElement, _gridDotNetRef, clientX, clientY);
             _gridResizeCaptureRegistered = true;
@@ -15718,6 +16031,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public async Task RefreshAsync()
     {
         InvalidateBlazorServerOptimizationCaches();
+        _gridMetricsAttemptSignature = null;
+        _gridMetricsResetGeneration++;
         await InvokeAsync(StateHasChanged);
     }
 
@@ -15855,7 +16170,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            _gridJsModule ??= await JsRuntime.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            _gridJsModule ??= await ImportGridJsModuleAsync();
             var measured = await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
                 "measureColumnContentWidths", _gridHostElement, fields, Math.Max(1, AutoFitSampleSize));
             if (measured != null && measured.TryGetValue("__fxContainerWidth", out var containerPx))
@@ -16618,6 +16933,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
             _gridJsModule = null;
         }
+        _gridJsModuleImport = null;
+        _gridInteropInit = null;
 
         _gridDotNetRef?.Dispose();
         _gridDotNetRef = null;

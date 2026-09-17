@@ -4,6 +4,8 @@ using Sprache;
 
 namespace Fx.ControlKit.Reports;
 
+public enum CrystalEvaluationTime { BeforeReadingRecords, WhileReadingRecords, WhilePrintingRecords }
+
 /// <summary>Inert Crystal-syntax AST. No generated code, reflection, SQL, files, or network access.</summary>
 public sealed class CrystalFormula
 {
@@ -11,17 +13,43 @@ public sealed class CrystalFormula
     private readonly object? _defaultValue;
     public IReadOnlyList<string> References { get; }
     public bool UsesVariables { get; }
+    public bool UsesPersistentVariables { get; }
+    public bool UsesSharedVariables { get; }
+    public bool WritesPersistentVariables { get; }
+    public bool UsesRecordContext { get; }
+    public CrystalEvaluationTime? EvaluationTime { get; }
+    public IReadOnlyList<string> EvaluateAfter { get; }
     public bool UsesPageContext { get; }
     public bool UsesAggregates { get; }
+    public IReadOnlyList<string> AggregateReferences { get; }
     public bool UsesEvaluationDirectives { get; }
+    public bool RequiresPrintPass { get; }
     private CrystalFormula(Node root, object? defaultValue)
     {
         _root = root; _defaultValue = defaultValue;
         var nodes = Walk(root).ToArray();
         References = nodes.OfType<Reference>().Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         UsesVariables = nodes.Any(n => n is Variable or Assign);
+        UsesPersistentVariables = nodes.OfType<Variable>().Any(n => !n.Scope.Equals("local", StringComparison.OrdinalIgnoreCase));
+        UsesSharedVariables = nodes.OfType<Variable>().Any(n => n.Scope.Equals("shared", StringComparison.OrdinalIgnoreCase));
+        var persistentNames = nodes.OfType<Variable>().Where(n => !n.Scope.Equals("local", StringComparison.OrdinalIgnoreCase)).Select(n => n.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        WritesPersistentVariables = nodes.OfType<Variable>().Any(n => persistentNames.Contains(n.Name) && n.Value is not null)
+            || nodes.OfType<Assign>().Any(n => persistentNames.Contains(n.Name));
+        UsesRecordContext = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "recordnumber" or "onfirstrecord" or "onlastrecord" or "currentfieldvalue")
+            || nodes.OfType<Call>().Any(n => n.Name.ToLowerInvariant() is "previous" or "next" or "onfirstrecord" or "onlastrecord");
+        var times = nodes.OfType<Symbol>().Select(n => Enum.TryParse<CrystalEvaluationTime>(n.Name, true, out var time) ? (CrystalEvaluationTime?)time : null)
+            .Where(t => t.HasValue).Distinct().ToArray();
+        if (times.Length > 1) throw new InvalidDataException("A formula cannot specify conflicting evaluation times.");
+        EvaluationTime = times.FirstOrDefault();
+        var after = nodes.OfType<Call>().Where(n => n.Name.Equals("EvaluateAfter", StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (after.Any(n => n.Args.Length != 1 || n.Args[0] is not Reference r || !r.Name.StartsWith("{@", StringComparison.Ordinal)))
+            throw new InvalidDataException("EvaluateAfter requires one formula reference.");
+        EvaluateAfter = after.Select(n => ((Reference)n.Args[0]).Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         UsesPageContext = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "pagenumber" or "totalpagecount" or "inrepeatedgroupheader");
         UsesAggregates = nodes.OfType<Call>().Any(n => AggregateNames.Contains(n.Name));
+        AggregateReferences = nodes.OfType<Call>().Where(n => AggregateNames.Contains(n.Name)).SelectMany(n => n.Args.OfType<Reference>())
+            .Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        RequiresPrintPass = nodes.OfType<Symbol>().Any(n => n.Name.Equals("WhilePrintingRecords", StringComparison.OrdinalIgnoreCase));
         UsesEvaluationDirectives = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "whileprintingrecords" or "whilereadingrecords" or "beforereadingrecords")
             || nodes.OfType<Call>().Any(n => n.Name.Equals("EvaluateAfter", StringComparison.OrdinalIgnoreCase));
     }
@@ -329,7 +357,7 @@ public sealed class CrystalFormula
     private static readonly Parser<Node> Declaration = from scope in Word("shared").Or(Word("global")).Or(Word("local")).Optional()
         from type in Word("numbervar").Or(Word("currencyvar")).Or(Word("stringvar")).Or(Word("booleanvar")).Or(Word("datevar")).Or(Word("datetimevar"))
         from name in Identifier from value in Punctuation(":=").Then(_ => Parse.Ref(() => Expression)).Optional()
-        select (Node)new Variable(scope.GetOrDefault() ?? "local", type, name, value.GetOrDefault());
+        select (Node)new Variable(scope.GetOrDefault() ?? "global", type, name, value.GetOrDefault());
     private static readonly Parser<Node> Assignment = from name in Identifier from op in Punctuation(":=") from value in Parse.Ref(() => Expression) select (Node)new Assign(name, value);
     private static readonly Parser<Node> If = from keyword in Word("if") from test in Parse.Ref(() => Expression) from then in Word("then")
         from yes in Parse.Ref(() => Expression) from no in Word("else").Then(_ => Parse.Ref(() => Expression)).Optional()

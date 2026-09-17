@@ -13,23 +13,44 @@ internal static class CrystalPictureStorage
             var storage = prefix + "Embedding " + picture.PictureStorageIndex + "/";
             var entries = streams.Where(s => s.FullPath.StartsWith(storage, StringComparison.OrdinalIgnoreCase) &&
                 !s.FullPath[storage.Length..].Contains('/')).ToList();
-            var content = entries.FirstOrDefault(s => s.Name.Equals("CONTENTS", StringComparison.OrdinalIgnoreCase));
-            try
+            var candidates = entries.Where(s => s.Name.Equals("CONTENTS", StringComparison.OrdinalIgnoreCase) || s.Name == "\u0001Ole10Native" || IsPresentation(s.Name))
+                .OrderBy(s => IsPresentation(s.Name) ? 2 : s.Name == "\u0001Ole10Native" ? 1 : 0).ThenBy(s => s.Name, StringComparer.Ordinal);
+            var failures = new List<string>();
+            foreach (var content in candidates)
             {
-                if (content is not null) picture.ImageDataUrl = ReportObjectVisual.EmbedImage(content.Bytes);
-                else if (entries.FirstOrDefault(s => s.Name == "\u0001Ole10Native") is { Bytes.Length: > 4 } native)
+                try
                 {
-                    var size = BinaryPrimitives.ReadUInt32LittleEndian(native.Bytes);
-                    if (size != native.Bytes.Length - 4) throw new InvalidDataException("Invalid Ole10Native image length.");
-                    picture.ImageDataUrl = ReportObjectVisual.EmbedImage(native.Bytes.AsSpan(4));
+                    if (IsPresentation(content.Name))
+                    {
+                        try { picture.ImageDataUrl = CrystalMetafileImage.Presentation(content.Bytes, picture.PictureAspect); }
+                        catch (InvalidDataException) { picture.VectorImage = CrystalVectorMetafile.Presentation(content.Bytes, picture.PictureAspect); }
+                    }
+                    else if (content.Name == "\u0001Ole10Native")
+                    {
+                        if (content.Bytes.Length < 4 || BinaryPrimitives.ReadUInt32LittleEndian(content.Bytes) != content.Bytes.Length - 4)
+                            throw new InvalidDataException("Invalid Ole10Native image length.");
+                        Image(content.Bytes.AsSpan(4));
+                    }
+                    else Image(content.Bytes);
+                    picture.PictureDiagnostic = "";
+                    break;
                 }
-                else throw new InvalidDataException(entries.Count == 0 ? "Linked picture storage is missing." : "OLE presentation/metafile rasterization is not supported.");
+                catch (InvalidDataException ex) { failures.Add($"{content.Name.TrimStart('\u0001', '\u0002')}: {ex.Message}"); }
             }
-            catch (InvalidDataException ex)
+            if (string.IsNullOrEmpty(picture.ImageDataUrl) && picture.VectorImage is null)
             {
-                picture.PictureDiagnostic = $"{picture.Name} ({storage}): {ex.Message}";
+                var reason = failures.Count > 0 ? string.Join("; ", failures) : entries.Count == 0 ? "Linked picture storage is missing." : "No supported image presentation was found.";
+                picture.PictureDiagnostic = $"{picture.Name} ({storage}): {reason}";
                 progress?.Invoke(picture.PictureDiagnostic);
+            }
+            void Image(ReadOnlySpan<byte> bytes)
+            {
+                try { picture.ImageDataUrl = CrystalMetafileImage.Embed(bytes); }
+                catch (InvalidDataException) { picture.VectorImage = CrystalVectorMetafile.Read(bytes); }
             }
         }
     }
+
+    private static bool IsPresentation(string name) => name.Length == 11 && name.StartsWith("\u0002OlePres", StringComparison.Ordinal)
+        && name[8..].All(c => c is >= '0' and <= '9');
 }

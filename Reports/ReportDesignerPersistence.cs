@@ -89,7 +89,7 @@ public sealed class ReportDesignerPreview : IDisposable
             preview._sourceRoot = string.IsNullOrWhiteSpace(document.SourcePath) ? null
                 : System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(document.SourcePath));
             var copied = new Dictionary<string, string>(StringComparer.Ordinal);
-            preview.XmlPath = preview.CopyReport(ReportDesignerXmlSerializer.ToXml(document), document.SourcePath, copied);
+            preview.XmlPath = preview.CopyReport(ReportDesignerXmlSerializer.ToXml(document), document.SourcePath, copied, document.SourceName);
             return preview;
         }
         catch
@@ -99,11 +99,17 @@ public sealed class ReportDesignerPreview : IDisposable
         }
     }
 
-    private string CopyReport(string xml, string sourcePath, Dictionary<string, string> copied)
+    private string CopyReport(string xml, string sourcePath, Dictionary<string, string> copied, string? sourceName = null)
     {
         if (copied.Count >= 128)
             throw new InvalidDataException("The report snapshot exceeds 128 external subreports.");
-        var output = System.IO.Path.Combine(_directory, $"report-{copied.Count}.xml");
+        var fileName = System.IO.Path.GetFileName(string.IsNullOrWhiteSpace(sourcePath) ? sourceName : sourcePath);
+        if (string.IsNullOrWhiteSpace(fileName)) fileName = "Report.xml";
+        // Keep the main report identity stable for structured data executors. Children remain in the bounded package root.
+        fileName = System.IO.Path.ChangeExtension(fileName, ".xml");
+        var output = System.IO.Path.Combine(_directory, fileName);
+        for (var suffix = 1; copied.Values.Contains(output, StringComparer.OrdinalIgnoreCase); suffix++)
+            output = System.IO.Path.Combine(_directory, $"{suffix}-{fileName}");
         copied[sourcePath] = output;
         var root = XDocument.Parse(xml);
         foreach (var obj in root.Descendants("SubreportObject"))

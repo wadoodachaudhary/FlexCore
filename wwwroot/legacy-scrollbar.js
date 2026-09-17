@@ -84,12 +84,97 @@ export function enableTreeKeyboardNavigation(root, scroller, dotNetRef) {
         });
     }
 
+    // Type-ahead into a cell editor that is not there yet. The first key starts the
+    // edit on the server; the keys typed while the editor is being mounted and
+    // focused still land on the row. They are kept HERE and handed to the editor
+    // the moment it appears — ahead of the keys typed after focus, which the input
+    // receives natively. Relayed through the server one by one they would land
+    // AFTER those (the browser is faster than a round trip): "12-Jan-26" typed at
+    // speed came out as "1-Jan-262".
+    const typeAhead = { armed: false, replace: false, text: "", trailing: null, timer: 0, observer: null };
+    const disarmTypeAhead = () => {
+        typeAhead.armed = false; typeAhead.text = ""; typeAhead.trailing = null;
+        clearTimeout(typeAhead.timer); typeAhead.timer = 0;
+        typeAhead.observer?.disconnect(); typeAhead.observer = null;
+    };
+    // replace: the edit was opened by Enter / F2 (the existing text is selected, as
+    // in VB6) — the typed text replaces it rather than extending it. The observer
+    // that watches for the editor's mount lives only for the burst.
+    const armTypeAhead = replace => {
+        disarmTypeAhead();
+        typeAhead.armed = true; typeAhead.replace = replace;
+        typeAhead.timer = setTimeout(disarmTypeAhead, 1500);
+        typeAhead.observer = new MutationObserver(() => flushTypeAhead());
+        typeAhead.observer.observe(root, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-fx-cell-editing"] });
+    };
+    const hostedTextInput = () => root.querySelector(".fx-treegrid-cell-edit-editing [data-fx-host-typing]");
+    const typeIntoHostedInput = (input, text, replace) => {
+        input.value = replace ? text : (input.value ?? "") + text;
+        input.dataset.fxUserTyped = "1";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const flushTypeAhead = () => {
+        if (!typeAhead.armed) return;
+        const generation = root.dataset.fxCellEditing;
+        if (generation === undefined) return;          // the edit is not mounted yet
+        const { text, replace, trailing } = typeAhead;
+        disarmTypeAhead();
+        const input = hostedTextInput();
+        if (input) {
+            if (text) typeIntoHostedInput(input, text, replace);
+            // Focus moved on to another control meanwhile: the text is in, the
+            // keyboard is not taken back (the editor's own focus step is guarded too).
+            if (treeOwnsFocus(root)) {
+                input.focus({ preventScroll: true });
+                // A commit key typed behind the text is replayed once the text is in.
+                if (trailing) input.dispatchEvent(new KeyboardEvent("keydown", { key: trailing, code: trailing, bubbles: true, cancelable: true }));
+            }
+        } else if (text && dotNetRef) {
+            dotNetRef.invokeMethodAsync("RelayTypedTextAsync", Number(generation), text, trailing ?? "").catch(() => { });
+        }
+    };
+
     root.addEventListener("keydown", event => {
         const target = event.target;
         if (event.key === "Tab" && target?.closest?.(".fx-treegrid-batch-editor")) { event.preventDefault(); return; }
         const onRootOrRow = target === root || !!target?.classList?.contains("fx-treegrid-row");
         const inEditHost = !!target?.closest?.(".fx-treegrid-cell-edit-host");
         const onDisplay = !!target?.classList?.contains("fx-treegrid-cell-edit-display");
+
+        // Only a tree that hosts cell editors has anything to type into.
+        if (dotNetRef && root.dataset.fxCellEditable !== undefined && (onRootOrRow || onDisplay) && !event.isComposing) {
+            const printable = event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey;
+            if (typeAhead.armed) {
+                if (printable) {
+                    typeAhead.text += event.key;
+                    event.preventDefault(); event.stopPropagation(); return;
+                }
+                if (["Shift", "Control", "Alt", "Meta", "CapsLock", "Dead", "Unidentified"].includes(event.key)) return;
+                if (event.key === "Backspace" && typeAhead.text) {
+                    typeAhead.text = typeAhead.text.slice(0, -1);
+                    event.preventDefault(); event.stopPropagation(); return;
+                }
+                if (typeAhead.text && ["Tab", "Enter", "NumpadEnter"].includes(event.key) && !event.shiftKey) {
+                    typeAhead.trailing = event.key;
+                    event.preventDefault(); event.stopPropagation(); return;
+                }
+                disarmTypeAhead();                     // Escape, an arrow: the tree's key
+            } else if (root.dataset.fxCellEditing === undefined) {
+                const opensEdit = event.key === "F2" || event.key === "F4" || event.key === "Enter" || event.key === "NumpadEnter"
+                    || (event.altKey && event.key === "ArrowDown");
+                // This key starts the edit on the server — whitespace never does (Space is the outline toggle).
+                if (printable && event.key.trim() !== "") armTypeAhead(false);
+                else if (opensEdit) armTypeAhead(true);
+            } else if (printable) {
+                // The editor is mounted but its focus step has not landed: straight in.
+                const input = hostedTextInput();
+                if (input && !input.disabled) {
+                    typeIntoHostedInput(input, event.key, false);
+                    input.focus({ preventScroll: true });
+                    event.preventDefault(); event.stopPropagation(); return;
+                }
+            }
+        }
 
         if (event.key === "Tab") {
             // A property grid (wrap-until-edge) walks its rows on Tab: the browser's own
@@ -227,7 +312,9 @@ export function focusIfTreeOwnsFocus(root, element, selectText) {
     if (!element || !element.isConnected) return true;
     try {
         element.focus({ preventScroll: true });
-        if (selectText && typeof element.select === "function") element.select();
+        // Text the user has typed since the mount (the type-ahead flush) stays as
+        // typed: selecting it would hand the next key a replacement.
+        if (selectText && !element.dataset?.fxUserTyped && typeof element.select === "function") element.select();
     } catch { }
     return true;
 }

@@ -18,13 +18,19 @@ public sealed class ReportPositionedLayout
     public Dictionary<string, Dictionary<string, CrystalFormula>> AreaConditions { get; } = new();
     public Dictionary<string, Dictionary<string, CrystalFormula>> ObjectConditions { get; } = new();
     public Dictionary<string, ReportLayoutSubreport> Subreports { get; } = new();
+    public List<string> Diagnostics { get; } = [];
     public CrystalFormula? RecordSelection { get; set; }
     public CrystalFormula? GroupSelection { get; set; }
     internal List<string> Projections { get; } = [];
 }
 
-public sealed record ReportLayoutSummary(string Operation, string Field, string Group);
-public sealed record ReportLayoutArea(bool Suppressed, bool RepeatHeader, bool NewPageBefore, bool NewPageAfter, bool Hidden = false);
+public sealed record ReportLayoutSummary(string Operation, string Field, string Group)
+{
+    public ReportRunningTotalCondition Evaluation { get; init; } = new("NoCondition");
+    public ReportRunningTotalCondition Reset { get; init; } = new("NoCondition");
+}
+public sealed record ReportRunningTotalCondition(string Type, string Field = "", int Group = 0, CrystalFormula? Formula = null);
+public sealed record ReportLayoutArea(bool Suppressed, bool RepeatHeader, bool NewPageBefore, bool NewPageAfter, bool Hidden = false, bool ResetPageNumberAfter = false, bool KeepGroupTogether = false);
 public sealed record ReportTextMeasurement(string Style, string Html);
 public sealed record ReportLayoutResult(List<string> Pages, List<string> Diagnostics);
 public sealed record ReportLayoutParameterLink(string Parameter, string MainField, string ChildField);
@@ -35,6 +41,8 @@ public sealed partial class ReportLayoutSession
 {
     private readonly ReportPositionedLayout _layout;
     private DataRow[] _rows;
+    private DataRow[]? _summaryRows;
+    private Dictionary<DataRow, int>? _summaryRowIndexes;
     private readonly IReadOnlyDictionary<string, object> _parameters;
     private readonly List<Band> _bands = [];
     private readonly Dictionary<string, int> _measurementKeys = new(StringComparer.Ordinal);
@@ -43,15 +51,19 @@ public sealed partial class ReportLayoutSession
     private readonly Dictionary<(ReportLayoutSummary Summary, int Start, int End), object?> _summaryCache = new();
     private readonly string _pageToken = Guid.NewGuid().ToString("N") + "-page";
     private readonly string _countToken = Guid.NewGuid().ToString("N") + "-count";
-    private readonly DateTime _printTime = DateTime.Now;
+    private readonly DateTime _printTime;
     public List<ReportTextMeasurement> Measurements { get; } = [];
-    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0);
+    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null);
     private sealed record InlineHeader(int Start, int End, Band Header);
+    private sealed record InlineSection(int Start, int End, Band Source, ReportDesignerSection? Format = null);
+    private sealed record InlineCut(Band Source, int RetainedHeight);
     private sealed record Band(ReportDesignerSection Section, List<Item> Items, int Row, List<Band> Repeats, bool Suppressed = false,
-        List<int>? Breaks = null, List<int>? ForcedBreaks = null, List<InlineHeader>? InlineHeaders = null, bool RepeatedHeader = false);
+        List<int>? Breaks = null, List<int>? ForcedBreaks = null, List<InlineHeader>? InlineHeaders = null, bool RepeatedHeader = false,
+        ReportLayoutSession? Owner = null, List<InlineSection>? InlineSections = null, List<InlineCut>? InlineCuts = null);
     private sealed record Placement(Band Band, int Top, int Offset, int Height);
     private sealed class Page
     {
+        public int Number { get; init; }
         public List<Placement> Placements { get; } = [];
         public int Cursor { get; set; }
         public int Bottom { get; set; }
@@ -60,20 +72,37 @@ public sealed partial class ReportLayoutSession
     }
 
     public ReportLayoutSession(ReportPositionedLayout layout, DataTable data, IReadOnlyDictionary<string, object>? parameters = null,
-        Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport = null)
-        : this(layout, data, parameters, executeSubreport, new RuntimeState(), 0) { }
+        Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport = null, DateTime? printTime = null)
+        : this(layout, data, parameters, executeSubreport, new RuntimeState { PrintTime = printTime ?? DateTime.Now }, 0) { }
 
     private ReportLayoutSession(ReportPositionedLayout layout, DataTable data, IReadOnlyDictionary<string, object>? parameters,
         Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport, RuntimeState state, int depth)
     {
         _layout = layout;
+        _printTime = state.PrintTime;
+        _diagnostics.UnionWith(layout.Diagnostics);
+        // Authored layouts can bypass the XML loader. Report capabilities even for hidden/empty bands.
+        var reportName = layout.Document.SourceDocument?.Root is { } root ? (string?)root.Attribute("Name") ?? "Report" : layout.Document.Title;
+        foreach (var section in layout.Document.Sections)
+        foreach (var element in section.Elements)
+            if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is { } kind)
+                _diagnostics.Add(ReportObjectCapabilities.Diagnostic(reportName, section.Name, element.Name, kind, true,
+                    layout.Document.SourceObjects.GetValueOrDefault(element.SourceKey)));
         _rows = data.Rows.Cast<DataRow>().ToArray();
         _parameters = new Dictionary<string, object>(parameters ?? new Dictionary<string, object>(), StringComparer.OrdinalIgnoreCase);
         _executeSubreport = executeSubreport; _state = state; _depth = depth;
+        _state.Sessions.Add(this);
+        _state.HasGrowingText |= layout.Document.Elements.Any(e => e.CanGrow);
         _state.HasPageConditions |= layout.SectionConditions.Values.Concat(layout.AreaConditions.Values).Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values).Any(UsesPage);
+        _state.HasPageConditions |= layout.Formulas.Values.Any(f => f.UsesPageContext || f.References.Any(IsSpecial))
+            || layout.Document.Elements.Any(e => IsSpecial(e.Binding) || e.Visual.Runs.Any(r => IsSpecial(r.Binding)));
         if (ReportDesignerEditing.ValidatePage(layout.Document.Page) is { } error) throw new InvalidDataException(error);
+        PrepareFormulaSchedule();
         PrepareRows();
-        BuildBands();
+        PreparePhysicalPageSchedule();
+        if (_physicalPageSchedule) { _formulaPage = 1; _formulaPages = 1; }
+        try { BuildBands(); }
+        finally { _formulaPage = null; _formulaPages = null; }
     }
 
     public static bool IsSpecial(string reference) => SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm" or "reporttitle" or "reportfilename" or "printdate" or "printtime" or "recordnumber";
@@ -84,7 +113,7 @@ public sealed partial class ReportLayoutSession
         reference = reference.Trim();
         if (_layout.Formulas.ContainsKey(reference)) return FormulaValue(reference, row);
         if (_layout.FormulaErrors.TryGetValue(reference, out var error)) throw new InvalidDataException($"{reference}: {error}");
-        if (_layout.RunningTotals.TryGetValue(reference, out var running)) return Summary(running, row, row + 1);
+        if (_layout.RunningTotals.TryGetValue(reference, out var running)) return RunningTotal(reference, running, row);
         if (_layout.GroupNames.TryGetValue(reference, out var condition)) return Value(condition, row);
         if (reference.StartsWith("{?", StringComparison.Ordinal))
         {
@@ -114,6 +143,18 @@ public sealed partial class ReportLayoutSession
 
     private object? Summary(ReportLayoutSummary summary, int row, int? stop = null)
     {
+        if (_summaryRows is null || ReferenceEquals(_rows, _summaryRows)) return SummaryCore(summary, row, stop);
+        // Group selection is a print-pass filter. First-pass summaries still include the excluded groups.
+        var displayed = _rows;
+        _summaryRowIndexes ??= _summaryRows.Select((data, index) => (data, index)).ToDictionary(pair => pair.data, pair => pair.index);
+        var sourceRow = row >= 0 && row < displayed.Length ? _summaryRowIndexes[displayed[row]] : row;
+        try { _rows = _summaryRows; return SummaryCore(summary, sourceRow, stop); }
+        finally { _rows = displayed; }
+    }
+
+    private object? SummaryCore(ReportLayoutSummary summary, int row, int? stop)
+    {
+        if (_layout.Formulas.TryGetValue(summary.Field, out var formula)) RequireReadTime(formula, "Summary");
         if (_layout.Summaries.ContainsKey(summary.Field)) { _diagnostics.Add("Nested summaries are not supported."); return "[Nested summary]"; }
         var start = 0;
         var end = Math.Clamp(stop ?? _rows.Length, 0, _rows.Length);
@@ -177,19 +218,27 @@ public sealed partial class ReportLayoutSession
     private Band CreateBand(ReportDesignerSection section, int row, List<Band> repeats)
     {
         _bandFormulaCache.Clear();
+        if (Conditions(_layout.SectionConditions, section.Id, true).Any() || Conditions(_layout.AreaConditions, section.Id, true).Any())
+        {
+            var stateful = section.Elements.Any(e => NeedsPrintState(e.Binding) || e.Visual.Runs.Any(r => NeedsPrintState(r.Binding))
+                || (_layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(f => f.UsesPersistentVariables) ?? false));
+            if (stateful && Conditions(_layout.SectionConditions, section.Id, true).Concat(Conditions(_layout.AreaConditions, section.Id, true)).Any(c => !VisibilityProperty(c.Key)))
+                throw new NotSupportedException($"{section.Name}: non-visibility page-dependent section reflow with persistent variable formulas requires additional scheduling.");
+        }
         section = ApplySectionConditions(section, row);
-        if (!Visible(section)) return new(section, [], row, repeats.ToList(), true);
+        if (!Visible(section)) return new(section, [], row, repeats.ToList(), true, Owner: this);
         var items = new List<Item>();
         foreach (var original in section.Elements)
         {
             var element = ApplyObjectConditions(original, row);
             if (element.IsSuppressed) continue;
-            if (element.Kind == "Picture" && !ReportObjectVisual.IsEmbeddedImage(element.Visual.ImageDataUrl))
+            if (element.Kind == "Picture" && element.Visual.VectorImage is null && !ReportObjectVisual.IsEmbeddedImage(element.Visual.ImageDataUrl))
                 _diagnostics.Add($"{element.Name}: embedded image bytes are missing. Replace the picture in the designer.");
             var child = element.Kind == "Subreport" ? CreateInlineSubreport(element, row) : null;
             var childOffset = Measurements.Count;
             if (child is not null) Measurements.AddRange(child.Measurements);
-            if (element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport"))
+            if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
+                && element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport"))
                 _diagnostics.Add($"{element.Name}: {element.Kind} objects are not implemented in positioned rendering.");
             var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString));
             var measure = -1;
@@ -207,7 +256,7 @@ public sealed partial class ReportLayoutSession
             }
             items.Add(new(element, html, measure, child, childOffset, this, row));
         }
-        return new(section, items, row, repeats.ToList());
+        return new(section, items, row, repeats.ToList(), Owner: this);
     }
 
     private void BuildBands()
@@ -219,14 +268,16 @@ public sealed partial class ReportLayoutSession
             foreach (var section in sections.Where(section => section.Kind == kind && (group is null || ReportDesignerEditing.GetGroupNumber(_layout.Document, section) == group + 1)))
             {
                 var band = CreateBand(section, row, repeats);
-                if (band.Suppressed) continue;
+                if (band.Suppressed && !HasVisibilityEvent(section.Id)) continue;
                 _bands.Add(band);
                 if (kind == "GroupHeader" && (_layout.Areas.GetValueOrDefault(section.Id)?.RepeatHeader ?? false)) repeats.Add(band);
             }
         }
         Add("ReportHeader", _rows.Length > 0 ? 0 : -1);
+        _rowBefore[-1] = _rowAfter[-1] = CaptureVariables();
         for (var row = 0; row < _rows.Length; row++)
         {
+            _rowBefore[row] = CaptureVariables();
             for (var group = 0; group < _layout.Document.Groups.Count; group++)
                 if (row == 0 || !SameGroup(row - 1, row, group)) Add("GroupHeader", row, group);
             Add("Detail", row);
@@ -236,33 +287,37 @@ public sealed partial class ReportLayoutSession
                     Add("GroupFooter", row, group);
                     repeats.RemoveAll(band => ReportDesignerEditing.GetGroupNumber(_layout.Document, band.Section) == group + 1);
                 }
+            _rowAfter[row] = CaptureVariables();
         }
         Add("ReportFooter", _rows.Length - 1);
+        _rowAfter[_rows.Length - 1] = CaptureVariables();
         // Page furniture can bind to the first/last row on each page. Prepare all variants before DOM measurement.
         foreach (var section in sections.Where(section => section.Kind is "PageHeader" or "PageFooter"))
-            for (var row = -1; row < _rows.Length; row++) _furniture[(section.Id, row)] = CreateBand(section, row, []);
+            for (var row = -1; row < _rows.Length; row++) _furniture[(section.Id, row)] = CreateFurniture(section, row);
     }
 
     private readonly Dictionary<(string Id, int Row), Band> _furniture = new();
 
     public ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights = null)
-        => Paginate(measuredHeights, 1, 0);
+        => Paginate(measuredHeights, 1, 0, null);
 
-    private ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights, int expectedPages, int attempt)
+    private ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights, int expectedPages, int attempt, IReadOnlyList<int>? expectedCounts,
+        Dictionary<Band, (int Page, int Count)>? inlineContexts = null, IReadOnlyList<int>? footerRows = null, int scheduleAttempt = 0)
     {
-        if (Measurements.Count > 0 && (measuredHeights is null || measuredHeights.Count != Measurements.Count))
+        if (_textMetrics is null && Measurements.Count > 0 && _state.HasGrowingText && (measuredHeights is null || measuredHeights.Count != Measurements.Count))
             _diagnostics.Add("Browser text measurement is unavailable; CanGrow pagination uses an approximate font metric.");
         var size = _layout.Document.Page;
         var bands = _bands.Select(band => Expand(band, 0)).ToList();
         var pages = new List<Page>();
         var headers = _layout.Document.Sections.Where(section => section.Kind == "PageHeader").ToList();
         var footers = _layout.Document.Sections.Where(section => section.Kind == "PageFooter").ToList();
-        var footerReserve = footers.Sum(section => _furniture.Where(pair => pair.Key.Id == section.Id).Select(pair => Height(pair.Value)).DefaultIfEmpty(section.HeightTwips).Max());
+        var pendingHidden = new List<Band>();
+        var resetPageNumber = false;
         var page = NewPage(bands.FirstOrDefault()?.Row ?? -1, [], bands.FirstOrDefault()?.Section.Kind != "ReportHeader");
         for (var bandIndex = 0; bandIndex < bands.Count; bandIndex++)
         {
-            var band = ForPage(bands[bandIndex], pages.Count, expectedPages);
-            if (band.Suppressed) continue;
+            var band = PageBand(bandIndex);
+            if (band.Suppressed) { HiddenEvent(band); continue; }
             if (band.Section.SuppressIfBlank && band.Items.All(item => item.Element.Kind is not ("Line" or "Box" or "Picture") &&
                 string.IsNullOrWhiteSpace(System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(item.Html, "<[^>]+>", ""))))) continue;
             var height = Height(band);
@@ -283,61 +338,163 @@ public sealed partial class ReportLayoutSession
                     keepHeight += Height(bands[next]);
                     if (bands[next].Section.Kind != "GroupHeader") break;
                 }
+                if (area?.KeepGroupTogether == true)
+                {
+                    var wholeGroup = height;
+                    var groupNumber = ReportDesignerEditing.GetGroupNumber(_layout.Document, _layout.Document.Sections.First(s => s.Id == band.Section.Id));
+                    for (var next = bandIndex + 1; next < bands.Count; next++)
+                    {
+                        wholeGroup += Height(bands[next]);
+                        if (bands[next].Section.Kind == "GroupFooter" && ReportDesignerEditing.GetGroupNumber(_layout.Document, _layout.Document.Sections.First(s => s.Id == bands[next].Section.Id)) == groupNumber) break;
+                    }
+                    var freshRoom = page.Bottom - headers.Sum(s => Height(_furniture[(s.Id, band.Row)])) - band.Repeats.Sum(Height);
+                    if (wholeGroup <= freshRoom) keepHeight = wholeGroup;
+                }
                 if (keepHeight > page.Bottom - page.Cursor) page = NewPage(band.Row, band.Repeats);
             }
             if (band.Section.UnderlayFollowingSections)
             {
-                page.Placements.Add(new(band, page.Cursor, 0, height)); page.HasBody = true; continue;
+                page.Placements.Add(new(band, page.Cursor, 0, height)); page.HasBody = true;
+                resetPageNumber |= band.Section.ResetPageNumberAfter || area?.ResetPageNumberAfter == true;
+                continue;
             }
             if (height > page.Bottom - page.Cursor && page.HasBody && band.Section.KeepTogether) page = NewPage(band.Row, band.Repeats, withHeaders);
-            band = ForPage(bands[bandIndex], pages.Count, expectedPages);
-            if (band.Suppressed) continue;
+            band = PageBand(bandIndex);
+            if (band.Suppressed) { HiddenEvent(band); continue; }
             height = Height(band);
             var offset = 0;
             do
             {
                 if (page.Bottom <= page.Cursor) page = NewPage(band.Row, band.Repeats, withHeaders);
+                if (page.HasBody && band.InlineSections?.Any(s => s.Start == offset && s.End > s.Start
+                    && ((s.Format ?? s.Source.Section).NewPageBefore || s.Source.Owner!._layout.Areas.GetValueOrDefault(s.Source.Section.Id)?.NewPageBefore == true)) == true)
+                {
+                    page = NewPage(band.Row, band.Repeats, withHeaders);
+                    if (offset == 0) { band = PageBand(bandIndex); height = Height(band); }
+                    AddInlineHeaders(page, band, offset);
+                }
                 var available = page.Bottom - page.Cursor;
                 if (available <= 0) throw new InvalidDataException("Page headers and footers leave no room for report content.");
                 var slice = Math.Min(height - offset, available);
-                var forced = band.ForcedBreaks?.Where(point => point > offset && point < offset + slice).DefaultIfEmpty(0).Min() ?? 0;
+                var forced = band.ForcedBreaks?.Where(point => point > offset && point <= offset + slice).DefaultIfEmpty(0).Min() ?? 0;
+                foreach (var ending in band.InlineSections?.Where(s => s.End > offset && s.End <= offset + slice) ?? [])
+                {
+                    var owner = ending.Source.Owner!;
+                    if (owner.Conditions(owner._layout.SectionConditions, ending.Source.Section.Id, true)
+                        .Concat(owner.Conditions(owner._layout.AreaConditions, ending.Source.Section.Id, true))
+                        .Any(c => c.Key.Equals("EnableNewPageAfter", StringComparison.OrdinalIgnoreCase))
+                        && ForPage(ending.Source, page.Number, ExpectedCount(pages.Count - 1)).Section.NewPageAfter)
+                        forced = forced == 0 ? ending.End : Math.Min(forced, ending.End);
+                }
+                var kept = band.InlineSections?.Where(s => (s.Format ?? s.Source.Section).KeepTogether && s.Start >= offset
+                    && s.Start < offset + slice && s.End > offset + slice).OrderBy(s => s.Start).FirstOrDefault();
+                if (kept is not null && (forced == 0 || forced >= kept.End))
+                {
+                    // Honor the child's section boundary, not just the outer subreport object's KeepTogether.
+                    var freshRoom = page.Bottom - headers.Sum(s => Height(_furniture[(s.Id, band.Row)])) - band.Repeats.Sum(Height)
+                        - (band.InlineHeaders?.Where(h => h.Start < kept.Start && h.End > kept.Start).Sum(h => Height(h.Header)) ?? 0);
+                    if (kept.End - kept.Start <= freshRoom)
+                    {
+                        if (kept.Start > offset && SafeBreaks(band).Contains(kept.Start)) slice = kept.Start - offset;
+                        else if (kept.Start == offset && page.HasBody)
+                        { page = NewPage(band.Row, band.Repeats, withHeaders); AddInlineHeaders(page, band, offset); continue; }
+                    }
+                }
+                if (forced > offset + slice) forced = 0;
                 if (forced > 0) slice = forced - offset;
                 else if (slice < height - offset && band.Breaks is { Count: > 0 })
                 {
-                    var boundary = band.Breaks.Where(point => point > offset && point <= offset + slice).DefaultIfEmpty(0).Max();
+                    var boundary = SafeAt(band, offset + slice) ? offset + slice
+                        : SafeBreaks(band).Where(point => point > offset && point <= offset + slice).DefaultIfEmpty(0).Max();
                     if (boundary > 0) slice = boundary - offset;
                     else if (page.HasBody && band.Breaks.FirstOrDefault(point => point > offset) - offset <= page.Bottom)
                     { page = NewPage(band.Row, band.Repeats, withHeaders); AddInlineHeaders(page, band, offset); continue; }
                 }
-                if ((offset > 0 || slice < height) && (band.Breaks is not { Count: > 0 } || slice < height - offset && !band.Breaks.Contains(offset + slice)))
+                if ((offset > 0 || slice < height) && !SafeAt(band, offset + slice))
                     _diagnostics.Add($"{band.Section.Name}: a band spans pages; overflowing objects are clipped at the page boundary.");
+                foreach (var inline in band.InlineSections?.Where(s => s.Start < offset + slice && s.End > offset + slice) ?? [])
+                {
+                    var owner = inline.Source.Owner!;
+                    if (owner.Conditions(owner._layout.SectionConditions, inline.Source.Section.Id, true)
+                        .Concat(owner.Conditions(owner._layout.AreaConditions, inline.Source.Section.Id, true))
+                        .Any(c => c.Key.ToLowerInvariant() is not ("enablesuppress" or "enablehidefordrilldown" or "enablekeeptogether" or "enablenewpagebefore" or "enablenewpageafter")))
+                        throw new NotSupportedException($"{inline.Source.Section.Name}: a page-conditioned inline section spanning physical pages requires fragment-level section reflow.");
+                }
                 var top = band.Section.PrintAtBottomOfPage && slice == height ? page.Bottom - slice : page.Cursor;
-                page.Placements.Add(new(ForPage(bands[bandIndex], pages.Count, expectedPages), top, offset, slice));
+                page.Placements.Add(new(band, top, offset, slice));
                 page.Cursor = top + slice;
+                if (forced > 0 && forced == offset + slice) page.Cursor = page.Bottom;
                 page.HasBody = true;
                 offset += slice;
-                if (offset < height) { page = NewPage(band.Row, band.Repeats, withHeaders); AddInlineHeaders(page, band, offset); }
+                if (offset < height)
+                {
+                    var resetBeforeContinuation = resetPageNumber;
+                    page = NewPage(band.Row, band.Repeats, withHeaders);
+                    var continued = PageBand(bandIndex);
+                    continued = ApplyInlineCuts(continued, band.InlineCuts, ItemHeight);
+                    band = ContinueText(band, continued, offset, ItemHeight);
+                    band = SuppressInlineContinuations(band, offset, page.Number, ExpectedCount(pages.Count - 1), ItemHeight);
+                    band = band with { Breaks = SafeBreaks(band) };
+                    height = Height(band);
+                    if (band.Suppressed || offset >= height)
+                    {
+                        pages.RemoveAt(pages.Count - 1); page = pages[^1]; resetPageNumber = resetBeforeContinuation;
+                        break;
+                    }
+                    AddInlineHeaders(page, band, offset);
+                }
             } while (offset < height);
             if (band.Section.NewPageAfter || area?.NewPageAfter == true) page.Cursor = page.Bottom;
+            resetPageNumber |= band.Section.ResetPageNumberAfter || area?.ResetPageNumberAfter == true;
         }
 
-        if (pages.Count != expectedPages && _state.HasPageConditions)
+        foreach (var hidden in pendingHidden) page.Placements.Add(new(hidden, page.Cursor, 0, 0));
+        pendingHidden.Clear();
+        var counts = new int[pages.Count];
+        for (var start = 0; start < pages.Count;)
+        {
+            var end = start + 1;
+            while (end < pages.Count && pages[end].Number != 1) end++;
+            for (var index = start; index < end; index++) counts[index] = end - start;
+            start = end;
+        }
+        var nextInlineContexts = new Dictionary<Band, (int Page, int Count)>();
+        var lastOffsets = LastFragmentOffsets(pages);
+        for (var index = 0; index < pages.Count; index++)
+        foreach (var placement in pages[index].Placements)
+        foreach (var inline in placement.Band.InlineSections ?? [])
+            if (inline.Start >= placement.Offset && (inline.Start < placement.Offset + placement.Height
+                || inline.Start == inline.End && inline.Start == placement.Offset + placement.Height && placement.Offset == lastOffsets[FragmentKey(placement.Band)]))
+                nextInlineContexts.TryAdd(inline.Source, (pages[index].Number, counts[index]));
+        var inlineChanged = nextInlineContexts.Any(pair => inlineContexts is null || !inlineContexts.TryGetValue(pair.Key, out var context) || context != pair.Value);
+        var nextFooterRows = pages.Select(p => p.Placements.LastOrDefault(p => p.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1).ToArray();
+        var footerChanged = footers.Count > 0 && (footerRows is null || !nextFooterRows.SequenceEqual(footerRows));
+        if (footerChanged || _state.HasPageConditions && (inlineChanged || pages.Count != expectedPages || expectedCounts is null || !counts.SequenceEqual(expectedCounts)))
         {
             if (attempt >= 7) throw new InvalidDataException("Page-dependent formatting did not converge within eight pagination passes.");
-            return Paginate(measuredHeights, pages.Count, attempt + 1);
+            return Paginate(measuredHeights, pages.Count, attempt + 1, counts, nextInlineContexts, nextFooterRows, scheduleAttempt);
+        }
+        for (var index = 0; index < pages.Count; index++)
+        {
+            var current = pages[index];
+            var lastRow = current.Placements.LastOrDefault(placement => placement.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1;
+            var footerTop = current.Bottom;
+            foreach (var section in footers)
+            {
+                var footer = ForPage(_furniture[(section.Id, lastRow)], current.Number, counts[index], physicalPage: index + 1);
+                var height = Height(footer);
+                current.Placements.Add(new(footer, footerTop, 0, height)); footerTop += height;
+            }
+        }
+        if (ReplayPhysicalPages(pages, counts))
+        {
+            if (scheduleAttempt >= 15) throw new InvalidDataException("Mutable page formula layout did not converge within sixteen replay passes.");
+            return Paginate(measuredHeights, pages.Count, 0, counts, nextInlineContexts, nextFooterRows, scheduleAttempt + 1);
         }
         var output = new List<string>();
         for (var index = 0; index < pages.Count; index++)
         {
             var current = pages[index];
-            var lastRow = current.Placements.LastOrDefault(placement => placement.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1;
-            var footerTop = size.ContentHeightTwips - footerReserve;
-            foreach (var section in footers)
-            {
-                var footer = ForPage(_furniture[(section.Id, lastRow)], index + 1, pages.Count);
-                var height = Height(footer);
-                current.Placements.Add(new(footer, footerTop, 0, height)); footerTop += height;
-            }
             var html = new StringBuilder();
             html.Append("<article class=\"fx-report-positioned-page\" aria-label=\"").Append(ReportObjectRenderer.Encode(_layout.Document.Title)).Append("\" data-page=\"").Append(index + 1).Append("\" style=\"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:")
                 .Append(Px(size.ContentWidthTwips + size.MarginLeftTwips + size.MarginRightTwips)).Append("px;height:")
@@ -354,8 +511,20 @@ public sealed partial class ReportLayoutSession
                     element.LeftTwips = item.Element.LeftTwips; element.TopTwips = item.Element.TopTwips - placement.Offset;
                     element.HeightTwips = ItemHeight(item);
                     if (element.TopTwips >= placement.Height || element.TopTwips + element.HeightTwips <= 0) continue;
+                    if (element.Kind == "Box")
+                    {
+                        var end = element.TopTwips + element.HeightTwips;
+                        if (!element.Visual.CloseAtPageBreak)
+                        {
+                            if (element.TopTwips < 0) element.Visual.TopLine = "NoLine";
+                            if (end > placement.Height) element.Visual.BottomLine = "NoLine";
+                        }
+                        // Each fragment owns its borders; clipping the original box loses page-edge closure.
+                        element.TopTwips = Math.Max(0, element.TopTwips);
+                        element.HeightTwips = Math.Min(placement.Height, end) - element.TopTwips;
+                    }
                     html.Append("<div data-object=\"").Append(ReportObjectRenderer.Encode(element.Name)).Append("\" style=\"").Append(ReportObjectRenderer.Style(element)).Append("\">")
-                        .Append(ResolvePageValues(item.Html.Replace(_pageToken, (index + 1).ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, pages.Count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), index + 1, pages.Count, placement.Band.RepeatedHeader)).Append("</div>");
+                        .Append(ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader)).Append("</div>");
                 }
                 html.Append("</section>");
             }
@@ -363,25 +532,40 @@ public sealed partial class ReportLayoutSession
         }
         return new(output, _diagnostics.Order(StringComparer.Ordinal).ToList());
 
+        int ExpectedCount(int index) => expectedCounts is not null && index < expectedCounts.Count ? expectedCounts[index] : expectedPages;
+        void HiddenEvent(Band hidden)
+        {
+            if (!HasVisibilityEvent(hidden.Section.Id)) return;
+            if (page.Cursor >= page.Bottom) pendingHidden.Add(hidden);
+            else page.Placements.Add(new(hidden, page.Cursor, 0, 0));
+        }
+        Band PageBand(int index) => ForPage(Expand(ForPage(_bands[index], page.Number, ExpectedCount(pages.Count - 1)), 0, page.Number), page.Number, ExpectedCount(pages.Count - 1));
         Page NewPage(int row, List<Band> repeats, bool withHeaders = true)
         {
             if (pages.Count >= 10000) throw new InvalidDataException("Report exceeds the 10,000-page layout limit.");
-            var next = new Page { Bottom = size.ContentHeightTwips - footerReserve };
+            var number = resetPageNumber || pages.Count == 0 ? 1 : pages[^1].Number + 1;
+            var footerRow = footerRows is not null && pages.Count < footerRows.Count ? footerRows[pages.Count] : row;
+            var reserve = footers.Sum(section => Height(ForPage(_furniture[(section.Id, footerRow)], number, ExpectedCount(pages.Count), physicalPage: pages.Count + 1)));
+            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve };
+            resetPageNumber = false;
             if (withHeaders) AddHeaders(next, row);
             foreach (var repeat in repeats)
             {
-                var header = ForPage(repeat, pages.Count + 1, expectedPages, true);
+                var header = ForPage(repeat, next.Number, ExpectedCount(pages.Count), true, pages.Count + 1);
                 var height = Height(header);
                 next.Placements.Add(new(header, next.Cursor, 0, height)); next.Cursor += height;
             }
             if (next.Cursor >= next.Bottom) throw new InvalidDataException("Page and repeating group headers plus footers leave no space for content.");
+            foreach (var hidden in pendingHidden) next.Placements.Add(new(hidden, next.Cursor, 0, 0));
+            pendingHidden.Clear();
             pages.Add(next); return next;
         }
         void AddHeaders(Page target, int row)
         {
             foreach (var section in headers)
             {
-                var band = ForPage(_furniture[(section.Id, row)], pages.Count + (pages.Contains(target) ? 0 : 1), expectedPages); var height = Height(band);
+                var physical = pages.Contains(target) ? pages.Count : pages.Count + 1;
+                var band = ForPage(_furniture[(section.Id, row)], target.Number, ExpectedCount(physical - 1), physicalPage: physical); var height = Height(band);
                 target.Placements.Add(new(band, target.Cursor, 0, height)); target.Cursor += height;
             }
             target.HasHeaders = true;
@@ -390,19 +574,21 @@ public sealed partial class ReportLayoutSession
         {
             foreach (var repeat in band.InlineHeaders?.Where(h => h.Start < offset && h.End > offset) ?? [])
             {
-                var header = ForPage(repeat.Header, pages.Count, expectedPages, true);
+                var header = ForPage(repeat.Header, target.Number, ExpectedCount(pages.Count - 1), true, pages.Count);
                 var height = Height(header);
                 if (target.Cursor + height >= target.Bottom) throw new InvalidDataException("Repeating inline subreport headers leave no space for content.");
                 target.Placements.Add(new(header, target.Cursor, 0, height)); target.Cursor += height;
             }
         }
-        Band Expand(Band source, int measurementOffset)
+        Band Expand(Band source, int measurementOffset, int? objectPage = null)
         {
+            source = ApplyPrintedItems(source, 0, false);
             if (source.Suppressed) return source;
             var items = new List<Item>();
             var breaks = new List<int>();
             var forcedBreaks = new List<int>();
             var inlineHeaders = new List<InlineHeader>();
+            var inlineSections = new List<InlineSection>();
             var growth = new List<(int Bottom, int Amount)>();
             foreach (var item in source.Items.OrderBy(i => i.Element.TopTwips))
             {
@@ -410,30 +596,42 @@ public sealed partial class ReportLayoutSession
                 if (item.Child is not { } child)
                 {
                     var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name); element.Id = item.Element.Id; element.TopTwips = top; element.LeftTwips = item.Element.LeftTwips;
-                    items.Add(item with { Element = element, Measurement = item.Measurement < 0 ? -1 : item.Measurement + measurementOffset }); continue;
+                    var positioned = item with { Element = element, Measurement = item.Measurement < 0 ? item.Measurement : item.Measurement + measurementOffset };
+                    items.Add(positioned);
+                    if (source.Section.RelativePositions)
+                        growth.Add((item.Element.TopTwips + item.Element.HeightTwips, top - item.Element.TopTwips + Math.Max(0, ItemHeight(positioned) - item.Element.HeightTwips)));
+                    continue;
                 }
                 var cursor = top;
                 var active = new Dictionary<Band, (int Start, Band Header)>();
                 foreach (var original in child._bands)
                 {
-                    var nested = Expand(original, measurementOffset + item.ChildMeasurementOffset);
-                    if (nested.Suppressed) continue;
+                    var context = inlineContexts?.GetValueOrDefault(original) ?? (Page: 1, Count: ExpectedCount(0));
+                    if (context.Page == 0) context = (1, ExpectedCount(0));
+                    var nested = Expand(ForPage(original, context.Page, context.Count, objectPage: objectPage), measurementOffset + item.ChildMeasurementOffset, objectPage);
+                    if (nested.Suppressed) { inlineSections.Add(new(cursor, cursor, original, nested.Section)); continue; }
                     foreach (var previous in active.Keys.Where(k => !original.Repeats.Contains(k)).ToArray())
                     { var header = active[previous]; inlineHeaders.Add(new(header.Start, cursor, header.Header)); active.Remove(previous); }
                     foreach (var repeat in original.Repeats.Where(r => !active.ContainsKey(r)))
                     {
-                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset);
+                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset, objectPage);
                         active[repeat] = (cursor, header with { Items = header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() });
                     }
-                    if (nested.Section.NewPageBefore && cursor > top) forcedBreaks.Add(cursor);
+                    var nestedArea = child._layout.Areas.GetValueOrDefault(original.Section.Id);
+                    if ((nested.Section.NewPageBefore || nestedArea?.NewPageBefore == true) && cursor > 0) forcedBreaks.Add(cursor);
                     breaks.Add(cursor);
                     items.AddRange(nested.Items.Select(i => Shift(i with { Html = i.Html.Replace(child._pageToken, _pageToken, StringComparison.Ordinal).Replace(child._countToken, _countToken, StringComparison.Ordinal) }, item.Element.LeftTwips, cursor, item.Element.WidthTwips)));
                     breaks.AddRange(nested.Breaks?.Select(b => cursor + b) ?? []);
                     forcedBreaks.AddRange(nested.ForcedBreaks?.Select(b => cursor + b) ?? []);
                     inlineHeaders.AddRange(nested.InlineHeaders?.Select(h => new InlineHeader(cursor + h.Start, cursor + h.End,
                         h.Header with { Items = h.Header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() })) ?? []);
+                    inlineSections.AddRange(nested.InlineSections?.Select(s => s with { Start = cursor + s.Start, End = cursor + s.End }) ?? []);
+                    inlineSections.Add(new(cursor, cursor + Height(nested), original, nested.Section));
                     cursor += Height(nested);
-                    if (nested.Section.NewPageAfter) forcedBreaks.Add(cursor);
+                    var conditionalAfter = child.Conditions(child._layout.SectionConditions, original.Section.Id, true)
+                        .Concat(child.Conditions(child._layout.AreaConditions, original.Section.Id, true))
+                        .Any(c => c.Key.Equals("EnableNewPageAfter", StringComparison.OrdinalIgnoreCase));
+                    if (!conditionalAfter && (nested.Section.NewPageAfter || nestedArea?.NewPageAfter == true)) forcedBreaks.Add(cursor);
                     breaks.Add(cursor);
                 }
                 foreach (var header in active.Values) inlineHeaders.Add(new(header.Start, cursor, header.Header));
@@ -444,12 +642,12 @@ public sealed partial class ReportLayoutSession
                 Id = source.Section.Id, Name = source.Section.Name, Kind = source.Section.Kind, HeightTwips = source.Section.HeightTwips + growth.Select(g => g.Amount).DefaultIfEmpty(0).Max(),
                 BackgroundColor = source.Section.BackgroundColor, KeepTogether = source.Section.KeepTogether, NewPageBefore = source.Section.NewPageBefore,
                 NewPageAfter = source.Section.NewPageAfter, PrintAtBottomOfPage = source.Section.PrintAtBottomOfPage,
+                ResetPageNumberAfter = source.Section.ResetPageNumberAfter, RelativePositions = source.Section.RelativePositions,
                 SuppressIfBlank = source.Section.SuppressIfBlank, UnderlayFollowingSections = source.Section.UnderlayFollowingSections
             };
-            var expanded = source with { Section = section, Items = items, Breaks = breaks.Distinct().Order().ToList(), ForcedBreaks = forcedBreaks.Distinct().Order().ToList(), InlineHeaders = inlineHeaders };
+            var expanded = source with { Section = section, Items = items, Breaks = breaks.Distinct().Order().ToList(), ForcedBreaks = forcedBreaks.Distinct().Order().ToList(), InlineHeaders = inlineHeaders, InlineSections = inlineSections };
             // Only break between child bands when no neighboring object crosses that boundary.
-            expanded.Breaks.RemoveAll(point => items.Any(i => i.Element.TopTwips < point && i.Element.TopTwips + ItemHeight(i) > point && i.Element.Kind is not ("Line" or "Box")));
-            return expanded;
+            return expanded with { Breaks = SafeBreaks(expanded) };
         }
         static Item Shift(Item item, int left, int top, int width)
         {
@@ -463,6 +661,8 @@ public sealed partial class ReportLayoutSession
         int Height(Band band) => band.Suppressed ? 0 : Math.Max(band.Section.HeightTwips, band.Items.Select(item => item.Element.TopTwips + Math.Max(15, ItemHeight(item))).DefaultIfEmpty(0).Max());
         int ItemHeight(Item item)
         {
+            var metric = TextMetrics(item);
+            if (metric is not null && item.Element.CanGrow) return Math.Max(item.Element.HeightTwips, metric.Height);
             if (!item.Element.CanGrow || item.Measurement == -1) return item.Element.HeightTwips;
             if (item.Measurement >= 0 && measuredHeights is not null && measuredHeights.Count == Measurements.Count && measuredHeights[item.Measurement] is >= 0 and <= 10000000)
                 return Math.Max(item.Element.HeightTwips, measuredHeights[item.Measurement]);
@@ -471,6 +671,26 @@ public sealed partial class ReportLayoutSession
             var capacity = Math.Max(1, (int)(item.Element.WidthTwips / Math.Max(1, font * 10)));
             return Math.Max(item.Element.HeightTwips, (int)Math.Ceiling(text.Split('\n').Sum(line => Math.Max(1, Math.Ceiling(line.Length / (double)capacity))) * (double)font * 23));
         }
+        List<int> SafeBreaks(Band band)
+        {
+            var candidates = new List<int>(band.Breaks ?? []);
+            foreach (var item in band.Items)
+            {
+                var top = item.Element.TopTwips;
+                candidates.Add(top); candidates.Add(top + ItemHeight(item));
+                if (TextMetrics(item) is { } metric)
+                    foreach (var line in metric.Lines.Where(l => l.Bottom <= ItemHeight(item)))
+                    { candidates.Add(top + line.Top); candidates.Add(top + line.Bottom); }
+            }
+            return candidates.Distinct().Where(point => point > 0 && SafeAt(band, point)).Order().ToList();
+        }
+        bool SafeAt(Band band, int point) => band.Items.All(item =>
+            {
+                var relative = point - item.Element.TopTwips;
+                if (relative <= 0 || relative >= ItemHeight(item) || item.Element.Kind is "Line" or "Box") return true;
+                if (!item.Element.CanGrow && ItemHeight(item) <= size.ContentHeightTwips) return false;
+                return TextMetrics(item) is { } metric && metric.Lines.All(line => relative <= line.Top || relative >= line.Bottom);
+            });
         static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
     }
 }

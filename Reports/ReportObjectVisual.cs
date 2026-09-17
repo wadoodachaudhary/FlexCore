@@ -22,6 +22,7 @@ public sealed class ReportTextRun
 public sealed class ReportObjectVisual
 {
     public string ImageDataUrl { get; set; } = "";
+    public ReportVectorImage? VectorImage { get; set; }
     public string ImageFit { get; set; } = "contain";
     public List<ReportTextRun> Runs { get; set; } = [];
     public string BorderColor { get; set; } = "#000000";
@@ -29,10 +30,12 @@ public sealed class ReportObjectVisual
     public string BottomLine { get; set; } = "NoLine";
     public string LeftLine { get; set; } = "NoLine";
     public string RightLine { get; set; } = "NoLine";
+    public bool CloseAtPageBreak { get; set; } = true;
     public ReportObjectVisual Clone() => new()
     {
-        ImageDataUrl = ImageDataUrl, ImageFit = ImageFit, Runs = Runs.Select(run => run.Clone()).ToList(),
-        BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine
+        ImageDataUrl = ImageDataUrl, VectorImage = VectorImage?.Clone(), ImageFit = ImageFit, Runs = Runs.Select(run => run.Clone()).ToList(),
+        BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine,
+        CloseAtPageBreak = CloseAtPageBreak
     };
 
     public static string EmbedImage(ReadOnlySpan<byte> bytes)
@@ -75,11 +78,13 @@ public sealed class ReportObjectVisual
         var result = new ReportObjectVisual
         {
             ImageDataUrl = visual?.Element("Image")?.Value ?? "",
+            VectorImage = ReportVectorImage.Read(visual?.Element("Vector")),
             ImageFit = (string?)visual?.Attribute("ImageFit") ?? "contain",
             TopLine = (string?)border?.Attribute("TopLineStyle") ?? "NoLine",
             BottomLine = (string?)border?.Attribute("BottomLineStyle") ?? "NoLine",
             LeftLine = (string?)border?.Attribute("LeftLineStyle") ?? "NoLine",
             RightLine = (string?)border?.Attribute("RightLineStyle") ?? "NoLine",
+            CloseAtPageBreak = (bool?)element.Element("ObjectFormat")?.Attribute("EnableCloseAtPageBreak") ?? true,
             BorderColor = color is null ? "#000000" : $"#{Channel("R"):x2}{Channel("G"):x2}{Channel("B"):x2}"
         };
         foreach (var run in visual?.Elements("Run") ?? []) result.Runs.Add(new ReportTextRun
@@ -96,9 +101,10 @@ public sealed class ReportObjectVisual
     internal static void Write(ReportObjectVisual visual, XElement element)
     {
         element.Element("FlexKitVisual")?.Remove();
-        if (visual.Runs.Count > 0 || visual.ImageDataUrl.Length > 0)
+        if (visual.Runs.Count > 0 || visual.ImageDataUrl.Length > 0 || visual.VectorImage is not null)
             element.Add(new XElement("FlexKitVisual", new XAttribute("ImageFit", visual.ImageFit),
                 visual.ImageDataUrl.Length > 0 ? new XElement("Image", visual.ImageDataUrl) : null,
+                visual.VectorImage?.ToXml(),
                 visual.Runs.Select(run => new XElement("Run", new XAttribute("Binding", run.Binding),
                     new XAttribute("Font", run.FontFamily), new XAttribute("Size", run.FontSize),
                     new XAttribute("Bold", run.Bold), new XAttribute("Italic", run.Italic),
@@ -169,9 +175,12 @@ public static class ReportObjectRenderer
     public static string Content(ReportDesignerElement item, Func<string, string>? resolve = null, bool design = false)
     {
         resolve ??= reference => reference;
-        if (item.Kind == "Picture") return ReportObjectVisual.IsEmbeddedImage(item.Visual.ImageDataUrl)
-            ? $"<img alt=\"{Encode(item.Name)}\" draggable=\"false\" src=\"{item.Visual.ImageDataUrl}\" style=\"display:block;width:100%;height:100%;object-fit:{(item.Visual.ImageFit is "cover" or "fill" ? item.Visual.ImageFit : "contain")}\">"
-            : $"<span data-fx-missing-image=\"true\">{Encode("[Missing image: " + item.Name + "]")}</span>";
+        if (item.Kind == "Picture")
+        {
+            var image = ReportObjectVisual.IsEmbeddedImage(item.Visual.ImageDataUrl) ? item.Visual.ImageDataUrl : item.Visual.VectorImage?.ToDataUrl();
+            return image is not null ? $"<img alt=\"{Encode(item.Name)}\" draggable=\"false\" src=\"{image}\" style=\"display:block;width:100%;height:100%;object-fit:{(item.Visual.ImageFit is "cover" or "fill" ? item.Visual.ImageFit : "contain")}\">"
+                : $"<span data-fx-missing-image=\"true\">{Encode("[Missing image: " + item.Name + "]")}</span>";
+        }
         if (item.Kind == "Line") return $"<span style=\"display:block;position:absolute;transform-origin:0 0;width:{Number(Math.Sqrt((double)item.WidthTwips * item.WidthTwips + (double)item.HeightTwips * item.HeightTwips) / 15)}px;transform:rotate({Number(Math.Atan2(item.HeightTwips, item.WidthTwips))}rad);border-top:{Border(item.Visual.TopLine == "NoLine" ? "Single" : item.Visual.TopLine, item.Visual.BorderColor)}\"></span>";
         if (item.Kind == "Box") return "";
         if (item.Kind == "Subreport") return Encode("[Subreport: " + item.SubreportName + "]");

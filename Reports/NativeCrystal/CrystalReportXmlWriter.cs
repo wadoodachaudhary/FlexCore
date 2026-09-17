@@ -30,6 +30,7 @@ internal static class CrystalReportXmlWriter
         }
 
         writer.WriteEndElement();
+        WriteConversionDiagnostics(writer, report);
         WriteDatabase(writer, report.Database);
         WriteDataDefinition(writer, report.DataDefinition);
         writer.WriteStartElement("CustomFunctions");
@@ -43,6 +44,7 @@ internal static class CrystalReportXmlWriter
     {
         writer.WriteStartElement("Report");
         Attr(writer, "Name", report.Name);
+        WriteConversionDiagnostics(writer, report);
         WriteDatabase(writer, report.Database);
         WriteDataDefinition(writer, report.DataDefinition, report.Name);
         writer.WriteStartElement("CustomFunctions");
@@ -475,6 +477,15 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "ResetConditionType", RunningTotalConditionName(runningTotal.ResetConditionType));
         Attr(writer, "SummarizedField", runningTotal.SummarizedField);
         Attr(writer, "ValueType", CrystalValueTypeMapper.XmlValueType(runningTotal.ValueType));
+        if (runningTotal.EvaluationConditionType != 0 || runningTotal.ResetConditionType != 0)
+        {
+            writer.WriteStartElement("FlexKitRunningTotalConditions");
+            Attr(writer, "EvaluationField", runningTotal.EvaluationConditionField);
+            Attr(writer, "EvaluationGroup", runningTotal.EvaluationConditionGroup);
+            Attr(writer, "ResetField", runningTotal.ResetConditionField);
+            Attr(writer, "ResetGroup", runningTotal.ResetConditionGroup);
+            writer.WriteEndElement();
+        }
         writer.WriteEndElement();
     }
 
@@ -593,6 +604,24 @@ internal static class CrystalReportXmlWriter
         };
     }
 
+    private static void WriteConversionDiagnostics(XmlWriter writer, CrystalReportModel report)
+    {
+        if (report.ConversionDiagnostics.Count == 0) return;
+        writer.WriteStartElement("ConversionDiagnostics");
+        foreach (var diagnostic in report.ConversionDiagnostics)
+        {
+            writer.WriteStartElement("Diagnostic");
+            Attr(writer, "Code", diagnostic.Code);
+            Attr(writer, "ReportName", diagnostic.ReportName);
+            Attr(writer, "SectionName", diagnostic.SectionName);
+            Attr(writer, "ObjectName", diagnostic.ObjectName);
+            Attr(writer, "Kind", diagnostic.Kind);
+            writer.WriteString(diagnostic.Message);
+            writer.WriteEndElement();
+        }
+        writer.WriteEndElement();
+    }
+
     private static void WriteReportObject(XmlWriter writer, CrystalReportObjectModel reportObject)
     {
         writer.WriteStartElement(reportObject.ElementName);
@@ -602,6 +631,21 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "Left", reportObject.Left);
         Attr(writer, "Width", reportObject.Width);
         Attr(writer, "Height", reportObject.Height);
+
+        if (reportObject.UnsupportedSource is { } source)
+        {
+            writer.WriteStartElement("NativeCrystalSource");
+            Attr(writer, "Stream", source.Stream);
+            Attr(writer, "Offset", source.Offset);
+            Attr(writer, "RecordType", source.RecordType);
+            Attr(writer, "Schema", source.Schema);
+            Attr(writer, "Length", source.ArchiveBytes.Length);
+            Attr(writer, "Complete", LowerBool(source.Complete));
+            Attr(writer, "Encoding", "base64");
+            Attr(writer, "MetadataDiagnostic", string.Join(" ", source.MetadataDiagnostics));
+            writer.WriteBase64(source.ArchiveBytes, 0, source.ArchiveBytes.Length);
+            writer.WriteEndElement();
+        }
 
         if (reportObject.ElementName == "FieldHeadingObject")
         {
@@ -663,6 +707,7 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "ImageFit", "fill");
             if (reportObject.PictureDiagnostic.Length > 0) Attr(writer, "Diagnostic", reportObject.PictureDiagnostic);
             if (reportObject.ImageDataUrl.Length > 0) writer.WriteElementString("Image", reportObject.ImageDataUrl);
+            reportObject.VectorImage?.ToXml().WriteTo(writer);
             writer.WriteEndElement();
         }
 

@@ -4,7 +4,7 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
 
-<div class="fx-rd-canvas" @ref="_surface" tabindex="0" @onpointermove="PointerMoveHandler" @onpointerup="EndAsync" @onpointercancel="CancelAsync" @onlostpointercapture="CancelAsync" @onkeydown="KeyAsync">
+<div class="fx-rd-canvas" @ref="_surface" tabindex="0" @onfocusin="InitializeKeyboardAsync" @onpointermove="PointerMoveHandler" @onpointerup="EndAsync" @onpointercancel="CancelAsync" @onlostpointercapture="CancelAsync" @onkeydown="KeyAsync">
     <div class="fx-rd-canvas-tools" @onkeydown:stopPropagation="true">
         <DropDownListControl TValue="int" TItem="int" DataSource="@(new[] { 50, 75, 100, 125, 150, 200 })" Value="_zoom" ValueChanged="SetZoom" Width="80px" />
         <span>%</span><CheckBoxControl Checked="_snap" CheckedChanged="value => _snap = value" Label="Snap" />
@@ -76,7 +76,7 @@
                     }
                     <div class="fx-rd-band-body @(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "") @(reportSection.IsSuppressed ? "suppressed" : "")"
                          style="@GetSectionBodyStyle(reportSection)"
-                         @onclick="() => SelectSectionAsync(reportSection)">
+                         @onpointerdown="e => BeginMarqueeAsync(e, reportSection)" @onpointerdown:preventDefault="true">
                         <div class="fx-rd-band-stage" style="@($"width:{ReportObjectRenderer.Number(Document.Page.ContentWidthTwips / 15d)}px;transform:scale({ReportObjectRenderer.Number(Scale)})")">
                         @foreach (var element in reportSection.Elements)
                         {
@@ -89,14 +89,32 @@
                                     @onpointerdown:preventDefault="true"
                                     @onpointerdown="@(e => BeginAsync(e, reportSection, element, "move"))"
                                     @onclick:stopPropagation="true"
-                                    @onclick="() => SelectElementAsync(reportSection, element)">
+                                    @onclick="e => e.Detail == 0 ? SelectElementAsync(reportSection, element) : Task.CompletedTask">
                                 <div class="fx-rd-object-content" style="@ReportObjectRenderer.Style(element, false)">@((MarkupString)ReportObjectRenderer.Content(element, design: true))</div>
-                                @if (ReferenceEquals(element, SelectedElement) && !element.LockSizePosition && !reportSection.ReadOnly)
+                                @if (IsSelected(element) && _selection.Count == 1 && !element.LockSizePosition && !reportSection.ReadOnly)
                                 {
                                     @foreach (var handle in Handles)
                                     {
                                         <span class="@($"fx-rd-handle fx-rd-handle-{handle}")" role="button" aria-label="@($"Resize {element.Name} {handle}")" title="@($"Resize {handle}")"
                                               @onpointerdown:stopPropagation="true" @onpointerdown:preventDefault="true" @onpointerdown="e => BeginAsync(e, reportSection, element, handle)"></span>
+                                    }
+                                }
+                            </div>
+                        }
+                        @if (_marquee is { } marquee && marquee.Section == reportSection)
+                        {
+                            <div class="fx-rd-marquee" style="@MarqueeStyle(marquee)"></div>
+                        }
+                        @if (SelectedItems.Count > 1 && SelectedItems.All(e => e.SectionId == reportSection.Id))
+                        {
+                            var bounds = SelectionBounds(SelectedItems);
+                            <div class="fx-rd-selection-bounds" style="@BoundsStyle(bounds)">
+                                @if (!reportSection.ReadOnly && SelectedItems.All(e => !e.LockSizePosition))
+                                {
+                                    @foreach (var handle in Handles)
+                                    {
+                                        <span class="@($"fx-rd-handle fx-rd-handle-{handle}")" role="button" aria-label="@($"Resize selection {handle}")" title="@($"Resize selection {handle}")"
+                                              @onpointerdown:stopPropagation="true" @onpointerdown:preventDefault="true" @onpointerdown="e => BeginAsync(e, reportSection, SelectedItems[0], handle)"></span>
                                     }
                                 }
                             </div>
@@ -113,10 +131,12 @@
     [Parameter] public ReportDesignerDocument Document { get; set; } = ReportDesignerDocument.CreateBlank();
     [Parameter] public ReportDesignerSection? SelectedSection { get; set; }
     [Parameter] public ReportDesignerElement? SelectedElement { get; set; }
+    [Parameter] public IReadOnlyCollection<string>? SelectedElementIds { get; set; }
     [Parameter] public EventCallback<ReportDesignerSection> SectionSelected { get; set; }
     [Parameter] public EventCallback<ReportDesignerElementSelection> ElementSelected { get; set; }
     [Parameter] public EventCallback<ReportDesignerSection> SectionResized { get; set; }
     [Parameter] public EventCallback<ReportDesignerSection> ElementChanged { get; set; }
+    [Parameter] public EventCallback<string> CommandRequested { get; set; }
     [Parameter] public bool AllowSectionRowResizing { get; set; } = true;
     [Parameter] public int SectionRailWidthPx { get; set; } = 190;
 
@@ -126,69 +146,154 @@
     private double Scale => _zoom / 100d;
     private ElementReference _surface;
     private IJSObjectReference? _module;
+    private bool _keyboardBound;
     private Gesture? _gesture;
-    private sealed record Gesture(long Pointer, double X, double Y, string Handle, ReportDesignerSection Section, ReportDesignerElement Element, ReportObjectBounds Original, int SectionHeight);
+    private readonly HashSet<string> _selection = new(StringComparer.Ordinal);
+    private List<ReportDesignerElement> SelectedItems => ReportDesignerEditing.Selection(Document, _selection);
+    private sealed record DragItem(ReportDesignerElement Element, ReportObjectBounds Original);
+    private sealed record Gesture(long Pointer, double X, double Y, string Handle, ReportDesignerSection Section, List<DragItem> Items,
+        ReportObjectBounds Bounds, Dictionary<ReportDesignerSection, int> Heights);
+    private Marquee? _marquee;
+    private sealed record Marquee(long Pointer, double X, double Y, int Left, int Top, ReportDesignerSection Section, HashSet<string> Initial)
+    { public int Right { get; set; } = Left; public int Bottom { get; set; } = Top; }
     private int ContentWidthPx => Math.Max(1, (int)Math.Ceiling(Document.Page.ContentWidthTwips / 15d * Scale));
 
     private Task SetZoom(int value) { CancelGesture(); _zoom = value; return Task.CompletedTask; }
+    protected override void OnParametersSet()
+    {
+        _selection.Clear();
+        _selection.UnionWith(SelectedElementIds ?? (SelectedElement is null ? [] : new[] { SelectedElement.Id }));
+    }
+    private bool IsSelected(ReportDesignerElement element) => _selection.Contains(element.Id);
 
     private async Task BeginAsync(PointerEventArgs e, ReportDesignerSection section, ReportDesignerElement element, string handle)
     {
-        if (e.Button != 0 || _gesture is not null) return;
-        await SelectElementAsync(section, element);
-        if (element.LockSizePosition || section.ReadOnly) return;
-        _gesture = new(e.PointerId, e.ClientX, e.ClientY, handle, section, element, ReportObjectBounds.Of(element), section.HeightTwips);
+        if (e.Button != 0 || _gesture is not null || _marquee is not null) return;
+        if (e.CtrlKey || e.MetaKey)
+        { if (!_selection.Add(element.Id)) _selection.Remove(element.Id); }
+        else if (e.ShiftKey && SelectedElement is { } anchor)
+        {
+            var all = Document.Elements.ToList(); var a = all.IndexOf(anchor); var b = all.IndexOf(element);
+            _selection.UnionWith(all.Skip(Math.Min(a, b)).Take(Math.Abs(b - a) + 1).Select(item => item.Id));
+        }
+        else if (!_selection.Contains(element.Id)) { _selection.Clear(); _selection.Add(element.Id); }
+        var selected = SelectedItems;
+        await PublishSelectionAsync(section, element, selected);
+        if (e.CtrlKey || e.MetaKey || e.ShiftKey || selected.Count == 0) return;
+        try { ReportDesignerEditing.RequireEditable(Document, selected); } catch (InvalidOperationException) { return; }
+        _gesture = new(e.PointerId, e.ClientX, e.ClientY, handle, section, selected.Select(item => new DragItem(item, ReportObjectBounds.Of(item))).ToList(),
+            SelectionBounds(selected), Document.Sections.Where(s => selected.Any(item => item.SectionId == s.Id)).ToDictionary(s => s, s => s.HeightTwips));
+        await CaptureAsync(e.PointerId);
+    }
+
+    private async Task CaptureAsync(long pointer)
+    {
         try
         {
             await _surface.FocusAsync(preventScroll: true);
             _module ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js");
-            if (_module is not null) await _module.InvokeVoidAsync("capturePointer", _surface, e.PointerId);
+            if (_module is not null) await _module.InvokeVoidAsync("capturePointer", _surface, pointer);
         }
         catch (Exception ex) when (ex is JSException or InvalidOperationException) { /* In-surface gestures still work without pointer capture. */ }
+    }
+    private async Task InitializeKeyboardAsync()
+    {
+        if (_keyboardBound) return;
+        try
+        {
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js");
+            if (_module is not null) { await _module.InvokeVoidAsync("bindCanvasKeyboard", _surface); _keyboardBound = true; }
+        }
+        catch (Exception ex) when (ex is JSException or InvalidOperationException) { }
     }
 
     // Attached only while a drag is active, so idle pointer moves never reach the server.
     // A default EventCallback (no receiver, no delegate) makes Blazor drop the attribute;
     // a null Func would still bind the component as receiver and keep the handler.
     private EventCallback<PointerEventArgs> PointerMoveHandler =>
-        _gesture is null ? default : EventCallback.Factory.Create<PointerEventArgs>(this, MoveAsync);
+        _gesture is null && _marquee is null ? default : EventCallback.Factory.Create<PointerEventArgs>(this, MoveAsync);
 
     private Task MoveAsync(PointerEventArgs e)
     {
+        if (_marquee is { } marquee && e.PointerId == marquee.Pointer)
+        {
+            marquee.Right = Math.Clamp(marquee.Left + (int)Math.Round((e.ClientX - marquee.X) * 15 / Scale), 0, Document.Page.ContentWidthTwips);
+            marquee.Bottom = Math.Clamp(marquee.Top + (int)Math.Round((e.ClientY - marquee.Y) * 15 / Scale), 0, marquee.Section.HeightTwips);
+            return Task.CompletedTask;
+        }
         if (_gesture is not { } drag || e.PointerId != drag.Pointer) return Task.CompletedTask;
         if (!Document.Sections.Contains(drag.Section)) { CancelGesture(); return Task.CompletedTask; }
         if (Math.Abs(e.ClientX - drag.X) < 2 && Math.Abs(e.ClientY - drag.Y) < 2)
-        { drag.Original.Apply(drag.Element); drag.Section.HeightTwips = drag.SectionHeight; return Task.CompletedTask; }
-        drag.Original.Transform((e.ClientX - drag.X) * 15 / Scale, (e.ClientY - drag.Y) * 15 / Scale,
-            drag.Handle, Document.Page.ContentWidthTwips, _snap && !e.AltKey ? 60 : 0).Apply(drag.Element);
-        drag.Section.HeightTwips = Math.Max(drag.SectionHeight, drag.Element.TopTwips + drag.Element.HeightTwips);
+        { Restore(drag); return Task.CompletedTask; }
+        var bounds = drag.Bounds.Transform((e.ClientX - drag.X) * 15 / Scale, (e.ClientY - drag.Y) * 15 / Scale,
+            drag.Handle, Document.Page.ContentWidthTwips, _snap && !e.AltKey ? 60 : 0);
+        foreach (var item in drag.Items)
+        {
+            var sx = drag.Handle == "move" ? 1 : bounds.Width / (double)Math.Max(1, drag.Bounds.Width);
+            var sy = drag.Handle == "move" ? 1 : bounds.Height / (double)Math.Max(1, drag.Bounds.Height);
+            new ReportObjectBounds(bounds.Left + (int)Math.Round((item.Original.Left - drag.Bounds.Left) * sx),
+                bounds.Top + (int)Math.Round((item.Original.Top - drag.Bounds.Top) * sy),
+                Math.Max(0, (int)Math.Round(item.Original.Width * sx)), Math.Max(0, (int)Math.Round(item.Original.Height * sy))).Apply(item.Element);
+        }
+        foreach (var (section, height) in drag.Heights) section.HeightTwips = Math.Max(height, section.Elements.Select(item => item.TopTwips + item.HeightTwips).DefaultIfEmpty(0).Max());
         return Task.CompletedTask;
     }
 
     private async Task EndAsync(PointerEventArgs e)
     {
+        if (_marquee is { } marquee && e.PointerId == marquee.Pointer)
+        {
+            await MoveAsync(e); _marquee = null;
+            _selection.Clear(); _selection.UnionWith(marquee.Initial);
+            var left = Math.Min(marquee.Left, marquee.Right); var top = Math.Min(marquee.Top, marquee.Bottom);
+            var right = Math.Max(marquee.Left, marquee.Right); var bottom = Math.Max(marquee.Top, marquee.Bottom);
+            _selection.UnionWith(marquee.Section.Elements.Where(item => item.LeftTwips >= left && item.TopTwips >= top && item.LeftTwips + item.WidthTwips <= right && item.TopTwips + item.HeightTwips <= bottom).Select(item => item.Id));
+            await PublishSelectionAsync(marquee.Section, SelectedItems.LastOrDefault(), SelectedItems); return;
+        }
         if (_gesture is not { } drag || e.PointerId != drag.Pointer) return;
         await MoveAsync(e);
         _gesture = null;
-        if (ReportObjectBounds.Of(drag.Element) != drag.Original) await ElementChanged.InvokeAsync(drag.Section);
+        if (drag.Items.Any(item => ReportObjectBounds.Of(item.Element) != item.Original)) await ElementChanged.InvokeAsync(drag.Section);
     }
 
-    private Task CancelAsync(PointerEventArgs e) { if (_gesture?.Pointer == e.PointerId) CancelGesture(); return Task.CompletedTask; }
+    private Task CancelAsync(PointerEventArgs e) { if (_gesture?.Pointer == e.PointerId || _marquee?.Pointer == e.PointerId) CancelGesture(); return Task.CompletedTask; }
     private void CancelGesture()
     {
+        _marquee = null;
         if (_gesture is not { } drag) return;
-        drag.Original.Apply(drag.Element); drag.Section.HeightTwips = drag.SectionHeight; _gesture = null;
+        Restore(drag); _gesture = null;
+    }
+    private static void Restore(Gesture drag)
+    {
+        foreach (var item in drag.Items) item.Original.Apply(item.Element);
+        foreach (var (section, height) in drag.Heights) section.HeightTwips = height;
     }
 
     private async Task KeyAsync(KeyboardEventArgs e)
     {
         if (e.Key == "Escape") { CancelGesture(); return; }
+        if (_gesture is not null || _marquee is not null) return;
+        if ((e.CtrlKey || e.MetaKey) && e.Key.Equals("a", StringComparison.OrdinalIgnoreCase))
+        { _selection.UnionWith(Document.Elements.Select(item => item.Id)); await PublishSelectionAsync(SelectedSection ?? Document.Sections[0], SelectedItems.LastOrDefault(), SelectedItems); return; }
+        var command = e.Key switch
+        { "Delete" => "delete", _ when e.CtrlKey || e.MetaKey => e.Key.ToLowerInvariant() switch { "c" => "copy", "x" => "cut", "v" => "paste", "d" => "duplicate", "z" => e.ShiftKey ? "redo" : "undo", "y" => "redo", _ => "" }, _ => "" };
+        if (command.Length > 0) { await CommandRequested.InvokeAsync(command); return; }
         if (_gesture is not null || SelectedElement is not { LockSizePosition: false } item || SelectedSection is not { ReadOnly: false } section) return;
         var step = e.ShiftKey ? 240 : 15;
         var (x, y) = e.Key switch { "ArrowLeft" => (-step, 0), "ArrowRight" => (step, 0), "ArrowUp" => (0, -step), "ArrowDown" => (0, step), _ => (0, 0) };
         if (x == 0 && y == 0) return;
+        if (SelectedItems.Count > 1)
+        {
+            try
+            {
+                var changed = e.CtrlKey || e.MetaKey ? ReportDesignerEditing.ResizeSelection(Document, _selection, x, y) : ReportDesignerEditing.MoveSelection(Document, _selection, x, y);
+                if (changed) await ElementChanged.InvokeAsync(section);
+            }
+            catch (InvalidOperationException) { }
+            return;
+        }
         var before = ReportObjectBounds.Of(item);
-        before.Transform(x, y, e.CtrlKey ? "se" : "move", Document.Page.ContentWidthTwips, 0).Apply(item);
+        before.Transform(x, y, e.CtrlKey || e.MetaKey ? "se" : "move", Document.Page.ContentWidthTwips, 0).Apply(item);
         section.HeightTwips = Math.Max(section.HeightTwips, item.TopTwips + item.HeightTwips);
         if (before != ReportObjectBounds.Of(item)) await ElementChanged.InvokeAsync(section);
     }
@@ -196,7 +301,7 @@
     public async ValueTask DisposeAsync()
     {
         CancelGesture();
-        if (_module is not null) try { await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
+        if (_module is not null) try { if (_keyboardBound) await _module.InvokeVoidAsync("unbindCanvasKeyboard", _surface); await _module.DisposeAsync(); } catch (JSDisconnectedException) { }
     }
 
     private double? GetSectionRowHeight(ReportDesignerSection reportSection, int rowIndex)
@@ -223,15 +328,22 @@
 
     private async Task SelectElementAsync(ReportDesignerSection reportSection, ReportDesignerElement element)
     {
-        if (ElementSelected.HasDelegate)
-        {
-            await ElementSelected.InvokeAsync(new ReportDesignerElementSelection
-            {
-                Section = reportSection,
-                Element = element
-            });
-        }
+        _selection.Clear(); _selection.Add(element.Id);
+        await PublishSelectionAsync(reportSection, element, [element]);
     }
+    private Task PublishSelectionAsync(ReportDesignerSection section, ReportDesignerElement? element, IReadOnlyList<ReportDesignerElement> elements) =>
+        ElementSelected.InvokeAsync(new ReportDesignerElementSelection { Section = section, Element = element!, Elements = elements });
+    private async Task BeginMarqueeAsync(PointerEventArgs e, ReportDesignerSection section)
+    {
+        if (e.Button != 0 || _gesture is not null || _marquee is not null) return;
+        _marquee = new(e.PointerId, e.ClientX, e.ClientY, (int)Math.Round(e.OffsetX * 15 / Scale), (int)Math.Round(e.OffsetY * 15 / Scale), section,
+            e.CtrlKey || e.MetaKey || e.ShiftKey ? _selection.ToHashSet(StringComparer.Ordinal) : []);
+        await CaptureAsync(e.PointerId);
+    }
+    private static ReportObjectBounds SelectionBounds(IReadOnlyList<ReportDesignerElement> items) =>
+        new(items.Min(e => e.LeftTwips), items.Min(e => e.TopTwips), items.Max(e => e.LeftTwips + e.WidthTwips) - items.Min(e => e.LeftTwips), items.Max(e => e.TopTwips + e.HeightTwips) - items.Min(e => e.TopTwips));
+    private static string BoundsStyle(ReportObjectBounds bounds) => $"left:{ReportObjectRenderer.Number(bounds.Left / 15d)}px;top:{ReportObjectRenderer.Number(bounds.Top / 15d)}px;width:{ReportObjectRenderer.Number(bounds.Width / 15d)}px;height:{ReportObjectRenderer.Number(bounds.Height / 15d)}px";
+    private static string MarqueeStyle(Marquee marquee) => BoundsStyle(new(Math.Min(marquee.Left, marquee.Right), Math.Min(marquee.Top, marquee.Bottom), Math.Abs(marquee.Right - marquee.Left), Math.Abs(marquee.Bottom - marquee.Top)));
 
     private string GetSectionBodyStyle(ReportDesignerSection reportSection)
     {
@@ -253,7 +365,7 @@
 
     private string GetElementClass(ReportDesignerElement element)
     {
-        var selected = ReferenceEquals(element, SelectedElement) ? "selected" : "";
+        var selected = IsSelected(element) ? "selected" : "";
         var kind = element.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase)
             ? "subreport"
             : element.Kind.Equals("Field", StringComparison.OrdinalIgnoreCase) ? "field" : "text";
@@ -304,7 +416,7 @@
                 : $"{label} #{groupNumber}:\n{condition}";
         }
 
-        return label;
+        return label + ReportDesignerEditing.SectionSuffix(Document, section);
     }
 
     private int GetSectionGroupNumber(ReportDesignerSection section)

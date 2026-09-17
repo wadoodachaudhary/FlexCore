@@ -91,10 +91,10 @@
                     <span class="fx-rpt-toolbar-label">Export ▾</span>
                 </ToolbarButtonControl>
                 <div class="fx-rpt-export-items">
-                    <button @onclick='() => ChromeOnExport("PDF")'>📄 PDF</button>
-                    <button @onclick='() => ChromeOnExport("Excel")'>📊 Excel</button>
-                    <button @onclick='() => ChromeOnExport("Word")'>📝 Word</button>
-                    <button @onclick='() => ChromeOnExport("CSV")'>📋 CSV</button>
+                    <button @onclick='() => ChromeOnExport("Print")'><i class="bi bi-printer"></i> Print / Save as PDF</button>
+                    <button disabled="@(ActiveTab?.Pages.Count is not > 0)" @onclick='() => ChromeOnExport("Html")'><i class="bi bi-filetype-html"></i> HTML report</button>
+                    <button disabled="@(ActiveTab?.CreateDataExport is null)" @onclick='() => ChromeOnExport("Xlsx")'><i class="bi bi-file-earmark-spreadsheet"></i> Excel data (.xlsx)</button>
+                    <button disabled="@(ActiveTab?.CreateDataExport is null)" @onclick='() => ChromeOnExport("Csv")'><i class="bi bi-filetype-csv"></i> CSV data</button>
                 </div>
             </div>
 
@@ -145,9 +145,9 @@
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="ToggleGroupTreePanel">
+            <ToolbarButtonControl Vertical="true" OnClick="ToggleGroupTreePanel" Disabled="@(!CanShowGroupTree)">
                 <span style="font-size:calc(18px * var(--fx-zoom, 1));">🌳</span>
-                <span class="fx-rpt-toolbar-label">@(ShowGroupTree ? "Hide Tree" : "Show Tree")</span>
+                <span class="fx-rpt-toolbar-label">@(ShowGroupTree && CanShowGroupTree ? "Hide Tree" : "Show Tree")</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
@@ -155,13 +155,13 @@
             <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="What happens when you click a group node">
                 <span class="fx-rpt-tree-mode-label">Tree:</span>
                 <label class="fx-rpt-tree-mode-radio">
-                    <input type="radio" name="fx-rpt-tree-mode" value="Group"
+                    <input type="radio" name="fx-rpt-tree-mode" value="Group" disabled="@(!CanShowGroupTree)"
                            checked="@(TreeMode == TreeNavigationMode.Group)"
                            @onchange="() => SetTreeMode(TreeNavigationMode.Group)" />
                     <span title="Click a node to scroll to that group on the current tab.">Group</span>
                 </label>
                 <label class="fx-rpt-tree-mode-radio">
-                    <input type="radio" name="fx-rpt-tree-mode" value="DrillDown"
+                    <input type="radio" name="fx-rpt-tree-mode" value="DrillDown" disabled="@(!CanShowGroupTree)"
                            checked="@(TreeMode == TreeNavigationMode.DrillDown)"
                            @onchange="() => SetTreeMode(TreeNavigationMode.DrillDown)" />
                     <span title="Click a node to open a new drill-down tab filtered to that group.">Drill Down</span>
@@ -171,7 +171,7 @@
 
         @* ── Content Area — group tree + bare renderer ────────────────── *@
         <div class="fx-rpt-content-area">
-            @if (ShowGroupTree)
+            @if (ShowGroupTree && CanShowGroupTree)
             {
                 <div class="fx-rpt-group-tree">
                     <strong style="font-size: calc(13px * var(--fx-zoom, 1)); display: block; margin-bottom: 8px;">Report Groups</strong>
@@ -232,6 +232,12 @@ else
     /// previews, etc.) — only the page area is shown.
     /// </summary>
     [Parameter] public bool ShowChrome { get; set; } = true;
+
+    /// <summary>Use Crystal object geometry in the unified load, parameter, and refresh workflow.</summary>
+    [Parameter] public bool UsePositionedLayout { get; set; }
+
+    /// <summary>Include optional parameters when opening the parameter dialog.</summary>
+    [Parameter] public bool PromptOptionalParameters { get; set; }
 
     /// <summary>
     /// Fires when the user clicks the toolbar's Close button. Hosts wire
@@ -318,6 +324,7 @@ else
 
     // Toolbar / panel toggles.
     private bool ShowGroupTree = true;
+    private bool CanShowGroupTree => !UsePositionedLayout || GroupTree.Count > 0;
     private bool ExportMenuOpen;
 
     // Tree-click mode — Group scrolls to / highlights the matching group
@@ -632,7 +639,7 @@ else
             Logger.LogInformation("Drill-down parameters: {Params}", paramStr);
             Logger.LogInformation("Drill-down SQL:\n{Sql}", drillDef.Sql);
 
-            var dt = db.Execute(drillDef.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            var dt = ExecuteReportData(drillDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             var visibleCols = drillDef.Columns.Where(c => !c.Hidden).ToList();
             var rowsPerPage = drillDef.RowsPerPage > 0
@@ -650,6 +657,7 @@ else
                 RuntimeDiagnostics = drillDef.RuntimeDiagnostics,
                 Path = fullPath.ToList(),
                 Pages = RenderHtmlPages(drillDef, dt, visibleCols),
+                CreateDataExport = ReportNativeExport.CaptureData(node.Label, dt, visibleCols),
                 Tree = BuildGroupTree(dt, drillDef, rowsPerPage),
                 CurrentPage = 1,
                 Orientation = drillDef.Orientation
@@ -767,7 +775,7 @@ else
             Logger.LogInformation("Subreport {Title} filters: {Filters}", title, filterStr);
             Logger.LogInformation("Subreport SQL:\n{Sql}", subDef.Sql);
 
-            var dt = db.Execute(subDef.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            var dt = ExecuteReportData(subDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             var visibleCols = subDef.Columns.Where(c => !c.Hidden).ToList();
             var rowsPerPage = subDef.RowsPerPage > 0
@@ -786,6 +794,7 @@ else
                 SourceXmlPath = sourceKey,
                 FieldFilters = filters.ToList(),
                 Pages = RenderHtmlPages(subDef, dt, visibleCols),
+                CreateDataExport = ReportNativeExport.CaptureData(tabTitle, dt, visibleCols),
                 Tree = BuildGroupTree(dt, subDef, rowsPerPage),
                 CurrentPage = 1,
                 Orientation = subDef.Orientation
@@ -940,7 +949,8 @@ else
         _designerPreview = snapshot;
         try
         {
-            await ShowXmlReport(snapshot.XmlPath, parameters, positioned: true);
+            if (UsePositionedLayout && parameters is null) await ShowReportAsync(snapshot.XmlPath);
+            else await ShowXmlReport(snapshot.XmlPath, parameters, positioned: true);
         }
         finally
         {
@@ -1071,7 +1081,7 @@ else
             Logger.LogInformation("Main report SQL:\n{Sql}", definition.Sql);
 
             // Execute SQL
-            var dt = db.Execute(definition.Sql, sqlParams.Count > 0 ? sqlParams : null);
+            var dt = ExecuteReportData(definition, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             Logger.LogInformation("Main report returned {Rows} rows", dt.Rows.Count);
 
@@ -1082,29 +1092,25 @@ else
                     var childParameters = new Dictionary<string, object>(values);
                     AutoInjectSessionParameters(childParameters, child.Sql);
                     foreach (var parameter in child.FixedParameters) childParameters[parameter.Key] = parameter.Value;
-                    var childRows = db.Execute(child.Sql, childParameters);
+                    var childRows = ExecuteReportData(child, childParameters);
                     GuardRowLimit(childRows);
                     return childRows;
                 });
-                int[]? heights = null;
-                if (session.Measurements.Count > 0)
+                ReportLayoutResult result;
+                try
                 {
-                    try
-                    {
-                        await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
-                        if (module is not null)
-                        {
-                            var measured = new List<int>();
-                            foreach (var batch in session.Measurements.Chunk(250))
-                                measured.AddRange(await module.InvokeAsync<int[]>("measureText", (object)batch));
-                            heights = measured.ToArray();
-                        }
-                    }
-                    catch (Exception error) when (error is JSException or InvalidOperationException)
-                    { Logger.LogWarning(error, "Browser report text measurement unavailable"); }
+                    await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
+                    if (module is null) throw new InvalidOperationException("Browser report measurement module is unavailable.");
+                    result = await session.PaginateAsync(async (batch, cancellationToken) =>
+                        await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch));
                 }
-                var result = session.Paginate(heights);
+                catch (Exception error) when (error is JSException or InvalidOperationException)
+                {
+                    Logger.LogWarning(error, "Browser report text measurement unavailable");
+                    result = session.Paginate();
+                }
                 Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
+                    CreateDataExport = session.CreateDataExport,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
                 _lastParameters = new Dictionary<string, object>(sqlParams);
                 OnRenderComplete?.Invoke();
@@ -1157,6 +1163,7 @@ else
                 Path = new(),  // empty path = no drill
                 RuntimeDiagnostics = definition.RuntimeDiagnostics,
                 Pages = RenderHtmlPages(definition, dt, visibleColumns),
+                CreateDataExport = ReportNativeExport.CaptureData(definition.Title, dt, visibleColumns),
                 Tree = BuildGroupTree(treeData, definition, rowsPerPage),
                 CurrentPage = 1,
                 Orientation = definition.Orientation
@@ -1227,6 +1234,7 @@ else
             {
                 Title = "Main Report",
                 Pages = RenderHtmlPages(definition, data, visibleColumns),
+                CreateDataExport = ReportNativeExport.CaptureData(title, data, visibleColumns),
                 Tree = new(),
                 CurrentPage = 1,
                 Orientation = orientation
@@ -1288,6 +1296,8 @@ else
     /// </summary>
     public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
     {
+        ErrorMessage = null;
+        ReportLoaded = false;
         try
         {
             IsLoading = true;
@@ -1339,7 +1349,9 @@ else
             var xmlPath = await ResolveOrConvertXmlPathAsync(file);
             if (xmlPath != null)
             {
-                var definition = _seedFieldFilters.Count > 0
+                if (UsePositionedLayout && _seedFieldFilters.Count > 0)
+                    throw new NotSupportedException("Direct field-filter seeds are not supported in positioned reports. Use report parameters.");
+                var definition = UsePositionedLayout ? XmlLoader.LoadPositioned(xmlPath) : _seedFieldFilters.Count > 0
                     ? XmlLoader.LoadWithFieldFilters(xmlPath, _seedFieldFilters)
                     : XmlLoader.Load(xmlPath);
                 var typedParams = _seedParameters
@@ -1363,9 +1375,8 @@ else
                 }
 
                 var missingRequired = definition.Parameters
-                    .Where(p => p.Required
-                        && !typedParams.ContainsKey(p.Name)
-                        && !string.Equals(p.Name, "DivisionID", StringComparison.OrdinalIgnoreCase))
+                    .Where(p => (p.Required || PromptOptionalParameters)
+                        && !typedParams.ContainsKey(p.Name))
                     .ToList();
 
                 if (missingRequired.Count > 0 && _paramDialog != null)
@@ -1431,8 +1442,8 @@ else
 
                 SetXmlSource(xmlPath);
                 await ShowSqlReport(definition, typedParams);
-                ReportLoaded = true;
-                StatusMessage = $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)";
+                ReportLoaded = string.IsNullOrEmpty(ErrorMessage);
+                StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)" : ErrorMessage!;
             }
             else
             {
@@ -1544,11 +1555,16 @@ else
         await InvokeAsync(StateHasChanged);
         try
         {
-            // Browser print-to-PDF works in all browsers for the HTML
-            // report. For Crystal-Engine export of richer formats hosts
-            // can extend IReportExporter.
-            await JSRuntime.InvokeVoidAsync("window.print");
-            StatusMessage = $"Export ({format}) sent to browser.";
+            if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
+            if (ActiveTab is null) throw new InvalidOperationException("No report is loaded.");
+            if (!Enum.TryParse<ReportNativeExportFormat>(format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
+            var result = ReportNativeExport.Export(ActiveTab, nativeFormat, string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath));
+            await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/browser-capabilities.js");
+            if (module is null) throw new InvalidOperationException("Browser download is unavailable.");
+            using var stream = new MemoryStream(result.Bytes, writable: false);
+            using var reference = new DotNetStreamReference(stream);
+            await module.InvokeVoidAsync("invoke", "download", null, new { name = result.FileName, type = result.ContentType, stream = reference }, null);
+            StatusMessage = $"Downloaded {result.FileName}.";
         }
         catch (Exception ex)
         {
@@ -2998,6 +3014,9 @@ else
     /// the UI from runaway result sets (a badly-filtered report could otherwise return
     /// millions of rows and lock up the browser). Configurable per-installation.
     /// </summary>
+    private System.Data.DataTable ExecuteReportData(ReportDefinition definition, IDictionary<string, object>? parameters) =>
+        db is IReportDefinitionDataExecutor structured ? structured.Execute(definition, parameters) : db.Execute(definition.Sql, parameters);
+
     private void GuardRowLimit(System.Data.DataTable dt)
     {
         var limit = Options.MaxRowsPerReport;
