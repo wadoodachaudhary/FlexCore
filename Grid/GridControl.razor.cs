@@ -1575,6 +1575,23 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _filterDataSourceCaptured;
     private ElementReference _filterConditionInputRef;
     private FilterPopupFocusTarget? _pendingFilterPopupFocusTarget;
+    private int _filterPopupDraftGeneration;                  // @key of every popup box; bump = re-seed from the drafts
+    private FilterPopupFocusTarget? _filterPopupAutoFocusTarget; // the re-mounted box that takes focus
+    private bool _filterPopupDragRegistered;                  // registerFilterPopupDrag once per popup
+    private bool _filterPopupApplyRejected;                   // the last popup apply was refused
+    private bool _filterPopupCommitApplyRejected;             // the apply of the commit just made was refused
+    private bool? _filterSelectAllPressIntent;                // what the press on (Select All) will do
+    // Bumped when a column's filter is cleared (per field) or every filter is
+    // reset or restored (all fields): an apply still waiting on the host's
+    // Filtering handler must not write its value over the clear.
+    private readonly Dictionary<string, int> _filterClearEpochs = new(StringComparer.OrdinalIgnoreCase);
+    private int _filterClearEpoch;
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<string?>> _filterPopupCommitCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<KeyboardEventArgs>> _filterPopupKeyDownCallbacks = new();
+    private int _filterPopupCallbackGeneration = -1;          // the generation the cached callbacks carry
+    private Action<ElementReference>? _captureFilterConditionInput;
+    private Action<ElementReference> CaptureFilterConditionInput =>
+        _captureFilterConditionInput ??= element => _filterConditionInputRef = element;
     private IEnumerable<TValue>? _lastSelectionDataSource;
     private DataSourceSelectionSignature _lastSelectionDataSourceSignature;
     private bool _selectionDataSourceCaptured;
@@ -1584,7 +1601,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private enum FilterPopupFocusTarget
     {
-        ConditionInput
+        ConditionInput,
+        SecondConditionInput,
+        ChecklistSearchInput,
+        NumericMinInput,
+        NumericMaxInput
     }
 
     // Type-ahead buffer (multi-select numeric input)
@@ -5418,9 +5439,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (EventsRef?.Filtering.HasDelegate == true)
         {
+            var clearEpoch = FilterClearEpoch(field);
             var args = new FilterEventArgs { Field = field, Value = value };
             await EventsRef.Filtering.InvokeAsync(args);
             if (args.Cancel) return false;
+            // Cleared (or reset / restored) while the host decided: the clear wins.
+            if (clearEpoch != FilterClearEpoch(field)) return false;
         }
 
         state.FilterValue = string.IsNullOrWhiteSpace(value) ? null : value;
@@ -5446,6 +5470,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
+    private (int All, int Field) FilterClearEpoch(string field) =>
+        (_filterClearEpoch, _filterClearEpochs.GetValueOrDefault(field));
+
     private async Task ToggleFilterPopup(string field, MouseEventArgs e)
     {
         if (_filterPopupField == field)
@@ -5469,6 +5496,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _filterChecklistSearchDraft = string.Empty;
         _filterChecklistDraftTouched = false;
         _filterChecklistCommitError = null;
+        _filterPopupDragRegistered = false;
     }
 
     private Task ToggleCheckboxFilter(string field, string value)
@@ -5485,6 +5513,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             pending.Dispose();
         }
 
+        _filterClearEpochs[field] = _filterClearEpochs.GetValueOrDefault(field) + 1;
         var state = GetColumnState(field);
         ResetColumnFilterState(state);
         _simpleColumnFilters.Remove(field);
@@ -5545,6 +5574,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _filterChecklistSearchDraft = string.Empty;
             _filterChecklistDraftTouched = false;
             _filterChecklistCommitError = null;
+            _filterPopupDraftGeneration++;
+            _filterPopupAutoFocusTarget = null;
+            _filterPopupApplyRejected = false;
+            _filterPopupCommitApplyRejected = false;
         }
     }
 
@@ -5567,6 +5600,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void ClearAllFilterState()
     {
+        _filterClearEpoch++;
         foreach (var state in _columnStates.Values)
             ResetColumnFilterState(state);
 
@@ -6787,7 +6821,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task EnsureFilterPopupDragRegisteredAsync()
     {
-        if (_filterPopupField == null) return;
+        if (_filterPopupField == null)
+        {
+            _filterPopupDragRegistered = false;
+            return;
+        }
+        if (_filterPopupDragRegistered) return;
+        // Claimed before the call: a render that lands while it is in flight
+        // (the open renders twice) must not register again.
+        _filterPopupDragRegistered = true;
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
@@ -6796,6 +6838,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         catch (Exception)
         {
             // Best-effort; the filter remains usable even if it cannot be dragged.
+            _filterPopupDragRegistered = false;
         }
     }
 

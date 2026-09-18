@@ -3019,7 +3019,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     top: 50%;
     transform: translateY(-50%);
 }
-.fx-filter-popup-input {
+.fx-filter-popup ::deep .fx-filter-popup-input {
     width: 100%;
     padding: 6px 10px;
     border: 1px solid #ced4da;
@@ -3042,7 +3042,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     border-top: 1px solid #eef2f7;
     color: #64748b;
 }
-.fx-filter-checklist-search .fx-filter-popup-input {
+.fx-filter-checklist-search ::deep .fx-filter-popup-input {
     min-width: 0;
     padding-block: 4px;
 }
@@ -3081,7 +3081,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     font-size: calc(11px * var(--fx-zoom, 1));
     font-weight: 600;
 }
-.fx-filter-number-input {
+.fx-filter-number-field ::deep .fx-filter-number-input {
     width: 100%;
     padding: 5px 8px;
     border: 1px solid #ced4da;
@@ -4227,8 +4227,8 @@ td.fx-drag-preview-cell {
 .fx-grid.fx-grid-dark .fx-grid-pivot-value-chip select,
 .fx-grid.fx-grid-dark .fx-grid-pivot-format-input,
 .fx-grid.fx-grid-dark .fx-filter-operator-select,
-.fx-grid.fx-grid-dark .fx-filter-popup-input,
-.fx-grid.fx-grid-dark .fx-filter-number-input,
+.fx-grid.fx-grid-dark ::deep .fx-filter-popup-input,
+.fx-grid.fx-grid-dark ::deep .fx-filter-number-input,
 .fx-grid.fx-grid-dark .fx-pager-size select {
     background: #0f172a;
     border-color: #475569;

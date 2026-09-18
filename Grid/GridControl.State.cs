@@ -129,6 +129,7 @@ public partial class GridControl<TValue>
             _expressionFilterRoot = parsedExpression;
             _expressionFilterError = null;
 
+            _filterClearEpoch++;
             _filterPopupField = null;
             _activeFilterPopupField = null;
             _simpleColumnFilters.Clear();

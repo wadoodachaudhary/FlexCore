@@ -1297,7 +1297,12 @@
         var isNumericFilter = IsNumericFilterColumn(col);
 
         <div class="fx-filter-popup-overlay" @onclick="CloseFilterPopup">
-            <div class="fx-filter-popup" style="@FilterPopupStyle" @onclick:stopPropagation="true">
+            @* The popup owns its keys: capture-phase key handlers of the grid and of a
+               host dialog skip it (data-fx-key-scope), and no keydown bubbles on to the
+               grid's or the page's key handlers. Escape anywhere in it closes it. *@
+            <div class="fx-filter-popup" style="@FilterPopupStyle" data-fx-key-scope=""
+                 @onclick:stopPropagation="true"
+                 @onkeydown="FilterPopupRootKeyDown" @onkeydown:stopPropagation="true">
                 <div class="fx-filter-popup-header">
                     <span>Filter: @filterHeader</span>
                     <button type="button"
@@ -1329,15 +1334,17 @@
                                                      Value="@_filterOperatorDraft"
                                                      ValueChanged="OnTextFilterOperatorValueChanged"
                                                      CssClass="fx-filter-operator-select" />
-                                <input type="number"
-                                       class="fx-filter-popup-input fx-filter-condition-input"
-                                       placeholder="First value..."
-                                       value="@_filterTextDraft"
-                                       @oninput="OnTextFilterInput"
-                                       @oninput:stopPropagation="true"
-                                       @onkeydown:stopPropagation="true"
-                                       @onkeyup:stopPropagation="true"
-                                       @onclick:stopPropagation="true" />
+                                <TextBoxControl @key="_filterPopupDraftGeneration"
+                                                InputType="number"
+                                                CssClass="fx-filter-popup-input fx-filter-condition-input"
+                                                Placeholder="First value..."
+                                                Value="@_filterTextDraft"
+                                                TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                KeepNativeTab="true"
+                                                AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ConditionInput)"
+                                                ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ConditionInput)"
+                                                OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ConditionInput)"
+                                                ElementReferenceCaptured="@CaptureFilterConditionInput" />
                             </div>
 
                             <div class="fx-filter-logical-operator d-flex align-items-center justify-content-center gap-3 my-1">
@@ -1365,15 +1372,16 @@
                                                      Value="@_secondFilterOperatorDraft"
                                                      ValueChanged="OnSecondTextFilterOperatorValueChanged"
                                                      CssClass="fx-filter-operator-select" />
-                                <input type="number"
-                                       class="fx-filter-popup-input fx-filter-condition-input"
-                                       placeholder="Second value..."
-                                       value="@_secondFilterTextDraft"
-                                       @oninput="OnSecondTextFilterInput"
-                                       @oninput:stopPropagation="true"
-                                       @onkeydown:stopPropagation="true"
-                                       @onkeyup:stopPropagation="true"
-                                       @onclick:stopPropagation="true" />
+                                <TextBoxControl @key="_filterPopupDraftGeneration"
+                                                InputType="number"
+                                                CssClass="fx-filter-popup-input fx-filter-condition-input"
+                                                Placeholder="Second value..."
+                                                Value="@_secondFilterTextDraft"
+                                                TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                KeepNativeTab="true"
+                                                AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.SecondConditionInput)"
+                                                ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.SecondConditionInput)"
+                                                OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)" />
                             </div>
                         }
 
@@ -1385,22 +1393,32 @@
                             <div class="fx-filter-number-inputs">
                                 <label class="fx-filter-number-field">
                                     <span>Min</span>
-                                    <input type="number"
-                                           class="fx-filter-number-input"
-                                           value="@GetNumericFilterMinText(_filterPopupField)"
-                                           @oninput="e => SetNumericFilterMinText(_filterPopupField, e.Value?.ToString())" />
+                                    <TextBoxControl @key="_filterPopupDraftGeneration"
+                                                    InputType="number"
+                                                    CssClass="fx-filter-number-input"
+                                                    Value="@GetNumericFilterMinText(_filterPopupField)"
+                                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                    KeepNativeTab="true"
+                                                    AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.NumericMinInput)"
+                                                    ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.NumericMinInput)"
+                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMinInput)" />
                                 </label>
                                 <label class="fx-filter-number-field">
                                     <span>Max</span>
-                                    <input type="number"
-                                           class="fx-filter-number-input"
-                                           value="@GetNumericFilterMaxText(_filterPopupField)"
-                                           @oninput="e => SetNumericFilterMaxText(_filterPopupField, e.Value?.ToString())" />
+                                    <TextBoxControl @key="_filterPopupDraftGeneration"
+                                                    InputType="number"
+                                                    CssClass="fx-filter-number-input"
+                                                    Value="@GetNumericFilterMaxText(_filterPopupField)"
+                                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                    KeepNativeTab="true"
+                                                    AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.NumericMaxInput)"
+                                                    ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.NumericMaxInput)"
+                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMaxInput)" />
                                 </label>
                             </div>
                             <button type="button"
                                     class="fx-filter-popup-btn"
-                                    @onclick="() => ApplyNumericBoundsFilter(_filterPopupField)">
+                                    @onclick="ApplyNumericBoundsFromPopupAsync">
                                 Apply Range
                             </button>
                         </div>
@@ -1464,16 +1482,16 @@
                                              Value="@_filterOperatorDraft"
                                              ValueChanged="OnTextFilterOperatorValueChanged"
                                              CssClass="fx-filter-operator-select" />
-                        <input type="text"
-                               @ref="_filterConditionInputRef"
-                               class="fx-filter-popup-input fx-filter-condition-input"
-                               placeholder="Filter value..."
-                               value="@_filterTextDraft"
-                               @oninput="OnTextFilterInput"
-                               @oninput:stopPropagation="true"
-                               @onkeydown:stopPropagation="true"
-                               @onkeyup:stopPropagation="true"
-                               @onclick:stopPropagation="true" />
+                        <TextBoxControl @key="_filterPopupDraftGeneration"
+                                        CssClass="fx-filter-popup-input fx-filter-condition-input"
+                                        Placeholder="Filter value..."
+                                        Value="@_filterTextDraft"
+                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                        KeepNativeTab="true"
+                                        AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ConditionInput)"
+                                        ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ConditionInput)"
+                                        OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ConditionInput)"
+                                        ElementReferenceCaptured="@CaptureFilterConditionInput" />
                     </div>
 
                     @if (EnableAdvancedFilterPopup)
@@ -1503,30 +1521,31 @@
                                                  Value="@_secondFilterOperatorDraft"
                                                  ValueChanged="OnSecondTextFilterOperatorValueChanged"
                                                  CssClass="fx-filter-operator-select" />
-                            <input type="text"
-                                   class="fx-filter-popup-input fx-filter-condition-input"
-                                   placeholder="Second filter value..."
-                                   value="@_secondFilterTextDraft"
-                                   @oninput="OnSecondTextFilterInput"
-                                   @oninput:stopPropagation="true"
-                                   @onkeydown:stopPropagation="true"
-                                   @onkeyup:stopPropagation="true"
-                                   @onclick:stopPropagation="true" />
+                            <TextBoxControl @key="_filterPopupDraftGeneration"
+                                            CssClass="fx-filter-popup-input fx-filter-condition-input"
+                                            Placeholder="Second filter value..."
+                                            Value="@_secondFilterTextDraft"
+                                            TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                            KeepNativeTab="true"
+                                            AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.SecondConditionInput)"
+                                            ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.SecondConditionInput)"
+                                            OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)" />
                         </div>
                     }
 
                     <div class="fx-filter-checklist-search">
                         <span aria-hidden="true">⌕</span>
-                        <input type="search"
-                               class="fx-filter-popup-input"
-                               aria-label="Search values for @filterHeader"
-                               placeholder="Search values..."
-                               value="@_filterChecklistSearchDraft"
-                               @oninput="SetFilterChecklistSearch"
-                               @oninput:stopPropagation="true"
-                               @onkeydown:stopPropagation="true"
-                               @onkeyup:stopPropagation="true"
-                               @onclick:stopPropagation="true" />
+                        <TextBoxControl @key="_filterPopupDraftGeneration"
+                                        InputType="search"
+                                        CssClass="fx-filter-popup-input"
+                                        Placeholder="Search values..."
+                                        aria-label="@($"Search values for {filterHeader}")"
+                                        Value="@_filterChecklistSearchDraft"
+                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                        KeepNativeTab="true"
+                                        AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ChecklistSearchInput)"
+                                        ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ChecklistSearchInput)"
+                                        OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ChecklistSearchInput)" />
                     </div>
 
                     <div class="fx-filter-popup-summary fx-filter-value-summary">
@@ -1539,7 +1558,8 @@
                                 role="checkbox"
                                 aria-checked="@GetFilterSelectionAriaValue(selectAllState)"
                                 aria-label="Select all visible values"
-                                @onclick="() => SetFilterFieldSelected(_filterPopupField, selectAllState != GridFilterSelectionState.All, values)">
+                                @onmousedown="FilterSelectAllPressed"
+                                @onclick="ToggleFilterSelectAllAsync">
                             <span aria-hidden="true">@(selectAllState == GridFilterSelectionState.All ? "✓" : selectAllState == GridFilterSelectionState.Some ? "−" : "")</span>
                         </button>
                         <span>(Select All)</span>
@@ -1557,7 +1577,7 @@
                         @foreach (var candidate in candidates)
                         {
                             var v = candidate.Value;
-                            <label class="fx-filter-checkbox-item">
+                            <label @key="v" class="fx-filter-checkbox-item">
                                 <input type="checkbox"
                                        checked="@IsFilterValueChecked(_filterPopupField, v)"
                                        @onchange="e => SetFilterValueChecked(_filterPopupField, v, e.Value is bool b && b)" />
