@@ -1444,10 +1444,11 @@
                 }
                 else
                 {
-                    var candidates = GetColumnFilterValueCandidates(_filterPopupField);
+                    var allCandidates = GetDistinctFilterValueCandidates(_filterPopupField);
+                    var candidates = FilterChecklistCandidatesBySearch(allCandidates);
                     var values = candidates.Select(v => v.Value).ToList();
-                    var totalValueCount = GetDistinctValues(_filterPopupField).Count;
-                    var selectedValueCount = GetSelectedFilterValueCount(_filterPopupField);
+                    var totalValueCount = allCandidates.Count;
+                    var selectedValueCount = CountSelectedFilterValues(_filterPopupField, allCandidates);
                     var selectAllState = GetFilterFieldSelectionState(_filterPopupField, values);
                     @if (EnableBlankRowFilter)
                     {

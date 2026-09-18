@@ -1952,13 +1952,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
                 if (state.UseCheckedFilter)
                 {
-                    var checkedVals = state.CheckedFilterValues;
+                    // Membership must use the active comparison; a set built under
+                    // another comparer (the model default is ordinal) is re-keyed
+                    // once per pass.
+                    var checkedVals = state.CheckedFilterValues.Comparer.Equals(FilterTextComparer)
+                        ? state.CheckedFilterValues
+                        : new HashSet<string>(state.CheckedFilterValues, FilterTextComparer);
                     data = data.Where(item =>
-                    {
-                        var val = GetFilterRawValue(item, colField)?.ToString() ?? "";
-                        return checkedVals.Any(checkedValue =>
-                            string.Equals(checkedValue, val, FilterTextComparison));
-                    });
+                        checkedVals.Contains(GetFilterRawValue(item, colField)?.ToString() ?? ""));
                 }
 
                 if (state.UseNumericRangeFilter || state.UseNumericBoundsFilter)

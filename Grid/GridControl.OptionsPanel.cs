@@ -864,12 +864,13 @@ public partial class GridControl<TValue>
     private bool IsNumericFilterColumn(GridColumn? col) =>
         col?.Type == ColumnType.Number;
 
-    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field)
-    {
-        return GetDistinctFilterValueCandidates(field)
-            .Where(MatchesChecklistSearch)
-            .ToList();
-    }
+    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field) =>
+        FilterChecklistCandidatesBySearch(GetDistinctFilterValueCandidates(field));
+
+    private IReadOnlyList<FilterValueCandidate> FilterChecklistCandidatesBySearch(IReadOnlyList<FilterValueCandidate> all) =>
+        string.IsNullOrWhiteSpace(_filterChecklistSearchDraft)
+            ? all
+            : all.Where(MatchesChecklistSearch).ToList();
 
     private bool MatchesChecklistSearch(FilterValueCandidate candidate)
     {
@@ -1160,17 +1161,19 @@ public partial class GridControl<TValue>
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
-    private int GetSelectedFilterValueCount(string field)
+    private int GetSelectedFilterValueCount(string field) =>
+        CountSelectedFilterValues(field, GetDistinctFilterValueCandidates(field));
+
+    private int CountSelectedFilterValues(string field, IReadOnlyList<FilterValueCandidate> all)
     {
-        var all = GetDistinctValues(field);
         if (IsCurrentFilterPopupField(field))
-            return all.Count(_filterCheckedDraft.Contains);
+            return all.Count(candidate => _filterCheckedDraft.Contains(candidate.Value));
 
         var state = GetColumnState(field);
         if (!state.UseCheckedFilter)
             return all.Count;
 
-        return all.Count(state.CheckedFilterValues.Contains);
+        return all.Count(candidate => state.CheckedFilterValues.Contains(candidate.Value));
     }
 
     private bool ProviderFilterValuesHaveMore(string field) =>
