@@ -683,8 +683,11 @@ function shouldTrapGridKeyboardNavigation(gridRoot, target) {
     const active = gridRoot.ownerDocument?.activeElement ?? null;
     // Composite controls such as the pager own their native Tab/arrow/Enter
     // behavior. They opt out before the broad "active inside the grid" test.
-    if (active instanceof Element && active.closest?.("[data-fx-key-scope]")) return false;
-    if (target instanceof Element && target.closest?.("[data-fx-key-scope]")) return false;
+    // The grid's own text boxes opt out of the grid's keys only
+    // (data-fx-grid-native-keys); a host dialog still handles their keys.
+    const optOut = "[data-fx-key-scope], [data-fx-grid-native-keys]";
+    if (active instanceof Element && active.closest?.(optOut)) return false;
+    if (target instanceof Element && target.closest?.(optOut)) return false;
     if (active === gridRoot) return true;
     if (active instanceof Element && gridRoot.contains(active)) return true;
     if (!target || !gridRoot.contains(target)) return false;
@@ -5507,7 +5510,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // An in-cell popup that owns its own arrows opts out of the fast path,
         // which is capture-phase and would otherwise drive the grid cursor
         // underneath it.
-        const inKeyScope = t instanceof Element && !!t.closest("[data-fx-key-scope]");
+        const inKeyScope = t instanceof Element && !!t.closest("[data-fx-key-scope], [data-fx-grid-native-keys]");
         // An OPEN batch editor/dropdown handles arrows SERVER-side while focus
         // stays on the grid host — the fast path must yield or it steals the
         // dropdown's arrow keys and navigates the grid underneath it.

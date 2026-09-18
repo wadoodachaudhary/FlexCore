@@ -25,8 +25,23 @@ public class FilterSettings
     public bool ShowFilterRowOperators { get; set; } = true;
 
     /// <summary>
-    /// Debounce, in milliseconds, for the SearchBox, typed filter-row inputs,
-    /// and an auto-applying filter menu. Set to zero for immediate application.
+    /// Debounce, in milliseconds, for search as you type (<see cref="SearchAsYouType"/>):
+    /// the search box, the filter-row boxes, the filter menu's boxes and the
+    /// side-panel searches apply this long after the last key (Enter, Tab or
+    /// leaving the box apply at once). It also delays filter-row values set through
+    /// <c>OnColumnFilterInput</c> and a filter-menu template's checklist search. With
+    /// <see cref="SearchAsYouType"/> off the grid's own boxes apply when the text is
+    /// committed, not after a delay. Set to zero for immediate application.
     /// </summary>
     public int ImmediateModeDelay { get; set; } = 300;
+
+    /// <summary>
+    /// When true (the default) the grid's filter and search boxes search as you
+    /// type: the text applies once typing pauses for <see cref="ImmediateModeDelay"/>,
+    /// or at once on Enter, Tab or leaving the box. When false they apply only when
+    /// the text is committed: Enter, Tab, leaving the box or, in the filter menu, the
+    /// box's search button. Either way the browser owns the typed text, so a slow
+    /// connection never loses or reorders characters.
+    /// </summary>
+    public bool SearchAsYouType { get; set; } = true;
 }

@@ -44,13 +44,13 @@
                     @{
                         var reportSection = (ReportDesignerSection)context;
                     }
-                    <button type="button"
-                            class="fx-rd-band-label @(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "") @(reportSection.IsSuppressed ? "suppressed" : "")"
-                            title="@reportSection.Name"
-                            style="@($"height:{ReportObjectRenderer.Number(Math.Max(22, reportSection.HeightTwips / 15d * Scale))}px")"
-                            @onclick="() => SelectSectionAsync(reportSection)">
+                    <ButtonControl BareStyle="true"
+                            CssClass="@($"fx-rd-band-label {(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "")} {(reportSection.IsSuppressed ? "suppressed" : "")}")"
+                            Title="@reportSection.Name"
+                            Style="@($"height:{ReportObjectRenderer.Number(Math.Max(22, reportSection.HeightTwips / 15d * Scale))}px")"
+                            OnClick="() => SelectSectionAsync(reportSection)">
                         @GetSectionRailLabel(reportSection)
-                    </button>
+                    </ButtonControl>
                 </Template>
             </GridColumn>
 
@@ -90,7 +90,16 @@
                                     @onpointerdown="@(e => BeginAsync(e, reportSection, element, "move"))"
                                     @onclick:stopPropagation="true"
                                     @onclick="e => e.Detail == 0 ? SelectElementAsync(reportSection, element) : Task.CompletedTask">
-                                <div class="fx-rd-object-content" style="@ReportObjectRenderer.Style(element, false)">@((MarkupString)ReportObjectRenderer.Content(element, design: true))</div>
+                                <div class="fx-rd-object-content" style="@ReportObjectRenderer.Style(element, false)">
+                                    @if (element.Analysis is { } analysis && element.Kind is "Chart" or "CrossTab")
+                                    {
+                                        <ReportAnalysisControl Element="element" Snapshot="@(new ReportAnalysisSnapshot(analysis, []))" />
+                                    }
+                                    else
+                                    {
+                                        @((MarkupString)ReportObjectRenderer.Content(element, design: true))
+                                    }
+                                </div>
                                 @if (IsSelected(element) && _selection.Count == 1 && !element.LockSizePosition && !reportSection.ReadOnly)
                                 {
                                     @foreach (var handle in Handles)

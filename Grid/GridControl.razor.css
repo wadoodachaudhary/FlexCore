@@ -621,7 +621,7 @@
     overflow: auto;
 }
 
-.fx-grid-side-search {
+.fx-grid-side-panel ::deep .fx-grid-side-search {
     width: 100%;
     height: 26px;
     padding: 3px 7px;
@@ -634,7 +634,7 @@
     box-sizing: border-box;
 }
 
-.fx-grid-side-search:focus {
+.fx-grid-side-panel ::deep .fx-grid-side-search:focus {
     outline: 1px solid #4a7ab5;
     border-color: #4a7ab5;
 }
@@ -929,6 +929,14 @@
 .fx-grid-filter-typed-wrap ::deep .fx-dropdown {
     font-size: calc(10px * var(--fx-zoom, 1));
 }
+/* The side-panel searches' key hosts add no box. */
+.fx-grid-side-search-host {
+    display: contents;
+}
+/* The filter-row box's key host adds no box: the input stays the grid item. */
+.fx-grid-filter-input-host {
+    display: contents;
+}
 .fx-grid-filter-typed-wrap ::deep .fx-grid-filter-input {
     box-sizing: border-box;
     width: 100%;
@@ -1073,7 +1081,7 @@
     color: #6c757d;
     pointer-events: none;
 }
-.fx-toolbar-search input {
+.fx-toolbar-search ::deep input {
     /* extra left padding leaves room for the magnifier icon */
     padding: 5px 10px 5px 26px;
     border: 1px solid #ced4da;
@@ -1254,7 +1262,7 @@
     min-width: 280px;
     max-width: min(620px, 62vw);
 }
-.fx-expression-filter-input {
+.fx-expression-filter-editor ::deep .fx-expression-filter-input {
     width: 360px;
     max-width: 42vw;
     height: 24px;
@@ -1266,7 +1274,7 @@
     background: #fff;
     color: #1f2937;
 }
-.fx-expression-filter-input:focus {
+.fx-expression-filter-editor ::deep .fx-expression-filter-input:focus {
     outline: 1px solid #4a7ab5;
     border-color: #4a7ab5;
 }
@@ -3019,7 +3027,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     top: 50%;
     transform: translateY(-50%);
 }
-.fx-filter-popup-input {
+.fx-filter-popup ::deep .fx-filter-popup-input {
     width: 100%;
     padding: 6px 10px;
     border: 1px solid #ced4da;
@@ -3042,7 +3050,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     border-top: 1px solid #eef2f7;
     color: #64748b;
 }
-.fx-filter-checklist-search .fx-filter-popup-input {
+.fx-filter-checklist-search ::deep .fx-filter-popup-input {
     min-width: 0;
     padding-block: 4px;
 }
@@ -3050,6 +3058,45 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     margin: 0;
     padding: 0 12px 8px;
     border-bottom: 1px solid #eef2f7;
+}
+/* Searching on commit: an icon-only search button beside each menu text box
+   (it does what Tab does) takes one more column. */
+.fx-filter-popup-commit .fx-filter-condition {
+    grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr) auto;
+}
+.fx-filter-popup-commit .fx-filter-checklist-search {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.fx-filter-search-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    background: #fff;
+    color: #64748b;
+    cursor: pointer;
+}
+.fx-filter-search-btn svg {
+    width: 11px;
+    height: 11px;
+}
+.fx-filter-search-btn:hover {
+    background: #dbeafe;
+    border-color: #2563eb;
+    color: #1e3a8a;
+}
+/* One-line typing hint under Search values. */
+.fx-filter-popup-hint {
+    margin-top: -4px;
+    padding: 0 12px 6px;
+    color: #64748b;
+    font-size: calc(10px * var(--fx-zoom, 1));
+    line-height: 1.3;
 }
 .fx-filter-number-panel {
     display: flex;
@@ -3081,7 +3128,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     font-size: calc(11px * var(--fx-zoom, 1));
     font-weight: 600;
 }
-.fx-filter-number-input {
+.fx-filter-number-field ::deep .fx-filter-number-input {
     width: 100%;
     padding: 5px 8px;
     border: 1px solid #ced4da;
@@ -4221,14 +4268,14 @@ td.fx-drag-preview-cell {
     color: #fff;
 }
 
-.fx-grid.fx-grid-dark .fx-toolbar-search input,
-.fx-grid.fx-grid-dark .fx-expression-filter-input,
-.fx-grid.fx-grid-dark .fx-grid-side-search,
+.fx-grid.fx-grid-dark .fx-toolbar-search ::deep input,
+.fx-grid.fx-grid-dark ::deep .fx-expression-filter-input,
+.fx-grid.fx-grid-dark ::deep .fx-grid-side-search,
 .fx-grid.fx-grid-dark .fx-grid-pivot-value-chip select,
 .fx-grid.fx-grid-dark .fx-grid-pivot-format-input,
 .fx-grid.fx-grid-dark .fx-filter-operator-select,
-.fx-grid.fx-grid-dark .fx-filter-popup-input,
-.fx-grid.fx-grid-dark .fx-filter-number-input,
+.fx-grid.fx-grid-dark ::deep .fx-filter-popup-input,
+.fx-grid.fx-grid-dark ::deep .fx-filter-number-input,
 .fx-grid.fx-grid-dark .fx-pager-size select {
     background: #0f172a;
     border-color: #475569;
@@ -4260,6 +4307,7 @@ td.fx-drag-preview-cell {
 }
 
 .fx-grid.fx-grid-dark .fx-filter-popup-summary,
+.fx-grid.fx-grid-dark .fx-filter-popup-hint,
 .fx-grid.fx-grid-dark .fx-filter-popup-empty,
 .fx-grid.fx-grid-dark .fx-filter-range-item em {
     color: #94a3b8;
@@ -4267,6 +4315,7 @@ td.fx-drag-preview-cell {
 
 .fx-grid.fx-grid-dark .fx-filter-popup-close,
 .fx-grid.fx-grid-dark .fx-filter-popup-btn,
+.fx-grid.fx-grid-dark .fx-filter-search-btn,
 .fx-grid.fx-grid-dark .fx-filter-tristate {
     background: #0f172a;
     border-color: #475569;

@@ -90,6 +90,35 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8, panelW
     };
 }
 
+// Keep layout, scroll, focus and the first visible paint in the same browser turn.
+// The panel reference identifies this opening; a late call cannot reveal a replacement.
+export function prepareDropdown(host, panel, editable, dotNetRef) {
+    if (!host?.isConnected || !panel?.isConnected || !host.contains(panel)) return null;
+    const geometry = measureDropdown(host, 180, 8, 0, panel);
+    host.classList.toggle("fx-dropdown-open-up", geometry.openUp);
+    panel.style.removeProperty("top");
+    panel.style.maxHeight = `${geometry.maxHeight}px`;
+    if (!panel.classList.contains("fx-dropdown-panel-fit")) {
+        panel.style.width = panel.style.minWidth = panel.style.maxWidth = `${geometry.minWidth}px`;
+    }
+    const option = panel.querySelector(".fx-dropdown-option.highlighted");
+    if (option) {
+        // An item out of view opens as the TOP row, as the VB6 combo drops its list
+        // (top index = current item); not the bottom row, where the next ArrowDown
+        // would have to scroll.
+        const top = option.offsetTop;
+        const bottom = top + option.offsetHeight;
+        if (top < panel.scrollTop || bottom > panel.scrollTop + panel.clientHeight)
+            panel.scrollTop = Math.max(0, Math.min(top, panel.scrollHeight - panel.clientHeight));
+        if (!editable) option.focus({ preventScroll: true });
+    }
+    if (!editable) watchFocusLeave(host, dotNetRef);
+    panel.style.removeProperty("opacity");
+    panel.style.removeProperty("pointer-events");
+    host.querySelector(".fx-dropdown-backdrop")?.style.removeProperty("visibility");
+    return geometry;
+}
+
 
 // Focus leaving an OPEN list: one registration per open, judged after the
 // browser has settled the new focus — a move between the list's own options is

@@ -12,6 +12,8 @@
 
 .fx-rd-properties-content {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: 10px;
     max-height: 360px;
     overflow: auto;
@@ -20,14 +22,15 @@
 
 .fx-rd-property-card {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: 6px;
-    padding: 10px;
-    background: #fff;
-    border: 1px solid #c5c5c5;
+    padding: 8px 0;
+    border-bottom: 1px solid #d4d4d4;
 }
 
 .fx-rd-property-card.grid2 {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .fx-rd-property-card h3 {
@@ -38,6 +41,7 @@
 
 .fx-rd-property-card label {
     display: grid;
+    min-width: 0;
     gap: 3px;
     color: #555;
 }
@@ -48,17 +52,12 @@
     gap: 6px;
 }
 
-.fx-rd-property-card input,
-.fx-rd-property-card select,
-.fx-rd-property-card textarea {
+.fx-rd-property-card ::deep .fx-textbox,
+.fx-rd-property-card ::deep .fx-numeric,
+.fx-rd-property-card ::deep .fx-dropdown,
+.fx-rd-property-card ::deep textarea {
     width: 100%;
+    max-width: 100%;
     min-width: 0;
-    border: 1px solid #aaa;
-    padding: 4px 6px;
-    font: inherit;
-}
-
-.fx-rd-property-card textarea {
-    min-height: 60px;
-    resize: vertical;
+    box-sizing: border-box;
 }

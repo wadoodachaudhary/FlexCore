@@ -2,6 +2,10 @@ using System.Data;
 using System.Globalization;
 using System.Text;
 using Fx.ControlKit.Grid;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace Fx.ControlKit.Reports;
 
@@ -10,8 +14,41 @@ public enum ReportNativeExportFormat { Html, Csv, Xlsx }
 /// <summary>Native report-page HTML and typed data exports. Never invokes a Crystal engine.</summary>
 public static class ReportNativeExport
 {
+    private static readonly Lazy<string> AnalysisStyles = new(() => string.Concat(new[] { "Fx.Reports.ChartStyles", "Fx.Reports.PivotStyles" }.Select(name =>
+    {
+        using var stream = typeof(ReportNativeExport).Assembly.GetManifestResourceStream(name)
+            ?? throw new InvalidOperationException($"Missing report export stylesheet: {name}");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    })));
+
+    public static async Task<GridExportResult> ExportAsync(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
+    {
+        if (format != ReportNativeExportFormat.Html || tab.PageSnapshots.Count == 0) return Export(tab, format, fileName);
+        var pages = await RenderPagesAsync(tab.PageSnapshots);
+        return Export(new ReportTab { Title = tab.Title, Pages = pages, PositionedPage = tab.PositionedPage, Orientation = tab.Orientation }, format, fileName);
+    }
+
+    public static async Task<List<string>> RenderPagesAsync(IReadOnlyList<ReportPageSnapshot> snapshots)
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(services, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+        var pages = new List<string>();
+        await renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            foreach (var page in snapshots)
+            {
+                var root = await renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page }));
+                pages.Add(root.ToHtmlString());
+            }
+        });
+        return pages;
+    }
+
     public static GridExportResult Export(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
     {
+        if (format == ReportNativeExportFormat.Html && tab.PageSnapshots.Any(page => page.Bands.Any(band => band.Objects.Any(item => item.Analysis is not null))))
+            throw new InvalidOperationException("Use ExportAsync for reports containing chart or cross-tab components.");
         var name = Path.GetFileNameWithoutExtension(fileName ?? tab.Title);
         name = string.Concat(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ' ? c : '_')).Trim();
         if (name.Length == 0) name = "Report";
@@ -24,7 +61,7 @@ public static class ReportNativeExport
                   ReportObjectRenderer.Number((paper.ContentHeightTwips + paper.MarginTopTwips + paper.MarginBottomTwips) / 1440d) + "in";
             var html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
                 "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">" +
-                "<title>" + ReportObjectRenderer.Encode(tab.Title) + "</title><style>body{margin:0;font-family:Arial;color:#000;background:#fff}table{border-collapse:collapse;width:100%}th,td{padding:3px 6px;text-align:left}.fx-export-page{break-after:page}.fx-export-page:last-child,.fx-report-positioned-page:last-child{break-after:auto!important}@page{size:" + size + ";margin:0}</style></head><body>" +
+                "<title>" + ReportObjectRenderer.Encode(tab.Title) + "</title><style>" + AnalysisStyles.Value + "body{margin:0;font-family:Arial;color:#000;background:#fff}table{border-collapse:collapse;width:100%}th,td{padding:3px 6px;text-align:left}.fx-export-page{break-after:page}.fx-export-page:last-child,.fx-report-positioned-page:last-child{break-after:auto!important}@page{size:" + size + ";margin:0}</style></head><body>" +
                 string.Concat(tab.Pages.Select(page => "<div class=\"fx-export-page\">" + page + "</div>")) + "</body></html>";
             return new(Encoding.UTF8.GetBytes(html), name + ".html", "text/html;charset=utf-8");
         }

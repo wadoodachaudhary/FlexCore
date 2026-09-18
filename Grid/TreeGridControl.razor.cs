@@ -233,6 +233,10 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Expanded { get; set; }
     [Parameter] public EventCallback<TreeNodeEventArgs<TValue>> Collapsed { get; set; }
+    /// <summary>Fires once when the user finishes dragging a column boundary:
+    /// the column key, the width in px the drag started from and the width it
+    /// settled at. Not raised when the width did not change.</summary>
+    [Parameter] public EventCallback<ResizeEventArgs> ColumnResized { get; set; }
     [Parameter] public EventCallback<string> OnToolbarItemClick { get; set; }
     [Parameter] public EventCallback<GridToolbarClickEventArgs> ToolbarItemClicked { get; set; }
 
@@ -252,6 +256,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private readonly Dictionary<string, ColumnState> _columnStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _visibilityOverrides = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, double> _columnWidthOverrides = new(StringComparer.OrdinalIgnoreCase);
+    // A press on a grip that moves no more than this is a click, not a resize.
+    private const double GripJitterPx = 6;
     private string? _filterPopupField;
     private string _filterDraft = "";
     private bool _treeColumnPanelOpen;
@@ -2188,10 +2194,36 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (!_isColumnResizing)
             return;
 
+        var column = _resizingColumn;
+        var oldWidth = _resizeStartWidth;
+        if (column != null && Math.Abs(e.ClientX - _resizeStartX) <= GripJitterPx)
+        {
+            // A press that only jittered is not a resize: the column keeps the width
+            // it had (a width-less column would otherwise collapse to the minimum an
+            // override the move handler wrote), and nothing is reported.
+            var key = GetColumnKey(column);
+            if (oldWidth > 0) _columnWidthOverrides[key] = oldWidth; else _columnWidthOverrides.Remove(key);
+            _isColumnResizing = false;
+            _resizingColumn = null;
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
         await HandleColumnResizeMove(e);
         _isColumnResizing = false;
         _resizingColumn = null;
         await InvokeAsync(StateHasChanged);
+
+        if (column == null || !ColumnResized.HasDelegate)
+            return;
+
+        var newWidth = GetEffectiveColumnWidth(column);
+        if (newWidth != oldWidth)
+            await ColumnResized.InvokeAsync(new ResizeEventArgs
+            {
+                Field = GetColumnKey(column),
+                OldWidth = oldWidth,
+                NewWidth = newWidth
+            });
     }
 
     internal string GetHeaderStyle(TreeGridColumn column)

@@ -45,11 +45,11 @@
     color: #000;
 }
 
-.fx-dialog-body.fx-param-body {
+.fx-param-body {
     padding: 16px;
     overflow-y: auto;
     flex: 1;
-    background: #f0f0f0;
+    background: #fff;
 }
 
 .fx-param-title {
@@ -62,10 +62,8 @@
 
 /* Each parameter occupies a panel matching Crystal's "Enter Parameter Values" dialog. */
 .fx-param-panel {
-    background: #e8eaef;
-    border: 1px solid #c0c4cc;
-    border-radius: 3px;
-    padding: 10px 14px;
+    border-bottom: 1px solid #d4d4d4;
+    padding: 10px 0;
     margin-bottom: 12px;
 }
 

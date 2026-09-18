@@ -18,7 +18,7 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.44</Version>
+    <Version>0.2.45</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
@@ -40,6 +40,8 @@
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
+    <EmbeddedResource Include="Charts/ChartControl.razor.css" LogicalName="Fx.Reports.ChartStyles" />
+    <EmbeddedResource Include="Grid/PivotControl.razor.css" LogicalName="Fx.Reports.PivotStyles" />
   </ItemGroup>
 
   <ItemGroup>
@@ -59,6 +61,7 @@
     <PackageReference Include="Ical.Net" Version="5.2.3" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
     <PackageReference Include="Sprache" Version="2.3.1" />
+    <PackageReference Include="AngleSharp" Version="1.8.1" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>

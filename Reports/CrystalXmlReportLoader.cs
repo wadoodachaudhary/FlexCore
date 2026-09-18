@@ -3309,7 +3309,7 @@ public partial class CrystalXmlReportLoader
                 {
                     Field = MapAggregateField(s.Field),
                     AggregateType = MapAggregateType(s.Operation),
-                    Format = "C2",                  // currency — matches Crystal's @Amount
+                    Format = s.Operation == "Count" ? "N0" : "C2",   // currency — matches Crystal's @Amount; counts as the grand totals
                     Label = s.Operation + ":"
                 });
             }
@@ -3325,7 +3325,7 @@ public partial class CrystalXmlReportLoader
                     {
                         Field = MapAggregateField(d.Field),
                         AggregateType = d.Op,
-                        Format = "C2",
+                        Format = d.Op == ReportAggregateType.Count ? "N0" : "C2",
                         Label = d.Op + ":"
                     });
                 }

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using System.Globalization;
 
 namespace Fx.ControlKit.Grid;
@@ -183,6 +184,84 @@ public partial class GridControl<TValue>
         string.Create(CultureInfo.InvariantCulture,
             $"--fx-theme-header:{item.Header};--fx-theme-body:{item.Body};--fx-theme-alt:{item.Alt};--fx-theme-accent:{item.Accent};");
 
+    // The side-panel searches keep their text in the browser while typing and
+    // narrow their list once per commit (Enter, Tab or leaving the box).
+    private EventCallback<string?>? _columnPanelSearchCommitted;
+    private EventCallback<string?> ColumnPanelSearchCommitted => SearchAsYouType ? default
+        : _columnPanelSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+        {
+            value ??= string.Empty;
+            if (string.Equals(value, _columnPanelSearch, StringComparison.Ordinal))
+                return;
+            _columnPanelSearch = value;
+            StateHasChanged();
+        });
+
+    private EventCallback<string?>? _pivotFieldSearchCommitted;
+    private EventCallback<string?> PivotFieldSearchCommitted => SearchAsYouType ? default
+        : _pivotFieldSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+        {
+            value ??= string.Empty;
+            if (string.Equals(value, _pivotFieldSearch, StringComparison.Ordinal))
+                return;
+            _pivotFieldSearch = value;
+            StateHasChanged();
+        });
+
+    // Searching as you type the lists narrow once typing pauses (ImmediateModeDelay),
+    // or at once on Enter, Tab or leaving the box; nothing renders per key.
+    private CancellationTokenSource? _sidePanelSearchCts;
+    private Action<string?>? _columnPanelSearchTyped;
+    private Action<string?>? ColumnPanelSearchTyped => !SearchAsYouType ? null
+        : _columnPanelSearchTyped ??= text =>
+        {
+            _columnPanelSearch = text ?? string.Empty;
+            _ = RenderSidePanelSearchAfterDelayAsync();
+        };
+    private Action<string?>? _pivotFieldSearchTyped;
+    private Action<string?>? PivotFieldSearchTyped => !SearchAsYouType ? null
+        : _pivotFieldSearchTyped ??= text =>
+        {
+            _pivotFieldSearch = text ?? string.Empty;
+            _ = RenderSidePanelSearchAfterDelayAsync();
+        };
+    private EventCallback<KeyboardEventArgs>? _sidePanelSearchKeyDown;
+    private EventCallback<KeyboardEventArgs> SidePanelSearchKeyDown => !SearchAsYouType ? CommitKeyDown
+        : _sidePanelSearchKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(e =>
+        {
+            if (IsApplyNowKey(e))
+                RenderPendingSidePanelSearch();
+        });
+    private EventCallback? _sidePanelSearchLeft;
+    private EventCallback SidePanelSearchLeft => !SearchAsYouType ? default
+        : _sidePanelSearchLeft ??= new EventCallback(null, (Action)RenderPendingSidePanelSearch);
+
+    private async Task RenderSidePanelSearchAfterDelayAsync()
+    {
+        _sidePanelSearchCts?.Cancel();
+        var cts = _sidePanelSearchCts = new CancellationTokenSource();
+        try
+        {
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (ReferenceEquals(cts, _sidePanelSearchCts))
+            await InvokeAsync(RenderPendingSidePanelSearch);
+    }
+
+    private void RenderPendingSidePanelSearch()
+    {
+        if (_sidePanelSearchCts is not { } cts)
+            return;
+        _sidePanelSearchCts = null;
+        cts.Cancel();
+        StateHasChanged();
+    }
+
     private IEnumerable<GridColumn> ColumnPanelColumns =>
         Columns
             .Where(c => !string.IsNullOrWhiteSpace(c.Field))
@@ -349,6 +428,10 @@ public partial class GridControl<TValue>
 
     private void SeedFilterPopupDraft(string field)
     {
+        // Every open starts from the applied bounds: a Min / Max typed in an
+        // earlier open and never applied is discarded with it.
+        _numericFilterMinText.Remove(field);
+        _numericFilterMaxText.Remove(field);
         var state = GetColumnState(field);
         var column = FindColumnByField(field);
         var defaultOperator = column == null
@@ -375,6 +458,12 @@ public partial class GridControl<TValue>
         _filterChecklistSearchDraft = string.Empty;
         _filterChecklistDraftTouched = false;
         _filterChecklistCommitError = null;
+        _filterPopupDraftGeneration++;
+        _filterPopupAutoFocusTarget = null;
+        _filterPopupApplyRejected = false;
+        _filterPopupCommitApplyRejected = false;
+        _filterPopupDragRegistered = false;
+        CancelFilterPopupTyping(discard: true);
     }
 
     private async Task OnTextFilterOperatorChanged(ChangeEventArgs e)
@@ -400,28 +489,11 @@ public partial class GridControl<TValue>
             await ApplyFilterPopupAsync(close: false);
     }
 
-    private async Task OnTextFilterInput(ChangeEventArgs e)
-    {
-        _filterTextDraft = e.Value?.ToString() ?? "";
-        if (_filterPopupField != null)
-            _filterOperatorDraftsByField[_filterPopupField] = _filterOperatorDraft;
-        QueueFilterPopupFocus(FilterPopupFocusTarget.ConditionInput);
-        if (_filterPopupAutoApply && _filterPopupField != null)
-            await QueueFilterPopupAutoApplyAsync();
-    }
-
     private async Task OnSecondTextFilterOperatorValueChanged(TextFilterOperator filterOperator)
     {
         _secondFilterOperatorDraft = filterOperator;
         if (_filterPopupAutoApply && _filterPopupField != null)
             await ApplyFilterPopupAsync(close: false);
-    }
-
-    private async Task OnSecondTextFilterInput(ChangeEventArgs e)
-    {
-        _secondFilterTextDraft = e.Value?.ToString() ?? "";
-        if (_filterPopupAutoApply && _filterPopupField != null)
-            await QueueFilterPopupAutoApplyAsync();
     }
 
     private async Task OnFilterLogicalOperatorChanged(LogicalFilterOperator op)
@@ -447,7 +519,423 @@ public partial class GridControl<TValue>
             await ApplyFilterPopupAsync(close: false);
     }
 
-    private async Task ApplyFilterPopupAsync(bool close)
+    // The callbacks are rebuilt for every draft generation and carry it, so a box
+    // instance that has already been replaced (re-seed, column switch, Clear
+    // Filter) can never publish into the drafts of its successor.
+    private void EnsureFilterPopupCallbackGeneration()
+    {
+        if (_filterPopupCallbackGeneration == _filterPopupDraftGeneration)
+            return;
+        _filterPopupCommitCallbacks.Clear();
+        _filterPopupKeyDownCallbacks.Clear();
+        _filterPopupSearchCallbacks.Clear();
+        _filterPopupTypedCallbacks.Clear();
+        _filterPopupLeftCallbacks.Clear();
+        _filterPopupCallbackGeneration = _filterPopupDraftGeneration;
+    }
+
+    // ── Search as you type (FilterSettings.SearchAsYouType, the default) ─────
+    // The boxes are Uncontrolled: the browser owns the text and every input reports
+    // it (@bind keeps the server's copy in step, so no render writes an older text
+    // back). Nothing renders per key: the checklist narrows and the filter applies
+    // once typing pauses (ImmediateModeDelay), or at once on Enter, Tab or leaving
+    // the box. Min / Max keep applying on Enter / Apply Range in both modes.
+    private Action<string?>? FilterPopupBoxTyped(FilterPopupFocusTarget box)
+    {
+        if (!SearchAsYouType)
+            return null;
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupTypedCallbacks.TryGetValue(box, out var typed))
+            return typed;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupTypedCallbacks[box] = text => OnFilterPopupBoxTyped(box, generation, text);
+    }
+
+    private EventCallback FilterPopupBoxLeft(FilterPopupFocusTarget box)
+    {
+        if (!SearchAsYouType)
+            return default;
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupLeftCallbacks.TryGetValue(box, out var left))
+            return left;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupLeftCallbacks[box] = new EventCallback(null, (Func<Task>)(() => OnFilterPopupBoxLeftAsync(generation)));
+    }
+
+    private void OnFilterPopupBoxTyped(FilterPopupFocusTarget box, int generation, string? value)
+    {
+        var field = _filterPopupField;
+        if (field == null || generation != _filterPopupDraftGeneration)
+            return;
+
+        var text = value ?? string.Empty;
+        switch (box)
+        {
+            case FilterPopupFocusTarget.ConditionInput:
+                _filterTextDraft = text;
+                _filterOperatorDraftsByField[field] = _filterOperatorDraft;
+                break;
+            case FilterPopupFocusTarget.SecondConditionInput:
+                _secondFilterTextDraft = text;
+                break;
+            case FilterPopupFocusTarget.ChecklistSearchInput:
+                _filterChecklistSearchDraft = text;
+                _filterPopupTypedSearchPending = true;
+                break;
+            default:
+                return;
+        }
+
+        // A typed search narrows the checklist in manual mode too.
+        if (_filterPopupAutoApply || box == FilterPopupFocusTarget.ChecklistSearchInput)
+            QueueFilterPopupTypingApply(field, generation);
+    }
+
+    private void QueueFilterPopupTypingApply(string field, int generation)
+    {
+        CancelFilterPopupTyping(discard: false);
+        var cts = _filterPopupTypingCts = new CancellationTokenSource();
+        _ = ApplyFilterPopupTypingAfterDelayAsync(field, generation, cts);
+    }
+
+    private async Task ApplyFilterPopupTypingAfterDelayAsync(string field, int generation, CancellationTokenSource cts)
+    {
+        try
+        {
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;     // a newer key, or Enter / Tab / leaving the box, owns the apply
+        }
+
+        await InvokeAsync(async () =>
+        {
+            // Superseded, or the menu closed, switched column or re-seeded meanwhile.
+            if (!ReferenceEquals(cts, _filterPopupTypingCts) || cts.IsCancellationRequested
+                || !IsCurrentFilterPopupField(field) || generation != _filterPopupDraftGeneration)
+                return;
+            CancelFilterPopupTyping(discard: false);
+            await ApplyFilterPopupTypingAsync(field);
+            StateHasChanged();
+        });
+    }
+
+    private async Task OnFilterPopupBoxLeftAsync(int generation)
+    {
+        if (_filterPopupField == null || generation != _filterPopupDraftGeneration)
+            return;
+        if ((await ApplyPendingFilterPopupTypingAsync()).Applied)
+            StateHasChanged();
+    }
+
+    // Typing not applied yet applies now (Enter, Tab, leaving the box).
+    private async Task<(bool Applied, bool Refused)> ApplyPendingFilterPopupTypingAsync()
+    {
+        if (_filterPopupTypingCts == null || _filterPopupField is not { } field)
+            return (false, false);
+        CancelFilterPopupTyping(discard: false);
+        return (true, await ApplyFilterPopupTypingAsync(field));
+    }
+
+    // Returns true when the apply was refused (provider checklist incomplete,
+    // Filtering cancelled).
+    private async Task<bool> ApplyFilterPopupTypingAsync(string field)
+    {
+        var apply = _filterPopupAutoApply;
+        if (_filterPopupTypedSearchPending)
+        {
+            _filterPopupTypedSearchPending = false;
+            apply &= SelectFilterChecklistSearchMatches(field);
+        }
+        if (!apply)
+            return false;
+        await ApplyFilterPopupAsync(close: false, render: false);
+        return _filterPopupApplyRejected;
+    }
+
+    private void CancelFilterPopupTyping(bool discard)
+    {
+        if (discard)
+            _filterPopupTypedSearchPending = false;
+        var cts = _filterPopupTypingCts;
+        _filterPopupTypingCts = null;
+        if (cts == null)
+            return;
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    // The search button beside a box does what Tab does in it: the box's current
+    // browser text is read back (FlushClientBufferedValueAsync) and published
+    // through the box's own ValueChanged, i.e. the same commit a Tab sends, so it
+    // applies under Auto Apply and only stages without it. Focus stays in the box.
+    private EventCallback<MouseEventArgs> FilterPopupSearchClicked(FilterPopupFocusTarget box)
+    {
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupSearchCallbacks.TryGetValue(box, out var callback))
+            return callback;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupSearchCallbacks[box] = NonRenderingEventHandler.Create<MouseEventArgs>(
+            _ => SearchFromFilterPopupBoxAsync(box, generation));
+    }
+
+    private Task SearchFromFilterPopupBoxAsync(FilterPopupFocusTarget box, int generation)
+    {
+        if (_filterPopupField == null || generation != _filterPopupDraftGeneration)
+            return Task.CompletedTask;
+        var textBox = box switch
+        {
+            FilterPopupFocusTarget.ConditionInput => _filterConditionBox,
+            FilterPopupFocusTarget.SecondConditionInput => _secondFilterConditionBox,
+            FilterPopupFocusTarget.ChecklistSearchInput => _filterChecklistSearchBox,
+            _ => null
+        };
+        return textBox?.FlushClientBufferedValueAsync() ?? Task.CompletedTask;
+    }
+
+    private EventCallback<string?> FilterPopupBoxCommitted(FilterPopupFocusTarget box)
+    {
+        // Searching as you type, the text boxes report every input instead (Min /
+        // Max keep committing in both modes).
+        if (SearchAsYouType && box is not (FilterPopupFocusTarget.NumericMinInput or FilterPopupFocusTarget.NumericMaxInput))
+            return default;
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupCommitCallbacks.TryGetValue(box, out var callback))
+            return callback;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupCommitCallbacks[box] = NonRenderingEventHandler.Create<string?>(
+            value => OnFilterPopupBoxCommittedAsync(box, generation, value));
+    }
+
+    private EventCallback<KeyboardEventArgs> FilterPopupBoxKeyDown(FilterPopupFocusTarget box)
+    {
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupKeyDownCallbacks.TryGetValue(box, out var callback))
+            return callback;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupKeyDownCallbacks[box] = NonRenderingEventHandler.Create<KeyboardEventArgs>(
+            e => OnFilterPopupBoxKeyDownAsync(box, generation, e));
+    }
+
+    private async Task OnFilterPopupBoxCommittedAsync(FilterPopupFocusTarget box, int generation, string? value)
+    {
+        // Every commit key but Escape arrives here first, so a refusal left by an
+        // earlier commit never reaches this commit's key.
+        _filterPopupCommitApplyRejected = false;
+        var field = _filterPopupField;
+        if (field == null || generation != _filterPopupDraftGeneration)
+            return;
+
+        var text = value ?? string.Empty;
+        var apply = _filterPopupAutoApply;
+        switch (box)
+        {
+            case FilterPopupFocusTarget.ConditionInput:
+                if (string.Equals(text, _filterTextDraft, StringComparison.Ordinal)) return;
+                _filterTextDraft = text;
+                _filterOperatorDraftsByField[field] = _filterOperatorDraft;
+                break;
+            case FilterPopupFocusTarget.SecondConditionInput:
+                if (string.Equals(text, _secondFilterTextDraft, StringComparison.Ordinal)) return;
+                _secondFilterTextDraft = text;
+                break;
+            case FilterPopupFocusTarget.ChecklistSearchInput:
+                if (string.Equals(text, _filterChecklistSearchDraft, StringComparison.Ordinal)) return;
+                _filterChecklistSearchDraft = text;
+                // `&` (not `&&`): the matches are selected in manual mode too.
+                // While provider values load, the provider path re-applies the search.
+                apply &= SelectFilterChecklistSearchMatches(field);
+                break;
+            case FilterPopupFocusTarget.NumericMinInput:
+                if (string.Equals(text, GetNumericFilterMinText(field), StringComparison.Ordinal)) return;
+                // Stored as typed, "" included: a blank must clear the applied
+                // bound, not fall back to it.
+                _numericFilterMinText[field] = text;
+                apply = false;          // bounds apply on Apply Range / Enter
+                break;
+            case FilterPopupFocusTarget.NumericMaxInput:
+                if (string.Equals(text, GetNumericFilterMaxText(field), StringComparison.Ordinal)) return;
+                _numericFilterMaxText[field] = text;
+                apply = false;
+                break;
+        }
+
+        if (apply)
+        {
+            await ApplyFilterPopupAsync(close: false, render: false);
+            _filterPopupCommitApplyRejected = _filterPopupApplyRejected;
+        }
+
+        // The browser listener owns the box's text, so a committed box keeps it
+        // by itself; one render shows the applied filter.
+        StateHasChanged();
+    }
+
+    private async Task OnFilterPopupBoxKeyDownAsync(FilterPopupFocusTarget box, int generation, KeyboardEventArgs e)
+    {
+        var commitRefused = _filterPopupCommitApplyRejected;
+        _filterPopupCommitApplyRejected = false;
+        var field = _filterPopupField;
+        // A key that confirms an IME composition is the composition's, not the menu's.
+        if (field == null || generation != _filterPopupDraftGeneration
+            || e.AltKey || e.CtrlKey || e.MetaKey || e.IsComposing)
+            return;
+
+        if (e.Key is "Enter" or "NumpadEnter")
+        {
+            if (box is FilterPopupFocusTarget.NumericMinInput or FilterPopupFocusTarget.NumericMaxInput)
+            {
+                await ApplyNumericBoundsFromMenuAsync(field, box);
+                StateHasChanged();
+                return;
+            }
+
+            // A search committed while provider values are still loading has not
+            // selected anything yet; closing now would lose it (the provider path
+            // re-applies it only while the menu is open).
+            if (box == FilterPopupFocusTarget.ChecklistSearchInput && IsProviderFilterValuesLoading)
+            {
+                StateHasChanged();
+                return;
+            }
+
+            // Searching as you type, typing not applied yet applies now.
+            var typingApplied = false;
+            if (SearchAsYouType)
+                (typingApplied, commitRefused) = await ApplyPendingFilterPopupTypingAsync();
+
+            // This Enter's own commit was just refused: the same drafts would only
+            // be refused again (and the host's Filtering would run twice). Stay open.
+            if (_filterPopupAutoApply && commitRefused)
+            {
+                if (typingApplied)
+                    StateHasChanged();
+                return;
+            }
+
+            // Enter is the menu's OK. Under Auto Apply the committed text is
+            // already applied, unless an earlier apply was refused (provider
+            // checklist incomplete, Filtering cancelled): then Enter retries it the
+            // way the Apply button does and stays open if it is refused again.
+            if (_filterPopupAutoApply && !_filterPopupApplyRejected)
+            {
+                CloseFilterPopup();
+                StateHasChanged();
+            }
+            else
+            {
+                await ApplyFilterPopupAsync(close: true);
+            }
+            if (_filterPopupField == null)
+                await FocusGridHostAsync();
+            return;
+        }
+
+        // Searching as you type, Tab applies typing not applied yet at once.
+        if (e.Key == "Tab" && SearchAsYouType)
+        {
+            if ((await ApplyPendingFilterPopupTypingAsync()).Applied)
+                StateHasChanged();
+            return;
+        }
+
+        // Escape never publishes the box's text (nor typing not applied yet): the
+        // menu closes without applying anything and the keyboard returns to the grid.
+        if (e.Key == "Escape")
+            await CloseFilterPopupAndFocusGridAsync();
+    }
+
+    // Escape anywhere else in the menu (a checkbox, a button, Auto Apply) closes it
+    // too. A text box's own Escape arrives through its OnKeyDown; one that also
+    // bubbles here finds the menu already closed.
+    private EventCallback<KeyboardEventArgs>? _filterPopupRootKeyDown;
+    private EventCallback<KeyboardEventArgs> FilterPopupRootKeyDown =>
+        _filterPopupRootKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(async e =>
+        {
+            if (e.Key == "Escape" && !e.AltKey && !e.CtrlKey && !e.MetaKey && !e.ShiftKey
+                && _filterPopupField != null)
+                await CloseFilterPopupAndFocusGridAsync();
+        });
+
+    private async Task CloseFilterPopupAndFocusGridAsync()
+    {
+        CloseFilterPopup();
+        StateHasChanged();
+        await FocusGridHostAsync();
+    }
+
+    private async Task ApplyNumericBoundsFromPopupAsync()
+    {
+        if (_filterPopupField is { } field)
+            await ApplyNumericBoundsFromMenuAsync(field, refocus: null);   // focus stays on the button
+    }
+
+    private async Task ApplyNumericBoundsFromMenuAsync(string field, FilterPopupFocusTarget? refocus)
+    {
+        var generation = _filterPopupDraftGeneration;
+        var minText = GetNumericFilterMinText(field);
+        var maxText = GetNumericFilterMaxText(field);
+        await ApplyNumericBoundsFilter(field);
+        // The menu moved on while the apply awaited (another column, a re-seed).
+        if (!IsCurrentFilterPopupField(field) || generation != _filterPopupDraftGeneration)
+            return;
+        // Bounds that come back normalised or swapped re-seed the boxes to show
+        // them; text that is already normal keeps its box, and focus with it.
+        if (!string.Equals(minText, GetNumericFilterMinText(field), StringComparison.Ordinal)
+            || !string.Equals(maxText, GetNumericFilterMaxText(field), StringComparison.Ordinal))
+        {
+            _filterPopupAutoFocusTarget = refocus;
+            _filterPopupDraftGeneration++;
+        }
+    }
+
+    // (Select All) decides at the press what its click does. The press commits a
+    // typed search first (blur), which narrows the list and selects its matches
+    // before the click arrives; a click that read the list then would invert what
+    // the user saw and clear every match.
+    private EventCallback<MouseEventArgs>? _filterSelectAllPressed;
+    private EventCallback<MouseEventArgs> FilterSelectAllPressed =>
+        _filterSelectAllPressed ??= NonRenderingEventHandler.Create<MouseEventArgs>(_ =>
+        {
+            if (_filterPopupField is { } popupField)
+                _filterSelectAllPressIntent = GetFilterFieldSelectionState(
+                    popupField, VisibleFilterChecklistValues(popupField)) != GridFilterSelectionState.All;
+        });
+
+    private async Task ToggleFilterSelectAllAsync(MouseEventArgs e)
+    {
+        var pressIntent = _filterSelectAllPressIntent;
+        _filterSelectAllPressIntent = null;
+        if (_filterPopupField is not { } field)
+            return;
+        var values = VisibleFilterChecklistValues(field);
+        // A pointer click does what its press saw; a key press (Detail 0) what is shown.
+        var select = e.Detail != 0 && pressIntent is { } intent
+            ? intent
+            : GetFilterFieldSelectionState(field, values) != GridFilterSelectionState.All;
+        await SetFilterFieldSelected(field, select, values);
+    }
+
+    private List<string> VisibleFilterChecklistValues(string field) =>
+        GetColumnFilterValueCandidates(field).Select(candidate => candidate.Value).ToList();
+
+    /// <summary>A search selects its matching values, as in Excel. Returns false
+    /// while provider values are still loading.</summary>
+    private bool SelectFilterChecklistSearchMatches(string field)
+    {
+        if (IsProviderFilterValuesLoading)
+            return false;
+        _filterCheckedDraft = new HashSet<string>(
+            GetColumnFilterValueCandidates(field).Select(candidate => candidate.Value),
+            FilterTextComparer);
+        _filterChecklistDraftTouched = true;
+        _filterChecklistCommitError = null;
+        return true;
+    }
+
+    private async Task ApplyFilterPopupAsync(bool close, bool render = true)
     {
         var field = _filterPopupField;
         if (field == null)
@@ -455,28 +943,53 @@ public partial class GridControl<TValue>
 
         if (!CanCommitCheckedFilterDraft(field))
         {
-            await InvokeAsync(StateHasChanged);
+            _filterPopupApplyRejected = true;
+            if (render)
+                await InvokeAsync(StateHasChanged);
             return;
         }
+
+        // The drafts are read before the first await: a Filtering handler that
+        // yields must not let a column switch hand this column the drafts of
+        // the next one.
+        var text = _filterTextDraft;
+        var secondText = _secondFilterTextDraft;
+        var secondOperator = _secondFilterOperatorDraft;
+        var logicalOperator = _filterLogicalOperatorDraft;
+        var blankRows = _blankRowFilterDraft;
+        var checkedDraft = _filterChecklistDraftTouched
+            ? new HashSet<string>(_filterCheckedDraft, FilterTextComparer)
+            : null;
 
         // Commit the menu as one transaction. ApplyFilter normally reloads a
         // provider immediately, but here the second/checklist/blank criteria
         // must be copied first so one user action issues one complete request.
-        if (!await ApplyFilter(field, _filterTextDraft, _filterOperatorDraft, finalizeUpdate: false))
+        var clearEpoch = FilterClearEpoch(field);
+        if (!await ApplyFilter(field, text, _filterOperatorDraft, finalizeUpdate: false))
+        {
+            // Refused by the host, unless a clear superseded the apply.
+            if (IsCurrentFilterPopupField(field) && clearEpoch == FilterClearEpoch(field))
+                _filterPopupApplyRejected = true;
             return;
+        }
         var state = GetColumnState(field);
-        state.SecondFilterValue = string.IsNullOrWhiteSpace(_secondFilterTextDraft) ? null : _secondFilterTextDraft;
-        state.SecondFilterOperator = _secondFilterOperatorDraft;
-        state.LogicalFilterOperator = _filterLogicalOperatorDraft;
-        state.BlankRowFilter = _blankRowFilterDraft;
-        CommitCheckedFilterDraft(field);
+        state.SecondFilterValue = string.IsNullOrWhiteSpace(secondText) ? null : secondText;
+        state.SecondFilterOperator = secondOperator;
+        state.LogicalFilterOperator = logicalOperator;
+        state.BlankRowFilter = blankRows;
+        // Applying a text condition must not accidentally turn an unavailable
+        // provider checklist into an active "select nothing" predicate.
+        if (checkedDraft != null)
+            CommitCheckedFilterDraft(field, checkedDraft);
+        if (IsCurrentFilterPopupField(field))
+            _filterPopupApplyRejected = false;
 
         if (EventsRef?.Filtered.HasDelegate == true)
         {
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs
             {
                 Field = field,
-                Value = _filterTextDraft
+                Value = text
             });
         }
 
@@ -484,24 +997,28 @@ public partial class GridControl<TValue>
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
 
-        if (close)
+        if (close && IsCurrentFilterPopupField(field))
             CloseFilterPopup();
 
-        await InvokeAsync(StateHasChanged);
+        if (render)
+            await InvokeAsync(StateHasChanged);
     }
 
     private void CommitCheckedFilterDraft(string field)
     {
         // Applying a text condition must not accidentally turn an unavailable
         // provider checklist into an active "select nothing" predicate.
-        if (!_filterChecklistDraftTouched)
-            return;
+        if (_filterChecklistDraftTouched)
+            CommitCheckedFilterDraft(field, _filterCheckedDraft);
+    }
 
+    private void CommitCheckedFilterDraft(string field, HashSet<string> checkedDraft)
+    {
         var state = GetColumnState(field);
         var all = GetDistinctValues(field);
-        state.CheckedFilterValues = new HashSet<string>(_filterCheckedDraft, FilterTextComparer);
+        state.CheckedFilterValues = new HashSet<string>(checkedDraft, FilterTextComparer);
 
-        state.UseCheckedFilter = all.Count > 0 && _filterCheckedDraft.Count < all.Count;
+        state.UseCheckedFilter = all.Count > 0 && checkedDraft.Count < all.Count;
         if (!state.UseCheckedFilter)
             state.CheckedFilterValues.Clear();
 
@@ -612,12 +1129,13 @@ public partial class GridControl<TValue>
     private bool IsNumericFilterColumn(GridColumn? col) =>
         col?.Type == ColumnType.Number;
 
-    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field)
-    {
-        return GetDistinctFilterValueCandidates(field)
-            .Where(MatchesChecklistSearch)
-            .ToList();
-    }
+    private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field) =>
+        FilterChecklistCandidatesBySearch(GetDistinctFilterValueCandidates(field));
+
+    private IReadOnlyList<FilterValueCandidate> FilterChecklistCandidatesBySearch(IReadOnlyList<FilterValueCandidate> all) =>
+        string.IsNullOrWhiteSpace(_filterChecklistSearchDraft)
+            ? all
+            : all.Where(MatchesChecklistSearch).ToList();
 
     private bool MatchesChecklistSearch(FilterValueCandidate candidate)
     {
@@ -772,9 +1290,6 @@ public partial class GridControl<TValue>
         _ => "false"
     };
 
-    private Task SetFilterChecklistSearch(ChangeEventArgs e) =>
-        SetFilterChecklistSearchAsync(e.Value?.ToString());
-
     private async Task SetFilterChecklistSearchAsync(string? searchText)
     {
         _filterChecklistSearchDraft = searchText ?? string.Empty;
@@ -785,17 +1300,8 @@ public partial class GridControl<TValue>
         // A search selects its matching values, as in Excel. Keeping hidden
         // values selected makes both Auto Apply and Apply admit every row.
         // Clearing the search selects the complete checklist again.
-        if (!IsProviderFilterValuesLoading)
-        {
-            _filterCheckedDraft = new HashSet<string>(
-                GetColumnFilterValueCandidates(field).Select(candidate => candidate.Value),
-                FilterTextComparer);
-            _filterChecklistDraftTouched = true;
-            _filterChecklistCommitError = null;
-
-            if (_filterPopupAutoApply)
-                await QueueFilterPopupAutoApplyAsync();
-        }
+        if (SelectFilterChecklistSearchMatches(field) && _filterPopupAutoApply)
+            await QueueFilterPopupAutoApplyAsync();
 
         await InvokeAsync(StateHasChanged);
     }
@@ -920,17 +1426,19 @@ public partial class GridControl<TValue>
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
-    private int GetSelectedFilterValueCount(string field)
+    private int GetSelectedFilterValueCount(string field) =>
+        CountSelectedFilterValues(field, GetDistinctFilterValueCandidates(field));
+
+    private int CountSelectedFilterValues(string field, IReadOnlyList<FilterValueCandidate> all)
     {
-        var all = GetDistinctValues(field);
         if (IsCurrentFilterPopupField(field))
-            return all.Count(_filterCheckedDraft.Contains);
+            return all.Count(candidate => _filterCheckedDraft.Contains(candidate.Value));
 
         var state = GetColumnState(field);
         if (!state.UseCheckedFilter)
             return all.Count;
 
-        return all.Count(state.CheckedFilterValues.Contains);
+        return all.Count(candidate => state.CheckedFilterValues.Contains(candidate.Value));
     }
 
     private bool ProviderFilterValuesHaveMore(string field) =>
@@ -952,22 +1460,6 @@ public partial class GridControl<TValue>
 
         var max = GetColumnState(field).NumericFilterMax;
         return max.HasValue ? FormatNumericFilterInputValue(max.Value) : "";
-    }
-
-    private void SetNumericFilterMinText(string field, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            _numericFilterMinText.Remove(field);
-        else
-            _numericFilterMinText[field] = value;
-    }
-
-    private void SetNumericFilterMaxText(string field, string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            _numericFilterMaxText.Remove(field);
-        else
-            _numericFilterMaxText[field] = value;
     }
 
     private async Task ApplyNumericBoundsFilter(string field)

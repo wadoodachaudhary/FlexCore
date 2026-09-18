@@ -62,13 +62,14 @@
 
         @* ── Toolbar (FxControlKit ToolbarControl + ToolbarButtonControl) ──── *@
         <ToolbarControl>
+            @* Glyph content, not IconCss: hosts need not load an icon font (the bi/fa classes rendered blank). *@
             <div class="fx-rpt-nav">
-                <button disabled="@(CurrentPage <= 1)" @onclick="OnFirstPage" title="First Page">⏮</button>
-                <button disabled="@(CurrentPage <= 1)" @onclick="OnPreviousPage" title="Previous Page">◀</button>
-                <input type="number" value="@CurrentPage" @onchange="@(e => OnPageChanged(int.TryParse(e.Value?.ToString(), out var p) ? p : 1))" min="1" max="@PageCount" title="Page Number" />
+                <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnFirstPage" Title="First page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏮</span></ToolbarButtonControl>
+                <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnPreviousPage" Title="Previous page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">◀</span></ToolbarButtonControl>
+                <NumericTextBoxControl TValue="int" Value="CurrentPage" ValueChanged="OnPageChanged" Min="1" Max="@Math.Max(1, PageCount)" Width="65px" />
                 <span>of @PageCount</span>
-                <button disabled="@(CurrentPage >= PageCount)" @onclick="OnNextPage" title="Next Page">▶</button>
-                <button disabled="@(CurrentPage >= PageCount)" @onclick="OnLastPage" title="Last Page">⏭</button>
+                <ToolbarButtonControl Disabled="@(CurrentPage >= PageCount)" OnClick="OnNextPage" Title="Next page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▶</span></ToolbarButtonControl>
+                <ToolbarButtonControl Disabled="@(CurrentPage >= PageCount)" OnClick="OnLastPage" Title="Last page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏭</span></ToolbarButtonControl>
             </div>
 
             <ToolbarSeparatorControl />
@@ -85,18 +86,9 @@
                 <span class="fx-rpt-toolbar-label">Print</span>
             </ToolbarButtonControl>
 
-            <div class="fx-rpt-export-menu @(ExportMenuOpen ? "open" : "")">
-                <ToolbarButtonControl Vertical="true" OnClick="ToggleExportMenu">
-                    <span style="font-size:calc(18px * var(--fx-zoom, 1));">📤</span>
-                    <span class="fx-rpt-toolbar-label">Export ▾</span>
-                </ToolbarButtonControl>
-                <div class="fx-rpt-export-items">
-                    <button @onclick='() => ChromeOnExport("Print")'><i class="bi bi-printer"></i> Print / Save as PDF</button>
-                    <button disabled="@(ActiveTab?.Pages.Count is not > 0)" @onclick='() => ChromeOnExport("Html")'><i class="bi bi-filetype-html"></i> HTML report</button>
-                    <button disabled="@(ActiveTab?.CreateDataExport is null)" @onclick='() => ChromeOnExport("Xlsx")'><i class="bi bi-file-earmark-spreadsheet"></i> Excel data (.xlsx)</button>
-                    <button disabled="@(ActiveTab?.CreateDataExport is null)" @onclick='() => ChromeOnExport("Csv")'><i class="bi bi-filetype-csv"></i> CSV data</button>
-                </div>
-            </div>
+            <SplitButtonControl Text="Export" IconCss="bi bi-download" Items="@ExportItems"
+                Disabled="@(ActiveTab?.Pages.Count is not > 0)" OnClick="ChromeOnPrint"
+                OnItemClick="item => ChromeOnExport(item.Value?.ToString() ?? string.Empty)" />
 
             <ToolbarSeparatorControl />
 
@@ -111,17 +103,8 @@
                 <ToolbarButtonControl OnClick="ChromeOnZoomOut">
                     <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍−</span>
                 </ToolbarButtonControl>
-                <select @bind="ZoomLevel" @bind:after="ChromeOnZoomChanged" title="Zoom Level">
-                    <option value="25">25%</option>
-                    <option value="50">50%</option>
-                    <option value="75">75%</option>
-                    <option value="100">100%</option>
-                    <option value="125">125%</option>
-                    <option value="150">150%</option>
-                    <option value="200">200%</option>
-                    <option value="0">Fit Page</option>
-                    <option value="-1">Fit Width</option>
-                </select>
+                <DropDownListControl TValue="int" TItem="ReportZoomChoice" DataSource="@ZoomChoices" TextFieldName="Text" ValueFieldName="Value"
+                    @bind-Value="ZoomLevel" @bind-Value:after="ChromeOnZoomChanged" Width="110px" AriaLabel="Zoom" />
                 <ToolbarButtonControl OnClick="ChromeOnZoomIn">
                     <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍+</span>
                 </ToolbarButtonControl>
@@ -130,10 +113,11 @@
             <ToolbarSeparatorControl />
 
             <div class="fx-rpt-search-controls">
-                <input type="text" @bind="SearchText" @bind:event="oninput" placeholder="Search..." @onkeydown="ChromeOnSearchKeyDown" />
-                <ToolbarButtonControl OnClick="ChromeOnSearch">
-                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔎</span>
-                </ToolbarButtonControl>
+                <TextBoxControl @bind-Value="SearchText" UpdateOnInput="true" Placeholder="Search report" OnKeyDown="ChromeOnSearchKeyDown" aria-label="Search report" />
+                <ToolbarButtonControl Title="Find in report" OnClick="ChromeOnSearch"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">🔎</span></ToolbarButtonControl>
+                <ToolbarButtonControl Title="Previous match" Disabled="@(ActiveTab?.Search?.Matches.Count is not > 0)" OnClick="() => MoveSearchAsync(-1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▲</span></ToolbarButtonControl>
+                <ToolbarButtonControl Title="Next match" Disabled="@(ActiveTab?.Search?.Matches.Count is not > 0)" OnClick="() => MoveSearchAsync(1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▼</span></ToolbarButtonControl>
+                <ToolbarButtonControl Title="Clear search" Disabled="@(ActiveTab?.Search is null)" OnClick="ClearSearch"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">✕</span></ToolbarButtonControl>
             </div>
 
             <ToolbarSeparatorControl />
@@ -154,18 +138,8 @@
 
             <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="What happens when you click a group node">
                 <span class="fx-rpt-tree-mode-label">Tree:</span>
-                <label class="fx-rpt-tree-mode-radio">
-                    <input type="radio" name="fx-rpt-tree-mode" value="Group" disabled="@(!CanShowGroupTree)"
-                           checked="@(TreeMode == TreeNavigationMode.Group)"
-                           @onchange="() => SetTreeMode(TreeNavigationMode.Group)" />
-                    <span title="Click a node to scroll to that group on the current tab.">Group</span>
-                </label>
-                <label class="fx-rpt-tree-mode-radio">
-                    <input type="radio" name="fx-rpt-tree-mode" value="DrillDown" disabled="@(!CanShowGroupTree)"
-                           checked="@(TreeMode == TreeNavigationMode.DrillDown)"
-                           @onchange="() => SetTreeMode(TreeNavigationMode.DrillDown)" />
-                    <span title="Click a node to open a new drill-down tab filtered to that group.">Drill Down</span>
-                </label>
+                <RadioGroupControl TValue="TreeNavigationMode" Items="@(new RadioGroupItem<TreeNavigationMode>[] { new(TreeNavigationMode.Group, "Group"), new(TreeNavigationMode.DrillDown, "Drill down") })"
+                    Value="TreeMode" ValueChanged="SetTreeMode" Enabled="@CanShowGroupTree" AriaLabel="Tree navigation" />
             </div>
         </ToolbarControl>
 
@@ -177,12 +151,8 @@
                     <strong style="font-size: calc(13px * var(--fx-zoom, 1)); display: block; margin-bottom: 8px;">Report Groups</strong>
                     @if (GroupTree.Any())
                     {
-                        <ul>
-                            @foreach (var node in GroupTree)
-                            {
-                                @RenderGroupTreeNode(node)
-                            }
-                        </ul>
+                        <TreeViewControl Nodes="@ViewerTreeNodes" ShowIcons="false" ToggleOnNodeClick="false"
+                            OnNodeClick="node => node.Tag is FxGroupNode group ? OnGroupNodeClicked(group) : Task.CompletedTask" AriaLabel="Report groups" />
                     }
                     else
                     {
@@ -197,10 +167,10 @@
         </div>
 
         @* ── Status Bar ──────────────────────────────────────── *@
-        <div class="fx-rpt-status-bar">
+        <StatusBarControl CssClass="fx-rpt-status-bar">
             <span>@StatusMessage</span>
             <span>@(ReportLoaded ? $"Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
-        </div>
+        </StatusBarControl>
     </div>
 
     @* Embedded parameter prompt — opened by ShowReportAsync when the
@@ -235,6 +205,9 @@ else
 
     /// <summary>Use Crystal object geometry in the unified load, parameter, and refresh workflow.</summary>
     [Parameter] public bool UsePositionedLayout { get; set; }
+
+    /// <summary>Optional shared PDF viewer type. Set explicitly in trimmed hosts using the Documents package.</summary>
+    [Parameter] public Type? PdfViewerComponentType { get; set; }
 
     /// <summary>Include optional parameters when opening the parameter dialog.</summary>
     [Parameter] public bool PromptOptionalParameters { get; set; }
@@ -298,6 +271,31 @@ else
 
     // === Internal State ===
     private string PdfDataUrl = "";
+    // Decoded once per PdfDataUrl: the PDF viewer reloads (page 1, zoom reset) whenever it is
+    // handed a different DocumentBytes array, so a fresh decode on every render reset it.
+    private string? _pdfViewerSource;
+    private Dictionary<string, object>? _pdfViewerParameters;
+
+    private void ClearPdfPreview()
+    {
+        PdfDataUrl = "";
+        _pdfViewerSource = null;
+        _pdfViewerParameters = null;
+    }
+
+    private Dictionary<string, object> PdfViewerParameters()
+    {
+        if (_pdfViewerParameters is null || !ReferenceEquals(_pdfViewerSource, PdfDataUrl))
+        {
+            _pdfViewerSource = PdfDataUrl;
+            _pdfViewerParameters = new()
+            {
+                ["DocumentBytes"] = Convert.FromBase64String(PdfDataUrl[(PdfDataUrl.IndexOf(',') + 1)..]),
+                ["AllowOpen"] = false, ["AllowAnnotations"] = false, ["AllowFormFilling"] = false
+            };
+        }
+        return _pdfViewerParameters;
+    }
     private static readonly List<FxGroupNode> _emptyTree = new();
 
     // Context for drill-down — stored when ShowSqlReport runs from an XML-backed report so
@@ -325,7 +323,6 @@ else
     // Toolbar / panel toggles.
     private bool ShowGroupTree = true;
     private bool CanShowGroupTree => !UsePositionedLayout || GroupTree.Count > 0;
-    private bool ExportMenuOpen;
 
     // Tree-click mode — Group scrolls to / highlights the matching group
     // header on the current tab; DrillDown opens a new filtered tab.
@@ -338,6 +335,7 @@ else
 
     // Search box state.
     private string SearchText = "";
+    private int _searchVersion;
 
     // Tracks the report file most recently passed to ShowReportAsync —
     // drives the Refresh button and ReportFilePath-aware features.
@@ -426,6 +424,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        _conversionWorkspace.Dispose();
         _designerPreview?.Dispose();
         _designerPreview = null;
         try
@@ -467,7 +466,7 @@ else
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "OnCellClick failed for path: {Path}", pathJson);
+            Logger.LogWarning(ex, "Report drill-down action failed");
         }
     }
 
@@ -501,7 +500,7 @@ else
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "OnSubreportClick failed for payload: {Payload}", payloadJson);
+            Logger.LogWarning(ex, "Report subreport action failed");
         }
     }
 
@@ -555,6 +554,7 @@ else
         if (tabIndex >= 0 && tabIndex < Tabs.Count)
         {
             ActiveTabIndex = tabIndex;
+            SearchText = ActiveTab?.Search?.Query ?? "";
             StateHasChanged();
             OnRenderComplete?.Invoke();
         }
@@ -620,24 +620,7 @@ else
             foreach (var parameter in drillDef.FixedParameters)
                 sqlParams[parameter.Key] = parameter.Value;
 
-            // Log what we're about to run — critical for debugging empty
-            // drill-downs. Console.WriteLine bypasses the Serilog
-            // Fx.ControlKit.Reports → Warning override that silences
-            // LogInformation, so the SQL is always visible in the
-            // process console output (and the file sink picks up the
-            // Logger.LogInformation copies as well, when the override
-            // is dialed back to Information).
-            var pathStr = string.Join(" -> ", fullPath.Select(f => $"{f.Field}={f.Value}"));
-            var paramStr = string.Join(", ", sqlParams.Select(kv => $"{kv.Key}={kv.Value} ({kv.Value?.GetType().Name})"));
-            Console.WriteLine($"\n═══ DRILL-DOWN ═══");
-            Console.WriteLine($"  Path:       [{pathStr}]");
-            Console.WriteLine($"  Parameters: {paramStr}");
-            Console.WriteLine($"  SQL:");
-            Console.WriteLine(drillDef.Sql);
-            Console.WriteLine($"═══════════════════\n");
-            Logger.LogInformation("Drill-down path: [{Path}]", pathStr);
-            Logger.LogInformation("Drill-down parameters: {Params}", paramStr);
-            Logger.LogInformation("Drill-down SQL:\n{Sql}", drillDef.Sql);
+            LogQuery("Drill-down", drillDef.Sql, sqlParams);
 
             var dt = ExecuteReportData(drillDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
@@ -684,12 +667,11 @@ else
             Tabs.Add(tab);
             ActiveTabIndex = Tabs.Count - 1;
 
-            Logger.LogInformation("Drill-down tab opened: {Title} ({Rows} rows, {Pages} pages)",
-                tab.Title, dt.Rows.Count, tab.Pages.Count);
+            Logger.LogInformation("Drill-down tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
         }
         catch (Exception ex)
         {
-            Logger.LogError(ex, "Drill-down failed for node {Label}", node.Label);
+            Logger.LogError(ex, "Report drill-down failed");
             ErrorMessage = $"Drill-down error: {ex.Message}";
         }
         finally
@@ -771,9 +753,7 @@ else
             foreach (var parameter in subDef.FixedParameters)
                 sqlParams[parameter.Key] = parameter.Value;
 
-            var filterStr = string.Join(", ", filters.Select(f => $"{f.Table}.{f.Field}={f.Value}"));
-            Logger.LogInformation("Subreport {Title} filters: {Filters}", title, filterStr);
-            Logger.LogInformation("Subreport SQL:\n{Sql}", subDef.Sql);
+            LogQuery("Subreport", subDef.Sql, sqlParams);
 
             var dt = ExecuteReportData(subDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
@@ -818,8 +798,7 @@ else
             ActiveTabIndex = Tabs.Count - 1;
             StatusMessage = $"Subreport: {tab.Title}";
 
-            Logger.LogInformation("Subreport tab opened: {Title} ({Rows} rows, {Pages} pages)",
-                tab.Title, dt.Rows.Count, tab.Pages.Count);
+            Logger.LogInformation("Subreport tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
         }
         catch (Exception ex)
         {
@@ -903,7 +882,7 @@ else
     {
         IsLoading = true;
         ErrorMessage = null;
-        PdfDataUrl = "";
+        ClearPdfPreview();
         Tabs.Clear();
         await InvokeAsync(StateHasChanged);
 
@@ -968,7 +947,7 @@ else
         }
         IsLoading = true;
         ErrorMessage = null;
-        PdfDataUrl = "";
+        ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
         await InvokeAsync(StateHasChanged);
@@ -1040,7 +1019,7 @@ else
     {
         IsLoading = true;
         ErrorMessage = null;
-        PdfDataUrl = "";
+        ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
         await InvokeAsync(StateHasChanged);
@@ -1074,11 +1053,7 @@ else
             foreach (var parameter in definition.FixedParameters)
                 sqlParams[parameter.Key] = parameter.Value;
 
-            // Log what we're about to run so users can see parameter values when a query
-            // unexpectedly returns 0 rows (column type mismatch, wrong session value, etc).
-            Logger.LogInformation("Main report parameters: {Params}",
-                string.Join(", ", sqlParams.Select(kv => $"{kv.Key}={kv.Value} ({kv.Value?.GetType().Name})")));
-            Logger.LogInformation("Main report SQL:\n{Sql}", definition.Sql);
+            LogQuery("Main report", definition.Sql, sqlParams);
 
             // Execute SQL
             var dt = ExecuteReportData(definition, sqlParams.Count > 0 ? sqlParams : null);
@@ -1109,7 +1084,7 @@ else
                     Logger.LogWarning(error, "Browser report text measurement unavailable");
                     result = session.Paginate();
                 }
-                Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
+                Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, PageSnapshots = result.Snapshots, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
                     CreateDataExport = session.CreateDataExport,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
                 _lastParameters = new Dictionary<string, object>(sqlParams);
@@ -1200,7 +1175,7 @@ else
     {
         IsLoading = true;
         ErrorMessage = null;
-        PdfDataUrl = "";
+        ClearPdfPreview();
         Tabs.Clear();
         // Orientation is now stored on each tab; set in the tab construction below.
         await InvokeAsync(StateHasChanged);
@@ -1262,7 +1237,7 @@ else
     /// <summary>Clears the current report.</summary>
     public void Clear()
     {
-        PdfDataUrl = "";
+        ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
         ErrorMessage = null;
@@ -1344,8 +1319,8 @@ else
                 return;
             }
 
-            // Prefer an existing XML export. If only the .rpt is available,
-            // materialize the XML with the native C# converter and render that.
+            // An explicit .xml path is rendered as is. An .rpt path is always converted fresh with the
+            // native C# converter into an owned temporary workspace; a sibling or xml/ export is not reused.
             var xmlPath = await ResolveOrConvertXmlPathAsync(file);
             if (xmlPath != null)
             {
@@ -1469,64 +1444,9 @@ else
         }
     }
 
-    /// <summary>
-    /// Resolves the XML sibling for a given .rpt / .xml path. Looks for
-    /// .../Reports/xml/Foo.xml when the input lives under .../Reports/rpt/,
-    /// otherwise checks a sibling .xml in the same folder.
-    /// </summary>
-    private static string? ResolveXmlPathLocal(string file)
-    {
-        if (string.IsNullOrWhiteSpace(file)) return null;
-        if (file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
-            return File.Exists(file) ? file : null;
-        var dir = Path.GetDirectoryName(file) ?? "";
-        var baseName = Path.GetFileNameWithoutExtension(file);
-        if (!string.IsNullOrEmpty(dir) &&
-            Path.GetFileName(dir).Equals("rpt", StringComparison.OrdinalIgnoreCase))
-        {
-            var xmlDir = Path.Combine(Path.GetDirectoryName(dir) ?? "", "xml");
-            var candidate = Path.Combine(xmlDir, baseName + ".xml");
-            if (File.Exists(candidate)) return candidate;
-        }
-        var sibling = Path.Combine(dir, baseName + ".xml");
-        if (File.Exists(sibling)) return sibling;
-        return null;
-    }
+    private readonly ReportConversionWorkspace _conversionWorkspace = new();
 
-    private async Task<string?> ResolveOrConvertXmlPathAsync(string file)
-    {
-        var xmlPath = ResolveXmlPathLocal(file);
-        if (xmlPath != null || !file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase))
-            return xmlPath;
-
-        if (OperatingSystem.IsBrowser())
-            throw new NotSupportedException("Crystal .rpt conversion requires server-side .NET because it reads the report binary from disk.");
-
-        var outputPath = GetDefaultXmlOutputPath(file);
-        Logger.LogInformation("Converting Crystal RPT for viewer: {Rpt} -> {Xml}", file, outputPath);
-
-        var result = await CrystalRptToXml.ConvertAsync(
-            file,
-            outputPath,
-            new CrystalRptConversionOptions(
-                ExtractSubreports: true,
-                Progress: message => Logger.LogDebug("RptToXml: {Message}", message)));
-
-        return result.ReportXmlPath;
-    }
-
-    private static string GetDefaultXmlOutputPath(string rptFilePath)
-    {
-        var dir = Path.GetDirectoryName(rptFilePath) ?? "";
-        var baseName = Path.GetFileNameWithoutExtension(rptFilePath);
-        if (!string.IsNullOrEmpty(dir) &&
-            Path.GetFileName(dir).Equals("rpt", StringComparison.OrdinalIgnoreCase))
-        {
-            return Path.Combine(Path.GetDirectoryName(dir) ?? "", "xml", baseName + ".xml");
-        }
-
-        return Path.Combine(dir, baseName + ".xml");
-    }
+    private Task<string?> ResolveOrConvertXmlPathAsync(string file) => _conversionWorkspace.ResolveAsync(file);
 
     // ═══════════════════════════════════════════════════════════════
     //  CHROME HANDLERS — toolbar / group tree / status bar
@@ -1546,11 +1466,37 @@ else
 
     private async Task ChromeOnPrint() => await Print();
 
-    private void ToggleExportMenu() => ExportMenuOpen = !ExportMenuOpen;
+    private IList<SplitButtonItem> ExportItems =>
+    [
+        new("Print / Save as PDF", "bi bi-printer", "Print"),
+        new("HTML report", "bi bi-filetype-html", "Html"),
+        new("Excel data (.xlsx)", "bi bi-file-earmark-spreadsheet", "Xlsx", ActiveTab?.CreateDataExport is null),
+        new("CSV data", "bi bi-filetype-csv", "Csv", ActiveTab?.CreateDataExport is null)
+    ];
+    private sealed record ReportZoomChoice(int Value, string Text);
+    private static readonly ReportZoomChoice[] ZoomChoices = [new(25, "25%"), new(50, "50%"), new(75, "75%"), new(100, "100%"), new(125, "125%"), new(150, "150%"), new(200, "200%"), new(0, "Fit page"), new(-1, "Fit width")];
+    private List<FxGroupNode>? _treeSource;
+    private List<TreeNode> _viewerTreeNodes = [];
+    private List<TreeNode> ViewerTreeNodes
+    {
+        get
+        {
+            if (!ReferenceEquals(_treeSource, GroupTree))
+            {
+                _treeSource = GroupTree;
+                _viewerTreeNodes = _treeSource.Select(MapGroupNode).ToList();
+            }
+            return _viewerTreeNodes;
+        }
+    }
+    private static TreeNode MapGroupNode(FxGroupNode group) => new()
+    {
+        Id = group.AnchorId, Text = group.Label, Tag = group, IsExpanded = group.Expanded,
+        Children = group.Children.Select(MapGroupNode).ToList()
+    };
 
     private async Task ChromeOnExport(string format)
     {
-        ExportMenuOpen = false;
         StatusMessage = $"Exporting as {format}...";
         await InvokeAsync(StateHasChanged);
         try
@@ -1558,7 +1504,7 @@ else
             if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
             if (ActiveTab is null) throw new InvalidOperationException("No report is loaded.");
             if (!Enum.TryParse<ReportNativeExportFormat>(format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
-            var result = ReportNativeExport.Export(ActiveTab, nativeFormat, string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath));
+            var result = await ReportNativeExport.ExportAsync(ActiveTab, nativeFormat, string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath));
             await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/browser-capabilities.js");
             if (module is null) throw new InvalidOperationException("Browser download is unavailable.");
             using var stream = new MemoryStream(result.Bytes, writable: false);
@@ -1620,16 +1566,47 @@ else
         await ChromeOnZoomChanged();
     }
 
-    private void ChromeOnSearchKeyDown(KeyboardEventArgs e)
+    private async Task ChromeOnSearchKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter") _ = ChromeOnSearch();
+        if (e.Key == "Enter") await ChromeOnSearch();
     }
-    private Task ChromeOnSearch()
+    private async Task ChromeOnSearch()
     {
-        StatusMessage = string.IsNullOrWhiteSpace(SearchText)
-            ? "Search cleared."
-            : $"Search: \"{SearchText}\" (highlight pending).";
-        return Task.CompletedTask;
+        if (ActiveTab is not { } tab) return;
+        if (string.IsNullOrWhiteSpace(SearchText)) { ClearSearch(); return; }
+        if (tab.Search?.Query == SearchText.Trim()) { await MoveSearchAsync(1); return; }
+        try
+        {
+            var query = SearchText;
+            var version = ++_searchVersion;
+            var pages = tab.PageSnapshots.Count > 0 ? await ReportNativeExport.RenderPagesAsync(tab.PageSnapshots) : tab.Pages;
+            if (version != _searchVersion) return;
+            tab.Search = new ReportTextSearch(pages, query);
+            tab.SearchMatchIndex = -1;
+            if (!ReferenceEquals(tab, ActiveTab)) return;
+            if (tab.Search.Matches.Count == 0) StatusMessage = "No matches.";
+            else await MoveSearchAsync(1);
+        }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+        { StatusMessage = "Search failed: " + error.Message; }
+    }
+
+    private async Task MoveSearchAsync(int direction)
+    {
+        if (ActiveTab?.Search is not { Matches.Count: > 0 } search) return;
+        var tab = ActiveTab;
+        ActiveTab.SearchMatchIndex = (ActiveTab.SearchMatchIndex + direction + search.Matches.Count) % search.Matches.Count;
+        JumpTo(search.Matches[ActiveTab.SearchMatchIndex].Page);
+        StatusMessage = $"Match {ActiveTab.SearchMatchIndex + 1} of {search.Matches.Count}" + (search.Truncated ? " (result limit reached)" : "");
+        await InvokeAsync(StateHasChanged);
+        if (ReferenceEquals(tab, ActiveTab)) await ScrollReportAnchorAsync("fx-report-hit-" + tab.SearchMatchIndex);
+    }
+
+    private void ClearSearch()
+    {
+        _searchVersion++;
+        if (ActiveTab is not null) { ActiveTab.Search = null; ActiveTab.SearchMatchIndex = -1; }
+        SearchText = ""; StatusMessage = "Search cleared.";
     }
 
     private void ToggleGroupTreePanel() => ShowGroupTree = !ShowGroupTree;
@@ -1647,7 +1624,6 @@ else
         }
     }
 
-    private void ToggleGroupNode(FxGroupNode node) => node.Expanded = !node.Expanded;
 
     private async Task OnGroupNodeClicked(FxGroupNode node)
     {
@@ -1853,7 +1829,7 @@ else
                 Field = group.Field,
                 Level = level,
                 PageIndex = pageIdx,
-                AnchorId = $"group-{level}-{SanitizeForId(value ?? "")}",
+                AnchorId = ReportValueFormatting.GroupAnchor(items[0].Row, groups, level, value ?? ""),
                 Children = BuildGroupLevel(items, groups, level + 1, rowsPerPage)
             };
             nodes.Add(node);
@@ -1861,8 +1837,9 @@ else
         return nodes;
     }
 
-    private static string SanitizeForId(string s)
-        => new string((s ?? "").Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+    private void LogQuery(string operation, string sql, IDictionary<string, object> parameters)
+        => Logger.LogInformation("{Operation} query {QueryId}; parameters: {Parameters}", operation,
+            ReportValueFormatting.QueryId(sql), string.Join(", ", parameters.Select(pair => $"{pair.Key} ({pair.Value?.GetType().Name ?? "null"})")));
 
     // ═══════════════════════════════════════════════════════════════════
     // Column-width strategy
@@ -2489,7 +2466,7 @@ else
                 if (agg != null)
                 {
                     var val = ComputeAggregate(allRows, agg);
-                    html.Append($"<td style='text-align:right;font-weight:bold'>{agg.Label} {val}</td>");
+                    html.Append($"<td style='text-align:right;font-weight:bold'>{Escape(agg.Label)} {Escape(val)}</td>");
                 }
                 else if (col == columns[0])
                 {
@@ -2531,7 +2508,7 @@ else
             if (agg != null)
             {
                 var val = ComputeAggregate(groupRows, agg);
-                html.Append($"<td style='text-align:right;font-weight:bold'>{agg.Label} {val}</td>");
+                html.Append($"<td style='text-align:right;font-weight:bold'>{Escape(agg.Label)} {Escape(val)}</td>");
             }
             else if (col == columns[0])
             {
@@ -2560,7 +2537,7 @@ else
         DataRow row, List<ReportGroup> allGroups, string groupValue)
     {
         var html = new System.Text.StringBuilder();
-        var anchorId = $"group-{level}-" + new string(groupValue.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+        var anchorId = ReportValueFormatting.GroupAnchor(row, allGroups, level, groupValue);
         var hdrPath = BuildCellPathAttribute(row, allGroups);
         var cls = $"fx-rpt-group-header fx-rpt-group-l{level}" + (string.IsNullOrEmpty(hdrPath) ? "" : " fx-drill-row");
         var pathAttr = string.IsNullOrEmpty(hdrPath) ? "" : $" data-path='{hdrPath}'";
@@ -2614,9 +2591,7 @@ else
     }
 
     /// <summary>
-    /// Emits a group FOOTER row at <paramref name="level"/> with subtotals for any currency
-    /// columns belonging to that group's aggregates. Indents like the matching header.
-    /// Subtotals are computed by summing the group's rows for each numeric column.
+    /// Emits only the aggregates declared by this group, in their original column slots.
     /// </summary>
     private string RenderMultiLevelFooter(List<ReportGroup> renderGroups, int level,
         List<ReportColumn> columns, List<DataRow> allRows, string?[] lastValues)
@@ -2635,65 +2610,27 @@ else
         var html = new System.Text.StringBuilder();
         var label = lastValues[level] ?? "";
 
-        // Find the FIRST numeric column — the label cell colspans over every
-        // text column to its left so the totals stay in their own column slot
-        // (perfectly column-aligned with the data above). If there are no
-        // numeric columns at all, the label spans the whole row.
-        int firstNumericCol = -1;
-        for (int i = 0; i < columns.Count; i++)
-        {
-            if (columns[i].ColumnType is ReportColumnType.Currency
-                                       or ReportColumnType.Decimal
-                                       or ReportColumnType.Integer)
-            {
-                firstNumericCol = i;
-                break;
-            }
-        }
-        int labelSpan = firstNumericCol < 0 ? columns.Count : firstNumericCol;
-        if (labelSpan < 1) labelSpan = 1;
-
+        var aggregates = renderGroups[level].Aggregates;
+        var firstAggregate = columns.FindIndex(column => aggregates.Any(aggregate => aggregate.Field == column.Field));
+        var labelSpan = firstAggregate < 0 ? columns.Count : firstAggregate;
         html.Append($"<tr class='fx-rpt-group-footer fx-rpt-group-l{level}'>");
-
-        // Label cell — single colspan over the text columns at the left.
-        // Indent comes from the .fx-rpt-group-footer.fx-rpt-group-l{level} CSS
-        // class (padding-left), NOT from empty <td>s — those would inherit
-        // wide column widths and push the label all the way to the middle.
-        html.Append($"<td colspan='{labelSpan}' " +
+        if (labelSpan > 0)
+            html.Append($"<td colspan='{labelSpan}' " +
                     $"style='font-weight:bold;border-top:1px solid #999;text-align:right;'>" +
                     $"{Escape(label)}&nbsp;</td>");
-
-        // Numeric column slots — each gets its sum (or remains empty for non-
-        // numeric columns at the right). Order matches the header so the
-        // total renders directly under its column header.
         for (int colIdx = labelSpan; colIdx < columns.Count; colIdx++)
         {
             var col = columns[colIdx];
-            if (col.ColumnType is ReportColumnType.Currency
-                               or ReportColumnType.Decimal
-                               or ReportColumnType.Integer)
-            {
-                var sum = 0.0;
-                foreach (var r in groupRows)
-                {
-                    if (!r.Table.Columns.Contains(col.Field)) continue;
-                    var raw = r[col.Field];
-                    if (raw == null || raw == DBNull.Value) continue;
-                    if (double.TryParse(raw.ToString(), out var d)) sum += d;
-                }
-                var formatted = col.ColumnType == ReportColumnType.Currency
-                    ? sum.ToString("C2")
-                    : col.ColumnType == ReportColumnType.Integer
-                        ? sum.ToString("N0")
-                        : sum.ToString("N2");
-                html.Append($"<td class='fx-rpt-col-nowrap' " +
-                            $"style='text-align:right;font-weight:bold;border-top:1px solid #999;'>" +
-                            $"{Escape(formatted)}</td>");
-            }
-            else
-            {
-                html.Append("<td style='border-top:1px solid #999;'></td>");
-            }
+            html.Append("<td class='fx-rpt-col-nowrap' style='text-align:right;font-weight:bold;border-top:1px solid #999;'>");
+            if (colIdx == 0 && labelSpan == 0) html.Append($"<div>{Escape(label)}</div>");
+            // The column's own format, as the footer used before declared aggregates: the loader gives
+            // every group aggregate "C2", which would show counts and quantities as currency. The
+            // label is only needed to tell several aggregates on one column apart.
+            var columnAggregates = aggregates.Where(aggregate => aggregate.Field == col.Field).ToList();
+            html.Append(string.Join("<br />", columnAggregates.Select(aggregate =>
+                (columnAggregates.Count > 1 ? Escape(aggregate.Label) + " " : "")
+                + Escape(ComputeAggregate(groupRows, FooterAggregate(aggregate, col))))));
+            html.Append("</td>");
         }
         html.Append("</tr>");
         return html.ToString();
@@ -2738,8 +2675,9 @@ else
                 bold = col.ConditionalStyle.FalseBold.Value;
         }
 
-        if (!string.IsNullOrWhiteSpace(color))
-            styles.Add($"color:{color}");
+        var safeColor = ReportValueFormatting.CssColor(color);
+        if (safeColor.Length > 0)
+            styles.Add($"color:{safeColor}");
         if (bold)
             styles.Add("font-weight:bold");
 
@@ -2822,31 +2760,20 @@ else
     }
 
     private static string ComputeAggregate(List<DataRow> rows, ReportAggregate agg)
+        => ReportValueFormatting.Aggregate(rows, agg);
+
+    // Replaces only the loader's placeholder formats ("C2" on every group sum, "N0" on counts); a
+    // format the host set is kept. Crystal-loaded columns are typed Currency or Text, so a sum on a
+    // Text column (a quantity) gets N2 rather than currency.
+    private static ReportAggregate FooterAggregate(ReportAggregate aggregate, ReportColumn column) => new()
     {
-        try
-        {
-            var values = rows.Where(r => r.Table.Columns.Contains(agg.Field) && r[agg.Field] != DBNull.Value)
-                             .Select(r => Convert.ToDouble(r[agg.Field]))
-                             .ToList();
-
-            if (values.Count == 0) return "";
-
-            double result = agg.AggregateType switch
-            {
-                ReportAggregateType.Sum => values.Sum(),
-                ReportAggregateType.Average => values.Average(),
-                ReportAggregateType.Count => values.Count,
-                ReportAggregateType.Min => values.Min(),
-                ReportAggregateType.Max => values.Max(),
-                _ => values.Sum()
-            };
-
-            return !string.IsNullOrEmpty(agg.Format)
-                ? result.ToString(agg.Format)
-                : result.ToString("N2");
-        }
-        catch { return ""; }
-    }
+        Field = aggregate.Field, AggregateType = aggregate.AggregateType, Label = aggregate.Label,
+        Format = aggregate.Format is not ("" or "C2" or "N0") ? aggregate.Format
+            : aggregate.AggregateType == ReportAggregateType.Count ? "N0"
+            : column.ColumnType == ReportColumnType.Currency ? "C2"
+            : aggregate.AggregateType == ReportAggregateType.Average ? "N2"
+            : column.ColumnType == ReportColumnType.Integer ? "N0" : "N2"
+    };
 
     private static string ReplacePlaceholders(string text, string title, int page, int total, DateTime now)
     {
@@ -3087,52 +3014,64 @@ else
         }
         else if (!string.IsNullOrEmpty(PdfDataUrl))
         {
-            <iframe src="@PdfDataUrl" class="fx-report-pdf-frame" title="Report"></iframe>
+            @if ((PdfViewerComponentType ?? typeof(ReportWriterControl).Assembly.GetType("Fx.ControlKit.Pdf.PdfViewerControl")
+                ?? Type.GetType("Fx.ControlKit.Pdf.PdfViewerControl, FlexCore.Documents", throwOnError: false)) is { } pdfViewer)
+            {
+                <DynamicComponent Type="pdfViewer" Parameters="@PdfViewerParameters()" />
+            }
+            else
+            {
+                <AlertControl Severity="AlertSeverity.Warning" Text="PDF preview requires the shared Documents viewer. Native report preview remains available." />
+            }
         }
         else if (Tabs.Count > 0 && ActiveTab != null && ActiveTab.Pages.Count > 0)
         {
             @if (ActiveTab.RuntimeDiagnostics.Count > 0)
             {
-                <details class="fx-report-runtime-diagnostics" open>
-                    <summary>Runtime limitations (@ActiveTab.RuntimeDiagnostics.Count)</summary>
+                <AccordionControl>
+                  <AccordionItemControl Title="@($"Runtime limitations ({ActiveTab.RuntimeDiagnostics.Count})")" InitiallyExpanded="true">
                     <ul>
                         @foreach (var diagnostic in ActiveTab.RuntimeDiagnostics)
                         {
                             <li>@diagnostic</li>
                         }
                     </ul>
-                </details>
+                  </AccordionItemControl>
+                </AccordionControl>
             }
             @if (Tabs.Count > 1)
             {
-                <div class="fx-report-tab-bar">
-                    @for (var i = 0; i < Tabs.Count; i++)
-                    {
-                        var idx = i;
-                        var tab = Tabs[idx];
-                        <div class="fx-report-tab @(idx == ActiveTabIndex ? "active" : "")"
-                             @onclick="() => SwitchTab(idx)">
-                            <span>@tab.Title</span>
-                            @if (idx > 0)
-                            {
-                                <button class="fx-report-tab-close"
-                                        @onclick="() => CloseTab(idx)"
-                                        @onclick:stopPropagation="true">×</button>
-                            }
-                        </div>
-                    }
-                </div>
+                <TabStripControl Items="@Tabs.Select((tab, index) => new TabStripItem(tab.Title, closable: index > 0)).ToList()"
+                    SelectedIndex="ActiveTabIndex" SelectedIndexChanged="SwitchTab" OnTabClose="CloseTab" />
             }
             <div class="fx-report-pages">
                 <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
-                    @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
+                    @if (ActiveTab.Search is { } search)
+                    {
+                        @((MarkupString)search.HighlightPage(Math.Clamp(ActiveTab.CurrentPage, 1, ActiveTab.Pages.Count), ActiveTab.SearchMatchIndex))
+                    }
+                    else if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
+                    {
+                        <ReportPageControl Page="@ActiveTab.PageSnapshots[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.PageSnapshots.Count) - 1]" />
+                    }
+                    else
+                    {
+                        @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
+                    }
                 </div>
             </div>
             @if (ActiveTab.PositionedPage is { } pageSize)
             {
                 <style>@($"@page fx-positioned {{ size:{ReportObjectRenderer.Number((pageSize.ContentWidthTwips + pageSize.MarginLeftTwips + pageSize.MarginRightTwips) / 15d)}px {ReportObjectRenderer.Number((pageSize.ContentHeightTwips + pageSize.MarginTopTwips + pageSize.MarginBottomTwips) / 15d)}px; margin:0; }}")</style>
                 <div class="fx-report-positioned-print" aria-hidden="true">
-                    @foreach (var html in ActiveTab.Pages) { @((MarkupString)html) }
+                    @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
+                    {
+                        @foreach (var snapshot in ActiveTab.PageSnapshots) { <ReportPageControl Page="snapshot" /> }
+                    }
+                    else
+                    {
+                        @foreach (var html in ActiveTab.Pages) { @((MarkupString)html) }
+                    }
                 </div>
             }
         }
@@ -3142,34 +3081,4 @@ else
         }
     };
 
-    private RenderFragment RenderGroupTreeNode(FxGroupNode node) => __builder =>
-    {
-        <li>
-            <span class="fx-rpt-tree-node">
-                @if (node.Children?.Any() == true)
-                {
-                    <span class="fx-rpt-tree-toggle" @onclick="() => ToggleGroupNode(node)" @onclick:stopPropagation="true">
-                        @(node.Expanded ? "▼" : "▶")
-                    </span>
-                }
-                else
-                {
-                    <span class="fx-rpt-tree-toggle leaf">&nbsp;</span>
-                }
-                <span class="fx-rpt-tree-label @(ReferenceEquals(_selectedTreeNode, node) ? "selected" : "")"
-                      @onclick="() => OnGroupNodeClicked(node)" title="@node.Value">
-                    @node.Label
-                </span>
-            </span>
-            @if (node.Expanded && node.Children?.Any() == true)
-            {
-                <ul>
-                    @foreach (var child in node.Children)
-                    {
-                        @RenderGroupTreeNode(child)
-                    }
-                </ul>
-            }
-        </li>
-    };
 }

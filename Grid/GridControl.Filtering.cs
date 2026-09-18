@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using System.Globalization;
 
 namespace Fx.ControlKit.Grid;
@@ -13,6 +14,20 @@ public partial class GridControl<TValue>
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _filterRowDebounce =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventCallback<string?>> _filterRowBoxCommits =
+        new(StringComparer.OrdinalIgnoreCase);
+    // @key of a filter-row text box: its column, and generations bumped when code
+    // sets or clears that column's value (per column) or every value (all). The
+    // text is browser-owned, so a bump re-seeds only the boxes it concerns.
+    private readonly Dictionary<string, int> _filterRowBoxGenerations =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int _filterRowBoxGeneration;
+
+    private (string Field, int All, int Own, bool AsYouType) FilterRowBoxKey(string field) =>
+        (field, _filterRowBoxGeneration, _filterRowBoxGenerations.GetValueOrDefault(field), SearchAsYouType);
+
+    private void ReseedFilterRowBox(string field) =>
+        _filterRowBoxGenerations[field] = _filterRowBoxGenerations.GetValueOrDefault(field) + 1;
     private CancellationTokenSource? _filterPopupAutoApplyCts;
     private string _filterChecklistSearchDraft = string.Empty;
     private bool _filterChecklistDraftTouched;
@@ -29,6 +44,16 @@ public partial class GridControl<TValue>
             : StringComparer.OrdinalIgnoreCase;
 
     private int EffectiveFilterDelay => Math.Max(0, FilterSettingsRef?.ImmediateModeDelay ?? 300);
+
+    // The grid's filter and search boxes search as you type unless the host turns
+    // it off (then they apply on commit). Either way the browser owns the text.
+    private bool SearchAsYouType => FilterSettingsRef?.SearchAsYouType != false;
+
+    // As you type: Uncontrolled (@bind keeps the server's copy of the text in step,
+    // so a render never writes an older text back) and typing keys never dispatched.
+    // On commit: ClientBuffered (no traffic until the text is committed).
+    private TextBoxTypingBehavior FilterBoxTypingBehavior =>
+        SearchAsYouType ? TextBoxTypingBehavior.ServerBacked : TextBoxTypingBehavior.ClientBuffered;
 
     private bool ShowFilterRowOperators => FilterSettingsRef?.ShowFilterRowOperators != false;
 
@@ -116,6 +141,14 @@ public partial class GridControl<TValue>
 
     private void QueueFilterRowValue(string field, string? value)
     {
+        ReseedFilterRowBox(field);
+        QueueFilterRowDraft(field, value);
+    }
+
+    // A filter-row value that applies after ImmediateModeDelay: set from code, or
+    // typed while searching as you type (the box keeps its own text then).
+    private void QueueFilterRowDraft(string field, string? value)
+    {
         _filterRowDrafts[field] = value ?? string.Empty;
 
         if (_filterRowDebounce.Remove(field, out var previous))
@@ -138,8 +171,13 @@ public partial class GridControl<TValue>
 
             await InvokeAsync(async () =>
             {
-                if (!cts.IsCancellationRequested && _filterRowDrafts.TryGetValue(field, out var value))
-                    await CommitFilterRowAsync(field, value);
+                if (cts.IsCancellationRequested || !_filterRowDrafts.TryGetValue(field, out var value))
+                    return;
+                // In flight from here: an Enter / Tab / leave during the commit (a slow Filtering
+                // handler or reload) finds nothing queued and does not apply the same text twice.
+                if (_filterRowDebounce.TryGetValue(field, out var queued) && ReferenceEquals(queued, cts))
+                    _filterRowDebounce.Remove(field);
+                await CommitFilterRowAsync(field, value);
             });
         }
         catch (OperationCanceledException)
@@ -154,6 +192,86 @@ public partial class GridControl<TValue>
         }
     }
 
+    private readonly Dictionary<string, (object Key, Action<string?> Typed)> _filterRowBoxTypedCallbacks =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventCallback<KeyboardEventArgs>> _filterRowBoxKeyDowns =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventCallback> _filterRowBoxLefts =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // Search as you type: each input queues the value (no render); Enter, Tab or
+    // leaving the box apply a queued value at once.
+    private Action<string?>? FilterRowBoxTyped(string field)
+    {
+        if (!SearchAsYouType)
+            return null;
+        object key = FilterRowBoxKey(field);
+        if (_filterRowBoxTypedCallbacks.TryGetValue(field, out var cached) && Equals(cached.Key, key))
+            return cached.Typed;
+        // A box replaced by a re-seed can still report a late input; its key no
+        // longer matches, so it is ignored.
+        Action<string?> typed = text =>
+        {
+            if (Equals(key, FilterRowBoxKey(field)))
+                QueueFilterRowDraft(field, text);
+        };
+        _filterRowBoxTypedCallbacks[field] = (key, typed);
+        return typed;
+    }
+
+    private EventCallback<KeyboardEventArgs> FilterRowBoxKeyDown(string field)
+    {
+        if (!SearchAsYouType)
+            return CommitKeyDown;
+        if (!_filterRowBoxKeyDowns.TryGetValue(field, out var keyDown))
+            _filterRowBoxKeyDowns[field] = keyDown = NonRenderingEventHandler.Create<KeyboardEventArgs>(
+                e => IsApplyNowKey(e) ? ApplyQueuedFilterRowAsync(field) : Task.CompletedTask);
+        return keyDown;
+    }
+
+    private EventCallback FilterRowBoxLeft(string field)
+    {
+        if (!SearchAsYouType)
+            return default;
+        if (!_filterRowBoxLefts.TryGetValue(field, out var left))
+            _filterRowBoxLefts[field] = left = new EventCallback(null, (Func<Task>)(() => ApplyQueuedFilterRowAsync(field)));
+        return left;
+    }
+
+    private Task ApplyQueuedFilterRowAsync(string field)
+    {
+        if (!_filterRowDebounce.Remove(field, out var pending))
+            return Task.CompletedTask;
+        pending.Cancel();
+        pending.Dispose();
+        return CommitFilterRowAsync(field, _filterRowDrafts.GetValueOrDefault(field));
+    }
+
+    private EventCallback<string?> FilterRowBoxCommitted(string field)
+    {
+        if (SearchAsYouType)
+            return default;
+        if (!_filterRowBoxCommits.TryGetValue(field, out var callback))
+            _filterRowBoxCommits[field] = callback = NonRenderingEventHandler.Create<string?>(
+                value => CommitFilterRowBoxAsync(field, value));
+        return callback;
+    }
+
+    // A filter-row box commits on Enter, Tab or leaving it and applies at once.
+    private Task CommitFilterRowBoxAsync(string field, string? value)
+    {
+        var text = value ?? string.Empty;
+        if (string.Equals(text, GetColumnFilterValue(field), StringComparison.Ordinal))
+            return Task.CompletedTask;
+        // The typed value wins over one still queued through OnColumnFilterInput.
+        if (_filterRowDebounce.Remove(field, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+        return CommitFilterRowAsync(field, text);
+    }
+
     private async Task CommitFilterRowAsync(string field, string? value)
     {
         var column = FindColumnByField(field);
@@ -161,12 +279,20 @@ public partial class GridControl<TValue>
             ? TextFilterOperator.Contains
             : GetFilterRowOperator(column);
         var normalized = value ?? string.Empty;
+        var draftBefore = _filterRowDrafts.GetValueOrDefault(field);
 
         if (EventsRef?.Filtering.HasDelegate == true)
         {
+            var clearEpoch = FilterClearEpoch(field);
             var args = new FilterEventArgs { Field = field, Value = normalized };
             await EventsRef.Filtering.InvokeAsync(args);
             if (args.Cancel)
+                return;
+            // The row was cleared (or every filter reset / restored) while the host
+            // decided: the clear wins. Text typed meanwhile is newer than this commit:
+            // its own debounce (or Enter / Tab) applies it, so this one stands down.
+            if (clearEpoch != FilterClearEpoch(field)
+                || !string.Equals(_filterRowDrafts.GetValueOrDefault(field), draftBefore, StringComparison.Ordinal))
                 return;
         }
 
@@ -192,6 +318,7 @@ public partial class GridControl<TValue>
 
     private async Task ClearFilterRowAsync(string field)
     {
+        _filterClearEpochs[field] = _filterClearEpochs.GetValueOrDefault(field) + 1;
         if (_filterRowDebounce.Remove(field, out var pending))
         {
             pending.Cancel();
@@ -201,6 +328,7 @@ public partial class GridControl<TValue>
         _filterRowDrafts.Remove(field);
         _filterRowOperators.Remove(field);
         _simpleColumnFilters.Remove(field);
+        ReseedFilterRowBox(field);
         _pageState.CurrentPage = 1;
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
@@ -473,6 +601,9 @@ public partial class GridControl<TValue>
         _filterPopupAutoApplyCts?.Cancel();
         _filterPopupAutoApplyCts?.Dispose();
         _filterPopupAutoApplyCts = null;
+        CancelFilterPopupTyping(discard: true);
+        _sidePanelSearchCts?.Cancel();
+        _sidePanelSearchCts = null;
         CancelProviderFilterValuesLoad();
     }
 }

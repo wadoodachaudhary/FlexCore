@@ -63,13 +63,13 @@
         </button>
     }
 
-    @if (_isOpen && Enabled && _panelRevealed)
+    @if (_isOpen && Enabled)
     {
-        @* Not before the reveal: the fixed backdrop covers the trigger, so a re-click during
-           the open->measure->focus->reveal round trips landed here and CLOSED the list the
-           user had not yet seen (for a grid cell: committed and tore the editor down). *@
+        @* Revealed together with the positioned panel; never intercept the trigger
+           while the list is still invisible. *@
         <button type="button"
                 class="fx-dropdown-backdrop"
+                style="@(_panelRevealed ? null : "visibility:hidden")"
                 tabindex="-1"
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
@@ -82,7 +82,7 @@
            ancestor — that is outside the cell host, and the focus-leave watcher would
            close the list and commit the highlighted option. A form list and the
            editable input keep their own contracts. *@
-        <div class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onmousedown:preventDefault="@(!Editable && CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        <div @key="_openGeneration" @ref="_panelRef" class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onmousedown:preventDefault="@(!Editable && CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = DataSource.ToList();
@@ -216,6 +216,8 @@
     private bool _panelRevealed;
     private readonly Dictionary<int, ElementReference> _optionRefs = new();
     private ElementReference _hostRef;
+    private ElementReference _panelRef;
+    private int _openGeneration;
     private ElementReference _buttonRef;
     private ElementReference _editableInputRef;
     private bool _autoFocusApplied;
@@ -271,6 +273,19 @@
             }
             if (_panelMaxHeight is > 0)
                 parts.Add($"max-height:{_panelMaxHeight.Value.ToString("0.##", CultureInfo.InvariantCulture)}px");
+            if (!_hasMeasuredGeometry && !_panelRevealed)
+            {
+                // First paint of an open, before measureDropdown has answered: the list must
+                // add no scrollable overflow to an ancestor. A dialog root is overflow:auto,
+                // and the unmeasured box (CSS 180px, hanging below the host) reaching past
+                // its edge grew a scrollbar and reflowed the whole dialog for a round trip,
+                // then flipped upward once measured. Collapsed to its borders at the host's
+                // top edge it still lays out its options, so scrollHeight and the option
+                // sizes measure the same; the module-null and error paths reveal without
+                // measuring, which is why _panelRevealed also lifts this.
+                parts.Add("top:0");
+                parts.Add("max-height:0");
+            }
             if (!_panelRevealed)
             {
                 // Invisible until parked on the current value (see _panelRevealed) — and
@@ -484,6 +499,7 @@
             return;
 
         _isOpen = true;
+        _openGeneration++;
         _highlightMovedByKeyboard = false;
         _needsGeometryRefresh = true;
         _openUp = false;
@@ -497,6 +513,7 @@
 
     private void ResetDropdownGeometry()
     {
+        _openGeneration++;
         _openUp = false;
         _panelMaxHeight = null;
         _panelMinWidth = null;
@@ -1157,16 +1174,47 @@
         if (_isOpen && _needsGeometryRefresh)
         {
             _needsGeometryRefresh = false;
+            var generation = _openGeneration;
+            var panelRef = _panelRef;
+            var highlightedIndex = _highlightedIndex;
             try
             {
                 var module = await GetDropdownJsModuleAsync();
+                if (!_isOpen || generation != _openGeneration) return;
                 if (module == null)
                 {
                     await RevealPanelAsync();
                     return;
                 }
 
-                var geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                // A normal list can measure, park and reveal in one browser operation.
+                // Cell hosts retain their guarded focus hand-off below.
+                DropdownGeometry? geometry;
+                if (CellHost is null)
+                {
+                    _selfRef ??= DotNetObjectReference.Create(this);
+                    _focusLeaveWatched = !Editable;
+                    geometry = await module.InvokeAsync<DropdownGeometry?>("prepareDropdown",
+                        _hostRef, panelRef, Editable, _selfRef);
+                }
+                else
+                    geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                if (!_isOpen || generation != _openGeneration) return;
+                if (geometry is null)
+                {
+                    // The panel was not attached, so prepareDropdown did nothing (no watcher
+                    // either): reveal it the plain way, as when the call fails, rather than
+                    // leave the list open and unseen.
+                    if (CellHost is null) _focusLeaveWatched = false;
+                    ResetDropdownGeometry();
+                    await RevealPanelAsync();
+                    return;
+                }
+                if (CellHost is null)
+                {
+                    _panelRevealed = true;
+                    _pendingHighlightScroll = _highlightedIndex != highlightedIndex;
+                }
                 var panelWidth = PanelFitContentWidth && geometry.ContentWidth > 0
                     ? geometry.ContentWidth
                     : geometry.MinWidth;
@@ -1189,6 +1237,8 @@
             }
             catch
             {
+                if (!_isOpen || generation != _openGeneration) return;
+                if (CellHost is null) _focusLeaveWatched = false;   // the watcher may not be registered
                 ResetDropdownGeometry();
                 await RevealPanelAsync();
                 return;
@@ -1272,6 +1322,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        _isOpen = false;
+        _openGeneration++;
         CellHost?.AttachKeyRelay(null);
         _selfRef?.Dispose();
         _selfRef = null;

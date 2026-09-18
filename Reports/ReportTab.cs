@@ -24,6 +24,9 @@ public class ReportTab
 
     /// <summary>Rendered HTML pages for this tab.</summary>
     public List<string> Pages { get; set; } = new();
+    public List<ReportPageSnapshot> PageSnapshots { get; set; } = [];
+    public ReportTextSearch? Search { get; set; }
+    public int SearchMatchIndex { get; set; } = -1;
     /// <summary>Data from this tab's execution snapshot; exporting never reruns its query.</summary>
     public Func<Fx.ControlKit.Grid.GridExportTable>? CreateDataExport { get; set; }
 

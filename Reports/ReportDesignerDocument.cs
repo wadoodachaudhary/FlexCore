@@ -437,6 +437,7 @@ public sealed class ReportDesignerElement
     public int IndentTwips { get; set; }
     public ReportDesignerHighlightRule HighlightRule { get; set; } = new();
     public ReportObjectVisual Visual { get; set; } = new();
+    public ReportAnalysisDefinition? Analysis { get; set; }
 
     public string DisplayText
     {
@@ -484,6 +485,7 @@ public sealed class ReportDesignerElement
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
             Visual = Visual.Clone(),
+            Analysis = Analysis?.Clone(),
             HighlightRule = HighlightRule.Clone()
         };
     }
@@ -842,6 +844,8 @@ public static partial class ReportDesignerXmlSerializer
 
     private static void ApplyElement(ReportDesignerElement element, XElement objectElement)
     {
+        objectElement.Element("FlexKitAnalysis")?.Remove();
+        if (element.Analysis is not null) objectElement.Add(element.Analysis.ToXml());
         ReportObjectVisual.Write(element.Visual, objectElement);
         objectElement.SetAttributeValue("Name", string.IsNullOrWhiteSpace(element.Name) ? element.Kind : element.Name);
         objectElement.SetAttributeValue("Kind", string.IsNullOrWhiteSpace(element.Kind) ? InferKindFromObjectElement(objectElement) : element.Kind);
@@ -965,6 +969,8 @@ public static partial class ReportDesignerXmlSerializer
             var kind when string.Equals(kind, "Box", StringComparison.OrdinalIgnoreCase) => "BoxObject",
             var kind when string.Equals(kind, "Line", StringComparison.OrdinalIgnoreCase) => "LineObject",
             var kind when string.Equals(kind, "Picture", StringComparison.OrdinalIgnoreCase) => "PictureObject",
+            "Chart" => "ChartObject",
+            "CrossTab" => "CrossTabObject",
             _ => "FieldObject"
         };
 
@@ -1096,6 +1102,7 @@ public static partial class ReportDesignerXmlSerializer
                 element.Text = string.IsNullOrWhiteSpace(element.SubreportName) ? "Subreport" : element.SubreportName;
 
             element.Visual = ReportObjectVisual.Read(objectElement);
+            element.Analysis = ReportAnalysisDefinition.Read(objectElement);
             document.SourceObjects[element.SourceKey] = objectElement;
             section.Elements.Add(element);
         }

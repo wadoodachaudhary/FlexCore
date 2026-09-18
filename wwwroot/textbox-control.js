@@ -529,10 +529,20 @@ export function registerTabCapture(el, spaces) {
 export function suppressTypingKeyDispatch(el) {
     if (!el || el.dataset.fxTypingKeysLocal === "1") return;
     el.dataset.fxTypingKeysLocal = "1";
+    // Opt-in for a grid filter / search box (data-fx-grid-filter-box): its caret
+    // keys and IME composition keys stay local too, and Enter never submits an
+    // enclosing form (the box's own Enter handler still runs).
+    const filterBox = "fxGridFilterBox" in el.dataset;
     el.addEventListener("keydown", e => {
+        if (filterBox && (e.isComposing || e.keyCode === 229)) {
+            e.stopPropagation();
+            return;
+        }
         if (e.altKey || e.ctrlKey || e.metaKey) return;
-        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete";
+        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete"
+            || (filterBox && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End"));
         if (ownedByEditor) e.stopPropagation();
+        else if (filterBox && !e.shiftKey && (e.key === "Enter" || e.key === "NumpadEnter")) e.preventDefault();
     });
 }
 
@@ -556,21 +566,44 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
         keepNativeTab: !!keepNativeTab,
         hosted: !!hosted,
         commitPending: false,
+        deferred: null,
         composing: false,
+        unfocusedSyncQueued: false,
+        lastSent: undefined,
         cleanup: null
     };
 
     const commit = (key, event) => {
-        if (binding.commitPending) return;
+        if (binding.commitPending) {
+            // A commit is in flight: keep the latest one and send it when that one
+            // settles if it still carries something new (changed text, or another
+            // key such as Enter after an edge-arrow commit). A repeat, or the blur
+            // that follows Tab / Enter, stays dropped.
+            // A value-only Sync waits only when nothing else is held; it is re-sent below
+            // only if the text changed meanwhile (an autofill during the round trip).
+            if (key === "Sync") {
+                binding.deferred ??= { key, event };
+                return;
+            }
+            // The blur a key that ends the edit causes (Enter, Escape, Tab), or a
+            // click away right after it, must not replace that key.
+            const held = binding.deferred?.key;
+            if (key === "Blur" && (held === "Escape" || held === "Enter" || held === "NumpadEnter" || held === "Tab"))
+                return;
+            binding.deferred = { key, event };
+            return;
+        }
         // A value-only flush ("Sync") never holds the commit that may follow it
         // (a blur, an Enter): it lands the draft and steps aside.
         const holds = key !== "Sync";
         if (holds) binding.commitPending = true;
+        const value = el.value ?? "";
+        binding.lastSent = value;
 
         try {
             const invocation = binding.dotNetRef.invokeMethodAsync(
                 "CommitClientBufferedTypingAsync",
-                el.value ?? "",
+                value,
                 key,
                 !!event?.shiftKey,
                 !!event?.ctrlKey,
@@ -580,8 +613,14 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
             Promise.resolve(invocation)
                 .catch(() => { })
                 .finally(() => {
-                    if (holds && el.isConnected)
-                        binding.commitPending = false;
+                    if (!holds || !el.isConnected) return;
+                    binding.commitPending = false;
+                    const next = binding.deferred;
+                    binding.deferred = null;
+                    if (next && clientBufferedTypingBindings.get(el) === binding
+                        && ((el.value ?? "") !== value || (next.key !== key && next.key !== "Blur" && next.key !== "Sync"))
+                        && (next.key !== "Blur" || el.ownerDocument.activeElement !== el))
+                        commit(next.key, next.event);
                 });
         } catch {
             if (holds) binding.commitPending = false;
@@ -593,6 +632,7 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
             return;
 
         const key = event.key;
+        if (typeof key !== "string") return;   // e.g. Chrome's synthetic autofill keydown
         const controlBoundaryKey = (event.ctrlKey || event.metaKey)
             && (key === "Home" || key === "End");
 
@@ -616,6 +656,13 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
             || key === "ArrowRight" || key === "PageUp" || key === "PageDown")) {
             event.stopPropagation();
             if (key === "PageUp" || key === "PageDown") event.preventDefault();
+            return;
+        }
+
+        // A number box the host marks keeps the browser's own Up / Down stepping (the
+        // grid filter menu's Min / Max): local, never a commit.
+        if ((key === "ArrowUp" || key === "ArrowDown") && el.hasAttribute("data-fx-native-vertical-keys")) {
+            event.stopPropagation();
             return;
         }
 
@@ -676,6 +723,27 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
         if (event.type === "input")
             el.dataset.fxUserTyped = "1";
     };
+    // A value the browser writes while this box is NOT focused (autofill, a password
+    // manager filling a second field) has no key or blur of its own to commit it, and
+    // the native change is no longer published once this listener owns the commit keys.
+    // Publish it as a value-only Sync one tick later; a commit already in flight (the
+    // blur of a box the user just typed in) makes the Sync a no-op.
+    // Not for a hosted cell editor: its host owns focus, and FlexKit's own appendTypedText
+    // writes relayed keys into it before the host focuses it — publishing that draft would
+    // make Escape unable to cancel the edit.
+    const onInputOrChange = event => {
+        stopServerDispatch(event);
+        if (binding.hosted || binding.composing || el.ownerDocument.activeElement === el
+            || binding.unfocusedSyncQueued)
+            return;
+        binding.unfocusedSyncQueued = true;
+        setTimeout(() => {
+            binding.unfocusedSyncQueued = false;
+            if (el.isConnected && clientBufferedTypingBindings.get(el) === binding
+                && el.ownerDocument.activeElement !== el && (el.value ?? "") !== binding.lastSent)
+                commit("Sync", null);
+        }, 0);
+    };
     const onBlur = event => {
         event.stopPropagation();
         commit("Blur", event);
@@ -684,16 +752,16 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
     const onCompositionEnd = () => { binding.composing = false; };
 
     el.addEventListener("keydown", onKeyDown);
-    el.addEventListener("input", stopServerDispatch);
-    el.addEventListener("change", stopServerDispatch);
+    el.addEventListener("input", onInputOrChange);
+    el.addEventListener("change", onInputOrChange);
     el.addEventListener("blur", onBlur);
     el.addEventListener("compositionstart", onCompositionStart);
     el.addEventListener("compositionend", onCompositionEnd);
 
     binding.cleanup = () => {
         el.removeEventListener("keydown", onKeyDown);
-        el.removeEventListener("input", stopServerDispatch);
-        el.removeEventListener("change", stopServerDispatch);
+        el.removeEventListener("input", onInputOrChange);
+        el.removeEventListener("change", onInputOrChange);
         el.removeEventListener("blur", onBlur);
         el.removeEventListener("compositionstart", onCompositionStart);
         el.removeEventListener("compositionend", onCompositionEnd);

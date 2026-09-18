@@ -119,16 +119,19 @@ public partial class GridControl<TValue>
         try
         {
             _searchCts?.Cancel();
-            _pendingSearchText = state.SearchText;
+            _pendingSearchText = null;
             SearchText = state.SearchText;
+            _searchBoxGeneration++;
             FilterSettingsRef ??= new FilterSettings();
             FilterSettingsRef.EnableCaseSensitivity = state.CaseSensitiveFiltering;
 
             _expressionFilterText = expressionText;
             _expressionFilterDraft = expressionText;
+            _expressionFilterBoxGeneration++;
             _expressionFilterRoot = parsedExpression;
             _expressionFilterError = null;
 
+            _filterClearEpoch++;
             _filterPopupField = null;
             _activeFilterPopupField = null;
             _simpleColumnFilters.Clear();
@@ -140,6 +143,7 @@ public partial class GridControl<TValue>
             _filterRowDebounce.Clear();
             _filterRowDrafts.Clear();
             _filterRowOperators.Clear();
+            _filterRowBoxGeneration++;
             _columnAdvancedFilters.Clear();
             _columnCheckboxFilters.Clear();
             _numericFilterMinText.Clear();

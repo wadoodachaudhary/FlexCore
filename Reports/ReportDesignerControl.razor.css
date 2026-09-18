@@ -307,11 +307,18 @@
 
 .fx-rd-document-tabs {
     display: flex;
+    flex-wrap: wrap;
+    row-gap: 6px;
     align-items: flex-end;
     min-height: 31px;
     padding: 4px 8px 0;
     background: linear-gradient(#cfe6ff, #9fc3e8);
     border-bottom: 1px solid #6594bf;
+}
+
+.fx-rd-document-tabs ::deep .fx-tabstrip {
+    flex: 0 0 auto;
+    max-width: 100%;
 }
 
 .fx-rd-document-tabs button {
@@ -340,6 +347,8 @@
 
 .fx-rd-document-title {
     display: flex;
+    flex-wrap: wrap;
+    overflow-wrap: anywhere;
     align-items: center;
     gap: 10px;
     min-width: 0;

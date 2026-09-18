@@ -435,6 +435,7 @@ else
 
     private async Task OnNativeBlur(FocusEventArgs _)
     {
+        _nativeBlurDelivered = true;
         await SynchronizeClientBufferedDomValueAsync();
         if (OnBlur.HasDelegate)
             await OnBlur.InvokeAsync();
@@ -468,7 +469,11 @@ else
                 committedValue = committedValue[..MaxLength.Value];
 
             Value = committedValue;
-            _uncontrolledValue = committedValue;
+            // Once the browser listener owns the input the DOM is the authority
+            // (see CommitClientBufferedTypingAsync); before that, @bind keeps the
+            // rendered value in step with it.
+            if (!_clientBufferedTypingAttached)
+                _uncontrolledValue = committedValue;
             _uncontrolledInitialized = true;
             _suppressNextNativeInputRender = true;
             InputValueChanged?.Invoke(committedValue);
@@ -505,7 +510,10 @@ else
                     committedValue = committedValue[..MaxLength.Value];
 
                 Value = committedValue;
-                _uncontrolledValue = committedValue;
+                // The browser listener owns the input, so the DOM is the authority:
+                // the rendered value stays the one the input last rendered, and no
+                // later render writes this (by then older) text over characters
+                // typed since. A new starting value takes a new @key.
                 _uncontrolledInitialized = true;
                 _suppressNextNativeInputRender = true;
                 InputValueChanged?.Invoke(committedValue);
@@ -520,6 +528,8 @@ else
 
             if (string.Equals(key, "Blur", StringComparison.Ordinal))
             {
+                if (_nativeBlurDelivered)
+                    return;
                 if (OnBlur.HasDelegate)
                     await OnBlur.InvokeAsync();
                 CellHost?.EndEdit();
@@ -561,6 +571,10 @@ else
     private bool _clientBufferedTypingAttached;
     private bool _clientBufferedHandlesNavigationKeys;
     private bool _clientBufferedKeepNativeTab;
+    // Blazor's capture-phase blur dispatch (BlurDispatch) runs ahead of the browser
+    // listener's Blur commit: once it has delivered OnBlur / EndEdit for this focus,
+    // the commit only lands the value. Cleared when the input takes focus again.
+    private bool _nativeBlurDelivered;
 
     // Browser-owned draft: seed from Value once, then track native input.
     // Parent Value changes must not overwrite a live draft.
@@ -865,8 +879,13 @@ else
         if (UpdateOnInput) NotifyNativeFieldChanged();
     }
 
+    // Once the browser listener commits Enter, Tab and blur itself, the native
+    // change event (Blazor dispatches it ahead of the listener) would publish the
+    // same text a second time.
     private Task OnNativeChange(ChangeEventArgs e) =>
-        UpdateOnInput ? Task.CompletedTask : OnNativeValueChanged(e);
+        UpdateOnInput || (_clientBufferedTypingAttached && _clientBufferedHandlesNavigationKeys)
+            ? Task.CompletedTask
+            : OnNativeValueChanged(e);
 
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
@@ -880,6 +899,7 @@ else
 
     private async Task OnInputFocus()
     {
+        _nativeBlurDelivered = false;
         if (!SelectOnFocus && !ReplaceOnFirstInput)
             return;
 

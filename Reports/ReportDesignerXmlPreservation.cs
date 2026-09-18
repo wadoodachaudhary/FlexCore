@@ -126,7 +126,7 @@ public static partial class ReportDesignerXmlSerializer
             if (XNode.DeepEquals(oldChild, child))
                 continue;
             // Ordered text runs are an atomic authoring payload, not named XML properties.
-            if (name.LocalName == "FlexKitVisual")
+            if (name.LocalName is "FlexKitVisual" or "FlexKitAnalysis")
             {
                 target.Element(name)?.Remove();
                 if (child is not null) target.Add(new XElement(child));

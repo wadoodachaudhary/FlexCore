@@ -1575,6 +1575,33 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _filterDataSourceCaptured;
     private ElementReference _filterConditionInputRef;
     private FilterPopupFocusTarget? _pendingFilterPopupFocusTarget;
+    private int _filterPopupDraftGeneration;                  // @key of every popup box; bump = re-seed from the drafts
+    private FilterPopupFocusTarget? _filterPopupAutoFocusTarget; // the re-mounted box that takes focus
+    private bool _filterPopupDragRegistered;                  // registerFilterPopupDrag once per popup
+    private bool _filterPopupApplyRejected;                   // the last popup apply was refused
+    private bool _filterPopupCommitApplyRejected;             // the apply of the commit just made was refused
+    private bool? _filterSelectAllPressIntent;                // what the press on (Select All) will do
+    // Bumped when a column's filter is cleared (per field) or every filter is
+    // reset or restored (all fields): an apply still waiting on the host's
+    // Filtering handler must not write its value over the clear.
+    private readonly Dictionary<string, int> _filterClearEpochs = new(StringComparer.OrdinalIgnoreCase);
+    private int _filterClearEpoch;
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<string?>> _filterPopupCommitCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<KeyboardEventArgs>> _filterPopupKeyDownCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<MouseEventArgs>> _filterPopupSearchCallbacks = new();
+    private TextBoxControl? _filterConditionBox;               // the mounted box of each target (search button)
+    private TextBoxControl? _secondFilterConditionBox;
+    private TextBoxControl? _filterChecklistSearchBox;
+    private string FilterPopupHintId => $"{_accessibleGridDomId}-filter-hint";
+    private string FilterPopupCssClass => SearchAsYouType ? "fx-filter-popup" : "fx-filter-popup fx-filter-popup-commit";
+    private CancellationTokenSource? _filterPopupTypingCts;    // search as you type: the pending apply
+    private bool _filterPopupTypedSearchPending;               // the typed search has not selected its matches yet
+    private readonly Dictionary<FilterPopupFocusTarget, Action<string?>> _filterPopupTypedCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback> _filterPopupLeftCallbacks = new();
+    private int _filterPopupCallbackGeneration = -1;          // the generation the cached callbacks carry
+    private Action<ElementReference>? _captureFilterConditionInput;
+    private Action<ElementReference> CaptureFilterConditionInput =>
+        _captureFilterConditionInput ??= element => _filterConditionInputRef = element;
     private IEnumerable<TValue>? _lastSelectionDataSource;
     private DataSourceSelectionSignature _lastSelectionDataSourceSignature;
     private bool _selectionDataSourceCaptured;
@@ -1584,7 +1611,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private enum FilterPopupFocusTarget
     {
-        ConditionInput
+        ConditionInput,
+        SecondConditionInput,
+        ChecklistSearchInput,
+        NumericMinInput,
+        NumericMaxInput
     }
 
     // Type-ahead buffer (multi-select numeric input)
@@ -1596,7 +1627,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // Search
     private string? SearchText;
-    private CancellationTokenSource? _searchCts;
     private string? _exportStatusMessage;
     private int _exportStatusGeneration;
     private string? _validationStatusMessage;
@@ -1931,13 +1961,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
                 if (state.UseCheckedFilter)
                 {
-                    var checkedVals = state.CheckedFilterValues;
+                    // Membership must use the active comparison; a set built under
+                    // another comparer (the model default is ordinal) is re-keyed
+                    // once per pass.
+                    var checkedVals = state.CheckedFilterValues.Comparer.Equals(FilterTextComparer)
+                        ? state.CheckedFilterValues
+                        : new HashSet<string>(state.CheckedFilterValues, FilterTextComparer);
                     data = data.Where(item =>
-                    {
-                        var val = GetFilterRawValue(item, colField)?.ToString() ?? "";
-                        return checkedVals.Any(checkedValue =>
-                            string.Equals(checkedValue, val, FilterTextComparison));
-                    });
+                        checkedVals.Contains(GetFilterRawValue(item, colField)?.ToString() ?? ""));
                 }
 
                 if (state.UseNumericRangeFilter || state.UseNumericBoundsFilter)
@@ -5418,9 +5449,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         if (EventsRef?.Filtering.HasDelegate == true)
         {
+            var clearEpoch = FilterClearEpoch(field);
             var args = new FilterEventArgs { Field = field, Value = value };
             await EventsRef.Filtering.InvokeAsync(args);
             if (args.Cancel) return false;
+            // Cleared (or reset / restored) while the host decided: the clear wins.
+            if (clearEpoch != FilterClearEpoch(field)) return false;
         }
 
         state.FilterValue = string.IsNullOrWhiteSpace(value) ? null : value;
@@ -5446,6 +5480,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return true;
     }
 
+    private (int All, int Field) FilterClearEpoch(string field) =>
+        (_filterClearEpoch, _filterClearEpochs.GetValueOrDefault(field));
+
     private async Task ToggleFilterPopup(string field, MouseEventArgs e)
     {
         if (_filterPopupField == field)
@@ -5469,6 +5506,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _filterChecklistSearchDraft = string.Empty;
         _filterChecklistDraftTouched = false;
         _filterChecklistCommitError = null;
+        _filterPopupDragRegistered = false;
+        CancelFilterPopupTyping(discard: true);
     }
 
     private Task ToggleCheckboxFilter(string field, string value)
@@ -5485,11 +5524,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             pending.Dispose();
         }
 
+        _filterClearEpochs[field] = _filterClearEpochs.GetValueOrDefault(field) + 1;
         var state = GetColumnState(field);
         ResetColumnFilterState(state);
         _simpleColumnFilters.Remove(field);
         _filterRowDrafts.Remove(field);
         _filterRowOperators.Remove(field);
+        ReseedFilterRowBox(field);
         _columnAdvancedFilters.Remove(field);
         _columnCheckboxFilters.Remove(field);
         ResetFilterPopupDraft(field);
@@ -5545,6 +5586,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _filterChecklistSearchDraft = string.Empty;
             _filterChecklistDraftTouched = false;
             _filterChecklistCommitError = null;
+            _filterPopupDraftGeneration++;
+            _filterPopupAutoFocusTarget = null;
+            _filterPopupApplyRejected = false;
+            _filterPopupCommitApplyRejected = false;
+            CancelFilterPopupTyping(discard: true);
         }
     }
 
@@ -5567,6 +5613,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void ClearAllFilterState()
     {
+        _filterClearEpoch++;
         foreach (var state in _columnStates.Values)
             ResetColumnFilterState(state);
 
@@ -5594,6 +5641,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _filterRowDebounce.Clear();
         _filterRowDrafts.Clear();
         _filterRowOperators.Clear();
+        _filterRowBoxGeneration++;
         _columnAdvancedFilters.Clear();
         _columnCheckboxFilters.Clear();
         _restoredProviderNumericRanges.Clear();
@@ -5609,39 +5657,99 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // ── Search ───────────────────────────────────────────────────────────
 
-    // Typed text is staged here by the non-rendering oninput callback and
-    // committed to SearchText once per typing pause — one filter recompute and
-    // one grid render per pause instead of one of each per keystroke.
+    // The search box keeps its text in the browser while typing and hands the
+    // grid one committed value (Enter, Tab or leaving the box): one filter
+    // recompute and one grid render per commit, no server traffic per key.
+    private int _searchBoxGeneration;   // @key of the search box; bump = re-seed from SearchText
+
+    private EventCallback<string?>? _searchBoxCommitted;
+    private EventCallback<string?> SearchBoxCommitted => SearchAsYouType ? default
+        : _searchBoxCommitted ??= NonRenderingEventHandler.Create<string?>(ApplySearchTextAsync);
+
+    // Search as you type: each input reports the text without a render; the search
+    // applies once typing pauses (ImmediateModeDelay), or at once on Enter, Tab or
+    // leaving the box.
     private string? _pendingSearchText;
-
-    private EventCallback<ChangeEventArgs>? _nonRenderingSearchInput;
-    private EventCallback<ChangeEventArgs> NonRenderingSearchInput =>
-        _nonRenderingSearchInput ??= NonRenderingEventHandler.Create<ChangeEventArgs>(e =>
+    private CancellationTokenSource? _searchCts;
+    private (int Generation, Action<string?> Typed)? _searchBoxTyped;
+    private Action<string?>? SearchBoxTyped
+    {
+        get
         {
-            _pendingSearchText = e.Value?.ToString() ?? "";
-            _ = ApplySearchDebounced();
-        });
+            if (!SearchAsYouType)
+                return null;
+            var generation = _searchBoxGeneration;
+            if (_searchBoxTyped is { } cached && cached.Generation == generation)
+                return cached.Typed;
+            // A box replaced by a re-seed (state restore) can still report a late
+            // input; its generation no longer matches, so it is ignored.
+            Action<string?> typed = text =>
+            {
+                if (generation != _searchBoxGeneration)
+                    return;
+                _pendingSearchText = text ?? string.Empty;
+                _ = ApplySearchAfterDelayAsync();
+            };
+            _searchBoxTyped = (generation, typed);
+            return typed;
+        }
+    }
+    private EventCallback<KeyboardEventArgs>? _searchBoxKeyDown;
+    private EventCallback<KeyboardEventArgs> SearchBoxKeyDown => !SearchAsYouType ? CommitKeyDown
+        : _searchBoxKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(
+            e => IsApplyNowKey(e) ? ApplyPendingSearchTextAsync() : Task.CompletedTask);
+    private EventCallback? _searchBoxLeft;
+    private EventCallback SearchBoxLeft => !SearchAsYouType ? default
+        : _searchBoxLeft ??= new EventCallback(null, (Func<Task>)ApplyPendingSearchTextAsync);
 
-    private async Task ApplySearchDebounced()
+    private async Task ApplySearchAfterDelayAsync()
     {
         _searchCts?.Cancel();
-        _searchCts = new CancellationTokenSource();
-        var token = _searchCts.Token;
-
+        var cts = _searchCts = new CancellationTokenSource();
         try
         {
             if (EffectiveFilterDelay > 0)
-                await Task.Delay(EffectiveFilterDelay, token);
-            if (_pendingSearchText != null)
-                SearchText = _pendingSearchText;
-            _pageState.CurrentPage = 1;
-            if (UsesItemsProvider)
-                await ReloadItemsAsync();
-            else
-                await InvokeAsync(StateHasChanged);
-            await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
         }
-        catch (TaskCanceledException) { }
+        catch (OperationCanceledException)
+        {
+            return;     // a newer key, or Enter / Tab / leaving the box, owns the search
+        }
+        if (ReferenceEquals(cts, _searchCts))
+            await InvokeAsync(ApplyPendingSearchTextAsync);
+    }
+
+    private Task ApplyPendingSearchTextAsync()
+    {
+        _searchCts?.Cancel();
+        _searchCts = null;
+        var text = _pendingSearchText;
+        _pendingSearchText = null;
+        return text == null ? Task.CompletedTask : ApplySearchTextAsync(text);
+    }
+
+    // The keys that apply typed text at once while searching as you type.
+    private static bool IsApplyNowKey(KeyboardEventArgs e) =>
+        !e.AltKey && !e.CtrlKey && !e.MetaKey && !e.IsComposing && e.Key is "Enter" or "NumpadEnter" or "Tab";
+
+    // The grid's own text boxes commit through ValueChanged; their OnKeyDown only
+    // switches the commit keys (Enter, Tab, arrows) on.
+    private static readonly EventCallback<KeyboardEventArgs> CommitKeyDown =
+        NonRenderingEventHandler.Create<KeyboardEventArgs>(_ => { });
+
+    private async Task ApplySearchTextAsync(string? text)
+    {
+        text ??= string.Empty;
+        if (string.Equals(text, SearchText ?? string.Empty, StringComparison.Ordinal))
+            return;
+
+        SearchText = text;
+        _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        else
+            await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
     }
 
     /// <summary>True when any column filter or the expression filter is applied —
@@ -6787,7 +6895,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task EnsureFilterPopupDragRegisteredAsync()
     {
-        if (_filterPopupField == null) return;
+        if (_filterPopupField == null)
+        {
+            _filterPopupDragRegistered = false;
+            return;
+        }
+        if (_filterPopupDragRegistered) return;
+        // Claimed before the call: a render that lands while it is in flight
+        // (the open renders twice) must not register again.
+        _filterPopupDragRegistered = true;
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
@@ -6796,6 +6912,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         catch (Exception)
         {
             // Best-effort; the filter remains usable even if it cannot be dragged.
+            _filterPopupDragRegistered = false;
         }
     }
 

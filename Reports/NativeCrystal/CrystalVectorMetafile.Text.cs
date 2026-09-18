@@ -115,6 +115,7 @@ internal sealed partial class CrystalVectorMetafile
 
     private void Text(ReadOnlySpan<byte> bytes, bool wide, int x, int y, double[]? advances, double[]? vertical, uint options, double[]? rectangle)
     {
+        Require(!_pathOpen, "Metafile glyph outlines inside a path bracket are not supported.");
         var clips = _context.ClipPolygons;
         if (rectangle is { } r)
         {
