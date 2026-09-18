@@ -3,6 +3,12 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-18 Dropdown Opening (HHM-1025)
+
+- Mirrored FlexKit's `DropDownListControl` and existing dropdown JS module: non-hosted lists measure, park, focus and reveal in one browser operation, avoiding intermediate server render/focus round trips. Hosted editors keep their guarded focus path; DropDownGridControl's measurement API is unchanged.
+- Keyed openings and generation checks reject stale interop responses. No GridControl flow or logic was changed by this fix.
+- Chrome/Blazor Server checks in active HomeFront's `verification/DropDownOpeningChecks` cover 0/150/300 ms each-way latency, close/reopen, selected-value parking, keyboard selection, editable focus, empty lists, upward clipping and native grid dropdown compatibility. The mirrored source files are identical; required HomeFront and FlexCore.Showcase non-incremental builds passed.
+
 ## 2026-09-18 Ship-Review Fixes To The 09-17 Report Work (Update Repositories)
 
 Review wf_14845c13-5fc (10 agents) of the 09-17 report/chart change set, then fixes verified by wf_69e310d1-677:
