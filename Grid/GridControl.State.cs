@@ -118,6 +118,8 @@ public partial class GridControl<TValue>
         _isApplyingGridState = true;
         try
         {
+            _searchCts?.Cancel();
+            _pendingSearchText = null;
             SearchText = state.SearchText;
             _searchBoxGeneration++;
             FilterSettingsRef ??= new FilterSettings();

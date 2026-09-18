@@ -929,6 +929,10 @@
 .fx-grid-filter-typed-wrap ::deep .fx-dropdown {
     font-size: calc(10px * var(--fx-zoom, 1));
 }
+/* The side-panel searches' key hosts add no box. */
+.fx-grid-side-search-host {
+    display: contents;
+}
 /* The filter-row box's key host adds no box: the input stays the grid item. */
 .fx-grid-filter-input-host {
     display: contents;
@@ -3055,6 +3059,45 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     padding: 0 12px 8px;
     border-bottom: 1px solid #eef2f7;
 }
+/* Searching on commit: an icon-only search button beside each menu text box
+   (it does what Tab does) takes one more column. */
+.fx-filter-popup-commit .fx-filter-condition {
+    grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr) auto;
+}
+.fx-filter-popup-commit .fx-filter-checklist-search {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.fx-filter-search-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid #ced4da;
+    border-radius: 3px;
+    background: #fff;
+    color: #64748b;
+    cursor: pointer;
+}
+.fx-filter-search-btn svg {
+    width: 11px;
+    height: 11px;
+}
+.fx-filter-search-btn:hover {
+    background: #dbeafe;
+    border-color: #2563eb;
+    color: #1e3a8a;
+}
+/* One-line typing hint under Search values. */
+.fx-filter-popup-hint {
+    margin-top: -4px;
+    padding: 0 12px 6px;
+    color: #64748b;
+    font-size: calc(10px * var(--fx-zoom, 1));
+    line-height: 1.3;
+}
 .fx-filter-number-panel {
     display: flex;
     flex-direction: column;
@@ -4264,6 +4307,7 @@ td.fx-drag-preview-cell {
 }
 
 .fx-grid.fx-grid-dark .fx-filter-popup-summary,
+.fx-grid.fx-grid-dark .fx-filter-popup-hint,
 .fx-grid.fx-grid-dark .fx-filter-popup-empty,
 .fx-grid.fx-grid-dark .fx-filter-range-item em {
     color: #94a3b8;
@@ -4271,6 +4315,7 @@ td.fx-drag-preview-cell {
 
 .fx-grid.fx-grid-dark .fx-filter-popup-close,
 .fx-grid.fx-grid-dark .fx-filter-popup-btn,
+.fx-grid.fx-grid-dark .fx-filter-search-btn,
 .fx-grid.fx-grid-dark .fx-filter-tristate {
     background: #0f172a;
     border-color: #475569;

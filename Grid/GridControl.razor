@@ -70,20 +70,27 @@
             }
             @if (ShowSearchBar)
             {
-                @* Typing stays in the browser; the search applies once when the text is
-                   committed: Enter, Tab or leaving the box. The grid's keyboard trap
-                   leaves its Tab native (data-fx-grid-native-keys). *@
-                <div class="fx-toolbar-search" data-fx-grid-native-keys="">
+                @* The browser owns the typed text. The search applies as you type (after
+                   FilterSettings.ImmediateModeDelay) or, with SearchAsYouType off, when the
+                   text is committed; Enter, Tab or leaving the box apply at once. The grid's
+                   keyboard trap leaves its Tab native (data-fx-grid-native-keys), and the
+                   box's keys stay away from the grid's key handlers. *@
+                <div class="fx-toolbar-search" data-fx-grid-native-keys="" @onkeydown:stopPropagation="true">
                     <svg class="fx-toolbar-search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                         <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
                     </svg>
-                    <TextBoxControl @key="_searchBoxGeneration"
+                    <TextBoxControl @key="(_searchBoxGeneration, SearchAsYouType)"
                                     Placeholder="Search..."
                                     Value="@SearchText"
-                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    TypingBehavior="@FilterBoxTypingBehavior"
+                                    Uncontrolled="@SearchAsYouType"
+                                    TypingKeysStayLocal="@SearchAsYouType"
+                                    data-fx-grid-filter-box=""
                                     KeepNativeTab="true"
+                                    InputValueChanged="@SearchBoxTyped"
                                     ValueChanged="@SearchBoxCommitted"
-                                    OnKeyDown="@CommitKeyDown" />
+                                    OnBlur="@SearchBoxLeft"
+                                    OnKeyDown="@SearchBoxKeyDown" />
                 </div>
             }
             @if (GridToolBarTemplate != null)
@@ -316,14 +323,23 @@
             @if (_activeOptionsPanel == GridOptionsPanel.Columns)
             {
                 <div class="fx-grid-side-panel-body">
-                    <TextBoxControl CssClass="fx-grid-side-search"
+                    @* The host adds no box (display: contents); it keeps the search's keys
+                       away from the grid's key handlers and its Tab native. *@
+                    <span class="fx-grid-side-search-host" data-fx-grid-native-keys="" @onkeydown:stopPropagation="true">
+                    <TextBoxControl @key="SearchAsYouType"
+                                    CssClass="fx-grid-side-search"
                                     Placeholder="Search columns..."
                                     Value="@_columnPanelSearch"
-                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    TypingBehavior="@FilterBoxTypingBehavior"
+                                    Uncontrolled="@SearchAsYouType"
+                                    TypingKeysStayLocal="@SearchAsYouType"
+                                    data-fx-grid-filter-box=""
                                     KeepNativeTab="true"
+                                    InputValueChanged="@ColumnPanelSearchTyped"
                                     ValueChanged="@ColumnPanelSearchCommitted"
-                                    OnKeyDown="@CommitKeyDown"
-                                    data-fx-grid-native-keys="" />
+                                    OnBlur="@SidePanelSearchLeft"
+                                    OnKeyDown="@SidePanelSearchKeyDown" />
+                    </span>
                     <div class="fx-grid-column-option-list">
                         @foreach (var col in ColumnPanelColumns)
                         {
@@ -355,14 +371,21 @@
                         <span>Pivot Mode</span>
                     </label>
 
-                    <TextBoxControl CssClass="fx-grid-side-search"
+                    <span class="fx-grid-side-search-host" data-fx-grid-native-keys="" @onkeydown:stopPropagation="true">
+                    <TextBoxControl @key="SearchAsYouType"
+                                    CssClass="fx-grid-side-search"
                                     Placeholder="Search fields..."
                                     Value="@_pivotFieldSearch"
-                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    TypingBehavior="@FilterBoxTypingBehavior"
+                                    Uncontrolled="@SearchAsYouType"
+                                    TypingKeysStayLocal="@SearchAsYouType"
+                                    data-fx-grid-filter-box=""
                                     KeepNativeTab="true"
+                                    InputValueChanged="@PivotFieldSearchTyped"
                                     ValueChanged="@PivotFieldSearchCommitted"
-                                    OnKeyDown="@CommitKeyDown"
-                                    data-fx-grid-native-keys="" />
+                                    OnBlur="@SidePanelSearchLeft"
+                                    OnKeyDown="@SidePanelSearchKeyDown" />
+                    </span>
 
                     <div class="fx-grid-pivot-field-list">
                         @foreach (var col in PivotPanelColumns)
@@ -920,9 +943,10 @@
                                                 }
                                                 else
                                                 {
-                                                    @* Typing stays in the browser; the filter applies once when the
-                                                       text is committed (Enter, Tab or leaving the box). The box is
-                                                       keyed by its column, so a column that moves never inherits
+                                                    @* The browser owns the typed text. The filter applies as you type
+                                                       (after FilterSettings.ImmediateModeDelay) or, with SearchAsYouType
+                                                       off, when the text is committed; Enter, Tab or leaving the box
+                                                       apply at once. The box is keyed by its column, so a column that moves never inherits
                                                        another column's text. The host span adds no box (display:
                                                        contents); the grid's keyboard trap leaves its Tab native and
                                                        its keys stay away from the grid's key handlers. *@
@@ -933,10 +957,15 @@
                                                                         Placeholder="Filter..."
                                                                         Enabled="@filterRowNeedsValue"
                                                                         Value="@GetColumnFilterValue(fCol.Field)"
-                                                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                                        TypingBehavior="@FilterBoxTypingBehavior"
+                                                                        Uncontrolled="@SearchAsYouType"
+                                                                        TypingKeysStayLocal="@SearchAsYouType"
+                                                                        data-fx-grid-filter-box=""
                                                                         KeepNativeTab="true"
+                                                                        InputValueChanged="@FilterRowBoxTyped(fCol.Field)"
                                                                         ValueChanged="@FilterRowBoxCommitted(fCol.Field)"
-                                                                        OnKeyDown="@CommitKeyDown"
+                                                                        OnBlur="@FilterRowBoxLeft(fCol.Field)"
+                                                                        OnKeyDown="@FilterRowBoxKeyDown(fCol.Field)"
                                                                         aria-label="@($"Filter value for {HeaderColumnDisplay(fCol)}")" />
                                                     </span>
                                                 }
@@ -1324,7 +1353,7 @@
             @* The popup owns its keys: capture-phase key handlers of the grid and of a
                host dialog skip it (data-fx-key-scope), and no keydown bubbles on to the
                grid's or the page's key handlers. Escape anywhere in it closes it. *@
-            <div class="fx-filter-popup" style="@FilterPopupStyle" data-fx-key-scope=""
+            <div class="@FilterPopupCssClass" style="@FilterPopupStyle" data-fx-key-scope=""
                  @onclick:stopPropagation="true"
                  @onkeydown="FilterPopupRootKeyDown" @onkeydown:stopPropagation="true">
                 <div class="fx-filter-popup-header">
@@ -1358,17 +1387,25 @@
                                                      Value="@_filterOperatorDraft"
                                                      ValueChanged="OnTextFilterOperatorValueChanged"
                                                      CssClass="fx-filter-operator-select" />
-                                <TextBoxControl @key="_filterPopupDraftGeneration"
+                                <TextBoxControl @key="(_filterPopupDraftGeneration, SearchAsYouType)"
                                                 InputType="number"
                                                 CssClass="fx-filter-popup-input fx-filter-condition-input"
                                                 Placeholder="First value..."
                                                 Value="@_filterTextDraft"
-                                                TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                TypingBehavior="@FilterBoxTypingBehavior"
+                                                Uncontrolled="@SearchAsYouType"
+                                                TypingKeysStayLocal="@SearchAsYouType"
+                                                data-fx-grid-filter-box=""
                                                 KeepNativeTab="true"
                                                 AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ConditionInput)"
+                                                InputValueChanged="@FilterPopupBoxTyped(FilterPopupFocusTarget.ConditionInput)"
                                                 ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ConditionInput)"
+                                                OnBlur="@FilterPopupBoxLeft(FilterPopupFocusTarget.ConditionInput)"
                                                 OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ConditionInput)"
-                                                ElementReferenceCaptured="@CaptureFilterConditionInput" />
+                                                ElementReferenceCaptured="@CaptureFilterConditionInput"
+                                                aria-describedby="@FilterPopupHintId"
+                                                @ref="_filterConditionBox" />
+                                @FilterPopupSearchButton(FilterPopupFocusTarget.ConditionInput)
                             </div>
 
                             <div class="fx-filter-logical-operator d-flex align-items-center justify-content-center gap-3 my-1">
@@ -1396,17 +1433,26 @@
                                                      Value="@_secondFilterOperatorDraft"
                                                      ValueChanged="OnSecondTextFilterOperatorValueChanged"
                                                      CssClass="fx-filter-operator-select" />
-                                <TextBoxControl @key="_filterPopupDraftGeneration"
+                                <TextBoxControl @key="(_filterPopupDraftGeneration, SearchAsYouType)"
                                                 InputType="number"
                                                 CssClass="fx-filter-popup-input fx-filter-condition-input"
                                                 Placeholder="Second value..."
                                                 Value="@_secondFilterTextDraft"
-                                                TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                TypingBehavior="@FilterBoxTypingBehavior"
+                                                Uncontrolled="@SearchAsYouType"
+                                                TypingKeysStayLocal="@SearchAsYouType"
+                                                data-fx-grid-filter-box=""
                                                 KeepNativeTab="true"
                                                 AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.SecondConditionInput)"
+                                                InputValueChanged="@FilterPopupBoxTyped(FilterPopupFocusTarget.SecondConditionInput)"
                                                 ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.SecondConditionInput)"
-                                                OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)" />
+                                                OnBlur="@FilterPopupBoxLeft(FilterPopupFocusTarget.SecondConditionInput)"
+                                                OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)"
+                                                aria-describedby="@FilterPopupHintId"
+                                                @ref="_secondFilterConditionBox" />
+                                @FilterPopupSearchButton(FilterPopupFocusTarget.SecondConditionInput)
                             </div>
+                            <div class="fx-filter-popup-hint" id="@FilterPopupHintId">Press Tab to search, Enter to apply</div>
                         }
 
                         <div class="fx-filter-popup-summary">
@@ -1507,16 +1553,24 @@
                                              Value="@_filterOperatorDraft"
                                              ValueChanged="OnTextFilterOperatorValueChanged"
                                              CssClass="fx-filter-operator-select" />
-                        <TextBoxControl @key="_filterPopupDraftGeneration"
+                        <TextBoxControl @key="(_filterPopupDraftGeneration, SearchAsYouType)"
                                         CssClass="fx-filter-popup-input fx-filter-condition-input"
                                         Placeholder="Filter value..."
                                         Value="@_filterTextDraft"
-                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                        TypingBehavior="@FilterBoxTypingBehavior"
+                                        Uncontrolled="@SearchAsYouType"
+                                        TypingKeysStayLocal="@SearchAsYouType"
+                                        data-fx-grid-filter-box=""
                                         KeepNativeTab="true"
                                         AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ConditionInput)"
+                                        InputValueChanged="@FilterPopupBoxTyped(FilterPopupFocusTarget.ConditionInput)"
                                         ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ConditionInput)"
+                                        OnBlur="@FilterPopupBoxLeft(FilterPopupFocusTarget.ConditionInput)"
                                         OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ConditionInput)"
-                                        ElementReferenceCaptured="@CaptureFilterConditionInput" />
+                                        ElementReferenceCaptured="@CaptureFilterConditionInput"
+                                        aria-describedby="@FilterPopupHintId"
+                                        @ref="_filterConditionBox" />
+                        @FilterPopupSearchButton(FilterPopupFocusTarget.ConditionInput)
                     </div>
 
                     @if (EnableAdvancedFilterPopup)
@@ -1546,32 +1600,53 @@
                                                  Value="@_secondFilterOperatorDraft"
                                                  ValueChanged="OnSecondTextFilterOperatorValueChanged"
                                                  CssClass="fx-filter-operator-select" />
-                            <TextBoxControl @key="_filterPopupDraftGeneration"
+                            <TextBoxControl @key="(_filterPopupDraftGeneration, SearchAsYouType)"
                                             CssClass="fx-filter-popup-input fx-filter-condition-input"
                                             Placeholder="Second filter value..."
                                             Value="@_secondFilterTextDraft"
-                                            TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                            TypingBehavior="@FilterBoxTypingBehavior"
+                                            Uncontrolled="@SearchAsYouType"
+                                            TypingKeysStayLocal="@SearchAsYouType"
+                                            data-fx-grid-filter-box=""
                                             KeepNativeTab="true"
                                             AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.SecondConditionInput)"
+                                            InputValueChanged="@FilterPopupBoxTyped(FilterPopupFocusTarget.SecondConditionInput)"
                                             ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.SecondConditionInput)"
-                                            OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)" />
+                                            OnBlur="@FilterPopupBoxLeft(FilterPopupFocusTarget.SecondConditionInput)"
+                                            OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.SecondConditionInput)"
+                                            aria-describedby="@FilterPopupHintId"
+                                            @ref="_secondFilterConditionBox" />
+                            @FilterPopupSearchButton(FilterPopupFocusTarget.SecondConditionInput)
                         </div>
                     }
 
                     <div class="fx-filter-checklist-search">
                         <span aria-hidden="true">⌕</span>
-                        <TextBoxControl @key="_filterPopupDraftGeneration"
+                        <TextBoxControl @key="(_filterPopupDraftGeneration, SearchAsYouType)"
                                         InputType="search"
                                         CssClass="fx-filter-popup-input"
                                         Placeholder="Search values..."
                                         aria-label="@($"Search values for {filterHeader}")"
                                         Value="@_filterChecklistSearchDraft"
-                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                        TypingBehavior="@FilterBoxTypingBehavior"
+                                        Uncontrolled="@SearchAsYouType"
+                                        TypingKeysStayLocal="@SearchAsYouType"
+                                        data-fx-grid-filter-box=""
                                         KeepNativeTab="true"
                                         AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.ChecklistSearchInput)"
+                                        InputValueChanged="@FilterPopupBoxTyped(FilterPopupFocusTarget.ChecklistSearchInput)"
                                         ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.ChecklistSearchInput)"
-                                        OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ChecklistSearchInput)" />
+                                        OnBlur="@FilterPopupBoxLeft(FilterPopupFocusTarget.ChecklistSearchInput)"
+                                        OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.ChecklistSearchInput)"
+                                        aria-describedby="@FilterPopupHintId"
+                                        @ref="_filterChecklistSearchBox" />
+                        @FilterPopupSearchButton(FilterPopupFocusTarget.ChecklistSearchInput)
                     </div>
+                    @* Tab (or, when searching on commit, the search button) searches: the
+                       checklist narrows and its matches are selected, and under Auto Apply
+                       the grid filters too; Enter applies and closes the menu. The boxes
+                       point here (aria-describedby). *@
+                    <div class="fx-filter-popup-hint" id="@FilterPopupHintId">Press Tab to search, Enter to apply</div>
 
                     <div class="fx-filter-popup-summary fx-filter-value-summary">
                         @selectedValueCount of @totalValueCount selected
@@ -2252,3 +2327,22 @@
           data-fx-window-count="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowCount.ToString(CultureInfo.InvariantCulture))"
           data-fx-window-mode="@(_deferredScrollDiagnosticsToken == 0 ? null : _deferredScrollWindowMode)"></span>
 </div>
+
+@code {
+    // The icon-only search button beside a filter-menu text box, shown only when
+    // the boxes search on commit (FilterSettings.SearchAsYouType off): it does what
+    // Tab does in that box while focus stays there. The press does not take focus
+    // (no blur commit), and the button is not a Tab stop.
+    private RenderFragment? FilterPopupSearchButton(FilterPopupFocusTarget box) => SearchAsYouType ? null :
+        @<button type="button"
+                 class="fx-filter-search-btn"
+                 tabindex="-1"
+                 title="Search (Tab)"
+                 aria-label="Search"
+                 @onmousedown:preventDefault="true"
+                 @onclick="@FilterPopupSearchClicked(box)">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+            </svg>
+        </button>;
+}

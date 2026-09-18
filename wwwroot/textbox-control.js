@@ -529,10 +529,20 @@ export function registerTabCapture(el, spaces) {
 export function suppressTypingKeyDispatch(el) {
     if (!el || el.dataset.fxTypingKeysLocal === "1") return;
     el.dataset.fxTypingKeysLocal = "1";
+    // Opt-in for a grid filter / search box (data-fx-grid-filter-box): its caret
+    // keys and IME composition keys stay local too, and Enter never submits an
+    // enclosing form (the box's own Enter handler still runs).
+    const filterBox = "fxGridFilterBox" in el.dataset;
     el.addEventListener("keydown", e => {
+        if (filterBox && (e.isComposing || e.keyCode === 229)) {
+            e.stopPropagation();
+            return;
+        }
         if (e.altKey || e.ctrlKey || e.metaKey) return;
-        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete";
+        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete"
+            || (filterBox && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End"));
         if (ownedByEditor) e.stopPropagation();
+        else if (filterBox && !e.shiftKey && (e.key === "Enter" || e.key === "NumpadEnter")) e.preventDefault();
     });
 }
 

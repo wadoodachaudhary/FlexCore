@@ -201,17 +201,23 @@ use a True/False selector. Set `FilterSettings.ShowFilterRowOperators = false`
 for a textbox-only row: every column uses Contains against raw/display text,
 including numbers, dates, and Booleans. Clearing a textbox removes its filter. The menu supports
 two conditions joined by AND/OR; Excel mode adds a searchable checklist.
-The search box, the filter-row textboxes and the menu's textboxes keep typing
-in the browser and apply when the text is committed (Enter, Tab or leaving the
-box), with no delay and no server round trip per keystroke. In the menu, Enter
-applies and closes, Tab or leaving a box applies under Auto Apply, and Escape
-discards the uncommitted text and closes the menu. Searching an Excel checklist
-selects only the matching values when the search is committed; Auto Apply
-applies that selection, while manual mode stages it until Apply. Checkboxes
-refine those matches, and clearing the search selects all values again. The
-typed conditions remain independent. `ImmediateModeDelay` now debounces only
-filter-row values set through `OnColumnFilterInput` and a `FilterMenuTemplate`'s
-checklist search.
+The search box, the filter-row textboxes, the menu's textboxes and the
+side-panel searches let the browser own the typed text, so a slow connection
+never loses or reorders characters. By default they search as you type
+(`FilterSettings.SearchAsYouType = true`): each key sends only the text, nothing
+renders per key, and the filter applies once typing pauses for
+`ImmediateModeDelay`, or at once on Enter, Tab or leaving the box. Set
+`SearchAsYouType = false` to apply only when the text is committed (Enter, Tab,
+leaving the box, or the small search button beside each menu textbox); nothing
+crosses the network until then. In the menu, Enter applies and closes, Tab
+applies under Auto Apply and keeps it open, and Escape discards text not yet
+applied and closes the menu; a one-line hint in the menu reads "Press Tab to
+search, Enter to apply". Searching an Excel checklist narrows the list and selects the
+matching values; Auto Apply applies that selection, while manual mode stages it
+until Apply. Checkboxes refine those matches, and clearing the search selects all
+values again. The typed conditions remain independent. `ImmediateModeDelay` also
+debounces filter-row values set through `OnColumnFilterInput` and a
+`FilterMenuTemplate`'s checklist search.
 
 ```razor
 <GridControl TValue="MyRow" DataSource="@rows"

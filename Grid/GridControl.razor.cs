@@ -1588,6 +1588,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int _filterClearEpoch;
     private readonly Dictionary<FilterPopupFocusTarget, EventCallback<string?>> _filterPopupCommitCallbacks = new();
     private readonly Dictionary<FilterPopupFocusTarget, EventCallback<KeyboardEventArgs>> _filterPopupKeyDownCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback<MouseEventArgs>> _filterPopupSearchCallbacks = new();
+    private TextBoxControl? _filterConditionBox;               // the mounted box of each target (search button)
+    private TextBoxControl? _secondFilterConditionBox;
+    private TextBoxControl? _filterChecklistSearchBox;
+    private string FilterPopupHintId => $"{_accessibleGridDomId}-filter-hint";
+    private string FilterPopupCssClass => SearchAsYouType ? "fx-filter-popup" : "fx-filter-popup fx-filter-popup-commit";
+    private CancellationTokenSource? _filterPopupTypingCts;    // search as you type: the pending apply
+    private bool _filterPopupTypedSearchPending;               // the typed search has not selected its matches yet
+    private readonly Dictionary<FilterPopupFocusTarget, Action<string?>> _filterPopupTypedCallbacks = new();
+    private readonly Dictionary<FilterPopupFocusTarget, EventCallback> _filterPopupLeftCallbacks = new();
     private int _filterPopupCallbackGeneration = -1;          // the generation the cached callbacks carry
     private Action<ElementReference>? _captureFilterConditionInput;
     private Action<ElementReference> CaptureFilterConditionInput =>
@@ -5497,6 +5507,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _filterChecklistDraftTouched = false;
         _filterChecklistCommitError = null;
         _filterPopupDragRegistered = false;
+        CancelFilterPopupTyping(discard: true);
     }
 
     private Task ToggleCheckboxFilter(string field, string value)
@@ -5579,6 +5590,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             _filterPopupAutoFocusTarget = null;
             _filterPopupApplyRejected = false;
             _filterPopupCommitApplyRejected = false;
+            CancelFilterPopupTyping(discard: true);
         }
     }
 
@@ -5651,8 +5663,74 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private int _searchBoxGeneration;   // @key of the search box; bump = re-seed from SearchText
 
     private EventCallback<string?>? _searchBoxCommitted;
-    private EventCallback<string?> SearchBoxCommitted =>
-        _searchBoxCommitted ??= NonRenderingEventHandler.Create<string?>(ApplySearchTextAsync);
+    private EventCallback<string?> SearchBoxCommitted => SearchAsYouType ? default
+        : _searchBoxCommitted ??= NonRenderingEventHandler.Create<string?>(ApplySearchTextAsync);
+
+    // Search as you type: each input reports the text without a render; the search
+    // applies once typing pauses (ImmediateModeDelay), or at once on Enter, Tab or
+    // leaving the box.
+    private string? _pendingSearchText;
+    private CancellationTokenSource? _searchCts;
+    private (int Generation, Action<string?> Typed)? _searchBoxTyped;
+    private Action<string?>? SearchBoxTyped
+    {
+        get
+        {
+            if (!SearchAsYouType)
+                return null;
+            var generation = _searchBoxGeneration;
+            if (_searchBoxTyped is { } cached && cached.Generation == generation)
+                return cached.Typed;
+            // A box replaced by a re-seed (state restore) can still report a late
+            // input; its generation no longer matches, so it is ignored.
+            Action<string?> typed = text =>
+            {
+                if (generation != _searchBoxGeneration)
+                    return;
+                _pendingSearchText = text ?? string.Empty;
+                _ = ApplySearchAfterDelayAsync();
+            };
+            _searchBoxTyped = (generation, typed);
+            return typed;
+        }
+    }
+    private EventCallback<KeyboardEventArgs>? _searchBoxKeyDown;
+    private EventCallback<KeyboardEventArgs> SearchBoxKeyDown => !SearchAsYouType ? CommitKeyDown
+        : _searchBoxKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(
+            e => IsApplyNowKey(e) ? ApplyPendingSearchTextAsync() : Task.CompletedTask);
+    private EventCallback? _searchBoxLeft;
+    private EventCallback SearchBoxLeft => !SearchAsYouType ? default
+        : _searchBoxLeft ??= new EventCallback(null, (Func<Task>)ApplyPendingSearchTextAsync);
+
+    private async Task ApplySearchAfterDelayAsync()
+    {
+        _searchCts?.Cancel();
+        var cts = _searchCts = new CancellationTokenSource();
+        try
+        {
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;     // a newer key, or Enter / Tab / leaving the box, owns the search
+        }
+        if (ReferenceEquals(cts, _searchCts))
+            await InvokeAsync(ApplyPendingSearchTextAsync);
+    }
+
+    private Task ApplyPendingSearchTextAsync()
+    {
+        _searchCts?.Cancel();
+        _searchCts = null;
+        var text = _pendingSearchText;
+        _pendingSearchText = null;
+        return text == null ? Task.CompletedTask : ApplySearchTextAsync(text);
+    }
+
+    // The keys that apply typed text at once while searching as you type.
+    private static bool IsApplyNowKey(KeyboardEventArgs e) =>
+        !e.AltKey && !e.CtrlKey && !e.MetaKey && !e.IsComposing && e.Key is "Enter" or "NumpadEnter" or "Tab";
 
     // The grid's own text boxes commit through ValueChanged; their OnKeyDown only
     // switches the commit keys (Enter, Tab, arrows) on.
@@ -16890,6 +16968,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _columnUpdateDepth = 0;
         _columnUpdateFlushTcs?.TrySetResult();
         _columnUpdateFlushTcs = null;
+
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = null;
 
         DisposeFilteringState();
         DisposeRowValidationContext();

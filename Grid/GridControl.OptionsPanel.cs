@@ -187,8 +187,8 @@ public partial class GridControl<TValue>
     // The side-panel searches keep their text in the browser while typing and
     // narrow their list once per commit (Enter, Tab or leaving the box).
     private EventCallback<string?>? _columnPanelSearchCommitted;
-    private EventCallback<string?> ColumnPanelSearchCommitted =>
-        _columnPanelSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+    private EventCallback<string?> ColumnPanelSearchCommitted => SearchAsYouType ? default
+        : _columnPanelSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
         {
             value ??= string.Empty;
             if (string.Equals(value, _columnPanelSearch, StringComparison.Ordinal))
@@ -198,8 +198,8 @@ public partial class GridControl<TValue>
         });
 
     private EventCallback<string?>? _pivotFieldSearchCommitted;
-    private EventCallback<string?> PivotFieldSearchCommitted =>
-        _pivotFieldSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+    private EventCallback<string?> PivotFieldSearchCommitted => SearchAsYouType ? default
+        : _pivotFieldSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
         {
             value ??= string.Empty;
             if (string.Equals(value, _pivotFieldSearch, StringComparison.Ordinal))
@@ -207,6 +207,60 @@ public partial class GridControl<TValue>
             _pivotFieldSearch = value;
             StateHasChanged();
         });
+
+    // Searching as you type the lists narrow once typing pauses (ImmediateModeDelay),
+    // or at once on Enter, Tab or leaving the box; nothing renders per key.
+    private CancellationTokenSource? _sidePanelSearchCts;
+    private Action<string?>? _columnPanelSearchTyped;
+    private Action<string?>? ColumnPanelSearchTyped => !SearchAsYouType ? null
+        : _columnPanelSearchTyped ??= text =>
+        {
+            _columnPanelSearch = text ?? string.Empty;
+            _ = RenderSidePanelSearchAfterDelayAsync();
+        };
+    private Action<string?>? _pivotFieldSearchTyped;
+    private Action<string?>? PivotFieldSearchTyped => !SearchAsYouType ? null
+        : _pivotFieldSearchTyped ??= text =>
+        {
+            _pivotFieldSearch = text ?? string.Empty;
+            _ = RenderSidePanelSearchAfterDelayAsync();
+        };
+    private EventCallback<KeyboardEventArgs>? _sidePanelSearchKeyDown;
+    private EventCallback<KeyboardEventArgs> SidePanelSearchKeyDown => !SearchAsYouType ? CommitKeyDown
+        : _sidePanelSearchKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(e =>
+        {
+            if (IsApplyNowKey(e))
+                RenderPendingSidePanelSearch();
+        });
+    private EventCallback? _sidePanelSearchLeft;
+    private EventCallback SidePanelSearchLeft => !SearchAsYouType ? default
+        : _sidePanelSearchLeft ??= new EventCallback(null, (Action)RenderPendingSidePanelSearch);
+
+    private async Task RenderSidePanelSearchAfterDelayAsync()
+    {
+        _sidePanelSearchCts?.Cancel();
+        var cts = _sidePanelSearchCts = new CancellationTokenSource();
+        try
+        {
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (ReferenceEquals(cts, _sidePanelSearchCts))
+            await InvokeAsync(RenderPendingSidePanelSearch);
+    }
+
+    private void RenderPendingSidePanelSearch()
+    {
+        if (_sidePanelSearchCts is not { } cts)
+            return;
+        _sidePanelSearchCts = null;
+        cts.Cancel();
+        StateHasChanged();
+    }
 
     private IEnumerable<GridColumn> ColumnPanelColumns =>
         Columns
@@ -409,6 +463,7 @@ public partial class GridControl<TValue>
         _filterPopupApplyRejected = false;
         _filterPopupCommitApplyRejected = false;
         _filterPopupDragRegistered = false;
+        CancelFilterPopupTyping(discard: true);
     }
 
     private async Task OnTextFilterOperatorChanged(ChangeEventArgs e)
@@ -473,11 +528,179 @@ public partial class GridControl<TValue>
             return;
         _filterPopupCommitCallbacks.Clear();
         _filterPopupKeyDownCallbacks.Clear();
+        _filterPopupSearchCallbacks.Clear();
+        _filterPopupTypedCallbacks.Clear();
+        _filterPopupLeftCallbacks.Clear();
         _filterPopupCallbackGeneration = _filterPopupDraftGeneration;
+    }
+
+    // ── Search as you type (FilterSettings.SearchAsYouType, the default) ─────
+    // The boxes are Uncontrolled: the browser owns the text and every input reports
+    // it (@bind keeps the server's copy in step, so no render writes an older text
+    // back). Nothing renders per key: the checklist narrows and the filter applies
+    // once typing pauses (ImmediateModeDelay), or at once on Enter, Tab or leaving
+    // the box. Min / Max keep applying on Enter / Apply Range in both modes.
+    private Action<string?>? FilterPopupBoxTyped(FilterPopupFocusTarget box)
+    {
+        if (!SearchAsYouType)
+            return null;
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupTypedCallbacks.TryGetValue(box, out var typed))
+            return typed;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupTypedCallbacks[box] = text => OnFilterPopupBoxTyped(box, generation, text);
+    }
+
+    private EventCallback FilterPopupBoxLeft(FilterPopupFocusTarget box)
+    {
+        if (!SearchAsYouType)
+            return default;
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupLeftCallbacks.TryGetValue(box, out var left))
+            return left;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupLeftCallbacks[box] = new EventCallback(null, (Func<Task>)(() => OnFilterPopupBoxLeftAsync(generation)));
+    }
+
+    private void OnFilterPopupBoxTyped(FilterPopupFocusTarget box, int generation, string? value)
+    {
+        var field = _filterPopupField;
+        if (field == null || generation != _filterPopupDraftGeneration)
+            return;
+
+        var text = value ?? string.Empty;
+        switch (box)
+        {
+            case FilterPopupFocusTarget.ConditionInput:
+                _filterTextDraft = text;
+                _filterOperatorDraftsByField[field] = _filterOperatorDraft;
+                break;
+            case FilterPopupFocusTarget.SecondConditionInput:
+                _secondFilterTextDraft = text;
+                break;
+            case FilterPopupFocusTarget.ChecklistSearchInput:
+                _filterChecklistSearchDraft = text;
+                _filterPopupTypedSearchPending = true;
+                break;
+            default:
+                return;
+        }
+
+        // A typed search narrows the checklist in manual mode too.
+        if (_filterPopupAutoApply || box == FilterPopupFocusTarget.ChecklistSearchInput)
+            QueueFilterPopupTypingApply(field, generation);
+    }
+
+    private void QueueFilterPopupTypingApply(string field, int generation)
+    {
+        CancelFilterPopupTyping(discard: false);
+        var cts = _filterPopupTypingCts = new CancellationTokenSource();
+        _ = ApplyFilterPopupTypingAfterDelayAsync(field, generation, cts);
+    }
+
+    private async Task ApplyFilterPopupTypingAfterDelayAsync(string field, int generation, CancellationTokenSource cts)
+    {
+        try
+        {
+            if (EffectiveFilterDelay > 0)
+                await Task.Delay(EffectiveFilterDelay, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;     // a newer key, or Enter / Tab / leaving the box, owns the apply
+        }
+
+        await InvokeAsync(async () =>
+        {
+            // Superseded, or the menu closed, switched column or re-seeded meanwhile.
+            if (!ReferenceEquals(cts, _filterPopupTypingCts) || cts.IsCancellationRequested
+                || !IsCurrentFilterPopupField(field) || generation != _filterPopupDraftGeneration)
+                return;
+            CancelFilterPopupTyping(discard: false);
+            await ApplyFilterPopupTypingAsync(field);
+            StateHasChanged();
+        });
+    }
+
+    private async Task OnFilterPopupBoxLeftAsync(int generation)
+    {
+        if (_filterPopupField == null || generation != _filterPopupDraftGeneration)
+            return;
+        if ((await ApplyPendingFilterPopupTypingAsync()).Applied)
+            StateHasChanged();
+    }
+
+    // Typing not applied yet applies now (Enter, Tab, leaving the box).
+    private async Task<(bool Applied, bool Refused)> ApplyPendingFilterPopupTypingAsync()
+    {
+        if (_filterPopupTypingCts == null || _filterPopupField is not { } field)
+            return (false, false);
+        CancelFilterPopupTyping(discard: false);
+        return (true, await ApplyFilterPopupTypingAsync(field));
+    }
+
+    // Returns true when the apply was refused (provider checklist incomplete,
+    // Filtering cancelled).
+    private async Task<bool> ApplyFilterPopupTypingAsync(string field)
+    {
+        var apply = _filterPopupAutoApply;
+        if (_filterPopupTypedSearchPending)
+        {
+            _filterPopupTypedSearchPending = false;
+            apply &= SelectFilterChecklistSearchMatches(field);
+        }
+        if (!apply)
+            return false;
+        await ApplyFilterPopupAsync(close: false, render: false);
+        return _filterPopupApplyRejected;
+    }
+
+    private void CancelFilterPopupTyping(bool discard)
+    {
+        if (discard)
+            _filterPopupTypedSearchPending = false;
+        var cts = _filterPopupTypingCts;
+        _filterPopupTypingCts = null;
+        if (cts == null)
+            return;
+        cts.Cancel();
+        cts.Dispose();
+    }
+
+    // The search button beside a box does what Tab does in it: the box's current
+    // browser text is read back (FlushClientBufferedValueAsync) and published
+    // through the box's own ValueChanged, i.e. the same commit a Tab sends, so it
+    // applies under Auto Apply and only stages without it. Focus stays in the box.
+    private EventCallback<MouseEventArgs> FilterPopupSearchClicked(FilterPopupFocusTarget box)
+    {
+        EnsureFilterPopupCallbackGeneration();
+        if (_filterPopupSearchCallbacks.TryGetValue(box, out var callback))
+            return callback;
+        var generation = _filterPopupDraftGeneration;
+        return _filterPopupSearchCallbacks[box] = NonRenderingEventHandler.Create<MouseEventArgs>(
+            _ => SearchFromFilterPopupBoxAsync(box, generation));
+    }
+
+    private Task SearchFromFilterPopupBoxAsync(FilterPopupFocusTarget box, int generation)
+    {
+        if (_filterPopupField == null || generation != _filterPopupDraftGeneration)
+            return Task.CompletedTask;
+        var textBox = box switch
+        {
+            FilterPopupFocusTarget.ConditionInput => _filterConditionBox,
+            FilterPopupFocusTarget.SecondConditionInput => _secondFilterConditionBox,
+            FilterPopupFocusTarget.ChecklistSearchInput => _filterChecklistSearchBox,
+            _ => null
+        };
+        return textBox?.FlushClientBufferedValueAsync() ?? Task.CompletedTask;
     }
 
     private EventCallback<string?> FilterPopupBoxCommitted(FilterPopupFocusTarget box)
     {
+        // Searching as you type, the text boxes report every input instead (Min /
+        // Max keep committing in both modes).
+        if (SearchAsYouType && box is not (FilterPopupFocusTarget.NumericMinInput or FilterPopupFocusTarget.NumericMaxInput))
+            return default;
         EnsureFilterPopupCallbackGeneration();
         if (_filterPopupCommitCallbacks.TryGetValue(box, out var callback))
             return callback;
@@ -555,8 +778,9 @@ public partial class GridControl<TValue>
         var commitRefused = _filterPopupCommitApplyRejected;
         _filterPopupCommitApplyRejected = false;
         var field = _filterPopupField;
+        // A key that confirms an IME composition is the composition's, not the menu's.
         if (field == null || generation != _filterPopupDraftGeneration
-            || e.AltKey || e.CtrlKey || e.MetaKey)
+            || e.AltKey || e.CtrlKey || e.MetaKey || e.IsComposing)
             return;
 
         if (e.Key is "Enter" or "NumpadEnter")
@@ -577,10 +801,19 @@ public partial class GridControl<TValue>
                 return;
             }
 
+            // Searching as you type, typing not applied yet applies now.
+            var typingApplied = false;
+            if (SearchAsYouType)
+                (typingApplied, commitRefused) = await ApplyPendingFilterPopupTypingAsync();
+
             // This Enter's own commit was just refused: the same drafts would only
             // be refused again (and the host's Filtering would run twice). Stay open.
             if (_filterPopupAutoApply && commitRefused)
+            {
+                if (typingApplied)
+                    StateHasChanged();
                 return;
+            }
 
             // Enter is the menu's OK. Under Auto Apply the committed text is
             // already applied, unless an earlier apply was refused (provider
@@ -600,8 +833,16 @@ public partial class GridControl<TValue>
             return;
         }
 
-        // Escape never publishes the box's text: the menu closes without
-        // applying anything and the keyboard returns to the grid.
+        // Searching as you type, Tab applies typing not applied yet at once.
+        if (e.Key == "Tab" && SearchAsYouType)
+        {
+            if ((await ApplyPendingFilterPopupTypingAsync()).Applied)
+                StateHasChanged();
+            return;
+        }
+
+        // Escape never publishes the box's text (nor typing not applied yet): the
+        // menu closes without applying anything and the keyboard returns to the grid.
         if (e.Key == "Escape")
             await CloseFilterPopupAndFocusGridAsync();
     }
