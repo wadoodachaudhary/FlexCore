@@ -201,11 +201,17 @@ use a True/False selector. Set `FilterSettings.ShowFilterRowOperators = false`
 for a textbox-only row: every column uses Contains against raw/display text,
 including numbers, dates, and Booleans. Clearing a textbox removes its filter. The menu supports
 two conditions joined by AND/OR; Excel mode adds a searchable checklist.
-Search, filter-row typing, and auto-applied menu typing share
-`ImmediateModeDelay`. Searching an Excel checklist selects only the matching
-values; Auto Apply commits that selection after the delay, while manual mode
-stages it until Apply. Checkboxes refine those matches, and clearing the search
-selects all values again. The typed conditions remain independent.
+The search box, the filter-row textboxes and the menu's textboxes keep typing
+in the browser and apply when the text is committed (Enter, Tab or leaving the
+box), with no delay and no server round trip per keystroke. In the menu, Enter
+applies and closes, Tab or leaving a box applies under Auto Apply, and Escape
+discards the uncommitted text and closes the menu. Searching an Excel checklist
+selects only the matching values when the search is committed; Auto Apply
+applies that selection, while manual mode stages it until Apply. Checkboxes
+refine those matches, and clearing the search selects all values again. The
+typed conditions remain independent. `ImmediateModeDelay` now debounces only
+filter-row values set through `OnColumnFilterInput` and a `FilterMenuTemplate`'s
+checklist search.
 
 ```razor
 <GridControl TValue="MyRow" DataSource="@rows"
