@@ -3,6 +3,15 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-18 Ship-Review Fixes To The Grid Filter And Dropdown Work (Update Repositories)
+
+Review wf_47238abd-a8a of the grid-filter (ClientBuffered / SearchAsYouType) and HHM-1025 dropdown change sets:
+- ClientBuffered TextBoxControl publishes a value the browser writes while the box is NOT focused (autofill, a password manager filling a second field) as a value-only Sync one tick later; a commit in flight makes it a no-op. Once the listener owns the commit keys the native change is not published, so FLogin's autofilled Password stayed "" (login failed with a saved credential). Focused typing, Tab, Enter and Escape are unchanged. Hosted cell editors never take it (FlexKit's appendTypedText writes relayed keys before the host focuses the editor; Escape must still cancel); a Sync during a pending commit is re-sent afterwards only if the text changed, and a value already sent is not re-sent. A keydown without a key (Chrome's synthetic autofill keydown) is ignored. GridFilterPopupChecks browser.mjs scenario (vi); verified by wf_4c5dd264-729.
+- Dropdown one-step open: a current item outside the visible page opens as the TOP row (VB6 combo top index), not the bottom row; an item already visible does not scroll (VB6 would still make it the top row — not changed). A null prepareDropdown result reveals the list the plain way instead of leaving it open and unseen. DropDownOpeningChecks asserts the top-row position and has a README.
+- Filter menu Min / Max number boxes (`data-fx-native-vertical-keys`) keep the browser's Up / Down stepping; the listener no longer commits and prevents those keys there.
+- Filter row: a debounced commit leaves the queue before it runs, so Enter / Tab / leaving the box during a slow Filtering handler no longer applies the same text twice.
+- Known, not changed: the toolbar and side-panel search hosts stop Blazor keydown propagation, so page-level Blazor @onkeydown shortcuts do not fire while those boxes have focus (JS document shortcuts are unaffected; in HomeFront only Components/Pages/DataGrid.razor shows the toolbar search).
+
 ## 2026-09-18 Dropdown Opening (HHM-1025)
 
 - Mirrored FlexKit's `DropDownListControl` and existing dropdown JS module: non-hosted lists measure, park, focus and reveal in one browser operation, avoiding intermediate server render/focus round trips. Hosted editors keep their guarded focus path; DropDownGridControl's measurement API is unchanged.

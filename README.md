@@ -212,7 +212,9 @@ leaving the box, or the small search button beside each menu textbox); nothing
 crosses the network until then. In the menu, Enter applies and closes, Tab
 applies under Auto Apply and keeps it open, and Escape discards text not yet
 applied and closes the menu; a one-line hint in the menu reads "Press Tab to
-search, Enter to apply". Searching an Excel checklist narrows the list and selects the
+search, Enter to apply". The numeric range's Min and Max boxes are the exception: they
+keep their text on Tab or leaving the box and apply on Enter or Apply Range, and their
+Up / Down arrows step the number. Searching an Excel checklist narrows the list and selects the
 matching values; Auto Apply applies that selection, while manual mode stages it
 until Apply. Checkboxes refine those matches, and clearing the search selects all
 values again. The typed conditions remain independent. `ImmediateModeDelay` also

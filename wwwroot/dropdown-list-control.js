@@ -103,11 +103,13 @@ export function prepareDropdown(host, panel, editable, dotNetRef) {
     }
     const option = panel.querySelector(".fx-dropdown-option.highlighted");
     if (option) {
+        // An item out of view opens as the TOP row, as the VB6 combo drops its list
+        // (top index = current item); not the bottom row, where the next ArrowDown
+        // would have to scroll.
         const top = option.offsetTop;
         const bottom = top + option.offsetHeight;
-        if (top < panel.scrollTop) panel.scrollTop = top;
-        else if (bottom > panel.scrollTop + panel.clientHeight)
-            panel.scrollTop = bottom - panel.clientHeight;
+        if (top < panel.scrollTop || bottom > panel.scrollTop + panel.clientHeight)
+            panel.scrollTop = Math.max(0, Math.min(top, panel.scrollHeight - panel.clientHeight));
         if (!editable) option.focus({ preventScroll: true });
     }
     if (!editable) watchFocusLeave(host, dotNetRef);

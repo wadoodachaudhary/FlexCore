@@ -171,8 +171,13 @@ public partial class GridControl<TValue>
 
             await InvokeAsync(async () =>
             {
-                if (!cts.IsCancellationRequested && _filterRowDrafts.TryGetValue(field, out var value))
-                    await CommitFilterRowAsync(field, value);
+                if (cts.IsCancellationRequested || !_filterRowDrafts.TryGetValue(field, out var value))
+                    return;
+                // In flight from here: an Enter / Tab / leave during the commit (a slow Filtering
+                // handler or reload) finds nothing queued and does not apply the same text twice.
+                if (_filterRowDebounce.TryGetValue(field, out var queued) && ReferenceEquals(queued, cts))
+                    _filterRowDebounce.Remove(field);
+                await CommitFilterRowAsync(field, value);
             });
         }
         catch (OperationCanceledException)

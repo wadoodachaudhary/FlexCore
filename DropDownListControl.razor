@@ -1199,7 +1199,17 @@
                 }
                 else
                     geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
-                if (!_isOpen || generation != _openGeneration || geometry is null) return;
+                if (!_isOpen || generation != _openGeneration) return;
+                if (geometry is null)
+                {
+                    // The panel was not attached, so prepareDropdown did nothing (no watcher
+                    // either): reveal it the plain way, as when the call fails, rather than
+                    // leave the list open and unseen.
+                    if (CellHost is null) _focusLeaveWatched = false;
+                    ResetDropdownGeometry();
+                    await RevealPanelAsync();
+                    return;
+                }
                 if (CellHost is null)
                 {
                     _panelRevealed = true;
@@ -1228,6 +1238,7 @@
             catch
             {
                 if (!_isOpen || generation != _openGeneration) return;
+                if (CellHost is null) _focusLeaveWatched = false;   // the watcher may not be registered
                 ResetDropdownGeometry();
                 await RevealPanelAsync();
                 return;

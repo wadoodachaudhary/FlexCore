@@ -1471,7 +1471,8 @@
                                                     KeepNativeTab="true"
                                                     AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.NumericMinInput)"
                                                     ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.NumericMinInput)"
-                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMinInput)" />
+                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMinInput)"
+                                                    data-fx-native-vertical-keys="" />
                                 </label>
                                 <label class="fx-filter-number-field">
                                     <span>Max</span>
@@ -1483,7 +1484,8 @@
                                                     KeepNativeTab="true"
                                                     AutoFocus="@(_filterPopupAutoFocusTarget == FilterPopupFocusTarget.NumericMaxInput)"
                                                     ValueChanged="@FilterPopupBoxCommitted(FilterPopupFocusTarget.NumericMaxInput)"
-                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMaxInput)" />
+                                                    OnKeyDown="@FilterPopupBoxKeyDown(FilterPopupFocusTarget.NumericMaxInput)"
+                                                    data-fx-native-vertical-keys="" />
                                 </label>
                             </div>
                             <button type="button"
