@@ -1,28 +1,33 @@
 @namespace Fx.ControlKit.Reports
 
-<details class="fx-rd-properties-drawer">
-    <summary>Properties</summary>
+<AccordionControl>
+    <AccordionItemControl Title="Properties" InitiallyExpanded="true">
     <div class="fx-rd-properties-content">
         @if (SelectedElement is not null)
         {
             var selected = SelectedElement;
             <div class="fx-rd-property-card">
                 <h3>Object</h3>
-                <label>Name<input @bind="selected.Name" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
-                <label>Kind<input value="@selected.Kind" readonly /></label>
+                <label>Name<TextBoxControl @bind-Value="selected.Name" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
+                <label>Kind<TextBoxControl Value="@selected.Kind" Enabled="false" /></label>
 
                 @if (selected.Kind.Equals("Text", StringComparison.OrdinalIgnoreCase) || selected.Kind.Equals("FieldHeading", StringComparison.OrdinalIgnoreCase))
                 {
-                    <label>Text<Fx.ControlKit.TextAreaControl Value="selected.Text" ValueChanged="value => ChangeTextAsync(selected, value)" Enabled="@(selected.Visual.Runs.Count == 0 && SelectedSection?.ReadOnly != true)" Rows="3" /></label>
+                    <label>Text<Fx.ControlKit.TextAreaControl Value="@selected.Text" ValueChanged="value => ChangeTextAsync(selected, value)" Enabled="@(selected.Visual.Runs.Count == 0 && SelectedSection?.ReadOnly != true)" Rows="3" /></label>
                 }
                 else if (selected.Kind.Equals("Subreport", StringComparison.OrdinalIgnoreCase))
                 {
-                    <label>Subreport<input @bind="selected.SubreportName" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
-                    <label>XML Path<input @bind="selected.SubreportXmlPath" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                    <label>Subreport<TextBoxControl @bind-Value="selected.SubreportName" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
+                    <label>XML Path<TextBoxControl @bind-Value="selected.SubreportXmlPath" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
+                }
+                else if (selected.Kind is "Chart" or "CrossTab")
+                {
+                    <ReportAnalysisEditorControl Element="selected" Fields="Document.Fields" Groups="Document.Groups"
+                        ReadOnly="@(SelectedSection?.ReadOnly == true || selected.LockFormat)" Changed="NotifyChangedAsync" />
                 }
                 else
                 {
-                    <label>Binding<input @bind="selected.Binding" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                    <label>Binding<TextBoxControl @bind-Value="selected.Binding" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
                 }
             </div>
 
@@ -39,26 +44,27 @@
             var section = SelectedSection;
             <div class="fx-rd-property-card">
                 <h3>Section</h3>
-                <label>Name<input @bind="section.Name" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+                <label>Name<TextBoxControl @bind-Value="section.Name" @bind-Value:after="NotifyChangedAsync" Enabled="@(!section.ReadOnly)" /></label>
                 <label>Kind<TextBoxControl Value="@(section.Kind)" ReadOnly="true" /></label>
                 <label>Height<NumericTextBoxControl TValue="int" Value="section.HeightTwips" ValueChanged="value => ChangeSectionHeightAsync(section, value)" Min="0" /></label>
-                <label>Background<input type="color" @bind="section.BackgroundColor" @bind:after="NotifyChangedAsync" /></label>
-                <label class="check"><input type="checkbox" @bind="section.IsSuppressed" @bind:after="NotifyChangedAsync" /> Suppressed</label>
-                <label class="check"><input type="checkbox" @bind="section.KeepTogether" @bind:after="NotifyChangedAsync" /> Keep Together</label>
+                <label>Background<Fx.ControlKit.Dialogs.ColorPickerControl @bind-Value="section.BackgroundColor" @bind-Value:after="NotifyChangedAsync" Enabled="@(!section.ReadOnly)" /></label>
+                <CheckBoxControl @bind-Checked="section.IsSuppressed" @bind-Checked:after="NotifyChangedAsync" Label="Suppressed" Disabled="@(section.ReadOnly)" />
+                <CheckBoxControl @bind-Checked="section.KeepTogether" @bind-Checked:after="NotifyChangedAsync" Label="Keep Together" Disabled="@(section.ReadOnly)" />
             </div>
         }
 
         <div class="fx-rd-property-card grid2">
             <h3>Page</h3>
-            <label>Title<input @bind="Document.Title" @bind:event="oninput" @bind:after="NotifyChangedAsync" /></label>
+            <label>Title<TextBoxControl @bind-Value="Document.Title" @bind-Value:after="NotifyChangedAsync" /></label>
             <label>Orientation
                 <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "Portrait", "Landscape" })" Value="@Document.Page.Orientation" ValueChanged="ChangeOrientationAsync" />
             </label>
-            <label>Width<input type="number" @bind="Document.Page.ContentWidthTwips" @bind:after="NotifyChangedAsync" /></label>
-            <label>Height<input type="number" @bind="Document.Page.ContentHeightTwips" @bind:after="NotifyChangedAsync" /></label>
+            <label>Width<NumericTextBoxControl TValue="int" @bind-Value="Document.Page.ContentWidthTwips" @bind-Value:after="NotifyChangedAsync" Min="1" /></label>
+            <label>Height<NumericTextBoxControl TValue="int" @bind-Value="Document.Page.ContentHeightTwips" @bind-Value:after="NotifyChangedAsync" Min="1" /></label>
         </div>
     </div>
-</details>
+    </AccordionItemControl>
+</AccordionControl>
 
 @code {
     [Parameter] public ReportDesignerDocument Document { get; set; } = ReportDesignerDocument.CreateBlank();
@@ -75,7 +81,7 @@
 
     private async Task ChangePositionAsync(ReportDesignerElement element, int value, int coordinate)
     {
-        if (element.LockSizePosition || value < 0)
+        if (element.LockSizePosition || SelectedSection?.ReadOnly == true || value < 0)
             return;
         switch (coordinate)
         {
@@ -92,6 +98,7 @@
 
     private async Task ChangeSectionHeightAsync(ReportDesignerSection section, int value)
     {
+        if (section.ReadOnly) return;
         section.HeightTwips = Math.Max(Math.Max(0, value), section.Elements.Select(element => element.TopTwips + element.HeightTwips).DefaultIfEmpty(0).Max());
         await NotifyChangedAsync();
     }

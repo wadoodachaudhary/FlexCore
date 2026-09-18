@@ -18,6 +18,17 @@ public sealed partial class ReportLayoutSession
     private VariableSnapshot? _printStart;
     private sealed record PrintBandKey(ReportLayoutSession Owner, string Section, int Row, int Occurrence);
     private sealed record PrintItemKey(PrintBandKey Band, string Element);
+    private sealed record PrintSectionFormat(bool Suppressed, bool Hidden, bool Before, bool After, bool Keep, bool Bottom, bool Underlay, bool Reset, string Background)
+    {
+        public static PrintSectionFormat Read(ReportDesignerSection s) => new(s.IsSuppressed, s.HideForDrillDown, s.NewPageBefore, s.NewPageAfter,
+            s.KeepTogether, s.PrintAtBottomOfPage, s.UnderlayFollowingSections, s.ResetPageNumberAfter, s.BackgroundColor);
+        public void Apply(ReportDesignerSection s)
+        {
+            s.IsSuppressed = Suppressed; s.HideForDrillDown = Hidden; s.NewPageBefore = Before; s.NewPageAfter = After;
+            s.KeepTogether = Keep; s.PrintAtBottomOfPage = Bottom; s.UnderlayFollowingSections = Underlay;
+            s.ResetPageNumberAfter = Reset; s.BackgroundColor = Background;
+        }
+    }
 
     // A cached first-pass formula is immutable during printing, even if it used variables to compute its value.
     private bool NeedsPrintState(string reference)
@@ -30,13 +41,14 @@ public sealed partial class ReportLayoutSession
     private bool NeedsPrintState(CrystalFormula formula) => formula.UsesPersistentVariables || formula.References.Any(NeedsPrintState);
 
     private static bool VisibilityProperty(string property) => property.ToLowerInvariant() is "enablesuppress" or "enablehidefordrilldown";
-    private bool HasMutableVisibility(string section) => new[] { _layout.AreaConditions, _layout.SectionConditions }
-        .SelectMany(table => table.GetValueOrDefault(section) ?? []).Any(c => VisibilityProperty(c.Key) && (NeedsPrintState(c.Value) || _physicalPageSchedule && UsesPage(c.Value)));
+    private static bool EndingProperty(string property) => property.ToLowerInvariant() is "enablenewpageafter" or "enableresetpagenumberafter";
+    private bool HasScheduledSection(string section) => new[] { _layout.AreaConditions, _layout.SectionConditions }
+        .SelectMany(table => table.GetValueOrDefault(section) ?? []).Any(c => NeedsPrintState(c.Value) || _physicalPageSchedule && UsesPage(c.Value));
     private bool MutableCondition(Dictionary<string, Dictionary<string, CrystalFormula>> table, string section, string property) =>
         (table.GetValueOrDefault(section) ?? []).Any(c => c.Key.Equals(property, StringComparison.OrdinalIgnoreCase) && (NeedsPrintState(c.Value) || _physicalPageSchedule && UsesPage(c.Value)));
     private bool HasPrintFields(string section) => _layout.Document.Sections.First(s => s.Id == section).Elements
         .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "")).Any(NeedsPrintState);
-    private bool HasVisibilityEvent(string section) => HasMutableVisibility(section) || _physicalPageSchedule && (HasPrintFields(section)
+    private bool HasVisibilityEvent(string section) => HasScheduledSection(section) || _physicalPageSchedule && (HasPrintFields(section)
         || _layout.Document.Sections.First(s => s.Id == section).Elements.Any(e => _layout.Subreports.ContainsKey(e.Id)
             || (_layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(NeedsPrintState) ?? false)));
 
@@ -76,15 +88,12 @@ public sealed partial class ReportLayoutSession
         _physicalPageSchedule = _state.PhysicalSchedule || needsReplay;
         _printStart = CaptureVariables();
         if (!_physicalPageSchedule) return;
-        var conditions = _layout.SectionConditions.Values.Concat(_layout.AreaConditions.Values).SelectMany(c => c);
         if (_layout.Document.Sections.Any(s => s.SuppressIfBlank)
-            || conditions.Any(c => !VisibilityProperty(c.Key) && NeedsPrintState(c.Value))
-            || _layout.ObjectConditions.Values.SelectMany(c => c).Any(c => c.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase) && NeedsPrintState(c.Value))
             || _layout.Summaries.Values.Concat(_layout.RunningTotals.Values).Any(s => NeedsPrintState(s.Field))
             || _scheduledFormulas.Any(r => _layout.Formulas[r].AggregateReferences.Any(NeedsPrintState))
             || _layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation.Formula, t.Reset.Formula })
                 .Any(f => f is not null && (f.UsesPersistentVariables || f.References.Any(NeedsPrintState))))
-            throw new NotSupportedException($"{_layout.Document.SourceName}: mutable page formulas do not yet support non-visibility section formatting/object suppression, blank-section suppression, or state-dependent summaries.");
+            throw new NotSupportedException($"{_layout.Document.SourceName}: mutable page formulas do not yet support blank-section suppression or state-dependent summaries.");
         if (_layout.Subreports.Values.SelectMany(s => s.Links).Any(l => NeedsPrintState(l.MainField) || DependsOn(l.MainField, true)))
             throw new NotSupportedException("Inline subreport query links cannot depend on mutable or page-dependent print state.");
     }
@@ -115,6 +124,8 @@ public sealed partial class ReportLayoutSession
         var saved = _state.Sessions.ToDictionary(s => s, s => (Variables: s.CaptureVariables(), Page: s._formulaPage, Count: s._formulaPages, Repeated: s._repeatedHeader));
         var printed = new Dictionary<PrintItemKey, Item>();
         var visibility = new Dictionary<PrintBandKey, bool>();
+        var formats = new Dictionary<PrintBandKey, PrintSectionFormat>();
+        var endings = new HashSet<PrintBandKey>();
         var hiddenValues = new HashSet<PrintBandKey>();
         var caches = new Dictionary<PrintBandKey, Dictionary<(string Name, int Row), object?>>();
         var lastOffsets = LastFragmentOffsets(pages);
@@ -137,7 +148,7 @@ public sealed partial class ReportLayoutSession
                     bool Section(Band band)
                     {
                         var owner = band.Owner ?? this;
-                        if (!owner.HasMutableVisibility(band.Section.Id)) return !band.Suppressed;
+                        if (!owner.HasScheduledSection(band.Section.Id)) return !band.Suppressed;
                         var key = Key(band);
                         if (visibility.TryGetValue(key, out var visible)) return visible;
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
@@ -147,9 +158,29 @@ public sealed partial class ReportLayoutSession
                         try
                         {
                             var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
-                            visible = owner.Visible(owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row), band.Row, true));
+                            var formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, endingOnly: false), band.Row, true, endingOnly: false);
+                            visible = owner.Visible(formatted); formats[key] = PrintSectionFormat.Read(formatted);
                             caches[key] = new(owner._bandFormulaCache);
                             visibility.Add(key, visible); return visible;
+                        }
+                        finally { owner._replayingPrint = false; }
+                    }
+                    void Finish(Band band)
+                    {
+                        var key = Key(band); var owner = key.Owner;
+                        if (!owner.HasScheduledSection(band.Section.Id) || !endings.Add(key)) return;
+                        owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
+                        owner._bandFormulaCache.Clear();
+                        if (caches.TryGetValue(key, out var cache)) foreach (var value in cache) owner._bandFormulaCache.Add(value.Key, value.Value);
+                        owner._replayingPrint = true;
+                        try
+                        {
+                            var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
+                            var formatted = CopySection(original);
+                            if (formats.TryGetValue(key, out var entry)) entry.Apply(formatted);
+                            // Ending formulas observe field assignments made in this section, on its final physical page.
+                            formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(formatted, band.Row, endingOnly: true), band.Row, true, endingOnly: true);
+                            formats[key] = PrintSectionFormat.Read(formatted); caches[key] = new(owner._bandFormulaCache);
                         }
                         finally { owner._replayingPrint = false; }
                     }
@@ -166,7 +197,7 @@ public sealed partial class ReportLayoutSession
                         var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
                         if (original.Elements.Any(e => owner._layout.Subreports.ContainsKey(e.Id)
                             || (owner._layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(owner.NeedsPrintState) ?? false)))
-                            throw new NotSupportedException("Suppressed sections containing inline subreports or mutable object formatting require an explicit Crystal engine compatibility policy.");
+                            owner._diagnostics.Add($"{original.Name}: hidden subreports and object-format assignments are skipped; named field assignments still run.");
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var existing)) foreach (var value in existing) owner._bandFormulaCache.Add(value.Key, value.Value);
@@ -176,20 +207,23 @@ public sealed partial class ReportLayoutSession
                             _ = owner.Value(reference, band.Row);
                         caches[key] = new(owner._bandFormulaCache);
                     }
-                    if (!Section(placement.Band)) { HiddenValues(placement.Band); continue; }
+                    if (!Section(placement.Band)) { HiddenValues(placement.Band); Finish(placement.Band); continue; }
                     var events = (placement.Band.InlineSections ?? [])
                         .Where(s => s.Start >= placement.Offset && (s.Start < placement.Offset + placement.Height
                             || s.Start == s.End && s.Start == placement.Offset + placement.Height && placement.Offset == lastOffsets[FragmentKey(placement.Band)]))
-                        .Select(s => (Top: s.Start, Depth: s.Source.Owner?._depth ?? 0, Band: (Band?)s.Source, Item: (Item?)null))
-                        .Concat(placement.Band.Items.Select(i => (Top: i.Element.TopTwips, Depth: int.MaxValue, Band: (Band?)null, Item: (Item?)i)))
-                        .OrderBy(e => e.Top).ThenBy(e => e.Depth);
+                        .Select(s => (Top: s.Start, Order: 1, Depth: s.Source.Owner?._depth ?? 0, Band: (Band?)s.Source, Item: (Item?)null))
+                        .Concat((placement.Band.InlineSections ?? []).Where(s => s.End > placement.Offset && s.End <= placement.Offset + placement.Height)
+                            .Select(s => (Top: s.End, Order: 0, Depth: -(s.Source.Owner?._depth ?? 0), Band: (Band?)s.Source, Item: (Item?)null)))
+                        .Concat(placement.Band.Items.Select(i => (Top: i.Element.TopTwips, Order: 2, Depth: int.MaxValue, Band: (Band?)null, Item: (Item?)i)))
+                        .OrderBy(e => e.Top).ThenBy(e => e.Order).ThenBy(e => e.Depth);
                     // Child bands are already positioned inside the parent. Execute only each object's first fragment.
                     foreach (var entry in events)
                     {
                         if (entry.Band is { } childBand)
                         {
+                            if (entry.Order == 0) { if (!blocked.Contains((childBand.Owner, childBand.Section.Id, childBand.Row))) Finish(childBand); continue; }
                             if (blocked.Contains((childBand.Owner, childBand.Section.Id, childBand.Row))) Block(childBand);
-                            else if (!Section(childBand)) { HiddenValues(childBand); Block(childBand); }
+                            else if (!Section(childBand)) { HiddenValues(childBand); Finish(childBand); Block(childBand); }
                             continue;
                         }
                         var item = entry.Item!;
@@ -218,14 +252,17 @@ public sealed partial class ReportLayoutSession
                         printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2 });
                         caches[bandKey] = new(owner._bandFormulaCache);
                     }
+                    if (placement.Offset == lastOffsets[FragmentKey(placement.Band)]) Finish(placement.Band);
                 }
             }
-            var changed = visibility.Count != _state.PrintedVisibility.Count || visibility.Any(p => !_state.PrintedVisibility.TryGetValue(p.Key, out var old) || p.Value != old)
+            var changed = formats.Count != _state.PrintedSections.Count || formats.Any(p => !_state.PrintedSections.TryGetValue(p.Key, out var old) || p.Value != old)
+                || visibility.Count != _state.PrintedVisibility.Count || visibility.Any(p => !_state.PrintedVisibility.TryGetValue(p.Key, out var old) || p.Value != old)
                 || printed.Count != _state.PrintedItems.Count || printed.Any(p => !_state.PrintedItems.TryGetValue(p.Key, out var old)
-                || p.Value.Html != old.Html || p.Value.Element.CanGrow != old.Element.CanGrow
+                || p.Value.Html != old.Html || p.Value.Element.CanGrow != old.Element.CanGrow || p.Value.Element.IsSuppressed != old.Element.IsSuppressed
                 || ReportObjectRenderer.Style(p.Value.Element, false) != ReportObjectRenderer.Style(old.Element, false));
             _state.PrintedItems = printed;
             _state.PrintedVisibility = visibility;
+            _state.PrintedSections = formats;
             return changed;
         }
         finally

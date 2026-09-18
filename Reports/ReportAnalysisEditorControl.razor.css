@@ -1,0 +1,4 @@
+.fx-report-analysis-editor { display:grid; gap:8px; min-width:0; }
+.fx-report-analysis-editor label { display:grid; gap:3px; min-width:0; }
+.fx-report-analysis-editor fieldset { display:grid; gap:6px; min-width:0; border:0; border-top:1px solid #d4d4d4; padding:8px 0; }
+.fx-report-analysis-dimension { display:grid; grid-template-columns:minmax(0,1fr) 30px; gap:4px; }

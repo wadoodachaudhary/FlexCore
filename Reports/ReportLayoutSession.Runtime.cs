@@ -19,6 +19,7 @@ public sealed partial class ReportLayoutSession
         public List<ReportLayoutSession> Sessions { get; } = [];
         public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
         public Dictionary<PrintBandKey, bool> PrintedVisibility { get; set; } = new();
+        public Dictionary<PrintBandKey, PrintSectionFormat> PrintedSections { get; set; } = new();
     }
     private readonly RuntimeState _state;
     private readonly int _depth;
@@ -128,9 +129,7 @@ public sealed partial class ReportLayoutSession
             throw new NotSupportedException("Page-dependent formatting cannot mutate shared/global variables.");
         return formula.Evaluate(Context(row, currentField: currentField));
     }
-    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false)
-    {
-        var section = new ReportDesignerSection
+    private static ReportDesignerSection CopySection(ReportDesignerSection source) => new()
         {
             Id = source.Id, Name = source.Name, SourceKey = source.SourceKey, Kind = source.Kind, AreaId = source.AreaId, AreaName = source.AreaName, GroupId = source.GroupId,
             HeightTwips = source.HeightTwips, IsSuppressed = source.IsSuppressed, HideForDrillDown = source.HideForDrillDown,
@@ -139,6 +138,9 @@ public sealed partial class ReportLayoutSession
             ResetPageNumberAfter = source.ResetPageNumberAfter,
             KeepTogether = source.KeepTogether, BackgroundColor = source.BackgroundColor, Elements = source.Elements
         };
+    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null)
+    {
+        var section = CopySection(source);
         var states = pageOnly ? _suppression.GetValueOrDefault((source.Id, row)) :
             (Area: !PageSuppresses(_layout.AreaConditions, source.Id) && !MutableCondition(_layout.AreaConditions, source.Id, "EnableSuppress") && _layout.Areas.GetValueOrDefault(source.Id)?.Suppressed == true,
                 Section: !PageSuppresses(_layout.SectionConditions, source.Id) && !MutableCondition(_layout.SectionConditions, source.Id, "EnableSuppress") && source.IsSuppressed,
@@ -148,7 +150,8 @@ public sealed partial class ReportLayoutSession
                      .Concat(Conditions(_layout.SectionConditions, source.Id, pageOnly).Select(c => (Condition: c, Area: false))))
         {
             var condition = entry.Condition;
-            if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value) || VisibilityProperty(condition.Key) && UsesPage(condition.Value))) continue;
+            if (endingOnly is { } ending && EndingProperty(condition.Key) != ending) continue;
+            if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value) || UsesPage(condition.Value))) continue;
             var value = ConditionValue(condition.Value, row, pageOnly);
             switch (condition.Key.ToLowerInvariant())
             {
@@ -165,9 +168,12 @@ public sealed partial class ReportLayoutSession
                 default: _diagnostics.Add($"{section.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
         }
-        section.IsSuppressed = states.Area || states.Section;
-        section.HideForDrillDown = states.AreaHidden || states.SectionHidden;
-        if (!pageOnly) _suppression[(source.Id, row)] = states;
+        if (endingOnly != true)
+        {
+            section.IsSuppressed = states.Area || states.Section;
+            section.HideForDrillDown = states.AreaHidden || states.SectionHidden;
+            if (!pageOnly) _suppression[(source.Id, row)] = states;
+        }
         return section;
     }
 
@@ -176,7 +182,7 @@ public sealed partial class ReportLayoutSession
         var element = source.CloneFor(source.SectionId, source.Name);
         element.Id = source.Id; element.SourceKey = source.SourceKey;
         element.LeftTwips = source.LeftTwips; element.TopTwips = source.TopTwips;
-        if (!pageOnly && PageSuppresses(_layout.ObjectConditions, source.Id)) element.IsSuppressed = false;
+        if (!pageOnly && (PageSuppresses(_layout.ObjectConditions, source.Id) || MutableCondition(_layout.ObjectConditions, source.Id, "EnableSuppress"))) element.IsSuppressed = false;
         foreach (var condition in Conditions(_layout.ObjectConditions, source.Id, pageOnly))
         {
             if (_physicalPageSchedule && !_replayingPrint && NeedsPrintState(condition.Value)) continue;
@@ -258,6 +264,8 @@ public sealed partial class ReportLayoutSession
         {
             sectionOwner._formulaPage = page; sectionOwner._formulaPages = count; sectionOwner._repeatedHeader = repeated;
             var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true);
+            var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
+            if (_state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format)) format.Apply(section);
             var items = new List<Item>();
             foreach (var item in source.Items)
             {
@@ -267,7 +275,6 @@ public sealed partial class ReportLayoutSession
                 {
                     owner._formulaPage = objectPage ?? page; owner._formulaPages = count; owner._repeatedHeader = repeated;
                     var element = owner.ApplyObjectConditions(item.Element, item.Row, true);
-                    if (element.IsSuppressed) continue;
                     var resized = element.CanGrow != item.Element.CanGrow || element.FontSize != item.Element.FontSize || element.FontFamily != item.Element.FontFamily;
                     if (resized && _textMetrics is null) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
                     var richChanged = element.Visual.Runs.Count > 0 && owner.Conditions(owner._layout.ObjectConditions, element.Id, true).Any();
@@ -284,7 +291,6 @@ public sealed partial class ReportLayoutSession
                 }
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
             }
-            var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
             var hidden = _state.PrintedVisibility.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var visible) && !visible;
             return source with { Section = section, Items = items, Suppressed = !Visible(section) || hidden, RepeatedHeader = repeated };
         }
@@ -353,7 +359,7 @@ public sealed partial class ReportLayoutSession
         foreach (DataRow candidate in data.Rows)
             if (filters.All(f => candidate.Table.Columns.Contains(f.Alias) ? f.Value is not (null or DBNull) && candidate[f.Alias] is not DBNull && CrystalFormula.Compare(candidate[f.Alias], f.Value) == 0
                 : throw new InvalidDataException($"Subreport link column '{f.Alias}' is missing."))) filtered.ImportRow(candidate);
-        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1);
+        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1, this);
         if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
             _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
         foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);

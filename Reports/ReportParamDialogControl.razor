@@ -37,13 +37,9 @@
 
 @if (_visible)
 {
-    <div class="fx-dialog-overlay">
-        <div class="fx-dialog fx-param-dialog">
-            <div class="fx-dialog-header">
-                <span>Enter Parameter Values</span>
-                <button class="fx-dialog-close" type="button" @onclick="Cancel">×</button>
-            </div>
-            <div class="fx-dialog-body fx-param-body">
+    <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" OnClose="Cancel">
+        <ChildContent>
+            <div class="fx-param-body">
                 @if (!string.IsNullOrWhiteSpace(_title))
                 {
                     <div class="fx-param-title">@_title</div>
@@ -96,17 +92,10 @@
                                        Selected pane. *@
                                     <div class="fx-param-custom-row">
                                         <label class="fx-param-value-label">Enter a Value:</label>
-                                        <input type="text"
-                                               class="fx-param-value-input"
-                                               value="@_customDrafts.GetValueOrDefault(p.Name)"
-                                               @oninput="@(e => _customDrafts[p.Name] = e.Value?.ToString() ?? "")"
-                                               @onkeydown="@(e => OnCustomKeyDown(e, p.Name))" />
-                                        <button type="button"
-                                                class="fx-param-custom-add"
-                                                title="Add this value to the Selected list"
-                                                @onclick="@(() => AddCustomValue(p.Name))">
-                                            &gt;
-                                        </button>
+                                        <TextBoxControl CssClass="fx-param-value-input" Value="@_customDrafts.GetValueOrDefault(p.Name)"
+                                                        ValueChanged="value => _customDrafts[p.Name] = value ?? string.Empty" UpdateOnInput="true"
+                                                        OnKeyDown="e => OnCustomKeyDown(e, p.Name)" />
+                                        <ButtonControl Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">&gt;</ButtonControl>
                                     </div>
                                 }
                             }
@@ -114,43 +103,26 @@
                             {
                                 @* Crystal default-values dropdown — shows description,
                                    sets value behind it. Same as before. *@
-                                <select class="fx-param-defaults-dropdown"
-                                        @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
-                                    @foreach (var choice in defaults)
-                                    {
-                                        <option value="@choice.Value"
-                                                selected="@(_values.GetValueOrDefault(p.Name) == choice.Value)">
-                                            @(string.IsNullOrWhiteSpace(choice.Description) ? choice.Value : choice.Description)
-                                        </option>
-                                    }
-                                </select>
+                                <DropDownListControl TValue="string" TItem="ListItem"
+                                    DataSource="@defaults.Select(choice => new ListItem(choice.Value, string.IsNullOrWhiteSpace(choice.Description) ? choice.Value : choice.Description))"
+                                    ValueFieldName="Key" TextFieldName="Label" Value="@_values.GetValueOrDefault(p.Name)"
+                                    ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
                                 @if (p.AllowCustomCurrentValues)
                                 {
                                     <label class="fx-param-value-label">Enter a Value:</label>
-                                    <input type="text"
-                                           class="fx-param-value-input"
-                                           value="@_values.GetValueOrDefault(p.Name)"
-                                           @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                                    <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
                                 }
                             }
                             else if (pickList != null && pickList.Count > 0)
                             {
-                                <select class="fx-param-picklist-dropdown"
-                                        @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
-                                    <option value="" selected="@(string.IsNullOrEmpty(_values.GetValueOrDefault(p.Name)))">
-                                        @(p.IsOptional ? "..." : "--")
-                                    </option>
-                                    @foreach (var item in pickList)
-                                    {
-                                        <option value="@item.Value" selected="@(_values.GetValueOrDefault(p.Name) == item.Value)">@item.Display</option>
-                                    }
-                                </select>
+                                <DropDownListControl TValue="string" TItem="PickListItem" DataSource="@_singlePickLists[p.Name]"
+                                    ValueFieldName="Value" TextFieldName="Display" Value="@PickListValue(p)"
+                                    ValueChanged="value => SetPickListValue(p.Name, value)" AllowFiltering="true" AriaLabel="@p.Name" />
                             }
                             else if (p.ParameterType == ReportParameterType.Integer || p.ParameterType == ReportParameterType.Decimal)
                             {
-                                <input type="number"
-                                       value="@_values.GetValueOrDefault(p.Name)"
-                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                                <NumericTextBoxControl TValue="decimal?" Value="@ParseNumberValue(_values.GetValueOrDefault(p.Name))"
+                                    ValueChanged="value => SetValue(p.Name, value?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty)" />
                             }
                             else if (p.ParameterType == ReportParameterType.Date)
                             {
@@ -159,16 +131,12 @@
                             }
                             else if (p.ParameterType == ReportParameterType.Boolean)
                             {
-                                <select @onchange="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))">
-                                    <option value="True" selected="@(_values.GetValueOrDefault(p.Name) == "True")">True</option>
-                                    <option value="False" selected="@(_values.GetValueOrDefault(p.Name) == "False")">False</option>
-                                </select>
+                                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "True", "False" })"
+                                    Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
                             }
                             else
                             {
-                                <input type="text"
-                                       value="@_values.GetValueOrDefault(p.Name)"
-                                       @oninput="@(e => SetValue(p.Name, e.Value?.ToString() ?? ""))" />
+                                <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
                             }
                         </div>
                     </div>
@@ -178,12 +146,12 @@
                     <div class="fx-param-error">@_error</div>
                 }
             </div>
-            <div class="fx-dialog-footer">
-                <button class="fx-button fx-button-primary" type="button" @onclick="Accept">OK</button>
-                <button class="fx-button" type="button" @onclick="Cancel">Cancel</button>
-            </div>
-        </div>
-    </div>
+        </ChildContent>
+        <FooterContent>
+            <ButtonControl CssClass="fx-button-primary" OnClick="Accept">OK</ButtonControl>
+            <ButtonControl OnClick="Cancel">Cancel</ButtonControl>
+        </FooterContent>
+    </DialogControl>
 }
 
 @code {
@@ -201,6 +169,17 @@
     private List<ReportParameter> _parameters = new();
     private Dictionary<string, string> _values = new();
     private Dictionary<string, IReadOnlyList<PickListItem>> _pickLists = new();
+    private Dictionary<string, IReadOnlyList<PickListItem>> _singlePickLists = new();
+    private const string NoValueChoice = "fx-param-no-value";
+
+    private string PickListValue(ReportParameter p)
+    {
+        var value = _values.GetValueOrDefault(p.Name) ?? "";
+        return value.Length == 0 && p.IsOptional ? NoValueChoice : value;
+    }
+
+    private void SetPickListValue(string name, string? value)
+        => SetValue(name, value is null or NoValueChoice ? string.Empty : value);
 
     // Per-parameter dual-list state. Each multi-value parameter gets its
     // own Available pool (seeded from DefaultValues or PickListSql) and
@@ -253,6 +232,7 @@
 
         _values = _parameters.ToDictionary(p => p.Name, p => p.DefaultValue ?? "");
         _pickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
+        _singlePickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
         if (PickLists != null)
         {
             foreach (var p in _parameters)
@@ -264,7 +244,14 @@
                 // table.field, with no host-side per-parameter mapping.
                 var list = PickLists.GetPickList(p);
                 if (list != null && list.Count > 0)
+                {
                     _pickLists[p.Name] = list;
+                    // An optional parameter keeps a "..." choice so a picked value can be cleared
+                    // again (blank = no filter; Accept skips optional parameters). Its key is a
+                    // sentinel, not "": the drop-down treats "" as no selection, which would trap
+                    // arrow-key movement on this item. PickListValue/SetPickListValue map it.
+                    _singlePickLists[p.Name] = p.IsOptional ? [new PickListItem(NoValueChoice, "..."), .. list] : list;
+                }
             }
         }
 
@@ -473,6 +460,8 @@
     // DatePickerControl (it binds DateTime?, not the raw <input type=date> string).
     private static DateTime? ParseDateValue(string? raw)
         => DateTime.TryParse(raw, out var dt) ? dt : (DateTime?)null;
+
+    private static decimal? ParseNumberValue(string? raw) => decimal.TryParse(raw, out var value) ? value : null;
 
     private static object ConvertValue(string raw, ReportParameterType type) => type switch
     {

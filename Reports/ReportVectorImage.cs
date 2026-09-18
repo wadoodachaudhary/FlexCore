@@ -6,8 +6,9 @@ namespace Fx.ControlKit.Reports;
 
 public sealed record ReportVectorText(string Value, string FontFamily, double FontSize, int Weight = 400, bool Italic = false,
     bool Underline = false, bool StrikeOut = false, string Anchor = "start", string Baseline = "alphabetic", double[]? Advances = null, double[]? VerticalAdvances = null);
+public sealed record ReportVectorPathCommand(string Kind, double[] Points);
 public sealed record ReportVectorShape(string Kind, double[] Points, string Fill, string Stroke, double StrokeWidth, bool Winding = false,
-    double[]? Clip = null, double[]? Transform = null, ReportVectorText? Text = null, double[][]? ClipPolygons = null);
+    double[]? Clip = null, double[]? Transform = null, ReportVectorText? Text = null, double[][]? ClipPolygons = null, ReportVectorPathCommand[]? Commands = null);
 
 /// <summary>A bounded geometry/text vocabulary, never imported SVG, markup or external resources.</summary>
 public sealed class ReportVectorImage
@@ -20,6 +21,7 @@ public sealed class ReportVectorImage
     public ReportVectorImage Clone() => new() { Left = Left, Top = Top, Width = Width, Height = Height,
         Shapes = Shapes.Select(s => s with { Points = s.Points.ToArray(), Clip = s.Clip?.ToArray(), Transform = s.Transform?.ToArray(),
             ClipPolygons = s.ClipPolygons?.Select(p => p.ToArray()).ToArray(),
+            Commands = s.Commands?.Select(c => c with { Points = c.Points.ToArray() }).ToArray(),
             Text = s.Text is { } text ? text with { Advances = text.Advances?.ToArray(), VerticalAdvances = text.VerticalAdvances?.ToArray() } : null }).ToList() };
 
     public void Validate()
@@ -31,15 +33,32 @@ public sealed class ReportVectorImage
         var count = 0;
         foreach (var shape in Shapes)
         {
-            if (shape.Kind is not ("Rectangle" or "Ellipse" or "Polygon" or "Polyline" or "Bezier" or "Text") || shape.Points.Length < (shape.Kind == "Text" ? 2 : 4) || shape.Points.Length % 2 != 0
+            if (shape.Kind is not ("Rectangle" or "Ellipse" or "Polygon" or "Polyline" or "Bezier" or "Text" or "Path") || shape.Points.Length < (shape.Kind == "Path" ? 0 : shape.Kind == "Text" ? 2 : 4) || shape.Points.Length % 2 != 0
                 || shape.Points.Any(n => !Number(n)) || (count += shape.Points.Length) > 200000
                 || shape.Kind is "Rectangle" or "Ellipse" && (shape.Points.Length != 4 || shape.Points[2] < 0 || shape.Points[3] < 0)
                 || shape.Kind == "Bezier" && (shape.Points.Length < 8 || (shape.Points.Length - 2) % 6 != 0)
                 || !Color(shape.Fill) || !Color(shape.Stroke) || !Number(shape.StrokeWidth) || shape.StrokeWidth < 0
                 || shape.Clip is { } clip && (clip.Length != 4 || clip.Any(n => !Number(n)) || clip[2] < 0 || clip[3] < 0)
                 || shape.Transform is { } matrix && (matrix.Length != 6 || matrix.Any(n => !Number(n)) || Math.Abs(matrix[0] * matrix[3] - matrix[1] * matrix[2]) < 1e-12)
-                || (shape.Kind == "Text") != (shape.Text is not null))
+                || (shape.Kind == "Text") != (shape.Text is not null) || (shape.Kind == "Path") != (shape.Commands is not null)
+                || shape.Kind == "Path" && shape.Points.Length != 0)
                 throw new InvalidDataException("Invalid or unsupported vector geometry.");
+            if (shape.Commands is { } commands)
+            {
+                if (commands.Length is 0 or > 10000) throw new InvalidDataException("Invalid vector path command count.");
+                var open = false; var drawn = false;
+                foreach (var command in commands)
+                {
+                    var length = command.Kind switch { "Move" or "Line" => 2, "Cubic" => 6, "Close" => 0, _ => -1 };
+                    if (length < 0 || command.Points.Length != length || command.Points.Any(n => !Number(n))
+                        || (count += Math.Max(1, length)) > 200000 || command.Kind != "Move" && !open)
+                        throw new InvalidDataException("Invalid vector path command or sequence.");
+                    if (command.Kind == "Move") open = true;
+                    else if (command.Kind == "Close") open = false;
+                    else drawn = true;
+                }
+                if (!drawn) throw new InvalidDataException("Vector path contains no drawable segments.");
+            }
             if (shape.ClipPolygons is { } clips && (clips.Length > 64 || clips.Any(p => p.Length is < 6 or > 128 || p.Length % 2 != 0
                 || p.Any(n => !Number(n)) || (count += p.Length) > 200000)))
                 throw new InvalidDataException("Invalid or excessive vector clip geometry.");
@@ -67,6 +86,7 @@ public sealed class ReportVectorImage
                 s.Clip is null ? null : new XAttribute("Clip", string.Join(" ", s.Clip.Select(N))),
                 s.Transform is null ? null : new XAttribute("Transform", string.Join(" ", s.Transform.Select(N))),
                 s.ClipPolygons?.Select(p => new XElement("ClipPolygon", new XAttribute("Points", string.Join(" ", p.Select(N))))),
+                s.Commands?.Select(c => new XElement("Command", new XAttribute("Kind", c.Kind), new XAttribute("Points", string.Join(" ", c.Points.Select(N))))),
                 s.Text is not { } t ? null : new XElement("Text", new XAttribute("Font", t.FontFamily), new XAttribute("Size", N(t.FontSize)),
                     new XAttribute("Weight", t.Weight), new XAttribute("Italic", t.Italic), new XAttribute("Underline", t.Underline),
                     new XAttribute("StrikeOut", t.StrikeOut), new XAttribute("Anchor", t.Anchor), new XAttribute("Baseline", t.Baseline),
@@ -89,8 +109,8 @@ public sealed class ReportVectorImage
         var count = 0;
         foreach (var shape in xml.Elements())
         {
-            if (shape.Elements().Any(e => e.Name != "Text" && e.Name != "ClipPolygon") || shape.Elements("Text").Skip(1).Any()
-                || shape.Elements("ClipPolygon").Take(65).Count() > 64)
+            if (shape.Elements().Any(e => e.Name != "Text" && e.Name != "ClipPolygon" && e.Name != "Command") || shape.Elements("Text").Skip(1).Any()
+                || shape.Elements("ClipPolygon").Take(65).Count() > 64 || shape.Elements("Command").Take(10001).Count() > 10000)
                 throw new InvalidDataException("Unsupported vector shape content.");
             var points = Numbers((string?)shape.Attribute("Points") ?? "");
             if ((count += points.Length) > 200000) throw new InvalidDataException("Vector coordinate count exceeds the limit.");
@@ -101,6 +121,14 @@ public sealed class ReportVectorImage
                 if (values.Length > 128 || (count += values.Length) > 200000) throw new InvalidDataException("Vector clip data exceeds the limit.");
                 polygons.Add(values);
             }
+            var commands = new List<ReportVectorPathCommand>();
+            foreach (var command in shape.Elements("Command"))
+            {
+                var values = Numbers((string?)command.Attribute("Points") ?? "");
+                if (command.HasElements || values.Length > 6 || (count += Math.Max(1, values.Length)) > 200000)
+                    throw new InvalidDataException("Vector path data exceeds the limit.");
+                commands.Add(new((string?)command.Attribute("Kind") ?? "", values));
+            }
             result.Shapes.Add(new((string?)shape.Attribute("Kind") ?? "", points,
                 (string?)shape.Attribute("Fill") ?? "none", (string?)shape.Attribute("Stroke") ?? "none", D(shape, "StrokeWidth"), (bool?)shape.Attribute("Winding") ?? false,
                 shape.Attribute("Clip") is { } clip ? Numbers(clip.Value) : null,
@@ -109,7 +137,7 @@ public sealed class ReportVectorImage
                     (bool?)t.Attribute("Italic") ?? false, (bool?)t.Attribute("Underline") ?? false, (bool?)t.Attribute("StrikeOut") ?? false,
                     (string?)t.Attribute("Anchor") ?? "start", (string?)t.Attribute("Baseline") ?? "alphabetic", t.Attribute("Advances") is { } dx ? Numbers(dx.Value) : null,
                     t.Attribute("VerticalAdvances") is { } dy ? Numbers(dy.Value) : null),
-                polygons.ToArray()));
+                polygons.ToArray(), commands.Count == 0 ? null : commands.ToArray()));
             if (shape.Element("Text") is { } content && (count += TextValue(content).Length) > 200000)
                 throw new InvalidDataException("Vector text exceeds the limit.");
         }
@@ -143,6 +171,8 @@ public sealed class ReportVectorImage
                 "Ellipse" => new XElement(ns + "ellipse", new XAttribute("cx", N(p[0] + p[2] / 2)), new XAttribute("cy", N(p[1] + p[3] / 2)), new XAttribute("rx", N(p[2] / 2)), new XAttribute("ry", N(p[3] / 2))),
                 "Text" => Text(shape.Text!, p),
                 "Bezier" => new XElement(ns + "path", new XAttribute("d", "M " + N(p[0]) + " " + N(p[1]) + " C " + string.Join(" ", p.Skip(2).Select(N)))),
+                "Path" => new XElement(ns + "path", new XAttribute("d", string.Join(" ", shape.Commands!.Select(c =>
+                    (c.Kind switch { "Move" => "M", "Line" => "L", "Cubic" => "C", _ => "Z" }) + " " + string.Join(" ", c.Points.Select(N)))))),
                 _ => new XElement(ns + (shape.Kind == "Polygon" ? "polygon" : "polyline"), new XAttribute("points", string.Join(" ", p.Select(N))))
             };
             node.Add(new XAttribute("fill", shape.Fill), new XAttribute("stroke", shape.Stroke), new XAttribute("stroke-width", N(shape.StrokeWidth)),

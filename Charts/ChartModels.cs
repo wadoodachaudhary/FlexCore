@@ -22,6 +22,8 @@ public class ChartDataPoint
 {
     public string Label { get; set; } = "";
     public double Value { get; set; }
+    /// <summary>Retains the category position without inventing a zero value in bar/line charts.</summary>
+    public bool IsEmpty { get; set; }
     public double? Value2 { get; set; } // For bubble (size), box plot (high), financial (high), bullet (target), range (max)
     public double? Value3 { get; set; } // For box plot (Q1), financial (low)
     public double? Value4 { get; set; } // For box plot (Q3), financial (close)

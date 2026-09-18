@@ -25,7 +25,8 @@ internal static class ReportObjectCapabilities
     {
         foreach (var section in report.Element("ReportDefinition")?.Elements("Areas").Elements("Area").Elements("Sections").Elements("Section") ?? [])
         foreach (var obj in section.Elements("ReportObjects").Elements())
-            if (UnsupportedCrystalKind((string?)obj.Attribute("Kind"), obj.Name.LocalName) is { } kind)
+            if (UnsupportedCrystalKind((string?)obj.Attribute("Kind"), obj.Name.LocalName) is { } kind
+                && (!positioned || ReportAnalysisDefinition.Read(obj)?.Validate(kind) is not null || obj.Element("FlexKitAnalysis") is null))
                 yield return Diagnostic((string?)report.Attribute("Name") ?? "Report", (string?)section.Attribute("Name") ?? "Section",
                     (string?)obj.Attribute("Name") ?? obj.Name.LocalName, kind, positioned, obj);
     }

@@ -1,0 +1,104 @@
+@namespace Fx.ControlKit.Reports
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using System.Globalization
+
+<div class="fx-report-analysis" style="white-space:normal;">
+@if (_error is not null)
+{
+    <div class="fx-report-analysis-diagnostic" role="status">@_error</div>
+}
+else if (Snapshot is null)
+{
+    <div class="fx-report-analysis-diagnostic">@Element.Name: no data snapshot.</div>
+}
+else if (Element.Kind == "Chart")
+{
+    <ChartControl Type="Snapshot.Definition.ChartType" Title="@Snapshot.Definition.Title" Series="_series"
+        Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false"
+        Width="100%" Height="@($"{Math.Max(1, Element.HeightTwips / 15 - 64)}px")" />
+}
+else if (Element.Kind == "CrossTab")
+{
+    <PivotControl TValue="Dictionary<string, object>" DataSource="_pivotRows" RowFields="Snapshot.Definition.RowFields"
+        ColumnFields="Snapshot.Definition.ColumnFields" ValueFields="_pivotMeasures" FieldLabels="_labels"
+        ShowGrandTotals="Snapshot.Definition.ShowTotals" ShowSubTotals="Snapshot.Definition.ShowTotals"
+        Interactive="false" AllowSorting="false" Height="@($"{Math.Max(1, Element.HeightTwips / 15)}px")" />
+}
+
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ReportDesignerElement Element { get; set; } = new();
+    [Parameter] public ReportAnalysisSnapshot? Snapshot { get; set; }
+    private string? _error;
+    private List<ChartSeries> _series = [];
+    private List<Dictionary<string, object>> _pivotRows = [];
+    private List<PivotValueConfig> _pivotMeasures = [];
+    private Dictionary<string, string> _labels = [];
+
+    protected override void OnParametersSet()
+    {
+        _error = Snapshot?.Definition.Validate(Element.Kind);
+        if (_error is not null || Snapshot is null) return;
+        try
+        {
+            var definition = Snapshot.Definition;
+            if (Element.Kind == "Chart")
+            {
+                _series = [];
+                var categories = Snapshot.Rows.Select(row => Label(Value(row, definition.CategoryField))).Distinct(StringComparer.Ordinal).ToArray();
+                if (categories.Length > 5000) throw new InvalidDataException("Chart exceeds 5,000 categories.");
+                var partitions = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.SeriesField)));
+                foreach (var partition in partitions)
+                foreach (var measure in definition.Measures)
+                {
+                    var table = new System.Data.DataTable(); table.Columns.Add("value", typeof(object));
+                    var points = new List<ChartDataPoint>();
+                    var categoryRows = partition.ToLookup(row => Label(Value(row, definition.CategoryField)), StringComparer.Ordinal);
+                    foreach (var category in categories)
+                    {
+                        table.Clear();
+                        foreach (var row in categoryRows[category]) table.Rows.Add(Value(row, measure.Field) ?? DBNull.Value);
+                        var formatted = ReportValueFormatting.Aggregate(table.Rows.Cast<System.Data.DataRow>(),
+                            new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
+                        if (decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
+                        {
+                            if (definition.ChartType == ChartType.Pie && number < 0)
+                                throw new InvalidDataException("Pie charts cannot represent negative values. Use a bar or line chart.");
+                            points.Add(new(category, (double)number));
+                        }
+                        else if (definition.ChartType != ChartType.Pie) points.Add(new(category, 0) { IsEmpty = true });
+                    }
+                    var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
+                    _series.Add(new(partition.Key.Length == 0 ? caption : partition.Key + " / " + caption, definition.ChartType, points));
+                    if (_series.Count > 64) throw new InvalidDataException("Chart exceeds 64 series.");
+                }
+            }
+            else
+            {
+                _pivotRows = Snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)).ToList();
+                _pivotMeasures = []; _labels = [];
+                for (var index = 0; index < definition.Measures.Count; index++)
+                {
+                    var measure = definition.Measures[index];
+                    // Pivot's generic Count counts records. Crystal Count(field) excludes nulls.
+                    var field = measure.Aggregate == ReportAggregateType.Count ? $"__fx_count_{index}" : measure.Field;
+                    if (measure.Aggregate == ReportAggregateType.Count)
+                        foreach (var row in _pivotRows) row[field] = Value(row, measure.Field) is null or DBNull ? 0 : 1;
+                    _pivotMeasures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
+                        Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
+                            ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
+                    _labels[field] = measure.Caption.Length == 0 ? measure.Field : measure.Caption;
+                }
+                var columnKeys = _pivotRows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => Value(row, field)))).Distinct().Take(257).Count();
+                if (columnKeys > 256) throw new InvalidDataException("Cross-tab exceeds 256 column groups.");
+            }
+        }
+        catch (Exception error) when (error is InvalidDataException or FormatException or OverflowException or NotSupportedException)
+        { _error = Element.Name + ": " + error.Message; }
+    }
+
+    private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
+    private static string Label(object? value) => value is null or DBNull ? "" : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
+}

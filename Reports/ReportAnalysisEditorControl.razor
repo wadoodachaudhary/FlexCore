@@ -1,0 +1,79 @@
+@namespace Fx.ControlKit.Reports
+@using Fx.ControlKit.Charts
+
+<div class="fx-report-analysis-editor">
+    @if (Element.Analysis is not { } analysis)
+    {
+        <ButtonControl OnClick="ConfigureAsync" Disabled="ReadOnly">Configure data bindings</ButtonControl>
+    }
+    else
+    {
+        <label>Title<TextBoxControl @bind-Value="analysis.Title" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
+        <label>Scope<DropDownListControl TValue="string" TItem="Choice" DataSource="ScopeChoices" TextFieldName="Label" ValueFieldName="Value"
+            @bind-Value="analysis.GroupScope" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Data scope" /></label>
+        @if (Element.Kind == "Chart")
+        {
+            <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.Line, ChartType.Pie })"
+                @bind-Value="analysis.ChartType" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Chart type" /></label>
+            <label>Category<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
+                @bind-Value="analysis.CategoryField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Category field" /></label>
+            <label>Series<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
+                @bind-Value="analysis.SeriesField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Series field" /></label>
+            <CheckBoxControl Label="Legend" @bind-Checked="analysis.ShowLegend" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+        }
+        else
+        {
+            @Dimensions("Rows", analysis.RowFields)
+            @Dimensions("Columns", analysis.ColumnFields)
+            <CheckBoxControl Label="Totals" @bind-Checked="analysis.ShowTotals" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+        }
+        @for (var i = 0; i < analysis.Measures.Count; i++)
+        {
+            var index = i; var measure = analysis.Measures[index];
+            <fieldset>
+                <legend>Measure @(index + 1)</legend>
+                <label>Field<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
+                    @bind-Value="measure.Field" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Measure field" /></label>
+                <label>Aggregate<DropDownListControl TValue="ReportAggregateType" TItem="ReportAggregateType" DataSource="Operations"
+                    @bind-Value="measure.Aggregate" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Aggregate" /></label>
+                <label>Caption<TextBoxControl @bind-Value="measure.Caption" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
+                <label>Format<TextBoxControl @bind-Value="measure.Format" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
+                <ButtonControl IconCss="bi bi-trash" Title="Remove measure" OnClick="async () => { analysis.Measures.RemoveAt(index); await ChangedAsync(); }" Disabled="ReadOnly" />
+            </fieldset>
+        }
+        <ButtonControl IconCss="bi bi-plus-lg" OnClick="async () => { analysis.Measures.Add(new()); await ChangedAsync(); }" Disabled="ReadOnly">Measure</ButtonControl>
+        @if (analysis.Validate(Element.Kind) is { } error) { <div role="status">@error</div> }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ReportDesignerElement Element { get; set; } = default!;
+    [Parameter] public IReadOnlyList<ReportDesignerField> Fields { get; set; } = [];
+    [Parameter] public IReadOnlyList<ReportDesignerGroup> Groups { get; set; } = [];
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+    public sealed record Choice(string Value, string Label);
+    private IEnumerable<Choice> FieldChoices => Fields.Select(item => new Choice(item.Reference, item.DisplayName)).Prepend(new("", "(None)"));
+    private IEnumerable<Choice> ScopeChoices => Groups.Select(group => new Choice(group.Condition, group.Name)).Prepend(new("", "Report"));
+    private static readonly ReportAggregateType[] Operations = [ReportAggregateType.Sum, ReportAggregateType.Count, ReportAggregateType.Average, ReportAggregateType.Min, ReportAggregateType.Max];
+    private Task ChangedAsync() => Changed.InvokeAsync();
+    private async Task ConfigureAsync()
+    {
+        if (ReadOnly) return;
+        Element.Analysis = new() { Title = Element.Name, Measures = [new()] };
+        await ChangedAsync();
+    }
+    private RenderFragment Dimensions(string title, List<string> fields) => @<fieldset>
+        <legend>@title</legend>
+        @for (var i = 0; i < fields.Count; i++)
+        {
+            var index = i;
+            <div class="fx-report-analysis-dimension">
+                <DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
+                    Value="@fields[index]" ValueChanged="async value => { fields[index] = value ?? string.Empty; await ChangedAsync(); }" Enabled="@(!ReadOnly)" AriaLabel="@title" />
+                <ButtonControl IconCss="bi bi-trash" Title="Remove field" OnClick="async () => { fields.RemoveAt(index); await ChangedAsync(); }" Disabled="ReadOnly" />
+            </div>
+        }
+        <ButtonControl IconCss="bi bi-plus-lg" Title="Add field" OnClick="async () => { fields.Add(string.Empty); await ChangedAsync(); }" Disabled="@(ReadOnly || fields.Count >= 3)" />
+    </fieldset>;
+}

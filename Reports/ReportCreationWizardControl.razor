@@ -195,7 +195,7 @@
                 @for (var i = 0; i < _links.Count; i++)
                 {
                     var index = i;
-                    <button type="button" class="@(index == _activeLinkIndex ? "active" : "")" @onclick="() => _activeLinkIndex = index">@_links[index].DisplayName</button>
+                    <ButtonControl CssClass="@(index == _activeLinkIndex ? "active" : "")" OnClick="() => _activeLinkIndex = index">@_links[index].DisplayName</ButtonControl>
                 }
                 @if (_links.Count == 0)
                 {
@@ -230,7 +230,7 @@
                 <span class="@($"fx-rw-sql-status {(_sqlValidationSucceeded == true ? "ok" : _sqlValidationSucceeded == false ? "error" : "")}")">@_sqlValidationMessage</span>
             }
         </div>
-        <textarea class="fx-rw-sql-editor" spellcheck="false" @bind="_customSql" @bind:event="oninput" @bind:after="OnSqlEdited"></textarea>
+        <Fx.ControlKit.TextAreaControl CssClass="fx-rw-sql-editor" @bind-Value="_customSql" UpdateOnInput="true" @bind-Value:after="OnSqlEdited" Rows="12" />
     </div>;
 
     private RenderFragment RenderGroupingStep() => @<div class="fx-rw-step">

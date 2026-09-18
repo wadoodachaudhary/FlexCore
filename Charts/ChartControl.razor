@@ -440,7 +440,7 @@
 
     private (double min, double max) GetDataRange(List<ChartSeries> series)
     {
-        var allValues = series.SelectMany(s => s.DataPoints.Select(p => p.Value));
+        var allValues = series.SelectMany(s => s.DataPoints.Where(p => !p.IsEmpty).Select(p => p.Value));
         if (!allValues.Any()) return (0, 1);
         var min = allValues.Min();
         var max = allValues.Max();
@@ -528,10 +528,11 @@
         }
         else
         {
-            maxVal = series.SelectMany(s => s.DataPoints.Select(p => p.Value)).DefaultIfEmpty(0).Max();
+            maxVal = series.SelectMany(s => s.DataPoints.Where(p => !p.IsEmpty).Select(p => p.Value)).DefaultIfEmpty(0).Max();
         }
         if (maxVal <= 0) maxVal = 1;
-        var (rangeMin, rangeMax) = GetNiceRange(0, maxVal);
+        var minVal = isStacked ? 0 : Math.Min(0, series.SelectMany(s => s.DataPoints.Where(p => !p.IsEmpty).Select(p => p.Value)).DefaultIfEmpty(0).Min());
+        var (rangeMin, rangeMax) = GetNiceRange(minVal, maxVal);
 
         double barGroupWidth = plotW / n;
         double barGap = barGroupWidth * 0.2;
@@ -563,6 +564,7 @@
                     double cumY = 0;
                     for (int si = 0; si < series.Count; si++)
                     {
+                        if (i < series[si].DataPoints.Count && series[si].DataPoints[i].IsEmpty) continue;
                         double val = i < series[si].DataPoints.Count ? series[si].DataPoints[i].Value : 0;
                         if (Type == ChartType.StackedBar100)
                         {
@@ -583,9 +585,12 @@
                     double subBarW = usableWidth / series.Count;
                     for (int si = 0; si < series.Count; si++)
                     {
+                        if (i < series[si].DataPoints.Count && series[si].DataPoints[i].IsEmpty) continue;
                         double val = i < series[si].DataPoints.Count ? series[si].DataPoints[i].Value : 0;
-                        double barH = ((val - rangeMin) / (rangeMax - rangeMin)) * plotH;
-                        double barY = padT + plotH - barH;
+                        double zeroY = Math.Clamp(padT + plotH - (0 - rangeMin) / (rangeMax - rangeMin) * plotH, padT, padT + plotH);   // YAxis.Min > 0 / Max < 0 put zero outside the plot
+                        double valueY = Math.Clamp(padT + plotH - (val - rangeMin) / (rangeMax - rangeMin) * plotH, padT, padT + plotH);
+                        double barH = Math.Abs(valueY - zeroY);
+                        double barY = Math.Min(valueY, zeroY);
                         double barX = groupX + si * subBarW;
                         <rect x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
                               fill="@GetSeriesColor(si)" rx="2">
@@ -593,11 +598,13 @@
                         </rect>
                     }
                 }
-                else
+                else if (i >= series[0].DataPoints.Count || !series[0].DataPoints[i].IsEmpty)
                 {
                     double val = i < series[0].DataPoints.Count ? series[0].DataPoints[i].Value : 0;
-                    double barH = ((val - rangeMin) / (rangeMax - rangeMin)) * plotH;
-                    double barY = padT + plotH - barH;
+                    double zeroY = Math.Clamp(padT + plotH - (0 - rangeMin) / (rangeMax - rangeMin) * plotH, padT, padT + plotH);   // YAxis.Min > 0 / Max < 0 put zero outside the plot
+                    double valueY = Math.Clamp(padT + plotH - (val - rangeMin) / (rangeMax - rangeMin) * plotH, padT, padT + plotH);
+                    double barH = Math.Abs(valueY - zeroY);
+                    double barY = Math.Min(valueY, zeroY);
                     string color = i < series[0].DataPoints.Count && !string.IsNullOrEmpty(series[0].DataPoints[i].Color)
                         ? series[0].DataPoints[i].Color!
                         : GetSeriesColor(0);
@@ -708,6 +715,23 @@
                 var s = series[si];
                 var pts = s.DataPoints;
                 if (pts.Count == 0) continue;
+
+                if (Type == ChartType.Line && pts.Any(point => point.IsEmpty))
+                {
+                    var path = new System.Text.StringBuilder();
+                    var move = true;
+                    for (var index = 0; index < pts.Count; index++)
+                    {
+                        if (pts[index].IsEmpty) { move = true; continue; }
+                        var x = padL + (maxPoints > 1 ? (double)index / (maxPoints - 1) * plotW : plotW / 2);
+                        var y = padT + plotH - (pts[index].Value - rangeMin) / (rangeMax - rangeMin) * plotH;
+                        path.Append(move ? "M" : " L").Append(F(x)).Append(',').Append(F(y));
+                        move = false;
+                        <circle cx="@F(x)" cy="@F(y)" r="3" fill="@GetSeriesColor(si)"><title>@pts[index].Label: @F1(pts[index].Value)</title></circle>
+                    }
+                    <path d="@path.ToString()" fill="none" stroke="@GetSeriesColor(si)" stroke-width="2" />
+                    continue;
+                }
 
                 var pointCoords = new List<(double x, double y)>();
                 for (int i = 0; i < pts.Count; i++)

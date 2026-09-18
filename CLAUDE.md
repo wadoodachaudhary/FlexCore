@@ -3,6 +3,43 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-18 Ship-Review Fixes To The 09-17 Report Work (Update Repositories)
+
+Review wf_14845c13-5fc (10 agents) of the 09-17 report/chart change set, then fixes verified by wf_69e310d1-677:
+- Viewer page-navigation and search buttons, and the parameter dialog's add button, carry glyph/text content (⏮ ◀ ▶ ⏭ 🔎 ▲ ▼ ✕, `>`) instead of `bi`/`fa` icon classes: hosts such as HomeFront load no icon font, so they rendered blank. The designer's pre-existing `bi` toolbar icons are unchanged.
+- Group footers format by column (Currency C2, Integer N0, other N2, Count N0, Average N2) instead of the loader's placeholder C2, and print the aggregate label only when one column has several aggregates. A host-set Format is kept. The loader now gives group Count aggregates N0, as the grand totals already did. A Percent aggregate renders blank instead of failing the render.
+- Optional pick-list parameters keep a `...` choice (sentinel key `fx-param-no-value`, mapped to "") so a picked value can be cleared; the multi-value lists are unchanged.
+- The Crystal PDF viewer's decoded bytes are cached per PdfDataUrl (a new byte[] each render reloaded it to page 1) and dropped when the PDF view closes.
+- Chart bars are clamped to the plot (YAxis.Min > 0 drew them through the axis). Nested-session diagnostics a parent already copied with its element prefix are no longer listed twice.
+- Left as recorded behaviour, for the owner: .rpt paths always convert fresh (HomeFront's Reports menu no longer renders the checked-in xml/ exports); FlexCore NuGet users need FlexCore.Documents (unpublished) for the Crystal PDF preview; ReportVectorShape's positional constructor gained a parameter (binary break vs 0.2.44); the new analysis editor uses `bi` icons like the designer.
+
+## 2026-09-17 Report Audit Remediation And Analytical Items
+
+- Fixed declared group aggregates, non-null text Count, first-column totals, encoded aggregate labels, constrained colors, and stable parent-aware group anchors. Explicit SQL/parameter-value logging is replaced by query identity and parameter names/types.
+- Every viewer RPT open now converts into an owned temporary workspace; only explicitly opened XML is reused. No sibling/reference XML substitutes for conversion. In-flight conversions clean up if their viewer is disposed.
+- Reports' direct input/select/textarea/button/dialog/details/iframe/InputFile sites are replaced with existing shared controls; a lexical regression gate rejects reintroduction. Legacy formatted HTML/tabular rendering, custom rulers and existing business-click JavaScript are not fully removed. Host-specific raw controls remain separate work.
+- Added typed analytical bindings/editor, real shared ChartControl/PivotControl children, finalized positioned page snapshots, and same-snapshot HTML export with shared chart/pivot styles. Bar/line/pie, null-aware Sum/Count/Average/Min/Max, report/group scope and fixed-rectangle cross-tabs are supported. Negative pies and unsupported mutable/page aggregate bindings are explicit diagnostics. Native RPT analytical bindings and automatic matrix pagination are still missing.
+- Viewer search now indexes finalized output in managed AngleSharp 1.8.1: matches, navigation, highlights, clear and bounds. No production JavaScript was added. The optional shared PDF fallback respects the separate FlexCore.Documents package; trimmed hosts should pass PdfViewerComponentType explicitly.
+- Shared Reports and chart changes are mirrored from FlexKit; project identities and the Documents split are preserved. Standard verification is 1,586 checks per library, plus 223 overlapping isolated parity checks. Audit: 18 pass, one known native analytical-import gap remains. Analytical export browser checks cover desktop/mobile fixed-paper geometry, not original Crystal visual approval. Inspector text binding and narrow-width editor/tab bounds have regression checks.
+- Full ActiveReportsJS parity is NOT complete. No HomeFrontPB/HomeFront/Showcase host source or database was changed. Current status, build evidence and roadmap: /Users/wadood/projects/JavaToCSharp/converted/docs/activereportsjs-parity-implementation.md.
+
+## 2026-09-17 Native Nested Flow And Graceful Defaults
+
+- Nested sessions track their actual parents. Fixed-position child growth affects horizontally intersecting content, preserving independently growing columns and cached child queries.
+- Physical replay schedules mutable section entry formatting before fields and ending page-break/reset conditions after fields. Hidden objects retain one-time formula assignments without visible output or growth; nested diagnostics reach the parent result.
+- Main underlays now continue behind foreground pages with measured text fragments. Nested underlays retain overlap without advancing sibling flow. Oversized bottom-aligned sections anchor their final fragment; isolated trailing nested fragments do likewise.
+- Conflicting continuations use explicit warnings and conservative defaults: preserve unrelated content/reserved space, keep already printed text immutable, omit unsafe newly visible tails, retain normal flow for shared bottom-aligned fragments, and bound unstable layout replay. Remaining malformed-input, resource and unsupported data-evaluation guards remain documented.
+- Shared Reports sources match in FlexKit and FlexCore. Per library: 1,546 standard checks, 223 isolated parity checks (partly overlapping), 138 browser reflow checks and 38 unchanged metafile regression checks pass. Desktop/mobile screenshots inspected. Required non-incremental builds pass: HomeFront 203 warnings/zero errors; FlexCore.Showcase zero warnings/errors.
+- This phase changes no images, binary readers, OS integration, packages, application JavaScript or host source; no website/database started. No Java, IKVM or SAP dependency added. Exact Crystal visual approval still requires matching originals. Current implementation and defaults: /Users/wadood/projects/JavaToCSharp/converted/docs/crystal-native-flow.md.
+
+## 2026-09-17 Compound Paths And Nested Continuation
+
+- Added pure C# EMF BeginPath/EndPath/CloseFigure/AbortPath and fill/stroke playback for bounded line, rectangle, polygon and cubic figures. Compound alternate/winding fills preserve holes; capture-time geometry and paint-time brush/pen/clipping remain distinct. Typed numeric path commands round-trip through XML and deep cloning. Unsupported glyph/ellipse outlines, pending-path DC save/restore, path widening/clipping and nonuniform wide pens remain explicit errors.
+- Nested continuation suppression preserves horizontally independent columns and collapses only unused common tail space. Owned descendant ranges stop at suppression while neighboring ranges remain intact. Fixtures cover every depth through the existing eight-level nesting limit.
+- Newly visible nested trees retain internal forced page breaks during changing-text reflow. Mandatory breaks carry adjacent text from the last complete measured line, including unchanged text, without clipping, duplication, rewriting printed prefixes or requerying children.
+- Shared Reports sources match byte-for-byte in FlexKit and FlexCore. Per library: 1,538 standard checks, 215 isolated parity checks (partly overlapping), 116 browser reflow checks and 38 metafile pixel checks pass. Desktop/mobile screenshots inspected. Non-incremental HomeFront build: 203 existing warnings/zero errors; FlexCore.Showcase: zero warnings/errors.
+- No host source, packages, application JavaScript, live website or database changed. No Java, IKVM, SAP or native graphics dependency added. EMF+, broader drawing operations and unrestricted arbitrary continuation remain incomplete; original Crystal visual approval still lacks matching baselines. Current details: /Users/wadood/projects/JavaToCSharp/converted/docs/crystal-text-visibility-continuation.md.
+
 ## 2026-09-17 Ship-Review Fixes (Update Repositories)
 
 - Tabular Excel/CSV export skips on-demand subreport link columns (`IsSubreportObject`) and exports a column the query did not return as blank, as the viewer shows it. It used to throw "Missing export column '__Subreport_…'" (e.g. HomeFront `salessheetCurrentCosts Division version.xml`).

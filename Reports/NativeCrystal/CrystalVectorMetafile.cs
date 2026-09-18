@@ -135,7 +135,7 @@ internal sealed partial class CrystalVectorMetafile
                 case 36: Size(p, 28); Transform(p[..24], U32(p, 24)); break;
                 case 37: Size(p, 4); Select(U32(p, 0), 0x80000000); break;
                 case 40: Size(p, 4); Delete(U32(p, 0)); break;
-                case 27: Size(p, 8); _context = _context with { X = I32(p, 0), Y = I32(p, 4) }; break;
+                case 27: Size(p, 8); MoveTo(I32(p, 0), I32(p, 4)); break;
                 case 54: Size(p, 8); Line(I32(p, 0), I32(p, 4)); break;
                 case 43: case 42: case 30:
                     Size(p, 16); Rectangle(type == 43 ? "Rectangle" : type == 42 ? "Ellipse" : "Clip", I32(p, 0), I32(p, 4), I32(p, 8), I32(p, 12)); break;
@@ -145,6 +145,11 @@ internal sealed partial class CrystalVectorMetafile
                 case 2: case 5: case 85: case 88:
                     Require(p.Length >= 20, "Truncated EMF Bezier curve.");
                     Bezier(p, U32(p, 16), type is 85 or 88, type is 5 or 88); break;
+                case 59: Size(p, 0); BeginPath(); break;
+                case 60: Size(p, 0); EndPath(); break;
+                case 61: Size(p, 0); ClosePathFigure(); break;
+                case 62: case 63: case 64: Size(p, 16); PaintPath(type != 64, type != 62); break;
+                case 68: Size(p, 0); _path = null; _pathOpen = false; break;
                 default: throw new InvalidDataException($"EMF vector record {type} is not supported.");
             }
         }
@@ -167,7 +172,9 @@ internal sealed partial class CrystalVectorMetafile
 
     private void Line(double x, double y)
     {
-        Draw("Polyline", [_context.X, _context.Y, x, y]); _context = _context with { X = x, Y = y };
+        if (_pathOpen) { ContinuePathFigure(); AddPath("Line", [x, y]); }
+        else Draw("Polyline", [_context.X, _context.Y, x, y]);
+        _context = _context with { X = x, Y = y };
     }
 
     private void Bezier(ReadOnlySpan<byte> bytes, uint count, bool shorts, bool fromCurrent)
@@ -185,7 +192,12 @@ internal sealed partial class CrystalVectorMetafile
             points[start + i * 2 + 1] = shorts ? I16(bytes, 22 + i * stride) : I32(bytes, 24 + i * stride);
         }
         var endX = points[^2]; var endY = points[^1];
-        Draw("Bezier", points);
+        if (_pathOpen && fromCurrent)
+        {
+            ContinuePathFigure();
+            for (var i = 2; i < points.Length; i += 6) AddPath("Cubic", points[i..(i + 6)]);
+        }
+        else Draw("Bezier", points);
         if (fromCurrent) _context = _context with { X = endX, Y = endY };
     }
 
@@ -217,6 +229,7 @@ internal sealed partial class CrystalVectorMetafile
 
     private void Draw(string kind, double[] points)
     {
+        if (_pathOpen) { CapturePath(kind, points); return; }
         Require(_scene.Shapes.Count < 10000 && (_pointCount += points.Length) <= 200000, "Vector shape/point limit exceeded.");
         var matrix = Mapping();
         var pen = _context.Pen!; var sx = _context.Mode == 8 ? _context.VW / _context.WW : 1;
@@ -274,9 +287,10 @@ internal sealed partial class CrystalVectorMetafile
     private void Window(double x, double y) { Require(x != 0 && y != 0, "Zero vector window extent."); _context = _context with { WW = x, WH = y, WindowSet = true }; }
     private void Viewport(double x, double y) { Require(x != 0 && y != 0, "Zero vector viewport extent."); _context = _context with { VW = x, VH = y, ViewportSet = true }; }
     private void FillMode(int mode) { Require(mode is 1 or 2, "Invalid polygon fill mode."); _context = _context with { Winding = mode == 2 }; }
-    private void Save() { Require(_saved.Count < 64, "Vector saved-state limit exceeded."); _saved.Add(_context); }
+    private void Save() { Require(_path is null, "Saving a metafile DC with a pending path is not supported."); Require(_saved.Count < 64, "Vector saved-state limit exceeded."); _saved.Add(_context); }
     private void Restore(int relative)
     {
+        Require(_path is null, "Restoring a metafile DC with a pending path is not supported.");
         Require(relative < 0 && -(long)relative <= _saved.Count, "Invalid vector restore state.");
         var index = _saved.Count + relative; _context = _saved[index]; _saved.RemoveRange(index, _saved.Count - index);
     }

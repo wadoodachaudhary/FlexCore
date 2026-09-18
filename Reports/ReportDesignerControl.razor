@@ -33,14 +33,13 @@
                         case ReportDesignerToolbarItemKind.FileOpen:
                             if (AllowFileOpen)
                             {
-                                <label class="@ToolbarButtonCss(item)" title="@item.Tooltip" aria-label="@item.Tooltip">
+                                <FilePickerControl CssClass="@ToolbarButtonCss(item)" Title="@item.Tooltip" OnChange="OpenFileAsync" Accept=".xml,.rpt,text/xml,application/xml">
                                     <span class="@ToolbarIconCss(item)" title="@item.Tooltip" aria-hidden="true"></span>
                                     @if (item.HasDropDown)
                                     {
                                         <span class="fx-rd-drop-cue" aria-hidden="true"></span>
                                     }
-                                    <InputFile OnChange="OpenFileAsync" accept=".xml,.rpt,text/xml,application/xml" />
-                                </label>
+                                </FilePickerControl>
                             }
                             break;
                         default:
@@ -78,9 +77,8 @@
     <div class="fx-rd-shell">
         <main class="fx-rd-stage-wrap">
             <div class="fx-rd-document-tabs">
-                <button type="button" class="@(IsDesignDocumentActive ? "active" : "")" @onclick="() => ShowDocumentTab(DesignDocumentTab)">Design</button>
-                <button type="button" @onclick="PreviewAsync" disabled="@(!PreviewRequested.HasDelegate)">Preview</button>
-                <button type="button" class="@(IsCodeDocumentActive ? "active" : "")" @onclick="() => ShowDocumentTab(CodeDocumentTab)">Code</button>
+                <TabStripControl Items="@(new() { new() { Text = "Design" }, new() { Text = "Preview", Disabled = !PreviewRequested.HasDelegate }, new() { Text = "Code" } })"
+                    SelectedIndex="@(IsCodeDocumentActive ? 2 : 0)" SelectedIndexChanged="SelectDocumentViewAsync" />
                 <div class="fx-rd-document-title">
                     <strong>@_document.Title</strong>
                     <span>@_document.SourceName</span>
@@ -134,8 +132,8 @@
                                                      SelectedElement="@_selectedElement"
                                                      Changed="MarkDirtyAsync" />
                     <div class="fx-rd-dock-tabs">
-                        <button type="button" class="@(IsFieldExplorerActive ? "active" : "")" @onclick="() => ShowExplorerTab(FieldExplorerTab)">Field Explorer</button>
-                        <button type="button" class="@(!IsFieldExplorerActive ? "active" : "")" @onclick="() => ShowExplorerTab(ReportExplorerTab)">Report Explorer</button>
+                        <TabStripControl Items="@(new() { new() { Text = "Fields" }, new() { Text = "Report" } })"
+                            SelectedIndex="@(IsFieldExplorerActive ? 0 : 1)" SelectedIndexChanged="index => ShowExplorerTab(index == 0 ? FieldExplorerTab : ReportExplorerTab)" />
                     </div>
                 </FooterContent>
             </ExplorerControl>
@@ -241,6 +239,12 @@
     private int _activeExpertItemIndex;
 
     private const string DesignDocumentTab = "design";
+    private Task SelectDocumentViewAsync(int index)
+    {
+        if (index == 1) return PreviewAsync();
+        ShowDocumentTab(index == 2 ? CodeDocumentTab : DesignDocumentTab);
+        return Task.CompletedTask;
+    }
     private const string CodeDocumentTab = "code";
     private const string FieldExplorerTab = "fields";
     private const string ReportExplorerTab = "report";
@@ -572,7 +576,7 @@
             "database" or "record" or "group" or "groupsort" or "section" or "sort" or
             "formula" or "parameter" or "summary" or "page" or
             "visualLinking" or "highlightExpert" or "runningTotal" or
-            "wizard" or "text" or "field" or "line" or "box" or "subreport" or "image" or "richText" or
+            "wizard" or "text" or "field" or "line" or "box" or "subreport" or "image" or "richText" or "chart" or "crosstab" or
             "bold" or "italic" or "underline" or
             "fontGrow" or "fontShrink" or
             "align-left" or "align-center" or "align-right" or "align-justified" or
@@ -697,6 +701,12 @@
                 await AddSubreportElement();
                 break;
             case "image":
+                await OpenExpertAsync(command);
+                break;
+            case "chart":
+            case "crosstab":
+                await AddAnalysisAsync(command == "chart" ? "Chart" : "CrossTab");
+                break;
             case "richText":
                 await OpenExpertAsync(command);
                 break;
@@ -1177,7 +1187,7 @@
     };
 
     private RenderFragment RenderPictureExpert() => @<div class="fx-rd-expert fx-rd-visual-expert">
-        <InputFile OnChange="ReadPictureAsync" accept="image/png,image/jpeg,image/gif,image/webp" />
+        <FilePickerControl OnChange="ReadPictureAsync" Accept="image/png,image/jpeg,image/gif,image/webp" Label="Choose picture" />
         <label>Fit <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "contain", "cover", "fill" })" @bind-Value="_expertVisual.ImageFit" Width="140px" /></label>
         @if (!string.IsNullOrEmpty(_visualError)) { <div role="alert">@_visualError</div> }
         @if (ReportObjectVisual.IsEmbeddedImage(_expertVisual.ImageDataUrl) || _expertVisual.VectorImage is not null)
@@ -1263,9 +1273,9 @@
                 @for (var i = 0; i < _expertFilters.Count; i++)
                 {
                     var index = i;
-                    <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertFilters[index].Field.DisplayName</button>
+                    <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@_expertFilters[index].Field.DisplayName</ButtonControl>
                 }
-                <button type="button" @onclick="AddExpertFilter">&lt;New&gt;</button>
+                <ButtonControl IconCss="bi bi-plus-lg" OnClick="AddExpertFilter">New</ButtonControl>
             </div>
             <div class="fx-rd-record-editor">
                 @if (ActiveExpertFilter is not null)
@@ -1285,7 +1295,7 @@
         <label>Record selection formula
             <TextBoxControl Value="@_expertRecordSelectionFormula" ValueChanged="value => _expertRecordSelectionFormula = value ?? string.Empty" Multiline="true" Rows="5" CssClass="fx-rd-expert-input textarea" />
         </label>
-        <textarea class="fx-rd-expert-formula" readonly>@BuildFilterFormulaPreview()</textarea>
+        <Fx.ControlKit.TextAreaControl CssClass="fx-rd-expert-formula" Value="@BuildFilterFormulaPreview()" Enabled="false" Rows="5" />
     </div>;
 
     private RenderFragment RenderGroupExpert() => @<div class="fx-rd-expert">
@@ -1312,7 +1322,7 @@
             @for (var i = 0; i < _expertGroups.Count; i++)
             {
                 var index = i;
-                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@CleanCrystalFormula(_expertGroups[index].Condition)</button>
+                <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@CleanCrystalFormula(_expertGroups[index].Condition)</ButtonControl>
             }
         </div>
         @if (ActiveExpertGroup is not null)
@@ -1331,7 +1341,7 @@
             @for (var i = 0; i < _expertSections.Count; i++)
             {
                 var index = i;
-                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@GetReportSectionExplorerLabel(_expertSections[index])</button>
+                <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@GetReportSectionExplorerLabel(_expertSections[index])</ButtonControl>
             }
         </div>
         <div class="fx-rd-section-options">
@@ -1392,7 +1402,7 @@
             @for (var i = 0; i < _expertFormulaFields.Count; i++)
             {
                 var index = i;
-                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertFormulaFields[index].Name</button>
+                <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@_expertFormulaFields[index].Name</ButtonControl>
             }
         </div>
         <div class="fx-rd-expert-edit">
@@ -1421,7 +1431,7 @@
             @for (var i = 0; i < _expertParameters.Count; i++)
             {
                 var index = i;
-                <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertParameters[index].Name</button>
+                <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@_expertParameters[index].Name</ButtonControl>
             }
         </div>
         <div class="fx-rd-expert-edit">
@@ -1483,7 +1493,7 @@
                 <div class="fx-rd-expert-list">
                     @foreach (var table in GetWizardDataSources())
                     {
-                        <button type="button">@table.DisplayName</button>
+                        <ButtonControl Disabled="true">@table.DisplayName</ButtonControl>
                     }
                 </div>
             </div>
@@ -1492,7 +1502,7 @@
                 <div class="fx-rd-expert-list">
                     @foreach (var field in AllDesignerFields)
                     {
-                        <button type="button">@field.DisplayName</button>
+                        <ButtonControl Disabled="true">@field.DisplayName</ButtonControl>
                     }
                 </div>
             </div>
@@ -1538,10 +1548,10 @@
             <div class="fx-rd-highlight-listbox">
                 @if (_selectedElement?.HighlightRule.Enabled == true)
                 {
-                    <button type="button" class="active">
+                    <ButtonControl CssClass="active">
                         <span style="@($"color:{_selectedElement.HighlightRule.TextColor};background:{CssColor(_selectedElement.HighlightRule.BackgroundColor, "transparent")};")">Sample</span>
                         <span>@BuildHighlightCondition(_selectedElement.HighlightRule)</span>
-                    </button>
+                    </ButtonControl>
                 }
             </div>
             <div class="fx-rd-pane-actions">
@@ -1602,7 +1612,7 @@
                 @for (var i = 0; i < _expertLinks.Count; i++)
                 {
                     var index = i;
-                    <button type="button" class="@(index == _activeExpertItemIndex ? "active" : "")" @onclick="() => _activeExpertItemIndex = index">@_expertLinks[index].DisplayName</button>
+                    <ButtonControl CssClass="@(index == _activeExpertItemIndex ? "active" : "")" OnClick="() => _activeExpertItemIndex = index">@_expertLinks[index].DisplayName</ButtonControl>
                 }
             </div>
             <div class="fx-rd-link-editor">
@@ -1631,15 +1641,15 @@
                     <span class="@($"fx-rd-sql-status {(_expertSqlValidationSucceeded == true ? "ok" : _expertSqlValidationSucceeded == false ? "error" : "")}")">@_expertSqlValidationMessage</span>
                 }
             </div>
-            <textarea class="fx-rd-sql-editor" spellcheck="false" @bind="_expertSql" @bind:event="oninput" @bind:after="OnExpertSqlEdited"></textarea>
+            <Fx.ControlKit.TextAreaControl CssClass="fx-rd-sql-editor" @bind-Value="_expertSql" UpdateOnInput="true" @bind-Value:after="OnExpertSqlEdited" Rows="12" />
         </div>
     </div>;
 
     private RenderFragment RenderRunningTotalExpert() => @<div class="fx-rd-expert">
         <div class="fx-rd-bottom-row">
             <DropDownListControl TValue="string" TItem="ReportDesignerRunningTotal" DataSource="_expertRunningTotals" Value="@(ActiveRunningTotal?.Id)" ValueChanged="value => _activeExpertItemIndex = _expertRunningTotals.FindIndex(t => t.Id == value)" TextFieldName="Name" ValueFieldName="Id" Width="240px" />
-            <button type="button" title="Add running total" @onclick="AddRunningTotalAsync"><i class="bi bi-plus-lg"></i></button>
-            <button type="button" title="Delete running total" disabled="@(ActiveRunningTotal is null)" @onclick="DeleteRunningTotalAsync"><i class="bi bi-trash"></i></button>
+            <ButtonControl Title="Add running total" OnClick="AddRunningTotalAsync" IconCss="bi bi-plus-lg" />
+            <ButtonControl Title="Delete running total" Disabled="@(ActiveRunningTotal is null)" OnClick="DeleteRunningTotalAsync" IconCss="bi bi-trash" />
         </div>
         @if (ActiveRunningTotal is { } total)
         {

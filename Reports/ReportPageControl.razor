@@ -1,0 +1,30 @@
+@namespace Fx.ControlKit.Reports
+
+<article class="fx-report-positioned-page" aria-label="@Page.Title" data-page="@Page.Number"
+    style="@($"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:{Px(Page.Size.ContentWidthTwips + Page.Size.MarginLeftTwips + Page.Size.MarginRightTwips)}px;height:{Px(Page.Size.ContentHeightTwips + Page.Size.MarginTopTwips + Page.Size.MarginBottomTwips)}px;break-after:page;")">
+    <div style="@($"position:absolute;left:{Px(Page.Size.MarginLeftTwips)}px;top:{Px(Page.Size.MarginTopTwips)}px;width:{Px(Page.Size.ContentWidthTwips)}px;height:{Px(Page.Size.ContentHeightTwips)}px;overflow:hidden;")">
+        @foreach (var band in Page.Bands)
+        {
+            <section data-section="@band.Name" style="@($"position:absolute;overflow:hidden;left:0;width:100%;top:{Px(band.TopTwips)}px;height:{Px(band.HeightTwips)}px;background:{ReportObjectRenderer.Color(band.Background)};")">
+                @foreach (var item in band.Objects)
+                {
+                    <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">
+                        @if (item.Analysis is not null)
+                        {
+                            <ReportAnalysisControl Element="item.Element" Snapshot="item.Analysis" />
+                        }
+                        else
+                        {
+                            @((MarkupString)item.FormattedContent)
+                        }
+                    </div>
+                }
+            </section>
+        }
+    </div>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public ReportPageSnapshot Page { get; set; } = default!;
+    private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
+}
