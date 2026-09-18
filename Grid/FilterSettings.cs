@@ -25,8 +25,12 @@ public class FilterSettings
     public bool ShowFilterRowOperators { get; set; } = true;
 
     /// <summary>
-    /// Debounce, in milliseconds, for the SearchBox, typed filter-row inputs,
-    /// and an auto-applying filter menu. Set to zero for immediate application.
+    /// Debounce, in milliseconds, for filter-row values set through
+    /// <c>OnColumnFilterInput</c>, a filter-menu template's checklist search, and a
+    /// menu search applied once provider distinct values arrive. The grid's own text
+    /// boxes (the search box, the filter-row boxes and the filter menu's boxes) keep
+    /// typing in the browser and apply when the text is committed (Enter, Tab or
+    /// leaving the box), not after a delay. Set to zero for immediate application.
     /// </summary>
     public int ImmediateModeDelay { get; set; } = 300;
 }
