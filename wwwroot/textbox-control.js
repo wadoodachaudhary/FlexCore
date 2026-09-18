@@ -556,21 +556,36 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
         keepNativeTab: !!keepNativeTab,
         hosted: !!hosted,
         commitPending: false,
+        deferred: null,
         composing: false,
         cleanup: null
     };
 
     const commit = (key, event) => {
-        if (binding.commitPending) return;
+        if (binding.commitPending) {
+            // A commit is in flight: keep the latest one and send it when that one
+            // settles if it still carries something new (changed text, or another
+            // key such as Enter after an edge-arrow commit). A repeat, or the blur
+            // that follows Tab / Enter, stays dropped.
+            if (key === "Sync") return;
+            // The blur a key that ends the edit causes (Enter, Escape, Tab), or a
+            // click away right after it, must not replace that key.
+            const held = binding.deferred?.key;
+            if (key === "Blur" && (held === "Escape" || held === "Enter" || held === "NumpadEnter" || held === "Tab"))
+                return;
+            binding.deferred = { key, event };
+            return;
+        }
         // A value-only flush ("Sync") never holds the commit that may follow it
         // (a blur, an Enter): it lands the draft and steps aside.
         const holds = key !== "Sync";
         if (holds) binding.commitPending = true;
+        const value = el.value ?? "";
 
         try {
             const invocation = binding.dotNetRef.invokeMethodAsync(
                 "CommitClientBufferedTypingAsync",
-                el.value ?? "",
+                value,
                 key,
                 !!event?.shiftKey,
                 !!event?.ctrlKey,
@@ -580,8 +595,14 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
             Promise.resolve(invocation)
                 .catch(() => { })
                 .finally(() => {
-                    if (holds && el.isConnected)
-                        binding.commitPending = false;
+                    if (!holds || !el.isConnected) return;
+                    binding.commitPending = false;
+                    const next = binding.deferred;
+                    binding.deferred = null;
+                    if (next && clientBufferedTypingBindings.get(el) === binding
+                        && ((el.value ?? "") !== value || (next.key !== key && next.key !== "Blur"))
+                        && (next.key !== "Blur" || el.ownerDocument.activeElement !== el))
+                        commit(next.key, next.event);
                 });
         } catch {
             if (holds) binding.commitPending = false;

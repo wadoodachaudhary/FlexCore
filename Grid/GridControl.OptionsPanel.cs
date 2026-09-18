@@ -521,10 +521,8 @@ public partial class GridControl<TValue>
             _filterPopupCommitApplyRejected = _filterPopupApplyRejected;
         }
 
-        // A committed box skips its next render. The second render records the
-        // committed text as the text the box last rendered, so no later render
-        // writes an older text into the field.
-        StateHasChanged();
+        // The browser listener owns the box's text, so a committed box keeps it
+        // by itself; one render shows the applied filter.
         StateHasChanged();
     }
 
