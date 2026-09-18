@@ -1617,7 +1617,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // Search
     private string? SearchText;
-    private CancellationTokenSource? _searchCts;
     private string? _exportStatusMessage;
     private int _exportStatusGeneration;
     private string? _validationStatusMessage;
@@ -5520,6 +5519,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _simpleColumnFilters.Remove(field);
         _filterRowDrafts.Remove(field);
         _filterRowOperators.Remove(field);
+        ReseedFilterRowBox(field);
         _columnAdvancedFilters.Remove(field);
         _columnCheckboxFilters.Remove(field);
         ResetFilterPopupDraft(field);
@@ -5629,6 +5629,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _filterRowDebounce.Clear();
         _filterRowDrafts.Clear();
         _filterRowOperators.Clear();
+        _filterRowBoxGeneration++;
         _columnAdvancedFilters.Clear();
         _columnCheckboxFilters.Clear();
         _restoredProviderNumericRanges.Clear();
@@ -5644,39 +5645,33 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // ── Search ───────────────────────────────────────────────────────────
 
-    // Typed text is staged here by the non-rendering oninput callback and
-    // committed to SearchText once per typing pause — one filter recompute and
-    // one grid render per pause instead of one of each per keystroke.
-    private string? _pendingSearchText;
+    // The search box keeps its text in the browser while typing and hands the
+    // grid one committed value (Enter, Tab or leaving the box): one filter
+    // recompute and one grid render per commit, no server traffic per key.
+    private int _searchBoxGeneration;   // @key of the search box; bump = re-seed from SearchText
 
-    private EventCallback<ChangeEventArgs>? _nonRenderingSearchInput;
-    private EventCallback<ChangeEventArgs> NonRenderingSearchInput =>
-        _nonRenderingSearchInput ??= NonRenderingEventHandler.Create<ChangeEventArgs>(e =>
-        {
-            _pendingSearchText = e.Value?.ToString() ?? "";
-            _ = ApplySearchDebounced();
-        });
+    private EventCallback<string?>? _searchBoxCommitted;
+    private EventCallback<string?> SearchBoxCommitted =>
+        _searchBoxCommitted ??= NonRenderingEventHandler.Create<string?>(ApplySearchTextAsync);
 
-    private async Task ApplySearchDebounced()
+    // The grid's own text boxes commit through ValueChanged; their OnKeyDown only
+    // switches the commit keys (Enter, Tab, arrows) on.
+    private static readonly EventCallback<KeyboardEventArgs> CommitKeyDown =
+        NonRenderingEventHandler.Create<KeyboardEventArgs>(_ => { });
+
+    private async Task ApplySearchTextAsync(string? text)
     {
-        _searchCts?.Cancel();
-        _searchCts = new CancellationTokenSource();
-        var token = _searchCts.Token;
+        text ??= string.Empty;
+        if (string.Equals(text, SearchText ?? string.Empty, StringComparison.Ordinal))
+            return;
 
-        try
-        {
-            if (EffectiveFilterDelay > 0)
-                await Task.Delay(EffectiveFilterDelay, token);
-            if (_pendingSearchText != null)
-                SearchText = _pendingSearchText;
-            _pageState.CurrentPage = 1;
-            if (UsesItemsProvider)
-                await ReloadItemsAsync();
-            else
-                await InvokeAsync(StateHasChanged);
-            await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
-        }
-        catch (TaskCanceledException) { }
+        SearchText = text;
+        _pageState.CurrentPage = 1;
+        if (UsesItemsProvider)
+            await ReloadItemsAsync();
+        else
+            await InvokeAsync(StateHasChanged);
+        await NotifyGridStateChangedAsync(GridStateChangeKind.Search);
     }
 
     /// <summary>True when any column filter or the expression filter is applied —
@@ -16895,10 +16890,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _columnUpdateDepth = 0;
         _columnUpdateFlushTcs?.TrySetResult();
         _columnUpdateFlushTcs = null;
-
-        _searchCts?.Cancel();
-        _searchCts?.Dispose();
-        _searchCts = null;
 
         DisposeFilteringState();
         DisposeRowValidationContext();

@@ -13,6 +13,9 @@ public partial class GridControl<TValue>
     private string? _expressionFilterError;
     private bool _expressionFilterOpen;
     private ExpressionFilterNode? _expressionFilterRoot;
+    private int _expressionFilterBoxGeneration;   // @key of the expression box; bump = re-seed from the draft
+    private EventCallback<string?>? _expressionFilterCommitted;
+    private EventCallback<KeyboardEventArgs>? _expressionFilterKeyDown;
 
     private bool HasExpressionFilter => _expressionFilterRoot != null;
     private string ExpressionFilterDraft => _expressionFilterDraft ?? string.Empty;
@@ -35,13 +38,21 @@ public partial class GridControl<TValue>
         }
     }
 
-    private void OnExpressionFilterInput(ChangeEventArgs e)
-    {
-        _expressionFilterDraft = e.Value?.ToString() ?? string.Empty;
-    }
+    // The expression box keeps its text in the browser while typing; a commit
+    // (Enter, Tab or leaving the box) stores the draft, and Enter or Apply applies it.
+    private EventCallback<string?> ExpressionFilterCommitted =>
+        _expressionFilterCommitted ??= NonRenderingEventHandler.Create<string?>(
+            value => _expressionFilterDraft = value ?? string.Empty);
+
+    private EventCallback<KeyboardEventArgs> ExpressionFilterKeyDown =>
+        _expressionFilterKeyDown ??= NonRenderingEventHandler.Create<KeyboardEventArgs>(HandleExpressionFilterKeyDown);
 
     private async Task HandleExpressionFilterKeyDown(KeyboardEventArgs e)
     {
+        // A chord never commits the box, so it must not apply a stale draft.
+        if (e.AltKey || e.CtrlKey || e.MetaKey)
+            return;
+
         if (e.Key == "Enter")
         {
             await ApplyExpressionFilterAsync();
@@ -99,6 +110,8 @@ public partial class GridControl<TValue>
 
     private void ClearExpressionFilterState()
     {
+        if (!string.IsNullOrEmpty(_expressionFilterDraft))
+            _expressionFilterBoxGeneration++;
         _expressionFilterRoot = null;
         _expressionFilterText = null;
         _expressionFilterDraft = null;

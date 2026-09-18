@@ -184,6 +184,30 @@ public partial class GridControl<TValue>
         string.Create(CultureInfo.InvariantCulture,
             $"--fx-theme-header:{item.Header};--fx-theme-body:{item.Body};--fx-theme-alt:{item.Alt};--fx-theme-accent:{item.Accent};");
 
+    // The side-panel searches keep their text in the browser while typing and
+    // narrow their list once per commit (Enter, Tab or leaving the box).
+    private EventCallback<string?>? _columnPanelSearchCommitted;
+    private EventCallback<string?> ColumnPanelSearchCommitted =>
+        _columnPanelSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+        {
+            value ??= string.Empty;
+            if (string.Equals(value, _columnPanelSearch, StringComparison.Ordinal))
+                return;
+            _columnPanelSearch = value;
+            StateHasChanged();
+        });
+
+    private EventCallback<string?>? _pivotFieldSearchCommitted;
+    private EventCallback<string?> PivotFieldSearchCommitted =>
+        _pivotFieldSearchCommitted ??= NonRenderingEventHandler.Create<string?>(value =>
+        {
+            value ??= string.Empty;
+            if (string.Equals(value, _pivotFieldSearch, StringComparison.Ordinal))
+                return;
+            _pivotFieldSearch = value;
+            StateHasChanged();
+        });
+
     private IEnumerable<GridColumn> ColumnPanelColumns =>
         Columns
             .Where(c => !string.IsNullOrWhiteSpace(c.Field))

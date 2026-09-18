@@ -13,6 +13,20 @@ public partial class GridControl<TValue>
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, CancellationTokenSource> _filterRowDebounce =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, EventCallback<string?>> _filterRowBoxCommits =
+        new(StringComparer.OrdinalIgnoreCase);
+    // @key of a filter-row text box: its column, and generations bumped when code
+    // sets or clears that column's value (per column) or every value (all). The
+    // text is browser-owned, so a bump re-seeds only the boxes it concerns.
+    private readonly Dictionary<string, int> _filterRowBoxGenerations =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int _filterRowBoxGeneration;
+
+    private (string Field, int All, int Own) FilterRowBoxKey(string field) =>
+        (field, _filterRowBoxGeneration, _filterRowBoxGenerations.GetValueOrDefault(field));
+
+    private void ReseedFilterRowBox(string field) =>
+        _filterRowBoxGenerations[field] = _filterRowBoxGenerations.GetValueOrDefault(field) + 1;
     private CancellationTokenSource? _filterPopupAutoApplyCts;
     private string _filterChecklistSearchDraft = string.Empty;
     private bool _filterChecklistDraftTouched;
@@ -117,6 +131,7 @@ public partial class GridControl<TValue>
     private void QueueFilterRowValue(string field, string? value)
     {
         _filterRowDrafts[field] = value ?? string.Empty;
+        ReseedFilterRowBox(field);
 
         if (_filterRowDebounce.Remove(field, out var previous))
         {
@@ -152,6 +167,29 @@ public partial class GridControl<TValue>
                 _filterRowDebounce.Remove(field);
             cts.Dispose();
         }
+    }
+
+    private EventCallback<string?> FilterRowBoxCommitted(string field)
+    {
+        if (!_filterRowBoxCommits.TryGetValue(field, out var callback))
+            _filterRowBoxCommits[field] = callback = NonRenderingEventHandler.Create<string?>(
+                value => CommitFilterRowBoxAsync(field, value));
+        return callback;
+    }
+
+    // A filter-row box commits on Enter, Tab or leaving it and applies at once.
+    private Task CommitFilterRowBoxAsync(string field, string? value)
+    {
+        var text = value ?? string.Empty;
+        if (string.Equals(text, GetColumnFilterValue(field), StringComparison.Ordinal))
+            return Task.CompletedTask;
+        // The typed value wins over one still queued through OnColumnFilterInput.
+        if (_filterRowDebounce.Remove(field, out var pending))
+        {
+            pending.Cancel();
+            pending.Dispose();
+        }
+        return CommitFilterRowAsync(field, text);
     }
 
     private async Task CommitFilterRowAsync(string field, string? value)
@@ -201,6 +239,7 @@ public partial class GridControl<TValue>
         _filterRowDrafts.Remove(field);
         _filterRowOperators.Remove(field);
         _simpleColumnFilters.Remove(field);
+        ReseedFilterRowBox(field);
         _pageState.CurrentPage = 1;
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();

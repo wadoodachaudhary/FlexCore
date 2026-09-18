@@ -70,18 +70,20 @@
             }
             @if (ShowSearchBar)
             {
-                <div class="fx-toolbar-search">
+                @* Typing stays in the browser; the search applies once when the text is
+                   committed: Enter, Tab or leaving the box. The grid's keyboard trap
+                   leaves its Tab native (data-fx-grid-native-keys). *@
+                <div class="fx-toolbar-search" data-fx-grid-native-keys="">
                     <svg class="fx-toolbar-search-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
                         <path fill="currentColor" d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398l3.85 3.85a1 1 0 0 0 1.415-1.415l-3.85-3.85a1 1 0 0 0-.018-.017zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
                     </svg>
-                    @* Uncontrolled while typing: keystrokes land in _pendingSearchText
-                       through a non-rendering callback (a bound oninput re-rendered the
-                       whole grid AND recomputed the search filter on every keystroke);
-                       the debounce commits once per pause. Value renders from the pending
-                       text so unrelated renders never repaint stale input. *@
-                    <input type="text" placeholder="Search..."
-                           value="@(_pendingSearchText ?? SearchText)"
-                           @oninput="NonRenderingSearchInput" />
+                    <TextBoxControl @key="_searchBoxGeneration"
+                                    Placeholder="Search..."
+                                    Value="@SearchText"
+                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    KeepNativeTab="true"
+                                    ValueChanged="@SearchBoxCommitted"
+                                    OnKeyDown="@CommitKeyDown" />
                 </div>
             }
             @if (GridToolBarTemplate != null)
@@ -194,12 +196,15 @@
                     </button>
                     @if (_expressionFilterOpen)
                     {
-                        <div class="fx-expression-filter-editor">
-                            <input class="fx-expression-filter-input"
-                                   placeholder="OrderQty > 100 and Price Level like Community"
-                                   value="@ExpressionFilterDraft"
-                                   @oninput="OnExpressionFilterInput"
-                                   @onkeydown="HandleExpressionFilterKeyDown" />
+                        <div class="fx-expression-filter-editor" data-fx-grid-native-keys="">
+                            <TextBoxControl @key="_expressionFilterBoxGeneration"
+                                            CssClass="fx-expression-filter-input"
+                                            Placeholder="OrderQty > 100 and Price Level like Community"
+                                            Value="@ExpressionFilterDraft"
+                                            TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                            KeepNativeTab="true"
+                                            ValueChanged="@ExpressionFilterCommitted"
+                                            OnKeyDown="@ExpressionFilterKeyDown" />
                             <button class="fx-expression-filter-apply"
                                     type="button"
                                     title="Apply filter expression"
@@ -311,10 +316,14 @@
             @if (_activeOptionsPanel == GridOptionsPanel.Columns)
             {
                 <div class="fx-grid-side-panel-body">
-                    <input class="fx-grid-side-search"
-                           placeholder="Search columns..."
-                           value="@_columnPanelSearch"
-                           @oninput="e => _columnPanelSearch = e.Value?.ToString() ?? string.Empty" />
+                    <TextBoxControl CssClass="fx-grid-side-search"
+                                    Placeholder="Search columns..."
+                                    Value="@_columnPanelSearch"
+                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    KeepNativeTab="true"
+                                    ValueChanged="@ColumnPanelSearchCommitted"
+                                    OnKeyDown="@CommitKeyDown"
+                                    data-fx-grid-native-keys="" />
                     <div class="fx-grid-column-option-list">
                         @foreach (var col in ColumnPanelColumns)
                         {
@@ -346,10 +355,14 @@
                         <span>Pivot Mode</span>
                     </label>
 
-                    <input class="fx-grid-side-search"
-                           placeholder="Search fields..."
-                           value="@_pivotFieldSearch"
-                           @oninput="e => _pivotFieldSearch = e.Value?.ToString() ?? string.Empty" />
+                    <TextBoxControl CssClass="fx-grid-side-search"
+                                    Placeholder="Search fields..."
+                                    Value="@_pivotFieldSearch"
+                                    TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                    KeepNativeTab="true"
+                                    ValueChanged="@PivotFieldSearchCommitted"
+                                    OnKeyDown="@CommitKeyDown"
+                                    data-fx-grid-native-keys="" />
 
                     <div class="fx-grid-pivot-field-list">
                         @foreach (var col in PivotPanelColumns)
@@ -907,14 +920,25 @@
                                                 }
                                                 else
                                                 {
-                                                    <TextBoxControl InputType="@GetFilterRowInputType(fCol)"
-                                                                    CssClass="fx-grid-filter-input"
-                                                                    Placeholder="Filter..."
-                                                                    Enabled="@filterRowNeedsValue"
-                                                                    Value="@GetColumnFilterValue(fCol.Field)"
-                                                                    UpdateOnInput="true"
-                                                                    ValueChanged="@(value => OnColumnFilterInput(fCol.Field, value))"
-                                                                    aria-label="@($"Filter value for {HeaderColumnDisplay(fCol)}")" />
+                                                    @* Typing stays in the browser; the filter applies once when the
+                                                       text is committed (Enter, Tab or leaving the box). The box is
+                                                       keyed by its column, so a column that moves never inherits
+                                                       another column's text. The host span adds no box (display:
+                                                       contents); the grid's keyboard trap leaves its Tab native and
+                                                       its keys stay away from the grid's key handlers. *@
+                                                    <span class="fx-grid-filter-input-host" data-fx-grid-native-keys="" @onkeydown:stopPropagation="true">
+                                                        <TextBoxControl @key="FilterRowBoxKey(fCol.Field)"
+                                                                        InputType="@GetFilterRowInputType(fCol)"
+                                                                        CssClass="fx-grid-filter-input"
+                                                                        Placeholder="Filter..."
+                                                                        Enabled="@filterRowNeedsValue"
+                                                                        Value="@GetColumnFilterValue(fCol.Field)"
+                                                                        TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
+                                                                        KeepNativeTab="true"
+                                                                        ValueChanged="@FilterRowBoxCommitted(fCol.Field)"
+                                                                        OnKeyDown="@CommitKeyDown"
+                                                                        aria-label="@($"Filter value for {HeaderColumnDisplay(fCol)}")" />
+                                                    </span>
                                                 }
                                                 @if (!string.IsNullOrEmpty(GetColumnFilterValue(fCol.Field)) || FilterOperatorNeedsNoValue(filterRowOperator))
                                                 {

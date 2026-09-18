@@ -621,7 +621,7 @@
     overflow: auto;
 }
 
-.fx-grid-side-search {
+.fx-grid-side-panel ::deep .fx-grid-side-search {
     width: 100%;
     height: 26px;
     padding: 3px 7px;
@@ -634,7 +634,7 @@
     box-sizing: border-box;
 }
 
-.fx-grid-side-search:focus {
+.fx-grid-side-panel ::deep .fx-grid-side-search:focus {
     outline: 1px solid #4a7ab5;
     border-color: #4a7ab5;
 }
@@ -929,6 +929,10 @@
 .fx-grid-filter-typed-wrap ::deep .fx-dropdown {
     font-size: calc(10px * var(--fx-zoom, 1));
 }
+/* The filter-row box's key host adds no box: the input stays the grid item. */
+.fx-grid-filter-input-host {
+    display: contents;
+}
 .fx-grid-filter-typed-wrap ::deep .fx-grid-filter-input {
     box-sizing: border-box;
     width: 100%;
@@ -1073,7 +1077,7 @@
     color: #6c757d;
     pointer-events: none;
 }
-.fx-toolbar-search input {
+.fx-toolbar-search ::deep input {
     /* extra left padding leaves room for the magnifier icon */
     padding: 5px 10px 5px 26px;
     border: 1px solid #ced4da;
@@ -1254,7 +1258,7 @@
     min-width: 280px;
     max-width: min(620px, 62vw);
 }
-.fx-expression-filter-input {
+.fx-expression-filter-editor ::deep .fx-expression-filter-input {
     width: 360px;
     max-width: 42vw;
     height: 24px;
@@ -1266,7 +1270,7 @@
     background: #fff;
     color: #1f2937;
 }
-.fx-expression-filter-input:focus {
+.fx-expression-filter-editor ::deep .fx-expression-filter-input:focus {
     outline: 1px solid #4a7ab5;
     border-color: #4a7ab5;
 }
@@ -4221,9 +4225,9 @@ td.fx-drag-preview-cell {
     color: #fff;
 }
 
-.fx-grid.fx-grid-dark .fx-toolbar-search input,
-.fx-grid.fx-grid-dark .fx-expression-filter-input,
-.fx-grid.fx-grid-dark .fx-grid-side-search,
+.fx-grid.fx-grid-dark .fx-toolbar-search ::deep input,
+.fx-grid.fx-grid-dark ::deep .fx-expression-filter-input,
+.fx-grid.fx-grid-dark ::deep .fx-grid-side-search,
 .fx-grid.fx-grid-dark .fx-grid-pivot-value-chip select,
 .fx-grid.fx-grid-dark .fx-grid-pivot-format-input,
 .fx-grid.fx-grid-dark .fx-filter-operator-select,
