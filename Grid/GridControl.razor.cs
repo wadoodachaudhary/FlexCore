@@ -4583,22 +4583,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!shouldReset)
             return;
 
-        if (!await ResetInitialGridScrollAsync())
-            return;
-
-        // Cleared only on success, so a circuit without JS interop retries on a later render.
+        // Single-flight: the pending reasons are claimed before the interop await, so the
+        // after-render passes that overlap this call find nothing pending instead of each
+        // sending the same reset again.
+        var claimedFirstRender = _initialScrollResetOnFirstRenderPending && (hasData || firstRender);
+        var claimedFirstData = _initialScrollResetOnFirstDataPending && hasData;
         if (hostRequested)
             _scrollToOriginPending = false;
-
-        if (hasData)
-        {
+        if (claimedFirstRender)
+            _initialScrollResetOnFirstRenderPending = false;
+        if (claimedFirstData)
             _initialScrollResetOnFirstDataPending = false;
-            _initialScrollResetOnFirstRenderPending = false;
-        }
-        else if (firstRender)
-        {
-            _initialScrollResetOnFirstRenderPending = false;
-        }
+
+        if (await ResetInitialGridScrollAsync())
+            return;
+
+        // Released on failure, so a circuit without JS interop retries on a later render.
+        if (hostRequested)
+            _scrollToOriginPending = true;
+        if (claimedFirstRender)
+            _initialScrollResetOnFirstRenderPending = true;
+        if (claimedFirstData)
+            _initialScrollResetOnFirstDataPending = true;
     }
 
     private async Task EnsurePendingFirstRowSelectionAsync()
@@ -7310,8 +7316,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _focusedGroupPath = null;
         var selType = SelectionSettingsRef?.Type ?? SelectionType.Single;
-        var isCtrl = mouseArgs?.CtrlKey == true || mouseArgs?.MetaKey == true;
-        var isShift = mouseArgs?.ShiftKey == true;
+        // SelectionSettings.ModifierKeysExtendSelection=false: a Single grid keeps one row,
+        // so a modifier click is treated as a plain click.
+        var modifiersExtend = selType == SelectionType.Multiple
+            || SelectionSettingsRef?.ModifierKeysExtendSelection != false;
+        var isCtrl = modifiersExtend && (mouseArgs?.CtrlKey == true || mouseArgs?.MetaKey == true);
+        var isShift = modifiersExtend && mouseArgs?.ShiftKey == true;
 
         if (EventsRef?.RowSelecting.HasDelegate == true)
         {
@@ -8747,6 +8757,31 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    // A double-click on an edit button raises OnEditButtonClick once: the click that
+    // completes it (MouseEventArgs.Detail >= 2) on the button whose first click was just
+    // handled is dropped. A double-click whose first press landed on the cell (before the
+    // button was painted) still opens from its second click.
+    private const int EditButtonDoubleClickWindowMs = 800;
+    private TValue? _lastEditButtonClickItem;
+    private string? _lastEditButtonClickField;
+    private long _lastEditButtonClickTicks;
+
+    private Task HandleEditButtonPointerClick(TValue item, GridColumn col, MouseEventArgs args)
+    {
+        var now = Environment.TickCount64;
+        var completesDoubleClick = args.Detail >= 2
+            && _lastEditButtonClickField != null
+            && now - _lastEditButtonClickTicks <= EditButtonDoubleClickWindowMs
+            && string.Equals(_lastEditButtonClickField, col.Field, StringComparison.Ordinal)
+            && EqualityComparer<TValue>.Default.Equals(_lastEditButtonClickItem!, item);
+
+        _lastEditButtonClickItem = item;
+        _lastEditButtonClickField = col.Field;
+        _lastEditButtonClickTicks = now;
+
+        return completesDoubleClick ? Task.CompletedTask : HandleEditButtonClick(item, col);
+    }
+
     private async Task<bool> TryInvokeActiveEditButtonAsync(KeyboardEventArgs e)
     {
         if (e.Key is not ("Enter" or "NumpadEnter"))
@@ -8961,12 +8996,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 6, "type", "button");
             builder.AddAttribute(sequence + 7, "class", "fx-cell-action-btn fx-cell-action-ellipsis-btn");
             builder.AddAttribute(sequence + 8, "onclick", cachedActionClick
-                ?? EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+                ?? EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleEditButtonPointerClick(buttonItem, buttonCol, e)));
             builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
             builder.AddAttribute(sequence + 10, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
             builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
             builder.AddEventPreventDefaultAttribute(sequence + 12, "onmousedown", true);
-            builder.AddContent(sequence + 13, "...");
+            // The button's click already opened its window: the double-click it completes
+            // must not reach the cell's or row's double-click handlers as well.
+            builder.AddEventStopPropagationAttribute(sequence + 13, "ondblclick", true);
+            builder.AddContent(sequence + 14, "...");
             builder.CloseElement();
 
             builder.CloseElement();
@@ -8976,12 +9014,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         builder.OpenElement(sequence, "button");
         builder.AddAttribute(sequence + 1, "type", "button");
         builder.AddAttribute(sequence + 2, "class", "fx-cell-action-btn fx-cell-action-command");
-        builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+        builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleEditButtonPointerClick(buttonItem, buttonCol, e)));
         builder.AddEventStopPropagationAttribute(sequence + 4, "onclick", true);
         builder.AddAttribute(sequence + 5, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
         builder.AddEventStopPropagationAttribute(sequence + 6, "onmousedown", true);
         builder.AddEventPreventDefaultAttribute(sequence + 7, "onmousedown", true);
-        builder.AddContent(sequence + 8, editButtonText);
+        builder.AddEventStopPropagationAttribute(sequence + 8, "ondblclick", true);
+        builder.AddContent(sequence + 9, editButtonText);
         builder.CloseElement();
     }
 
@@ -12101,6 +12140,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!TryGetShiftArrowSelection(e, out var rowDelta, out var cellDelta))
             return false;
         if (!AllowSelection || _isEditing || _batchEditItem != null)
+            return false;
+        if ((SelectionSettingsRef?.Type ?? SelectionType.Single) == SelectionType.Single
+            && SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && SelectionSettingsRef?.ModifierKeysExtendSelection == false)
             return false;
 
         var rows = GetKeyboardNavigationRowItems();

@@ -15,5 +15,13 @@ public class SelectionSettings
     public bool CheckboxOnly { get; set; }
     public bool PersistSelection { get; set; }
     public bool EnableToggle { get; set; } = true;
+    /// <summary>
+    /// Ctrl/Shift+click and Shift+Arrow add rows to a <see cref="SelectionType.Single"/>
+    /// row selection (the VSFlexGrid flexSelectionListBox model). False keeps exactly one
+    /// row: a modifier click selects the clicked row alone and Shift+Arrow does not extend,
+    /// as in a VSFlexGrid with AllowSelection=False. Ignored for
+    /// <see cref="SelectionType.Multiple"/> and for <see cref="SelectionMode.Cell"/>.
+    /// </summary>
+    public bool ModifierKeysExtendSelection { get; set; } = true;
     public GridMultiSelectBehavior MultiSelectBehavior { get; set; } = GridMultiSelectBehavior.FullMultiSelect;
 }
