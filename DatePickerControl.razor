@@ -8,8 +8,11 @@
 
 @if (Visible)
 {
+    @* data-fx-key-scope while the calendar is open: its Escape closes only the calendar, so a
+       host dialog's capture-phase Escape (VB6: Cancel) must not close the whole dialog under it. *@
     <div @ref="_hostElement"
          class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
+         data-fx-key-scope="@(_isOpen && CellHost is null ? "" : null)"
          @onclick:stopPropagation="true"
          @onmousedown:stopPropagation="true"
          @ondblclick:stopPropagation="true"
