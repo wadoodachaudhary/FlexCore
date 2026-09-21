@@ -7,6 +7,7 @@
 @if (Visible)
 {
     <CascadingValue Value="@ContentFocusScope" IsFixed="true">
+    <CascadingValue Value="@_defaultButtonScope" IsFixed="true">
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
          @onmousemove="HandleOverlayMouseMove"
@@ -15,6 +16,7 @@
          tabindex="0"
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
+             data-fx-dialog-enter="@(OnEnter.HasDelegate ? "true" : null)"
              aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && !string.IsNullOrWhiteSpace(Header) ? _titleId : null)"
              aria-describedby="@AriaDescribedBy" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true">
             <div class="fx-dialog-header"
@@ -97,6 +99,7 @@
         }
     </div>
     </CascadingValue>
+    </CascadingValue>
 }
 
 @code {
@@ -125,6 +128,20 @@
     /// path — for dialogs whose ✕/close COMMITS while Escape must CANCEL.
     /// </summary>
     [Parameter] public EventCallback OnEscape { get; set; }
+
+    /// <summary>
+    /// The dialog's default button (VB6 CommandButton.Default = True): a plain Enter anywhere in the
+    /// dialog invokes this, after the focused control has handled the key, so a value it commits on
+    /// Enter lands first. Enter is left to the control on buttons and links (Enter presses them), in
+    /// multi-line editors, grids, tree grids and tabs, on an open dropdown, in a nested dialog, and
+    /// inside any element marked <c>data-fx-enter-owner</c>. A control that keeps the key itself (a date
+    /// it cannot parse, say) vetoes it through the cascaded <see cref="DefaultButtonScope"/>. Point it at
+    /// the default button's handler, and have that handler do nothing while the button is disabled.
+    /// </summary>
+    [Parameter] public EventCallback OnEnter { get; set; }
+
+    private readonly DefaultButtonScope _defaultButtonScope = new();
+    private bool _enterRunning;
 
     /// <summary>Ctrl+Enter requests close (the OnClose path) — the keyboard
     /// "OK" for dialogs whose close commits.</summary>
@@ -674,6 +691,26 @@
 
         if (CloseOnEscape)
             await RequestClose();
+    }
+
+    [JSInvokable]
+    public async Task OnDialogContentEnterAsync()
+    {
+        if (_moveArmed || !Visible || !OnEnter.HasDelegate || _enterRunning)
+            return;
+
+        _enterRunning = true;   // a second Enter while the default button is still running is dropped
+        try
+        {
+            if (await _defaultButtonScope.TakeConsumedEnterAsync() || !Visible)
+                return;
+
+            await OnEnter.InvokeAsync();
+        }
+        finally
+        {
+            _enterRunning = false;
+        }
     }
 
     [JSInvokable]

@@ -26,6 +26,9 @@
  private void Input(string? text){_draft=text;SetError(null);}
  public async Task CommitAsync(){if(!Enabled||ReadOnly)return;var result=string.IsNullOrEmpty(_draft)&&!Required?new MaskResult("","",true,null):_pattern.Apply(_draft,PromptChar,IncludeLiterals);SetError(result.Error);if(result.Error is not null)return;_draft=IncludeLiterals?result.Text:result.RawValue;Value=_lastValue=_draft;await ValueChanged.InvokeAsync(Value);if(ValueExpression is not null)_context?.NotifyFieldChanged(FieldIdentifier.Create(ValueExpression));await OnChange.InvokeAsync(result);}
  private void SetError(string? error){Error=error;if(ValueExpression is null||_messages is null)return;var field=FieldIdentifier.Create(ValueExpression);_messages.Clear(field);if(error is not null)_messages.Add(field,error);_context?.NotifyValidationStateChanged();}
- private Task KeyDown(KeyboardEventArgs e)=>e.Key=="Enter"?CommitAsync():Task.CompletedTask;
+ [CascadingParameter] private DefaultButtonScope? DefaultButtonScope {get;set;}
+ // An entry the mask rejects keeps Enter: a dialog's default button (DialogControl.OnEnter) must not also press.
+ private Task KeyDown(KeyboardEventArgs e){if(e.Key!="Enter")return Task.CompletedTask;var work=CommitOnEnterAsync();DefaultButtonScope?.Defer(work);return work;}
+ private async Task CommitOnEnterAsync(){await CommitAsync();if(Error is not null)DefaultButtonScope?.ConsumeEnter();}
  public void Dispose(){_messages?.Clear();_context?.NotifyValidationStateChanged();}
 }

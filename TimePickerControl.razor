@@ -3,7 +3,9 @@
 @implements IDisposable
 @using System.Globalization
 @using System.Linq.Expressions
-<div class="fx-timepicker @CssClass" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+@* data-fx-enter-owner: the editable list commits or rejects the typed time on Enter, so a dialog's
+   default button (DialogControl.OnEnter) leaves that key to it. *@
+<div class="fx-timepicker @CssClass" style="@ResolvedStyle" data-fx-enter-owner @attributes="AdditionalAttributes">
     <DropDownListControl @ref="_editor" OnKeyDown="OnKeyDown" TItem="string" TValue="string" DataSource="@Times" Editable="true" Value="@_text" ValueChanged="CommitAsync"
                          Enabled="@Enabled" Width="@Width" AriaLabel="@AriaLabel" Placeholder="@Format" />
     @if(ErrorMessage!=null){<div role="alert" class="fx-timepicker-error">@ErrorMessage</div>}
