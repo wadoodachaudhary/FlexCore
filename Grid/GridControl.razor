@@ -2229,17 +2229,18 @@
        _visibilityOverrides and reorders the underlying column list. *@
     @if (_showChooseColumnsDialog)
     {
-        <div class="fx-choose-columns-overlay"
-             @onclick="ChooseColumnsCancel"
-             @oncontextmenu="ChooseColumnsCancel"
-             @oncontextmenu:preventDefault="true"></div>
-        <div class="fx-choose-columns-dialog" @onclick:stopPropagation="true">
-            <div class="fx-choose-columns-header">
-                <span>Choose Columns</span>
-                <button type="button" class="fx-choose-columns-close"
-                        title="Close" aria-label="Close"
-                        @onclick="ChooseColumnsCancel">×</button>
-            </div>
+        <div class="fx-choose-columns-host" data-fx-grid-native-keys=""
+             @onclick:stopPropagation="true"
+             @onmousedown:stopPropagation="true"
+             @onkeydown='e => { if (e.Key == "Escape") ChooseColumnsCancel(); }'
+             @onkeydown:stopPropagation="true"
+             @oncontextmenu:preventDefault="true"
+             @oncontextmenu:stopPropagation="true">
+        <DialogControl Visible="true" Header="Choose Columns" Width="460px"
+                       CssClass="fx-dialog-classic fx-choose-columns-dialog"
+                       Draggable="true" Resizable="false" AutoFocus="false"
+                       ShowSystemMenu="false" CloseOnOverlayClick="true"
+                       OnClose="ChooseColumnsCancel">
             <div class="fx-choose-columns-instructions">
                 Check the columns that you would like visible in this view. Use
                 the Move Up and Move Down buttons to reorder the columns as you
@@ -2314,6 +2315,7 @@
                 <button type="button" class="fx-choose-columns-cancel"
                         @onclick="ChooseColumnsCancel">Cancel</button>
             </div>
+        </DialogControl>
         </div>
     }
 

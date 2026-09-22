@@ -41,12 +41,25 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public string? Height { get; set; }
     [Parameter] public string? Width { get; set; }
+    /// <summary>FillAvailable (default) stretches the table to the host and lets the fixed
+    /// layout share the width out; FitColumns keeps every column at its own width — slack
+    /// after the last column or a horizontal scrollbar, and a resize moves only that column.</summary>
+    [Parameter] public GridWidthMode WidthMode { get; set; } = GridWidthMode.FillAvailable;
     [Parameter] public bool EnableHover { get; set; } = true;
     [Parameter] public bool ToggleOnRowClick { get; set; } = true;
     [Parameter] public int TabIndex { get; set; } = 0;
     [Parameter] public bool AllowSorting { get; set; }
     [Parameter] public bool AllowFiltering { get; set; }
     [Parameter] public bool AllowResizing { get; set; }
+    /// <summary>Best fit: double-click a column's resize grip, or the header menu's Best Fit /
+    /// Best Fit All Columns / Best Fit to Grid. The sizing is <see cref="ColumnAutoFit"/>,
+    /// the engine GridControl uses.</summary>
+    [Parameter] public bool AllowColumnAutoFit { get; set; } = true;
+    [Parameter] public int AutoFitSampleSize { get; set; } = ColumnAutoFit.DefaultSampleSize;
+    [Parameter] public double AutoFitMinWidth { get; set; } = ColumnAutoFit.DefaultMinWidth;
+    /// <summary>0 = the scroll surface's width.</summary>
+    [Parameter] public double AutoFitMaxWidth { get; set; }
+    [Parameter] public bool AutoFitUseDomMeasurement { get; set; } = true;
     [Parameter] public bool ShowColumnOptionsButton { get; set; }
     [Parameter] public bool ShowGridOptionsRail { get; set; }
     [Parameter] public bool ShowColumnHeaders { get; set; } = true;
@@ -256,6 +269,12 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private readonly Dictionary<string, ColumnState> _columnStates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, bool> _visibilityOverrides = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, double> _columnWidthOverrides = new(StringComparer.OrdinalIgnoreCase);
+    private readonly GripDoubleClickDetector _gripClicks = new();
+    private double _autoFitCeilingPx = ColumnAutoFit.DefaultCeilingPx;
+    // grid-control.js is where both grids' content measurement lives (see ColumnAutoFit).
+    private static readonly string GridJsModulePath =
+        FxJsAsset.Versioned($"./_content/{typeof(TreeGridControl<TValue>).Assembly.GetName().Name}/grid-control.js");
+    private IJSObjectReference? _gridJsModule;
     // A press on a grip that moves no more than this is a click, not a resize.
     private const double GripJitterPx = 6;
     private string? _filterPopupField;
@@ -612,6 +631,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 parts.Add("fx-treegrid-toolbar-on");
             if (_isColumnResizing)
                 parts.Add("fx-treegrid-resizing");
+            if (WidthMode == GridWidthMode.FitColumns)
+                parts.Add("fx-treegrid-width-fit-columns");
             return string.Join(" ", parts);
         }
     }
@@ -2166,10 +2187,18 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         await InvokeAsync(StateHasChanged);
     }
 
-    internal void StartColumnResize(TreeGridColumn column, MouseEventArgs e)
+    internal async Task StartColumnResize(TreeGridColumn column, MouseEventArgs e)
     {
         if (!AllowResizing || !column.AllowResizing)
             return;
+
+        if (_gripClicks.Register(GetColumnKey(column), DateTime.UtcNow) && AllowColumnAutoFit)
+        {
+            _isColumnResizing = false;
+            _resizingColumn = null;
+            await AutoFitCoreAsync(new List<TreeGridColumn> { column });
+            return;
+        }
 
         _isColumnResizing = true;
         _resizingColumn = column;
@@ -2183,10 +2212,150 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             return;
 
         var delta = e.ClientX - _resizeStartX;
+        // A deliberate drag is not half of a double-click.
+        if (Math.Abs(delta) > GripJitterPx)
+            _gripClicks.Reset();
         var minWidth = ParseCssPixels(_resizingColumn.MinWidth, 32);
         var width = Math.Max(minWidth, _resizeStartWidth + delta);
         _columnWidthOverrides[GetColumnKey(_resizingColumn)] = width;
         await InvokeAsync(StateHasChanged);
+    }
+
+    // ── Best fit — the engine is ColumnAutoFit, shared with GridControl ──────────
+
+    /// <summary>Best-fits every visible column to its content.</summary>
+    public Task AutoFitColumnsAsync() => AutoFitCoreAsync(VisibleColumns);
+
+    /// <summary>Best-fits one column (by field, or header for a field-less column).</summary>
+    public Task AutoFitColumnAsync(string field)
+    {
+        var column = VisibleColumns.FirstOrDefault(c => string.Equals(GetColumnKey(c), field, StringComparison.OrdinalIgnoreCase));
+        return column == null ? Task.CompletedTask : AutoFitCoreAsync(new List<TreeGridColumn> { column });
+    }
+
+    /// <summary>Scales every visible column proportionally so together they exactly fill the
+    /// tree's available width — unlike Best Fit, which sizes each column to its content.</summary>
+    public async Task FitColumnsToGridAsync()
+    {
+        if (_disposed) return;
+        var targets = VisibleColumns;
+        if (targets.Count == 0) return;
+
+        var available = await ColumnAutoFit.MeasureAvailableWidthAsync(
+            await GetGridJsModuleAsync(), _treeGridElement, ColumnAutoFitDomOptions.TreeGrid);
+        var measured = available > 0;
+        if (available <= 0 && _autoFitCeilingPx > 80) available = _autoFitCeilingPx;
+        if (available <= 0) return;
+        if (!measured && ShowCheckboxes) available -= CheckCellWidthPx;   // the measured width already excludes it
+
+        var changes = ColumnAutoFit.ComputeFitToWidth(
+            BuildAutoFitTargets(targets, null), available, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
+        await ApplyWidthChangesAsync(targets, changes);
+    }
+
+    private async Task AutoFitCoreAsync(List<TreeGridColumn> columns)
+    {
+        if (!AllowColumnAutoFit || _disposed) return;
+        var targets = columns.Where(c => c != null && IsColumnVisible(c) && c.AllowAutoFit).ToList();
+        if (targets.Count == 0) return;
+
+        var measured = await MeasureColumnContentWidthsAsync(targets);
+        var sample = VisibleNodes.Take(Math.Max(1, AutoFitSampleSize)).Select(n => n.Data).ToList();
+        var changes = ColumnAutoFit.ComputeBestFit(
+            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
+        await ApplyWidthChangesAsync(targets, changes);
+    }
+
+    /// <summary>What the shared engine needs to know about each column. The sample texts
+    /// are read lazily — only when the DOM measurement is unavailable.</summary>
+    private List<ColumnAutoFitTarget> BuildAutoFitTargets(List<TreeGridColumn> columns, List<TValue>? sample)
+        => columns.Select(col => new ColumnAutoFitTarget
+        {
+            Field = GetColumnKey(col),
+            HeaderText = col.DisplayHeader,
+            CurrentWidth = GetEffectiveColumnWidth(col),
+            MinWidth = col.MinWidth,
+            MaxWidth = col.MaxWidth,
+            IsNumeric = col.Type == ColumnType.Number,
+            SampleTexts = sample == null ? null : () => sample.Select(item => GetCellDisplayValue(item, col)),
+        }).ToList();
+
+    /// <summary>Applies the engine's widths and reports each through ColumnResized, so a host
+    /// that persists user resizes persists best fit the same way.</summary>
+    private async Task ApplyWidthChangesAsync(List<TreeGridColumn> targets, List<ColumnWidthChange> changes)
+    {
+        if (changes.Count == 0) return;
+        foreach (var change in changes)
+            _columnWidthOverrides[GetColumnKey(targets[change.Index])] = change.NewWidth;
+        await InvokeAsync(StateHasChanged);
+
+        if (!ColumnResized.HasDelegate) return;
+        foreach (var change in changes)
+            await ColumnResized.InvokeAsync(new ResizeEventArgs
+            {
+                Field = change.Field,
+                OldWidth = change.OldWidth,
+                NewWidth = change.NewWidth
+            });
+    }
+
+    private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(List<TreeGridColumn> columns)
+    {
+        if (!AutoFitUseDomMeasurement) return null;
+        var fields = columns.Select(GetColumnKey).Where(f => !string.IsNullOrEmpty(f)).Distinct(StringComparer.Ordinal).ToArray();
+        return await ColumnAutoFit.MeasureAsync(await GetGridJsModuleAsync(), _treeGridElement, fields, AutoFitSampleSize,
+            ColumnAutoFitDomOptions.TreeGrid, containerPx => _autoFitCeilingPx = containerPx);
+    }
+
+    private async Task<IJSObjectReference?> GetGridJsModuleAsync()
+    {
+        if (LegacyScrollJs is null || _disposed) return null;
+        try
+        {
+            if (_gridJsModule is not null) return _gridJsModule;
+            var module = await LegacyScrollJs.InvokeAsync<IJSObjectReference>("import", GridJsModulePath);
+            if (_disposed)
+            {
+                try { await module.DisposeAsync(); } catch { }
+                return null;
+            }
+            return _gridJsModule = module;
+        }
+        catch { return null; }   // prerender / torn-down circuit — best fit falls back to the estimate
+    }
+
+    private const double CheckCellWidthPx = 36;   // .fx-treegrid-check-cell
+
+    /// <summary>FitColumns: the table is exactly the sum of its columns. FillAvailable keeps
+    /// the stylesheet's width:100% fixed layout (the table shares the host out).</summary>
+    internal string? GetTableStyle()
+    {
+        if (WidthMode != GridWidthMode.FitColumns) return null;
+        var total = ShowCheckboxes ? CheckCellWidthPx : 0d;
+        foreach (var col in VisibleColumns)
+        {
+            var width = GetEffectiveColumnWidth(col);
+            total += width > 0 ? width : ColumnAutoFit.FallbackWidthPx;
+        }
+        return ColumnAutoFit.TableStyle(GridWidthMode.FitColumns, total);
+    }
+
+    private async Task HeaderMenuBestFitAsync(TreeGridColumn? column)
+    {
+        _headerMenu = false;
+        if (column != null) await AutoFitCoreAsync(new List<TreeGridColumn> { column });
+    }
+
+    private Task HeaderMenuBestFitAllAsync()
+    {
+        _headerMenu = false;
+        return AutoFitColumnsAsync();
+    }
+
+    private Task HeaderMenuBestFitToGridAsync()
+    {
+        _headerMenu = false;
+        return FitColumnsToGridAsync();
     }
 
     internal async Task EndColumnResize(MouseEventArgs e)

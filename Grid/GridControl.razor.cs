@@ -1654,14 +1654,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private double _resizeStartWidth;
 
     // Double-click on the grip is detected from two mousedowns rather than from the
-    // DOM's dblclick event. A real hand jitters a pixel or two, which resizes the
-    // column, which fires OnLayoutChanged, which makes hosts that re-key their
-    // columns rebuild the header — and a browser only fires dblclick when both
-    // clicks land on the SAME element, so the rebuilt grip never sees one. mousedown
-    // always arrives before the rebuild, so this path survives it.
-    private string? _lastGripDownField;
-    private DateTime _lastGripDownAt;
-    private const int GripDoubleClickMs = 700;
+    // DOM's dblclick event — see GripDoubleClickDetector (shared with TreeGridControl).
+    private readonly GripDoubleClickDetector _gripClicks = new();
 
     /// <summary>Movement under this many px is hand tremor, not a resize.</summary>
     private const double GripJitterPx = 6;
@@ -13505,7 +13499,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>Scales every visible column proportionally so together they exactly fill the
-    /// grid's available width — unlike Best Fit, which sizes each column to its content.</summary>
+    /// grid's available width — unlike Best Fit, which sizes each column to its content.
+    /// The maths is <see cref="ColumnAutoFit.ComputeFitToWidth"/>, shared with TreeGridControl.</summary>
     public async Task FitColumnsToGridAsync()
     {
         var targets = VisibleColumns.ToList();
@@ -13516,49 +13511,35 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
-            available = await _gridJsModule.InvokeAsync<double>("measureGridAvailableWidth", _gridHostElement);
+            available = await ColumnAutoFit.MeasureAvailableWidthAsync(_gridJsModule, _gridHostElement, ColumnAutoFitDomOptions.Grid);
         }
         catch
         {
         }
+        var measured = available > 0;
         if (available <= 0 && _autoFitCeilingPx > 80)
             available = _autoFitCeilingPx;
         if (available <= 0)
             return;
-
-        if (ShowCheckboxColumn) available -= 50;
-        if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
-        if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
-        if (available <= targets.Count * 20)
-            return;
-
-        var current = targets.Sum(c => { var w = GetColumnWidthPx(c); return w > 0 ? w : 120d; });
-        if (current <= 0)
-            return;
-
-        var factor = available / current;
-        var assigned = 0d;
-        var changes = new List<(GridColumn Col, double Old, double New)>();
-        for (var i = 0; i < targets.Count; i++)
+        // The measured width already excludes the checkbox / selector / reorder cells; only
+        // the estimate fallback (no DOM) still needs them taken off.
+        if (!measured)
         {
-            var col = targets[i];
-            var old = GetColumnWidthPx(col);
-            var basis = old > 0 ? old : 120d;
-            // last column takes the rounding remainder so the sum lands exactly on available
-            var width = i == targets.Count - 1
-                ? Math.Round(available - assigned)
-                : Math.Round(basis * factor);
-            var (min, _) = ResolveAutoFitBounds(col);
-            width = Math.Max(width, min);
-            assigned += width;
-            if (Math.Abs(old - width) >= 0.5)
-                changes.Add((col, old, width));
+            if (ShowCheckboxColumn) available -= 50;
+            if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
+            if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
         }
+
+        var changes = ColumnAutoFit.ComputeFitToWidth(
+            BuildAutoFitTargets(targets, null), available, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
         if (changes.Count == 0)
             return;
 
-        foreach (var (col, old, width) in changes)
+        foreach (var change in changes)
         {
+            var col = targets[change.Index];
+            var old = change.OldWidth;
+            var width = change.NewWidth;
             if (EventsRef?.ColumnResizing.HasDelegate == true)
             {
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
@@ -14642,17 +14623,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
-        var now = DateTime.UtcNow;
-        var isDoubleClick = AllowColumnAutoFit
-            && _lastGripDownField != null
-            && string.Equals(_lastGripDownField, col.Field, StringComparison.Ordinal)
-            && (now - _lastGripDownAt).TotalMilliseconds <= GripDoubleClickMs;
-        _lastGripDownField = col.Field;
-        _lastGripDownAt = now;
-
-        if (isDoubleClick)
+        if (_gripClicks.Register(col.Field, DateTime.UtcNow) && AllowColumnAutoFit)
         {
-            _lastGripDownField = null;   // a third click starts a fresh pair
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -14692,7 +14664,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // A deliberate drag is not half of a double-click — stop the next mousedown
         // on this grip from being read as one.
         if (Math.Abs(delta) > GripJitterPx)
-            _lastGripDownField = null;
+            _gripClicks.Reset();
 
         if (EventsRef?.ColumnResizing.HasDelegate == true)
         {
@@ -15403,16 +15375,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var totalWidth = IsColumnVirtualizationActive
             ? GetColumnVirtualizedTableWidthPx()
             : GetTotalColumnWidthPx();
-        if (totalWidth <= 0)
-            return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
-
         // FitColumns keeps every column at its own width, so the table may end short of the
         // container (slack after the last column) or run past it (the scroll surface overflows
         // and a horizontal scrollbar appears). FillAvailable is the page's opt-in to stretch.
-        var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
-        return WidthMode == GridWidthMode.FitColumns
-            ? $"width:{widthPx}px;min-width:{widthPx}px;max-width:none;"
-            : $"width:100%;min-width:{widthPx}px;max-width:none;";
+        return ColumnAutoFit.TableStyle(WidthMode, totalWidth);
     }
 
     private string GetScrollSurfaceStyle()
@@ -15467,17 +15433,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return parsed ?? 0;
     }
 
-    private static double? TryParseWidthPx(string? width)
-    {
-        if (string.IsNullOrWhiteSpace(width))
-            return null;
-        var trimmed = width.Trim();
-        if (trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
-            trimmed = trimmed[..^2];
-        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var px))
-            return px;
-        return null;
-    }
+    private static double? TryParseWidthPx(string? width) => ColumnAutoFit.TryParseWidthPx(width);
 
     // Runs at the TOP of every render pass (BeginGridRenderPass). Widths used
     // to be assigned only in OnAfterRender, so the first wire batch shipped
@@ -15518,23 +15474,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private double EstimateColumnWidth(GridColumn col, IReadOnlyList<TValue> sample)
-    {
-        var maxLen = col.DisplayHeader?.Length ?? 0;
-
-        foreach (var item in sample)
-        {
-            var text = GetCellDisplayValue(item, col);
-            if (string.IsNullOrEmpty(text))
-                continue;
-            if (text.Length > maxLen)
-                maxLen = text.Length;
-        }
-
-        var px = (maxLen * 7.6) + 36;
-        if (col.Type == ColumnType.Number)
-            px += 12;
-        return Math.Clamp(px, 80, 520);
-    }
+        => ColumnAutoFit.EstimateWidth(col.DisplayHeader, sample.Select(item => GetCellDisplayValue(item, col)), col.Type == ColumnType.Number);
 
     private string GetCellDisplayValue(object? item, GridColumn col)
     {
@@ -16288,7 +16228,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>Applies best-fit widths and raises the resize / layout events ONCE for
-    /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.</summary>
+    /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.
+    /// The sizing is <see cref="ColumnAutoFit.ComputeBestFit"/>, shared with TreeGridControl.</summary>
     private async Task AutoFitCoreAsync(List<GridColumn>? columns)
     {
         if (columns == null || columns.Count == 0)
@@ -16300,32 +16241,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var sample = BuildAutoFitSample();
         var measured = await MeasureColumnContentWidthsAsync(targets);
-
-        var changes = new List<(GridColumn Col, double Old, double New)>();
-        foreach (var col in targets)
-        {
-            var content = measured != null
-                          && col.Field != null
-                          && measured.TryGetValue(col.Field, out var px)
-                          && px > 0
-                ? px
-                : EstimateColumnWidth(col, sample);
-
-            var (min, max) = ResolveAutoFitBounds(col);
-            var width = Math.Round(Math.Clamp(content, min, max));
-
-            var old = GetColumnWidthPx(col);
-            if (Math.Abs(old - width) < 0.5)
-                continue;
-
-            changes.Add((col, old, width));
-        }
-
+        var changes = ColumnAutoFit.ComputeBestFit(
+            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
         if (changes.Count == 0)
             return;
 
-        foreach (var (col, old, width) in changes)
+        foreach (var change in changes)
         {
+            var col = targets[change.Index];
+            var old = change.OldWidth;
+            var width = change.NewWidth;
             if (EventsRef?.ColumnResizing.HasDelegate == true)
             {
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
@@ -16347,16 +16272,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>A column's own MinWidth/MaxWidth beat the grid-wide defaults; px only,
-    /// since a percentage cannot be compared against a measured pixel width.</summary>
-    private (double Min, double Max) ResolveAutoFitBounds(GridColumn col)
-    {
-        var min = TryParseWidthPx(col.MinWidth) ?? AutoFitMinWidth;
-        var max = TryParseWidthPx(col.MaxWidth)
-                  ?? (AutoFitMaxWidth > 0 ? AutoFitMaxWidth : _autoFitCeilingPx);
-        if (max < min) max = min;
-        return (min, max);
-    }
+    /// <summary>What the shared engine needs to know about each column. The sample texts
+    /// are read lazily — only when the DOM measurement is unavailable.</summary>
+    private List<ColumnAutoFitTarget> BuildAutoFitTargets(List<GridColumn> columns, IReadOnlyList<TValue>? sample)
+        => columns.Select(col => new ColumnAutoFitTarget
+        {
+            Field = col.Field ?? "",
+            HeaderText = col.DisplayHeader,
+            CurrentWidth = GetColumnWidthPx(col),
+            MinWidth = col.MinWidth,
+            MaxWidth = col.MaxWidth,
+            IsNumeric = col.Type == ColumnType.Number,
+            SampleTexts = sample == null ? null : () => sample.Select(item => GetCellDisplayValue(item, col)),
+        }).ToList();
 
     /// <summary>Rows to estimate from when the DOM measurement is unavailable — taken
     /// from the rendered view (sorted, filtered, current page), not the raw DataSource.</summary>
@@ -16391,14 +16319,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
-            var measured = await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
-                "measureColumnContentWidths", _gridHostElement, fields, Math.Max(1, AutoFitSampleSize));
-            if (measured != null && measured.TryGetValue("__fxContainerWidth", out var containerPx))
-            {
-                measured.Remove("__fxContainerWidth");
-                if (containerPx > 80) _autoFitCeilingPx = containerPx;
-            }
-            return measured;
         }
         catch (Exception)
         {
@@ -16406,6 +16326,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // EstimateColumnWidth covers every one of those.
             return null;
         }
+        return await ColumnAutoFit.MeasureAsync(_gridJsModule, _gridHostElement, fields, AutoFitSampleSize,
+            ColumnAutoFitDomOptions.Grid, containerPx => _autoFitCeilingPx = containerPx);
     }
 
     private string ResolveExportTitle(string fallback)

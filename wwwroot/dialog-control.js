@@ -264,6 +264,8 @@ export function registerDialogKeys(root, dotNetRef) {
     root.addEventListener("input", e => { if (e.target instanceof HTMLInputElement) uncommitted.add(e.target); }, true);
     root.addEventListener("change", e => uncommitted.delete(e.target), true);
     root.addEventListener("keydown", e => {
+        // A nested dialog owns its keys, including Escape and the modal Tab loop.
+        if (e.target instanceof Element && e.target.closest("[role='dialog']") !== root) return;
         // A popup inside the dialog that owns its own keys (its own Escape /
         // Tab) opts out — this listener is capture-phase, so a bubble-phase
         // stopPropagation cannot reach it.

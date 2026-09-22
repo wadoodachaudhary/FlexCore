@@ -85,6 +85,10 @@ public class TreeGridColumn : ComponentBase, IDisposable
     [Parameter] public string HeaderText { get; set; } = "";
     [Parameter] public string? Width { get; set; }
     [Parameter] public string? MinWidth { get; set; }
+    /// <summary>Upper bound for best fit (px); unset = the grid's AutoFitMaxWidth or the pane width.</summary>
+    [Parameter] public string? MaxWidth { get; set; }
+    /// <summary>False keeps this column out of Best Fit / Best Fit All Columns.</summary>
+    [Parameter] public bool AllowAutoFit { get; set; } = true;
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
     /// <summary>Cell text alignment. Unset defaults by column type: Date
     /// columns right-align (vsFlexGrid flexDTDate parity, HHM-920); everything

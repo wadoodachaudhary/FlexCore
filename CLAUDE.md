@@ -3,6 +3,22 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-21 Ship-Review Fixes (Choose Columns, Best Fit to Grid)
+
+- `DialogControl` with `CloseOnOverlayClick="true"` closes on a backdrop click only when the press and the release were both on the backdrop. A press on a dialog button that slides off onto the backdrop (or the reverse) lands its click on the overlay and used to discard the dialog's edits, e.g. the Choose Columns list. The press/release handlers are wired only when `CloseOnOverlayClick` is true (GridControl's own dialogs); every other dialog renders exactly as before. Only a primary-button press made while the system menu is closed arms a backdrop close, and each backdrop press clears a stale drag-release suppression.
+- `SplitterControl` server fallback (JS preview not yet registered): a mouse-move that reports the button already up ends the drag at that position, as the JS preview does, so a release the overlay never saw cannot leave the overlay capturing the next click and committing a stray size. SplitterChecks covers it (32 checks).
+- `measureGridAvailableWidth`: a FitColumns GridControl (`fx-grid-width-fit-columns`, scroll surface `width: fit-content`) measures against the host again, so "Best Fit to Grid" grows the columns to the pane instead of reading back the current column total. TreeGrid and other grids keep the scroll-surface measure.
+- Verified in Chrome on both libraries: FlexKitTester `/choose-columns-popup` slide-off in both directions keeps the chooser open with its edits (fails on the previous DialogControl), a clean backdrop click still cancels, the 336-check chooser bench passes; `/edit-model-options` Best Fit to Grid grows 896 to 2014 px in a 2042 px pane and is stable on repeat; InputDialogBrowserChecks 300 pass.
+
+## 2026-09-21 Choose Columns Popup Isolation
+
+- Caption follow-up: mirrored chooser-scoped bold black title styling from FlexKit. The existing title remains a regular span; other dialogs, dragging and layout handling are unchanged. Browser checks cover caption color/weight and non-editable, non-disabled markup.
+- Caption verification: 352 Chrome chooser checks pass against FlexKit, including desktop/narrow screenshots and 150 ms each-way latency. Mirrored stylesheet matches exactly; required non-incremental active HomeFront and FlexCore.Showcase builds pass. Temporary bench stopped.
+- Mirrored FlexKit's draggable `DialogControl` shell for Choose Columns, with local context-menu/mouse/key boundaries. Right-clicks inside the popup or on its backdrop do not reach the grid or host. Column schemas, editing and layout persistence are unchanged.
+- The chooser opts out of grid-native navigation and handles immediate Escape before dialog interop is ready. The existing dialog key listener ignores nested dialogs so their Escape/Tab do not operate on the parent.
+- Database-free browser bench: `HomeFront/FlexKitTester/choose-columns-popup`, with `verification/choose-columns-popup.mjs`; desktop/narrow windows, 150 ms each-way latency, dragging, host event counters, column actions and nested-dialog checks. No database or frozen HomeFrontPB work.
+- Verification: 336 Chrome chooser checks pass against each library; FlexKit's existing prompt suite passes 300 lifecycle/Escape/focus checks. Final non-incremental active HomeFront and FlexCore.Showcase builds pass; all temporary test servers stopped.
+
 ## 2026-09-21 Keyless Grid Editor Events (HHM-1134)
 
 - Mirrored FlexKit's one-line null-safe Key length check in `IsEditorOwnedTypingKey`; no editing, navigation or buffering flow changes. The keyless event previously threw in the TextBox-to-Grid callback.

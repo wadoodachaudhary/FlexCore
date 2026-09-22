@@ -51,8 +51,10 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
     const onMove = event => {
         if (!drag || event.pointerId !== drag.pointerId) return;
         stop(event);
-        if (event.pointerType === 'mouse' && !(event.buttons & 1)) { finish(false); return; }
         update(event);
+        // The button is already up but no pointerup reached us (it can be coalesced away, or
+        // lost with the capture): the user released here, so land the pane here.
+        if (event.pointerType === 'mouse' && !(event.buttons & 1)) finish(true, 'button released');
     };
     const onUp = event => {
         if (!drag || event.pointerId !== drag.pointerId) return;
@@ -61,17 +63,31 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
         finish(true);
     };
     const onCancel = event => {
-        if (drag && (!event.pointerId || event.pointerId === drag.pointerId)) finish(false);
+        if (drag && (!event.pointerId || event.pointerId === drag.pointerId)) finish(false, event.type);
+    };
+    // Capture can be lost without a release (the bar re-rendered, a native gesture): the
+    // document listeners keep tracking the pointer, so re-take it and carry on.
+    const onLostCapture = event => {
+        if (!drag || event.pointerId !== drag.pointerId) return;
+        try { bar.setPointerCapture(drag.pointerId); } catch { }
     };
     const onKey = event => {
-        if (event.key === 'Escape' && drag) { stop(event); finish(false); }
+        if (event.key === 'Escape' && drag) { stop(event); finish(false, 'escape'); }
     };
-    const onVisibility = () => { if (doc.hidden) finish(false); };
-    const cancel = () => finish(false);
-    const finish = commit => {
+    const onVisibility = () => { if (doc.hidden) finish(false, 'page hidden'); };
+    const cancel = event => finish(false, event && event.type);
+    // Only a scroll that moves the splitter itself (the document or an ancestor) invalidates
+    // the guide; a grid scrolling inside a pane — common while a page is still loading — does not.
+    const onScroll = event => {
+        const target = event.target;
+        if (target === doc || target === win || (target instanceof Element && target !== root && target.contains(root)))
+            finish(false, 'scroll');
+    };
+    const finish = (commit, reason) => {
         if (!drag) return;
         const current = drag;
         drag = null;
+        if (!commit && reason && reason !== 'escape') console.debug('fx-splitter: drag cancelled (' + reason + ')');
         win.cancelAnimationFrame(current.frame);
         current.observer.disconnect();
         current.overlay.remove();
@@ -83,7 +99,8 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
         doc.removeEventListener('visibilitychange', onVisibility);
         win.removeEventListener('blur', cancel);
         win.removeEventListener('resize', cancel);
-        win.removeEventListener('scroll', cancel, true);
+        win.removeEventListener('scroll', onScroll, true);
+        bar.removeEventListener('lostpointercapture', onLostCapture);
         try { bar.releasePointerCapture(current.pointerId); } catch { }
         if (!commit || !root.isConnected || Math.abs(current.next - current.startSize) < 0.01) return;
 
@@ -110,7 +127,7 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
     const onDown = event => {
         if (options.disabled || event.button !== 0 || !event.isPrimary) return;
         stop(event);
-        if (drag) finish(false);
+        if (drag) finish(false, 'new drag');
         generation++;
         const rect = root.getBoundingClientRect(), paneRect = primary.getBoundingClientRect();
         const barRect = bar.getBoundingClientRect();
@@ -146,7 +163,7 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
             line.style.left = `${rect.left}px`; line.style.width = `${rect.width}px`;
         }
         overlay.appendChild(line); doc.body.appendChild(overlay);
-        const observer = new MutationObserver(() => { if (!root.isConnected) finish(false); });
+        const observer = new MutationObserver(() => { if (!root.isConnected) finish(false, 'splitter removed'); });
         drag = { overlay, line, observer, frame: 0, min, max, unitPx, container,
             startSize, next: startSize, pointerId: event.pointerId,
             startPointer: vertical ? event.clientX : event.clientY,
@@ -161,17 +178,16 @@ export function enableSplitterPreview(root, dotNetRef, options, revision) {
         doc.addEventListener('visibilitychange', onVisibility);
         win.addEventListener('blur', cancel);
         win.addEventListener('resize', cancel);
-        win.addEventListener('scroll', cancel, true);
+        win.addEventListener('scroll', onScroll, true);
+        bar.addEventListener('lostpointercapture', onLostCapture);
         try { bar.setPointerCapture(event.pointerId); } catch { }
     };
     const stopMouse = event => { if (!options.disabled && event.button === 0) stop(event); };
     bar.addEventListener('pointerdown', onDown);
-    bar.addEventListener('lostpointercapture', onCancel);
     bar.addEventListener('mousedown', stopMouse);
     splitterPreviews.set(root, { dispose: () => {
-        disposed = true; generation++; finish(false);
+        disposed = true; generation++; finish(false, 'preview disabled');
         bar.removeEventListener('pointerdown', onDown);
-        bar.removeEventListener('lostpointercapture', onCancel);
         bar.removeEventListener('mousedown', stopMouse);
     } });
 }
