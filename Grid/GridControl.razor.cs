@@ -8764,15 +8764,56 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (string.IsNullOrWhiteSpace(col.Field))
             return;
 
-        if (EventsRef?.OnEditButtonClick.HasDelegate == true)
+        if (EventsRef?.OnEditButtonClick.HasDelegate != true)
+            return;
+
+        // The … button is visible WHILE this cell's editor is open (VB6
+        // ComboList "|..." parity). The editor closes before the host's picker
+        // or text dialog opens, so neither races a blur-commit or a
+        // required-list rejection underneath it.
+        if (IsBatchEditing(item, col.Field))
+            await EndBatchEditForEditButtonAsync();
+
+        await EventsRef.OnEditButtonClick.InvokeAsync(new CellEditButtonArgs<TValue>
         {
-            await EventsRef.OnEditButtonClick.InvokeAsync(new CellEditButtonArgs<TValue>
-            {
-                Data = item,
-                ColumnName = col.Field,
-                Column = col
-            });
+            Data = item,
+            ColumnName = col.Field,
+            Column = col
+        });
+    }
+
+    // A typed entry the column accepts is committed, so the host opens on it (a
+    // cancelled pick keeps it). One its required list refuses is discarded, so the
+    // picker's result replaces it; that check runs here rather than in
+    // CommitBatchEdit, whose rejection shows the not-found message and reselects
+    // the editor first. An editor that was opened but not typed in just closes:
+    // committing it would copy its value across a multi-row selection. A combo
+    // editor holds its typed text inside the dropdown until it blurs, so it is
+    // left to that blur.
+    private async Task EndBatchEditForEditButtonAsync()
+    {
+        if (_batchDropdownEditorRef != null)
+            return;
+
+        var entryBefore = _batchEditValue;
+        var typed = _batchEditDirty;
+        await SynchronizeClientBufferedBatchEditorValueAsync();
+        typed |= !string.Equals(_batchEditValue, entryBefore, StringComparison.Ordinal);
+
+        if (typed && !IsBatchEditEntryRefusedByList() && await CommitBatchEdit())
+        {
+            await FocusGridHostAsync();
+            return;
         }
+
+        await CancelActiveBatchEditAsync();
+    }
+
+    private bool IsBatchEditEntryRefusedByList()
+    {
+        var column = ResolveBatchEditColumn(_batchEditField);
+        var entry = ApplyColumnMaxLength(_batchEditValue ?? "", column);
+        return !TryResolveRequiredEditValue(column, _batchEditItem, entry, out _, out _);
     }
 
     // A double-click on an edit button raises OnEditButtonClick once: the click that
