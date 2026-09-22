@@ -303,7 +303,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
            && (CellEditablePredicate == null || item == null || CellEditablePredicate(item, col.Field));
 
     [Parameter] public bool AllowSorting { get; set; }
-    /// <summary>Allow multiple sort levels on sortable grids. Hosts can opt out explicitly.</summary>
+    /// <summary>Allow multiple sort levels in the Sort dialog. Header clicks sort one column.</summary>
     [Parameter] public bool AllowMultiSorting { get; set; } = true;
     /// <summary>Show the Multi-sort group (Custom Sort...) in the header right-click menu. On by default
     /// whenever AllowSorting and AllowMultiSorting are; a page sets it false to leave the option out of
@@ -654,6 +654,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// list instead of the standard group/hide/rename/print command set.
     /// </summary>
     [Parameter] public bool HeaderContextMenuShowsColumns { get; set; }
+
+    /// <summary>
+    /// Opt-in: left-clicking a header opens the checked column list instead of
+    /// sorting. Right-click also uses that list. Requires the header menu to be enabled.
+    /// </summary>
+    [Parameter] public bool HeaderClickShowsColumns { get; set; }
 
     /// <summary>
     /// Optional host action exposed as Attachments in the standard column-header
@@ -1463,7 +1469,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.AltKey || e.CtrlKey || e.MetaKey)
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || e.Key is "Backspace" or "Delete" or "Shift";
     }
 
@@ -1648,14 +1654,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private double _resizeStartWidth;
 
     // Double-click on the grip is detected from two mousedowns rather than from the
-    // DOM's dblclick event. A real hand jitters a pixel or two, which resizes the
-    // column, which fires OnLayoutChanged, which makes hosts that re-key their
-    // columns rebuild the header — and a browser only fires dblclick when both
-    // clicks land on the SAME element, so the rebuilt grip never sees one. mousedown
-    // always arrives before the rebuild, so this path survives it.
-    private string? _lastGripDownField;
-    private DateTime _lastGripDownAt;
-    private const int GripDoubleClickMs = 700;
+    // DOM's dblclick event — see GripDoubleClickDetector (shared with TreeGridControl).
+    private readonly GripDoubleClickDetector _gripClicks = new();
 
     /// <summary>Movement under this many px is hand tremor, not a resize.</summary>
     private const double GripJitterPx = 6;
@@ -4583,22 +4583,28 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!shouldReset)
             return;
 
-        if (!await ResetInitialGridScrollAsync())
-            return;
-
-        // Cleared only on success, so a circuit without JS interop retries on a later render.
+        // Single-flight: the pending reasons are claimed before the interop await, so the
+        // after-render passes that overlap this call find nothing pending instead of each
+        // sending the same reset again.
+        var claimedFirstRender = _initialScrollResetOnFirstRenderPending && (hasData || firstRender);
+        var claimedFirstData = _initialScrollResetOnFirstDataPending && hasData;
         if (hostRequested)
             _scrollToOriginPending = false;
-
-        if (hasData)
-        {
+        if (claimedFirstRender)
+            _initialScrollResetOnFirstRenderPending = false;
+        if (claimedFirstData)
             _initialScrollResetOnFirstDataPending = false;
-            _initialScrollResetOnFirstRenderPending = false;
-        }
-        else if (firstRender)
-        {
-            _initialScrollResetOnFirstRenderPending = false;
-        }
+
+        if (await ResetInitialGridScrollAsync())
+            return;
+
+        // Released on failure, so a circuit without JS interop retries on a later render.
+        if (hostRequested)
+            _scrollToOriginPending = true;
+        if (claimedFirstRender)
+            _initialScrollResetOnFirstRenderPending = true;
+        if (claimedFirstData)
+            _initialScrollResetOnFirstDataPending = true;
     }
 
     private async Task EnsurePendingFirstRowSelectionAsync()
@@ -5375,6 +5381,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // ── Sorting ──────────────────────────────────────────────────────────
 
+    private Task HandleHeaderClickAsync(MouseEventArgs e, GridColumn col)
+    {
+        if (HeaderClickShowsColumns && (EnableHeaderContextMenu || ShowColumnMenu))
+        {
+            OpenHeaderContextMenu(e, col.Field);
+            return Task.CompletedTask;
+        }
+        return HandleSort(col);
+    }
+
     private async Task HandleSort(GridColumn col)
     {
         // A header click "selects" that column for type-search, whether or not
@@ -5400,15 +5416,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (args.Cancel) return;
         }
 
-        // Clear other sorts unless multi-sort
-        if (!AllowMultiSorting)
-        {
-            foreach (var kvp in _columnStates)
-                if (!string.Equals(kvp.Key, col.Field, StringComparison.OrdinalIgnoreCase))
-                    kvp.Value.SortDirection = null;
-            _sortPriorityFields.RemoveAll(field =>
-                !string.Equals(field, col.Field, StringComparison.OrdinalIgnoreCase));
-        }
+        // Header clicks replace the sort; multiple levels are set in the Sort dialog.
+        foreach (var kvp in _columnStates)
+            if (!string.Equals(kvp.Key, col.Field, StringComparison.OrdinalIgnoreCase))
+                kvp.Value.SortDirection = null;
+        _sortPriorityFields.RemoveAll(field =>
+            !string.Equals(field, col.Field, StringComparison.OrdinalIgnoreCase));
 
         // Toggle
         if (!state.SortDirection.HasValue)
@@ -7301,6 +7314,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && EventsRef?.OnEditButtonClick.HasDelegate == true
             && !string.IsNullOrEmpty(col.Field))
         {
+            // Same gate as the button's own render and the Enter-key path: a row the host
+            // refuses through ShowEditButtonPredicate has no button, so a double-click on it
+            // must not open the picker either.
+            if (!ShouldShowEditButtonForItem(col, item))
+                return;
             await HandleEditButtonClick(item, col);
             return;
         }
@@ -7310,8 +7328,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _focusedGroupPath = null;
         var selType = SelectionSettingsRef?.Type ?? SelectionType.Single;
-        var isCtrl = mouseArgs?.CtrlKey == true || mouseArgs?.MetaKey == true;
-        var isShift = mouseArgs?.ShiftKey == true;
+        // SelectionSettings.ModifierKeysExtendSelection=false: a Single grid keeps one row,
+        // so a modifier click is treated as a plain click.
+        var modifiersExtend = selType == SelectionType.Multiple
+            || SelectionSettingsRef?.ModifierKeysExtendSelection != false;
+        var isCtrl = modifiersExtend && (mouseArgs?.CtrlKey == true || mouseArgs?.MetaKey == true);
+        var isShift = modifiersExtend && mouseArgs?.ShiftKey == true;
 
         if (EventsRef?.RowSelecting.HasDelegate == true)
         {
@@ -8736,15 +8758,81 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (string.IsNullOrWhiteSpace(col.Field))
             return;
 
-        if (EventsRef?.OnEditButtonClick.HasDelegate == true)
+        if (EventsRef?.OnEditButtonClick.HasDelegate != true)
+            return;
+
+        // The … button is visible WHILE this cell's editor is open (VB6
+        // ComboList "|..." parity). The editor closes before the host's picker
+        // or text dialog opens, so neither races a blur-commit or a
+        // required-list rejection underneath it.
+        if (IsBatchEditing(item, col.Field))
+            await EndBatchEditForEditButtonAsync();
+
+        await EventsRef.OnEditButtonClick.InvokeAsync(new CellEditButtonArgs<TValue>
         {
-            await EventsRef.OnEditButtonClick.InvokeAsync(new CellEditButtonArgs<TValue>
-            {
-                Data = item,
-                ColumnName = col.Field,
-                Column = col
-            });
+            Data = item,
+            ColumnName = col.Field,
+            Column = col
+        });
+    }
+
+    // A typed entry the column accepts is committed, so the host opens on it (a
+    // cancelled pick keeps it). One its required list refuses is discarded, so the
+    // picker's result replaces it; that check runs here rather than in
+    // CommitBatchEdit, whose rejection shows the not-found message and reselects
+    // the editor first. An editor that was opened but not typed in just closes:
+    // committing it would copy its value across a multi-row selection. A combo
+    // editor holds its typed text inside the dropdown until it blurs, so it is
+    // left to that blur.
+    private async Task EndBatchEditForEditButtonAsync()
+    {
+        if (_batchDropdownEditorRef != null)
+            return;
+
+        var entryBefore = _batchEditValue;
+        var typed = _batchEditDirty;
+        await SynchronizeClientBufferedBatchEditorValueAsync();
+        typed |= !string.Equals(_batchEditValue, entryBefore, StringComparison.Ordinal);
+
+        if (typed && !IsBatchEditEntryRefusedByList() && await CommitBatchEdit())
+        {
+            await FocusGridHostAsync();
+            return;
         }
+
+        await CancelActiveBatchEditAsync();
+    }
+
+    private bool IsBatchEditEntryRefusedByList()
+    {
+        var column = ResolveBatchEditColumn(_batchEditField);
+        var entry = ApplyColumnMaxLength(_batchEditValue ?? "", column);
+        return !TryResolveRequiredEditValue(column, _batchEditItem, entry, out _, out _);
+    }
+
+    // A double-click on an edit button raises OnEditButtonClick once: the click that
+    // completes it (MouseEventArgs.Detail >= 2) on the button whose first click was just
+    // handled is dropped. A double-click whose first press landed on the cell (before the
+    // button was painted) still opens from its second click.
+    private const int EditButtonDoubleClickWindowMs = 800;
+    private TValue? _lastEditButtonClickItem;
+    private string? _lastEditButtonClickField;
+    private long _lastEditButtonClickTicks;
+
+    private Task HandleEditButtonPointerClick(TValue item, GridColumn col, MouseEventArgs args)
+    {
+        var now = Environment.TickCount64;
+        var completesDoubleClick = args.Detail >= 2
+            && _lastEditButtonClickField != null
+            && now - _lastEditButtonClickTicks <= EditButtonDoubleClickWindowMs
+            && string.Equals(_lastEditButtonClickField, col.Field, StringComparison.Ordinal)
+            && EqualityComparer<TValue>.Default.Equals(_lastEditButtonClickItem!, item);
+
+        _lastEditButtonClickItem = item;
+        _lastEditButtonClickField = col.Field;
+        _lastEditButtonClickTicks = now;
+
+        return completesDoubleClick ? Task.CompletedTask : HandleEditButtonClick(item, col);
     }
 
     private async Task<bool> TryInvokeActiveEditButtonAsync(KeyboardEventArgs e)
@@ -8961,12 +9049,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(sequence + 6, "type", "button");
             builder.AddAttribute(sequence + 7, "class", "fx-cell-action-btn fx-cell-action-ellipsis-btn");
             builder.AddAttribute(sequence + 8, "onclick", cachedActionClick
-                ?? EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+                ?? EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleEditButtonPointerClick(buttonItem, buttonCol, e)));
             builder.AddEventStopPropagationAttribute(sequence + 9, "onclick", true);
             builder.AddAttribute(sequence + 10, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
             builder.AddEventStopPropagationAttribute(sequence + 11, "onmousedown", true);
             builder.AddEventPreventDefaultAttribute(sequence + 12, "onmousedown", true);
-            builder.AddContent(sequence + 13, "...");
+            // The button's click already opened its window: the double-click it completes
+            // must not reach the cell's or row's double-click handlers as well.
+            builder.AddEventStopPropagationAttribute(sequence + 13, "ondblclick", true);
+            builder.AddContent(sequence + 14, "...");
             builder.CloseElement();
 
             builder.CloseElement();
@@ -8976,12 +9067,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         builder.OpenElement(sequence, "button");
         builder.AddAttribute(sequence + 1, "type", "button");
         builder.AddAttribute(sequence + 2, "class", "fx-cell-action-btn fx-cell-action-command");
-        builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, _ => HandleEditButtonClick(buttonItem, buttonCol)));
+        builder.AddAttribute(sequence + 3, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => HandleEditButtonPointerClick(buttonItem, buttonCol, e)));
         builder.AddEventStopPropagationAttribute(sequence + 4, "onclick", true);
         builder.AddAttribute(sequence + 5, "onmousedown", EventCallback.Factory.Create<MouseEventArgs>(this, _ => { }));
         builder.AddEventStopPropagationAttribute(sequence + 6, "onmousedown", true);
         builder.AddEventPreventDefaultAttribute(sequence + 7, "onmousedown", true);
-        builder.AddContent(sequence + 8, editButtonText);
+        builder.AddEventStopPropagationAttribute(sequence + 8, "ondblclick", true);
+        builder.AddContent(sequence + 9, editButtonText);
         builder.CloseElement();
     }
 
@@ -9280,7 +9372,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return !e.AltKey
             && !e.CtrlKey
             && !e.MetaKey
-            && e.Key.Length == 1
+            && e.Key is { Length: 1 }
             && !char.IsControl(e.Key[0])
             && !char.IsWhiteSpace(e.Key[0]);
     }
@@ -9945,7 +10037,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.CtrlKey || e.AltKey || e.MetaKey || string.IsNullOrEmpty(e.Key))
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || string.Equals(e.Key, "Backspace", StringComparison.Ordinal)
             || string.Equals(e.Key, "Delete", StringComparison.Ordinal);
     }
@@ -11540,7 +11632,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (HasRowSelectionTypeAheadSelection() && _batchEditItem == null)
         {
             var targetCol = ResolveTypeAheadTargetColumn();
-            if (e.Key.Length == 1)
+            if (e.Key is { Length: 1 })
             {
                 if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol))
                     return;
@@ -11658,7 +11750,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static bool IsTypeSearchCharacterKey(KeyboardEventArgs e)
     {
-        return e.Key.Length == 1 && !char.IsControl(e.Key[0]);
+        return e.Key is { Length: 1 } && !char.IsControl(e.Key[0]);
     }
 
     private async Task MoveTypeSearchSelectionAsync()
@@ -11804,7 +11896,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_batchEditItem != null || !HasRowSelectionTypeAheadSelection())
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || e.Key == "Backspace"
             || (e.Key is "Enter" or "NumpadEnter" && _typeAheadBuffer.Length > 0)
             || (_typeAheadBuffer.Length > 0 && IsRowSelectionTypeAheadCommitKey(e, out _));
@@ -12102,6 +12194,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return false;
         if (!AllowSelection || _isEditing || _batchEditItem != null)
             return false;
+        if ((SelectionSettingsRef?.Type ?? SelectionType.Single) == SelectionType.Single
+            && SelectionSettingsRef?.Mode != SelectionMode.Cell
+            && SelectionSettingsRef?.ModifierKeysExtendSelection == false)
+            return false;
 
         var rows = GetKeyboardNavigationRowItems();
         var columns = VisibleColumns.ToList();
@@ -12350,7 +12446,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static bool IsEditableTypeAheadKey(KeyboardEventArgs e, GridColumn col)
     {
-        if (e.Key.Length != 1)
+        if (e.Key is not { Length: 1 })
             return false;
 
         if (col.Type != ColumnType.Number)
@@ -12825,7 +12921,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         EffectiveColumns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();
 
     private IReadOnlyList<GridColumn> HeaderContextMenuColumns =>
-        EffectiveColumns.Where(c => !string.IsNullOrWhiteSpace(c.Field)).ToList();
+        EffectiveColumns.Where(c => !string.IsNullOrWhiteSpace(c.Field)
+            && !string.IsNullOrWhiteSpace(HeaderColumnDisplay(c))).ToList();
 
     private bool CanHideColumn(GridColumn col) =>
         col.AllowHiding
@@ -13402,7 +13499,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>Scales every visible column proportionally so together they exactly fill the
-    /// grid's available width — unlike Best Fit, which sizes each column to its content.</summary>
+    /// grid's available width — unlike Best Fit, which sizes each column to its content.
+    /// The maths is <see cref="ColumnAutoFit.ComputeFitToWidth"/>, shared with TreeGridControl.</summary>
     public async Task FitColumnsToGridAsync()
     {
         var targets = VisibleColumns.ToList();
@@ -13413,49 +13511,35 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
-            available = await _gridJsModule.InvokeAsync<double>("measureGridAvailableWidth", _gridHostElement);
+            available = await ColumnAutoFit.MeasureAvailableWidthAsync(_gridJsModule, _gridHostElement, ColumnAutoFitDomOptions.Grid);
         }
         catch
         {
         }
+        var measured = available > 0;
         if (available <= 0 && _autoFitCeilingPx > 80)
             available = _autoFitCeilingPx;
         if (available <= 0)
             return;
-
-        if (ShowCheckboxColumn) available -= 50;
-        if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
-        if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
-        if (available <= targets.Count * 20)
-            return;
-
-        var current = targets.Sum(c => { var w = GetColumnWidthPx(c); return w > 0 ? w : 120d; });
-        if (current <= 0)
-            return;
-
-        var factor = available / current;
-        var assigned = 0d;
-        var changes = new List<(GridColumn Col, double Old, double New)>();
-        for (var i = 0; i < targets.Count; i++)
+        // The measured width already excludes the checkbox / selector / reorder cells; only
+        // the estimate fallback (no DOM) still needs them taken off.
+        if (!measured)
         {
-            var col = targets[i];
-            var old = GetColumnWidthPx(col);
-            var basis = old > 0 ? old : 120d;
-            // last column takes the rounding remainder so the sum lands exactly on available
-            var width = i == targets.Count - 1
-                ? Math.Round(available - assigned)
-                : Math.Round(basis * factor);
-            var (min, _) = ResolveAutoFitBounds(col);
-            width = Math.Max(width, min);
-            assigned += width;
-            if (Math.Abs(old - width) >= 0.5)
-                changes.Add((col, old, width));
+            if (ShowCheckboxColumn) available -= 50;
+            if (ShowRowReorderColumn) available -= RowReorderColumnWidth;
+            if (ShowRowSelectorHandleColumn) available -= ResolvedRowSelectorHandleWidth;
         }
+
+        var changes = ColumnAutoFit.ComputeFitToWidth(
+            BuildAutoFitTargets(targets, null), available, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
         if (changes.Count == 0)
             return;
 
-        foreach (var (col, old, width) in changes)
+        foreach (var change in changes)
         {
+            var col = targets[change.Index];
+            var old = change.OldWidth;
+            var width = change.NewWidth;
             if (EventsRef?.ColumnResizing.HasDelegate == true)
             {
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
@@ -14539,17 +14623,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
-        var now = DateTime.UtcNow;
-        var isDoubleClick = AllowColumnAutoFit
-            && _lastGripDownField != null
-            && string.Equals(_lastGripDownField, col.Field, StringComparison.Ordinal)
-            && (now - _lastGripDownAt).TotalMilliseconds <= GripDoubleClickMs;
-        _lastGripDownField = col.Field;
-        _lastGripDownAt = now;
-
-        if (isDoubleClick)
+        if (_gripClicks.Register(col.Field, DateTime.UtcNow) && AllowColumnAutoFit)
         {
-            _lastGripDownField = null;   // a third click starts a fresh pair
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -14589,7 +14664,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // A deliberate drag is not half of a double-click — stop the next mousedown
         // on this grip from being read as one.
         if (Math.Abs(delta) > GripJitterPx)
-            _lastGripDownField = null;
+            _gripClicks.Reset();
 
         if (EventsRef?.ColumnResizing.HasDelegate == true)
         {
@@ -15300,16 +15375,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var totalWidth = IsColumnVirtualizationActive
             ? GetColumnVirtualizedTableWidthPx()
             : GetTotalColumnWidthPx();
-        if (totalWidth <= 0)
-            return WidthMode == GridWidthMode.FitColumns ? "width:auto;min-width:0;" : "width:100%;";
-
         // FitColumns keeps every column at its own width, so the table may end short of the
         // container (slack after the last column) or run past it (the scroll surface overflows
         // and a horizontal scrollbar appears). FillAvailable is the page's opt-in to stretch.
-        var widthPx = totalWidth.ToString("0.##", CultureInfo.InvariantCulture);
-        return WidthMode == GridWidthMode.FitColumns
-            ? $"width:{widthPx}px;min-width:{widthPx}px;max-width:none;"
-            : $"width:100%;min-width:{widthPx}px;max-width:none;";
+        return ColumnAutoFit.TableStyle(WidthMode, totalWidth);
     }
 
     private string GetScrollSurfaceStyle()
@@ -15364,17 +15433,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return parsed ?? 0;
     }
 
-    private static double? TryParseWidthPx(string? width)
-    {
-        if (string.IsNullOrWhiteSpace(width))
-            return null;
-        var trimmed = width.Trim();
-        if (trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
-            trimmed = trimmed[..^2];
-        if (double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var px))
-            return px;
-        return null;
-    }
+    private static double? TryParseWidthPx(string? width) => ColumnAutoFit.TryParseWidthPx(width);
 
     // Runs at the TOP of every render pass (BeginGridRenderPass). Widths used
     // to be assigned only in OnAfterRender, so the first wire batch shipped
@@ -15415,23 +15474,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private double EstimateColumnWidth(GridColumn col, IReadOnlyList<TValue> sample)
-    {
-        var maxLen = col.DisplayHeader?.Length ?? 0;
-
-        foreach (var item in sample)
-        {
-            var text = GetCellDisplayValue(item, col);
-            if (string.IsNullOrEmpty(text))
-                continue;
-            if (text.Length > maxLen)
-                maxLen = text.Length;
-        }
-
-        var px = (maxLen * 7.6) + 36;
-        if (col.Type == ColumnType.Number)
-            px += 12;
-        return Math.Clamp(px, 80, 520);
-    }
+        => ColumnAutoFit.EstimateWidth(col.DisplayHeader, sample.Select(item => GetCellDisplayValue(item, col)), col.Type == ColumnType.Number);
 
     private string GetCellDisplayValue(object? item, GridColumn col)
     {
@@ -16185,7 +16228,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>Applies best-fit widths and raises the resize / layout events ONCE for
-    /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.</summary>
+    /// the whole batch, so a host's OnLayoutChanged persistence keeps working unchanged.
+    /// The sizing is <see cref="ColumnAutoFit.ComputeBestFit"/>, shared with TreeGridControl.</summary>
     private async Task AutoFitCoreAsync(List<GridColumn>? columns)
     {
         if (columns == null || columns.Count == 0)
@@ -16197,32 +16241,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var sample = BuildAutoFitSample();
         var measured = await MeasureColumnContentWidthsAsync(targets);
-
-        var changes = new List<(GridColumn Col, double Old, double New)>();
-        foreach (var col in targets)
-        {
-            var content = measured != null
-                          && col.Field != null
-                          && measured.TryGetValue(col.Field, out var px)
-                          && px > 0
-                ? px
-                : EstimateColumnWidth(col, sample);
-
-            var (min, max) = ResolveAutoFitBounds(col);
-            var width = Math.Round(Math.Clamp(content, min, max));
-
-            var old = GetColumnWidthPx(col);
-            if (Math.Abs(old - width) < 0.5)
-                continue;
-
-            changes.Add((col, old, width));
-        }
-
+        var changes = ColumnAutoFit.ComputeBestFit(
+            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
         if (changes.Count == 0)
             return;
 
-        foreach (var (col, old, width) in changes)
+        foreach (var change in changes)
         {
+            var col = targets[change.Index];
+            var old = change.OldWidth;
+            var width = change.NewWidth;
             if (EventsRef?.ColumnResizing.HasDelegate == true)
             {
                 var resizing = new ResizeEventArgs { Field = col.Field, OldWidth = old, NewWidth = width };
@@ -16244,16 +16272,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await InvokeAsync(StateHasChanged);
     }
 
-    /// <summary>A column's own MinWidth/MaxWidth beat the grid-wide defaults; px only,
-    /// since a percentage cannot be compared against a measured pixel width.</summary>
-    private (double Min, double Max) ResolveAutoFitBounds(GridColumn col)
-    {
-        var min = TryParseWidthPx(col.MinWidth) ?? AutoFitMinWidth;
-        var max = TryParseWidthPx(col.MaxWidth)
-                  ?? (AutoFitMaxWidth > 0 ? AutoFitMaxWidth : _autoFitCeilingPx);
-        if (max < min) max = min;
-        return (min, max);
-    }
+    /// <summary>What the shared engine needs to know about each column. The sample texts
+    /// are read lazily — only when the DOM measurement is unavailable.</summary>
+    private List<ColumnAutoFitTarget> BuildAutoFitTargets(List<GridColumn> columns, IReadOnlyList<TValue>? sample)
+        => columns.Select(col => new ColumnAutoFitTarget
+        {
+            Field = col.Field ?? "",
+            HeaderText = col.DisplayHeader,
+            CurrentWidth = GetColumnWidthPx(col),
+            MinWidth = col.MinWidth,
+            MaxWidth = col.MaxWidth,
+            IsNumeric = col.Type == ColumnType.Number,
+            SampleTexts = sample == null ? null : () => sample.Select(item => GetCellDisplayValue(item, col)),
+        }).ToList();
 
     /// <summary>Rows to estimate from when the DOM measurement is unavailable — taken
     /// from the rendered view (sorted, filtered, current page), not the raw DataSource.</summary>
@@ -16288,14 +16319,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         try
         {
             _gridJsModule ??= await ImportGridJsModuleAsync();
-            var measured = await _gridJsModule.InvokeAsync<Dictionary<string, double>?>(
-                "measureColumnContentWidths", _gridHostElement, fields, Math.Max(1, AutoFitSampleSize));
-            if (measured != null && measured.TryGetValue("__fxContainerWidth", out var containerPx))
-            {
-                measured.Remove("__fxContainerWidth");
-                if (containerPx > 80) _autoFitCeilingPx = containerPx;
-            }
-            return measured;
         }
         catch (Exception)
         {
@@ -16303,6 +16326,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // EstimateColumnWidth covers every one of those.
             return null;
         }
+        return await ColumnAutoFit.MeasureAsync(_gridJsModule, _gridHostElement, fields, AutoFitSampleSize,
+            ColumnAutoFitDomOptions.Grid, containerPx => _autoFitCeilingPx = containerPx);
     }
 
     private string ResolveExportTitle(string fallback)

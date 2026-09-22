@@ -291,7 +291,7 @@ public partial class TreeViewControl
             case "Enter": if (OnNodeActivated.HasDelegate) await OnNodeActivated.InvokeAsync(info.Node); else await OnNodeDoubleClick.InvokeAsync(info.Node); return;
             case "a" when control && AllowMultiSelect: await SelectNodesAsync(visible.Select(n => n.Node.Id)); return;
             default:
-                if (control || e.AltKey || e.Key.Length != 1) return;
+                if (control || e.AltKey || e.Key is not { Length: 1 }) return;
                 var found = Enumerable.Range(1, visible.Count).Select(i => (at + i) % visible.Count).FirstOrDefault(i => visible[i].Node.Text.StartsWith(e.Key, StringComparison.CurrentCultureIgnoreCase), -1);
                 if (found < 0) return; next = found; break;
         }

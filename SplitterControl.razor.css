@@ -46,7 +46,9 @@
     box-sizing: border-box;
 }
 
-.fx-splitter-horizontal .fx-splitter-bar {
+/* Child combinators: a vertical splitter nested inside a horizontal one (or the reverse)
+   must keep its own bar and grip — a descendant selector flattened the inner bar to 6px. */
+.fx-splitter-horizontal > .fx-splitter-bar {
     width: auto;
     min-width: 0;
     height: var(--fx-splitter-size, 6px);
@@ -77,7 +79,7 @@
     border-right: 1px solid #fff;
 }
 
-.fx-splitter-horizontal .fx-splitter-grip {
+.fx-splitter-horizontal > .fx-splitter-bar > .fx-splitter-grip {
     width: 24px;
     height: 2px;
     margin-left: -12px;

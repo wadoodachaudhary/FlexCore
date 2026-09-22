@@ -47,7 +47,7 @@ public static class ReportNativeExport
 
     public static GridExportResult Export(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
     {
-        if (format == ReportNativeExportFormat.Html && tab.PageSnapshots.Any(page => page.Bands.Any(band => band.Objects.Any(item => item.Analysis is not null))))
+        if (format == ReportNativeExportFormat.Html && tab.PageSnapshots.Any(page => page.Bands.Any(band => band.Objects.Any(item => item.Analysis is not null || item.Table is not null))))
             throw new InvalidOperationException("Use ExportAsync for reports containing chart or cross-tab components.");
         var name = Path.GetFileNameWithoutExtension(fileName ?? tab.Title);
         name = string.Concat(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ' ? c : '_')).Trim();

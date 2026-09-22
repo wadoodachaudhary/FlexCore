@@ -199,6 +199,7 @@ document.addEventListener("keydown", event => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing)
         return;
     const key = event.key;
+    if (typeof key !== "string") return;   // e.g. Chrome's synthetic autofill keydown
     if (key.length === 1
         || key === "Backspace"
         || key === "Delete"
@@ -539,7 +540,7 @@ export function suppressTypingKeyDispatch(el) {
             return;
         }
         if (e.altKey || e.ctrlKey || e.metaKey) return;
-        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete"
+        const ownedByEditor = e.key?.length === 1 || e.key === "Backspace" || e.key === "Delete"
             || (filterBox && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End"));
         if (ownedByEditor) e.stopPropagation();
         else if (filterBox && !e.shiftKey && (e.key === "Enter" || e.key === "NumpadEnter")) e.preventDefault();
@@ -628,7 +629,18 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
     };
 
     const onKeyDown = event => {
-        if (!binding.handlesNavigationKeys || binding.composing || event.isComposing)
+        if (!binding.handlesNavigationKeys) {
+            // A plain form field in a dialog with a default button commits its draft on Enter,
+            // as a native text input's change does, so the default button reads the typed value.
+            if ((event.key === "Enter" || event.key === "NumpadEnter") && !binding.hosted
+                && !binding.composing && !event.isComposing
+                && !event.ctrlKey && !event.altKey && !event.metaKey
+                && el.closest("[data-fx-dialog-enter='true']")
+                && (el.value ?? "") !== binding.lastSent)
+                commit("Sync", event);
+            return;
+        }
+        if (binding.composing || event.isComposing)
             return;
 
         const key = event.key;

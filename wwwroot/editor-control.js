@@ -1334,7 +1334,7 @@
         });
         editor.addEventListener("keydown", function (event) {
             if (event.isComposing || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-            var key = event.key.toLowerCase();
+            var key = (event.key || "").toLowerCase();
             if (key === "f" && editor._fxCallback) {
                 event.preventDefault(); event.stopPropagation();
                 editor._fxCallback.invokeMethodAsync("OpenSearchAsync").catch(function () { /* disposed circuit */ });

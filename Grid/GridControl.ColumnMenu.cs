@@ -63,7 +63,7 @@ public partial class GridControl<TValue>
                 return;
         }
 
-        if (!AllowMultiSorting && direction.HasValue)
+        if (direction.HasValue)
         {
             foreach (var pair in _columnStates)
                 if (!string.Equals(pair.Key, column.Field, StringComparison.OrdinalIgnoreCase))

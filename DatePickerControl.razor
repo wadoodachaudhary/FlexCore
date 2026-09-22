@@ -8,8 +8,11 @@
 
 @if (Visible)
 {
+    @* data-fx-key-scope while the calendar is open: its Escape closes only the calendar, so a
+       host dialog's capture-phase Escape (VB6: Cancel) must not close the whole dialog under it. *@
     <div @ref="_hostElement"
          class="fx-datepicker-host @CssClass" style="@Style" id="@Id" @attributes="AdditionalAttributes"
+         data-fx-key-scope="@(_isOpen && CellHost is null ? "" : null)"
          @onclick:stopPropagation="true"
          @onmousedown:stopPropagation="true"
          @ondblclick:stopPropagation="true"
@@ -269,6 +272,10 @@
     /// is blank (typed text is the entry for a filled date); typing that started
     /// the edit seeds the text.</summary>
     [CascadingParameter] private ICellEditorHost? CellHost { get; set; }
+
+    /// <summary>A dialog's default button (DialogControl.OnEnter): Enter this field keeps for itself
+    /// (it opens the calendar, or the text is not a date) must not also press it.</summary>
+    [CascadingParameter] private DefaultButtonScope? DefaultButtonScope { get; set; }
 
     private bool EffectiveAutoFocus => CellHost is null ? AutoFocus : CellHost.IsEditing;
     private bool EffectiveOpenOnRender => CellHost is null
@@ -669,7 +676,15 @@
         CellHost?.EndEdit();
     }
 
-    private async Task OnInputKeyDown(KeyboardEventArgs e)
+    private Task OnInputKeyDown(KeyboardEventArgs e)
+    {
+        var handling = OnInputKeyDownCore(e);
+        if (CellHost is null && e.Key is "Enter" or "NumpadEnter")
+            DefaultButtonScope?.Defer(handling);
+        return handling;
+    }
+
+    private async Task OnInputKeyDownCore(KeyboardEventArgs e)
     {
         if (e.Key is "Enter" or "NumpadEnter" or "Tab" && (_domAppendPending || (CellHost is not null && _rendered)))
             await SyncInputTextFromDomAsync();
@@ -751,6 +766,7 @@
             if (ShowTriggerButton && Enabled && string.IsNullOrWhiteSpace(_inputText))
             {
                 OpenDropdown();
+                if (CellHost is null) DefaultButtonScope?.ConsumeEnter();
                 return;
             }
             await ParseInputText(true);
@@ -758,7 +774,10 @@
             // Invalid text stays for correction (VB6 ValidateEdit Cancel): a host
             // that treats Enter as "done" must not close over it and drop it.
             if (_validationMessage != null)
+            {
+                if (CellHost is null) DefaultButtonScope?.ConsumeEnter();
                 return;
+            }
         }
         else if (e.Key == "Escape")
         {

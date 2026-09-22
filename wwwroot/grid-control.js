@@ -917,7 +917,7 @@ export function registerGridKeyboardTrap(gridRoot) {
         }
 
         const identity = cellIdentity(cell);
-        const isCharacter = event.key.length === 1;
+        const isCharacter = event.key?.length === 1;
         if (isCharacter) {
             const startsBuffer = !pendingEditTyping || !sameCell(cell, pendingEditTyping.identity);
             if (startsBuffer) {
@@ -979,7 +979,7 @@ export function registerGridKeyboardTrap(gridRoot) {
 
     const onKeyDown = (event) => {
         if (!pendingEditTyping
-            && (event.key === "Tab" || event.key.startsWith("Arrow")))
+            && (event.key === "Tab" || event.key?.startsWith("Arrow")))
             lastPressedEditCell = null;
         if (bufferEditMountKey(event)) return;
 
@@ -4308,9 +4308,23 @@ export function positionDatePickerDropdown(hostEl, dropdownEl, popupLayerEl) {
  * cannot stretch the column. Returns { field: px } for the fields it could measure;
  * the caller falls back to its own estimate for anything missing.
  */
-export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
+// `dom` names the control's markup (header cells, header label, data cells, scroll
+// surface); omitted = GridControl. TreeGridControl passes its own selectors and shares
+// everything below.
+export function measureColumnContentWidths(gridRoot, fields, sampleSize, dom) {
     if (!gridRoot || !fields || !fields.length) return null;
 
+    // headerSlack / iconWidth: fixed allowances (GridControl's original numbers); null =
+    // measure the header cell's own padding + borders and each icon's real width instead
+    // (TreeGridControl — its header padding differs between compact and default).
+    const o = Object.assign({
+        fieldAttribute: "data-field",
+        headerText: ".fx-header-text",
+        scroller: ".fx-grid-content",
+        headerIcons: ".fx-sort-icon, .fx-filter-icon, .fx-filter-applied-mark",
+        headerSlack: 18,
+        iconWidth: 16
+    }, dom || {});
     const wanted = new Set(fields);
     const limit = Math.max(1, Number(sampleSize) || 50);
     const out = {};
@@ -4342,18 +4356,34 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
         if (!isFinite(w) || w <= 0) return;
         if (!(field in out) || w > out[field]) out[field] = w;
     };
+    const edges = (el) => {
+        const cs = getComputedStyle(el);
+        return (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0)
+             + (parseFloat(cs.borderLeftWidth) || 0) + (parseFloat(cs.borderRightWidth) || 0);
+    };
+    const iconRoom = (th) => {
+        const icons = th.querySelectorAll(o.headerIcons);
+        if (o.iconWidth != null) return icons.length * o.iconWidth;
+        let w = 0;
+        for (const ic of icons) {
+            const cs = getComputedStyle(ic);
+            const gap = ic.parentElement ? (parseFloat(getComputedStyle(ic.parentElement).columnGap) || 0) : 0;
+            w += ic.getBoundingClientRect().width + (parseFloat(cs.marginLeft) || 0) + (parseFloat(cs.marginRight) || 0) + gap;
+        }
+        return w;
+    };
 
-    for (const th of gridRoot.querySelectorAll("thead th[data-field]")) {
-        const field = th.getAttribute("data-field");
+    for (const th of gridRoot.querySelectorAll(`thead th[${o.fieldAttribute}]`)) {
+        const field = th.getAttribute(o.fieldAttribute);
         if (!wanted.has(field)) continue;
-        const label = th.querySelector(".fx-header-text") || th;
-        const icons = th.querySelectorAll(".fx-sort-icon, .fx-filter-icon, .fx-filter-applied-mark").length * 16;
-        bump(field, intrinsic(label) + icons + 18);
+        const label = th.querySelector(o.headerText) || th;
+        const slack = o.headerSlack != null ? o.headerSlack : edges(th) + 8;
+        bump(field, intrinsic(label) + iconRoom(th) + slack);
     }
 
     const rows = [...gridRoot.querySelectorAll("tbody tr")];
     if (rows.length) {
-        const scroller = gridRoot.querySelector(".fx-grid-content") || gridRoot;
+        const scroller = gridRoot.querySelector(o.scroller) || gridRoot;
         const scRect = scroller.getBoundingClientRect();
         let first = 0;
         for (let i = 0; i < rows.length; i++) {
@@ -4366,22 +4396,31 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize) {
         // only the few longest candidates are laid out.
         const byField = new Map();
         for (let i = start; i < end; i++) {
-            for (const td of rows[i].querySelectorAll("td[data-field]")) {
-                const field = td.getAttribute("data-field");
+            for (const td of rows[i].querySelectorAll(`td[${o.fieldAttribute}]`)) {
+                const field = td.getAttribute(o.fieldAttribute);
                 if (!wanted.has(field)) continue;
                 if (!byField.has(field)) byField.set(field, []);
                 byField.get(field).push(td);
             }
         }
+        // Rank by text length plus any inline-width spacer (a tree row's indent), so a
+        // deep, short caption is not skipped in favour of a shallow, long one.
+        const spacers = (td) => {
+            let w = 0;
+            for (const sp of td.querySelectorAll("span[style*=\"width\"]"))
+                if (!(sp.textContent || "").trim()) w += parseFloat(sp.style.width) || 0;
+            return w;
+        };
+        const proxy = (td) => (td.textContent || "").length * 7 + spacers(td);
         for (const [field, cells] of byField) {
-            cells.sort((a, b) => (b.textContent || "").length - (a.textContent || "").length);
+            cells.sort((a, b) => proxy(b) - proxy(a));
             for (const td of cells.slice(0, 3)) bump(field, intrinsic(td) + 6);
         }
     }
 
     host.remove();
 
-    const scroller = gridRoot.querySelector(".fx-grid-content") || gridRoot;
+    const scroller = gridRoot.querySelector(o.scroller) || gridRoot;
     if (scroller && scroller.clientWidth > 0) out["__fxContainerWidth"] = scroller.clientWidth;
 
     return Object.keys(out).length ? out : null;
@@ -4479,11 +4518,38 @@ export function activateActiveCellPopup(gridRoot, ari, field) {
     return true;
 }
 
-export function measureGridAvailableWidth(gridRoot) {
+// Width the DATA columns can share. The scroll surface's own client width already excludes
+// its vertical scrollbar and any margin the host keeps beside it (options rail, legacy
+// scrollbar strip); a FitColumns grid whose surface hugs its columns (width: fit-content)
+// is measured from the root instead. The header cells that are not data columns (checkbox,
+// row selector, reorder handle) and the collapsed borders the table adds beyond its column
+// widths come off as they actually render, so a fit lands exactly on the pane instead of a
+// few pixels over it (a horizontal scrollbar for nothing).
+export function measureGridAvailableWidth(gridRoot, scrollerSelector, fieldAttribute) {
     if (!gridRoot) return 0;
-    const content = gridRoot.querySelector(".fx-grid-content");
-    const vScrollbar = content ? (content.offsetWidth - content.clientWidth) : 0;
-    return Math.max(0, gridRoot.clientWidth - vScrollbar - 2);
+    const content = gridRoot.querySelector(scrollerSelector || ".fx-grid-content");
+    let available;
+    if (content && gridRoot.classList.contains("fx-grid-width-fit-columns"))
+        available = gridRoot.clientWidth - (content.offsetWidth - content.clientWidth);
+    else if (content && content.clientWidth > 0)
+        available = content.clientWidth;
+    else
+        available = gridRoot.clientWidth;
+    const attr = fieldAttribute || "data-field";
+    // The row that holds the data-column headers — a column-header band row can come first.
+    const headerRow = gridRoot.querySelector(`thead th[${attr}]`)?.closest("tr")
+                   || gridRoot.querySelector("thead tr");
+    if (headerRow) {
+        let ths = 0;
+        for (const th of headerRow.children) {
+            const w = th.getBoundingClientRect().width;
+            ths += w;
+            if (!th.hasAttribute(attr)) available -= w;
+        }
+        const table = headerRow.closest("table");
+        if (table) available -= Math.max(0, table.getBoundingClientRect().width - ths);
+    }
+    return Math.max(0, available - 2);
 }
 
 // ── Endpoint-only drag selection ─────────────────────────────────────────

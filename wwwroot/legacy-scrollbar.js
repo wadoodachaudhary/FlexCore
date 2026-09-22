@@ -143,7 +143,7 @@ export function enableTreeKeyboardNavigation(root, scroller, dotNetRef) {
 
         // Only a tree that hosts cell editors has anything to type into.
         if (dotNetRef && root.dataset.fxCellEditable !== undefined && (onRootOrRow || onDisplay) && !event.isComposing) {
-            const printable = event.key.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey;
+            const printable = event.key?.length === 1 && !event.altKey && !event.ctrlKey && !event.metaKey;
             if (typeAhead.armed) {
                 if (printable) {
                     typeAhead.text += event.key;

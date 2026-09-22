@@ -152,7 +152,7 @@
     <div class="fx-treegrid-content@(ShowLegacyScrollBar ? " fx-treegrid-legacy-scroll" : "")"
          @ref="_scrollViewportElement"
          @onscroll="HandleLegacyScroll">
-        <table class="fx-treegrid-table" role="treegrid" aria-label="@AriaLabel" aria-rowcount="@(VisibleNodes.Count() + (ShowColumnHeaders ? 1 : 0))">
+        <table class="fx-treegrid-table" style="@GetTableStyle()" role="treegrid" aria-label="@AriaLabel" aria-rowcount="@(VisibleNodes.Count() + (ShowColumnHeaders ? 1 : 0))">
             @if (ShowColumnHeaders)
             {
                 <thead class="fx-treegrid-header" @oncontextmenu="e => ShowHeaderMenu(e)" @oncontextmenu:preventDefault="@ShowHeaderContextMenu">
@@ -293,9 +293,14 @@
                                 }
                                 @if (AllowResizing && col.AllowResizing)
                                 {
+                                    @* The grip's clicks must not reach the header's sort handler
+                                       (a grip double-click is a best fit, not two sorts). *@
                                     <span class="fx-treegrid-resize-handle"
                                           @onmousedown="e => StartColumnResize(col, e)"
-                                          @onmousedown:stopPropagation="true"></span>
+                                          @onmousedown:stopPropagation="true"
+                                          @onmousedown:preventDefault="true"
+                                          @onclick:stopPropagation="true"
+                                          @ondblclick:stopPropagation="true"></span>
                                 }
                             </th>
                         }
@@ -641,6 +646,16 @@
         <ContextMenuItemControl Text="Freeze left" OnClick="() => FreezeColumnAsync(_menuColumn.Field, FrozenColumnPosition.Left)" />
         <ContextMenuItemControl Text="Freeze right" OnClick="() => FreezeColumnAsync(_menuColumn.Field, FrozenColumnPosition.Right)" />
         <ContextMenuItemControl Text="Unfreeze column" OnClick="() => FreezeColumnAsync(_menuColumn.Field, null)" />
+        @if (AllowColumnAutoFit && _menuColumn.AllowAutoFit)
+        {
+            <ContextMenuItemControl Text="Best Fit" OnClick="() => HeaderMenuBestFitAsync(_menuColumn)" />
+        }
+    }
+    @if (AllowColumnAutoFit)
+    {
+        <ContextMenuSectionControl Text="Columns" />
+        <ContextMenuItemControl Text="Best Fit All Columns" OnClick="HeaderMenuBestFitAllAsync" />
+        <ContextMenuItemControl Text="Best Fit to Grid" OnClick="HeaderMenuBestFitToGridAsync" />
     }
     @if (AllowRowDragAndDrop && _selectedItem is not null)
     {

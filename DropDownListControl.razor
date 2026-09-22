@@ -898,7 +898,7 @@
         return !e.AltKey
             && !e.CtrlKey
             && !e.MetaKey
-            && e.Key.Length == 1
+            && e.Key is { Length: 1 }
             && !char.IsControl(e.Key[0])
             && !char.IsWhiteSpace(e.Key[0]);
     }

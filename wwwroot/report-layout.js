@@ -7,8 +7,8 @@ export function bindCanvasKeyboard(element) {
     if (!element || canvasKeys.has(element)) return;
     const listener = event => {
         if (event.target !== element && !event.target.closest('.fx-rd-object')) return;
-        if (event.key.startsWith('Arrow') || event.key === 'Delete' ||
-            (event.ctrlKey || event.metaKey) && ['a', 'c', 'x', 'v', 'd', 'z', 'y'].includes(event.key.toLowerCase())) event.preventDefault();
+        if (event.key?.startsWith('Arrow') || event.key === 'Delete' ||
+            (event.ctrlKey || event.metaKey) && ['a', 'c', 'x', 'v', 'd', 'z', 'y'].includes((event.key || '').toLowerCase())) event.preventDefault();
     };
     canvasKeys.set(element, listener);
     element.addEventListener('keydown', listener);

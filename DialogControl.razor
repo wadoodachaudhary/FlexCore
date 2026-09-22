@@ -7,16 +7,21 @@
 @if (Visible)
 {
     <CascadingValue Value="@ContentFocusScope" IsFixed="true">
+    <CascadingValue Value="@_defaultButtonScope" IsFixed="true">
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
+         @onmousedown="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleOverlayPress) : default)"
          @onmousemove="HandleOverlayMouseMove"
          @onmouseup="e => HandleOverlayMouseUp(e, true)"
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
+             data-fx-dialog-enter="@(OnEnter.HasDelegate ? "true" : null)"
              aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && !string.IsNullOrWhiteSpace(Header) ? _titleId : null)"
-             aria-describedby="@AriaDescribedBy" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true">
+             aria-describedby="@AriaDescribedBy" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true"
+             @onmousedown="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleDialogPress) : default)"
+             @onmouseup="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleDialogRelease) : default)">
             <div class="fx-dialog-header"
                  @onmousedown="HandleDragStart"
                  @onmousedown:preventDefault="true"
@@ -97,6 +102,7 @@
         }
     </div>
     </CascadingValue>
+    </CascadingValue>
 }
 
 @code {
@@ -125,6 +131,20 @@
     /// path — for dialogs whose ✕/close COMMITS while Escape must CANCEL.
     /// </summary>
     [Parameter] public EventCallback OnEscape { get; set; }
+
+    /// <summary>
+    /// The dialog's default button (VB6 CommandButton.Default = True): a plain Enter anywhere in the
+    /// dialog invokes this, after the focused control has handled the key, so a value it commits on
+    /// Enter lands first. Enter is left to the control on buttons and links (Enter presses them), in
+    /// multi-line editors, grids, tree grids and tabs, on an open dropdown, in a nested dialog, and
+    /// inside any element marked <c>data-fx-enter-owner</c>. A control that keeps the key itself (a date
+    /// it cannot parse, say) vetoes it through the cascaded <see cref="DefaultButtonScope"/>. Point it at
+    /// the default button's handler, and have that handler do nothing while the button is disabled.
+    /// </summary>
+    [Parameter] public EventCallback OnEnter { get; set; }
+
+    private readonly DefaultButtonScope _defaultButtonScope = new();
+    private bool _enterRunning;
 
     /// <summary>Ctrl+Enter requests close (the OnClose path) — the keyboard
     /// "OK" for dialogs whose close commits.</summary>
@@ -262,8 +282,39 @@
     private string SystemMenuStyle =>
         $"left:{_systemMenuX:0.##}px;top:{_systemMenuY:0.##}px";
 
+    // A press on a dialog button that slides off onto the backdrop (or the reverse) ends in
+    // a click on the overlay, the nearest element containing both points. Only a press AND a
+    // release on the backdrop close the dialog; anything else would discard its edits.
+    private bool _pressInsideDialog;
+    private bool _pressOnBackdrop;
+    private bool _releaseInsideDialog;
+
+    private void HandleDialogPress()
+    {
+        _pressInsideDialog = true;
+        _suppressNextRenderOnce = true;
+    }
+
+    private void HandleDialogRelease() => _releaseInsideDialog = true;
+
+    // Runs after HandleDialogPress for a press inside the dialog: the event bubbles to the overlay.
+    // Only a primary press counts: a right press never clicks, and while the system menu is open
+    // its own backdrop takes the click, so either would leave a stale backdrop press behind.
+    private void HandleOverlayPress(MouseEventArgs e)
+    {
+        _pressOnBackdrop = e.Button == 0 && !_pressInsideDialog && !_systemMenuVisible;
+        _pressInsideDialog = false;
+        _releaseInsideDialog = false;
+        _suppressNextOverlayClick = false;
+        _suppressNextRenderOnce = true;
+    }
+
     private async Task HandleOverlayClick()
     {
+        var backdropClick = _pressOnBackdrop && !_releaseInsideDialog;
+        _pressOnBackdrop = false;
+        _releaseInsideDialog = false;
+
         if (_systemMenuVisible)
         {
             _systemMenuVisible = false;
@@ -279,7 +330,7 @@
         if (_isResizing)
             return;
 
-        if (!CloseOnOverlayClick)
+        if (!CloseOnOverlayClick || !backdropClick)
             return;
 
         await RequestClose();
@@ -674,6 +725,26 @@
 
         if (CloseOnEscape)
             await RequestClose();
+    }
+
+    [JSInvokable]
+    public async Task OnDialogContentEnterAsync()
+    {
+        if (_moveArmed || !Visible || !OnEnter.HasDelegate || _enterRunning)
+            return;
+
+        _enterRunning = true;   // a second Enter while the default button is still running is dropped
+        try
+        {
+            if (await _defaultButtonScope.TakeConsumedEnterAsync() || !Visible)
+                return;
+
+            await OnEnter.InvokeAsync();
+        }
+        finally
+        {
+            _enterRunning = false;
+        }
     }
 
     [JSInvokable]

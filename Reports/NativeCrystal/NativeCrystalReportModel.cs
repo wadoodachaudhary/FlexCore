@@ -392,6 +392,8 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    public ReportAnalysisDefinition? Analysis { get; set; }
+    public string AnalysisDiagnostic { get; set; } = "";
     public CrystalUnsupportedObjectSource? UnsupportedSource { get; set; }
 
     public int PictureStorageIndex { get; set; } = -1;

@@ -336,6 +336,7 @@
             Button("group", "rd-group", "Insert Group"),
             Button("summary", "rd-sigma", "Insert Summary (Sigma)"),
             Button("crosstab", "rd-crosstab", "Insert Cross-Tab"),
+            Button("table", "rd-crosstab", "Insert Table"),
             Button("olapGrid", "rd-olap-grid", "Insert OLAP GRIDt"),
             Button("subreport", "rd-subreport", "Insert Subreport"),
             Button("line", "rd-line", "Insert Line"),
@@ -576,7 +577,7 @@
             "database" or "record" or "group" or "groupsort" or "section" or "sort" or
             "formula" or "parameter" or "summary" or "page" or
             "visualLinking" or "highlightExpert" or "runningTotal" or
-            "wizard" or "text" or "field" or "line" or "box" or "subreport" or "image" or "richText" or "chart" or "crosstab" or
+            "wizard" or "text" or "field" or "line" or "box" or "subreport" or "image" or "richText" or "chart" or "crosstab" or "table" or
             "bold" or "italic" or "underline" or
             "fontGrow" or "fontShrink" or
             "align-left" or "align-center" or "align-right" or "align-justified" or
@@ -705,7 +706,8 @@
                 break;
             case "chart":
             case "crosstab":
-                await AddAnalysisAsync(command == "chart" ? "Chart" : "CrossTab");
+            case "table":
+                await AddAnalysisAsync(command == "chart" ? "Chart" : command == "table" ? "Table" : "CrossTab");
                 break;
             case "richText":
                 await OpenExpertAsync(command);

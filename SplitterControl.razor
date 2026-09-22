@@ -16,6 +16,7 @@
             @onmousedown="BeginDrag"
             @onmousedown:preventDefault="true"
             @onmousedown:stopPropagation="true"
+            @onmouseup="EndDragAsync"
             @ondblclick="ResetToDefaultAsync"
             @onkeydown="HandleKeyDownAsync">
         <span class="fx-splitter-grip" aria-hidden="true"></span>
@@ -242,15 +243,20 @@
             var options = new PreviewOptions(Vertical, Proportional, MinPrimarySize, MaxPrimarySize,
                 MinPrimary, MaxPrimary, MinSecondary, ShrinkPrimaryToContent, Disabled);
             if (options == _previewOptions && _previewElementId == _rootElement.Id) return;
+            // Claim the registration BEFORE the first await: renders that land during the
+            // import / enable round trips (a page still loading re-renders constantly) must
+            // early-return here. Each extra enableSplitterPreview disposed the previous
+            // registration — cancelling a drag in progress — and bumped the revision, so a
+            // drag started under the old one had its commit rejected and rolled back.
+            _previewOptions = options;
+            _previewElementId = _rootElement.Id;
             _module ??= await ImportModuleAsync();
             _previewRef ??= DotNetObjectReference.Create(this);
             await _module.InvokeVoidAsync("enableSplitterPreview", _rootElement, _previewRef, options, ++_previewRevision);
-            _previewOptions = options;
-            _previewElementId = _rootElement.Id;
         }
-        catch (JSException) { /* Keep the server event fallback usable. */ }
-        catch (InvalidOperationException) { /* Prerendering has no browser. */ }
-        catch (TaskCanceledException) { }
+        catch (JSException) { _previewOptions = null; /* Keep the server event fallback usable; retry next render. */ }
+        catch (InvalidOperationException) { _previewOptions = null; /* Prerendering has no browser. */ }
+        catch (TaskCanceledException) { _previewOptions = null; }
     }
 
     private ValueTask<IJSObjectReference> ImportModuleAsync() =>
@@ -287,12 +293,17 @@
         if (Disabled || e.Button != 0)
             return;
 
-        _containerPx = await MeasureContainerAsync();
-        _isDragging = true;
+        // Armed before the measure round trip: a release that lands during the await then
+        // ends the drag instead of finding nothing to end (and leaving the overlay stuck).
         _dragStartPosition = Vertical ? e.ClientX : e.ClientY;
         _dragStartSize = _runtimePrimarySize;
         _previewSize = _runtimePrimarySize;
         _previewPosition = _dragStartPosition;
+        _isDragging = true;
+
+        var measured = await MeasureContainerAsync();
+        if (!_isDragging) return;   // released while measuring
+        _containerPx = measured;
     }
 
     private async Task HandleDragMove(MouseEventArgs e)
@@ -300,6 +311,16 @@
         if (!_isDragging)
             return;
 
+        await TrackDragAsync(e);
+        // The button came up where no handler saw it (released before the overlay was drawn):
+        // end the drag at this position, as the JS preview does, instead of letting the next
+        // click commit a stray size.
+        if ((e.Buttons & 1) == 0)
+            await EndDragAsync(e);
+    }
+
+    private async Task TrackDragAsync(MouseEventArgs e)
+    {
         var position = Vertical ? e.ClientX : e.ClientY;
         var deltaPx = position - _dragStartPosition;
         var delta = Proportional && _containerPx > 0 ? deltaPx / _containerPx * 100d : deltaPx;
@@ -325,7 +346,7 @@
         if (!_isDragging)
             return;
 
-        await HandleDragMove(e);
+        await TrackDragAsync(e);
         _isDragging = false;
         if (ResizeOnRelease)
             await ApplySizeAsync(_previewSize);

@@ -18,12 +18,20 @@ else if (Element.Kind == "Chart")
         Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false"
         Width="100%" Height="@($"{Math.Max(1, Element.HeightTwips / 15 - 64)}px")" />
 }
-else if (Element.Kind == "CrossTab")
+else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0)
 {
     <PivotControl TValue="Dictionary<string, object>" DataSource="_pivotRows" RowFields="Snapshot.Definition.RowFields"
         ColumnFields="Snapshot.Definition.ColumnFields" ValueFields="_pivotMeasures" FieldLabels="_labels"
         ShowGrandTotals="Snapshot.Definition.ShowTotals" ShowSubTotals="Snapshot.Definition.ShowTotals"
+        SortDescriptors="@(Snapshot.Definition.DescendingFields.Select(field => new PivotSortDescriptor(field, SortDirection.Descending)).ToArray())"
         Interactive="false" AllowSorting="false" Height="@($"{Math.Max(1, Element.HeightTwips / 15)}px")" />
+}
+else if (Element.Kind is "Table" or "CrossTab")
+{
+    @foreach (var fragment in _tablePreview)
+    {
+        <ReportTableFragmentControl Fragment="fragment" Title="Element.Name" />
+    }
 }
 
 </div>
@@ -36,6 +44,7 @@ else if (Element.Kind == "CrossTab")
     private List<Dictionary<string, object>> _pivotRows = [];
     private List<PivotValueConfig> _pivotMeasures = [];
     private Dictionary<string, string> _labels = [];
+    private IReadOnlyList<ReportTableFragment> _tablePreview = [];
 
     protected override void OnParametersSet()
     {
@@ -47,9 +56,40 @@ else if (Element.Kind == "CrossTab")
             if (Element.Kind == "Chart")
             {
                 _series = [];
+                if (definition.EachRecord)
+                {
+                    if (Snapshot.Rows.Count > 5000) throw new InvalidDataException("Each-record chart exceeds 5,000 points.");
+                    foreach (var measure in definition.Measures)
+                    {
+                        var points = Snapshot.Rows.Select((row, index) =>
+                        {
+                            var label = definition.CategoryField.Length == 0 ? (index + 1).ToString(CultureInfo.CurrentCulture) : Label(Value(row, definition.CategoryField));
+                            var value = Value(row, measure.Field);
+                            var valid = decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var number);
+                            if (valid) ValidateChartValue(number, definition.ChartType);
+                            return new ChartDataPoint(label, valid ? (double)number : 0) { IsEmpty = !valid };
+                        }).ToList();
+                        _series.Add(new(measure.Caption.Length == 0 ? measure.Field : measure.Caption, definition.ChartType, points));
+                    }
+                    return;
+                }
                 var categories = Snapshot.Rows.Select(row => Label(Value(row, definition.CategoryField))).Distinct(StringComparer.Ordinal).ToArray();
+                var descending = definition.DescendingFields.Contains(definition.CategoryField, StringComparer.OrdinalIgnoreCase);
+                if (definition.SortCategories || descending)
+                {
+                    var values = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.CategoryField)), StringComparer.Ordinal)
+                        .ToDictionary(group => group.Key, group => Value(group.First(), definition.CategoryField));
+                    Array.Sort(categories, (a, b) => descending ? CompareCategory(values[b], values[a]) : CompareCategory(values[a], values[b]));
+                }
                 if (categories.Length > 5000) throw new InvalidDataException("Chart exceeds 5,000 categories.");
-                var partitions = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.SeriesField)));
+                IEnumerable<IGrouping<string, Dictionary<string, object>>> partitions = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.SeriesField)));
+                if (definition.SortCategories || definition.DescendingFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase))
+                {
+                    var comparer = Comparer<object?>.Create(CompareCategory);
+                    partitions = definition.DescendingFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase)
+                        ? partitions.OrderByDescending(group => Value(group.First(), definition.SeriesField), comparer)
+                        : partitions.OrderBy(group => Value(group.First(), definition.SeriesField), comparer);
+                }
                 foreach (var partition in partitions)
                 foreach (var measure in definition.Measures)
                 {
@@ -64,16 +104,21 @@ else if (Element.Kind == "CrossTab")
                             new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
                         if (decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
                         {
-                            if (definition.ChartType == ChartType.Pie && number < 0)
-                                throw new InvalidDataException("Pie charts cannot represent negative values. Use a bar or line chart.");
+                            ValidateChartValue(number, definition.ChartType);
                             points.Add(new(category, (double)number));
                         }
-                        else if (definition.ChartType != ChartType.Pie) points.Add(new(category, 0) { IsEmpty = true });
+                        else if (definition.ChartType is not (ChartType.Pie or ChartType.Donut)) points.Add(new(category, 0) { IsEmpty = true });
                     }
                     var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
                     _series.Add(new(partition.Key.Length == 0 ? caption : partition.Key + " / " + caption, definition.ChartType, points));
                     if (_series.Count > 64) throw new InvalidDataException("Chart exceeds 64 series.");
                 }
+            }
+            else if (Element.Kind == "Table" || definition.Cells.Count > 0)
+            {
+                var pane = (Snapshot.Table ?? ReportTabularData.Create(Element, Snapshot))
+                    .PaginateColumns(Math.Max(ReportTabularData.MinimumPaneWidthTwips, Element.WidthTwips), Element.FontSize, definition.RowHeightTwips).FirstOrDefault();
+                _tablePreview = pane is null ? [] : pane.Headers.Concat(pane.Rows).ToArray();
             }
             else
             {
@@ -87,6 +132,8 @@ else if (Element.Kind == "CrossTab")
                     if (measure.Aggregate == ReportAggregateType.Count)
                         foreach (var row in _pivotRows) row[field] = Value(row, measure.Field) is null or DBNull ? 0 : 1;
                     _pivotMeasures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
+                        ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median
+                            ? values => ReportValueFormatting.ExtendedAggregate(values, measure.Aggregate) : null,
                         Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
                             ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
                     _labels[field] = measure.Caption.Length == 0 ? measure.Field : measure.Caption;
@@ -100,5 +147,21 @@ else if (Element.Kind == "CrossTab")
     }
 
     private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
+    private static void ValidateChartValue(decimal value, ChartType type)
+    {
+        if (value < 0 && type is ChartType.Pie or ChartType.Donut)
+            throw new InvalidDataException("Pie charts cannot represent negative values. Use a bar or line chart.");
+        if (value < 0 && type is ChartType.StackedBar or ChartType.StackedBar100)
+            throw new InvalidDataException("Negative values are not supported by this chart adapter. Use an ordinary bar or line chart.");
+    }
+    private static int CompareCategory(object? left, object? right)
+    {
+        if (left is DBNull) left = null;
+        if (right is DBNull) right = null;
+        if (left is null) return right is null ? 0 : -1;
+        if (right is null) return 1;
+        if (left.GetType() == right.GetType() && left is IComparable comparable) return comparable.CompareTo(right);
+        return StringComparer.CurrentCulture.Compare(Label(left), Label(right));
+    }
     private static string Label(object? value) => value is null or DBNull ? "" : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
 }

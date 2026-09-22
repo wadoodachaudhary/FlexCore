@@ -186,7 +186,8 @@ function isTextEditor(element) {
 }
 
 function shortcutMatches(event, shortcut) {
-    return event.key.toLocaleLowerCase() === shortcut.key.toLocaleLowerCase()
+    return typeof event.key === "string"
+        && event.key.toLocaleLowerCase() === shortcut.key.toLocaleLowerCase()
         && event.altKey === !!shortcut.alt
         && event.ctrlKey === !!shortcut.control
         && event.metaKey === !!shortcut.meta

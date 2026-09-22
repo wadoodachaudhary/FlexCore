@@ -12,6 +12,13 @@ public partial class ReportDesignerControl
             WidthTwips = Math.Min(7200, _document.Page.ContentWidthTwips), HeightTwips = 3600,
             Analysis = new() { Measures = [new()] }
         };
+        if (kind == "Table")
+        {
+            element.Analysis.Measures.Clear();
+            element.Analysis.TableColumns = _document.Fields.Where(field => !field.IsFormula).Take(3)
+                .Select(field => new ReportTableColumn { Field = field.Reference, Caption = field.DisplayName }).ToList();
+            if (element.Analysis.TableColumns.Count == 0) element.Analysis.TableColumns.Add(new());
+        }
         section.Elements.Add(element);
         section.HeightTwips = Math.Max(section.HeightTwips, element.HeightTwips);
         SelectElement(section, element);

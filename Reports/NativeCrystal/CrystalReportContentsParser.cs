@@ -3,7 +3,7 @@ using System.Runtime.Versioning;
 namespace Fx.ControlKit.Reports.NativeCrystal;
 
 [UnsupportedOSPlatform("browser")]
-internal static class CrystalReportContentsParser
+internal static partial class CrystalReportContentsParser
 {
     public static CrystalReportCore ParseCore(CrystalRptStream contentsStream)
     {
@@ -154,6 +154,13 @@ internal static class CrystalReportContentsParser
 
             ResolveDeferredGroupNameReferences(dataDefinition);
             ResolveDeferredSummaryReferences(dataDefinition);
+            foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects)
+            {
+                try { reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition); }
+                catch (Exception error) when (error is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException or NotSupportedException)
+                { reportObject.AnalysisDiagnostic = error.Message; }
+            }
+            fieldReferences.AnalyticalObjects.Clear();
             foreach (var obj in dataDefinition.ReportDefinition.Areas.SelectMany(a => a.Sections).SelectMany(s => s.ReportObjects))
             {
                 ResolveConditions(obj.Format.ConditionReferences, obj.Format.ConditionFormulas);
@@ -1315,7 +1322,7 @@ internal static class CrystalReportContentsParser
 
             if (next.Type is 180 or 185)
             {
-                reportObjects.Add(ReadUnsupportedObject(reader, endType));
+                reportObjects.Add(ReadUnsupportedObject(reader, endType, fieldReferences, dataDefinition));
                 continue;
             }
 
@@ -1375,8 +1382,10 @@ internal static class CrystalReportContentsParser
         return new CrystalSectionHeader(name, height);
     }
 
-    private static CrystalReportObjectModel ReadUnsupportedObject(TslvArchiveReader reader, int sectionEndType)
+    private static CrystalReportObjectModel ReadUnsupportedObject(TslvArchiveReader reader, int sectionEndType,
+        FieldReferenceTable fieldReferences, CrystalDataDefinitionModel dataDefinition)
     {
+        var bindingReader = reader.Fork();
         var start = reader.CurrentRecord!;
         var kind = start.Type == 180 ? "Chart" : "CrossTab";
         var source = new CrystalUnsupportedObjectSource
@@ -1435,6 +1444,7 @@ internal static class CrystalReportContentsParser
         }
         source.ArchiveBytes = reader.CopyRange(start.Offset, reader.Position - start.Offset);
         if (!source.Complete) source.MetadataDiagnostics.Add("Object end record is missing; retained bytes stop before the next object/section.");
+        if (source.Complete) fieldReferences.AnalyticalObjects.Add((reportObject, bindingReader));
         return reportObject;
 
         void ReadMetadata(string label, TslvArchiveReader probe, Action<TslvArchiveReader> read)
@@ -2656,6 +2666,7 @@ internal static class CrystalReportContentsParser
 
     private sealed class FieldReferenceTable
     {
+        public List<(CrystalReportObjectModel Object, TslvArchiveReader Reader)> AnalyticalObjects { get; } = [];
         private readonly Dictionary<int, List<string>> _references = [];
 
         public void Add(int type, string reference)

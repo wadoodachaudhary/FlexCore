@@ -13,15 +13,15 @@ internal static class ReportValueFormatting
         var values = rows.Where(row => row.Table.Columns.Contains(aggregate.Field))
             .Select(row => row[aggregate.Field]).Where(value => value is not null and not DBNull).ToList();
         decimal result;
-        if (aggregate.AggregateType == ReportAggregateType.Count)
-            result = values.Count;
+        if (aggregate.AggregateType is ReportAggregateType.Count or ReportAggregateType.DistinctCount)
+            result = aggregate.AggregateType == ReportAggregateType.Count ? values.Count : values.Distinct().Count();
         else
         {
             if (values.Count == 0) return "";
             // Percent needs a denominator the aggregate does not carry; show it blank rather than
             // failing the whole report render.
             if (aggregate.AggregateType is not (ReportAggregateType.Sum or ReportAggregateType.Average
-                or ReportAggregateType.Min or ReportAggregateType.Max)) return "";
+                or ReportAggregateType.Min or ReportAggregateType.Max or ReportAggregateType.Median)) return "";
             var numbers = new List<decimal>(values.Count);
             foreach (var value in values)
             {
@@ -35,12 +35,33 @@ internal static class ReportValueFormatting
                 ReportAggregateType.Average => numbers.Average(),
                 ReportAggregateType.Min => numbers.Min(),
                 ReportAggregateType.Max => numbers.Max(),
+                ReportAggregateType.Median => Median(numbers),
                 _ => throw new NotSupportedException($"Aggregate {aggregate.AggregateType} requires a denominator.")
             };
         }
         var format = string.IsNullOrWhiteSpace(aggregate.Format)
-            ? aggregate.AggregateType == ReportAggregateType.Count ? "N0" : "N2" : aggregate.Format;
+            ? aggregate.AggregateType is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0" : "N2" : aggregate.Format;
         return result.ToString(format, CultureInfo.CurrentCulture);
+    }
+
+    internal static object ExtendedAggregate(IEnumerable<object?> source, ReportAggregateType operation)
+    {
+        var values = source.Where(value => value is not null and not DBNull).ToArray();
+        if (operation == ReportAggregateType.DistinctCount) return values.Distinct().Count();
+        var numbers = new List<decimal>();
+        foreach (var value in values)
+        {
+            if (!decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var number)) return "";
+            numbers.Add(number);
+        }
+        return numbers.Count == 0 ? "" : Median(numbers);
+    }
+
+    private static decimal Median(List<decimal> numbers)
+    {
+        numbers.Sort();
+        var middle = numbers.Count / 2;
+        return numbers.Count % 2 == 1 ? numbers[middle] : numbers[middle - 1] / 2 + numbers[middle] / 2;
     }
 
     internal static string CssColor(string? value)

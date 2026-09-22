@@ -174,7 +174,7 @@ public partial class GridControl<TValue>
             handlers.CheckKeyDown[i] = EventCallback.Factory.Create<KeyboardEventArgs>(this,
                 (KeyboardEventArgs e) => { var item = ctx.Item; var row = ctx.RowIndexHint; var c = ctx.ColIndex; var col = ctx.Column; return HandleCheckboxKeyDown(item, row, c, col, e); });
             handlers.ActionClick[i] = EventCallback.Factory.Create<MouseEventArgs>(this,
-                (MouseEventArgs _) => { var item = ctx.Item; var col = ctx.Column; return HandleEditButtonClick(item, col); });
+                (MouseEventArgs e) => { var item = ctx.Item; var col = ctx.Column; return HandleEditButtonPointerClick(item, col, e); });
         }
 
         return handlers;

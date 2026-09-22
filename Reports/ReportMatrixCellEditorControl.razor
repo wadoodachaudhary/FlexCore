@@ -1,0 +1,60 @@
+@namespace Fx.ControlKit.Reports
+
+<fieldset class="fx-report-matrix-cells">
+    <legend>Cells</legend>
+    @if (_error is not null) { <div role="status">@_error</div> }
+    else
+    {
+        @foreach (var cell in Definition.Cells)
+        {
+            <fieldset @key="cell">
+                <legend>Cell @(cell.Row + 1), @(cell.Column + 1)</legend>
+                <label>Row<NumericTextBoxControl TValue="int" Value="@(cell.Row + 1)" ValueChanged="async value => { cell.Row = value - 1; await Changed.InvokeAsync(); }" Min="1" Max="10000" Enabled="@(!ReadOnly)" /></label>
+                <label>Column<NumericTextBoxControl TValue="int" Value="@(cell.Column + 1)" ValueChanged="async value => { cell.Column = value - 1; await Changed.InvokeAsync(); }" Min="1" Max="10000" Enabled="@(!ReadOnly)" /></label>
+                <label>Row span<NumericTextBoxControl TValue="int" @bind-Value="cell.RowSpan" @bind-Value:after="ChangedAsync" Min="1" Max="10000" Enabled="@(!ReadOnly)" /></label>
+                <label>Column span<NumericTextBoxControl TValue="int" @bind-Value="cell.ColumnSpan" @bind-Value:after="ChangedAsync" Min="1" Max="10000" Enabled="@(!ReadOnly)" /></label>
+                <label>Content<DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "Value", "Table", "CrossTab" })"
+                    Value="@(cell.Region is null ? "Value" : cell.RegionKind)" ValueChanged="value => SetRegionAsync(cell, value)" Enabled="@(!ReadOnly)" AriaLabel="Cell content" /></label>
+                @if (cell.Region is null)
+                {
+                    <CheckBoxControl Label="Override value" Checked="@(cell.Text is not null)" CheckedChanged="async value => { cell.Text = value ? string.Empty : null; await Changed.InvokeAsync(); }" Disabled="ReadOnly" />
+                    @if (cell.Text is not null) { <TextBoxControl @bind-Value="cell.Text" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /> }
+                }
+                else
+                {
+                    <ReportAnalysisEditorControl Element="@(new ReportDesignerElement { Kind = cell.RegionKind, Name = "Nested region", Analysis = cell.Region })"
+                        Fields="Fields" ReadOnly="ReadOnly" Changed="Changed" InheritedScope="true" />
+                }
+                <ButtonControl IconCss="bi bi-trash" Title="Remove cell layout" OnClick="async () => { Definition.Cells.Remove(cell); await Changed.InvokeAsync(); }" Disabled="ReadOnly" />
+            </fieldset>
+        }
+        <ButtonControl IconCss="bi bi-plus-lg" Title="Add cell layout" OnClick="async () => { Definition.Cells.Add(new()); await Changed.InvokeAsync(); }" Disabled="@(ReadOnly || Definition.Cells.Count >= 4096)">Cell</ButtonControl>
+    }
+</fieldset>
+
+@code {
+    [Parameter, EditorRequired] public ReportAnalysisDefinition Definition { get; set; } = default!;
+    [Parameter] public IReadOnlyList<ReportDesignerField> Fields { get; set; } = [];
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public EventCallback Changed { get; set; }
+    private string? _error;
+    protected override void OnParametersSet()
+    {
+        try { _ = Definition.Tree().ToArray(); _error = null; }
+        catch (InvalidDataException error) { _error = error.Message; }
+    }
+    private Task ChangedAsync() => Changed.InvokeAsync();
+    private async Task SetRegionAsync(ReportMatrixCell cell, string? kind)
+    {
+        if (ReadOnly) return;
+        cell.RegionKind = kind ?? "Value";
+        var field = Fields.FirstOrDefault()?.Reference ?? "";
+        cell.Region = kind switch
+        {
+            "Table" => new() { TableColumns = [new() { Field = field }] },
+            "CrossTab" => new() { RowFields = [field], Measures = [new() { Field = field, Aggregate = ReportAggregateType.Count }] },
+            _ => null
+        };
+        await Changed.InvokeAsync();
+    }
+}

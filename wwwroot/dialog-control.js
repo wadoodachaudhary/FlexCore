@@ -228,9 +228,44 @@ const DIALOG_TABBABLE =
     "input:not([type=hidden]):not(:disabled), textarea:not(:disabled), " +
     "select:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex='-1'])";
 
+// Focus targets that keep a plain Enter for themselves, so the default button
+// (DialogControl.OnEnter) does not also fire: buttons and links (Enter presses
+// them), multi-line editors, lists that pick on Enter, grids, and anything a
+// host marks with data-fx-enter-owner.
+const DIALOG_ENTER_OWNERS =
+    "button, a[href], textarea, select, summary, [contenteditable]:not([contenteditable='false']), " +
+    "input[type='button'], input[type='submit'], input[type='reset'], input[type='image'], " +
+    "input[type='file'], input[type='color'], " +
+    "[role='button'], [role='link'], [role='menuitem'], [role='option'], [role='tab'], [role='tree'], " +
+    "[aria-expanded='true'], [data-fx-enter-owner], .fx-grid, .fx-treegrid";
+
+// A closed list's trigger button is a combo box, not a command button: in VB6 Enter on a
+// closed combo presses the default button, so the key is taken before the list can open.
+const DIALOG_CLOSED_LIST_TRIGGER = "button[aria-haspopup='listbox']:not([aria-expanded='true'])";
+
+// "control": the default button fires after the focused control handles Enter.
+// "trigger": the default button takes the key from a closed list trigger.
+// null: Enter belongs to the focused control, a nested dialog, or nobody.
+function dialogDefaultEnterKind(root, e) {
+    if (root.dataset.fxDialogEnter !== "true" || e.repeat || e.isComposing || e.keyCode === 229) return null;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target || target.closest("[role='dialog']") !== root) return null; // a nested dialog owns its keys
+    if (target.closest(".fx-dialog-overlay") !== root.parentElement) return null; // ...and so does its backdrop
+    if (target.closest(DIALOG_CLOSED_LIST_TRIGGER)) return "trigger";
+    return target.closest(DIALOG_ENTER_OWNERS) ? null : "control";
+}
+
 export function registerDialogKeys(root, dotNetRef) {
     if (!root) return;
+    // Text boxes typed into since their last change event. A text input only
+    // fires change on blur, so the default button commits it first — as a
+    // blur would — or OnEnter would read the value from before the typing.
+    const uncommitted = new WeakSet();
+    root.addEventListener("input", e => { if (e.target instanceof HTMLInputElement) uncommitted.add(e.target); }, true);
+    root.addEventListener("change", e => uncommitted.delete(e.target), true);
     root.addEventListener("keydown", e => {
+        // A nested dialog owns its keys, including Escape and the modal Tab loop.
+        if (e.target instanceof Element && e.target.closest("[role='dialog']") !== root) return;
         // A popup inside the dialog that owns its own keys (its own Escape /
         // Tab) opts out — this listener is capture-phase, so a bubble-phase
         // stopPropagation cannot reach it.
@@ -239,6 +274,20 @@ export function registerDialogKeys(root, dotNetRef) {
             dotNetRef.invokeMethodAsync("OnDialogContentEscapeAsync");
         } else if ((e.key === "Enter" || e.key === "NumpadEnter") && e.ctrlKey) {
             dotNetRef.invokeMethodAsync("OnDialogContentCtrlEnterAsync");
+        } else if ((e.key === "Enter" || e.key === "NumpadEnter") && !e.altKey && !e.metaKey && !e.shiftKey
+            && dialogDefaultEnterKind(root, e)) {
+            if (dialogDefaultEnterKind(root, e) === "trigger") {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+            // Deferred past this dispatch: the focused control's own Enter handling
+            // (a text box committing its value) reaches the server first.
+            const entry = e.target instanceof HTMLInputElement ? e.target : null;
+            setTimeout(() => {
+                if (entry && entry.isConnected && uncommitted.has(entry))
+                    entry.dispatchEvent(new Event("change", { bubbles: true }));
+                dotNetRef.invokeMethodAsync("OnDialogContentEnterAsync").catch(() => { });
+            }, 0);
         } else if (e.key === "Tab" && !e.altKey && !e.ctrlKey && !e.metaKey) {
             // Modal tab loop: like a VB6 form, Tab cycles the dialog's own
             // controls and never wanders into the covered page behind the

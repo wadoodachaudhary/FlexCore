@@ -587,6 +587,7 @@ public partial class PivotControl<TValue>
 
                 AddValueCells(cells, rowGroup, false);
                 row.Cells = cells;
+                row.SourceRows = rowGroup.ToList();
                 _displayRows.Add(row);
             }
 
@@ -601,6 +602,7 @@ public partial class PivotControl<TValue>
                 var groupItems = groupRows.SelectMany(rg => rg).ToList();
                 AddValueCells(subtotalCells, groupItems, true);
                 subtotalRow.Cells = subtotalCells;
+                subtotalRow.SourceRows = groupItems;
                 _displayRows.Add(subtotalRow);
             }
         }
@@ -622,6 +624,7 @@ public partial class PivotControl<TValue>
             }
             AddValueCells(cells, rowGroup, false);
             row.Cells = cells;
+            row.SourceRows = rowGroup.ToList();
             _displayRows.Add(row);
         }
 
@@ -678,6 +681,7 @@ public partial class PivotControl<TValue>
         }
 
         totalRow.Cells = cells;
+        totalRow.SourceRows = allRows;
         _displayRows.Add(totalRow);
     }
 
@@ -788,6 +792,7 @@ public partial class PivotControl<TValue>
     private object Aggregate(IEnumerable<TValue> items, PivotValueConfig cfg)
     {
         var itemList = items.ToList();
+        if (cfg.ValueAggregator is not null) return cfg.ValueAggregator(itemList.Select(item => GetValue(item!, cfg.Field)));
         if (cfg.Aggregation == AggregateType.Count)
             return itemList.Count;
 
@@ -875,8 +880,14 @@ public partial class PivotControl<TValue>
         return string.IsNullOrWhiteSpace(text) ? "Value" : $"P_{text}";
     }
 
-    internal GridExportTable CreateExportTable(string title = "Pivot Export")
+    internal GridExportTable CreateExportTable(string title = "Pivot Export", bool repeatRowLabels = false)
     {
+        if (SortDescriptors is not null && (_lastSortParameters is null || !_lastSortParameters.SequenceEqual(SortDescriptors)))
+        {
+            _sortDescriptors.Clear();
+            _sortDescriptors.AddRange(SortDescriptors.DistinctBy(sort => sort.Field, StringComparer.OrdinalIgnoreCase));
+            _lastSortParameters = SortDescriptors.ToArray();
+        }
         BuildPivot();
 
         var table = new GridExportTable
@@ -895,13 +906,35 @@ public partial class PivotControl<TValue>
                 textAlign: TextAlign.Right));
 
         var expectedColumnCount = table.Columns.Count;
+        var rowLabels = new string[_effectiveRowFields.Count];
         foreach (var row in _displayRows)
         {
-            var values = FlattenPivotExportRow(row.Cells, expectedColumnCount);
+            var values = FlattenPivotExportRow(row.Cells, expectedColumnCount).ToList();
+            if (repeatRowLabels)
+                for (var index = 0; index < rowLabels.Length && index < row.Cells.Count; index++)
+                {
+                    var cell = row.Cells[index];
+                    if (cell.Rowspan == 0) values[index] = rowLabels[index];
+                    else rowLabels[index] = Convert.ToString(values[index], CultureInfo.CurrentCulture) ?? "";
+                }
             table.Rows.Add(new GridExportRow(values, IsPivotExportTotalRow(row)));
         }
 
         return table;
+    }
+
+    internal IReadOnlyList<TValue> ExportCellRows(int row, int column, int rowSpan, int columnSpan)
+    {
+        var result = new HashSet<TValue>();
+        foreach (var entry in _displayRows.Skip(row).Take(rowSpan))
+        for (var col = column; col < column + columnSpan; col++)
+        {
+            var valueColumn = col < _effectiveRowFields.Count ? null : _valueColumns.ElementAtOrDefault(col - _effectiveRowFields.Count);
+            foreach (var item in entry.SourceRows)
+                if (valueColumn is null || valueColumn.IsTotal || _effectiveColumnFields.Count == 0 || BuildKey(item!, _effectiveColumnFields).Equals(valueColumn.Key))
+                    result.Add(item);
+        }
+        return DataSource.Where(result.Contains).ToArray();
     }
 
     private static IEnumerable<object?> FlattenPivotExportRow(
@@ -979,6 +1012,7 @@ public partial class PivotControl<TValue>
         public PivotDisplayRow(string cssClass) => CssClass = cssClass;
         public string CssClass { get; }
         public List<PivotDisplayCell> Cells { get; set; } = new();
+        public IReadOnlyList<TValue> SourceRows { get; set; } = [];
     }
 
     private sealed class PivotDisplayCell
@@ -1009,6 +1043,8 @@ public class PivotValueConfig
     public string? Label { get; set; }
     public AggregateType Aggregation { get; set; } = AggregateType.Sum;
     public string Format { get; set; } = "";
+    /// <summary>Optional caller-supplied aggregate over the current cell's raw field values.</summary>
+    public Func<IEnumerable<object?>, object>? ValueAggregator { get; set; }
 
     public string DisplayLabel => Label ?? $"{Aggregation} of {Field}";
     public string ShortLabel => Label ?? $"{Aggregation}";
