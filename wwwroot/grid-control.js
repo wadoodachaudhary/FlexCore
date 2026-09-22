@@ -917,7 +917,7 @@ export function registerGridKeyboardTrap(gridRoot) {
         }
 
         const identity = cellIdentity(cell);
-        const isCharacter = event.key.length === 1;
+        const isCharacter = event.key?.length === 1;
         if (isCharacter) {
             const startsBuffer = !pendingEditTyping || !sameCell(cell, pendingEditTyping.identity);
             if (startsBuffer) {
@@ -979,7 +979,7 @@ export function registerGridKeyboardTrap(gridRoot) {
 
     const onKeyDown = (event) => {
         if (!pendingEditTyping
-            && (event.key === "Tab" || event.key.startsWith("Arrow")))
+            && (event.key === "Tab" || event.key?.startsWith("Arrow")))
             lastPressedEditCell = null;
         if (bufferEditMountKey(event)) return;
 

@@ -303,7 +303,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
            && (CellEditablePredicate == null || item == null || CellEditablePredicate(item, col.Field));
 
     [Parameter] public bool AllowSorting { get; set; }
-    /// <summary>Allow multiple sort levels on sortable grids. Hosts can opt out explicitly.</summary>
+    /// <summary>Allow multiple sort levels in the Sort dialog. Header clicks sort one column.</summary>
     [Parameter] public bool AllowMultiSorting { get; set; } = true;
     /// <summary>Show the Multi-sort group (Custom Sort...) in the header right-click menu. On by default
     /// whenever AllowSorting and AllowMultiSorting are; a page sets it false to leave the option out of
@@ -654,6 +654,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// list instead of the standard group/hide/rename/print command set.
     /// </summary>
     [Parameter] public bool HeaderContextMenuShowsColumns { get; set; }
+
+    /// <summary>
+    /// Opt-in: left-clicking a header opens the checked column list instead of
+    /// sorting. Right-click also uses that list. Requires the header menu to be enabled.
+    /// </summary>
+    [Parameter] public bool HeaderClickShowsColumns { get; set; }
 
     /// <summary>
     /// Optional host action exposed as Attachments in the standard column-header
@@ -1463,7 +1469,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.AltKey || e.CtrlKey || e.MetaKey)
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || e.Key is "Backspace" or "Delete" or "Shift";
     }
 
@@ -5381,6 +5387,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // ── Sorting ──────────────────────────────────────────────────────────
 
+    private Task HandleHeaderClickAsync(MouseEventArgs e, GridColumn col)
+    {
+        if (HeaderClickShowsColumns && (EnableHeaderContextMenu || ShowColumnMenu))
+        {
+            OpenHeaderContextMenu(e, col.Field);
+            return Task.CompletedTask;
+        }
+        return HandleSort(col);
+    }
+
     private async Task HandleSort(GridColumn col)
     {
         // A header click "selects" that column for type-search, whether or not
@@ -5406,15 +5422,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (args.Cancel) return;
         }
 
-        // Clear other sorts unless multi-sort
-        if (!AllowMultiSorting)
-        {
-            foreach (var kvp in _columnStates)
-                if (!string.Equals(kvp.Key, col.Field, StringComparison.OrdinalIgnoreCase))
-                    kvp.Value.SortDirection = null;
-            _sortPriorityFields.RemoveAll(field =>
-                !string.Equals(field, col.Field, StringComparison.OrdinalIgnoreCase));
-        }
+        // Header clicks replace the sort; multiple levels are set in the Sort dialog.
+        foreach (var kvp in _columnStates)
+            if (!string.Equals(kvp.Key, col.Field, StringComparison.OrdinalIgnoreCase))
+                kvp.Value.SortDirection = null;
+        _sortPriorityFields.RemoveAll(field =>
+            !string.Equals(field, col.Field, StringComparison.OrdinalIgnoreCase));
 
         // Toggle
         if (!state.SortDirection.HasValue)
@@ -7307,6 +7320,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && EventsRef?.OnEditButtonClick.HasDelegate == true
             && !string.IsNullOrEmpty(col.Field))
         {
+            // Same gate as the button's own render and the Enter-key path: a row the host
+            // refuses through ShowEditButtonPredicate has no button, so a double-click on it
+            // must not open the picker either.
+            if (!ShouldShowEditButtonForItem(col, item))
+                return;
             await HandleEditButtonClick(item, col);
             return;
         }
@@ -9319,7 +9337,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return !e.AltKey
             && !e.CtrlKey
             && !e.MetaKey
-            && e.Key.Length == 1
+            && e.Key is { Length: 1 }
             && !char.IsControl(e.Key[0])
             && !char.IsWhiteSpace(e.Key[0]);
     }
@@ -9984,7 +10002,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (e.CtrlKey || e.AltKey || e.MetaKey || string.IsNullOrEmpty(e.Key))
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || string.Equals(e.Key, "Backspace", StringComparison.Ordinal)
             || string.Equals(e.Key, "Delete", StringComparison.Ordinal);
     }
@@ -11579,7 +11597,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (HasRowSelectionTypeAheadSelection() && _batchEditItem == null)
         {
             var targetCol = ResolveTypeAheadTargetColumn();
-            if (e.Key.Length == 1)
+            if (e.Key is { Length: 1 })
             {
                 if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol))
                     return;
@@ -11697,7 +11715,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static bool IsTypeSearchCharacterKey(KeyboardEventArgs e)
     {
-        return e.Key.Length == 1 && !char.IsControl(e.Key[0]);
+        return e.Key is { Length: 1 } && !char.IsControl(e.Key[0]);
     }
 
     private async Task MoveTypeSearchSelectionAsync()
@@ -11843,7 +11861,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_batchEditItem != null || !HasRowSelectionTypeAheadSelection())
             return false;
 
-        return e.Key.Length == 1
+        return e.Key is { Length: 1 }
             || e.Key == "Backspace"
             || (e.Key is "Enter" or "NumpadEnter" && _typeAheadBuffer.Length > 0)
             || (_typeAheadBuffer.Length > 0 && IsRowSelectionTypeAheadCommitKey(e, out _));
@@ -12393,7 +12411,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private static bool IsEditableTypeAheadKey(KeyboardEventArgs e, GridColumn col)
     {
-        if (e.Key.Length != 1)
+        if (e.Key is not { Length: 1 })
             return false;
 
         if (col.Type != ColumnType.Number)
@@ -12868,7 +12886,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         EffectiveColumns.Where(c => !IsColumnVisible(c) && !string.IsNullOrEmpty(c.Field)).ToList();
 
     private IReadOnlyList<GridColumn> HeaderContextMenuColumns =>
-        EffectiveColumns.Where(c => !string.IsNullOrWhiteSpace(c.Field)).ToList();
+        EffectiveColumns.Where(c => !string.IsNullOrWhiteSpace(c.Field)
+            && !string.IsNullOrWhiteSpace(HeaderColumnDisplay(c))).ToList();
 
     private bool CanHideColumn(GridColumn col) =>
         col.AllowHiding

@@ -1,0 +1,46 @@
+@namespace Fx.ControlKit.Reports
+
+<table class="fx-report-table-fragment fx-pivot-table" data-region="@Fragment.RegionId" data-pane="@Fragment.Pane" data-row="@Fragment.Row" data-line="@Fragment.Line"
+    aria-label="@Title" style="@($"border-collapse:collapse;table-layout:fixed;width:{Px(Fragment.Columns.Sum(c => c.WidthTwips))}px;height:{Px(Fragment.HeightTwips)}px;font:inherit;line-height:1.4;margin:0;")">
+    <colgroup>
+        @foreach (var column in Fragment.Columns) { <col style="@($"width:{ReportObjectRenderer.Number(column.WidthTwips * 100d / Fragment.Columns.Sum(c => c.WidthTwips))}%;")" /> }
+    </colgroup>
+    <tbody>
+        <tr style="@($"height:{Px(Math.Max(1, Fragment.HeightTwips - 30))}px;")">
+            @if (Fragment.LayoutCells is { } layout)
+            {
+                @foreach (var cell in layout)
+                {
+                    <td colspan="@cell.ColumnSpan" data-cell-row="@cell.SourceRow" data-cell-column="@cell.SourceColumn"
+                        style="@(CellStyle + (cell.First ? "" : "border-top:0;") + (cell.Last ? "" : "border-bottom:0;") + (cell.Nested is null ? "" : "padding:0;"))">
+                        @if (cell.Nested is { } nested)
+                        {
+                            <ReportTableFragmentControl Fragment="@(nested with { RegionId = Fragment.RegionId + $"/r{cell.SourceRow}c{cell.SourceColumn}", HeightTwips = Math.Max(1, Fragment.HeightTwips - 30) })" Title="Title" />
+                        }
+                        else { @cell.Text }
+                    </td>
+                }
+            }
+            else
+            {
+            @for (var index = 0; index < Fragment.Columns.Count; index++)
+            {
+                var cell = index < Fragment.Cells.Count ? Fragment.Cells[index] : "";
+                @if (Fragment.IsHeader || Fragment.Columns[index].IsRowHeader)
+                {
+                    <th scope="@(Fragment.IsHeader ? "col" : "row")" style="@CellStyle">@cell</th>
+                }
+                else { <td style="@CellStyle">@cell</td> }
+            }
+            }
+        </tr>
+    </tbody>
+</table>
+
+@code {
+    [Parameter, EditorRequired] public ReportTableFragment Fragment { get; set; } = default!;
+    [Parameter] public string Title { get; set; } = "";
+    private string CellStyle => "box-sizing:border-box;border:1px solid #cbd5cb;padding:2px 3px;white-space:pre;overflow:hidden;text-align:left;vertical-align:middle;"
+        + (Fragment.IsHeader ? "background:#e8efed;font-weight:600;" : Fragment.IsTotal ? "background:#f1f4f3;font-weight:600;" : "background:white;font-weight:normal;");
+    private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
+}

@@ -121,6 +121,6 @@ public partial class GridControl<TValue>
             return true;
         }
         // Selection checkboxes never open or feed a data editor.
-        return !e.CtrlKey && !e.MetaKey && !e.AltKey && (e.Key.Length == 1 || e.Key is "Backspace" or "F2");
+        return !e.CtrlKey && !e.MetaKey && !e.AltKey && (e.Key is { Length: 1 } || e.Key is "Backspace" or "F2");
     }
 }

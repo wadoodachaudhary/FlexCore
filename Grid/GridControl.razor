@@ -722,6 +722,7 @@
                                    loop variable. *@
                                 var capturedGroupField = gcol.Field;
                                 <th class="fx-header-cell fx-group-indent" style="@GetGroupedPlaceholderStyle(gcol)"
+                                    @onclick="e => { if (HeaderClickShowsColumns) OpenHeaderContextMenu(e, capturedGroupField); }"
                                     @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedGroupField))"
                                     @oncontextmenu:preventDefault="true"
                                     @oncontextmenu:stopPropagation="@EnableHeaderContextMenu"
@@ -758,7 +759,7 @@
                                 scope="col"
                                 aria-colindex="@GetColumnAriaIndex(columnSlot.ColumnIndex)"
                                 aria-sort="@GetColumnAriaSort(state)"
-                                @onclick="() => HandleSort(col)"
+                                @onclick="e => HandleHeaderClickAsync(e, col)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                                 @oncontextmenu:preventDefault="true"
                                 @oncontextmenu:stopPropagation="@(EnableHeaderContextMenu || ShowColumnMenu)"
@@ -1880,12 +1881,13 @@
              @onkeydown:stopPropagation="true"
              @onclick:stopPropagation="true">
 
-            @if (HeaderContextMenuShowsColumns)
+            @if (HeaderContextMenuShowsColumns || HeaderClickShowsColumns)
             {
                 @foreach (var col in HeaderContextMenuColumns)
                 {
                     var capturedCol = col;
                     <button type="button" class="fx-grid-header-context-item"
+                            role="menuitemcheckbox" aria-checked="@(IsColumnVisible(col) ? "true" : "false")"
                             disabled="@(!CanToggleHeaderContextColumn(col))"
                             @onclick="() => ToggleHeaderContextColumnAsync(capturedCol)">
                         <span class="fx-grid-header-context-check">@(IsColumnVisible(col) ? "✓" : "")</span>

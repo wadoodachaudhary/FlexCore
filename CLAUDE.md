@@ -3,6 +3,37 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-21 Keyless Grid Editor Events (HHM-1134)
+
+- Mirrored FlexKit's one-line null-safe Key length check in `IsEditorOwnedTypingKey`; no editing, navigation or buffering flow changes. The keyless event previously threw in the TextBox-to-Grid callback.
+- FlexKit's active-host fixture passes 193 component assertions and 120 Chrome layout checks. Required non-incremental HomeFront and FlexCore.Showcase builds pass. No live QA-database retest or frozen HomeFrontPB build.
+
+## 2026-09-20 Advanced Native Variants And Nested Cells
+
+- Mirrored FlexKit's deferred native analytical binding resolution, each-record charts, stacked/percentage bars, donut, DistinctCount/Median and typed ordering. Unsupported native semantics and negative stacking retain explicit diagnostics.
+- Shared recursive cell authoring now supports body-row/column merges and nested Table/CrossTab regions with scoped stable-order data, independent growth, nested repeating headers, header-chain boundary protection, vertical/horizontal continuation, preservation and search. Reports and PivotControl match FlexKit; no host-specific UI, package, production JS or runtime dependency added.
+- Both libraries pass 1,812 standard checks, including 226 region checks (104 added here), plus 223 partly overlapping parity checks. Five-layout Chrome desktop/mobile geometry checks pass for both. Broad audit remains 17/19 for the prior aggregate-label and unconfigured legacy-route probes; parameter defects are unchanged.
+- Final required non-incremental builds with --no-restore pass: FlexCore.Showcase has zero warnings/errors; active HomeFront has 189 existing warnings/zero errors. No host source or database changed and no website was started. Final logs: /tmp/flex-advanced-verification-final, /tmp/flex-advanced-homefront-build.log and /tmp/flex-advanced-showcase-build.log.
+- Free-form merged header templates, dynamic row-group cell templates, broader native OLAP/calculated variants and original Crystal visual approval remain open. Resource bounds remain explicit. Details: /Users/wadood/projects/JavaToCSharp/converted/docs/crystal-advanced-regions-2026-09-20.md.
+
+## 2026-09-20 Native Analytical Bindings And Data Regions
+
+- Mirrored FlexKit's bounded native chart/cross-tab binding import, retained source/default diagnostics and containing-group scope. Added Table insertion/shared column editing and pivot-backed vertical/horizontal matrix continuation with repeated labels/headers, full-scope totals, nested widths and wrapped-cell search.
+- Reports and PivotControl match FlexKit. Both libraries pass 1,708 standard checks plus 223 partly overlapping isolated checks; 122 new region checks cover conversion-to-viewer, editing and multi-page regions. Desktop/mobile Chrome geometry checks pass. Broad audit remains 17/19 for the pre-existing aggregate-label and unconfigured legacy-route probes; parameter issues are unchanged.
+- Required non-incremental FlexCore.Showcase build passes without warnings/errors; active HomeFront build passes with 205 warnings/zero errors. No host source, database, package, production JS or runtime dependency changed. No website started. This is not unrestricted Tablix or complete Crystal visual parity; implementation/limits: /Users/wadood/projects/JavaToCSharp/converted/docs/crystal-analytical-regions-2026-09-20.md.
+
+## 2026-09-18 Opt-In Header Column Checklist (HHM-1099)
+
+- Mirrored FlexKit's `HeaderClickShowsColumns`, default false: opens the checked column list on left- and right-click instead of sorting. `HeaderContextMenuShowsColumns` remains the right-click-only option. Header-menu enablement is respected, hidden captioned columns remain restorable, and captionless structural columns are excluded from the compact checklist.
+- Host Attachments keeps Folder grouping internal and uses the right-click column list (left-click sorts, 2026-09-21), removing its duplicate Name header/menu entry. No host-specific rules were added to GridControl; no shared editing, selection, grouping, or persistence flow changed.
+- Active HomeFront's database-free `verification/AttachmentColumnChecks` passes 51 Chrome checks (2026-09-21, with the left-click sort check) against the actual Attachments component. The 70 sorting checks also pass. Shared GridControl sources are identical. Required non-incremental HomeFront (203 warnings, zero errors) and FlexCore.Showcase (zero warnings/errors) builds pass.
+
+## 2026-09-18 Single-Column Header Sorting (HHM-996)
+
+- Mirrored FlexKit's fix: ordinary header clicks and ascending/descending column-menu commands replace earlier sorts and their arrows regardless of `AllowMultiSorting`. Multiple levels remain available through the explicit Custom Sort dialog. Sorting comparison, event cancellation and the existing header direction cycle are unchanged.
+- `HomeFront/verification/GridSortChecks` passes 70 component checks against each library, including row order, arrows, cancellation, menu commands, restored state, custom sort, pinned blank row and provider reloads. Chrome passes header/menu/custom-dialog interaction and queued clicks at 0/150/300 ms each-way latency against FlexKit; the shared source is identical.
+- Required non-incremental HomeFront build passed (203 warnings, no errors); FlexCore.Showcase passed without warnings or errors. No host runtime was restarted.
+
 ## 2026-09-18 Ship-Review Fixes To The Grid Filter And Dropdown Work (Update Repositories)
 
 Review wf_47238abd-a8a of the grid-filter (ClientBuffered / SearchAsYouType) and HHM-1025 dropdown change sets:

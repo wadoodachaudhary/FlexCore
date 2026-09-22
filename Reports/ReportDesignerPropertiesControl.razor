@@ -20,7 +20,7 @@
                     <label>Subreport<TextBoxControl @bind-Value="selected.SubreportName" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
                     <label>XML Path<TextBoxControl @bind-Value="selected.SubreportXmlPath" @bind-Value:after="NotifyChangedAsync" Enabled="@(SelectedSection?.ReadOnly != true)" /></label>
                 }
-                else if (selected.Kind is "Chart" or "CrossTab")
+                else if (selected.Kind is "Chart" or "CrossTab" or "Table")
                 {
                     <ReportAnalysisEditorControl Element="selected" Fields="Document.Fields" Groups="Document.Groups"
                         ReadOnly="@(SelectedSection?.ReadOnly == true || selected.LockFormat)" Changed="NotifyChangedAsync" />

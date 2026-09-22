@@ -199,6 +199,7 @@ document.addEventListener("keydown", event => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing)
         return;
     const key = event.key;
+    if (typeof key !== "string") return;   // e.g. Chrome's synthetic autofill keydown
     if (key.length === 1
         || key === "Backspace"
         || key === "Delete"
@@ -539,7 +540,7 @@ export function suppressTypingKeyDispatch(el) {
             return;
         }
         if (e.altKey || e.ctrlKey || e.metaKey) return;
-        const ownedByEditor = e.key.length === 1 || e.key === "Backspace" || e.key === "Delete"
+        const ownedByEditor = e.key?.length === 1 || e.key === "Backspace" || e.key === "Delete"
             || (filterBox && (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End"));
         if (ownedByEditor) e.stopPropagation();
         else if (filterBox && !e.shiftKey && (e.key === "Enter" || e.key === "NumpadEnter")) e.preventDefault();

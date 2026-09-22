@@ -91,7 +91,7 @@
                                     @onclick:stopPropagation="true"
                                     @onclick="e => e.Detail == 0 ? SelectElementAsync(reportSection, element) : Task.CompletedTask">
                                 <div class="fx-rd-object-content" style="@ReportObjectRenderer.Style(element, false)">
-                                    @if (element.Analysis is { } analysis && element.Kind is "Chart" or "CrossTab")
+                                    @if (element.Analysis is { } analysis && element.Kind is "Chart" or "CrossTab" or "Table")
                                     {
                                         <ReportAnalysisControl Element="element" Snapshot="@(new ReportAnalysisSnapshot(analysis, []))" />
                                     }
@@ -282,10 +282,10 @@
     {
         if (e.Key == "Escape") { CancelGesture(); return; }
         if (_gesture is not null || _marquee is not null) return;
-        if ((e.CtrlKey || e.MetaKey) && e.Key.Equals("a", StringComparison.OrdinalIgnoreCase))
+        if ((e.CtrlKey || e.MetaKey) && (e.Key ?? "").Equals("a", StringComparison.OrdinalIgnoreCase))
         { _selection.UnionWith(Document.Elements.Select(item => item.Id)); await PublishSelectionAsync(SelectedSection ?? Document.Sections[0], SelectedItems.LastOrDefault(), SelectedItems); return; }
         var command = e.Key switch
-        { "Delete" => "delete", _ when e.CtrlKey || e.MetaKey => e.Key.ToLowerInvariant() switch { "c" => "copy", "x" => "cut", "v" => "paste", "d" => "duplicate", "z" => e.ShiftKey ? "redo" : "undo", "y" => "redo", _ => "" }, _ => "" };
+        { "Delete" => "delete", _ when e.CtrlKey || e.MetaKey => (e.Key ?? "").ToLowerInvariant() switch { "c" => "copy", "x" => "cut", "v" => "paste", "d" => "duplicate", "z" => e.ShiftKey ? "redo" : "undo", "y" => "redo", _ => "" }, _ => "" };
         if (command.Length > 0) { await CommandRequested.InvokeAsync(command); return; }
         if (_gesture is not null || SelectedElement is not { LockSizePosition: false } item || SelectedSection is not { ReadOnly: false } section) return;
         var step = e.ShiftKey ? 240 : 15;

@@ -58,8 +58,8 @@ public sealed partial class ReportLayoutSession
     private readonly string _countToken = Guid.NewGuid().ToString("N") + "-count";
     private readonly DateTime _printTime;
     public List<ReportTextMeasurement> Measurements { get; } = [];
-    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null);
-    private sealed record InlineHeader(int Start, int End, Band Header);
+    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null, ReportTableFragment? Table = null);
+    private sealed record InlineHeader(int Start, int End, Band Header, int KeepThrough = 0, bool Repeat = true);
     private sealed record InlineSection(int Start, int End, Band Source, ReportDesignerSection? Format = null);
     private sealed record InlineCut(Band Source, int RetainedHeight);
     private sealed record Band(ReportDesignerSection Section, List<Item> Items, int Row, List<Band> Repeats, bool Suppressed = false,
@@ -238,7 +238,7 @@ public sealed partial class ReportLayoutSession
             var childOffset = Measurements.Count;
             if (child is not null) Measurements.AddRange(child.Measurements);
             if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
-                && element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport"))
+                && element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport" or "Table"))
                 _diagnostics.Add($"{element.Name}: {element.Kind} objects are not implemented in positioned rendering.");
             var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString));
             var measure = -1;
@@ -255,7 +255,7 @@ public sealed partial class ReportLayoutSession
                 }
             }
             ReportAnalysisSnapshot? analysis = null;
-            if (element.Analysis is { } definition && element.Kind is "Chart" or "CrossTab")
+            if (element.Analysis is { } definition && element.Kind is "Chart" or "CrossTab" or "Table")
             {
                 try
                 {
@@ -279,14 +279,8 @@ public sealed partial class ReportLayoutSession
                         var data = indexes.Select(index => definition.References.ToDictionary(reference => reference,
                             reference => Value(reference, index) ?? DBNull.Value, StringComparer.OrdinalIgnoreCase)).ToList();
                         analysis = new(definition.Clone(), data);
+                        if (element.Kind is "CrossTab" or "Table") analysis = analysis with { Table = ReportTabularData.Create(element, analysis) };
                         _analysisSnapshots[(original.Id, scopeStart)] = analysis;
-                        if (element.Kind == "CrossTab")
-                        {
-                            var rowGroups = data.Select(values => System.Text.Json.JsonSerializer.Serialize(definition.RowFields.Select(reference => values[reference]))).Distinct().Count();
-                            var columnGroups = data.Select(values => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(reference => values[reference]))).Distinct().Count();
-                            if ((rowGroups + definition.ColumnFields.Count + 2) * 300 > element.HeightTwips || (columnGroups * definition.Measures.Count + definition.RowFields.Count) * 900 > element.WidthTwips)
-                                _diagnostics.Add($"{element.Name}: cross-tab may exceed its fixed rectangle. Scroll in the viewer or enlarge it; automatic cell pagination is not implemented.");
-                        }
                     }
                     html = "[Analytical report item: use the component viewer or asynchronous HTML export]";
                 }
@@ -434,7 +428,7 @@ public sealed partial class ReportLayoutSession
                 {
                     // Honor the child's section boundary, not just the outer subreport object's KeepTogether.
                     var freshRoom = page.Bottom - headers.Sum(s => Height(_furniture[(s.Id, band.Row)])) - band.Repeats.Sum(Height)
-                        - (band.InlineHeaders?.Where(h => h.Start < kept.Start && h.End > kept.Start).Sum(h => Height(h.Header)) ?? 0);
+                        - (band.InlineHeaders?.Where(h => h.Repeat && h.Start < kept.Start && h.End > kept.Start).Sum(h => Height(h.Header)) ?? 0);
                     if (kept.End - kept.Start <= freshRoom)
                     {
                         if (kept.Start > offset && SafeBreaks(band).Contains(kept.Start)) slice = kept.Start - offset;
@@ -626,7 +620,7 @@ public sealed partial class ReportLayoutSession
                         element.HeightTwips = Math.Min(placement.Height, end) - element.TopTwips;
                     }
                     var content = ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader);
-                    objects.Add(new(element, content, item.Analysis));
+                    objects.Add(new(element, content, item.Analysis) { Table = item.Table });
                     html.Append("<div data-object=\"").Append(ReportObjectRenderer.Encode(element.Name)).Append("\" style=\"").Append(ReportObjectRenderer.Style(element)).Append("\">")
                         .Append(content).Append("</div>");
                 }
@@ -691,7 +685,7 @@ public sealed partial class ReportLayoutSession
         }
         void AddInlineHeaders(Page target, Band band, int offset)
         {
-            foreach (var repeat in band.InlineHeaders?.Where(h => h.Start < offset && h.End > offset) ?? [])
+            foreach (var repeat in (band.InlineHeaders ?? []).Where(h => h.Repeat && h.Start < offset && h.End > offset).OrderBy(h => h.Start))
             {
                 var header = ForPage(repeat.Header, target.Number, ExpectedCount(pages.Count - 1), true, pages.Count);
                 var height = Height(header);
@@ -699,7 +693,7 @@ public sealed partial class ReportLayoutSession
                 target.Placements.Add(new(header, target.Cursor, 0, height)); target.Cursor += height;
             }
         }
-        Band Expand(Band source, int measurementOffset, int? objectPage = null)
+        Band Expand(Band source, int measurementOffset, int? objectPage = null, int? printableWidth = null)
         {
             source = ApplyPrintedItems(source, 0, false);
             if (source.Suppressed) return source;
@@ -715,6 +709,70 @@ public sealed partial class ReportLayoutSession
                 var top = item.Element.TopTwips + growth.Where(g => g.Bottom <= item.Element.TopTwips
                     && (source.Section.RelativePositions || g.Left < item.Element.LeftTwips + item.Element.WidthTwips && item.Element.LeftTwips < g.Right))
                     .Select(g => g.Amount).DefaultIfEmpty(0).Max();
+                if (item.Analysis?.Table is { } table)
+                {
+                    // Crystal clips a cross-tab that runs past the printable edge; never ask for panes
+                    // narrower than the pager's minimum, which would fail the whole report.
+                    var available = Math.Min(item.Element.WidthTwips, (printableWidth ?? size.ContentWidthTwips) - item.Element.LeftTwips);
+                    var width = Math.Max(ReportTabularData.MinimumPaneWidthTwips, available);
+                    if (width > available)
+                        _diagnostics.Add($"{item.Element.Name}: table is narrower than the 0.25-inch minimum pane; content past its edge is clipped.");
+                    var panes = table.PaginateColumns(width, item.Element.FontSize, item.Analysis.Definition.RowHeightTwips);
+                    var regionCursor = top;
+                    foreach (var pane in panes)
+                    {
+                        if (regionCursor > top) forcedBreaks.Add(regionCursor);
+                        var start = regionCursor;
+                        var headerItems = new List<Item>();
+                        int? nestedHeaderStart = null;
+                        foreach (var fragment in pane.Headers.Concat(pane.Rows))
+                        {
+                            if (fragment.KeepWithNext) nestedHeaderStart ??= regionCursor;
+                            else if (nestedHeaderStart is { } keepStart)
+                            {
+                                inlineHeaders.Add(new(keepStart, regionCursor + fragment.HeightTwips,
+                                    new(source.Section, [], item.Row, [], Owner: item.Owner), regionCursor + fragment.HeightTwips, false));
+                                nestedHeaderStart = null;
+                            }
+                            var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name);
+                            element.Id = item.Element.Id + $"-pane{fragment.Pane}-row{fragment.Row}-line{fragment.Line}";
+                            element.LeftTwips = item.Element.LeftTwips; element.TopTwips = regionCursor;
+                            element.WidthTwips = fragment.Columns.Sum(column => column.WidthTwips);
+                            element.HeightTwips = fragment.HeightTwips; element.CanGrow = false;
+                            var rowItem = item with { Element = element, Analysis = null, Table = fragment with { RegionId = item.Element.Id + "-" + item.Row }, Measurement = -1,
+                                Html = ReportObjectRenderer.Encode(string.Join(" ", fragment.Cells)) };
+                            items.Add(rowItem);
+                            if (fragment.ContinuationHeaders.Count > 0)
+                            {
+                                var nestedHeaders = fragment.ContinuationHeaders.Select((header, index) =>
+                                {
+                                    var headerElement = element.CloneFor(element.SectionId, element.Name);
+                                    headerElement.Id = element.Id + "-nested-header-" + index;
+                                    headerElement.LeftTwips = element.LeftTwips;
+                                    headerElement.TopTwips = index * fragment.HeightTwips;
+                                    return rowItem with { Element = headerElement, Table = header with { RegionId = rowItem.Table!.RegionId } };
+                                }).ToList();
+                                var nestedSection = new ReportDesignerSection { Id = source.Section.Id, Name = item.Element.Name + " nested headers",
+                                    Kind = source.Section.Kind, HeightTwips = nestedHeaders.Count * fragment.HeightTwips };
+                                inlineHeaders.Add(new(regionCursor - 1, regionCursor + fragment.HeightTwips,
+                                    new(nestedSection, nestedHeaders, item.Row, [], Owner: item.Owner)));
+                            }
+                            if (fragment.IsHeader) headerItems.Add(Shift(rowItem, 0, -start, element.WidthTwips + element.LeftTwips));
+                            regionCursor += fragment.HeightTwips;
+                            breaks.Add(regionCursor);
+                        }
+                        if (headerItems.Count > 0 && pane.Rows.Count > 0)
+                        {
+                            var headerSection = new ReportDesignerSection { Id = source.Section.Id, Name = item.Element.Name + " headers",
+                                Kind = source.Section.Kind, HeightTwips = pane.Headers.Sum(header => header.HeightTwips) };
+                            inlineHeaders.Add(new(start, regionCursor, new(headerSection, headerItems, item.Row, [], Owner: item.Owner),
+                                start + headerSection.HeightTwips + pane.Rows[0].HeightTwips, item.Analysis.Definition.RepeatHeaders));
+                        }
+                    }
+                    growth.Add((item.Element.TopTwips + item.Element.HeightTwips,
+                        Math.Max(0, regionCursor - item.Element.TopTwips - item.Element.HeightTwips), item.Element.LeftTwips, item.Element.LeftTwips + width));
+                    continue;
+                }
                 if (item.Child is not { } child)
                 {
                     var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name); element.Id = item.Element.Id; element.TopTwips = top; element.LeftTwips = item.Element.LeftTwips;
@@ -732,13 +790,14 @@ public sealed partial class ReportLayoutSession
                 {
                     var context = inlineContexts?.GetValueOrDefault(original) ?? (Page: 1, Count: ExpectedCount(0));
                     if (context.Page == 0) context = (1, ExpectedCount(0));
-                    var nested = Expand(ForPage(original, context.Page, context.Count, objectPage: objectPage), measurementOffset + item.ChildMeasurementOffset, objectPage);
+                    var childWidth = Math.Min(item.Element.WidthTwips, (printableWidth ?? size.ContentWidthTwips) - item.Element.LeftTwips);
+                    var nested = Expand(ForPage(original, context.Page, context.Count, objectPage: objectPage), measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth);
                     if (nested.Suppressed) { inlineSections.Add(new(cursor, cursor, original, nested.Section)); continue; }
                     foreach (var previous in active.Keys.Where(k => !original.Repeats.Contains(k)).ToArray())
                     { var header = active[previous]; inlineHeaders.Add(new(header.Start, cursor, header.Header)); active.Remove(previous); }
                     foreach (var repeat in original.Repeats.Where(r => !active.ContainsKey(r)))
                     {
-                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset, objectPage);
+                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth);
                         active[repeat] = (cursor, header with { Items = header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() });
                     }
                     var nestedArea = child._layout.Areas.GetValueOrDefault(original.Section.Id);
@@ -748,7 +807,8 @@ public sealed partial class ReportLayoutSession
                     breaks.AddRange(nested.Breaks?.Select(b => cursor + b) ?? []);
                     forcedBreaks.AddRange(nested.ForcedBreaks?.Select(b => cursor + b) ?? []);
                     inlineHeaders.AddRange(nested.InlineHeaders?.Select(h => new InlineHeader(cursor + h.Start, cursor + h.End,
-                        h.Header with { Items = h.Header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() })) ?? []);
+                        h.Header with { Items = h.Header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() },
+                        h.KeepThrough == 0 ? 0 : cursor + h.KeepThrough, h.Repeat)) ?? []);
                     inlineSections.AddRange(nested.InlineSections?.Select(s => s with { Start = cursor + s.Start, End = cursor + s.End }) ?? []);
                     var end = cursor + Height(nested);
                     inlineSections.Add(new(cursor, end, original, nested.Section));
@@ -813,7 +873,8 @@ public sealed partial class ReportLayoutSession
             }
             return candidates.Distinct().Where(point => point > 0 && SafeAt(band, point)).Order().ToList();
         }
-        bool SafeAt(Band band, int point) => band.Items.All(item =>
+        bool SafeAt(Band band, int point) => !(band.InlineHeaders?.Any(header => header.Start < point && point < header.KeepThrough) ?? false)
+            && band.Items.All(item =>
             {
                 var relative = point - item.Element.TopTwips;
                 if (item.Element.IsSuppressed || relative <= 0 || relative >= ItemHeight(item) || item.Element.Kind is "Line" or "Box") return true;

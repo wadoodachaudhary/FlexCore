@@ -9,17 +9,40 @@
     else
     {
         <label>Title<TextBoxControl @bind-Value="analysis.Title" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
-        <label>Scope<DropDownListControl TValue="string" TItem="Choice" DataSource="ScopeChoices" TextFieldName="Label" ValueFieldName="Value"
-            @bind-Value="analysis.GroupScope" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Data scope" /></label>
-        @if (Element.Kind == "Chart")
+        @if (InheritedScope) { <span>Scope: Parent cell</span> }
+        else { <label>Scope<DropDownListControl TValue="string" TItem="Choice" DataSource="ScopeChoices" TextFieldName="Label" ValueFieldName="Value"
+            @bind-Value="analysis.GroupScope" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Data scope" /></label> }
+        @if (Element.Kind == "Table")
         {
-            <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.Line, ChartType.Pie })"
+            @for (var i = 0; i < analysis.TableColumns.Count; i++)
+            {
+                var index = i; var column = analysis.TableColumns[index];
+                <fieldset>
+                    <legend>Column @(index + 1)</legend>
+                    <label>Field<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
+                        @bind-Value="column.Field" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Column field" /></label>
+                    <label>Caption<TextBoxControl @bind-Value="column.Caption" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
+                    <label>Format<TextBoxControl @bind-Value="column.Format" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
+                    <label>Width (twips)<NumericTextBoxControl TValue="int" @bind-Value="column.WidthTwips" @bind-Value:after="ChangedAsync" Min="360" Max="100000" Enabled="@(!ReadOnly)" /></label>
+                    <ButtonControl Title="Move column left" OnClick="() => MoveColumnAsync(index, -1)" Disabled="@(ReadOnly || index == 0)">&#8592;</ButtonControl>
+                    <ButtonControl Title="Move column right" OnClick="() => MoveColumnAsync(index, 1)" Disabled="@(ReadOnly || index == analysis.TableColumns.Count - 1)">&#8594;</ButtonControl>
+                    <ButtonControl Title="Remove column" OnClick="async () => { analysis.TableColumns.RemoveAt(index); await ChangedAsync(); }" Disabled="ReadOnly">&#215;</ButtonControl>
+                </fieldset>
+            }
+            <ButtonControl Title="Add column" OnClick="async () => { analysis.TableColumns.Add(new()); await ChangedAsync(); }" Disabled="@(ReadOnly || analysis.TableColumns.Count >= 64)">+ Column</ButtonControl>
+        }
+        else if (Element.Kind == "Chart")
+        {
+            <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.StackedBar, ChartType.StackedBar100, ChartType.Line, ChartType.Pie, ChartType.Donut })"
                 @bind-Value="analysis.ChartType" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Chart type" /></label>
             <label>Category<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                 @bind-Value="analysis.CategoryField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Category field" /></label>
             <label>Series<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                 @bind-Value="analysis.SeriesField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Series field" /></label>
             <CheckBoxControl Label="Legend" @bind-Checked="analysis.ShowLegend" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+            <CheckBoxControl Label="One point per record" @bind-Checked="analysis.EachRecord" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+            <CheckBoxControl Label="Sort categories" @bind-Checked="analysis.SortCategories" @bind-Checked:after="ChangedAsync" Disabled="@(ReadOnly || analysis.EachRecord)" />
+            <CheckBoxControl Label="Descending categories" Checked="@analysis.DescendingFields.Contains(analysis.CategoryField)" CheckedChanged="value => SetDescendingAsync(analysis.CategoryField, value)" Disabled="@(ReadOnly || analysis.EachRecord)" />
         }
         else
         {
@@ -27,6 +50,8 @@
             @Dimensions("Columns", analysis.ColumnFields)
             <CheckBoxControl Label="Totals" @bind-Checked="analysis.ShowTotals" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
         }
+        @if (Element.Kind != "Table")
+        {
         @for (var i = 0; i < analysis.Measures.Count; i++)
         {
             var index = i; var measure = analysis.Measures[index];
@@ -42,6 +67,18 @@
             </fieldset>
         }
         <ButtonControl IconCss="bi bi-plus-lg" OnClick="async () => { analysis.Measures.Add(new()); await ChangedAsync(); }" Disabled="ReadOnly">Measure</ButtonControl>
+        }
+        @if (Element.Kind is "Table" or "CrossTab")
+        {
+            <ReportMatrixCellEditorControl Definition="analysis" Fields="Fields" ReadOnly="ReadOnly" Changed="Changed" />
+            <CheckBoxControl Label="Repeat column headers" @bind-Checked="analysis.RepeatHeaders" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+            <label>Row height (twips)<NumericTextBoxControl TValue="int" @bind-Value="analysis.RowHeightTwips" @bind-Value:after="ChangedAsync" Min="180" Max="100000" Enabled="@(!ReadOnly)" /></label>
+            @if (Element.Kind == "CrossTab")
+            {
+                <label>Row label width (twips)<NumericTextBoxControl TValue="int" @bind-Value="analysis.RowHeaderWidthTwips" @bind-Value:after="ChangedAsync" Min="360" Max="100000" Enabled="@(!ReadOnly)" /></label>
+                <label>Value width (twips)<NumericTextBoxControl TValue="int" @bind-Value="analysis.ValueColumnWidthTwips" @bind-Value:after="ChangedAsync" Min="360" Max="100000" Enabled="@(!ReadOnly)" /></label>
+            }
+        }
         @if (analysis.Validate(Element.Kind) is { } error) { <div role="status">@error</div> }
     }
 </div>
@@ -51,16 +88,31 @@
     [Parameter] public IReadOnlyList<ReportDesignerField> Fields { get; set; } = [];
     [Parameter] public IReadOnlyList<ReportDesignerGroup> Groups { get; set; } = [];
     [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool InheritedScope { get; set; }
     [Parameter] public EventCallback Changed { get; set; }
     public sealed record Choice(string Value, string Label);
     private IEnumerable<Choice> FieldChoices => Fields.Select(item => new Choice(item.Reference, item.DisplayName)).Prepend(new("", "(None)"));
     private IEnumerable<Choice> ScopeChoices => Groups.Select(group => new Choice(group.Condition, group.Name)).Prepend(new("", "Report"));
-    private static readonly ReportAggregateType[] Operations = [ReportAggregateType.Sum, ReportAggregateType.Count, ReportAggregateType.Average, ReportAggregateType.Min, ReportAggregateType.Max];
+    private static readonly ReportAggregateType[] Operations = [ReportAggregateType.Sum, ReportAggregateType.Count, ReportAggregateType.Average, ReportAggregateType.Min, ReportAggregateType.Max, ReportAggregateType.DistinctCount, ReportAggregateType.Median];
     private Task ChangedAsync() => Changed.InvokeAsync();
+    private async Task SetDescendingAsync(string field, bool descending)
+    {
+        if (ReadOnly || Element.Analysis is not { } analysis || field.Length == 0) return;
+        analysis.DescendingFields.RemoveAll(value => value.Equals(field, StringComparison.OrdinalIgnoreCase));
+        if (descending) analysis.DescendingFields.Add(field);
+        await ChangedAsync();
+    }
+    private async Task MoveColumnAsync(int index, int delta)
+    {
+        if (ReadOnly || Element.Analysis is not { } analysis || index + delta < 0 || index + delta >= analysis.TableColumns.Count) return;
+        (analysis.TableColumns[index], analysis.TableColumns[index + delta]) = (analysis.TableColumns[index + delta], analysis.TableColumns[index]);
+        await ChangedAsync();
+    }
     private async Task ConfigureAsync()
     {
         if (ReadOnly) return;
         Element.Analysis = new() { Title = Element.Name, Measures = [new()] };
+        if (Element.Kind == "Table") { Element.Analysis.Measures.Clear(); Element.Analysis.TableColumns.Add(new()); }
         await ChangedAsync();
     }
     private RenderFragment Dimensions(string title, List<string> fields) => @<fieldset>
@@ -71,6 +123,7 @@
             <div class="fx-report-analysis-dimension">
                 <DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                     Value="@fields[index]" ValueChanged="async value => { fields[index] = value ?? string.Empty; await ChangedAsync(); }" Enabled="@(!ReadOnly)" AriaLabel="@title" />
+                <CheckBoxControl Label="Descending" Checked="@(Element.Analysis!.DescendingFields.Contains(fields[index]))" CheckedChanged="value => SetDescendingAsync(fields[index], value)" Disabled="ReadOnly" />
                 <ButtonControl IconCss="bi bi-trash" Title="Remove field" OnClick="async () => { fields.RemoveAt(index); await ChangedAsync(); }" Disabled="ReadOnly" />
             </div>
         }

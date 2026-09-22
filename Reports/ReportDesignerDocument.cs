@@ -971,6 +971,7 @@ public static partial class ReportDesignerXmlSerializer
             var kind when string.Equals(kind, "Picture", StringComparison.OrdinalIgnoreCase) => "PictureObject",
             "Chart" => "ChartObject",
             "CrossTab" => "CrossTabObject",
+            "Table" => "TableObject",
             _ => "FieldObject"
         };
 

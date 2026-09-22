@@ -139,13 +139,34 @@ public static class NativeCrystalRptConverter
         }
 
         model.Name = NormalizeReportName(model.Name, fallbackName);
-        foreach (var section in model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections))
+        foreach (var area in model.DataDefinition.ReportDefinition.Areas)
+        foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
         {
             var source = obj.UnsupportedSource!;
             source.Stream = contents?.FullPath ?? prefix + "Contents";
+            if (obj.Analysis is { } analysis && area.Kind is "GroupHeader" or "GroupFooter")
+            {
+                var group = area.GroupPairOrder > 0 ? area.GroupPairOrder : area.GroupIndex;
+                if (group > 0 && group <= model.DataDefinition.Groups.Count)
+                    analysis.GroupScope = model.DataDefinition.Groups[group - 1].ConditionField;
+                else
+                {
+                    obj.Analysis = null;
+                    obj.AnalysisDiagnostic = "The containing analytical group scope could not be resolved.";
+                }
+            }
+            if (obj.Analysis is not null)
+            {
+                var defaults = new CrystalConversionDiagnostic("CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
+                    "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained.");
+                model.ConversionDiagnostics.Add(defaults);
+                options.Progress?.Invoke($"[{defaults.Code}] {model.Name}/{section.Name}/{obj.Name}: {defaults.Message}");
+                continue;
+            }
             var message = $"{obj.Kind} conversion preserves available identity, bounds, common formatting and opaque TSLV bytes; chart data/series and cross-tab grouping/cells are not interpreted or rendered."
-                + (source.MetadataDiagnostics.Count == 0 ? "" : " " + string.Join(" ", source.MetadataDiagnostics));
+                + (source.MetadataDiagnostics.Count == 0 ? "" : " " + string.Join(" ", source.MetadataDiagnostics))
+                + (obj.AnalysisDiagnostic.Length == 0 ? "" : " " + obj.AnalysisDiagnostic);
             var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_UNSUPPORTED_OBJECT", model.Name, section.Name, obj.Name, obj.Kind, message);
             model.ConversionDiagnostics.Add(diagnostic);
             options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{section.Name}/{obj.Name}: {message}");

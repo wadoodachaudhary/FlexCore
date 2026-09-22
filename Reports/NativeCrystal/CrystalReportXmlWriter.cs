@@ -632,6 +632,8 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "Width", reportObject.Width);
         Attr(writer, "Height", reportObject.Height);
 
+        reportObject.Analysis?.ToXml().WriteTo(writer);
+
         if (reportObject.UnsupportedSource is { } source)
         {
             writer.WriteStartElement("NativeCrystalSource");

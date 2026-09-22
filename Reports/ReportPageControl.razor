@@ -9,7 +9,11 @@
                 @foreach (var item in band.Objects)
                 {
                     <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">
-                        @if (item.Analysis is not null)
+                        @if (item.Table is not null)
+                        {
+                            <ReportTableFragmentControl Fragment="item.Table" Title="item.Element.Name" />
+                        }
+                        else if (item.Analysis is not null)
                         {
                             <ReportAnalysisControl Element="item.Element" Snapshot="item.Analysis" />
                         }

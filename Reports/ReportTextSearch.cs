@@ -77,13 +77,39 @@ public sealed class ReportTextSearch
         return document.Body!.InnerHtml;
     }
 
-    private static string ReadText(INode root, out List<TextPart> parts)
+    private static string ReadText(IElement root, out List<TextPart> parts)
     {
         var collected = new List<TextPart>(); var text = new StringBuilder();
+        var tableFragments = root.QuerySelectorAll("table.fx-report-table-fragment[data-region]")
+            .Where(table => !string.IsNullOrEmpty(table.GetAttribute("data-region"))).ToArray();
+        var visitedFragments = new HashSet<INode>();
         Visit(root, 0); parts = collected; return text.ToString();
         void Visit(INode node, int depth)
         {
             if (depth > 256) throw new InvalidDataException("Report markup exceeds the search nesting limit.");
+            if (visitedFragments.Contains(node)) return;
+            if (node is IElement table && tableFragments.Contains(table))
+            {
+                // Line fragments are positioned row-wise, but search follows each logical cell so
+                // a word wrapped within the same page remains searchable and highlightable.
+                var region = tableFragments.Where(fragment => fragment.GetAttribute("data-region") == table.GetAttribute("data-region")
+                    && fragment.GetAttribute("data-pane") == table.GetAttribute("data-pane")).ToArray();
+                foreach (var fragment in region) visitedFragments.Add(fragment);
+                var logicalCells = region.OrderBy(fragment => int.TryParse(fragment.GetAttribute("data-row"), out var row) ? row : -1)
+                    .ThenBy(fragment => int.TryParse(fragment.GetAttribute("data-line"), out var line) ? line : 0)
+                    .SelectMany(fragment => fragment.QuerySelectorAll("th,td").Where(cell => cell.Closest("table") == fragment)
+                        .Select((cell, column) => (Cell: cell, Row: cell.GetAttribute("data-cell-row") ?? fragment.GetAttribute("data-row"),
+                            Column: cell.GetAttribute("data-cell-column") ?? column.ToString(System.Globalization.CultureInfo.InvariantCulture))))
+                    .GroupBy(cell => (cell.Row, cell.Column));
+                foreach (var cell in logicalCells)
+                {
+                    text.Append('\n');
+                    foreach (var line in cell)
+                        foreach (var child in line.Cell.ChildNodes) Visit(child, depth + 1);
+                    text.Append('\n');
+                }
+                return;
+            }
             if (node is IText item) { collected.Add(new(item, text.Length, item.Length)); text.Append(item.TextContent); return; }
             if (node is IElement element && (element.LocalName is "script" or "style" or "template" or "title" or "defs" || element.HasAttribute("hidden") || element.GetAttribute("aria-hidden") == "true")) return;
             var block = node is IElement blockElement && blockElement.LocalName is "div" or "section" or "article" or "tr" or "td" or "th" or "p" or "h1" or "h2" or "h3" or "li" or "br" or "text";
