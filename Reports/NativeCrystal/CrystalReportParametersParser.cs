@@ -10,7 +10,7 @@ internal static class CrystalReportParametersParser
         CrystalDataDefinitionModel dataDefinition)
     {
         var decoded = TslvStreamReader.Decode(parametersStream.Bytes, defaultSchema: 1792);
-        var reader = new TslvArchiveReader(decoded.Body, decoded.HeaderSchema);
+        var reader = new TslvArchiveReader(decoded.Body, decoded.HeaderSchema) { LegacyValueLengths = decoded.IsHeaderless };
 
         _ = reader.LoadNextRecord(303, 1792, 304);
         var reportParameterSetCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
@@ -179,7 +179,7 @@ internal static class CrystalReportParametersParser
 
     private static string? ReadCrystalValue(TslvArchiveReader reader, int valueType)
     {
-        var length = reader.LoadInt32();
+        var length = reader.LegacyValueLengths ? reader.LoadUInt16() : reader.LoadInt32();
         if (length == 0)
         {
             return null;

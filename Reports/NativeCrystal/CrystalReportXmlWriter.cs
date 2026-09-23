@@ -12,7 +12,7 @@ internal static class CrystalReportXmlWriter
             OmitXmlDeclaration = true
         };
 
-        using var writer = XmlWriter.Create(xmlPath, settings);
+        using var writer = new CrystalXmlCharacterWriter(XmlWriter.Create(xmlPath, settings));
         writer.WriteStartElement("Report");
         Attr(writer, "Name", report.Name);
         Attr(writer, "FileName", report.SourcePath);
@@ -30,12 +30,25 @@ internal static class CrystalReportXmlWriter
         }
 
         writer.WriteEndElement();
-        WriteConversionDiagnostics(writer, report);
         WriteDatabase(writer, report.Database);
         WriteDataDefinition(writer, report.DataDefinition);
         writer.WriteStartElement("CustomFunctions");
         writer.WriteEndElement();
         WriteReportDefinition(writer, report.DataDefinition.ReportDefinition);
+
+        WriteConversionDiagnostics(writer, report, writer.EscapedValues.Count);
+        if (writer.EscapedValues.Count > 0)
+        {
+            writer.WriteStartElement("FlexKitXmlCharacterEscapes");
+            foreach (var (original, escaped) in writer.EscapedValues.ToArray())
+            {
+                writer.WriteStartElement("Value");
+                Attr(writer, "Escaped", escaped);
+                Attr(writer, "OriginalUtf16Base64", CrystalXmlCharacterWriter.PreserveUtf16(original));
+                writer.WriteEndElement();
+            }
+            writer.WriteEndElement();
+        }
 
         writer.WriteEndElement();
     }
@@ -604,9 +617,9 @@ internal static class CrystalReportXmlWriter
         };
     }
 
-    private static void WriteConversionDiagnostics(XmlWriter writer, CrystalReportModel report)
+    private static void WriteConversionDiagnostics(XmlWriter writer, CrystalReportModel report, int escapedValues = 0)
     {
-        if (report.ConversionDiagnostics.Count == 0) return;
+        if (report.ConversionDiagnostics.Count == 0 && escapedValues == 0) return;
         writer.WriteStartElement("ConversionDiagnostics");
         foreach (var diagnostic in report.ConversionDiagnostics)
         {
@@ -617,6 +630,14 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "ObjectName", diagnostic.ObjectName);
             Attr(writer, "Kind", diagnostic.Kind);
             writer.WriteString(diagnostic.Message);
+            writer.WriteEndElement();
+        }
+        if (escapedValues > 0)
+        {
+            writer.WriteStartElement("Diagnostic");
+            Attr(writer, "Code", "CRYSTAL_XML_CHARACTERS_ESCAPED");
+            Attr(writer, "ReportName", report.Name);
+            writer.WriteString($"{escapedValues} source string(s) contain characters forbidden by XML 1.0. Those characters are emitted as _xHHHH_ tokens; original UTF-16 values are retained in FlexKitXmlCharacterEscapes. Review affected names/text before execution.");
             writer.WriteEndElement();
         }
         writer.WriteEndElement();

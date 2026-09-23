@@ -1,7 +1,37 @@
 # FlexCore Work Notes
 
+## 2026-09-23 Report 1 Native Cross-tab
+
+- Mirrored FlexKit's grid-contained field reader (161 -> 159 -> 158) for `01 Cross Tab Page Numbers A.rpt`: customer rows, shipping-method columns, one Count(Order ID) measure from four cell templates. Source bytes remain preserved; unsupported bindings retain precise diagnostics.
+- Mirrored legacy `Group #1 Name` resolution, stable unnamed analytical identity, and unnamed designer-object ID collision fix. Source names/XML stay intact through save/preview.
+- The offline sample tool refreshes one report in a transaction. Report #1 now has its shipping dimension and 24 in-range Order IDs in the tester's installed SQLite pack; other catalog entries and datasets remain unchanged. No production JavaScript, Java/IKVM/SAP runtime, reference-XML fallback, HomeFront source edit, or running app change.
+- Reproduction and remaining blockers: `/Users/wadood/projects/JavaToCSharp/Reports/BLOCKED-REPORTS-HANDOFF.md`. Analytical styling/total visibility remain explicit editable defaults; original Crystal visual approval is still pending.
+- Verified: 23 focused, 107 bench and 330 analytical/matrix checks on each library. Shared changed sources match. Required nonincremental HomeFront (208 warnings/0 errors) and Showcase (0 warnings/errors) builds pass. No running website was changed.
+
+## 2026-09-23 Crystal Corpus Execution Bench
+
+- FlexKitTester `/crystal-reports` now browses the deduplicated downloaded/primary RPT corpus, searches and filters it, navigates previous/next, and converts fresh binaries for the existing designer and viewer. All interactive widgets are shared FlexKit/FlexCore controls; no new production JavaScript.
+- SQLite sample datasets are generated offline by `JavaToCSharp/tools/CrystalSamples.Seed`. The host reads the pack read-only and matches binary plus schema fingerprints, including linked subreports. Synthetic projected rows do not certify original SQL joins/data-source behavior or Crystal visual parity. Filters/formulas remain enabled; conversion never consults reference XML.
+- Mirrored from FlexKit: native `StartsWith`, `ReplicateString`, and unprefixed Crystal color constants. Remaining formula, analytical-region, mutable scheduling, data coverage and visual-approval gaps are shown separately in the bench and recorded in the corpus audit.
+
+## 2026-09-23 Reports Manage and private conversion
+
+- VB6 FMain.frm:2810–2833 enumerates the reports folder; :3097–3100 opens it in Explorer. Reports → Manage now navigates to the existing Crystal page, with a file/folder selection step and an explicit Convert action. Installed reports remain available; each imported RPT and converted XML lives under `{ContentRoot}/User/Reports/{SHA256(normalized LoginID)}/{import-id}/`, beside per-user preference JSON storage and outside wwwroot. Original names remain in metadata; duplicate names receive distinct import IDs. Failed conversions retain their originals, show their error and can be retried. Native diagnostics are shown with successful XML output.
+- Private imports use opaque `user-report:` routes checked against the current session in the viewer/designer. Anonymous imports and raw routes into User storage are rejected. Delete removes only the selected private import after confirmation. Installed report XML is not overwritten or deleted by this manager. Designer saves retain the existing authored-copy behavior.
+- FlexKit `FilePickerControl.SelectDirectory` enables native browser folder upload without new JavaScript. Disabled pickers retain their InputFile element so in-flight reads remain valid. Mirrored to FlexCore. Folder-relative hierarchy is flattened into separate import folders; original filenames and bytes are retained. Browser folder-picker support is required; multiple-file selection remains available.
+- Regression harness: active HomeFront `verification/ReportManagerChecks` exercises persistent native conversion, subreports, warnings, duplicate names, failed batches, retries, size limits, partial-upload cleanup, private routes, user separation, page callbacks and picker attributes. No app server, frozen HomeFrontPB, database or deployment is involved.
+- Validation: 59 report-manager checks pass, including actual component HTML rendering. Non-incremental HomeFront.sln passes with 189 existing warnings/0 errors; FlexCore.Showcase.sln passes with 0 warnings/0 errors. The folder picker sources are identical. Live browser uploads and database-backed previews remain for user testing; no app was started. Limits: 1,000 RPTs per batch, 64 MiB per file, 10,000 total entries per selected folder.
+
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
+
+## 2026-09-23 Native RPT Legacy Recovery
+
+- Independent strict FlexCore corpus run passes all 550 binaries; every generated XML and audited feature set matches FlexKit exactly.
+- Mirrored FlexKit's native converter fixes: physical CFB directory slots, v3 size DWORDs, bounded stream reads without unused padding, pre-v9 headerless archives and Database (TLV), qualified fields/index-based joins, 16-bit parameter-value lengths, embedded report discovery, implicit schemas and decrypt/inflate retries.
+- Strict FlexKit audit recovers all 284 prior failures: 511/511 downloaded binaries and 550/550 total binaries emit XML; previously successful feature sets are unchanged apart from diagnostics. NativeFormatTests passes 63 checks and RegionTests passes 226 checks against each library.
+- XML-invalid source text is explicitly escaped with original UTF-16 metadata retained. Partial extraction is diagnosed. This is not full rendering parity: unsupported analytical variants/style defaults, one non-equality legacy link and one escaped financial-report formula name remain review items.
+- Active HomeFront and FlexCore.Showcase non-incremental builds pass (189 existing HomeFront warnings; no Showcase warnings). No Java/IKVM/SAP runtime, new dependency, database change, source-report edit or running server. Details: `/Users/wadood/projects/JavaToCSharp/converted/docs/native-rpt-recovery-2026-09-23.md`.
 
 ## 2026-09-23 Wizard Last Step And Review-Only Grids
 

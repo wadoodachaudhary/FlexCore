@@ -70,6 +70,10 @@ public sealed class CrystalReportCore
 
 public sealed class CrystalDatabaseModel
 {
+    internal bool UsesLegacyFieldNames { get; init; }
+
+    internal List<string> ParseWarnings { get; } = [];
+
     public List<CrystalConnectionModel> Connections { get; } = [];
 
     public List<CrystalTableModel> Tables { get; } = [];
@@ -182,6 +186,8 @@ public sealed class CrystalTableLinkModel
 
 public sealed class CrystalDataDefinitionModel
 {
+    internal List<string> ParseWarnings { get; } = [];
+
     public CrystalReportDefinitionModel ReportDefinition { get; } = new();
 
     public string RecordSelectionFormula { get; set; } = "";

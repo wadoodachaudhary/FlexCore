@@ -110,13 +110,16 @@ public static class NativeCrystalRptConverter
         }
 
         var queryEngine = FindStream(streams, prefix, "QESession");
-        if (queryEngine is null)
+        var legacyDatabase = FindStream(streams, prefix, "Database (TLV)");
+        if (queryEngine is null && legacyDatabase is null)
         {
             throw new InvalidDataException("The RPT file does not contain the Query Engine session stream needed to materialize database metadata.");
         }
 
         options.Progress?.Invoke("Parsing Crystal Query Engine tables, fields, and joins.");
-        model.Database = QueryEngineSessionParser.Parse(queryEngine);
+        model.Database = queryEngine is not null
+            ? QueryEngineSessionParser.Parse(queryEngine)
+            : LegacyCrystalDatabaseParser.Parse(legacyDatabase!);
 
         if (contents is not null)
         {
@@ -139,6 +142,11 @@ public static class NativeCrystalRptConverter
         }
 
         model.Name = NormalizeReportName(model.Name, fallbackName);
+        foreach (var warning in model.Database.ParseWarnings.Concat(model.DataDefinition.ParseWarnings))
+        {
+            model.ConversionDiagnostics.Add(new("CRYSTAL_PARTIAL_EXTRACTION", model.Name, "", "", "", warning));
+            options.Progress?.Invoke($"[CRYSTAL_PARTIAL_EXTRACTION] {model.Name}: {warning}");
+        }
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
@@ -201,7 +209,7 @@ public static class NativeCrystalRptConverter
             .Where(stream =>
                 stream.FullPath.StartsWith("Subdocument ", StringComparison.OrdinalIgnoreCase) &&
                 stream.FullPath.EndsWith("/Contents", StringComparison.OrdinalIgnoreCase) &&
-                stream.HexPrefix.StartsWith("FC00FFFF", StringComparison.OrdinalIgnoreCase))
+                stream.FullPath.Split('/')[..^1].All(part => part.StartsWith("Subdocument ", StringComparison.OrdinalIgnoreCase)))
             .Select(stream => stream.FullPath[..^"Contents".Length])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(prefix => prefix, StringComparer.OrdinalIgnoreCase);

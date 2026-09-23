@@ -39,6 +39,10 @@ internal sealed class CompoundFileReader
         }
 
         _fileBytes = fileBytes;
+        var majorVersion = ReadInt16(0x1A);
+        if (ReadInt16(0x1C) != -2 || (majorVersion != 3 && majorVersion != 4) ||
+            ReadInt16(0x1E) != (majorVersion == 3 ? 9 : 12) || ReadInt16(0x20) != 6)
+            throw new InvalidDataException("The compound document has an unsupported sector layout.");
         _sectorSize = 1 << ReadInt16(0x1E);
         _miniSectorSize = 1 << ReadInt16(0x20);
         _firstDirectorySector = ReadInt32(0x30);
@@ -93,31 +97,38 @@ internal sealed class CompoundFileReader
         }
 
         var ordered = new List<CompoundFileEntry>();
-        VisitDirectory(root.ChildId, parentPath: "", ordered);
+        VisitDirectory(root.ChildId, parentPath: "", ordered, new HashSet<int>());
         return ordered;
     }
 
-    private void VisitDirectory(int entryId, string parentPath, List<CompoundFileEntry> ordered)
+    private void VisitDirectory(int entryId, string parentPath, List<CompoundFileEntry> ordered, HashSet<int> visited)
     {
-        if (entryId < 0 || entryId >= _entries.Count)
+        // Directory IDs are physical slots, including unallocated slots. Use an
+        // explicit traversal stack so corrupt sibling trees cannot overflow the call stack.
+        var pending = new Stack<(int Id, string Parent, bool Emit)>();
+        pending.Push((entryId, parentPath, false));
+        while (pending.TryPop(out var next))
         {
-            return;
+            if (next.Id == -1) continue;
+            if (next.Id < 0 || next.Id >= _entries.Count)
+                throw new InvalidDataException("The compound document references an invalid directory slot.");
+            var entry = _entries[next.Id];
+            var fullPath = string.IsNullOrEmpty(next.Parent) ? entry.Name : next.Parent + "/" + entry.Name;
+            if (next.Emit)
+            {
+                ordered.Add(entry with { FullPath = fullPath });
+                if (entry.Type is CompoundFileEntryType.Storage or CompoundFileEntryType.RootStorage)
+                    pending.Push((entry.ChildId, fullPath, false));
+                continue;
+            }
+            if (!visited.Add(next.Id))
+                throw new InvalidDataException("The compound document contains a cyclic or shared directory entry.");
+            if (entry.Type == CompoundFileEntryType.Unknown)
+                throw new InvalidDataException("The compound document references an unallocated directory slot.");
+            pending.Push((entry.RightSiblingId, next.Parent, false));
+            pending.Push((next.Id, next.Parent, true));
+            pending.Push((entry.LeftSiblingId, next.Parent, false));
         }
-
-        var entry = _entries[entryId];
-        VisitDirectory(entry.LeftSiblingId, parentPath, ordered);
-
-        var fullPath = string.IsNullOrEmpty(parentPath)
-            ? entry.Name
-            : parentPath + "/" + entry.Name;
-        ordered.Add(entry with { FullPath = fullPath });
-
-        if (entry.Type is CompoundFileEntryType.Storage or CompoundFileEntryType.RootStorage)
-        {
-            VisitDirectory(entry.ChildId, fullPath, ordered);
-        }
-
-        VisitDirectory(entry.RightSiblingId, parentPath, ordered);
     }
 
     private List<int> ReadFat(int fatSectorCount)
@@ -167,16 +178,21 @@ internal sealed class CompoundFileReader
         {
             var entryBytes = directoryBytes.AsSpan(offset, DirectoryEntrySize);
             var nameLength = BinaryPrimitives.ReadUInt16LittleEndian(entryBytes.Slice(0x40, 2));
-            if (nameLength < 2)
+            var type = (CompoundFileEntryType)entryBytes[0x42];
+            if (type == CompoundFileEntryType.Unknown)
             {
+                entries.Add(new CompoundFileEntry(entries.Count, "", "", type, -1, -1, -1, -2, 0));
                 continue;
             }
-
-            var rawNameBytes = Math.Min(nameLength - 2, 64);
+            if (nameLength < 2 || nameLength > 64 || nameLength % 2 != 0)
+                throw new InvalidDataException("The compound document has an invalid directory name length.");
+            var rawNameBytes = nameLength - 2;
             var name = Encoding.Unicode.GetString(entryBytes.Slice(0, rawNameBytes)).TrimEnd('\0');
-            var type = (CompoundFileEntryType)entryBytes[0x42];
             var startSector = BinaryPrimitives.ReadInt32LittleEndian(entryBytes.Slice(0x74, 4));
-            var size = BinaryPrimitives.ReadInt64LittleEndian(entryBytes.Slice(0x78, 8));
+            // MS-CFB 2.6.3: older v3 writers leave the high DWORD uninitialized.
+            var size = _sectorSize == 512
+                ? BinaryPrimitives.ReadUInt32LittleEndian(entryBytes.Slice(0x78, 4))
+                : BinaryPrimitives.ReadInt64LittleEndian(entryBytes.Slice(0x78, 8));
             entries.Add(new CompoundFileEntry(
                 entries.Count,
                 name,
@@ -222,8 +238,12 @@ internal sealed class CompoundFileReader
 
     private byte[] ReadRegularStream(int startSector, long? expectedSize)
     {
+        if (expectedSize < 0 || expectedSize > _fileBytes.LongLength)
+            throw new InvalidDataException("The compound stream has an invalid declared size.");
+        if (expectedSize == 0) return [];
         if (startSector < 0)
         {
+            if (expectedSize > 0) throw new InvalidDataException("The compound stream has no data sectors.");
             return [];
         }
 
@@ -237,7 +257,12 @@ internal sealed class CompoundFileReader
                 throw new InvalidDataException("The compound document contains a cyclic sector chain.");
             }
 
-            output.Write(GetSector(sector));
+            var required = expectedSize is null ? _sectorSize : (int)Math.Min(_sectorSize, expectedSize.Value - output.Length);
+            var offset = ((long)sector + 1) * _sectorSize;
+            if (offset < 0 || offset > _fileBytes.LongLength - required)
+                throw new InvalidDataException("The compound document references stream data outside the file.");
+            output.Write(_fileBytes.AsSpan((int)offset, required));
+            if (output.Length == expectedSize) break;
             if (sector >= _fat.Count)
             {
                 throw new InvalidDataException("The compound document references a FAT sector outside the file.");
@@ -256,16 +281,19 @@ internal sealed class CompoundFileReader
             return bytes;
         }
 
-        var size = checked((int)Math.Min(expectedSize.Value, bytes.LongLength));
-        Array.Resize(ref bytes, size);
+        if (bytes.LongLength != expectedSize.Value)
+            throw new InvalidDataException("The compound stream ends before its declared size.");
         return bytes;
     }
 
     private byte[] ReadMiniStream(int startMiniSector, int expectedSize)
     {
-        if (startMiniSector < 0 || expectedSize == 0)
+        if (expectedSize < 0 || expectedSize > _miniStream.Length)
+            throw new InvalidDataException("The compound mini stream has an invalid declared size.");
+        if (expectedSize == 0) return [];
+        if (startMiniSector < 0)
         {
-            return [];
+            throw new InvalidDataException("The compound mini stream has no data sectors.");
         }
 
         using var output = new MemoryStream();
@@ -278,13 +306,15 @@ internal sealed class CompoundFileReader
                 throw new InvalidDataException("The compound document contains a cyclic mini-sector chain.");
             }
 
-            var offset = miniSector * _miniSectorSize;
-            if (offset < 0 || offset + _miniSectorSize > _miniStream.Length)
+            var required = (int)Math.Min(_miniSectorSize, expectedSize - output.Length);
+            var offset = (long)miniSector * _miniSectorSize;
+            if (offset < 0 || offset > _miniStream.LongLength - required)
             {
                 throw new InvalidDataException("The compound document references a mini-sector outside the mini stream.");
             }
 
-            output.Write(_miniStream, offset, _miniSectorSize);
+            output.Write(_miniStream, (int)offset, required);
+            if (output.Length == expectedSize) break;
             if (miniSector >= _miniFat.Count)
             {
                 throw new InvalidDataException("The compound document references a mini-FAT sector outside the file.");
@@ -294,7 +324,8 @@ internal sealed class CompoundFileReader
         }
 
         var bytes = output.ToArray();
-        Array.Resize(ref bytes, Math.Min(expectedSize, bytes.Length));
+        if (bytes.Length != expectedSize)
+            throw new InvalidDataException("The compound mini stream ends before its declared size.");
         return bytes;
     }
 

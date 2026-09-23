@@ -52,15 +52,16 @@
                 <ButtonControl Disabled="@(!Enabled)">@(Label ?? "Browse...")</ButtonControl>
             }
 
-            @if (Enabled)
-            {
-                <InputFile OnChange="HandleChange"
-                           accept="@Accept"
-                           multiple="@Multiple"
-                           title="@ResolvedTooltip"
-                           aria-label="@ResolvedAriaLabel"
-                           style="position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; font-size:0;" />
-            }
+            @* Retain the input while disabled: selected IBrowserFile streams still refer to it. *@
+            <InputFile OnChange="HandleChange"
+                       accept="@Accept"
+                       multiple="@(Multiple || SelectDirectory)"
+                       webkitdirectory="@(SelectDirectory ? "" : null)"
+                       directory="@(SelectDirectory ? "" : null)"
+                       disabled="@(!Enabled)"
+                       title="@ResolvedTooltip"
+                       aria-label="@ResolvedAriaLabel"
+                       style="position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; font-size:0;" />
         }
     </div>
 
@@ -108,6 +109,9 @@
 
     /// <summary>Allow selecting more than one file.</summary>
     [Parameter] public bool Multiple { get; set; }
+
+    /// <summary>Select a client folder and its descendants in browser-upload mode. The host filters returned files.</summary>
+    [Parameter] public bool SelectDirectory { get; set; }
 
     /// <summary>Text for the default <see cref="ButtonControl"/> when no <see cref="ChildContent"/> is supplied.</summary>
     [Parameter] public string? Label { get; set; }
@@ -199,7 +203,7 @@
 
     private async Task HandleChange(InputFileChangeEventArgs e)
     {
-        if (OnChange.HasDelegate)
+        if (Enabled && OnChange.HasDelegate)
             await OnChange.InvokeAsync(e);
     }
 

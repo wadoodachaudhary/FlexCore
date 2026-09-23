@@ -88,10 +88,13 @@ internal static partial class CrystalReportContentsParser
                     else if (containers.Contains(211)) definition.RowFields.Add(field);
                 }
             }
-            else if (record.Type == 159 && objectType == 185 && containers.Contains(216))
+            else if (record.Type is 159 or 161 && objectType == 185 && containers.Contains(216))
             {
                 var probe = reader.Fork();
-                _ = ReadReportObjectBase(probe, "FieldObject", "Field", 160);
+                // FieldObject in a GridObject is wrapped as 161 -> 159 -> 158.
+                // Read only its summary binding; cell drawing records stay opaque.
+                if (record.Type == 161) probe.LoadNextRecord(159, 1792, 162);
+                _ = ReadReportObjectBase(probe, "FieldObject", "Field", record.Type == 161 ? 162 : 160);
                 AddSummary(ReadFieldReference(probe, fields, data));
                 bindingFound = true;
             }
@@ -115,8 +118,10 @@ internal static partial class CrystalReportContentsParser
             definition.SortCategories = !definition.EachRecord;
             definition.SeriesField = groups.Count > 1 ? groups[1] : "";
         }
-        if (!bindingFound || definition.Validate(objectType == 180 ? "Chart" : "CrossTab") is { })
-            throw new NotSupportedException("Native analytical bindings are incomplete or outside the supported report contract.");
+        if (!bindingFound)
+            throw new NotSupportedException("No supported native analytical measure-binding records were found.");
+        if (definition.Validate(objectType == 180 ? "Chart" : "CrossTab") is { } error)
+            throw new NotSupportedException("Native analytical bindings: " + error);
         return definition;
 
         void AddSummary(string reference)

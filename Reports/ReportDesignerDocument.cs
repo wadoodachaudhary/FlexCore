@@ -1063,7 +1063,7 @@ public static partial class ReportDesignerXmlSerializer
                 continue;
 
             var objectName = Attribute(objectElement, "Name") ?? objectElement.Name.LocalName;
-            var id = MakeUniqueId($"{section.Id}-{objectName}", usedIds);
+            var id = MakeUniqueId($"{section.Id}-{(string.IsNullOrWhiteSpace(objectName) ? objectElement.Name.LocalName : objectName)}", usedIds);
             var kind = InferKindFromObjectElement(objectElement);
             var objectFormat = Child(objectElement, "ObjectFormat");
             var font = Child(objectElement, "Font");

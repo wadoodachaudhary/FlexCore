@@ -21,8 +21,10 @@ internal static partial class CrystalReportContentsParser
         CrystalRptStream contentsStream,
         CrystalDatabaseModel? database = null)
     {
-        var decoded = TslvStreamReader.Decode(contentsStream.Bytes, defaultSchema: 3072);
-        var reader = new TslvArchiveReader(decoded.Body, decoded.HeaderSchema);
+        // These Contents archives use the legacy 100-series record family.
+        // Unstated schemas inherit 0x0700, not the newer 8000-series schema.
+        var decoded = TslvStreamReader.Decode(contentsStream.Bytes, defaultSchema: 1792);
+        var reader = new TslvArchiveReader(decoded.Body, decoded.HeaderSchema) { LegacyValueLengths = decoded.IsHeaderless };
         var core = new CrystalReportCore();
         var dataDefinition = new CrystalDataDefinitionModel();
         var fieldReferences = new FieldReferenceTable();
@@ -66,8 +68,11 @@ internal static partial class CrystalReportContentsParser
         var areaPairCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
         reader.SkipRestOfRecord();
 
-        _ = reader.LoadNextRecord(351, 1792, 103);
-        reader.SkipRestOfRecord();
+        if (reader.Fork().LoadAnyRecord().Type == 351)
+        {
+            _ = reader.LoadAnyRecord();
+            reader.SkipRestOfRecord();
+        }
 
         if (hasPrinter)
         {
@@ -184,15 +189,14 @@ internal static partial class CrystalReportContentsParser
                 _ = ruler;
             }
         }
-        catch (Exception)
+        catch (Exception error) when (error is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException or NotSupportedException)
         {
             if (Environment.GetEnvironmentVariable("FLEXKIT_DEBUG_RPT") == "1")
             {
                 throw;
             }
 
-            // The native converter is intentionally incremental. If a later report
-            // definition record is not understood yet, keep the metadata already read.
+            dataDefinition.ParseWarnings.Add($"Report definition extraction stopped at TSLV record {reader.CurrentRecord?.Type}: {error.Message}");
         }
     }
 
@@ -385,13 +389,24 @@ internal static partial class CrystalReportContentsParser
     {
         CrystalFieldHeader field;
         int databaseIndex;
+        string? legacyName = null;
         try
         {
             _ = reader.LoadNextRecord(115, 1792, 101);
             _ = reader.LoadNextRecord(114, 1792, 101);
             field = ReadFieldHeader(reader);
             reader.SkipRestOfRecord();
-            databaseIndex = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : -1;
+            if (database.UsesLegacyFieldNames)
+            {
+                if (reader.LoadUInt16() != 0x1008)
+                    throw new InvalidDataException("Unsupported legacy database field-name encoding.");
+                var nameBytes = reader.LoadBlock(reader.LoadUInt16());
+                if (nameBytes.Length == 0 || nameBytes[^1] != 0)
+                    throw new InvalidDataException("Unterminated legacy database field name.");
+                legacyName = System.Text.Encoding.Latin1.GetString(nameBytes, 0, nameBytes.Length - 1);
+                databaseIndex = -1;
+            }
+            else databaseIndex = reader.BytesLeftInRecord >= 4 ? reader.LoadInt32() : -1;
             reader.SkipRestOfRecord();
         }
         catch (Exception ex)
@@ -402,6 +417,13 @@ internal static partial class CrystalReportContentsParser
         if (database.FieldsByObjectId.TryGetValue(databaseIndex, out var databaseField))
         {
             return databaseField.FormulaName;
+        }
+
+        if (!string.IsNullOrWhiteSpace(legacyName))
+        {
+            var qualifiedField = database.Tables.SelectMany(t => t.Fields)
+                .FirstOrDefault(f => f.LongName.Equals(legacyName, StringComparison.OrdinalIgnoreCase));
+            return qualifiedField?.FormulaName ?? "{" + legacyName.Trim('{', '}') + "}";
         }
 
         var databaseFields = database.Tables.SelectMany(table => table.Fields).ToArray();
@@ -656,7 +678,7 @@ internal static partial class CrystalReportContentsParser
 
     private static string? ReadCrystalValue(TslvArchiveReader reader, int valueType)
     {
-        var length = reader.LoadInt32();
+        var length = reader.LegacyValueLengths ? reader.LoadUInt16() : reader.LoadInt32();
         if (length == 0)
         {
             return null;
@@ -946,11 +968,11 @@ internal static partial class CrystalReportContentsParser
         var resolved = fieldReferences.Get(type, index);
         if (type == 4 &&
             dataDefinition is not null &&
-            TryParseGroupReference(string.IsNullOrWhiteSpace(resolved) ? name : resolved, out var resolvedGroupNumber) &&
-            resolvedGroupNumber > 0 &&
-            resolvedGroupNumber <= dataDefinition.Groups.Count)
+            TryParseGroupReference(string.IsNullOrWhiteSpace(resolved) ? name : resolved, out var resolvedGroupNumber))
         {
-            return "GroupName (" + dataDefinition.Groups[resolvedGroupNumber - 1].ConditionField + ")";
+            return resolvedGroupNumber > 0 && resolvedGroupNumber <= dataDefinition.Groups.Count
+                ? "GroupName (" + dataDefinition.Groups[resolvedGroupNumber - 1].ConditionField + ")"
+                : "Group #" + resolvedGroupNumber;
         }
 
         if (!string.IsNullOrWhiteSpace(resolved))
@@ -974,10 +996,12 @@ internal static partial class CrystalReportContentsParser
     private static bool TryParseGroupReference(string name, out int groupNumber)
     {
         groupNumber = 0;
-        const string prefix = "Group #";
-        return name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) &&
+        // Legacy group-field identities include a trailing "Name"; it is not display text.
+        var match = System.Text.RegularExpressions.Regex.Match(name, @"^Group #(\d+)(?: Name)?$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return match.Success &&
                int.TryParse(
-                   name[prefix.Length..],
+                   match.Groups[1].Value,
                    System.Globalization.NumberStyles.Integer,
                    System.Globalization.CultureInfo.InvariantCulture,
                    out groupNumber);
@@ -1412,7 +1436,8 @@ internal static partial class CrystalReportContentsParser
             reportObject.Width = Math.Abs(probe.LoadInt32());
             reportObject.Height = Math.Abs(probe.LoadInt32());
             if (probe.BytesLeftInRecord >= 8) { probe.LoadInt32(); probe.LoadInt32(); }
-            reportObject.Name = probe.LoadString() ?? reportObject.Name;
+            var name = probe.LoadString();
+            if (!string.IsNullOrWhiteSpace(name)) reportObject.Name = name;
         });
 
         reader.SkipRestOfRecord();
