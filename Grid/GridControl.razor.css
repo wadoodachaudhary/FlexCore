@@ -4451,6 +4451,12 @@ td.fx-row-selector-cell-flat.fx-row-selector-emphasis {
     box-shadow: none !important;
 }
 
+/* ShowActiveCell=false: every cursor ring reads this variable (the SingleCell-batch ring
+   included), so making it transparent hides the cursor in every theme and state. */
+.fx-grid[data-fx-active-cell="hidden"] {
+    --fx-grid-active-cell-border: transparent !important;
+}
+
 /* Opt-in stacked/adaptive layout. Data behavior is unchanged; each flat row
    becomes a compact field card and uses the column header exposed through the
    cell's data-label attribute. */

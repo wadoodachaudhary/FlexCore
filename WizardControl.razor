@@ -71,7 +71,8 @@
                         @AccessKeyLabel(PreviousText, PreviousAccessKey)
                     </ButtonControl>
                 }
-                @if (ShowNext)
+                @* The last step has nowhere to go, so it has no Next at all. *@
+                @if (ShowNext && !StepContext.IsLast)
                 {
                     <ButtonControl CssClass="fx-wizard-nav-btn primary"
                                    accesskey="@NextAccessKey"
@@ -140,6 +141,7 @@
     [Parameter] public bool ShowHeader { get; set; } = true;
     [Parameter] public bool ShowFooter { get; set; } = true;
     [Parameter] public bool ShowPrevious { get; set; } = true;
+    /// <summary>Shows Next on every step but the last one, which never has a Next.</summary>
     [Parameter] public bool ShowNext { get; set; } = true;
     [Parameter] public bool ShowFinish { get; set; } = true;
     [Parameter] public bool ShowCancel { get; set; } = true;
@@ -226,6 +228,7 @@
 
     private WizardNavigationContext NavigationContext => new()
     {
+        IsLast = StepContext.IsLast,
         CanMovePrevious = CanNavigatePrevious,
         CanMoveNext = CanNavigateNext,
         CanFinish = CanFinish,

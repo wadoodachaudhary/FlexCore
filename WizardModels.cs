@@ -21,6 +21,9 @@ public sealed class WizardStepContext
 
 public sealed class WizardNavigationContext
 {
+    /// <summary>True on the last step. The default footer leaves Next out there; a custom
+    /// footer should do the same.</summary>
+    public bool IsLast { get; init; }
     public bool CanMovePrevious { get; init; }
     public bool CanMoveNext { get; init; }
     public bool CanFinish { get; init; }

@@ -3,6 +3,26 @@
 Follow `/Users/wadood/projects/VBToCSharp/AGENTS.md`. Shared code is mirrored from
 FlexKit; preserve project-specific files and build FlexCore.Showcase after edits.
 
+## 2026-09-23 Wizard Last Step And Review-Only Grids
+
+- `WizardControl`: the default footer leaves Next out on the last step (`ShowNext && !StepContext.IsLast`); Next there could never be enabled. `WizardNavigationContext.IsLast` lets a custom `FooterContent` do the same. Owner rule: a wizard's last page has no Next at all, not a disabled one.
+- `GridControl.ShowActiveCell` (default true; VSFlexGrid FocusRect=flexFocusNone): false emits `data-fx-active-cell="hidden"` on the grid root, the scoped CSS makes `--fx-grid-active-cell-border` transparent there (every cursor ring, the SingleCell-batch ring included, reads it), and the browser arrow-key preview is off so navigation takes the server path. `_activeCell` and the `fx-cell-active` class stay as the keyboard origin and scroll anchor. Review-only recipe: `AllowSelection=false HighlightSelectedRows=false EnableHover=false ShowActiveCell=false`. Never infer it from AllowSelection=false (tick-to-pick grids keep their cursor). A host that flips it live re-creates the grid with `@key`. Still visible by design: the "..." button on ShowEditButton columns, the editing ring, the orange type-search match.
+- Default grids render unchanged (the attribute is null). No new JavaScript. HomeFront.sln and FlexCore.Showcase.sln build with --no-incremental; HomeFront's 25 database-free harnesses pass; verified live on the TBD review step (click, ArrowRight: no ring, no inline cue, no selected classes).
+
+## 2026-09-22 Filter Popup Condition Checklist
+
+- The text-condition drafts now narrow the checkbox candidates and selection summary as well as the grid. The lower Search values box further narrows that set; Select All acts only on the visible matches. Checked membership never hides a candidate, and the complete distinct-value set is retained for commits and provider completeness checks.
+- Uses the grid's existing display-aware/case-sensitive operator matching, including blank conditions and advanced AND/OR. Both libraries are mirrored; regression coverage is in active HomeFront's database-free GridFilterPopupChecks. No host filter workaround or new production JavaScript.
+- Verified 435 .NET checks against each library, 109 offline Chrome checks, and screenshots at 1440px/390px. Chrome uses real rendered markup/assets with simulated .NET acknowledgements, not a live HomeFront session. Nonincremental HomeFront and FlexCore.Showcase builds passed (HomeFront: 189 warnings, zero errors; Showcase: zero warnings/errors). No app server started. The browser fixture now gives its simulated host dialog the role required by the existing keyboard ownership guard.
+
+## 2026-09-23 Ship-Review Fix (filter checklist search)
+
+- The column filter menu now narrows its value checklist to the typed condition. Clearing the
+  **Search values** box selects the COMPLETE distinct set again, not the condition-narrowed view:
+  selecting only the condition's matches left the commit short of the distinct count, so Apply
+  stored a checked-value filter that kept filtering the column after the condition was cleared
+  (`SelectFilterChecklistSearchMatches`). GridFilterPopupChecks pins both halves (437 checks).
+
 ## 2026-09-21 Ship-Review Fixes (Choose Columns, Best Fit to Grid)
 
 - `DialogControl` with `CloseOnOverlayClick="true"` closes on a backdrop click only when the press and the release were both on the backdrop. A press on a dialog button that slides off onto the backdrop (or the reverse) lands its click on the overlay and used to discard the dialog's edits, e.g. the Choose Columns list. The press/release handlers are wired only when `CloseOnOverlayClick` is true (GridControl's own dialogs); every other dialog renders exactly as before. Only a primary-button press made while the system menu is closed arms a backdrop close, and each backdrop press clears a stale drag-release suppression.

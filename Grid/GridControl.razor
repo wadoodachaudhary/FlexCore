@@ -17,6 +17,7 @@
      data-fx-client-buffered-editing="@(UsesClientBufferedTextEditing ? "true" : "false")"
      data-fx-row-highlight="@(HighlightSelectedRows ? "true" : "false")"
      data-fx-allow-selection="@(AllowSelection ? "true" : "false")"
+     data-fx-active-cell="@(ShowActiveCell ? null : "hidden")"
      data-fx-pointer-paint-ack="@_pointerPaintAcknowledgedGeneration"
      data-fx-custom-keyboard-shortcuts="@CustomKeyboardShortcutDomValue"
      data-fx-column-virtualization="@ColumnVirtualizationDomState"
@@ -1517,7 +1518,7 @@
                 }
                 else
                 {
-                    var allCandidates = GetDistinctFilterValueCandidates(_filterPopupField);
+                    var allCandidates = GetConditionFilterValueCandidates(_filterPopupField);
                     var candidates = FilterChecklistCandidatesBySearch(allCandidates);
                     var values = candidates.Select(v => v.Value).ToList();
                     var totalValueCount = allCandidates.Count;
