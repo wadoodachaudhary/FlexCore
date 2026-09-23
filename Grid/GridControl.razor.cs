@@ -412,6 +412,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// cell is ever selected and no selection event fires.</summary>
     [Parameter] public bool AllowSelection { get; set; } = true;
     [Parameter] public bool HighlightSelectedRows { get; set; } = true;
+    /// <summary>False hides the cell cursor (VSFlexGrid FocusRect=flexFocusNone). The active cell
+    /// still exists as the keyboard origin and scroll anchor; it is just not drawn, and the browser
+    /// arrow-key preview is off. With AllowSelection=false, HighlightSelectedRows=false and
+    /// EnableHover=false this makes a review-only grid: nothing on it ever looks selected.
+    /// A host that flips it on a live grid should re-create the grid with @key.</summary>
+    [Parameter] public bool ShowActiveCell { get; set; } = true;
     /// <summary>
     /// Enables spreadsheet-style row drag selection for multi-select row grids.
     /// Click selection is independent and always handled by <see cref="HandleRowClick"/>.

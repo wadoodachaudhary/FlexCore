@@ -279,9 +279,12 @@ public partial class GridControl<TValue>
         PerformanceMode is GridPerformanceMode.ServerOptimized
             or GridPerformanceMode.ClientPreviewAndServerOptimized;
 
+    // The browser preview paints its own inline cursor, so a grid with a hidden cursor
+    // navigates through the server path instead.
     private bool UseClientNavigationPreview =>
-        PerformanceMode is GridPerformanceMode.ClientPreview
-            or GridPerformanceMode.ClientPreviewAndServerOptimized;
+        ShowActiveCell
+        && (PerformanceMode is GridPerformanceMode.ClientPreview
+            or GridPerformanceMode.ClientPreviewAndServerOptimized);
 
     private IEnumerable<TValue>? _optimizedDataSource;
     private DataSourceSelectionSignature _optimizedDataSignature;

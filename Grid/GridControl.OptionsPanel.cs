@@ -927,8 +927,14 @@ public partial class GridControl<TValue>
     {
         if (IsProviderFilterValuesLoading)
             return false;
+        // An empty search selects the COMPLETE checklist again — the distinct set, not the
+        // condition-narrowed view. Selecting only the condition's matches would leave the
+        // commit short of the distinct count, so Apply would store a checked-value filter
+        // that keeps filtering the column after the condition is cleared.
         _filterCheckedDraft = new HashSet<string>(
-            GetColumnFilterValueCandidates(field).Select(candidate => candidate.Value),
+            (string.IsNullOrWhiteSpace(_filterChecklistSearchDraft)
+                ? GetDistinctFilterValueCandidates(field)
+                : GetColumnFilterValueCandidates(field)).Select(candidate => candidate.Value),
             FilterTextComparer);
         _filterChecklistDraftTouched = true;
         _filterChecklistCommitError = null;
@@ -1130,7 +1136,44 @@ public partial class GridControl<TValue>
         col?.Type == ColumnType.Number;
 
     private IReadOnlyList<FilterValueCandidate> GetColumnFilterValueCandidates(string field) =>
-        FilterChecklistCandidatesBySearch(GetDistinctFilterValueCandidates(field));
+        FilterChecklistCandidatesBySearch(GetConditionFilterValueCandidates(field));
+
+    private IReadOnlyList<FilterValueCandidate> GetConditionFilterValueCandidates(string field)
+    {
+        var all = GetDistinctFilterValueCandidates(field);
+        if (!IsCurrentFilterPopupField(field))
+            return all;
+
+        var hasFirst = !string.IsNullOrWhiteSpace(_filterTextDraft)
+            || IsValueOptionalFilterOperator(_filterOperatorDraft);
+        var hasSecond = EnableAdvancedFilterPopup
+            && (!string.IsNullOrWhiteSpace(_secondFilterTextDraft)
+                || IsValueOptionalFilterOperator(_secondFilterOperatorDraft));
+        var filterBlanks = EnableBlankRowFilter && _blankRowFilterDraft != BlankRowFilterMode.All;
+        if (!hasFirst && !hasSecond && !filterBlanks)
+            return all;
+
+        // Narrow by the conditions, never by checked membership: an unchecked
+        // match must remain available to select again. Keep the full value set for commits.
+        return all.Where(candidate =>
+        {
+            var raw = candidate.Value;
+            var display = raw.Length == 0 && candidate.DisplayText == "(blank)" ? "" : candidate.DisplayText;
+            if (filterBlanks)
+            {
+                var blank = string.IsNullOrWhiteSpace(raw) && string.IsNullOrWhiteSpace(display);
+                if (_blankRowFilterDraft == BlankRowFilterMode.BlanksOnly && !blank
+                    || _blankRowFilterDraft == BlankRowFilterMode.NonBlanksOnly && blank)
+                    return false;
+            }
+
+            var first = !hasFirst || PassesDisplayAwareTextFilter(raw, display, _filterTextDraft, _filterOperatorDraft);
+            var second = !hasSecond || PassesDisplayAwareTextFilter(raw, display, _secondFilterTextDraft, _secondFilterOperatorDraft);
+            return hasFirst && hasSecond && _filterLogicalOperatorDraft == LogicalFilterOperator.Or
+                ? first || second
+                : first && second;
+        }).ToList();
+    }
 
     private IReadOnlyList<FilterValueCandidate> FilterChecklistCandidatesBySearch(IReadOnlyList<FilterValueCandidate> all) =>
         string.IsNullOrWhiteSpace(_filterChecklistSearchDraft)
@@ -1427,7 +1470,7 @@ public partial class GridControl<TValue>
     }
 
     private int GetSelectedFilterValueCount(string field) =>
-        CountSelectedFilterValues(field, GetDistinctFilterValueCandidates(field));
+        CountSelectedFilterValues(field, GetConditionFilterValueCandidates(field));
 
     private int CountSelectedFilterValues(string field, IReadOnlyList<FilterValueCandidate> all)
     {
