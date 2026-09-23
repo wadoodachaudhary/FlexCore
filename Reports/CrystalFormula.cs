@@ -114,7 +114,7 @@ public sealed class CrystalFormula
     private static readonly HashSet<string> AggregateNames = new("sum average avg count distinctcount minimum maximum".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> Functions = new(("sum average avg count distinctcount minimum maximum iif switch choose isnull hasvalue previous next onfirstrecord onlastrecord " +
         "totext cstr tonumber cdbl cint val isnumber todate cdate date datetime dateadd datediff year month day hour minute second dayofweek " +
-        "left right mid len length trim ltrim rtrim uppercase lowercase ucase lcase replace instr chr chrw asc space replicate round truncate int abs sgn ceiling floor remainder mod " +
+        "left right mid len length trim ltrim rtrim uppercase lowercase ucase lcase replace instr chr chrw asc space replicate replicatestring round truncate int abs sgn ceiling floor remainder mod " +
         "groupname rgb color defaultvaluesfornulls exceptionsfornulls evaluateafter").Split(' '), StringComparer.OrdinalIgnoreCase);
 
     private sealed class Frame(CrystalFormulaContext context, object? defaultValue)
@@ -161,10 +161,10 @@ public sealed class CrystalFormula
             "currentfieldvalue" => f.Context.CurrentFieldValue(),
             "whileprintingrecords" or "whilereadingrecords" or "beforereadingrecords" => null,
             "defaultvaluesfornulls" => f.DefaultNulls = true, "exceptionsfornulls" => f.DefaultNulls = false,
-            "crred" => 255m, "crgreen" => 32768m, "crblue" => 16711680m, "crblack" => 0m, "crwhite" => 16777215m,
-            "crmaroon" => 128m, "crolive" => 32896m, "crnavy" => 8388608m, "crpurple" => 8388736m,
-            "crteal" => 8421376m, "crgray" => 8421504m, "crsilver" => 12632256m, "crlime" => 65280m,
-            "cryellow" => 65535m, "crfuchsia" => 16711935m, "craqua" => 16776960m, "crnocolor" => -1m,
+            "crred" or "red" => 255m, "crgreen" or "green" => 32768m, "crblue" or "blue" => 16711680m, "crblack" or "black" => 0m, "crwhite" or "white" => 16777215m,
+            "crmaroon" or "maroon" => 128m, "crolive" or "olive" => 32896m, "crnavy" or "navy" => 8388608m, "crpurple" or "purple" => 8388736m,
+            "crteal" or "teal" => 8421376m, "crgray" or "gray" => 8421504m, "crsilver" or "silver" => 12632256m, "crlime" or "lime" => 65280m,
+            "cryellow" or "yellow" => 65535m, "crfuchsia" or "fuchsia" => 16711935m, "craqua" or "aqua" => 16776960m, "crnocolor" or "nocolor" => -1m,
             "crregular" => 0m, "crbold" => 1m, "critalic" => 2m, "crbolditalic" => 3m,
             _ => f.Variables(Name).TryGetValue(Name, out var value) ? value : throw new InvalidDataException($"Unknown Crystal symbol '{Name}'.")
         };
@@ -229,6 +229,7 @@ public sealed class CrystalFormula
                 "/" => Number(a) / Number(b), "mod" or "%" => Number(a) % Number(b), "^" => (decimal)Math.Pow((double)Number(a), (double)Number(b)),
                 "to" => new Range(a, b), "in" => b is Range range ? Compare(a, range.Start) >= 0 && Compare(a, range.End) <= 0 : b is object?[] values ? values.Any(v => Compare(a, v) == 0) : Text(b).Contains(Text(a), StringComparison.OrdinalIgnoreCase),
                 "like" => Regex.IsMatch(Text(a), "^" + Regex.Escape(Text(b)).Replace("\\*", ".*").Replace("\\?", ".") + "$", RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromMilliseconds(100)),
+                "startswith" => Text(a).StartsWith(Text(b), StringComparison.OrdinalIgnoreCase),
                 _ => throw new NotSupportedException($"Crystal operator '{Op}' is not implemented.")
             };
         }
@@ -289,7 +290,7 @@ public sealed class CrystalFormula
                 "instr" => Args.Length == 2 ? Str(0).IndexOf(Str(1), StringComparison.Ordinal) + 1 : Str(1).IndexOf(Str(2), Math.Clamp(Int(0) - 1, 0, Str(1).Length), StringComparison.Ordinal) + 1,
                 "chr" or "chrw" => char.ConvertFromUtf32(Int(0)), "asc" => Str(0).Length == 0 ? 0 : char.ConvertToUtf32(Str(0), 0),
                 "space" => new string(' ', Math.Clamp(Int(0), 0, 32768)),
-                "replicate" => string.Concat(Enumerable.Repeat(Str(0), Math.Clamp(Int(1), 0, 32768 / Math.Max(1, Str(0).Length)))),
+                "replicate" or "replicatestring" => string.Concat(Enumerable.Repeat(Str(0), Math.Clamp(Int(1), 0, 32768 / Math.Max(1, Str(0).Length)))),
                 "round" => decimal.Round(Number(Arg(0)), Args.Length > 1 ? Math.Clamp(Int(1), 0, 28) : 0, MidpointRounding.AwayFromZero),
                 "truncate" => Truncate(Number(Arg(0)), Args.Length > 1 ? Int(1) : 0), "int" or "floor" => decimal.Floor(Number(Arg(0))),
                 "ceiling" => decimal.Ceiling(Number(Arg(0))), "abs" => Math.Abs(Number(Arg(0))), "sgn" => Math.Sign(Number(Arg(0))),
@@ -368,14 +369,14 @@ public sealed class CrystalFormula
     private static readonly Parser<Node> Atom = If.Or(Declaration).Or(Assignment).Or(Constant).Or(Field).Or(Function)
         .Or(from open in Punctuation("(") from value in Parse.Ref(() => Program) from close in Punctuation(")") select value)
         .Or(from open in Punctuation("[") from values in Parse.Ref(() => Expression).DelimitedBy(Punctuation(",")) from close in Punctuation("]") select (Node)new Values(values.ToArray()))
-        .Or(Identifier.Where(name => !new[] { "then", "else", "and", "or", "xor", "mod", "in", "like", "to" }.Contains(name.ToLowerInvariant())).Select(name => (Node)new Symbol(name)));
+        .Or(Identifier.Where(name => !new[] { "then", "else", "and", "or", "xor", "mod", "in", "like", "startswith", "to" }.Contains(name.ToLowerInvariant())).Select(name => (Node)new Symbol(name)));
     private static readonly Parser<Node> UnaryExpression = (from op in Punctuation("-").Or(Punctuation("+")) from value in Parse.Ref(() => UnaryExpression) select (Node)new Unary(op, value)).Or(Atom);
     private static Parser<Node> Chain(Parser<Node> operand, params string[] operators) => Parse.ChainOperator(operators.Select(op => char.IsLetter(op[0]) ? Word(op) : Punctuation(op)).Aggregate((a, b) => a.Or(b)), operand, (op, a, b) => new Binary(op, a, b));
     private static readonly Parser<Node> Power = Chain(UnaryExpression, "^");
     private static readonly Parser<Node> Product = Chain(Power, "*", "/", "%", "mod");
     private static readonly Parser<Node> Sum = Chain(Product, "+", "-", "&");
     private static readonly Parser<Node> Ranges = Chain(Sum, "to");
-    private static readonly Parser<Node> Comparison = Chain(Ranges, "<=", ">=", "<>", "!=", "=", "<", ">", "in", "like");
+    private static readonly Parser<Node> Comparison = Chain(Ranges, "<=", ">=", "<>", "!=", "=", "<", ">", "in", "like", "startswith");
     private static readonly Parser<Node> Not = Word("not").Then(_ => Parse.Ref(() => Not)).Select(value => (Node)new Unary("not", value)).Or(Comparison);
     private static readonly Parser<Node> And = Chain(Not, "and");
     private static readonly Parser<Node> Expression = Chain(And, "or", "xor");

@@ -22,6 +22,14 @@ public static class TslvStreamReader
 
     public static TslvDecodedStream Decode(byte[] bytes, int defaultSchema)
     {
+        var first = new Cursor(bytes, defaultSchema).LoadAnyRecord();
+        if (first.Type is 100 or 303 && first.HasSchema && first.Schema is >= 1536 and <= 1793)
+        {
+            // Pre-v9 report/parameter archives start with their first record,
+            // not the later encrypted/compressed stream-envelope record.
+            return new(first.Schema, false, false, 0, false, [], bytes,
+                ReadRecordHeaders(bytes, first.Schema)) { IsHeaderless = true };
+        }
         var streamHeader = ReadHeader(bytes, defaultSchema);
 
         var body = bytes.AsSpan(streamHeader.BodyOffset).ToArray();
@@ -143,14 +151,14 @@ public static class TslvStreamReader
 
     private static IReadOnlyList<TslvRecordHeader> ReadRecordHeaders(byte[] body, int defaultSchema)
     {
-        var cursor = new Cursor(body, defaultSchema);
+        var cursor = new TslvArchiveReader(body, defaultSchema);
         var records = new List<TslvRecordHeader>();
         while (cursor.Position < body.Length)
         {
             var position = cursor.Position;
             var record = cursor.LoadAnyRecord();
             records.Add(record with { Offset = position });
-            cursor.SkipRestOfRecord(record);
+            cursor.SkipRestOfRecord();
         }
 
         return records;
@@ -164,11 +172,15 @@ public static class TslvStreamReader
         foreach (var outputTransform in Enum.GetValues<BlockByteTransform>())
         {
             var decrypted = Decrypt(bytes, key, initializationVector, keyTransform, inputTransform, outputTransform);
+            if (decrypted.Length < 2 || (decrypted[0] & 0x0F) != 8 || decrypted[0] >> 4 > 7 ||
+                ((decrypted[0] << 8) + decrypted[1]) % 31 != 0 || (decrypted[1] & 0x20) != 0)
+                continue;
             try
             {
                 return Inflate(decrypted);
             }
-            catch (InvalidDataException ex)
+            catch (Exception ex) when (ex is InvalidDataException or IOException ||
+                                       ex.GetType().FullName == "System.IO.Compression.ZLibException")
             {
                 lastError = ex;
             }
@@ -255,7 +267,14 @@ public static class TslvStreamReader
         using var input = new MemoryStream(bytes);
         using var zlib = new ZLibStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream();
-        zlib.CopyTo(output);
+        var buffer = new byte[81920];
+        int count;
+        while ((count = zlib.Read(buffer)) > 0)
+        {
+            if (output.Length + count > 64 * 1024 * 1024)
+                throw new InvalidDataException("The decompressed Crystal stream exceeds the 64 MB safety limit.");
+            output.Write(buffer, 0, count);
+        }
         return output.ToArray();
     }
 
@@ -300,6 +319,9 @@ public static class TslvStreamReader
                 4 => LoadRawInt32(),
                 _ => throw new InvalidDataException("Invalid TSLV record length field.")
             };
+
+            if (length < 0 || length > _bytes.Length - Position)
+                throw new InvalidDataException($"TSLV record {type} extends beyond its stream.");
 
             if (simpleEncrypted)
             {
@@ -403,7 +425,10 @@ public sealed record TslvDecodedStream(
     bool UnknownFlag,
     byte[] InitializationVector,
     byte[] Body,
-    IReadOnlyList<TslvRecordHeader> Records);
+    IReadOnlyList<TslvRecordHeader> Records)
+{
+    internal bool IsHeaderless { get; init; }
+}
 
 public sealed record TslvStreamHeader(
     TslvRecordHeader Record,
@@ -528,6 +553,8 @@ public sealed class TslvArchiveReader
 
     public int Position { get; private set; }
 
+    internal bool LegacyValueLengths { get; init; }
+
     public TslvRecordHeader? CurrentRecord => _records.Count == 0 ? null : _records.Peek().Header;
 
     public int BytesLeftInRecord
@@ -626,7 +653,8 @@ public sealed class TslvArchiveReader
         var copy = new TslvArchiveReader(_bytes, _defaultSchema)
         {
             Position = Position, _simpleKey = _simpleKey, _enhancedStrings = _enhancedStrings,
-            _readObjectIds = _readObjectIds, _readEnumsAsInt32 = _readEnumsAsInt32
+            _readObjectIds = _readObjectIds, _readEnumsAsInt32 = _readEnumsAsInt32,
+            LegacyValueLengths = LegacyValueLengths
         };
         foreach (var frame in _records.Reverse()) copy._records.Push(frame);
         return copy;
