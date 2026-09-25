@@ -9,7 +9,7 @@ public sealed partial class ReportLayoutSession
     {
         public DateTime PrintTime { get; init; } = DateTime.Now;
         public Dictionary<string, object?> Shared { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, DataTable Data)> Queries { get; } = [];
+        public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, DataTable Data, DataTable Filtered)> Queries { get; } = [];
         public int Instances { get; set; }
         public int QueryRows { get; set; }
         public bool HasPageConditions { get; set; }
@@ -20,6 +20,8 @@ public sealed partial class ReportLayoutSession
         public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
         public Dictionary<PrintBandKey, bool> PrintedVisibility { get; set; } = new();
         public Dictionary<PrintBandKey, PrintSectionFormat> PrintedSections { get; set; } = new();
+        public List<HashSet<PrintBandKey>> BlankHistory { get; } = [];
+        public Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool> PrintedBlank { get; set; } = new();
     }
     private readonly RuntimeState _state;
     private readonly int _depth;
@@ -35,14 +37,79 @@ public sealed partial class ReportLayoutSession
 
     private CrystalFormulaContext Context(int row, object? page = null, object? count = null, string? currentField = null) => new()
     {
-        Resolve = reference => Value(reference, row),
-        Aggregate = (op, field, group) => Summary(new(op.ToLowerInvariant() switch { "avg" or "average" => "Average", "distinctcount" => "DistinctCount", "minimum" => "Minimum", "maximum" => "Maximum", "count" => "Count", _ => "Sum" }, field, group), row),
+        Resolve = reference => Value(reference, row), ReferenceType = ReferenceType,
+        Aggregate = (op, field, group) => IsParameter(field)
+            ? throw new NotSupportedException($"{op} ({field}): a parameter is summarized as an array or range value, not through the record summary context.")
+            : Summary(new(SummaryOperation(op), field, group), row),
+        ConditionalAggregate = (op, field, group, condition) => Summary(new(SummaryOperation(op), field, group) { GroupLevel = ConditionLevel(group, condition) }, row),
+        GroupName = (field, condition) => GroupNameValue(condition is null ? GroupLevel(field) : ConditionLevel(field, condition), row),
         Relative = (field, offset) => row + offset >= 0 && row + offset < _rows.Length ? Value(field, row + offset) : null,
         CurrentFieldValue = () => string.IsNullOrEmpty(currentField) ? null : Value(currentField, row),
         SharedVariables = _state.Shared, GlobalVariables = _globals, Now = _printTime,
         RecordIndex = row, RecordCount = _rows.Length, PageNumber = page ?? _formulaPage ?? 1, TotalPageCount = count ?? _formulaPages ?? 1,
-        InRepeatedGroupHeader = _repeatedHeader
+        InRepeatedGroupHeader = _repeatedHeader, GroupNumber = () => GroupNumber(row),
+        GroupingLevel = field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
+        HierarchicalChildren = level => HierarchicalChildren(level, row),
+        DocumentProperty = name => name switch
+        {
+            "reporttitle" => ReportTitle, "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
+            _ => throw new NotSupportedException($"Document property '{name}' is not available to this report run.")
+        }
     };
+
+    // Crystal's ReportTitle is the saved summary title, blank when none was saved; the document title falls back to other text for display.
+    private string ReportTitle => _layout.Document.SourceDocument?.Root is not { } root ? _layout.Document.Title
+        : string.IsNullOrWhiteSpace((string?)root.Element("Summaryinfo")?.Attribute("ReportTitle")) ? "" : _layout.Document.Title;
+
+    // Crystal types every reference statically: fields and formulas by their value type, parameters by their prompt kind (a multi-value
+    // parameter reads as an array, a range-capable one as a range) and summaries by their operation.
+    private Dictionary<string, CrystalValueType?>? _referenceTypes;
+    private CrystalValueType? ReferenceType(string reference)
+    {
+        if (_referenceTypes is null)
+        {
+            var types = new Dictionary<string, CrystalValueType?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var field in _layout.Document.Fields) types.TryAdd(field.Reference, CrystalValueType.FromXml(field.Type));
+            foreach (var parameter in _layout.Document.Parameters)
+                types["{?" + parameter.Name + "}"] = CrystalValueType.FromXml(parameter.Type, parameter.AllowMultiple, parameter.AllowRange);
+            foreach (var (name, summary) in _layout.Summaries.Concat(_layout.RunningTotals))
+                types.TryAdd(name, summary.Operation.ToLowerInvariant() is "count" or "distinctcount" or "sum" or "average" or "avg" ? new(CrystalBaseType.Number)
+                    : summary.Operation.ToLowerInvariant() is "minimum" or "maximum" && types.GetValueOrDefault(summary.Field) is { } fieldType ? fieldType with { IsArray = false, IsRange = false } : null);
+            foreach (var name in _layout.GroupNames.Keys) types.TryAdd(name, new(CrystalBaseType.String));
+            _referenceTypes = types;
+        }
+        return _referenceTypes.GetValueOrDefault(reference.Trim());
+    }
+
+    private static string SummaryOperation(string op) => op.ToLowerInvariant() switch
+    {
+        "avg" or "average" => "Average", "distinctcount" => "DistinctCount", "minimum" => "Minimum", "maximum" => "Maximum", "count" => "Count", "sum" => "Sum",
+        _ => throw new NotSupportedException($"Summary operation '{op}' is not implemented.")
+    };
+
+    // Sum ({field}, {group field}, "monthly"): the group on that field whose condition has that name.
+    private int ConditionLevel(string group, string condition)
+    {
+        for (var level = 0; level < _layout.Document.Groups.Count; level++)
+            if (_layout.Document.Groups[level].Condition.Trim().Equals(group.Trim(), StringComparison.OrdinalIgnoreCase)
+                && ConditionNamed(Options(level)?.ConditionKind ?? 0, condition, ReferenceType(group)?.BaseType)) return level;
+        throw new InvalidDataException($"There must be a group on {group} with the condition \"{condition}\" for this summary.");
+    }
+
+    // Crystal numbers group instances in print order; the number advances whenever any group changes (DataContext).
+    private (DataRow[]? Rows, int[] Numbers) _groupNumbers = (null, []);
+    private int GroupNumber(int row)
+    {
+        if (!ReferenceEquals(_groupNumbers.Rows, _rows))
+        {
+            var numbers = new int[_rows.Length];
+            var innermost = _layout.Document.Groups.Count - 1;
+            for (var index = 0; index < numbers.Length; index++)
+                numbers[index] = index == 0 ? 1 : numbers[index - 1] + (innermost >= 0 && !SameGroup(index - 1, index, innermost) ? 1 : 0);
+            _groupNumbers = (_rows, numbers);
+        }
+        return row < 0 || _rows.Length == 0 ? 1 : _groupNumbers.Numbers[Math.Min(row, _rows.Length - 1)];
+    }
 
     private bool DependsOn(string reference, bool page, HashSet<string>? stack = null)
     {
@@ -66,18 +133,33 @@ public sealed partial class ReportLayoutSession
             _rows = _rows.Where((_, index) => CrystalFormula.Boolean(selection.Evaluate(Context(index)))).ToArray();
             ClearValues();
         }
-        var sort = _layout.Document.Groups.Select(g => (Reference: g.Condition, Descending: g.SortDirection.StartsWith("Descending", StringComparison.OrdinalIgnoreCase)))
-            .Concat(_layout.Document.Sorts.Where(s => s.SortType == "RecordSortField").Select(s => (Reference: s.Field.Reference, Descending: s.Direction.StartsWith("Descending", StringComparison.OrdinalIgnoreCase)))).ToArray();
-        foreach (var item in sort)
-            if (_layout.Formulas.TryGetValue(item.Reference, out var formula)) RequireReadTime(formula, "Sort/group");
-        var keys = _rows.Select((data, index) => (Data: data, Index: index, Keys: sort.Select(s => Value(s.Reference, index)).ToArray())).ToArray();
+        if (_linkSelections.Count > 0)
+        {
+            foreach (var link in _linkSelections) RequireReadTime(_layout.Formulas[link.Field], "Subreport link selection");
+            var matches = _linkSelections.Select(link => (link.Field, Match: LinkMatcher(link.Value))).ToArray();
+            _rows = _rows.Where((_, index) => matches.All(link => link.Match(Value(link.Field, index)))).ToArray();
+            ClearValues();
+        }
+        var recordSorts = _layout.Document.Sorts.Where(s => s.SortType == "RecordSortField").ToArray();
+        foreach (var reference in _layout.Document.Groups.Select(g => g.Condition).Concat(recordSorts.Select(s => s.Field.Reference)))
+            if (_layout.Formulas.TryGetValue(reference, out var formula)) RequireReadTime(formula, "Sort/group");
+        foreach (var named in _layout.GroupOptions.Values.SelectMany(o => o.SpecifiedGroups)) RequireReadTime(named.Selection, "Specified group");
+        DiscardUnspecified();
+        var sort = Enumerable.Range(0, _layout.Document.Groups.Count)
+            .SelectMany(level => GroupSortKeys(level).Select(key => (Key: key, Descending: _layout.Document.Groups[level].SortDirection.StartsWith("Descending", StringComparison.OrdinalIgnoreCase))))
+            .Concat(recordSorts.Select(s => (Key: (Func<int, object?>)(row => Value(s.Field.Reference, row)), Descending: s.Direction.StartsWith("Descending", StringComparison.OrdinalIgnoreCase)))).ToArray();
+        var keys = _rows.Select((data, index) => (Data: data, Index: index, Keys: sort.Select(s => s.Key(index)).ToArray())).ToArray();
         Array.Sort(keys, (left, right) =>
         {
             for (var i = 0; i < sort.Length; i++) { var order = CrystalFormula.Compare(left.Keys[i], right.Keys[i]); if (order != 0) return sort[i].Descending ? -order : order; }
             return left.Index.CompareTo(right.Index);
         });
         _rows = keys.Select(k => k.Data).ToArray(); ClearValues();
+        OrderHierarchies();
+        var discarded = ApplyGroupSorts();
+        // Grand and group totals still count the groups a Top/Bottom N sort discards, as group selection's do.
         _summaryRows = _rows;
+        if (discarded.Count > 0) { _rows = _rows.Where(data => !discarded.Contains(data)).ToArray(); ClearValues(); }
         if (_layout.GroupSelection is { } groupSelection)
         {
             if (groupSelection.RequiresPrintPass || groupSelection.UsesPersistentVariables || groupSelection.UsesPageContext || groupSelection.References.Any(r => r.StartsWith("{#", StringComparison.Ordinal) || NeedsPrintState(r) || DependsOn(r, true)))
@@ -91,7 +173,7 @@ public sealed partial class ReportLayoutSession
         if (formula.RequiresPrintPass || RequiredTime(formula) == CrystalEvaluationTime.WhilePrintingRecords)
             throw new NotSupportedException(name + " cannot depend on print-time formulas.");
     }
-    private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
+    private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _groupStarts.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
 
     private string DeferredPageValue(string reference, int row, string format)
     {
@@ -151,7 +233,9 @@ public sealed partial class ReportLayoutSession
         {
             var condition = entry.Condition;
             if (endingOnly is { } ending && EndingProperty(condition.Key) != ending) continue;
-            if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value) || UsesPage(condition.Value))) continue;
+            // Until the first physical replay records page formats, page-only conditions use the tentative page number.
+            if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value)
+                || UsesPage(condition.Value) && (_state.PrintedVisibility.Count > 0 || _state.PrintedSections.Count > 0))) continue;
             var value = ConditionValue(condition.Value, row, pageOnly);
             switch (condition.Key.ToLowerInvariant())
             {
@@ -163,7 +247,7 @@ public sealed partial class ReportLayoutSession
                 case "enablekeeptogether": section.KeepTogether = CrystalFormula.Boolean(value); break;
                 case "enablesuppressifblank": section.SuppressIfBlank = CrystalFormula.Boolean(value); break;
                 case "enableprintatbottomofpage": section.PrintAtBottomOfPage = CrystalFormula.Boolean(value); break;
-                case "enableunderlayfollowingsections": section.UnderlayFollowingSections = CrystalFormula.Boolean(value); break;
+                case "enableunderlayfollowingsections" or "enableunderlaysection": section.UnderlayFollowingSections = CrystalFormula.Boolean(value); break;
                 case "backgroundcolor": section.BackgroundColor = FormulaColor(value); break;
                 default: _diagnostics.Add($"{section.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
@@ -181,7 +265,7 @@ public sealed partial class ReportLayoutSession
     {
         var element = source.CloneFor(source.SectionId, source.Name);
         element.Id = source.Id; element.SourceKey = source.SourceKey;
-        element.LeftTwips = source.LeftTwips; element.TopTwips = source.TopTwips;
+        element.LeftTwips = source.LeftTwips + (pageOnly ? 0 : HierarchicalIndent(source.SectionId, row)); element.TopTwips = source.TopTwips;
         if (!pageOnly && (PageSuppresses(_layout.ObjectConditions, source.Id) || MutableCondition(_layout.ObjectConditions, source.Id, "EnableSuppress"))) element.IsSuppressed = false;
         foreach (var condition in Conditions(_layout.ObjectConditions, source.Id, pageOnly))
         {
@@ -306,6 +390,32 @@ public sealed partial class ReportLayoutSession
     private static string FormulaLine(object? value) => value is string name ? name : (int)CrystalFormula.Number(value) switch
     { 0 => "NoLine", 1 => "Single", 2 => "Double", 3 => "Dash", 4 => "Dot", _ => throw new NotSupportedException("Unknown conditional border line style.") };
 
+    private sealed record SubreportLinkState(ReportLayoutSession Owner, string Section, int Row, string Element, List<ReportLayoutParameterLink> Links, object?[] Values);
+    private SubreportLinkState? _link;
+    private static object?[]? Multiple(object? value) => value is string or byte[] or null or DBNull || value is not System.Collections.IEnumerable items ? null : items.Cast<object?>().ToArray();
+    // Equality under CrystalFormula.Compare; same-kind text, number and date values use a set instead of a scan.
+    private static Func<object?, bool> LinkMatcher(object? expected)
+    {
+        var choices = (Multiple(expected) ?? [expected]).Where(choice => choice is not (null or DBNull)).Cast<object>().ToArray();
+        static bool Numeric(object? value) => value is byte or sbyte or short or ushort or int or uint or long or ulong or decimal;
+        var texts = choices.All(c => c is string) ? new HashSet<string>(choices.Cast<string>(), StringComparer.OrdinalIgnoreCase) : null;
+        var numbers = choices.All(Numeric) ? choices.Select(CrystalFormula.Number).ToHashSet() : null;
+        var dates = choices.All(c => c is DateTime) ? choices.Cast<DateTime>().ToHashSet() : null;
+        return actual => actual switch
+        {
+            null or DBNull => false,
+            string text when texts is not null => texts.Contains(text),
+            DateTime date when dates is not null => dates.Contains(date),
+            _ when numbers is not null && Numeric(actual) => numbers.Contains(CrystalFormula.Number(actual)),
+            _ => choices.Any(choice => CrystalFormula.Compare(actual, choice) == 0)
+        };
+    }
+    private static bool SameLinkValue(object? left, object? right) =>
+        Multiple(left) is { } a ? Multiple(right) is { } b && a.Length == b.Length && a.Zip(b).All(p => SameLinkValue(p.First, p.Second))
+            : left is null or DBNull ? right is null or DBNull : right is not (null or DBNull) && Multiple(right) is null && CrystalFormula.Compare(left, right) == 0;
+    private bool Resolvable(string reference) => reference.Trim() is var name && (_layout.Formulas.ContainsKey(name) || _layout.FormulaErrors.ContainsKey(name) || _layout.RunningTotals.ContainsKey(name)
+        || _layout.GroupNames.ContainsKey(name) || _layout.Bindings.ContainsKey(name) || _layout.Summaries.ContainsKey(name) || IsParameter(name) || IsSpecial(name));
+
     private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row)
     {
         if (!_layout.Subreports.TryGetValue(element.Id, out var subreport))
@@ -317,21 +427,27 @@ public sealed partial class ReportLayoutSession
         foreach (var parameter in subreport.Definition.Parameters)
             if (!parameters.ContainsKey(parameter.Name) && !string.IsNullOrEmpty(parameter.DefaultValue)) parameters[parameter.Name] = parameter.DefaultValue;
         var filters = new List<(string Alias, object? Value)>();
-        foreach (var link in subreport.Links)
+        var selections = new List<(string Field, object? Value)>();
+        var childLayout = subreport.Definition.PositionedLayout!;
+        var values = new object?[subreport.Links.Count];
+        for (var index = 0; index < subreport.Links.Count; index++)
         {
-            var value = Value(link.MainField, row);
+            // Crystal passes the main field, formula or (multi-value) parameter to {?Pm-...}; the optional
+            // subreport field adds "{child} = {?Pm-...}" to the subreport's record selection.
+            var link = subreport.Links[index];
+            if (!Resolvable(link.MainField))
+                throw new InvalidDataException($"{element.Name}: subreport link source '{link.MainField}' is not a field, formula or parameter of the main report.");
+            var value = values[index] = Value(link.MainField, row);
             if (link.Parameter.Length > 0) parameters[link.Parameter] = value ?? DBNull.Value;
-            if (link.ChildField.Length > 0)
-            {
-                if (!subreport.Definition.PositionedLayout!.Bindings.TryGetValue(link.ChildField, out var alias))
-                    throw new InvalidDataException($"Unresolved subreport link '{link.ChildField}'.");
-                filters.Add((alias, value));
-            }
+            if (link.ChildField.Length == 0) continue;
+            if (childLayout.Bindings.TryGetValue(link.ChildField, out var alias)) filters.Add((alias, value));
+            else if (childLayout.Formulas.ContainsKey(link.ChildField)) selections.Add((link.ChildField, value));
+            else throw new InvalidDataException($"{element.Name}: subreport link '{link.MainField}' -> '{{?{link.Parameter}}}' selects on '{link.ChildField}', which is not a field or formula of subreport '{element.SubreportName}'.");
         }
         var cached = _state.Queries.FirstOrDefault(q => ReferenceEquals(q.Definition, subreport.Definition) &&
             q.Filters.SequenceEqual(filters) &&
             q.Parameters.Count == parameters.Count && q.Parameters.All(p => parameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value)));
-        var data = cached.Data;
+        var (data, filtered) = (cached.Data, cached.Filtered);
         if (data is null)
         {
             var query = subreport.Definition;
@@ -339,13 +455,22 @@ public sealed partial class ReportLayoutSession
             if (filters.Count > 0)
             {
                 var predicates = new List<string>();
+                if (bound.Keys.Any(k => k.StartsWith("__fxSubreport", StringComparison.OrdinalIgnoreCase)))
+                    throw new InvalidDataException("Report parameter conflicts with the reserved subreport parameter prefix.");
                 for (var index = 0; index < filters.Count; index++)
                 {
                     var key = "__fxSubreport" + index;
-                    if (bound.ContainsKey(key)) throw new InvalidDataException("Report parameter conflicts with the reserved subreport parameter prefix.");
-                    bound[key] = filters[index].Value ?? DBNull.Value;
-                    predicates.Add($"[__fxInline].[{filters[index].Alias.Replace("]", "]]", StringComparison.Ordinal)}] = @{key}");
+                    var column = $"[__fxInline].[{filters[index].Alias.Replace("]", "]]", StringComparison.Ordinal)}]";
+                    if (Multiple(filters[index].Value) is { } choices)
+                    {
+                        if (bound.Count + choices.Length > 2100)
+                            throw new InvalidDataException($"{element.Name}: the subreport query would bind more than 2,100 SQL parameters ({bound.Count} before the {choices.Length} values of link '{filters[index].Alias}').");
+                        for (var choice = 0; choice < choices.Length; choice++) bound[key + "_" + choice] = choices[choice] ?? DBNull.Value;
+                        predicates.Add(choices.Length == 0 ? "1 = 0" : column + " IN (" + string.Join(", ", choices.Select((_, choice) => "@" + key + "_" + choice)) + ")");
+                    }
+                    else { bound[key] = filters[index].Value ?? DBNull.Value; predicates.Add(column + " = @" + key); }
                 }
+                if (bound.Count > 2100) throw new InvalidDataException($"{element.Name}: the subreport query would bind {bound.Count} SQL parameters; SQL Server accepts at most 2,100.");
                 query = new ReportDefinition { Sql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates),
                     Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout };
             }
@@ -353,13 +478,16 @@ public sealed partial class ReportLayoutSession
             if (data.Rows.Count > 100000) throw new InvalidDataException("Subreport exceeds the 100,000-row limit.");
             _state.QueryRows += data.Rows.Count;
             if (_state.QueryRows > 250000) throw new InvalidDataException("Inline subreport queries exceed the 250,000-row combined limit.");
-            _state.Queries.Add((subreport.Definition, parameters, filters, data));
+            // Identical query and link values give identical rows; later instances reuse the filtered table.
+            filtered = data.Clone();
+            var matches = filters.Select(f => (f.Alias, Match: data.Columns.Contains(f.Alias) || data.Rows.Count == 0 ? LinkMatcher(f.Value)
+                : throw new InvalidDataException($"Subreport link column '{f.Alias}' is missing."))).ToArray();
+            foreach (DataRow candidate in data.Rows)
+                if (matches.All(f => f.Match(candidate[f.Alias]))) filtered.ImportRow(candidate);
+            _state.Queries.Add((subreport.Definition, parameters, filters, data, filtered));
         }
-        var filtered = data.Clone();
-        foreach (DataRow candidate in data.Rows)
-            if (filters.All(f => candidate.Table.Columns.Contains(f.Alias) ? f.Value is not (null or DBNull) && candidate[f.Alias] is not DBNull && CrystalFormula.Compare(candidate[f.Alias], f.Value) == 0
-                : throw new InvalidDataException($"Subreport link column '{f.Alias}' is missing."))) filtered.ImportRow(candidate);
-        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1, this);
+        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1, this, selections)
+            { _link = new(this, element.SectionId, row, element.Name, subreport.Links, values) };
         if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
             _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
         foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);

@@ -265,6 +265,20 @@ public partial class CrystalXmlReportLoader
         // Column headers can live in PageHeader OR GroupHeader sections (Crystal's choice varies by report).
         var headerLabels = ParseHeaderLabels(report);
         var groups = ParseGroups(report);
+        foreach (var group in report.Element("DataDefinition")?.Element("Groups")?.Elements("Group") ?? [])
+        {
+            if (string.Equals((string?)group.Attribute("GroupHierarchically"), "true", StringComparison.OrdinalIgnoreCase))
+                definition.RuntimeDiagnostics.Add($"Group {(string?)group.Attribute("ConditionField")}: hierarchical grouping is shown flat in the tabular viewer; the positioned layout prints the hierarchy.");
+            if (group.Attribute("GroupNameFormula") is not null)
+                definition.RuntimeDiagnostics.Add($"Group {(string?)group.Attribute("ConditionField")}: the group-name formula is used by the positioned layout only; the tabular viewer names groups by their condition value.");
+            if ((string?)group.Attribute("ConditionKind") is { Length: > 0 } conditionKind && conditionKind != "0")
+                definition.RuntimeDiagnostics.Add($"Group {(string?)group.Attribute("ConditionField")}: its date, time or Boolean condition is applied by the positioned layout only; the tabular viewer groups every value.");
+            if (group.Element("SpecifiedGroups") is not null)
+                definition.RuntimeDiagnostics.Add($"Group {(string?)group.Attribute("ConditionField")}: specified-order grouping is applied by the positioned layout only; the tabular viewer groups every value in ascending order.");
+        }
+        foreach (var sort in report.Element("DataDefinition")?.Element("SortFields")?.Elements("SortField") ?? [])
+            if ((string?)sort.Attribute("SortType") == "GroupSortField" && ((string?)sort.Attribute("Field") ?? "").TrimStart() is { Length: > 0 } sorted && !sorted.StartsWith('{'))
+                definition.RuntimeDiagnostics.Add($"Group sort by '{sorted}'{((string?)sort.Attribute("TopBottomN") is { Length: > 0 } topBottom ? " (" + topBottom + ")" : "")} is applied by the positioned layout only; the tabular viewer orders groups by their condition value.");
         var sortFields = ParseSortFields(report);
         var summaryFields = ParseSummaryFields(report);
         // Formula fields: {@Name} → SQL expression. Translated ahead of everything else so
@@ -1080,6 +1094,7 @@ public partial class CrystalXmlReportLoader
                 Required = !promptIsOptional && isInUse,
                 IsOptional = nameSaysOptional,
                 AllowMultiple = string.Equals((string?)p.Attribute("EnableAllowMultipleValue"), "True", StringComparison.OrdinalIgnoreCase),
+                AllowRange = (string?)p.Attribute("DiscreteOrRangeKind") is "RangeValue" or "DiscreteAndRangeValue",
                 AllowCustomCurrentValues = string.Equals((string?)p.Attribute("AllowCustomCurrentValues"), "True", StringComparison.OrdinalIgnoreCase),
                 DefaultValue = defaultVal,
                 DefaultValues = defaultValues,

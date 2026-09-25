@@ -192,9 +192,9 @@ internal static class CrystalReportParametersParser
             6 or 7 or 16 => FormatCrystalScaledNumber(reader.LoadDouble()),
             8 => reader.LoadBoolean() ? "true" : "false",
             9 => CrystalDate(reader.LoadInt32()),
-            10 => reader.LoadInt32().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            10 => CrystalTime(reader.LoadInt32()),
             11 or 13 => reader.LoadString() ?? "",
-            15 => CrystalDate(reader.LoadInt32()) + " " + reader.LoadInt32().ToString(System.Globalization.CultureInfo.InvariantCulture),
+            15 => CrystalDateTime(reader.LoadInt32(), reader.LoadInt32()),
             _ => SkipCrystalValue(reader, length)
         };
     }
@@ -205,15 +205,38 @@ internal static class CrystalReportParametersParser
         return "";
     }
 
-    private static string CrystalDate(int crDate)
+    // Crystal's CRDate is the Julian day number minus one (DateValue: 1899-12-30, OLE date 0, is 2415018).
+    internal static string CrystalDate(int crDate)
     {
         if (crDate <= 0)
         {
             return "";
         }
 
-        var date = DateTime.FromOADate(crDate - 2415019);
+        var date = DateTime.FromOADate(crDate - 2415018);
         return date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // Crystal times are whole seconds after midnight (TimeValue.fromCRTime): -1 is the null time, values past 86400
+    // wrap, 86400 itself is the end of the day, and a negative time is rejected by TimeValue.
+    internal static string CrystalTime(int crTime)
+    {
+        if (crTime == -1) return "";
+        if (crTime > 86400) crTime %= 86400;
+        if (crTime < 0) throw new InvalidDataException($"Crystal time value {crTime} is negative.");
+        return crTime == 86400 ? "24:00:00" : TimeSpan.FromSeconds(crTime).ToString(@"hh\:mm\:ss", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // A date-time ending at 24:00:00 is written as midnight of the next day, the same instant.
+    internal static string CrystalDateTime(int crDate, int crTime)
+    {
+        var date = CrystalDate(crDate);
+        var time = CrystalTime(crTime);
+        if (time.Length == 0) return date;
+        if (date.Length == 0) throw new InvalidDataException($"Crystal date-time value has the time {time} but no date.");
+        return time == "24:00:00"
+            ? CrystalDate(crDate + 1) + " 00:00:00"
+            : date + " " + time;
     }
 
     private static string FormatCrystalScaledNumber(double scaled)

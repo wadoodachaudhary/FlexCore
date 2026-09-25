@@ -5377,12 +5377,18 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         el.style.setProperty("outline", "none", "important");
         navMuted.add(el);
     };
-    const muteForeignSelection = targetTr => {
+    const muteForeignSelection = (targetTr, targetCell) => {
         gridRoot.querySelectorAll(
             "tbody tr.fx-row.fx-selected, tbody tr.fx-row.fx-cell-row-selected, tbody tr.fx-row[style*=\"background\"], tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active")
             .forEach(el => {
                 const tr = el.closest("tr");
-                if (tr === targetTr) return;
+                if (el === targetCell) return;
+                if (tr === targetTr && gridPaintsNavigationRow(gridRoot)) {
+                    // Keep the selected-row tint, but not a stale cell focus
+                    // border from an earlier server render in this same row.
+                    if (el.tagName === "TD" && !isCueMuted(el)) navMuteLook(el, true);
+                    return;
+                }
                 if (isBareActiveCell(el)) { if (!isCueMuted(el)) navMuteLook(el, true); }
                 else if (!isEffectivelyMuted(el)) navMuteLook(el);
                 // The row shade is often a SERVER-WRITTEN INLINE STYLE on the
@@ -5644,7 +5650,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // Mute the old selection look in the same frame — both row-mode
         // (tr.fx-selected) and cell-mode (row shade on TD classes) variants —
         // tracking every muted element locally.
-        muteForeignSelection(newTr);
+        muteForeignSelection(newTr, target);
         if (paintRow) {
             setRowPreview(newTr, true, gridPreviewColor(gridRoot));
             paintedRowTr = newTr;
@@ -5702,7 +5708,8 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
             releasePreview();
             return;
         }
-        muteForeignSelection(ensurePreviewPainted());
+        const previewRow = ensurePreviewPainted();
+        muteForeignSelection(previewRow, previewRow?.cells[lastPreview.cell]);
         // While a settle-await is armed, this render may BE the settle
         // render — release in the same pre-paint microtask (seamless swap
         // from inline preview to the server's identical selection look).

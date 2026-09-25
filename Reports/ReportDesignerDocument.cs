@@ -12,6 +12,9 @@ public sealed class ReportDesignerDocument
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Title { get; set; } = "Untitled Report";
+    /// <summary>Report summary comments and author (Crystal's ReportComments / FileAuthor special fields).</summary>
+    public string Comments { get; set; } = "";
+    public string Author { get; set; } = "";
     public string SourceName { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public ReportDesignerPage Page { get; set; } = new();
@@ -586,6 +589,8 @@ public sealed class ReportDesignerParameter : ReportDesignerSourceItem
     public string Type { get; set; } = "";
     public bool Required { get; set; } = true;
     public bool AllowMultiple { get; set; }
+    /// <summary>Crystal range-capable parameter (<c>DiscreteOrRangeKind</c> RangeValue or DiscreteAndRangeValue): its formula value is a range.</summary>
+    public bool AllowRange { get; set; }
 }
 
 public sealed class ReportDesignerGroup : ReportDesignerSourceItem
@@ -593,6 +598,15 @@ public sealed class ReportDesignerGroup : ReportDesignerSourceItem
     public string Name { get; set; } = "";
     public string Condition { get; set; } = "";
     public string SortDirection { get; set; } = "Ascending";
+    /// <summary>Crystal hierarchical grouping: the field holding each record's parent instance ID; empty for an ordinary group.</summary>
+    public string ParentIdField { get; set; } = "";
+    public string InstanceIdField { get; set; } = "";
+    /// <summary>Twips each hierarchy level indents this group's header, footer and inner sections.</summary>
+    public int HierarchicalIndent { get; set; }
+    public bool IsHierarchical => ParentIdField.Length > 0;
+    /// <summary>Crystal group-name formula (Group Options "customize group name field"); empty when the condition value names the group.</summary>
+    public string NameFormula { get; set; } = "";
+    public string NameFormulaSyntax { get; set; } = "Crystal";
 }
 
 public sealed class ReportDesignerSubreport
@@ -668,6 +682,8 @@ public static partial class ReportDesignerXmlSerializer
             SourceName = sourceName ?? Attribute(root, "Name") ?? "Report.xml",
             SourcePath = sourcePath ?? "",
             Title = GetReportTitle(root, sourceName),
+            Comments = Attribute(Child(root, "Summaryinfo"), "ReportComments") ?? "",
+            Author = Attribute(Child(root, "Summaryinfo"), "ReportAuthor") ?? "",
             Page = ParsePage(root)
         };
 
@@ -1259,7 +1275,8 @@ public static partial class ReportDesignerXmlSerializer
                 Prompt = Attribute(parameter, "PromptText") ?? Attribute(parameter, "Prompt") ?? "",
                 Type = Attribute(parameter, "ParameterValueKind") ?? Attribute(parameter, "ValueType") ?? "",
                 Required = !ParseBool(Attribute(parameter, "IsOptionalPrompt") ?? Attribute(parameter, "OptionalPrompt")),
-                AllowMultiple = ParseBool(Attribute(parameter, "EnableAllowMultipleValue")) || ParseBool(Attribute(parameter, "AllowMultipleValue"))
+                AllowMultiple = ParseBool(Attribute(parameter, "EnableAllowMultipleValue")) || ParseBool(Attribute(parameter, "AllowMultipleValue")),
+                AllowRange = Attribute(parameter, "DiscreteOrRangeKind") is "RangeValue" or "DiscreteAndRangeValue"
             };
             document.Parameters.Add(designerParameter);
             document.SourceItems[designerParameter.Id] = parameter;
@@ -1282,6 +1299,15 @@ public static partial class ReportDesignerXmlSerializer
                     (string?)root.Element("DataDefinition")?.Element("SortFields")?.Elements("SortField")
                         .FirstOrDefault(s => (string?)s.Attribute("SortType") == "GroupSortField" && (string?)s.Attribute("Field") == condition)?.Attribute("SortDirection") ?? "Ascending"
             };
+            designerGroup.NameFormula = Attribute(group, "GroupNameFormula") ?? "";
+            designerGroup.NameFormulaSyntax = Attribute(group, "GroupNameFormulaSyntax") ?? "Crystal";
+            if (ParseBool(Attribute(group, "GroupHierarchically")))
+            {
+                designerGroup.ParentIdField = Attribute(group, "ParentIDField") ?? "";
+                designerGroup.InstanceIdField = Attribute(group, "InstanceIDField") ?? condition;
+                designerGroup.HierarchicalIndent = int.TryParse(Attribute(group, "HierarchicalIndent"), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var indent) ? Math.Max(0, indent) : 0;
+                if (designerGroup.ParentIdField.Length == 0) throw new InvalidDataException($"Hierarchical group {condition} has no parent ID field.");
+            }
             document.Groups.Add(designerGroup);
             document.SourceItems[designerGroup.Id] = group;
         }

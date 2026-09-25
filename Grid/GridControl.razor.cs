@@ -12844,6 +12844,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _showInsertColumnSubmenu;
 #pragma warning restore CS0414
     private bool _showRenameColumn;
+    /// <summary>Maximum length accepted by the column rename dialog.</summary>
+    [Parameter] public int ColumnRenameMaxLength { get; set; } = 255;
     private string _renameColumnDraft = "";
     private bool _showPrintOptionsDialog;
     private bool _printDefaultsInitialized;
@@ -13394,6 +13396,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var field = _renameColumnField;
         var draft = _renameColumnDraft?.Trim() ?? "";
+        if (ColumnRenameMaxLength > 0 && draft.Length > ColumnRenameMaxLength)
+            draft = draft[..ColumnRenameMaxLength];
         HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.

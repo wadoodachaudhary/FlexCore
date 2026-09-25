@@ -311,6 +311,10 @@ public class ReportParameter
     /// <summary>If true, parameter supports multiple comma-separated values.</summary>
     public bool AllowMultiple { get; set; }
 
+    /// <summary>Crystal range-capable parameter (<c>DiscreteOrRangeKind</c> RangeValue or DiscreteAndRangeValue).
+    /// Formulas read its value as a range; a discrete value <c>v</c> is the range <c>v to v</c>.</summary>
+    public bool AllowRange { get; set; }
+
     /// <summary>
     /// Crystal's <c>AllowCustomCurrentValues="True"</c> attribute. When true,
     /// the user is allowed to type ad-hoc values in addition to whatever

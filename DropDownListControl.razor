@@ -1138,8 +1138,28 @@
         }
     }
 
+    private bool _openingObserverRegistered;
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        // Page dropdowns can position the arriving panel before another server
+        // round trip. Hosted editors keep their guarded focus hand-off below.
+        if (!_openingObserverRegistered && CellHost is null)
+        {
+            _openingObserverRegistered = true;
+            try
+            {
+                var module = await GetDropdownJsModuleAsync();
+                if (module is null) _openingObserverRegistered = false;
+                else
+                {
+                    _selfRef ??= DotNetObjectReference.Create(this);
+                    await module.InvokeVoidAsync("watchDropdownOpening", _hostRef, _selfRef);
+                }
+            }
+            catch { _openingObserverRegistered = false; }
+        }
+
         if (_editableRefocusPending)
         {
             _editableRefocusPending = false;
@@ -1332,6 +1352,8 @@
 
         try
         {
+            if (_openingObserverRegistered)
+                await _dropdownJsModule.InvokeVoidAsync("unwatchDropdownOpening", _hostRef);
             if (_focusLeaveWatched)
                 await _dropdownJsModule.InvokeVoidAsync("unwatchFocusLeave", _hostRef);
             await _dropdownJsModule.DisposeAsync();

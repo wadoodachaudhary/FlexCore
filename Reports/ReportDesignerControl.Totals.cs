@@ -36,6 +36,7 @@ public partial class ReportDesignerControl
         {
             if (_expertRunningTotals.Select(t => t.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != _expertRunningTotals.Count)
                 throw new InvalidOperationException("Running total names must be unique.");
+            var functions = CrystalXmlReportLoader.CompileCustomFunctions(_document.SourceDocument?.Root, []);
             foreach (var total in _expertRunningTotals)
             {
                 if (string.IsNullOrWhiteSpace(total.Name) || total.Name.IndexOfAny(['{', '}', '#']) >= 0 || string.IsNullOrWhiteSpace(total.Field))
@@ -47,8 +48,9 @@ public partial class ReportDesignerControl
                     if (condition.Type == "UseFormula")
                     {
                         if (string.IsNullOrWhiteSpace(condition.Formula)) throw new InvalidOperationException("Enter a condition formula.");
-                        var formula = CrystalFormula.Compile(condition.Formula);
-                        if (formula.UsesVariables || formula.UsesPageContext || formula.UsesAggregates || formula.RequiresPrintPass)
+                        var formula = CrystalFormula.Compile(condition.Formula, condition.FormulaSyntax, false, functions);
+                        // Local variables (and Basic's Formula result) are first-pass; global and shared ones carry print state.
+                        if (formula.UsesPersistentVariables || formula.UsesPageContext || formula.UsesAggregates || formula.RequiresPrintPass)
                             throw new InvalidOperationException("Running-total conditions require first-pass formulas.");
                     }
                 }

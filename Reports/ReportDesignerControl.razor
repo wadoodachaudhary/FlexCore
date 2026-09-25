@@ -1809,7 +1809,7 @@
         if (ActiveExpertFormula is null) return Task.CompletedTask;
         try
         {
-            _ = CrystalFormula.Compile(ActiveExpertFormula.Expression, ActiveExpertFormula.Syntax);
+            _ = CrystalFormula.Compile(ActiveExpertFormula.Expression, ActiveExpertFormula.Syntax, customFunctions: CrystalXmlReportLoader.CompileCustomFunctions(_document.SourceDocument?.Root, []));
             _formulaCheckMessage = "Native Crystal formula syntax check passed. Field values are checked when the report runs.";
         }
         catch (Exception ex) when (ex is InvalidDataException or NotSupportedException)
@@ -3380,7 +3380,12 @@
             Id = group.Id,
             Name = group.Name,
             Condition = group.Condition,
-            SortDirection = group.SortDirection
+            SortDirection = group.SortDirection,
+            ParentIdField = group.ParentIdField,
+            InstanceIdField = group.InstanceIdField,
+            HierarchicalIndent = group.HierarchicalIndent,
+            NameFormula = group.NameFormula,
+            NameFormulaSyntax = group.NameFormulaSyntax
         };
     }
 
@@ -3415,7 +3420,8 @@
             Prompt = parameter.Prompt,
             Type = parameter.Type,
             Required = parameter.Required,
-            AllowMultiple = parameter.AllowMultiple
+            AllowMultiple = parameter.AllowMultiple,
+            AllowRange = parameter.AllowRange
         };
     }
 

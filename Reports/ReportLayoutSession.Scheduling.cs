@@ -82,20 +82,24 @@ public sealed partial class ReportLayoutSession
                 return layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(e.HighlightRule.FieldName)).Any(Reference)
                     || conditions.Any(f => f.UsesPersistentVariables || f.References.Any(Reference));
             }
-            needsReplay |= layouts.Count > 1 && layouts.Any(UsesState);
+            bool PageLinks(ReportPositionedLayout layout)
+            {
+                var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                bool Page(string reference) => visited.Add(reference) && (layout.Formulas.TryGetValue(reference, out var f)
+                    ? f.UsesPageContext || f.References.Any(Page) : SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm");
+                return layout.Subreports.Values.SelectMany(s => s.Links).Any(l => Page(l.MainField));
+            }
+            needsReplay |= layouts.Count > 1 && layouts.Any(UsesState) || layouts.Any(PageLinks);
             _state.PhysicalSchedule = needsReplay;
         }
         _physicalPageSchedule = _state.PhysicalSchedule || needsReplay;
         _printStart = CaptureVariables();
         if (!_physicalPageSchedule) return;
-        if (_layout.Document.Sections.Any(s => s.SuppressIfBlank)
-            || _layout.Summaries.Values.Concat(_layout.RunningTotals.Values).Any(s => NeedsPrintState(s.Field))
+        if (_layout.Summaries.Values.Concat(_layout.RunningTotals.Values).Any(s => NeedsPrintState(s.Field))
             || _scheduledFormulas.Any(r => _layout.Formulas[r].AggregateReferences.Any(NeedsPrintState))
             || _layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation.Formula, t.Reset.Formula })
                 .Any(f => f is not null && (f.UsesPersistentVariables || f.References.Any(NeedsPrintState))))
-            throw new NotSupportedException($"{_layout.Document.SourceName}: mutable page formulas do not yet support blank-section suppression or state-dependent summaries.");
-        if (_layout.Subreports.Values.SelectMany(s => s.Links).Any(l => NeedsPrintState(l.MainField) || DependsOn(l.MainField, true)))
-            throw new NotSupportedException("Inline subreport query links cannot depend on mutable or page-dependent print state.");
+            throw new NotSupportedException($"{_layout.Document.SourceName}: summaries, running totals and running-total conditions over variable-dependent print-time formulas are not supported.");
     }
 
     private Band ApplyPrintedItems(Band source, int physicalPage, bool repeated)
@@ -127,6 +131,8 @@ public sealed partial class ReportLayoutSession
         var formats = new Dictionary<PrintBandKey, PrintSectionFormat>();
         var endings = new HashSet<PrintBandKey>();
         var hiddenValues = new HashSet<PrintBandKey>();
+        var linked = new HashSet<ReportLayoutSession>();
+        var blanks = new Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool>();
         var caches = new Dictionary<PrintBandKey, Dictionary<(string Name, int Row), object?>>();
         var lastOffsets = LastFragmentOffsets(pages);
         try
@@ -140,7 +146,7 @@ public sealed partial class ReportLayoutSession
             foreach (var value in _printStart!.Shared) _state.Shared.Add(value.Key, value.Value);
             for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
             {
-                foreach (var placement in pages[pageIndex].Placements)
+                foreach (var placement in pages[pageIndex].Placements.OrderBy(p => p.Sequence))
                 {
                     var occurrence = placement.Band.RepeatedHeader || placement.Band.Section.Kind is "PageHeader" or "PageFooter" ? pageIndex + 1 : 0;
                     var blocked = new HashSet<(ReportLayoutSession? Owner, string Section, int Row)>();
@@ -184,6 +190,23 @@ public sealed partial class ReportLayoutSession
                         }
                         finally { owner._replayingPrint = false; }
                     }
+                    // A subreport's links are evaluated when its object prints. Its query ran with the logical-pass values.
+                    void VerifyLink(ReportLayoutSession? child)
+                    {
+                        if (child?._link is not { } link || !linked.Add(child)) return;
+                        var owner = link.Owner; var key = new PrintBandKey(owner, link.Section, link.Row, occurrence);
+                        owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
+                        owner._bandFormulaCache.Clear();
+                        if (caches.TryGetValue(key, out var cache)) foreach (var value in cache) owner._bandFormulaCache.Add(value.Key, value.Value);
+                        owner._replayingPrint = true;
+                        object?[] values;
+                        try { values = link.Links.Select(l => owner.Value(l.MainField, link.Row)).ToArray(); }
+                        finally { owner._replayingPrint = false; }
+                        caches[key] = new(owner._bandFormulaCache);
+                        for (var index = 0; index < values.Length; index++)
+                            if (!SameLinkValue(values[index], link.Values[index]))
+                                throw new NotSupportedException($"{link.Element}: subreport link '{link.Links[index].MainField}' has a different value where the subreport prints on page {pages[pageIndex].Number} than in the report's logical pass; re-running linked subreports during page replay is not supported.");
+                    }
                     void Block(Band band)
                     {
                         blocked.Add((band.Owner, band.Section.Id, band.Row));
@@ -211,10 +234,10 @@ public sealed partial class ReportLayoutSession
                     var events = (placement.Band.InlineSections ?? [])
                         .Where(s => s.Start >= placement.Offset && (s.Start < placement.Offset + placement.Height
                             || s.Start == s.End && s.Start == placement.Offset + placement.Height && placement.Offset == lastOffsets[FragmentKey(placement.Band)]))
-                        .Select(s => (Top: s.Start, Order: 1, Depth: s.Source.Owner?._depth ?? 0, Band: (Band?)s.Source, Item: (Item?)null))
+                        .Select(s => (Top: s.Start, Order: 1, Depth: s.Source.Owner?._depth ?? 0, Band: (Band?)s.Source, Item: (Item?)null, s.Blank))
                         .Concat((placement.Band.InlineSections ?? []).Where(s => s.End > placement.Offset && s.End <= placement.Offset + placement.Height)
-                            .Select(s => (Top: s.End, Order: 0, Depth: -(s.Source.Owner?._depth ?? 0), Band: (Band?)s.Source, Item: (Item?)null)))
-                        .Concat(placement.Band.Items.Select(i => (Top: i.Element.TopTwips, Order: 2, Depth: int.MaxValue, Band: (Band?)null, Item: (Item?)i)))
+                            .Select(s => (Top: s.End, Order: 0, Depth: -(s.Source.Owner?._depth ?? 0), Band: (Band?)s.Source, Item: (Item?)null, s.Blank)))
+                        .Concat(placement.Band.Items.Select(i => (Top: i.Element.TopTwips, Order: 2, Depth: int.MaxValue, Band: (Band?)null, Item: (Item?)i, Blank: false)))
                         .OrderBy(e => e.Top).ThenBy(e => e.Order).ThenBy(e => e.Depth);
                     // Child bands are already positioned inside the parent. Execute only each object's first fragment.
                     foreach (var entry in events)
@@ -222,21 +245,36 @@ public sealed partial class ReportLayoutSession
                         if (entry.Band is { } childBand)
                         {
                             if (entry.Order == 0) { if (!blocked.Contains((childBand.Owner, childBand.Section.Id, childBand.Row))) Finish(childBand); continue; }
-                            if (blocked.Contains((childBand.Owner, childBand.Section.Id, childBand.Row))) Block(childBand);
-                            else if (!Section(childBand)) { HiddenValues(childBand); Finish(childBand); Block(childBand); }
+                            if (blocked.Contains((childBand.Owner, childBand.Section.Id, childBand.Row))) { Block(childBand); continue; }
+                            VerifyLink(childBand.Owner);
+                            if (!Section(childBand)) { HiddenValues(childBand); Finish(childBand); Block(childBand); }
+                            // A blank subreport section takes no space, but Crystal formatted its objects to find it blank.
+                            else if (entry.Blank) { foreach (var blank in childBand.Items.OrderBy(i => i.Element.TopTwips)) Print(blank); Finish(childBand); }
                             continue;
                         }
                         var item = entry.Item!;
                         if (item.Element.TopTwips < placement.Offset || item.Element.TopTwips >= placement.Offset + placement.Height) continue;
+                        Print(item);
+                    }
+                    if (placement.Offset == lastOffsets[FragmentKey(placement.Band)]) Finish(placement.Band);
+                    if (occurrence > 0 && placement.Band.Section.SuppressIfBlank)
+                    {
+                        var owner = placement.Band.Owner ?? this;
+                        blanks[(owner, placement.Band.Section.Id, occurrence)] = IsBlank(placement.Band with { Items = placement.Band.Items
+                            .Select(i => printed.GetValueOrDefault(new(new(i.Owner ?? owner, i.Element.SectionId, i.Row, occurrence), i.Element.Id), i)).ToList() });
+                    }
+                    void Print(Item item)
+                    {
                         var owner = item.Owner ?? placement.Band.Owner ?? this;
-                        if (blocked.Contains((owner, item.Element.SectionId, item.Row))) continue;
+                        if (blocked.Contains((owner, item.Element.SectionId, item.Row))) return;
                         var bandKey = new PrintBandKey(owner, item.Element.SectionId, item.Row, occurrence);
                         var key = new PrintItemKey(bandKey, item.Element.Id);
-                        if (printed.ContainsKey(key)) continue;
+                        if (printed.ContainsKey(key)) return;
+                        // Cross-tab and table fragments are laid out from their analysis snapshot; they carry no formulas to replay.
+                        if (owner._layout.Document.Elements.FirstOrDefault(e => e.Id == item.Element.Id) is not { } original) return;
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(bandKey, out var cache)) foreach (var value in cache) owner._bandFormulaCache.Add(value.Key, value.Value);
-                        var original = owner._layout.Document.Elements.First(e => e.Id == item.Element.Id);
                         owner._replayingPrint = true;
                         ReportDesignerElement element;
                         string html;
@@ -252,7 +290,6 @@ public sealed partial class ReportLayoutSession
                         printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2 });
                         caches[bandKey] = new(owner._bandFormulaCache);
                     }
-                    if (placement.Offset == lastOffsets[FragmentKey(placement.Band)]) Finish(placement.Band);
                 }
             }
             var changed = formats.Count != _state.PrintedSections.Count || formats.Any(p => !_state.PrintedSections.TryGetValue(p.Key, out var old) || p.Value != old)
@@ -263,6 +300,7 @@ public sealed partial class ReportLayoutSession
             _state.PrintedItems = printed;
             _state.PrintedVisibility = visibility;
             _state.PrintedSections = formats;
+            _state.PrintedBlank = blanks;
             return changed;
         }
         finally
@@ -300,7 +338,7 @@ public sealed partial class ReportLayoutSession
         if (!_layout.Formulas.TryGetValue(reference, out var formula))
         {
             if (_layout.Summaries.ContainsKey(reference) || _layout.RunningTotals.ContainsKey(reference) || _layout.GroupNames.ContainsKey(reference)
-                || SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm" or "recordnumber")
+                || SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm" or "recordnumber" or "groupnumber")
                 return CrystalEvaluationTime.WhilePrintingRecords;
             return _layout.Bindings.ContainsKey(reference) ? CrystalEvaluationTime.WhileReadingRecords : CrystalEvaluationTime.BeforeReadingRecords;
         }
@@ -322,9 +360,13 @@ public sealed partial class ReportLayoutSession
         finally { visiting.Remove(reference); }
     }
 
+    // Minimum/Maximum/Count/... over a parameter, array or date range are array/range functions, not report summaries.
+    private static bool Summarizes(CrystalFormula formula) => formula.UsesAggregates && formula.AggregateReferences.Any(r => !IsParameter(r));
+    private static bool IsParameter(string reference) => reference.StartsWith("{?", StringComparison.Ordinal);
+
     private CrystalEvaluationTime RequiredTime(CrystalFormula formula, HashSet<string>? visiting = null)
     {
-        var time = formula.UsesPageContext || formula.UsesAggregates || formula.UsesSharedVariables || formula.UsesRecordContext
+        var time = formula.UsesPageContext || Summarizes(formula) || formula.UsesSharedVariables || formula.UsesRecordContext
             ? CrystalEvaluationTime.WhilePrintingRecords : CrystalEvaluationTime.BeforeReadingRecords;
         foreach (var dependency in formula.References)
         {
@@ -374,7 +416,7 @@ public sealed partial class ReportLayoutSession
             values = read;
         }
         if (values?.TryGetValue(reference, out var result) == true)
-            return result is Exception failure ? throw new InvalidDataException(failure.Message, failure) : result;
+            return result is Exception failure ? throw (failure is NotSupportedException ? new NotSupportedException(failure.Message, failure) : new InvalidDataException(failure.Message, failure)) : result;
         var key = (reference.ToUpperInvariant(), row);
         var pageDependent = !_physicalPageSchedule && DependsOn(reference, true);
         if (values is null && !pageDependent && _bandFormulaCache.TryGetValue(key, out result)) return result;

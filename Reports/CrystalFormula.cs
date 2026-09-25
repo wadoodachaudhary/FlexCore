@@ -1,16 +1,25 @@
 using System.Globalization;
-using System.Text.RegularExpressions;
-using Sprache;
+using System.Runtime.CompilerServices;
 
 namespace Fx.ControlKit.Reports;
 
 public enum CrystalEvaluationTime { BeforeReadingRecords, WhileReadingRecords, WhilePrintingRecords }
 
-/// <summary>Inert Crystal-syntax AST. No generated code, reflection, SQL, files, or network access.</summary>
-public sealed class CrystalFormula
+/// <summary>Inert Crystal formula AST (Crystal and Basic syntax). No generated code, reflection, SQL, files, or network access.</summary>
+public sealed partial class CrystalFormula
 {
+    private const int MaxTokens = 4096;
+    private const int MaxNesting = 256;
+    private const int MaxSteps = 2_000_000;
+    private const int MaxLoopIterations = 100_000;
+    private const int MaxArrayLength = 1000;
+    private const int MaxHostArrayLength = 100_000;
+    private const int MaxCallDepth = 32;
+    private const int MaxTextLength = 1_048_576;
+    private const int MaxArrayText = 1_048_576;
     private readonly Node _root;
     private readonly object? _defaultValue;
+    private readonly FunctionSignature? _signature;
     public IReadOnlyList<string> References { get; }
     public bool UsesVariables { get; }
     public bool UsesPersistentVariables { get; }
@@ -24,34 +33,50 @@ public sealed class CrystalFormula
     public IReadOnlyList<string> AggregateReferences { get; }
     public bool UsesEvaluationDirectives { get; }
     public bool RequiresPrintPass { get; }
-    private CrystalFormula(Node root, object? defaultValue)
+    /// <summary>True when the formula reads <see cref="CrystalFormulaContext.GroupNumber"/> (a print-time value).</summary>
+    public bool UsesGroupNumber { get; }
+    /// <summary>Identifiers that are neither declared variables nor Crystal built-ins; evaluating them fails.</summary>
+    public IReadOnlyList<string> UnknownSymbols { get; }
+    /// <summary>Custom functions (by name) called directly by this formula.</summary>
+    public IReadOnlyList<string> CustomFunctions { get; }
+    /// <summary>True when the text holds no expression (blank or comments only); it evaluates to the default value.</summary>
+    public bool IsEmpty { get; private init; }
+
+    private CrystalFormula(Node root, object? defaultValue, IReadOnlyCollection<Binding> declarations, IReadOnlyList<string> unknown, FunctionSignature? signature = null)
     {
-        _root = root; _defaultValue = defaultValue;
+        _root = root; _defaultValue = defaultValue; _signature = signature;
         var nodes = Walk(root).ToArray();
         References = nodes.OfType<Reference>().Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        UsesVariables = nodes.Any(n => n is Variable or Assign);
-        UsesPersistentVariables = nodes.OfType<Variable>().Any(n => !n.Scope.Equals("local", StringComparison.OrdinalIgnoreCase));
-        UsesSharedVariables = nodes.OfType<Variable>().Any(n => n.Scope.Equals("shared", StringComparison.OrdinalIgnoreCase));
-        var persistentNames = nodes.OfType<Variable>().Where(n => !n.Scope.Equals("local", StringComparison.OrdinalIgnoreCase)).Select(n => n.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        WritesPersistentVariables = nodes.OfType<Variable>().Any(n => persistentNames.Contains(n.Name) && n.Value is not null)
-            || nodes.OfType<Assign>().Any(n => persistentNames.Contains(n.Name));
-        UsesRecordContext = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "recordnumber" or "onfirstrecord" or "onlastrecord" or "currentfieldvalue")
-            || nodes.OfType<Call>().Any(n => n.Name.ToLowerInvariant() is "previous" or "next" or "onfirstrecord" or "onlastrecord");
+        UsesVariables = declarations.Count > 0 || nodes.Any(n => n is Variable or VarRef or Assign or ElementAssign or Redim or ForLoop);
+        UsesPersistentVariables = declarations.Any(b => b.Persistent);
+        UsesSharedVariables = declarations.Any(b => b.Scope == "shared");
+        WritesPersistentVariables = nodes.Any(n => n switch
+        {
+            Variable v => v.Binding.Persistent && v.Value is not null,
+            Assign a => a.Binding.Persistent, ElementAssign e => e.Binding.Persistent, Redim r => r.Binding.Persistent, ForLoop l => l.Binding.Persistent,
+            _ => false
+        });
+        var symbols = nodes.OfType<Symbol>().Select(n => n.Name.ToLowerInvariant()).ToHashSet();
+        var calls = nodes.OfType<Call>().ToArray();
+        UsesGroupNumber = symbols.Contains("groupnumber");
+        UsesRecordContext = symbols.Overlaps(["recordnumber", "onfirstrecord", "onlastrecord", "currentfieldvalue", "groupnumber"])
+            || calls.Any(n => n.Name.ToLowerInvariant() is "previous" or "next" or "previousvalue" or "nextvalue" or "previousisnull" or "nextisnull" or "onfirstrecord" or "onlastrecord" or "counthierarchicalchildren" or "groupname");
         var times = nodes.OfType<Symbol>().Select(n => Enum.TryParse<CrystalEvaluationTime>(n.Name, true, out var time) ? (CrystalEvaluationTime?)time : null)
             .Where(t => t.HasValue).Distinct().ToArray();
         if (times.Length > 1) throw new InvalidDataException("A formula cannot specify conflicting evaluation times.");
         EvaluationTime = times.FirstOrDefault();
-        var after = nodes.OfType<Call>().Where(n => n.Name.Equals("EvaluateAfter", StringComparison.OrdinalIgnoreCase)).ToArray();
+        var after = calls.Where(n => n.Name.Equals("EvaluateAfter", StringComparison.OrdinalIgnoreCase)).ToArray();
         if (after.Any(n => n.Args.Length != 1 || n.Args[0] is not Reference r || !r.Name.StartsWith("{@", StringComparison.Ordinal)))
             throw new InvalidDataException("EvaluateAfter requires one formula reference.");
         EvaluateAfter = after.Select(n => ((Reference)n.Args[0]).Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        UsesPageContext = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "pagenumber" or "totalpagecount" or "inrepeatedgroupheader");
-        UsesAggregates = nodes.OfType<Call>().Any(n => AggregateNames.Contains(n.Name));
-        AggregateReferences = nodes.OfType<Call>().Where(n => AggregateNames.Contains(n.Name)).SelectMany(n => n.Args.OfType<Reference>())
-            .Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-        RequiresPrintPass = nodes.OfType<Symbol>().Any(n => n.Name.Equals("WhilePrintingRecords", StringComparison.OrdinalIgnoreCase));
-        UsesEvaluationDirectives = nodes.OfType<Symbol>().Any(n => n.Name.ToLowerInvariant() is "whileprintingrecords" or "whilereadingrecords" or "beforereadingrecords")
-            || nodes.OfType<Call>().Any(n => n.Name.Equals("EvaluateAfter", StringComparison.OrdinalIgnoreCase));
+        UsesPageContext = symbols.Overlaps(["pagenumber", "totalpagecount", "pagenofm", "inrepeatedgroupheader"]);
+        var aggregates = calls.Where(IsAggregate).ToArray();
+        UsesAggregates = aggregates.Length > 0;
+        AggregateReferences = aggregates.SelectMany(n => n.Args.OfType<Reference>()).Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        RequiresPrintPass = symbols.Contains("whileprintingrecords");
+        UsesEvaluationDirectives = symbols.Overlaps(["whileprintingrecords", "whilereadingrecords", "beforereadingrecords"]) || after.Length > 0;
+        UnknownSymbols = unknown;
+        CustomFunctions = nodes.OfType<CustomCall>().Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     /// <summary>Crystal syntax under each spelling report XML uses for it.</summary>
@@ -59,46 +84,88 @@ public sealed class CrystalFormula
         syntax is not null && (syntax.Equals("Crystal", StringComparison.OrdinalIgnoreCase)
             || syntax.Equals("CrystalSyntax", StringComparison.OrdinalIgnoreCase)
             || syntax.Equals("crFormulaSyntaxCrystal", StringComparison.OrdinalIgnoreCase));
+    /// <summary>True for the syntaxes <see cref="Compile"/> accepts (Crystal and Basic).</summary>
+    public static bool IsSupportedSyntax(string? syntax) => IsCrystalSyntax(syntax) || IsBasicSyntax(syntax);
 
-    public static CrystalFormula Compile(string text, string syntax = "Crystal", object? defaultValue = null)
+    public static CrystalFormula Compile(string text, string syntax = "Crystal", object? defaultValue = null, IReadOnlyDictionary<string, CrystalCustomFunction>? customFunctions = null)
     {
+        try { return CompileFormula(text, syntax, defaultValue, customFunctions); }
+        catch (InsufficientExecutionStackException) { throw new InvalidDataException("Formula nesting limit exceeded."); }
+    }
+    private static CrystalFormula CompileFormula(string text, string syntax, object? defaultValue, IReadOnlyDictionary<string, CrystalCustomFunction>? customFunctions)
+    {
+        if (IsBasicSyntax(syntax))
+        {
+            var basic = new BasicParser(text, customFunctions, false);
+            return new(basic.IsEmpty ? new Literal(defaultValue ?? 0m) : basic.ParseFormula(), defaultValue ?? 0m, basic.Declarations, basic.Unknown) { IsEmpty = basic.IsEmpty };
+        }
         if (!IsCrystalSyntax(syntax)) throw new NotSupportedException($"Formula syntax '{syntax}' is not implemented.");
-        if (text.Length > 32768) throw new InvalidDataException("Formula exceeds the 32 KB limit.");
-        // Bound recursive grammar work before parsing untrusted report definitions.
-        string[] tokens;
-        try { tokens = Token(Lexemes).End().Parse(text).ToArray(); }
-        catch (ParseException ex) { throw new InvalidDataException("Invalid Crystal formula: " + ex.Message, ex); }
-        if (tokens.Length > 2048) throw new InvalidDataException("Formula token limit exceeded.");
-        var depth = 0; var branches = 0;
-        foreach (var token in tokens)
-        {
-            if ((token is "(" or "[") && ++depth > 64 || token.Equals("if", StringComparison.OrdinalIgnoreCase) && ++branches > 128)
-                throw new InvalidDataException("Formula nesting limit exceeded.");
-            if (token is ")" or "]") depth--;
-        }
-        try
-        {
-            var root = string.IsNullOrWhiteSpace(string.Concat(tokens)) ? new Literal(defaultValue ?? 0m) : Program.End().Parse(text);
-            foreach (var call in Walk(root).OfType<Call>())
-                if (!Functions.Contains(call.Name)) throw new NotSupportedException($"Crystal function '{call.Name}' is not implemented.");
-            return new(root, defaultValue ?? 0m);
-        }
-        catch (ParseException ex) { throw new InvalidDataException("Invalid Crystal formula: " + ex.Message, ex); }
+        var parser = new Parser(text, customFunctions, false);
+        var root = parser.IsEmpty ? new Literal(defaultValue ?? 0m) : parser.ParseFormula();
+        return new(root, defaultValue ?? 0m, parser.Declarations, parser.Unknown) { IsEmpty = parser.IsEmpty };
+    }
+
+    internal static CrystalCustomFunction CompileFunction(string name, string text, string syntax, IReadOnlyDictionary<string, CrystalCustomFunction>? functions)
+    {
+        try { return CompileFunctionBody(name, text, syntax, functions); }
+        catch (InsufficientExecutionStackException) { throw new InvalidDataException($"Custom function '{name}': formula nesting limit exceeded."); }
+    }
+    private static CrystalCustomFunction CompileFunctionBody(string name, string text, string syntax, IReadOnlyDictionary<string, CrystalCustomFunction>? functions)
+    {
+        ParserBase parser; FunctionSignature signature; Node body;
+        if (IsBasicSyntax(syntax)) { var basic = new BasicParser(text, functions, true); parser = basic; (signature, body) = basic.ParseFunction(name); }
+        else if (IsCrystalSyntax(syntax)) { var crystal = new Parser(text, functions, true); parser = crystal; (signature, body) = crystal.ParseFunction(); }
+        else throw new NotSupportedException($"Custom function '{name}' uses {syntax} syntax, which is not implemented.");
+        if (parser.Unknown.Count > 0) throw new InvalidDataException($"Custom function '{name}' uses unknown symbol '{parser.Unknown[0]}'.");
+        if (Walk(body).Select(n => n switch { Symbol s => s.Name, Call c => c.Name, _ => null }).FirstOrDefault(n => n is not null && PrintStateNames.Contains(n)) is { } printState)
+            throw new InvalidDataException($"Custom function '{name}' uses {printState}; custom functions cannot use print-state or evaluation-time functions.");
+        var formula = new CrystalFormula(body, Infer(body) ?? 0m, parser.Declarations, parser.Unknown, signature);
+        return new(name, text, formula, signature.Parameters.Select(p => new CrystalCustomFunctionParameter(p.Binding.Name, p.Binding.Type, p.Binding.IsArray, p.Binding.IsRange, p.Default is not null)).ToArray());
     }
 
     public object? Evaluate(CrystalFormulaContext context)
     {
-        var frame = new Frame(context, _defaultValue);
+        var frame = new Frame(context, _defaultValue, new Budget());
         try { return _root.Get(frame); }
         catch (NullFormulaValue) { return null; }
+        catch (DivideByZeroException) { throw new InvalidDataException("Division by zero."); }
+        catch (OverflowException ex) { throw new InvalidDataException("Crystal formula numeric overflow: " + ex.Message, ex); }
+        catch (InsufficientExecutionStackException) { throw new InvalidDataException("Formula nesting is too deep to evaluate."); }
+    }
+
+    private object? Invoke(Frame caller, string name, object?[] arguments)
+    {
+        var signature = _signature ?? throw new InvalidOperationException("Not a custom function.");
+        var required = signature.Parameters.Count(p => p.Default is null);
+        if (arguments.Length < required || arguments.Length > signature.Parameters.Count)
+            throw new InvalidDataException($"Custom function '{name}' expects {(required == signature.Parameters.Count ? required.ToString(CultureInfo.InvariantCulture) : $"{required} to {signature.Parameters.Count}")} argument(s).");
+        if (++caller.Budget.Depth > MaxCallDepth) throw new InvalidDataException("Custom function call depth limit exceeded.");
+        try
+        {
+            var frame = new Frame(caller.Context, _defaultValue, caller.Budget) { DefaultNulls = caller.DefaultNulls };
+            for (var i = 0; i < signature.Parameters.Count; i++)
+            {
+                var parameter = signature.Parameters[i];
+                frame.Write(parameter.Binding, i < arguments.Length ? arguments[i] : parameter.Default!.Get(frame));
+            }
+            return _root.Get(frame);
+        }
+        finally { caller.Budget.Depth--; }
     }
 
     public static bool Boolean(object? value) => value switch { null or DBNull => false, bool b => b, string s => bool.TryParse(s, out var b) ? b : throw new InvalidDataException("Expected a Boolean formula result."), _ => Number(value) != 0 };
-    public static decimal Number(object? value) => value is null or DBNull ? 0 : Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+    public static decimal Number(object? value) => value switch
+    {
+        null or DBNull => 0,
+        CrystalRange or object?[] => throw new InvalidDataException("A number is required here, not an array or a range."),
+        _ => Convert.ToDecimal(value, CultureInfo.InvariantCulture)
+    };
     public static int Compare(object? left, object? right)
     {
         if (left is null or DBNull) return right is null or DBNull ? 0 : -1;
         if (right is null or DBNull) return 1;
+        if (left is TimeSpan time) return time.CompareTo(Time(right));
+        if (right is TimeSpan otherTime) return Time(left).CompareTo(otherTime);
         if (left is DateTime date) return date.CompareTo(Date(right));
         if (right is DateTime otherDate) return Date(left).CompareTo(otherDate);
         if (left is string && right is string) return StringComparer.OrdinalIgnoreCase.Compare(Text(left), Text(right));
@@ -107,286 +174,267 @@ public sealed class CrystalFormula
             if (decimal.TryParse(Text(left), NumberStyles.Number, CultureInfo.CurrentCulture, out var a) && decimal.TryParse(Text(right), NumberStyles.Number, CultureInfo.CurrentCulture, out var b)) return a.CompareTo(b);
             return StringComparer.OrdinalIgnoreCase.Compare(Text(left), Text(right));
         }
+        if (left is CrystalRange || right is CrystalRange || AsArray(left) is not null || AsArray(right) is not null)
+            throw new InvalidDataException("Crystal ranges and arrays cannot be ordered against other values.");
         return Number(left).CompareTo(Number(right));
     }
-    private static string Text(object? value) => Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
-    private static DateTime Date(object? value) => value is DateTime date ? date : Convert.ToDateTime(value, CultureInfo.CurrentCulture);
-    private static readonly HashSet<string> AggregateNames = new("sum average avg count distinctcount minimum maximum".Split(' '), StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Functions = new(("sum average avg count distinctcount minimum maximum iif switch choose isnull hasvalue previous next onfirstrecord onlastrecord " +
-        "totext cstr tonumber cdbl cint val isnumber todate cdate date datetime dateadd datediff year month day hour minute second dayofweek " +
-        "left right mid len length trim ltrim rtrim uppercase lowercase ucase lcase replace instr chr chrw asc space replicate replicatestring round truncate int abs sgn ceiling floor remainder mod " +
-        "groupname rgb color defaultvaluesfornulls exceptionsfornulls evaluateafter").Split(' '), StringComparer.OrdinalIgnoreCase);
 
-    private sealed class Frame(CrystalFormulaContext context, object? defaultValue)
+    private static readonly ConditionalWeakTable<object, CrystalRandom> SessionRandom = new();
+    private static CrystalRandom Random(CrystalFormulaContext context) =>
+        context.Random ?? SessionRandom.GetValue(context.SharedVariables, _ => new CrystalRandom());
+}
+
+/// <summary>The base type of a Crystal value.</summary>
+public enum CrystalBaseType { Number, Currency, Boolean, Date, Time, DateTime, String }
+
+/// <summary>The declared Crystal type of a field, parameter or formula: a multi-value parameter is an array, a range parameter a range.</summary>
+public sealed record CrystalValueType(CrystalBaseType BaseType, bool IsArray = false, bool IsRange = false)
+{
+    /// <summary>The type a report XML names ("Xsd:dateField", "crFieldValueTypeDateTimeField", "Int32sField", "DateParameter", ...), or null when it names none.</summary>
+    public static CrystalValueType? FromXml(string? valueType, bool isArray = false, bool isRange = false)
     {
-        public CrystalFormulaContext Context { get; } = context;
-        public object? Default { get; } = defaultValue;
-        public Dictionary<string, object?> Locals { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public Dictionary<string, string> Scopes { get; } = new(StringComparer.OrdinalIgnoreCase);
-        public int Steps { get; private set; }
-        public bool DefaultNulls { get; set; } = context.DefaultValuesForNulls;
-        public object? NonNull(object? value) => value is null or DBNull && !DefaultNulls ? throw new NullFormulaValue() : value;
-        public void Tick() { if (++Steps > 10000) throw new InvalidDataException("Formula evaluation step limit exceeded."); }
-        public IDictionary<string, object?> Variables(string name, string? scope = null)
+        if (string.IsNullOrWhiteSpace(valueType)) return null;
+        var name = valueType.Trim().ToLowerInvariant();
+        if (name.StartsWith("crfieldvaluetype", StringComparison.Ordinal)) name = name["crfieldvaluetype".Length..];
+        if (name.StartsWith("xsd:", StringComparison.Ordinal)) name = name[4..];
+        foreach (var suffix in (string[])["field", "parameter"]) if (name.EndsWith(suffix, StringComparison.Ordinal)) name = name[..^suffix.Length];
+        CrystalBaseType? type = name switch
         {
-            scope ??= Scopes.GetValueOrDefault(name, "local");
-            return scope.ToLowerInvariant() switch { "shared" => Context.SharedVariables, "global" => Context.GlobalVariables, _ => Locals };
-        }
-    }
-    private sealed class NullFormulaValue : Exception;
-    private abstract record Node
-    {
-        public object? Get(Frame f)
-        {
-            f.Tick(); var value = Eval(f);
-            if (value is string text && text.Length > 1_048_576) throw new InvalidDataException("Formula text result exceeds 1 MB.");
-            return value;
-        }
-        protected abstract object? Eval(Frame f);
-        public virtual IEnumerable<Node> Children => [];
-    }
-    private sealed record Literal(object? Value) : Node { protected override object? Eval(Frame f) => Value; }
-    private sealed record Default : Node { protected override object? Eval(Frame f) => f.Default; }
-    private sealed record Reference(string Name) : Node { protected override object? Eval(Frame f) => f.Context.Resolve(Name); }
-    private sealed record Symbol(string Name) : Node
-    {
-        protected override object? Eval(Frame f) => Name.ToLowerInvariant() switch
-        {
-            "true" => true, "false" => false, "null" => null,
-            "currentdate" => f.Context.Now.Date, "currentdatetime" => f.Context.Now, "currenttime" => f.Context.Now.TimeOfDay,
-            "pagenumber" => f.Context.PageNumber, "totalpagecount" => f.Context.TotalPageCount,
-            "recordnumber" => f.Context.RecordIndex + 1, "onfirstrecord" => f.Context.RecordIndex == 0,
-            "onlastrecord" => f.Context.RecordIndex == f.Context.RecordCount - 1,
-            "drilldowngrouplevel" => f.Context.DrillDownGroupLevel, "inrepeatedgroupheader" => f.Context.InRepeatedGroupHeader,
-            "currentfieldvalue" => f.Context.CurrentFieldValue(),
-            "whileprintingrecords" or "whilereadingrecords" or "beforereadingrecords" => null,
-            "defaultvaluesfornulls" => f.DefaultNulls = true, "exceptionsfornulls" => f.DefaultNulls = false,
-            "crred" or "red" => 255m, "crgreen" or "green" => 32768m, "crblue" or "blue" => 16711680m, "crblack" or "black" => 0m, "crwhite" or "white" => 16777215m,
-            "crmaroon" or "maroon" => 128m, "crolive" or "olive" => 32896m, "crnavy" or "navy" => 8388608m, "crpurple" or "purple" => 8388736m,
-            "crteal" or "teal" => 8421376m, "crgray" or "gray" => 8421504m, "crsilver" or "silver" => 12632256m, "crlime" or "lime" => 65280m,
-            "cryellow" or "yellow" => 65535m, "crfuchsia" or "fuchsia" => 16711935m, "craqua" or "aqua" => 16776960m, "crnocolor" or "nocolor" => -1m,
-            "crregular" => 0m, "crbold" => 1m, "critalic" => 2m, "crbolditalic" => 3m,
-            _ => f.Variables(Name).TryGetValue(Name, out var value) ? value : throw new InvalidDataException($"Unknown Crystal symbol '{Name}'.")
+            "date" => CrystalBaseType.Date, "datetime" => CrystalBaseType.DateTime, "time" => CrystalBaseType.Time,
+            "boolean" or "bool" => CrystalBaseType.Boolean, "currency" => CrystalBaseType.Currency,
+            "string" or "persistentmemo" or "memo" => CrystalBaseType.String,
+            "number" or "decimal" or "long" or "short" or "byte" or "float" or "double" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s" => CrystalBaseType.Number,
+            _ => null
         };
+        return type is null ? null : new(type.Value, isArray, isRange);
     }
-    private sealed record Variable(string Scope, string Type, string Name, Node? Value) : Node
-    {
-        public override IEnumerable<Node> Children => Value is null ? [] : [Value];
-        protected override object? Eval(Frame f)
-        {
-            f.Scopes[Name] = Scope;
-            var vars = f.Variables(Name, Scope);
-            if (Value is not null) vars[Name] = Value.Get(f);
-            else if (!vars.ContainsKey(Name)) vars[Name] = Type.ToLowerInvariant() switch { "stringvar" => "", "booleanvar" => false, "datevar" or "datetimevar" => DateTime.MinValue, _ => 0m };
-            return vars[Name];
-        }
-    }
-    private sealed record Assign(string Name, Node Value) : Node
-    {
-        public override IEnumerable<Node> Children => [Value];
-        protected override object? Eval(Frame f) => f.Variables(Name)[Name] = Value.Get(f);
-    }
-    private sealed record Sequence(Node[] Nodes) : Node
-    {
-        public override IEnumerable<Node> Children => Nodes;
-        protected override object? Eval(Frame f) { object? value = null; foreach (var node in Nodes) value = node.Get(f); return value; }
-    }
-    private sealed record Conditional(Node Test, Node Yes, Node No) : Node
-    {
-        public override IEnumerable<Node> Children => [Test, Yes, No];
-        protected override object? Eval(Frame f) => Boolean(f.NonNull(Test.Get(f))) ? Yes.Get(f) : No.Get(f);
-    }
-    private sealed record Unary(string Op, Node Value) : Node
-    {
-        public override IEnumerable<Node> Children => [Value];
-        protected override object? Eval(Frame f) => Op.ToLowerInvariant() switch { "not" => !Boolean(f.NonNull(Value.Get(f))), "-" => -Number(f.NonNull(Value.Get(f))), _ => Number(f.NonNull(Value.Get(f))) };
-    }
-    private sealed record Values(Node[] Nodes) : Node
-    {
-        public override IEnumerable<Node> Children => Nodes;
-        protected override object? Eval(Frame f) => Nodes.Select(n => n.Get(f)).ToArray();
-    }
-    private sealed record Range(object? Start, object? End);
-    private sealed record Binary(string Op, Node Left, Node Right) : Node
-    {
-        public override IEnumerable<Node> Children => [Left, Right];
-        protected override object? Eval(Frame f)
-        {
-            var a = f.NonNull(Left.Get(f)); var op = Op.ToLowerInvariant();
-            if (op == "and") return Boolean(a) && Boolean(f.NonNull(Right.Get(f)));
-            if (op == "or") return Boolean(a) || Boolean(f.NonNull(Right.Get(f)));
-            var b = f.NonNull(Right.Get(f));
-            return op switch
-            {
-                "=" => Compare(a, b) == 0, "<>" or "!=" => Compare(a, b) != 0, "<" => Compare(a, b) < 0,
-                ">" => Compare(a, b) > 0, "<=" => Compare(a, b) <= 0, ">=" => Compare(a, b) >= 0,
-                "xor" => Boolean(a) ^ Boolean(b), "&" => Text(a) + Text(b),
-                "+" when a is string || b is string => Text(a) + Text(b),
-                "+" when a is DateTime date => date.AddDays((double)Number(b)),
-                "-" when a is DateTime date && b is DateTime other => (decimal)(date - other).TotalDays,
-                "-" when a is DateTime date => date.AddDays(-(double)Number(b)),
-                "+" => Number(a) + Number(b), "-" => Number(a) - Number(b), "*" => Number(a) * Number(b),
-                "/" => Number(a) / Number(b), "mod" or "%" => Number(a) % Number(b), "^" => (decimal)Math.Pow((double)Number(a), (double)Number(b)),
-                "to" => new Range(a, b), "in" => b is Range range ? Compare(a, range.Start) >= 0 && Compare(a, range.End) <= 0 : b is object?[] values ? values.Any(v => Compare(a, v) == 0) : Text(b).Contains(Text(a), StringComparison.OrdinalIgnoreCase),
-                "like" => Regex.IsMatch(Text(a), "^" + Regex.Escape(Text(b)).Replace("\\*", ".*").Replace("\\?", ".") + "$", RegexOptions.IgnoreCase | RegexOptions.Singleline, TimeSpan.FromMilliseconds(100)),
-                "startswith" => Text(a).StartsWith(Text(b), StringComparison.OrdinalIgnoreCase),
-                _ => throw new NotSupportedException($"Crystal operator '{Op}' is not implemented.")
-            };
-        }
-    }
-    private sealed record Call(string Name, Node[] Args) : Node
-    {
-        public override IEnumerable<Node> Children => Args;
-        protected override object? Eval(Frame f)
-        {
-            var name = Name.ToLowerInvariant();
-            var values = new Dictionary<int, object?>();
-            object? Arg(int i)
-            {
-                if (!values.TryGetValue(i, out var value)) values[i] = value = i < Args.Length ? Args[i].Get(f) : throw new InvalidDataException($"{Name}: missing argument {i + 1}.");
-                return name is "isnull" or "hasvalue" ? value : f.NonNull(value);
-            }
-            int Int(int i) => checked((int)Number(Arg(i)));
-            string Str(int i) => Text(Arg(i));
-            if (name == "iif") { var test = Boolean(Arg(0)); var yes = Arg(1); var no = Arg(2); return test ? yes : no; }
-            if (name == "switch")
-            {
-                if (Args.Length % 2 != 0) throw new InvalidDataException("Switch requires condition/value pairs.");
-                for (var i = 0; i < Args.Length; i++) _ = Arg(i);
-                for (var i = 0; i < Args.Length; i += 2) if (Boolean(Arg(i))) return Arg(i + 1);
-                return f.Default;
-            }
-            if (name == "choose") { for (var index = 0; index < Args.Length; index++) _ = Arg(index); var i = Int(0); return i >= 1 && i < Args.Length ? Arg(i) : f.Default; }
-            if (AggregateNames.Contains(name))
-            {
-                if (Args.Length is < 1 or > 2 || Args[0] is not Reference reference || Args.Length == 2 && Args[1] is not Reference)
-                    throw new NotSupportedException($"{Name} requires a field and optional group reference.");
-                return f.Context.Aggregate(name, reference.Name, Args.Length == 2 ? ((Reference)Args[1]).Name : "");
-            }
-            if (name is "previous" or "next")
-            {
-                if (Args.Length != 1 || Args[0] is not Reference reference) throw new NotSupportedException($"{Name} requires a field reference.");
-                return f.Context.Relative(reference.Name, name == "previous" ? -1 : 1);
-            }
-            return name switch
-            {
-                "isnull" => Arg(0) is null or DBNull, "hasvalue" => Arg(0) is not (null or DBNull),
-                "onfirstrecord" => f.Context.RecordIndex == 0, "onlastrecord" => f.Context.RecordIndex == f.Context.RecordCount - 1,
-                "groupname" => Text(Arg(0)), "totext" or "cstr" => ToText(Arg(0), Args.Skip(1).Select(n => n.Get(f)).ToArray()),
-                "tonumber" or "cdbl" => Number(Arg(0)), "cint" => decimal.Round(Number(Arg(0)), 0, MidpointRounding.AwayFromZero),
-                "val" => decimal.TryParse(Regex.Match(Str(0).TrimStart(), @"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)).Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var val) ? val : 0m,
-                "isnumber" => decimal.TryParse(Str(0), NumberStyles.Number, CultureInfo.CurrentCulture, out _),
-                "date" or "datetime" => Args.Length == 1 ? Date(Arg(0)) : new DateTime(Int(0), Int(1), Int(2), Args.Length > 3 ? Int(3) : 0, Args.Length > 4 ? Int(4) : 0, Args.Length > 5 ? Int(5) : 0),
-                "todate" or "cdate" => Date(Arg(0)).Date,
-                "datediff" => DateDiff(Str(0), Date(Arg(1)), Date(Arg(2))),
-                "dateadd" => DateAdd(Str(0), Number(Arg(1)), Date(Arg(2))),
-                "year" => Date(Arg(0)).Year, "month" => Date(Arg(0)).Month, "day" => Date(Arg(0)).Day,
-                "hour" => Date(Arg(0)).Hour, "minute" => Date(Arg(0)).Minute, "second" => Date(Arg(0)).Second, "dayofweek" => (int)Date(Arg(0)).DayOfWeek + 1,
-                "left" => Str(0)[..Math.Clamp(Int(1), 0, Str(0).Length)], "right" => Str(0)[(Str(0).Length - Math.Clamp(Int(1), 0, Str(0).Length))..],
-                "mid" => Str(0).Substring(Math.Clamp(Int(1) - 1, 0, Str(0).Length), Args.Length > 2 ? Math.Clamp(Int(2), 0, Str(0).Length - Math.Clamp(Int(1) - 1, 0, Str(0).Length)) : Str(0).Length - Math.Clamp(Int(1) - 1, 0, Str(0).Length)),
-                "len" or "length" => Str(0).Length, "trim" => Str(0).Trim(), "ltrim" => Str(0).TrimStart(), "rtrim" => Str(0).TrimEnd(),
-                "uppercase" or "ucase" => Str(0).ToUpper(CultureInfo.CurrentCulture), "lowercase" or "lcase" => Str(0).ToLower(CultureInfo.CurrentCulture),
-                "replace" => Str(0).Replace(Str(1), Str(2), StringComparison.Ordinal),
-                "instr" => Args.Length == 2 ? Str(0).IndexOf(Str(1), StringComparison.Ordinal) + 1 : Str(1).IndexOf(Str(2), Math.Clamp(Int(0) - 1, 0, Str(1).Length), StringComparison.Ordinal) + 1,
-                "chr" or "chrw" => char.ConvertFromUtf32(Int(0)), "asc" => Str(0).Length == 0 ? 0 : char.ConvertToUtf32(Str(0), 0),
-                "space" => new string(' ', Math.Clamp(Int(0), 0, 32768)),
-                "replicate" or "replicatestring" => string.Concat(Enumerable.Repeat(Str(0), Math.Clamp(Int(1), 0, 32768 / Math.Max(1, Str(0).Length)))),
-                "round" => decimal.Round(Number(Arg(0)), Args.Length > 1 ? Math.Clamp(Int(1), 0, 28) : 0, MidpointRounding.AwayFromZero),
-                "truncate" => Truncate(Number(Arg(0)), Args.Length > 1 ? Int(1) : 0), "int" or "floor" => decimal.Floor(Number(Arg(0))),
-                "ceiling" => decimal.Ceiling(Number(Arg(0))), "abs" => Math.Abs(Number(Arg(0))), "sgn" => Math.Sign(Number(Arg(0))),
-                "remainder" or "mod" => Number(Arg(0)) % Number(Arg(1)),
-                "rgb" or "color" => Math.Clamp(Int(0), 0, 255) + Math.Clamp(Int(1), 0, 255) * 256 + Math.Clamp(Int(2), 0, 255) * 65536,
-                "evaluateafter" => Arg(0),
-                _ => throw new NotSupportedException($"Crystal function '{Name}' is not implemented.")
-            };
-        }
-    }
-    private static decimal Truncate(decimal number, int places)
-    {
-        var factor = (decimal)Math.Pow(10, Math.Clamp(places, -28, 28));
-        return decimal.Truncate(number * factor) / factor;
-    }
-    private static string ToText(object? value, object?[] args)
-    {
-        if (value is string text) return text;
-        if (args.Length > 0 && args[0] is string format)
-            return value is IFormattable formattable ? formattable.ToString(format, CultureInfo.CurrentCulture) : Text(value);
-        if (value is DateTime date) return date.ToShortDateString();
-        if (value is null) return "";
-        if (value is bool boolean) return boolean ? "True" : "False";
-        var digits = args.Length == 0 ? 2 : Math.Clamp((int)Number(args[0]), 0, 28);
-        var culture = (CultureInfo)CultureInfo.CurrentCulture.Clone();
-        if (args.Length > 1) culture.NumberFormat.NumberGroupSeparator = Text(args[1]);
-        if (args.Length > 2) culture.NumberFormat.NumberDecimalSeparator = Text(args[2]);
-        return Number(value).ToString("N" + digits, culture);
-    }
-    private static decimal DateDiff(string interval, DateTime start, DateTime end) => interval.ToLowerInvariant() switch
-    {
-        "yyyy" => end.Year - start.Year, "q" => (end.Year - start.Year) * 4 + (end.Month - 1) / 3 - (start.Month - 1) / 3,
-        "m" => (end.Year - start.Year) * 12 + end.Month - start.Month, "d" or "y" => (end.Date - start.Date).Days,
-        "h" => end.Ticks / TimeSpan.TicksPerHour - start.Ticks / TimeSpan.TicksPerHour,
-        "n" => end.Ticks / TimeSpan.TicksPerMinute - start.Ticks / TimeSpan.TicksPerMinute,
-        "s" => end.Ticks / TimeSpan.TicksPerSecond - start.Ticks / TimeSpan.TicksPerSecond,
-        _ => throw new NotSupportedException($"DateDiff interval '{interval}' is not implemented.")
-    };
-    private static DateTime DateAdd(string interval, decimal amount, DateTime date) => interval.ToLowerInvariant() switch
-    {
-        "yyyy" => date.AddYears((int)amount), "q" => date.AddMonths((int)amount * 3), "m" => date.AddMonths((int)amount),
-        "d" or "y" => date.AddDays((double)amount), "h" => date.AddHours((double)amount), "n" => date.AddMinutes((double)amount),
-        "s" => date.AddSeconds((double)amount), "ww" => date.AddDays((double)amount * 7),
-        _ => throw new NotSupportedException($"DateAdd interval '{interval}' is not implemented.")
-    };
-    private static IEnumerable<Node> Walk(Node node) { yield return node; foreach (var child in node.Children) foreach (var descendant in Walk(child)) yield return descendant; }
+}
 
-    private static readonly Parser<string> Trivia = Parse.WhiteSpace.AtLeastOnce().Text()
-        .Or(Parse.String("//").Then(_ => Parse.CharExcept("\r\n").Many().Text()))
-        .Or(Parse.String("/*").Then(_ => Parse.AnyChar.Until(Parse.String("*/")).Text()));
-    private static Parser<T> Token<T>(Parser<T> parser) => from before in Trivia.Many() from value in parser from after in Trivia.Many() select value;
-    private static Parser<string> Word(string word) => Token(Parse.IgnoreCase(word).Text().Then(value => Parse.LetterOrDigit.Or(Parse.Char('_')).Not().Return(value.ToLowerInvariant())));
-    private static Parser<string> Punctuation(string value) => Token(Parse.String(value).Text());
-    private static Parser<string> Quoted(char quote) => from open in Parse.Char(quote)
-        from chars in Parse.String(new string(quote, 2)).Return(quote.ToString()).Or(Parse.CharExcept(quote).Select(c => c.ToString())).Many()
-        from close in Parse.Char(quote) select string.Concat(chars);
-    private static readonly Parser<string> Identifier = Token(from first in Parse.Letter.Or(Parse.Char('_')) from rest in Parse.LetterOrDigit.Or(Parse.Char('_')).Many() select first + new string(rest.ToArray()));
-    private static readonly Parser<IEnumerable<string>> Lexemes = Token(Quoted('"').Or(Quoted('\'')).Select(_ => "literal")
-        .Or(Parse.Char('{').Then(_ => Parse.CharExcept('}').Many()).Then(_ => Parse.Char('}')).Return("reference"))
-        .Or(Parse.Letter.AtLeastOnce().Text()).Or(Parse.AnyChar.Select(c => c.ToString()))).Many();
-    private static readonly Parser<Node> Constant = Token(Quoted('"').Or(Quoted('\''))).Select(s => (Node)new Literal(s))
-        .Or(Token(Parse.DecimalInvariant).Select(s => (Node)new Literal(decimal.Parse(s, CultureInfo.InvariantCulture))))
-        .Or(Token(from open in Parse.Char('#') from value in Parse.CharExcept('#').AtLeastOnce().Text() from close in Parse.Char('#') select (Node)new Literal(DateTime.Parse(value, CultureInfo.InvariantCulture))));
-    private static readonly Parser<Node> Field = Token(from open in Parse.Char('{') from name in Parse.CharExcept('}').AtLeastOnce().Text() from close in Parse.Char('}') select (Node)new Reference("{" + name + "}"));
-    private static readonly Parser<Node> Declaration = from scope in Word("shared").Or(Word("global")).Or(Word("local")).Optional()
-        from type in Word("numbervar").Or(Word("currencyvar")).Or(Word("stringvar")).Or(Word("booleanvar")).Or(Word("datevar")).Or(Word("datetimevar"))
-        from name in Identifier from value in Punctuation(":=").Then(_ => Parse.Ref(() => Expression)).Optional()
-        select (Node)new Variable(scope.GetOrDefault() ?? "global", type, name, value.GetOrDefault());
-    private static readonly Parser<Node> Assignment = from name in Identifier from op in Punctuation(":=") from value in Parse.Ref(() => Expression) select (Node)new Assign(name, value);
-    private static readonly Parser<Node> If = from keyword in Word("if") from test in Parse.Ref(() => Expression) from then in Word("then")
-        from yes in Parse.Ref(() => Expression) from no in Word("else").Then(_ => Parse.Ref(() => Expression)).Optional()
-        select (Node)new Conditional(test, yes, no.GetOrDefault() ?? new Default());
-    private static readonly Parser<Node> Function = from name in Identifier from open in Punctuation("(")
-        from args in Parse.Ref(() => Expression).DelimitedBy(Punctuation(",")).Optional() from close in Punctuation(")")
-        select (Node)new Call(name, (args.GetOrDefault() ?? []).ToArray());
-    private static readonly Parser<Node> Atom = If.Or(Declaration).Or(Assignment).Or(Constant).Or(Field).Or(Function)
-        .Or(from open in Punctuation("(") from value in Parse.Ref(() => Program) from close in Punctuation(")") select value)
-        .Or(from open in Punctuation("[") from values in Parse.Ref(() => Expression).DelimitedBy(Punctuation(",")) from close in Punctuation("]") select (Node)new Values(values.ToArray()))
-        .Or(Identifier.Where(name => !new[] { "then", "else", "and", "or", "xor", "mod", "in", "like", "startswith", "to" }.Contains(name.ToLowerInvariant())).Select(name => (Node)new Symbol(name)));
-    private static readonly Parser<Node> UnaryExpression = (from op in Punctuation("-").Or(Punctuation("+")) from value in Parse.Ref(() => UnaryExpression) select (Node)new Unary(op, value)).Or(Atom);
-    private static Parser<Node> Chain(Parser<Node> operand, params string[] operators) => Parse.ChainOperator(operators.Select(op => char.IsLetter(op[0]) ? Word(op) : Punctuation(op)).Aggregate((a, b) => a.Or(b)), operand, (op, a, b) => new Binary(op, a, b));
-    private static readonly Parser<Node> Power = Chain(UnaryExpression, "^");
-    private static readonly Parser<Node> Product = Chain(Power, "*", "/", "%", "mod");
-    private static readonly Parser<Node> Sum = Chain(Product, "+", "-", "&");
-    private static readonly Parser<Node> Ranges = Chain(Sum, "to");
-    private static readonly Parser<Node> Comparison = Chain(Ranges, "<=", ">=", "<>", "!=", "=", "<", ">", "in", "like", "startswith");
-    private static readonly Parser<Node> Not = Word("not").Then(_ => Parse.Ref(() => Not)).Select(value => (Node)new Unary("not", value)).Or(Comparison);
-    private static readonly Parser<Node> And = Chain(Not, "and");
-    private static readonly Parser<Node> Expression = Chain(And, "or", "xor");
-    private static readonly Parser<Node> Program = from nodes in Expression.DelimitedBy(Punctuation(";")) from tail in Punctuation(";").Many() select (Node)new Sequence(nodes.ToArray());
+/// <summary>A Crystal range value. A null endpoint is open (<c>UpTo</c>/<c>UpFrom</c>).</summary>
+public sealed record CrystalRange(object? Start, object? End, bool IncludeStart = true, bool IncludeEnd = true)
+{
+    /// <summary>Whether a bound is a Crystal Date (a whole day against date-times), a DateTime (false), or of unknown type (null).</summary>
+    internal bool? StartIsDate { get; init; }
+    internal bool? EndIsDate { get; init; }
+}
+
+/// <summary>The stored definition of a report custom function; <see cref="Syntax"/> is "Crystal" or "Basic".</summary>
+public sealed record CrystalCustomFunctionSource(string Name, string Text, string Syntax = "Crystal");
+
+/// <summary>A parameter of a compiled Crystal custom function.</summary>
+public sealed record CrystalCustomFunctionParameter(string Name, string Type, bool IsArray, bool IsRange, bool IsOptional);
+
+/// <summary>A compiled custom function: Crystal syntax (<c>Function (stringVar x, optional numberVar n := 1) body</c>) or Basic syntax (<c>Function name (x As String) ... End Function</c>).</summary>
+public sealed class CrystalCustomFunction
+{
+    internal CrystalCustomFunction(string name, string text, CrystalFormula body, IReadOnlyList<CrystalCustomFunctionParameter> parameters)
+    { Name = name; Text = text; Body = body; Parameters = parameters; }
+    public string Name { get; }
+    public string Text { get; }
+    public IReadOnlyList<CrystalCustomFunctionParameter> Parameters { get; }
+    /// <summary>Other custom functions this one calls.</summary>
+    public IReadOnlyList<string> CalledFunctions => Body.CustomFunctions;
+    internal CrystalFormula Body { get; }
+
+    /// <summary>Compiles one custom function. Calls to other custom functions resolve through <paramref name="functions"/> at evaluation time.</summary>
+    public static CrystalCustomFunction Compile(string name, string text, string syntax = "Crystal", IReadOnlyDictionary<string, CrystalCustomFunction>? functions = null)
+    {
+        if (string.IsNullOrWhiteSpace(name)) throw new InvalidDataException("A custom function requires a name.");
+        return CrystalFormula.CompileFunction(name.Trim(), text, syntax, functions);
+    }
+
+    /// <summary>Compiles a report's Crystal-syntax custom functions (name to text) so they may call each other; see <see cref="CompileAll(IEnumerable{CrystalCustomFunctionSource})"/>.</summary>
+    public static CrystalCustomFunctionLibrary CompileAll(IEnumerable<KeyValuePair<string, string>> definitions, string syntax = "Crystal") =>
+        CompileAll(definitions.Select(d => new CrystalCustomFunctionSource(d.Key, d.Value, syntax)));
+
+    /// <summary>Compiles a report's custom functions, each in its own syntax (Crystal or Basic), so they may call each other. A function that does not
+    /// compile, is defined twice, is recursive (Crystal rejects recursion) or calls such a function is left out, and the library's
+    /// <see cref="CrystalCustomFunctionLibrary.Errors"/> says why; the others stay usable.</summary>
+    public static CrystalCustomFunctionLibrary CompileAll(IEnumerable<CrystalCustomFunctionSource> definitions)
+    {
+        var names = StringComparer.OrdinalIgnoreCase;
+        var list = definitions.Select(d => d with { Name = d.Name.Trim() }).ToArray();
+        var compiled = new Dictionary<string, CrystalCustomFunction>(names);
+        var errors = new Dictionary<string, string>(names);
+        foreach (var duplicate in list.GroupBy(d => d.Name, names).Where(g => g.Count() > 1)) errors[duplicate.Key] = "it is defined more than once.";
+        var late = new LateFunctions(compiled, list.Select(d => d.Name).ToHashSet(names));
+        foreach (var definition in list.Where(d => !errors.ContainsKey(d.Name)))
+            try { compiled[definition.Name] = Compile(definition.Name, definition.Text, definition.Syntax, late); }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException) { errors[definition.Name] = ex.Message; }
+        // Recursive functions are the strongly connected components with a cycle (Tarjan, iterative: call chains may be thousands deep).
+        var index = new Dictionary<string, int>(names); var low = new Dictionary<string, int>(names);
+        var open = new Stack<string>(); var onStack = new HashSet<string>(names);
+        foreach (var root in compiled.Keys)
+        {
+            if (index.ContainsKey(root)) continue;
+            var work = new Stack<(string Name, int Next)>();
+            void Enter(string name) { index[name] = low[name] = index.Count; open.Push(name); onStack.Add(name); work.Push((name, 0)); }
+            Enter(root);
+            while (work.TryPop(out var frame))
+            {
+                var calls = compiled[frame.Name].CalledFunctions;
+                if (frame.Next < calls.Count)
+                {
+                    work.Push((frame.Name, frame.Next + 1));
+                    var called = calls[frame.Next];
+                    if (!compiled.ContainsKey(called)) continue;
+                    if (!index.ContainsKey(called)) Enter(called);
+                    else if (onStack.Contains(called)) low[frame.Name] = Math.Min(low[frame.Name], index[called]);
+                    continue;
+                }
+                if (work.TryPeek(out var parent)) low[parent.Name] = Math.Min(low[parent.Name], low[frame.Name]);
+                if (low[frame.Name] != index[frame.Name]) continue;
+                var component = new List<string>();
+                string member;
+                do { member = open.Pop(); onStack.Remove(member); component.Add(member); } while (!names.Equals(member, frame.Name));
+                if (component.Count == 1 && !calls.Contains(frame.Name, names)) continue;
+                foreach (var (recursive, cycle) in CycleNames(component, frame.Name))
+                    errors[recursive] = (cycle.Names.Count == 0 ? "it calls itself" : $"it calls itself through {string.Join(", ", cycle.Names.Select(c => "'" + c + "'"))}"
+                        + (cycle.Length > cycle.Names.Count ? " and others" : "")) + "; Crystal custom functions cannot be recursive.";
+            }
+        }
+        // Each member names its own cycle: none when it calls itself; the root, its shortest calls back to itself; any other member, its shortest calls
+        // toward the root (reverse breadth-first distances), then the root's shortest call path back to it, cut short where the two paths meet or at the
+        // first listed function that calls the member. Only the first three names of each path are looked at, so each member costs a constant beyond
+        // the two searches.
+        IEnumerable<(string Name, (List<string> Names, int Length) Cycle)> CycleNames(List<string> component, string root)
+        {
+            var members = component.ToHashSet(names);
+            var toRoot = new Dictionary<string, (int Distance, string Next)>(names) { [root] = (0, root) };
+            var from = new Dictionary<string, (int Depth, List<string> First)>(names) { [root] = (0, []) };
+            var inward = new Dictionary<string, HashSet<string>>(names);
+            foreach (var member in component)
+                foreach (var called in compiled[member].CalledFunctions.Where(members.Contains))
+                    (inward.TryGetValue(called, out var found) ? found : inward[called] = new(names)).Add(member);
+            for (var queue = new Queue<string>([root]); queue.TryDequeue(out var current);)
+                foreach (var caller in inward.GetValueOrDefault(current) ?? [])
+                    if (toRoot.TryAdd(caller, (toRoot[current].Distance + 1, current))) queue.Enqueue(caller);
+            for (var queue = new Queue<string>([root]); queue.TryDequeue(out var current);)
+                foreach (var called in compiled[current].CalledFunctions.Where(members.Contains))
+                    if (!from.ContainsKey(called))
+                    {
+                        var (depth, first) = from[current];
+                        from[called] = (depth + 1, first.Count < 3 ? [.. first, called] : first);
+                        queue.Enqueue(called);
+                    }
+            foreach (var member in component)
+            {
+                if (compiled[member].CalledFunctions.Contains(member, names)) { yield return (member, ([], 0)); continue; }
+                var cycle = new List<string>();
+                int length;
+                if (names.Equals(member, root))
+                {
+                    var start = compiled[root].CalledFunctions.Where(c => members.Contains(c) && !names.Equals(c, root)).MinBy(c => toRoot[c].Distance)!;
+                    for (var next = start; cycle.Count < 3 && !names.Equals(next, root); next = toRoot[next].Next) cycle.Add(next);
+                    length = toRoot[start].Distance;
+                }
+                else
+                {
+                    var down = from[member].First.Where(c => !names.Equals(c, member)).ToList();
+                    var between = from[member].Depth - 1;
+                    length = toRoot[member].Distance + between;
+                    var met = false;
+                    for (var next = toRoot[member].Next; cycle.Count < 3 && !met; next = toRoot[next].Next)
+                    {
+                        cycle.Add(next);
+                        if (down.FindIndex(c => names.Equals(c, next)) is >= 0 and var meet) { length = cycle.Count + between - meet - 1; down.RemoveRange(0, meet + 1); met = true; }
+                        else met = names.Equals(next, root);
+                    }
+                    if (met) cycle.AddRange(down.Take(3 - cycle.Count));
+                }
+                if (cycle.FindIndex(inward[member].Contains) is >= 0 and var close && close + 1 < Math.Max(length, cycle.Count)) { cycle.RemoveRange(close + 1, cycle.Count - close - 1); length = close + 1; }
+                yield return (member, (cycle, length));
+            }
+        }
+        // A function calling an unusable one is unusable too; its message names the first function that failed.
+        var callers = new Dictionary<string, List<string>>(names);
+        foreach (var (name, function) in compiled)
+            foreach (var called in function.CalledFunctions.Distinct(names)) (callers.TryGetValue(called, out var found) ? found : callers[called] = []).Add(name);
+        var pending = new Queue<(string Name, string Cause)>(errors.Keys.Select(name => (name, name)));
+        while (pending.TryDequeue(out var failed))
+            foreach (var caller in callers.GetValueOrDefault(failed.Name) ?? [])
+                if (errors.TryAdd(caller, $"it calls '{failed.Name}', which cannot be used" + (names.Equals(failed.Name, failed.Cause) ? "." : $" because '{failed.Cause}' cannot be used.")))
+                    pending.Enqueue((caller, failed.Cause));
+        foreach (var name in errors.Keys) compiled.Remove(name);
+        return new(compiled, errors);
+    }
+
+    private sealed class LateFunctions(Dictionary<string, CrystalCustomFunction> compiled, HashSet<string> names) : IReadOnlyDictionary<string, CrystalCustomFunction>
+    {
+        public CrystalCustomFunction this[string key] => compiled[key];
+        public IEnumerable<string> Keys => names;
+        public IEnumerable<CrystalCustomFunction> Values => compiled.Values;
+        public int Count => names.Count;
+        public bool ContainsKey(string key) => names.Contains(key);
+        public bool TryGetValue(string key, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out CrystalCustomFunction value) => compiled.TryGetValue(key, out value);
+        public IEnumerator<KeyValuePair<string, CrystalCustomFunction>> GetEnumerator() => compiled.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+}
+
+/// <summary>A report's compiled custom functions. <see cref="Errors"/> holds, by name, why each left-out function cannot be called; a formula
+/// compiled against the library that calls one fails to compile with that reason.</summary>
+public sealed class CrystalCustomFunctionLibrary : IReadOnlyDictionary<string, CrystalCustomFunction>
+{
+    private readonly Dictionary<string, CrystalCustomFunction> _functions;
+    internal CrystalCustomFunctionLibrary(Dictionary<string, CrystalCustomFunction> functions, IReadOnlyDictionary<string, string> errors) { _functions = functions; Errors = errors; }
+    public IReadOnlyDictionary<string, string> Errors { get; }
+    public CrystalCustomFunction this[string key] => _functions[key];
+    public IEnumerable<string> Keys => _functions.Keys;
+    public IEnumerable<CrystalCustomFunction> Values => _functions.Values;
+    public int Count => _functions.Count;
+    public bool ContainsKey(string key) => _functions.ContainsKey(key);
+    public bool TryGetValue(string key, [System.Diagnostics.CodeAnalysis.MaybeNullWhen(false)] out CrystalCustomFunction value) => _functions.TryGetValue(key, out value);
+    public IEnumerator<KeyValuePair<string, CrystalCustomFunction>> GetEnumerator() => _functions.GetEnumerator();
+    System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+}
+
+/// <summary>Crystal's <c>Rnd</c> generator (minimal-standard LCG with a 32-slot shuffle table). The runtime seeds it from the clock in milliseconds, which its seeding
+/// always reduces to 1, so every run yields the same sequence. Keep one per report run.</summary>
+public sealed class CrystalRandom
+{
+    private readonly long[] _table = new long[32];
+    private readonly Lock _gate = new();
+    private long _state, _last;
+    /// <summary>Crystal <c>Rnd(seed)</c>: a negative seed reseeds, zero repeats the last value, otherwise the next value.</summary>
+    public double Next(double seed = 1)
+    {
+        lock (_gate) return seed == 0 ? Current() : seed < 0 ? Seed(seed) : Advance();
+    }
+    private static long Step(long value)
+    {
+        var quotient = value / 127773L;
+        var next = 16807L * (value - quotient * 127773L) - 2836L * quotient;
+        return next < 0 ? next + int.MaxValue : next;
+    }
+    private double Seed(double seed)
+    {
+        var value = (long)Math.Abs(seed);
+        _state = value == 0 || value >= int.MaxValue ? 1 : value;
+        for (var i = 39; i >= 0; i--) { _state = Step(_state); if (i < 32) _table[i] = _state; }
+        _last = _state;
+        return Advance();
+    }
+    private double Advance()
+    {
+        if (_state == 0) Seed(1);
+        _last = Step(_last);
+        var slot = (int)(_state / 0x4000000L);
+        _state = _table[slot]; _table[slot] = _last;
+        return Current();
+    }
+    private double Current() => Math.Min(4.656612875245797E-10 * _state, 0.99999988);
 }
 
 public sealed class CrystalFormulaContext
 {
     public Func<string, object?> Resolve { get; init; } = name => throw new InvalidDataException($"Unresolved field '{name}'.");
     public Func<string, string, string, object?> Aggregate { get; init; } = (op, field, group) => throw new InvalidDataException("Aggregate context is unavailable.");
+    /// <summary>Crystal <c>Sum ({field}, {group field}, "condition")</c>: a summary for the group whose date, time or Boolean condition has that name.</summary>
+    public Func<string, string, string, string, object?> ConditionalAggregate { get; init; } = (op, field, group, condition) => throw new NotSupportedException($"{op} with the group condition \"{condition}\" requires the report's groups, which this context does not provide.");
+    /// <summary>Crystal <c>GroupName({field})</c> and <c>GroupName({field}, "condition")</c>: the name of the current group on that field (the Others
+    /// name, the group-name formula, the specified group or the date period); the condition picks among groups on the same field. Null reads the field value.</summary>
+    public Func<string, string?, object?>? GroupName { get; init; }
     public Func<string, int, object?> Relative { get; init; } = (field, offset) => throw new InvalidDataException("Relative record context is unavailable.");
     public IDictionary<string, object?> SharedVariables { get; init; } = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
     public IDictionary<string, object?> GlobalVariables { get; init; } = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
@@ -399,4 +447,18 @@ public sealed class CrystalFormulaContext
     public bool InRepeatedGroupHeader { get; init; }
     public bool DefaultValuesForNulls { get; init; }
     public Func<object?> CurrentFieldValue { get; init; } = () => null;
+    /// <summary>Crystal <c>GroupNumber</c>: 1-based ordinal, in print order, of the innermost group instance holding the current record.</summary>
+    public Func<int> GroupNumber { get; init; } = () => throw new InvalidDataException("Group number context is unavailable.");
+    /// <summary>Crystal <c>GroupingLevel({field})</c>: 1-based level of the group whose condition field is the argument, 0 when none.</summary>
+    public Func<string, int> GroupingLevel { get; init; } = field => throw new NotSupportedException("GroupingLevel requires the report's group list, which this context does not provide.");
+    /// <summary>Crystal <c>CountHierarchicalChildren(level)</c> for the current hierarchical group instance.</summary>
+    public Func<int, int> HierarchicalChildren { get; init; } = level => throw new NotSupportedException("CountHierarchicalChildren requires hierarchical grouping (parent/child group trees), which this engine does not build.");
+    /// <summary>Crystal document properties by lower-case name: filename, fileauthor, filecreationdate, modificationdate, modificationtime, reporttitle, reportcomments, recordselection, groupselection.</summary>
+    public Func<string, object?> DocumentProperty { get; init; } = name => throw new NotSupportedException($"Document property '{name}' is not available to this formula context.");
+    /// <summary>The report run's <c>Rnd</c> generator. When null, one generator per <see cref="SharedVariables"/> store is used.</summary>
+    public CrystalRandom? Random { get; init; }
+    /// <summary>The declared Crystal type of a reference ({T.F}, {?P}, {@F}), or null when unknown. It turns one supplied value of a multi-value or range parameter
+    /// into an array or a range, drops the time from Date values, and decides Date against DateTime comparisons: Crystal widens a Date compared with a
+    /// date-time to its whole day. When that decision needs a type this returns null for, evaluation fails rather than guess.</summary>
+    public Func<string, CrystalValueType?> ReferenceType { get; init; } = _ => null;
 }

@@ -250,7 +250,7 @@ internal static class ReportDesignerSqlBuilder
     internal static object TypedFilterValue(string value, string type)
     {
         var kind = type.ToLowerInvariant();
-        if (kind.Contains("number") || kind.Contains("decimal") || kind.Contains("currency") || kind.Contains("int") || kind.Contains("long"))
+        if (kind.Contains("number") || kind.Contains("decimal") || kind.Contains("currency") || kind.Contains("int") || kind.Contains("long") || kind.Contains("short") || kind.Contains("byte"))
             return decimal.Parse(value, NumberStyles.Number, CultureInfo.InvariantCulture);
         if (kind.Contains("boolean") || kind == "bool") return bool.Parse(value);
         if (kind.Contains("date")) return DateTime.Parse(value, CultureInfo.InvariantCulture);

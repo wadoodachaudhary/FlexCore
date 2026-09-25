@@ -74,7 +74,8 @@ internal static class LegacyCrystalDatabaseParser
                     break;
                 case 0x2009:
                     if (field is null || value.Length < 18) throw new InvalidDataException("Invalid legacy database field descriptor.");
-                    field.DataType = U16(value, 0) switch { 9 => 16, 10 => 17, 12 => 15, var type => type };
+                    // Legacy descriptors store date-time as 12; database value types use 15.
+                    field.DataType = U16(value, 0) switch { 12 => 15, var type => type };
                     field.Length = U16(value, 2);
                     field.Attributes = U16(value, 4);
                     field.Precision = U16(value, 16);

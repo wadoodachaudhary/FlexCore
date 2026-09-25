@@ -25,12 +25,12 @@ public static class NativeCrystalRptConverter
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
                 options);
-            ClearLinkedSubreportSelectionFormula(subreport);
             model.Subreports.Add(subreport);
         }
 
         ApplySubreportLayoutOrder(model);
         AssignSubreportObjectNames(model);
+        ApplySubreportLinks(model, options);
         return model;
     }
 
@@ -56,12 +56,12 @@ public static class NativeCrystalRptConverter
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
                 options);
-            ClearLinkedSubreportSelectionFormula(subreport);
             model.Subreports.Add(subreport);
         }
 
         ApplySubreportLayoutOrder(model);
         AssignSubreportObjectNames(model);
+        ApplySubreportLinks(model, options);
         options.Progress?.Invoke("Writing Crystal XML from native C# model.");
         CrystalReportXmlWriter.Write(model, xmlPath);
     }
@@ -109,6 +109,19 @@ public static class NativeCrystalRptConverter
             model.Core.PrinterName = core.PrinterName;
         }
 
+        // Report summary info is metadata only: an unreadable stream leaves it blank and is reported.
+        if (FindStream(streams, prefix, "\u0005SummaryInformation") is { } summary)
+        {
+            try { model.SummaryInformation = CrystalSummaryInformationParser.Parse(summary.Bytes); }
+            catch (InvalidDataException error)
+            {
+                var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_SUMMARY_INFORMATION", model.Name, "", "", "",
+                    $"The report summary information (title, author, comments) could not be read ({error.Message}); it is left blank.");
+                model.ConversionDiagnostics.Add(diagnostic);
+                options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}: {diagnostic.Message}");
+            }
+        }
+
         var queryEngine = FindStream(streams, prefix, "QESession");
         var legacyDatabase = FindStream(streams, prefix, "Database (TLV)");
         if (queryEngine is null && legacyDatabase is null)
@@ -146,6 +159,25 @@ public static class NativeCrystalRptConverter
         {
             model.ConversionDiagnostics.Add(new("CRYSTAL_PARTIAL_EXTRACTION", model.Name, "", "", "", warning));
             options.Progress?.Invoke($"[CRYSTAL_PARTIAL_EXTRACTION] {model.Name}: {warning}");
+        }
+        // The formula engine that runs the custom functions reads their declarations; a function it cannot compile keeps its text and is reported.
+        var functions = CrystalCustomFunction.CompileAll(model.DataDefinition.CustomFunctions.Where(f => f.Name.Trim().Length > 0 && !string.IsNullOrWhiteSpace(f.FormulaText))
+            .Select(f => new CrystalCustomFunctionSource(f.Name, f.FormulaText, f.Syntax == 1 ? "Basic" : "Crystal")));
+        foreach (var function in model.DataDefinition.CustomFunctions)
+        {
+            string? problem;
+            if (functions.TryGetValue(function.Name.Trim(), out var compiled))
+            {
+                function.Parameters = compiled.Parameters;
+                problem = function.ArgumentDescriptions.Count > 0 && compiled.Parameters.Count != function.ArgumentDescriptions.Count
+                    ? $"Custom function '{function.Name}' declares {compiled.Parameters.Count} argument(s) but the report stores metadata for {function.ArgumentDescriptions.Count}; its arguments are emitted by position."
+                    : null;
+            }
+            else problem = $"Custom function '{function.Name}' cannot be run by the formula engine ({functions.Errors.GetValueOrDefault(function.Name.Trim()) ?? "it has no text"}); its text is kept and formulas calling it fail.";
+            if (problem is null) continue;
+            var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_CUSTOM_FUNCTION", model.Name, "", function.Name, "CustomFunction", problem);
+            model.ConversionDiagnostics.Add(diagnostic);
+            options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{function.Name}: {diagnostic.Message}");
         }
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
@@ -304,46 +336,232 @@ public static class NativeCrystalRptConverter
             : -1;
     }
 
-    private static void ClearLinkedSubreportSelectionFormula(CrystalReportModel subreport)
+    // Crystal passes main-report values into subreport parameters through the links stored with the subreport
+    // object; the subreport's record selection formula does the filtering (linking only adds or removes a
+    // "{field} = {?Pm-x}" operand of its top-level And). The stored subreport field is metadata that the runtime only
+    // uses for dependency tracking and can be stale, so a link becomes a row filter (SubreportFieldName) only when the
+    // formula ANDs exactly one such database-field test for its discrete, single-valued parameter, and a stored field
+    // that disagrees with the formula is reported. A formula made of nothing but those tests is fully expressed by the
+    // links and is dropped; any other formula is kept verbatim.
+    private static void ApplySubreportLinks(CrystalReportModel model, CrystalRptConversionOptions options)
     {
-        if (subreport.DataDefinition.RecordSelectionFormula.Contains("{?Pm-", StringComparison.OrdinalIgnoreCase))
+        var subreportObjects = model.DataDefinition.ReportDefinition.Areas
+            .SelectMany(area => area.Sections)
+            .SelectMany(section => section.ReportObjects)
+            .Where(reportObject => reportObject.ElementName == "SubreportObject")
+            .ToList();
+        foreach (var subreport in model.Subreports)
         {
-            MaterializeSubreportLinks(subreport);
-            subreport.DataDefinition.RecordSelectionFormula = "";
-        }
-    }
-
-    private static void MaterializeSubreportLinks(CrystalReportModel subreport)
-    {
-        foreach (var parameter in subreport.DataDefinition.Parameters
-                     .Where(parameter => parameter.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase)))
-        {
-            var mainFieldName = "{" + parameter.Name[3..] + "}";
-            subreport.SubreportLinks.Add(new CrystalSubreportLinkModel
+            var documentIndex = ExtractSubdocumentIndex(subreport.SourcePath);
+            var data = subreport.DataDefinition;
+            // The formula engine compiles at most 32 KB of formula text; a longer formula is kept whole and its links only supply parameters.
+            var conjuncts = data.RecordSelectionFormulaSyntax == 0 && data.RecordSelectionFormula.Length <= 32768 ? SelectionConjuncts(data.RecordSelectionFormula) : null;
+            if (data.RecordSelectionFormula.Length > 32768)
+                AddLinkDiagnostic(subreport, options, $"The record selection formula of subreport '{subreport.Name}' exceeds 32 KB, so its links are not matched to it; they only supply parameters.");
+            var filterTests = 0;
+            foreach (var stored in subreportObjects
+                         .Where(reportObject => documentIndex >= 0 && reportObject.SubreportDocumentIndex == documentIndex)
+                         .SelectMany(reportObject => reportObject.StoredSubreportLinks))
             {
-                LinkedParameterName = parameter.Name,
-                MainReportFieldName = mainFieldName,
-                SubreportFieldName = GuessSubreportLinkField(subreport, mainFieldName)
-            });
-        }
+                var parameter = data.Parameters.FirstOrDefault(candidate => candidate.Id == stored.ParameterId);
+                if (parameter is null || stored.MainReportFieldName.Length == 0)
+                {
+                    AddLinkDiagnostic(subreport, options, $"A stored link of subreport '{subreport.Name}' names " +
+                        (parameter is null ? $"parameter #{stored.ParameterId}, which the subreport does not define" : $"no main-report field for parameter '{parameter.Name}'") +
+                        "; the link is not emitted.");
+                    continue;
+                }
 
-        if (subreport.SubreportLinks.Any(link =>
-                string.Equals(link.MainReportFieldName, "{POMaster.PONumber}", StringComparison.OrdinalIgnoreCase)))
-        {
-            subreport.DataDefinition.SummaryFields.Clear();
+                if (subreport.SubreportLinks.Any(link => string.Equals(link.LinkedParameterName, parameter.Name, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                var field = "";
+                if (conjuncts is not null && !parameter.AllowMultiple && !parameter.AllowRange)
+                {
+                    var tests = conjuncts.Select(conjunct => LinkTestField(conjunct, parameter.Name)).Where(test => test is not null).ToList();
+                    if (tests.Count == 1)
+                    {
+                        field = tests[0]!;
+                        filterTests++;
+                    }
+                }
+
+                var storedField = stored.SubreportFieldType < 0
+                    ? ""
+                    : CrystalReportContentsParser.ResolveFieldManagerReference(data, stored.SubreportFieldType, stored.SubreportFieldIndex);
+                if (storedField.Length > 0 && (field.Length > 0
+                        ? !storedField.Equals(field, StringComparison.OrdinalIgnoreCase)
+                        : !data.RecordSelectionFormula.Contains(storedField, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AddLinkDiagnostic(subreport, options, $"Subreport '{subreport.Name}' stores {storedField} as the linked field for {parameter.FormulaName}, " +
+                        (field.Length > 0
+                            ? $"but its record selection formula tests {field}; the link filters on {field}, as Crystal filters by the formula."
+                            : $"but its record selection formula does not use {storedField}; the link only supplies the parameter, as Crystal filters by the formula."));
+                }
+
+                subreport.SubreportLinks.Add(new CrystalSubreportLinkModel
+                {
+                    LinkedParameterName = parameter.Name,
+                    MainReportFieldName = stored.MainReportFieldName,
+                    SubreportFieldName = field
+                });
+            }
+
+            foreach (var parameter in data.Parameters.Where(parameter =>
+                         parameter.Name.StartsWith("Pm-", StringComparison.OrdinalIgnoreCase) &&
+                         !subreport.SubreportLinks.Any(link => string.Equals(link.LinkedParameterName, parameter.Name, StringComparison.OrdinalIgnoreCase)) &&
+                         data.RecordSelectionFormula.Contains(parameter.FormulaName, StringComparison.OrdinalIgnoreCase)))
+            {
+                AddLinkDiagnostic(subreport, options, $"The record selection formula of subreport '{subreport.Name}' uses {parameter.FormulaName}, " +
+                    "but no stored subreport link feeds that parameter; Crystal would prompt for it.");
+            }
+
+            if (conjuncts is not null && conjuncts.Count > 0 && filterTests == conjuncts.Count)
+                data.RecordSelectionFormula = "";
         }
     }
 
-    private static string GuessSubreportLinkField(CrystalReportModel subreport, string mainFieldName)
+    private static void AddLinkDiagnostic(CrystalReportModel subreport, CrystalRptConversionOptions options, string message)
     {
-        if (string.Equals(mainFieldName, "{POMaster.PONumber}", StringComparison.OrdinalIgnoreCase))
+        var diagnostic = new CrystalConversionDiagnostic("CRYSTAL_SUBREPORT_LINK", subreport.Name, "", subreport.Name, "Subreport", message);
+        subreport.ConversionDiagnostics.Add(diagnostic);
+        options.Progress?.Invoke($"[{diagnostic.Code}] {subreport.Name}: {message}");
+    }
+
+    private static string? LinkTestField(string conjunct, string parameterName)
+    {
+        var reference = System.Text.RegularExpressions.Regex.Escape("{?" + parameterName + "}");
+        var match = System.Text.RegularExpressions.Regex.Match(conjunct,
+            @"^(?:\{(?<field>[^{}?@#%][^{}]*)\}\s*=\s*" + reference + "|" + reference + @"\s*=\s*\{(?<field>[^{}?@#%][^{}]*)\})$",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        return match.Success ? "{" + match.Groups["field"].Value + "}" : null;
+    }
+
+    private static readonly HashSet<string> OpaqueSelectionWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "or", "xor", "eqv", "imp", "if", "then", "else", "select", "case", "default", "while", "for", "do",
+        "local", "global", "shared", "dim", "redim", "formula", "function", "exit"
+    };
+
+    // The top-level And operands of a Crystal-syntax selection formula, splitting fully parenthesised operands too. A formula holding a statement
+    // separator or an assignment, and an operand whose top level holds anything but And (Or, If, ...), stay whole; unbalanced text gives null.
+    // One pass matches the brackets and literals, so the split is linear and iterative however deeply the formula nests.
+    private static List<string>? SelectionConjuncts(string formula)
+    {
+        var text = StripFormulaComments(formula);
+        if (text is null || text.Trim().Length == 0) return null;
+        var closes = new int[text.Length];
+        var open = new Stack<int>();
+        var statements = false;
+        for (var i = 0; i < text.Length; i++)
         {
-            return subreport.Name.Equals("AmountApplied", StringComparison.OrdinalIgnoreCase)
-                ? "{POInvoicedAmounts.PONumber}"
-                : "{invoiceitems.Commitment}";
+            var c = text[i];
+            if (c is '"' or '\'' or '{')
+            {
+                var end = SkipLiteral(text, i);
+                if (end < 0) return null;
+                closes[i] = end;
+                i = end;
+            }
+            else if (c is '(' or '[') open.Push(i);
+            else if (c is ')' or ']')
+            {
+                if (!open.TryPop(out var start) || text[start] != (c == ')' ? '(' : '[')) return null;
+                closes[start] = i;
+            }
+            else if (c == ';' || c == ':' && i + 1 < text.Length && text[i + 1] == '=') statements = true;
         }
 
-        return mainFieldName;
+        if (open.Count > 0) return null;
+        var conjuncts = new List<string>();
+        var pending = new Stack<(int Start, int End)>();
+        pending.Push((0, text.Length));
+        while (pending.TryPop(out var span))
+        {
+            var (start, end) = TrimSpan(text, span.Start, span.End);
+            while (end - start > 1 && text[start] == '(' && closes[start] == end - 1) (start, end) = TrimSpan(text, start + 1, end - 1);
+            var parts = new List<(int Start, int End)>();
+            var opaque = statements;
+            var from = start;
+            for (var i = start; i < end && !opaque; i++)
+            {
+                var c = text[i];
+                if (c is '"' or '\'' or '{' or '(' or '[') { i = closes[i]; continue; }
+                if (!char.IsLetter(c) || i > start && IsFormulaWordChar(text[i - 1])) continue;
+                var wordEnd = i;
+                while (wordEnd < end && IsFormulaWordChar(text[wordEnd])) wordEnd++;
+                var word = text[i..wordEnd];
+                if (word.Equals("and", StringComparison.OrdinalIgnoreCase))
+                {
+                    parts.Add((from, i));
+                    from = wordEnd;
+                }
+                else if (OpaqueSelectionWords.Contains(word)) opaque = true;
+                i = wordEnd - 1;
+            }
+
+            parts.Add((from, end));
+            if (opaque || parts.Count == 1)
+            {
+                conjuncts.Add(text[start..end]);
+                continue;
+            }
+
+            for (var part = parts.Count - 1; part >= 0; part--) pending.Push(parts[part]);
+        }
+
+        return conjuncts;
+    }
+
+    private static (int Start, int End) TrimSpan(string text, int start, int end)
+    {
+        while (start < end && char.IsWhiteSpace(text[start])) start++;
+        while (end > start && char.IsWhiteSpace(text[end - 1])) end--;
+        return (start, end);
+    }
+
+    private static bool IsFormulaWordChar(char c) => char.IsLetterOrDigit(c) || c == '_';
+
+    // Index of the character that closes the string literal or field reference starting at 'start', or -1.
+    private static int SkipLiteral(string text, int start)
+    {
+        var close = text[start] == '{' ? '}' : text[start];
+        for (var i = start + 1; i < text.Length; i++)
+        {
+            if (text[i] != close) continue;
+            if (close != '}' && i + 1 < text.Length && text[i + 1] == close)
+            {
+                i++;
+                continue;
+            }
+
+            return i;
+        }
+
+        return -1;
+    }
+
+    private static string? StripFormulaComments(string formula)
+    {
+        var builder = new System.Text.StringBuilder(formula.Length);
+        for (var i = 0; i < formula.Length; i++)
+        {
+            var c = formula[i];
+            if (c is '"' or '\'' or '{')
+            {
+                var end = SkipLiteral(formula, i);
+                if (end < 0) return null;
+                builder.Append(formula, i, end - i + 1);
+                i = end;
+            }
+            else if (c == '/' && i + 1 < formula.Length && formula[i + 1] == '/')
+            {
+                while (i < formula.Length && formula[i] != '\n') i++;
+                builder.Append('\n');
+            }
+            else builder.Append(c);
+        }
+
+        return builder.ToString();
     }
 
     public static CrystalRptInspection Inspect(string rptPath)

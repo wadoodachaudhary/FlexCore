@@ -342,7 +342,8 @@ public static partial class ReportDesignerXmlSerializer
         new XAttribute("ParameterType", "ReportParameter"), new XAttribute("Kind", "ParameterField"),
         new XAttribute("ParameterFieldUsage", "InUse"), new XAttribute("ParameterValueKind", ParameterKind(parameter.Type)),
         new XAttribute("IsOptionalPrompt", Lower(!parameter.Required)),
-        new XAttribute("EnableAllowMultipleValue", Lower(parameter.AllowMultiple)));
+        new XAttribute("EnableAllowMultipleValue", Lower(parameter.AllowMultiple)),
+        new XAttribute("DiscreteOrRangeKind", parameter.AllowRange ? "DiscreteAndRangeValue" : "DiscreteValue"));
 
     private static string ParameterKind(string type)
     {

@@ -60,7 +60,6 @@
   <ItemGroup>
     <PackageReference Include="Ical.Net" Version="5.2.3" />
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
-    <PackageReference Include="Sprache" Version="2.3.1" />
     <PackageReference Include="AngleSharp" Version="1.8.1" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />

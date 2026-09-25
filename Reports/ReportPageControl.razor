@@ -5,7 +5,7 @@
     <div style="@($"position:absolute;left:{Px(Page.Size.MarginLeftTwips)}px;top:{Px(Page.Size.MarginTopTwips)}px;width:{Px(Page.Size.ContentWidthTwips)}px;height:{Px(Page.Size.ContentHeightTwips)}px;overflow:hidden;")">
         @foreach (var band in Page.Bands)
         {
-            <section data-section="@band.Name" style="@($"position:absolute;overflow:hidden;left:0;width:100%;top:{Px(band.TopTwips)}px;height:{Px(band.HeightTwips)}px;background:{ReportObjectRenderer.Color(band.Background)};")">
+            <section data-section="@band.Name" style="@($"position:absolute;overflow:hidden;{(band.WidthTwips > 0 ? $"left:{Px(band.LeftTwips)}px;width:{Px(band.WidthTwips)}px" : "left:0;width:100%")};top:{Px(band.TopTwips)}px;height:{Px(band.HeightTwips)}px;background:{ReportObjectRenderer.Color(band.Background)};")">
                 @foreach (var item in band.Objects)
                 {
                     <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">

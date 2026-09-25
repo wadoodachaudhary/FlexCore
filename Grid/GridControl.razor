@@ -2144,6 +2144,7 @@
                                     AutoFocus="true"
                                     TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
                                     KeepNativeTab="true"
+                                    MaxLength="@(ColumnRenameMaxLength > 0 ? ColumnRenameMaxLength : null)"
                                     @bind-Value="_renameColumnDraft"
                                     aria-label="New column description"
                                     OnKeyDown="HeaderMenuRenameKeyDown" />

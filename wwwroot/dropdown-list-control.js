@@ -92,8 +92,12 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8, panelW
 
 // Keep layout, scroll, focus and the first visible paint in the same browser turn.
 // The panel reference identifies this opening; a late call cannot reveal a replacement.
+const preparedPanels = new WeakMap();
 export function prepareDropdown(host, panel, editable, dotNetRef) {
     if (!host?.isConnected || !panel?.isConnected || !host.contains(panel)) return null;
+    // The observer may already have revealed it. Never refocus an option after
+    // the user has moved or clicked while the server acknowledgment was pending.
+    if (preparedPanels.has(panel)) return preparedPanels.get(panel);
     const geometry = measureDropdown(host, 180, 8, 0, panel);
     host.classList.toggle("fx-dropdown-open-up", geometry.openUp);
     panel.style.removeProperty("top");
@@ -116,7 +120,29 @@ export function prepareDropdown(host, panel, editable, dotNetRef) {
     panel.style.removeProperty("opacity");
     panel.style.removeProperty("pointer-events");
     host.querySelector(".fx-dropdown-backdrop")?.style.removeProperty("visibility");
+    preparedPanels.set(panel, geometry);
     return geometry;
+}
+
+const openingWatchers = new WeakMap();
+export function watchDropdownOpening(host, dotNetRef) {
+    if (!host) return;
+    unwatchDropdownOpening(host);
+    const prepare = () => {
+        const panel = host.querySelector(":scope > .fx-dropdown-panel");
+        if (panel) prepareDropdown(host, panel, !!host.querySelector(".fx-dropdown-input"), dotNetRef);
+        else unwatchFocusLeave(host);
+    };
+    const observer = new MutationObserver(prepare);
+    observer.observe(host, { childList: true });
+    openingWatchers.set(host, observer);
+    prepare();
+}
+
+export function unwatchDropdownOpening(host) {
+    openingWatchers.get(host)?.disconnect();
+    openingWatchers.delete(host);
+    unwatchFocusLeave(host);
 }
 
 
