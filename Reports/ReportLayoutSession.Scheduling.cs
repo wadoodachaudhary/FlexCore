@@ -281,8 +281,14 @@ public sealed partial class ReportLayoutSession
                         try
                         {
                             // Resolve field values before their formatting; both share the occurrence's formula cache.
+                            // Format() turns a formula fault into a field diagnostic. This prefetch runs outside Format,
+                            // so the same faults must not abort the physical replay (while-printing array formulas).
                             foreach (var reference in original.Visual.Runs.Select(r => r.Binding).Prepend(original.Kind == "Field" ? original.Binding : "").Where(r => r.Length > 0))
-                                _ = owner.Value(reference, item.Row);
+                            {
+                                try { _ = owner.Value(reference, item.Row); }
+                                catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or FormatException or InvalidCastException or OverflowException or DivideByZeroException or ArgumentException)
+                                { /* Format records the diagnostic when it evaluates this reference. */ }
+                            }
                             element = owner.ApplyObjectConditions(owner.ApplyObjectConditions(original, item.Row), item.Row, true);
                             html = ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString));
                         }
