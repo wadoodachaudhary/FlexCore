@@ -88,5 +88,38 @@ internal static class AnalysisRenderingChecks
             || diagnostic.Contains("CRYSTAL_UNSUPPORTED_OBJECT", StringComparison.Ordinal)), "pagination does not report chart or cross-tab objects as unimplemented");
         File.WriteAllText(Path.Combine(Path.GetTempPath(), "fx-analysis-page.html"),
             "<!doctype html><meta charset=utf-8><style>body{margin:16px;background:#e8ecef} .fx-report-positioned-page{box-shadow:0 1px 4px #0003}</style>" + html);
+
+        var grown = new ReportPositionedLayout { Document = ReportDesignerDocument.CreateBlank("Grown header") };
+        var pageHeader = grown.Document.Sections.First(section => section.Kind == "PageHeader");
+        pageHeader.Elements.Add(new ReportDesignerElement
+        {
+            SectionId = pageHeader.Id, Name = "GrownHeader", Kind = "Text", CanGrow = true,
+            WidthTwips = 1440, HeightTwips = 200, FontSize = 10, Text = new string('W', 4000)
+        });
+        var grownRows = new DataTable();
+        grownRows.Columns.Add("Id", typeof(int));
+        grownRows.Rows.Add(1);
+        var grownResult = new ReportLayoutSession(grown, grownRows).Paginate();
+        check(grownResult.Pages.Count > 0 && grownResult.Diagnostics.Any(diagnostic => diagnostic.Contains("clipped to the designed section height", StringComparison.Ordinal)),
+            "a page header that grows past its section is clipped instead of aborting the page");
+
+        var filled = new ReportPositionedLayout { Document = ReportDesignerDocument.CreateBlank("Filled header") };
+        filled.Document.Sections.First(section => section.Kind == "PageHeader").HeightTwips = filled.Document.Page.ContentHeightTwips;
+        var filledThrew = false;
+        try { _ = new ReportLayoutSession(filled, grownRows).Paginate(); }
+        catch (InvalidDataException error) { filledThrew = error.Message.Contains("page area too large", StringComparison.Ordinal); }
+        check(filledThrew, "a page header designed to fill the page still reports page area too large");
+
+        var faulted = new ReportPositionedLayout { Document = ReportDesignerDocument.CreateBlank("Formula fault") };
+        var detail = faulted.Document.Sections.First(section => section.Kind == "Detail");
+        detail.Elements.Add(new ReportDesignerElement
+        {
+            SectionId = detail.Id, Name = "Fault", Kind = "Field", Binding = "{@Fault}", WidthTwips = 2000, HeightTwips = 300
+        });
+        faulted.Formulas["{@Fault}"] = CrystalFormula.Compile("WhilePrintingRecords; PageNumber / 0");
+        var faultResult = new ReportLayoutSession(faulted, grownRows).Paginate();
+        check(faultResult.Diagnostics.Any(diagnostic => diagnostic.Contains("Division by zero", StringComparison.Ordinal))
+            && string.Join("\n", faultResult.Pages).Contains("Formula error", StringComparison.Ordinal),
+            "a while-printing formula fault is a field diagnostic instead of a pagination abort");
     }
 }

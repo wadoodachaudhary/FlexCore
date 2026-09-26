@@ -994,7 +994,28 @@ public sealed partial class ReportLayoutSession
             var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve };
             resetPageNumber = false;
             if (withHeaders) AddHeaders(next, row);
-            if (next.Cursor >= next.Bottom) throw new InvalidDataException("Page headers plus footers leave no space for content (Crystal: page area too large).");
+            if (next.Cursor >= next.Bottom)
+            {
+                // Designed header and footer sections that already fill the page are Crystal's
+                // "page area too large" error. Growth past a section that fits (an inline
+                // subreport in the page header is the usual case) is clipped to that section
+                // so the body keeps the room the design left for it.
+                var staticSpan = headers.Concat(footers).Where(section => !section.IsSuppressed).Sum(section => section.HeightTwips);
+                if (staticSpan >= size.ContentHeightTwips)
+                    throw new InvalidDataException("Page headers plus footers leave no space for content (Crystal: page area too large).");
+                _diagnostics.Add("Page header or footer content that grows past its section is clipped to the designed section height. The overflow is usually an inline subreport.");
+                var cursor = 0;
+                for (var i = 0; i < next.Placements.Count; i++)
+                {
+                    var placement = next.Placements[i];
+                    // Expand() copies the section and adds growth onto HeightTwips. The document
+                    // section still has the designed height, which is what the page must reserve.
+                    var designed = _layout.Document.Sections.First(section => section.Id == placement.Band.Section.Id).HeightTwips;
+                    next.Placements[i] = placement with { Top = cursor, Height = designed };
+                    cursor += placement.Band.Section.UnderlayFollowingSections ? 0 : designed;
+                }
+                next.Cursor = cursor;
+            }
             var (headerEnd, headerCount) = (next.Cursor, next.Placements.Count);
             foreach (var repeat in repeats)
             {
