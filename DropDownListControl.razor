@@ -1139,27 +1139,10 @@
     }
 
     private bool _openingObserverRegistered;
+    private bool _disposed;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        // Page dropdowns can position the arriving panel before another server
-        // round trip. Hosted editors keep their guarded focus hand-off below.
-        if (!_openingObserverRegistered && CellHost is null)
-        {
-            _openingObserverRegistered = true;
-            try
-            {
-                var module = await GetDropdownJsModuleAsync();
-                if (module is null) _openingObserverRegistered = false;
-                else
-                {
-                    _selfRef ??= DotNetObjectReference.Create(this);
-                    await module.InvokeVoidAsync("watchDropdownOpening", _hostRef, _selfRef);
-                }
-            }
-            catch { _openingObserverRegistered = false; }
-        }
-
         if (_editableRefocusPending)
         {
             _editableRefocusPending = false;
@@ -1189,6 +1172,33 @@
             {
                 // The editor can disappear while its parent grid commits.
             }
+        }
+
+        // Page dropdowns can position the arriving panel before another server
+        // round trip. Registered after the first-render focus, so an editor that a
+        // grid mounts takes the keyboard at once. Hosted editors keep their guarded
+        // focus hand-off.
+        if (!_openingObserverRegistered && CellHost is null && !_disposed)
+        {
+            _openingObserverRegistered = true;
+            try
+            {
+                var module = await GetDropdownJsModuleAsync();
+                if (_disposed)
+                {
+                    // Disposed while the module was loading: nothing was registered.
+                    _openingObserverRegistered = false;
+                    await DisposeLateModuleAsync();
+                    return;
+                }
+                if (module is null) _openingObserverRegistered = false;
+                else
+                {
+                    _selfRef ??= DotNetObjectReference.Create(this);
+                    await module.InvokeVoidAsync("watchDropdownOpening", _hostRef, _selfRef);
+                }
+            }
+            catch { _openingObserverRegistered = false; }
         }
 
         if (_isOpen && _needsGeometryRefresh)
@@ -1340,8 +1350,20 @@
         }
     }
 
+    private async Task DisposeLateModuleAsync()
+    {
+        var module = _dropdownJsModule;
+        _dropdownJsModule = null;
+        _selfRef?.Dispose();
+        _selfRef = null;
+        if (module is null) return;
+        try { await module.DisposeAsync(); }
+        catch { }
+    }
+
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _isOpen = false;
         _openGeneration++;
         CellHost?.AttachKeyRelay(null);

@@ -2305,8 +2305,8 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-cell.fx-cell-selected:not(.fx-cell-active) {
     background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5);
 }
-.fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]),
+.fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg));
     outline: none;
     box-shadow:
@@ -2322,8 +2322,8 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-active-editable:not(.fx-batch-editing)::after {
     content: none;
 }
-.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]),
+.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg));
     box-shadow:
         inset 0 0 0 1px var(--fx-grid-active-cell-border, #808080),
@@ -4105,6 +4105,8 @@ td.fx-drag-preview-cell {
     background: var(--fx-grid-selected-row-hover-bg, var(--fx-grid-selected-row-bg)) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
 }
+/* Keyboard row previews use the same shade as committed cell selections. */
+.fx-grid ::deep tr.fx-row.fx-cell-row-preview > td,
 .fx-row.fx-cell-row-selected > td,
 .fx-row.fx-cell-row-selected .fx-cell,
 .fx-grid ::deep tr.fx-row.fx-cell-row-selected > td,
@@ -4116,8 +4118,8 @@ td.fx-drag-preview-cell {
     background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5) !important;
     box-shadow: inset 0 0 0 1px var(--fx-grid-selected-cell-border, #808080) !important;
 }
-.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]),
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg)) !important;
     box-shadow:
         inset 0 0 0 1px var(--fx-grid-selected-cell-border, #808080),
@@ -4140,8 +4142,8 @@ td.fx-drag-preview-cell {
     box-shadow: inset 0 0 0 1px var(--fx-grid-active-cell-border) !important;
     z-index: 2;
 }
-.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid ::deep tr.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]),
+.fx-grid ::deep tr.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]) {
     background: var(--fx-grid-selected-row-active-cell-bg, color-mix(in srgb, var(--fx-grid-selected-row-bg, #b6c8dd) 64%, white)) !important;
     color: var(--fx-grid-selected-row-active-cell-color, var(--fx-grid-text-color, inherit)) !important;
     outline: none;

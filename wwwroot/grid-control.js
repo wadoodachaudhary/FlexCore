@@ -4690,6 +4690,12 @@ function gridPreviewColor(gridRoot) {
     return v || "#b6c8dd";
 }
 
+function gridNavigationPreviewColor(gridRoot) {
+    return gridRoot.dataset.fxSelectionMode === "cell"
+        ? gridCellPreviewColor(gridRoot)
+        : gridPreviewColor(gridRoot);
+}
+
 // HighlightSelectedRows as rendered on the grid root. This library writes it as
 // data-fx-row-highlight; the same flag has shipped as
 // data-fx-highlight-selected-rows, so accept either and keep the historical
@@ -4716,8 +4722,9 @@ function gridPaintsNavigationRow(gridRoot) {
     return gridAllowsSelection(gridRoot) && gridHighlightsSelectedRows(gridRoot);
 }
 
-function setRowPreview(tr, on, color) {
-    tr.classList.toggle("fx-drag-preview", on);
+function setRowPreview(tr, on, color, cellMode = false) {
+    tr.classList.toggle("fx-drag-preview", on && !cellMode);
+    tr.classList.toggle("fx-cell-row-preview", on && cellMode);
     // Paint the CELLS as well as the row: some grids render opaque td
     // backgrounds (the picklist), so a row-level color never shows through.
     if (on) {
@@ -4939,7 +4946,7 @@ export function unregisterGridDragSelection(gridRoot) {
 
 export function clearGridDragPreview(gridRoot) {
     if (!gridRoot) return;
-    gridRoot.querySelectorAll(".fx-drag-preview").forEach(r => setRowPreview(r, false, ""));
+    gridRoot.querySelectorAll(".fx-drag-preview, .fx-cell-row-preview").forEach(r => setRowPreview(r, false, ""));
     gridRoot.querySelectorAll(".fx-drag-preview-cell").forEach(td => setCellPreview(td, false, ""));
     // Registry sweep: rows whose preview class was wiped by a class-attribute
     // diff still carry JS paints — clear every tracked element in this grid.
@@ -5000,7 +5007,7 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
         if (clear) clearGridDragPreview(gridRoot);
     };
     arbiter.cancelPointer = releaseRowPreview;
-    if (!cellMode) gridRoot.dataset.fxInstantRowFeedback = "true";
+    gridRoot.dataset.fxInstantRowFeedback = "true";
 
     const reconcileRowPreview = () => {
         const preview = rowPreview;
@@ -5017,7 +5024,7 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
         // A late render may overwrite the old row's inline mute. Restore it
         // before paint; only write changed styles so the observer converges.
         const foreignPaints = new Set([
-            ...gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected, tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active"),
+            ...gridRoot.querySelectorAll("tbody tr.fx-row.fx-selected, tbody tr.fx-row.fx-cell-row-selected, tbody td.fx-cell-row-selected, tbody td.fx-cell-selected, tbody td.fx-cell-active"),
             ...paintedPreviewEls
         ]);
         foreignPaints.forEach(el => {
@@ -5031,8 +5038,13 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
             mute(el);
             if (el.tagName === "TR") [...el.children].forEach(mute);
         });
-        if ([preview.row, ...preview.row.children].some(el => el.style.backgroundColor !== preview.color))
-            setRowPreview(preview.row, true, preview.color);
+        const elements = preview.cell && !preview.paintRow ? [preview.cell] : [preview.row, ...preview.row.children];
+        if (elements.some(el => el.style.backgroundColor !== preview.color)) {
+            if (preview.cell && !preview.paintRow) {
+                preview.cell.style.setProperty("background-color", preview.color, "important");
+                paintedPreviewEls.add(preview.cell);
+            } else setRowPreview(preview.row, true, preview.color, !!preview.cell);
+        }
     };
     const observer = new MutationObserver(reconcileRowPreview);
     observer.observe(gridRoot, {
@@ -5064,7 +5076,9 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
         if (gridDragSelectionBindings.has(gridRoot)
             && tr && gridRoot.contains(tr) && tr !== rowPreview.row) releaseRowPreview(false);
     };
-    const onKeyDown = () => releaseRowPreview();
+    // A cell-mode press preview is released by its render acknowledgement, not by a key:
+    // typing, Enter or Tab right after the click must not bring the old selection back.
+    const onKeyDown = () => { if (!rowPreview?.cell) releaseRowPreview(); };
     doc.addEventListener("click", onClick);
     doc.addEventListener("pointermove", onMove, true);
     gridRoot.addEventListener("keydown", onKeyDown, true);
@@ -5106,6 +5120,7 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
             // never touched, so Blazor's diff stays coherent) and paint the
             // pressed cell with the cell-selection color.
             const td = t.closest ? t.closest("td") : null;
+            sweepStalePreviewPaints(tr);
             // 'important' priority: the single-cell-batch selected-cell rules
             // are themselves !important, so a plain inline mute loses.
             gridRoot.querySelectorAll("td.fx-cell-selected").forEach(c => { if (c !== td) muteSelectedLook(c); });
@@ -5126,22 +5141,16 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
                 for (const c of r.children) { if (c !== td) muteSelectedLook(c); }
             });
             if (td && gridRoot.contains(td)) {
-                td.style.setProperty("background-color", gridCellPreviewColor(gridRoot), "important");
-                paintedPreviewEls.add(td);
-                // Row-shade parity: when the grid highlights the whole selected
-                // row (server paints tr.fx-cell-row-selected > td one round trip
-                // later), paint this row's OTHER cells in the SAME press frame so
-                // the row does not visibly lag the cell. Same colour the server
-                // render uses -> flash-free; enrolled so the net/sweep clears them
-                // (then the server's fx-cell-row-selected class keeps the row lit).
-                if (gridRoot.dataset.fxRowHighlight === "true") {
-                    const rowColor = gridCellPreviewColor(gridRoot);
-                    for (const c of tr.children) {
-                        if (c === td || !c.matches || !c.matches("td")) continue;
-                        c.style.setProperty("background-color", rowColor, "important");
-                        paintedPreviewEls.add(c);
-                    }
+                const paintRow = gridHighlightsSelectedRows(gridRoot);
+                if (paintRow) setRowPreview(tr, true, gridCellPreviewColor(gridRoot), true);
+                else {
+                    td.style.setProperty("background-color", gridCellPreviewColor(gridRoot), "important");
+                    paintedPreviewEls.add(td);
                 }
+                if (dotNetRef) rowPreview = {
+                    row: tr, cell: td, paintRow, generation: gestureGeneration,
+                    color: td.style.backgroundColor, requested: false
+                };
             }
         } else {
             const color = gridPreviewColor(gridRoot);
@@ -5288,6 +5297,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
     // the foreign-selection mutes alive.
     const clearCuePaints = () => {
         for (const el of painted) {
+            delete el.dataset.fxNavCueMuted;
             el.style.removeProperty("background");
             el.style.removeProperty("box-shadow");
         }
@@ -5303,6 +5313,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // Unmute ONLY what this path muted — blanket-unmuting would resurrect
         // selection looks the DRAG painter muted mid-gesture.
         for (const el of navMuted) {
+            delete el.dataset.fxNavCueMuted;
             el.style.removeProperty("background-color");
             el.style.removeProperty("box-shadow");
             el.style.removeProperty("outline");
@@ -5373,6 +5384,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
     // selection class, resurrecting exactly what this path just muted.
     const navMuteLook = (el, cueOnly = false) => {
         if (!cueOnly) el.style.setProperty("background-color", "transparent", "important");
+        if (el.tagName === "TD") el.dataset.fxNavCueMuted = "true";
         el.style.setProperty("box-shadow", "none", "important");
         el.style.setProperty("outline", "none", "important");
         navMuted.add(el);
@@ -5412,7 +5424,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         const trBg = tr.style.backgroundColor;
         if (gridPaintsNavigationRow(gridRoot)
             && (tr !== paintedRowTr || !trBg || trBg === "transparent")) {
-            setRowPreview(tr, true, gridPreviewColor(gridRoot));
+            setRowPreview(tr, true, gridNavigationPreviewColor(gridRoot), gridRoot.dataset.fxSelectionMode === "cell");
             paintedRowTr = tr;
         }
         const td = tr.cells[lastPreview.cell];
@@ -5424,6 +5436,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
     };
 
     const paintCue = td => {
+        delete td.dataset.fxNavCueMuted;
         // Border only — the cell keeps the row-selection tint while the
         // cursor crosses columns (owner rule: only the border moves).
         td.style.setProperty("box-shadow", "inset 0 0 0 1px var(--fx-grid-editing-cell-border, #6b7f99)", "important");
@@ -5432,9 +5445,8 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
 
     const muteCue = (td, keepRowTint = false) => {
         if (!td) return;
-        if (keepRowTint)
-            td.style.setProperty("background", gridPreviewColor(gridRoot), "important");
-        else if (!isBareActiveCell(td))
+        td.dataset.fxNavCueMuted = "true";
+        if (!keepRowTint && !isBareActiveCell(td))
             td.style.setProperty("background", "transparent", "important");
         td.style.setProperty("box-shadow", "none", "important");
         painted.push(td);
@@ -5652,7 +5664,7 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
         // tracking every muted element locally.
         muteForeignSelection(newTr, target);
         if (paintRow) {
-            setRowPreview(newTr, true, gridPreviewColor(gridRoot));
+            setRowPreview(newTr, true, gridNavigationPreviewColor(gridRoot), gridRoot.dataset.fxSelectionMode === "cell");
             paintedRowTr = newTr;
         }
         const oldActive = gridRoot.querySelector("td.fx-cell-active");

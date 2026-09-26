@@ -17,6 +17,7 @@
      data-fx-client-buffered-editing="@(UsesClientBufferedTextEditing ? "true" : "false")"
      data-fx-row-highlight="@(HighlightSelectedRows ? "true" : "false")"
      data-fx-allow-selection="@(AllowSelection ? "true" : "false")"
+     data-fx-selection-mode="@(SelectionSettingsRef?.Mode == SelectionMode.Cell ? "cell" : "row")"
      data-fx-active-cell="@(ShowActiveCell ? null : "hidden")"
      data-fx-pointer-paint-ack="@_pointerPaintAcknowledgedGeneration"
      data-fx-custom-keyboard-shortcuts="@CustomKeyboardShortcutDomValue"

@@ -15492,6 +15492,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var val = ResolveCellDisplayValue(item, col, rawVal);
         if (val == null) return "";
 
+        if (col.DisplayFormatter != null)
+            return col.DisplayFormatter(val);
+
         if (string.IsNullOrWhiteSpace(col.DisplayField)
             && TryGetEditOptionDisplayValue(col, item, val, out var optionText))
             return optionText;

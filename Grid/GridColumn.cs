@@ -57,6 +57,12 @@ public class GridColumn : ComponentBase, IDisposable
     /// </summary>
     [Parameter] public string? Format { get; set; }
     /// <summary>
+    /// Optional text for a cell's raw value. When set, it is the text the grid shows,
+    /// type-searches, filters, lists in the filter checklist and exports, while sorting
+    /// still compares the raw value (for example a DateTime with a conditional format).
+    /// </summary>
+    [Parameter] public Func<object, string>? DisplayFormatter { get; set; }
+    /// <summary>
     /// Optional data field used as the display/search/filter text when the
     /// stored <see cref="Field"/> value differs from the visible cell text.
     /// The raw <see cref="Field"/> value remains the checked-filter key.
