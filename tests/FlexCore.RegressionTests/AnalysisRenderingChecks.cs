@@ -75,11 +75,25 @@ internal static class AnalysisRenderingChecks
 
         var result = new ReportLayoutSession(layout, table).Paginate();
         var html = string.Join("\n", result.Pages);
-        check(html.Contains("<svg", StringComparison.Ordinal) && html.Contains("<path", StringComparison.Ordinal),
-            "positioned page draws chart SVG");
+        check(html.Contains("fx-chart", StringComparison.Ordinal) && html.Contains("<svg", StringComparison.Ordinal)
+            && html.Contains("preserveAspectRatio=\"xMidYMid meet\"", StringComparison.Ordinal)
+            && html.Contains("#2563eb", StringComparison.Ordinal) && !html.Contains("#2f6f9f", StringComparison.Ordinal),
+            "positioned chart SVG is ChartControl output");
         check(html.Contains("1/1/2026", StringComparison.Ordinal) && html.Contains("2/1/2026", StringComparison.Ordinal)
             && !html.Contains("1/5/2026", StringComparison.Ordinal), "monthly chart buckets dates into months");
-        check(html.Contains(">Share<") && html.Contains(">Amount<") && html.Contains(">Units<"), "summary pie draws one slice per measure");
+        check(html.Contains(">Share<") && html.Contains(">Amount<") && html.Contains(">Units<")
+            && html.Contains("stroke=\"white\"", StringComparison.Ordinal), "summary pie draws one slice per measure");
+        var points = new ChartDataPoint[] { new("A", 2), new("B", 5) };
+        var bar = ChartSvg.Markup(ChartType.Bar, [new("Amount", ChartType.Bar, points)]);
+        var area = ChartSvg.Markup(ChartType.Area, [new("Amount", ChartType.Area, points)]);
+        var donut = ChartSvg.Markup(ChartType.Donut, [new("Share", ChartType.Donut, points)]);
+        check(bar.Contains("fx-chart", StringComparison.Ordinal) && bar.Contains("rx=\"2\"", StringComparison.Ordinal) && bar.Contains("#2563eb", StringComparison.Ordinal),
+            "bar markup is ChartControl SVG");
+        check(area.Contains("fx-chart", StringComparison.Ordinal) && area.Contains("fill-opacity=\"0.15\"", StringComparison.Ordinal),
+            "area markup is ChartControl SVG");
+        check(donut.Contains("fx-chart", StringComparison.Ordinal) && donut.Contains("preserveAspectRatio=\"xMidYMid meet\"", StringComparison.Ordinal)
+            && donut.Contains("stroke=\"white\"", StringComparison.Ordinal),
+            "donut markup is ChartControl SVG");
         check(html.Contains("fx-report-table-fragment", StringComparison.Ordinal) && html.Contains(">East<") && html.Contains(">West<") && html.Contains(">2024<"),
             "cross-tab page shows row and column headers");
         check(!html.Contains("[Unsupported", StringComparison.Ordinal) && !html.Contains("not implemented", StringComparison.OrdinalIgnoreCase)
