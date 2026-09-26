@@ -4,6 +4,9 @@
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><NoWarn>BL0005</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <None Include="Fixtures\*.rpt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="../../FlexCore.csproj" />
     <ProjectReference Include="..\..\FlexCore.Documents\FlexCore.Documents.csproj" />

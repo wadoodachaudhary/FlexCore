@@ -320,6 +320,7 @@ await renderer.Dispatcher.InvokeAsync(async () => {
 });
 await renderer.Dispatcher.InvokeAsync(() => CounterpartChecks.Run(renderer,activation.All,Check));
 RemainingControlChecks.Run(Check);
+AnalysisRenderingChecks.Run(Check);
 DocumentChecks.Run(Check);
 await renderer.Dispatcher.InvokeAsync(() => TreeChecks.Run(renderer, activation.All, Check));
 await renderer.Dispatcher.InvokeAsync(() => TreeGridOperationChecks.Run(renderer, activation.All, Check));
