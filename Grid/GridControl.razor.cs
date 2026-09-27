@@ -12844,8 +12844,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _showInsertColumnSubmenu;
 #pragma warning restore CS0414
     private bool _showRenameColumn;
-    /// <summary>Maximum length accepted by the column rename dialog.</summary>
+    /// <summary>Longest description the header rename box accepts (0 = no page limit).
+    /// A registered <see cref="IGridColumnCaptionLimit"/> can lower it, never raise it.</summary>
     [Parameter] public int ColumnRenameMaxLength { get; set; } = 255;
+    // Limit in force for the open rename dialog; resolved before its first render.
+    private int _renameColumnMaxLength;
     private string _renameColumnDraft = "";
     private bool _showPrintOptionsDialog;
     private bool _printDefaultsInitialized;
@@ -12978,7 +12981,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private string RenameColumnPrompt =>
-        $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
+        $"Change description from \"{HeaderColumnDisplay(RenameColumn).Trim()}\" to:";
 
     /// <summary>Toggles grouping on the right-clicked column.</summary>
     private async Task HeaderMenuToggleGroup()
@@ -13373,15 +13376,44 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         StateHasChanged();
     }
 
-    private void HeaderMenuStartRename()
+    private async Task HeaderMenuStartRename()
     {
         var col = CurrentHeaderColumn;
         if (col == null) return;
+        _showHeaderContextMenu = false;
+        _showInsertColumnSubmenu = false;
+        // TextBoxControl reads MaxLength on its first render, so resolve it first.
+        var maxLength = await ResolveColumnRenameMaxLengthAsync(col.Field);
         _renameColumnField = col.Field;
         _renameColumnDraft = "";
-        _showHeaderContextMenu = false;
+        _renameColumnMaxLength = maxLength;
         _showRenameColumn = true;
-        _showInsertColumnSubmenu = false;
+    }
+
+    /// <summary>The page limit and the host's storage limit, whichever is smaller; 0 = none.</summary>
+    private async Task<int> ResolveColumnRenameMaxLengthAsync(string field)
+    {
+        var pageLimit = Math.Max(0, ColumnRenameMaxLength);
+        if (Services?.GetService(typeof(IGridColumnCaptionLimit)) is not IGridColumnCaptionLimit host)
+            return pageLimit;
+        int? hostLimit;
+        try
+        {
+            hostLimit = await host.GetMaxLengthAsync(field);
+        }
+        catch (Exception ex)
+        {
+            var logger = (Services.GetService(typeof(Microsoft.Extensions.Logging.ILoggerFactory))
+                    as Microsoft.Extensions.Logging.ILoggerFactory)?
+                .CreateLogger("Fx.ControlKit.Grid.GridControl");
+            if (logger != null)
+                Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(logger, ex,
+                    "Column caption limit lookup failed for '{Field}'; the rename box keeps ColumnRenameMaxLength ({Limit}).",
+                    field, pageLimit);
+            return pageLimit;
+        }
+        if (hostLimit is not > 0) return pageLimit;
+        return pageLimit == 0 ? hostLimit.Value : Math.Min(pageLimit, hostLimit.Value);
     }
 
     private Task HeaderMenuRenameKeyDown(KeyboardEventArgs e)
@@ -13396,8 +13428,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var field = _renameColumnField;
         var draft = _renameColumnDraft?.Trim() ?? "";
-        if (ColumnRenameMaxLength > 0 && draft.Length > ColumnRenameMaxLength)
-            draft = draft[..ColumnRenameMaxLength];
+        var maxLength = _renameColumnMaxLength;
+        if (maxLength > 0 && draft.Length > maxLength)
+            draft = draft[..maxLength];
         HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
@@ -13415,6 +13448,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _showRenameColumn = false;
         _renameColumnField = "";
         _renameColumnDraft = "";
+        _renameColumnMaxLength = 0;
     }
 
     // ══════════════════════════════════════════════════════════════════════

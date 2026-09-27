@@ -2121,7 +2121,7 @@
              @oncontextmenu:preventDefault="true"></div>
         <div class="fx-grid-rename-dialog" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             <div class="fx-grid-rename-header">
-                <span>@RenameColumnDialogTitle</span>
+                <span class="fx-grid-rename-title">@RenameColumnDialogTitle</span>
                 <button type="button"
                         class="fx-grid-rename-close"
                         title="Close"
@@ -2145,7 +2145,7 @@
                                     AutoFocus="true"
                                     TypingBehavior="TextBoxTypingBehavior.ClientBuffered"
                                     KeepNativeTab="true"
-                                    MaxLength="@(ColumnRenameMaxLength > 0 ? ColumnRenameMaxLength : null)"
+                                    MaxLength="@(_renameColumnMaxLength > 0 ? _renameColumnMaxLength : null)"
                                     @bind-Value="_renameColumnDraft"
                                     aria-label="New column description"
                                     OnKeyDown="HeaderMenuRenameKeyDown" />
