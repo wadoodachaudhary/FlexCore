@@ -4907,7 +4907,7 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
             } else {
                 const td = tr.querySelector(`td[data-field="${CSS.escape(anchorField)}"]`);
                 const edges = !inRange ? "" : (a === b ? "both" : ari === a ? "top" : ari === b ? "bottom" : "middle");
-                if (td) setCellPreview(td, inRange, previewColor, edges, previewBorder);
+                if (td) setCellPreview(td, inRange && td.dataset.fxSelectable !== "false", previewColor, edges, previewBorder);
             }
         }
     };
@@ -5181,6 +5181,7 @@ export function registerGridInstantSelectionFeedback(gridRoot, cellMode = false,
         if (t.closest && t.closest("input, select, textarea, button")) return;
         const tr = t.closest ? t.closest("tbody tr.fx-row[data-ari]") : null;
         if (!tr || !gridRoot.contains(tr)) return;
+        if (cellMode && t.closest?.("td")?.dataset.fxSelectable === "false") return;
         // This press owns the selection visuals now: a live keyboard preview
         // is cancelled (its position flushed) inside beginGridPaintGesture.
         const gestureGeneration = beginGridPaintGesture(gridRoot, "pointer");
@@ -5696,15 +5697,19 @@ export function registerClientNavigationPreview(gridRoot, dotNetRef) {
 
         let target = null;
         if (key === "ArrowDown" || key === "ArrowUp") {
-            const nextTr = gridRoot.querySelector(
-                `tr.fx-row[data-ari="${ari + (key === "ArrowDown" ? 1 : -1)}"]`);
-            if (!nextTr) { flushPreviewPosition(); return; } // window edge — sync first, server shifts the window
-            target = nextTr.cells[cur.cellIndex];
+            let nextAri = ari;
+            do {
+                nextAri += key === "ArrowDown" ? 1 : -1;
+                const nextTr = gridRoot.querySelector(`tr.fx-row[data-ari="${nextAri}"]`);
+                if (!nextTr) { flushPreviewPosition(); return; } // server owns window edges
+                target = nextTr.cells[cur.cellIndex];
+            } while (target?.dataset.fxSelectable === "false");
         } else {
             let td = cur;
             do {
                 td = key === "ArrowRight" ? td.nextElementSibling : td.previousElementSibling;
             } while (td && (td.tagName !== "TD"
+                || td.dataset.fxSelectable === "false"
                 || (!td.hasAttribute("data-field") && !td.classList.contains("fx-checkbox-cell"))));
             if (!td) { flushPreviewPosition(); return; } // row edge — sync first, server owns wrap rules
             target = td;
