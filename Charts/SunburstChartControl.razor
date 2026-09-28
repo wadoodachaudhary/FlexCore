@@ -175,12 +175,12 @@
                     {
                         <div class="fx-tooltip-stat text-muted">
                             <span class="fx-stat-lbl">% of @(node.Parent?.Name ?? "Continent"):</span>
-                            <span class="fx-stat-val">@pctOfParent.ToString("0.1")%</span>
+                            <span class="fx-stat-val">@pctOfParent.ToString("0.0")%</span>
                         </div>
                     }
                     <div class="fx-tooltip-stat text-muted">
                         <span class="fx-stat-lbl">% of World:</span>
-                        <span class="fx-stat-val">@pctOfWorld.ToString("0.1")%</span>
+                        <span class="fx-stat-val">@pctOfWorld.ToString("0.0")%</span>
                     </div>
                     @if (node.Children.Count > 0 && EnableDrilldown)
                     {
