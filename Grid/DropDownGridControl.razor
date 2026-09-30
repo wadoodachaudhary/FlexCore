@@ -32,11 +32,13 @@
     {
         @* Fixed backdrop (same scheme as DropDownListControl): outside clicks
            close the popup instead of leaking into the page underneath. *@
-        <button type="button" class="fx-dropdown-grid-backdrop" tabindex="-1" aria-hidden="true" @onclick="ClosePopupAsync"></button>
+        <button type="button" class="fx-dropdown-grid-backdrop" title="" tabindex="-1" aria-hidden="true" @onclick="ClosePopupAsync"></button>
         @* The popup's own grid (and any editor inside it) is not the cell's editor:
            shield it from the cell host cascade. *@
         <CascadingValue TValue="ICellEditorHost" Value="null">
+        @* title="": a popup opened inside a grid cell must not show the row's tooltip (GridControl.RowTooltipSelector). *@
         <div class="fx-dropdown-grid-popup shadow @(ShowColumnHeaders ? "" : "fx-dropdown-grid-headerless")"
+             title=""
              style="@ComputedPopupStyle"
              @ref="_popupRef"
              @onclick:stopPropagation="true">

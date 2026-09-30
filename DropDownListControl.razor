@@ -12,6 +12,7 @@
    semantics: Escape on an open list never fires the form's Cancel button. *@
 <div class="@HostCssClass" style="@HostStyle"
      @ref="_hostRef"
+     data-fx-editable-dropdown="@(Editable ? ClientDropdownConfiguration : null)"
      data-fx-key-scope="@(_isOpen ? "" : null)"
      @onclick:stopPropagation="true"
      @onmousedown:stopPropagation="true"
@@ -20,7 +21,7 @@
     {
         <div class="@ButtonCssClass">
             <input class="fx-dropdown-input"
-                   role="combobox" aria-haspopup="listbox" aria-expanded="@_isOpen" aria-controls="@(_isOpen?_listId:null)" aria-autocomplete="list"
+                   role="combobox" aria-haspopup="listbox" aria-expanded="@(_isOpen ? "true" : "false")" aria-controls="@_listId" aria-autocomplete="list"
                    aria-activedescendant="@(_isOpen && _highlightedIndex>=0?$"{_listId}-{_highlightedIndex}":null)"
                    @key="_editableInputGeneration"
                    @ref="_editableInputRef"
@@ -36,7 +37,7 @@
                    @onkeydown="HandleEditableKeyDown"
                    @onkeydown:stopPropagation="true" />
             <span class="fx-dropdown-arrow" aria-hidden="true"
-                  @onmousedown="SuppressNextEditableBlurCommit"
+                  @onmousedown:preventDefault="true"
                   @onclick="HandleEditableArrowClick"
                   @onclick:stopPropagation="true"></span>
         </div>
@@ -63,29 +64,31 @@
         </button>
     }
 
-    @if (_isOpen && Enabled)
+    @if ((_isOpen || Editable) && Enabled)
     {
         @* Revealed together with the positioned panel; never intercept the trigger
            while the list is still invisible. *@
         <button type="button"
-                class="fx-dropdown-backdrop"
-                style="@(_panelRevealed ? null : "visibility:hidden")"
+                class="fx-dropdown-backdrop @(Editable ? "fx-dropdown-buffered-backdrop" : null)"
+                title=""
+                style="@(Editable || _panelRevealed ? null : "visibility:hidden")"
                 tabindex="-1"
                 aria-label="Close dropdown"
                 @onclick="CloseAsync"></button>
     }
 
-    @if (_isOpen && Enabled)
+    @if ((_isOpen || Editable) && Enabled)
     {
         @* Hosted, non-editable: the options are focused programmatically, so a press
            on the panel (its scrollbar) must not move focus to the nearest focusable
            ancestor — that is outside the cell host, and the focus-leave watcher would
            close the list and commit the highlighted option. A form list and the
            editable input keep their own contracts. *@
-        <div @key="_openGeneration" @ref="_panelRef" class="fx-dropdown-panel @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@PanelStyle" role="listbox" id="@_listId" @onmousedown="SuppressNextEditableBlurCommit" @onmousedown:preventDefault="@(!Editable && CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        @* title="": a popup opened inside a grid cell must not show the row's tooltip (GridControl.RowTooltipSelector). *@
+        <div @key="@(Editable ? 0 : _openGeneration)" @ref="_panelRef" class="fx-dropdown-panel @(Editable ? "fx-dropdown-buffered-panel" : null) @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@(Editable && !_isOpen ? null : PanelStyle)" role="listbox" id="@_listId" title="" tabindex="@(Editable ? -1 : (int?)null)" @onmousedown:preventDefault="@(Editable || CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
-                var items = DataSource.ToList();
+                var items = Editable ? _clientItems : DataSource.ToList();
                 for (var index = 0; index < items.Count; index++)
                 {
                     // A C# for-loop variable is ONE shared variable — lambdas must
@@ -99,6 +102,9 @@
                     <button type="button"
                             class="fx-dropdown-option @(isSelected ? "selected" : "") @(isHighlighted ? "highlighted" : "")"
                             role="option" id="@($"{_listId}-{optionIndex}")"
+                            data-fx-option-value="@(Editable ? val : null)"
+                            data-fx-option-text="@(Editable ? txt : null)"
+                            tabindex="@(Editable ? -1 : (int?)null)"
                             aria-selected="@isSelected"
                             @ref="_optionRefs[optionIndex]"
                             @onkeydown="e => HandleOptionKeyDown(e, val, item)"
@@ -178,6 +184,12 @@
     [Parameter] public EventCallback<KeyboardEventArgs> OnKeyDown { get; set; }
     [Parameter] public EventCallback Closed { get; set; }
 
+    /// <summary>Raised after an editable input commits its text on blur, INCLUDING when the
+    /// value did not change — a host that stages every keystroke (TextChanged) has already
+    /// made Value equal to the typed text, so ValueChanged never fires and the host would
+    /// otherwise never learn the edit finished. Unset by default: no consumer changes behaviour.</summary>
+    [Parameter] public EventCallback EditableCommitted { get; set; }
+
     /// <summary>Field settings - set via Text/Value properties on child DropDownListFieldSettings, or directly.</summary>
     [Parameter] public string TextFieldName { get; set; } = "";
     [Parameter] public string ValueFieldName { get; set; } = "";
@@ -199,7 +211,6 @@
     private bool _isOpen;
     private bool _openOnRenderInitialized;
     private bool _editableInputFocused;
-    private bool _suppressNextEditableBlurCommit;
     private bool _openUp;
     private bool _needsGeometryRefresh;
     private double? _panelMaxHeight;
@@ -250,7 +261,7 @@
     private DateTime _typeSelectLastInputUtc = DateTime.MinValue;
     private TimeSpan TypeSelectResetDelay => CellHost is null ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(2.5);
 
-    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", _openUp ? "fx-dropdown-open-up" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
+    private string HostCssClass => string.Join(" ", new[] { "fx-dropdown-host", _openUp ? "fx-dropdown-open-up" : null, Editable && _isOpen ? "fx-dropdown-server-open" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
     private string ButtonCssClass => string.Join(" ", new[] { "fx-dropdown", Editable ? "fx-dropdown-editable" : null, !Enabled ? "disabled" : null, CssClass }.Where(c => !string.IsNullOrWhiteSpace(c)));
     private string PanelStyle
     {
@@ -360,6 +371,8 @@
 
     protected override void OnParametersSet()
     {
+        if (Editable) UpdateClientDropdownOptions();
+        else _clientDropdownRegistered = false;
         if (!Enabled)
         {
             _isOpen = false;
@@ -391,7 +404,7 @@
             }
         }
 
-        if (Editable && !_editableInputFocused && _editableText != EditableDisplayText)
+        if (Editable && !_clientDropdownRegistered && !_editableInputFocused && _editableText != EditableDisplayText)
             ResetEditableDomText(EditableDisplayText, refocus: false);
     }
 
@@ -497,6 +510,8 @@
     {
         if (!Enabled)
             return;
+
+        if (Editable) RequestClientDropdown(true);
 
         _isOpen = true;
         _openGeneration++;
@@ -766,16 +781,11 @@
     {
         _editableInputFocused = false;
 
-        if (_suppressNextEditableBlurCommit)
-        {
-            _suppressNextEditableBlurCommit = false;
-            return;
-        }
-
         if (CommitEditableTextOnBlur)
         {
             await PublishEditableTextAsync(_editableText);
             _editableRenderedText = _editableText;
+            await EditableCommitted.InvokeAsync();
         }
         else
         {
@@ -809,6 +819,25 @@
             _editableRenderedText = _editableText;
             await CloseAsync();
         }
+        else if (e.Key == "Tab" && _isOpen && CellHost is null)
+        {
+            if (_highlightMovedByKeyboard)
+                await CommitCurrentSelectionAsync(returnFocus: false);
+            else
+            {
+                await PublishEditableTextAsync(_editableText);
+                _editableRenderedText = _editableText;
+                await CloseAsync(returnFocus: false);
+            }
+        }
+        else if (e.Key == "F4" || (e.AltKey && e.Key == "ArrowDown"))
+        {
+            OpenDropdown();
+        }
+        else if (_isOpen && e.Key is "Home" or "End")
+        {
+            await MoveSelectionToAsync(first: e.Key == "Home");
+        }
         else if (e.Key == "ArrowDown")
         {
             await MoveSelectionAsync(1);
@@ -819,10 +848,6 @@
             await MoveSelectionAsync(-1);
             _highlightMovedByKeyboard = true;
         }
-        else if (e.Key == "F4")
-        {
-            OpenDropdown();
-        }
         else if (e.Key == "Escape")
         {
             ResetEditableDomText(EditableDisplayText, refocus: true);
@@ -832,14 +857,12 @@
 
     private async Task HandleEditableArrowClick()
     {
+        if (!Enabled) return;
+        // Page controls focus on pointer-down in the browser. Keep the native
+        // API fallback for hosted editors and pending/unavailable JS registration.
+        if (!_editableInputFocused)
+            await FocusAsync();
         await ToggleOpen();
-        _suppressNextEditableBlurCommit = false;
-    }
-
-    private void SuppressNextEditableBlurCommit()
-    {
-        if (_editableInputFocused)
-            _suppressNextEditableBlurCommit = true;
     }
 
     private async Task HandleEditableInput(Microsoft.AspNetCore.Components.ChangeEventArgs e)
@@ -850,7 +873,12 @@
     }
 
     public Task ShowPopupAsync() => InvokeAsync(() => { if (Enabled) { OpenDropdown(); StateHasChanged(); } });
-    public Task HidePopupAsync() => CloseAsync();
+    public async Task HidePopupAsync()
+    {
+        if (Editable) RequestClientDropdown(false);
+        await CloseAsync();
+        await InvokeAsync(StateHasChanged);
+    }
 
     private async Task<bool> TrySelectByTypedPrefixAsync(KeyboardEventArgs e)
     {
@@ -1024,12 +1052,11 @@
 
     private async Task SelectItemAsync(string strVal, TItem item, bool closeAfterSelect = true, bool returnFocus = true, bool endEdit = true)
     {
-        _suppressNextEditableBlurCommit = false;
         var newValue = ConvertToValue(strVal);
         var unchanged = object.Equals(Value, newValue);
         Value = newValue;
         if (Editable)
-            ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: _editableInputFocused);
+            ResetEditableDomText(GetFieldValue(item, TextFieldName), refocus: returnFocus && _editableInputFocused);
 
         var wasOpen = false;
         if (closeAfterSelect)
@@ -1173,6 +1200,9 @@
                 // The editor can disappear while its parent grid commits.
             }
         }
+
+        if (Editable && await RegisterClientDropdownAsync())
+            return;
 
         // Page dropdowns can position the arriving panel before another server
         // round trip. Registered after the first-render focus, so an editor that a
@@ -1374,7 +1404,7 @@
 
         try
         {
-            if (_openingObserverRegistered)
+            if (_openingObserverRegistered || _clientDropdownRegistered)
                 await _dropdownJsModule.InvokeVoidAsync("unwatchDropdownOpening", _hostRef);
             if (_focusLeaveWatched)
                 await _dropdownJsModule.InvokeVoidAsync("unwatchFocusLeave", _hostRef);
@@ -1396,12 +1426,12 @@
         public double ContentWidth { get; set; }
     }
 
-    private async Task CommitCurrentSelectionAsync(bool endEdit = true)
+    private async Task CommitCurrentSelectionAsync(bool endEdit = true, bool returnFocus = true)
     {
         var items = GetMaterializedItems();
         if (items.Count == 0)
         {
-            await CloseAsync(returnFocus: true, endEdit: endEdit);
+            await CloseAsync(returnFocus: returnFocus, endEdit: endEdit);
             return;
         }
 
@@ -1412,7 +1442,7 @@
             index = 0;
 
         var item = items[index];
-        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, endEdit: endEdit);
+        await SelectItemAsync(GetFieldValue(item, ValueFieldName), item, endEdit: endEdit, returnFocus: returnFocus);
     }
 
     private int FindSelectedIndex(IReadOnlyList<TItem> items)

@@ -285,6 +285,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public double MinRowHeight { get; set; } = 16;
     [Parameter] public Func<TValue, int, double?>? RowHeightSelector { get; set; }
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
+    /// <summary>Optional row hover tooltip: the returned text becomes the data row's
+    /// <c>title</c>, so it shows wherever the pointer is on that row (a cell with its own
+    /// title, e.g. <see cref="ClipMode.EllipsisWithTooltip"/>, keeps its own). Null or empty
+    /// = no row tooltip. Arguments match <see cref="RowCssClassSelector"/>.</summary>
+    [Parameter] public Func<TValue, int, string?>? RowTooltipSelector { get; set; }
 
     // Feature flags
     /// <summary>
@@ -966,6 +971,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return IsPagingActive
                 ? "overflow-x:auto; overflow-y:hidden; flex:1;"
                 : "overflow:auto; flex:1;";
+        }
+    }
+
+    private string? GetRowTooltip(TValue item, int rowIndex)
+    {
+        if (RowTooltipSelector == null)
+            return null;
+
+        try
+        {
+            var tooltip = RowTooltipSelector.Invoke(item, rowIndex);
+            return string.IsNullOrEmpty(tooltip) ? null : tooltip;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -9522,6 +9543,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (col.MaxLength is > 0)
                 builder.AddAttribute(sequence + 16, "MaxLength", col.MaxLength.Value);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
+            builder.AddAttribute(sequence + 19, "TextChanged", EventCallback.Factory.Create<string>(this,
+                text => UpdateBatchEditValue(editItem, editField, text)));
+            // Staging every keystroke above makes the control's Value equal the typed text, so its
+            // blur publish is a no-op and ValueChanged never fires. Without this the typed custom
+            // value is staged but never written to the row.
+            builder.AddAttribute(sequence + 20, "EditableCommitted", EventCallback.Factory.Create(this, async () =>
+            {
+                if (await CommitBatchEdit(editItem, editField))
+                    await FocusGridHostAsync();
+            }));
             builder.AddComponentReferenceCapture(sequence + 15, component =>
                 _batchDropdownEditorRef = component as DropDownListControl<string, GridEditOption>);
             builder.CloseComponent();
@@ -9581,6 +9612,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // re-renders cannot revert characters or reset the caret. The
             // opt-in client buffer also keeps ordinary keys off the circuit.
             builder.AddAttribute(sequence + 15, "Uncontrolled", true);
+            // Server-applied keys (the pre-attach relay) reach the DOM only through
+            // setBatchEditorValue, which yields to text the user typed meanwhile; a
+            // render-driven re-seed would be a second, unguarded write over it.
+            builder.AddAttribute(sequence + 19, "ReseedOnOutsideChange", false);
             builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
             if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
@@ -14208,6 +14243,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         if (rowStyle.Length > 0)
                             builder.AddAttribute(73, "style", rowStyle);
+                        // Conditional attributes last, in rising sequence order, so a row
+                        // whose tooltip clears loses only its title in the diff.
+                        var rowTooltip = GetRowTooltip(item, resolvedRowIdx);
+                        if (rowTooltip != null)
+                            builder.AddAttribute(79, "title", rowTooltip);
 
                         // Checkbox column
                         if (ShowCheckboxColumn)

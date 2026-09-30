@@ -273,3 +273,31 @@
     border: 2px solid #f0f0f0;
     background: #b0b0b0;
 }
+
+/* Editable lists are prepared with the control; only their browser-owned
+   open/highlight attributes change during interaction. */
+.fx-dropdown-buffered-panel,
+.fx-dropdown-buffered-backdrop {
+    display: none;
+}
+.fx-dropdown-server-open:not([data-fx-local-ready]) > .fx-dropdown-buffered-panel,
+.fx-dropdown-server-open:not([data-fx-local-ready]) > .fx-dropdown-buffered-backdrop,
+.fx-dropdown-host[data-fx-local-open] > .fx-dropdown-buffered-panel,
+.fx-dropdown-host[data-fx-local-open] > .fx-dropdown-buffered-backdrop {
+    display: block;
+}
+.fx-dropdown-host[data-fx-local-ready] .fx-dropdown-option.highlighted {
+    background: #fff;
+    color: #000;
+}
+.fx-dropdown-host[data-fx-local-ready] .fx-dropdown-option[data-fx-local-highlight] {
+    background: #316ac5;
+    color: #fff;
+}
+.fx-dropdown-host.fx-dropdown-legacy-blue[data-fx-local-ready] .fx-dropdown-option {
+    background: #0a64c8;
+    color: #fff;
+}
+.fx-dropdown-host.fx-dropdown-legacy-blue[data-fx-local-ready] .fx-dropdown-option[data-fx-local-highlight] {
+    background: #004a9f;
+}

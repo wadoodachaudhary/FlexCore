@@ -76,7 +76,7 @@ else
                     aria-label="@PasswordToggleLabel"
                     title="@PasswordToggleLabel"
                     aria-pressed="@_showPassword"
-                    disabled="@(!Enabled)"
+                    disabled="@(!Enabled || !CanRevealPassword)"
                     @onclick="TogglePasswordVisibility"
                     @onclick:stopPropagation="true"
                     @onmousedown:preventDefault="true"
@@ -256,9 +256,12 @@ else
     /// input. Browser-local; pasted, autofilled and programmatic values stay masked.</summary>
     [Parameter] public bool RevealLastTypedCharacter { get; set; } = true;
     [Parameter] public bool ShowPasswordToggle { get; set; } = true;
+    /// <summary>Explains why a stored password cannot be revealed (for example, a
+    /// one-way hash). Keeps the eye visible but disabled; clear when the user replaces it.</summary>
+    [Parameter] public string? PasswordRevealUnavailableReason { get; set; }
     /// <summary>Local password echo lifetime in milliseconds. Zero disables it;
     /// values above 2000 are capped so an accidental setting cannot leave it visible.</summary>
-    [Parameter] public int PasswordRevealDurationMs { get; set; } = 400;
+    [Parameter] public int PasswordRevealDurationMs { get; set; } = 1000;
     [Parameter] public int? Rows { get; set; }
     [Parameter] public Dictionary<string, object>? HtmlAttributes { get; set; }
     [Parameter] public Action<ElementReference>? ElementReferenceCaptured { get; set; }
@@ -272,7 +275,18 @@ else
     /// Typed text is reported through <see cref="InputValueChanged"/> and
     /// <see cref="ValueChanged"/>. Use a fresh <c>@key</c> per edit session to
     /// seed a new starting value.</summary>
-    [Parameter] public bool Uncontrolled { get; set; }
+    /// <summary>Browser-owned value (default since 2026-09-29): the input keeps its own text and a
+    /// parent re-render never writes stale text back over it; the draft re-seeds only when the
+    /// parent changes Value from outside. Set false for the legacy controlled input whose rendered
+    /// value tracks Value on every render.</summary>
+    [Parameter] public bool Uncontrolled { get; set; } = true;
+
+    /// <summary>When the parent changes Value from outside (a load, a reset), a browser-owned
+    /// field re-seeds its draft so the box shows the new value (default). A host that delivers
+    /// server-side value changes to the DOM through its own guarded channel — GridControl's batch
+    /// editor pushes them with setBatchEditorValue, which yields to text the user has already
+    /// typed — sets this false so a render never becomes a second, unguarded write.</summary>
+    [Parameter] public bool ReseedOnOutsideChange { get; set; } = true;
     [Parameter] public bool AutoFocus { get; set; }
     [Parameter] public bool SelectOnFocus { get; set; }
     [Parameter] public bool ReplaceOnFirstInput { get; set; }
@@ -469,6 +483,7 @@ else
                 committedValue = committedValue[..MaxLength.Value];
 
             Value = committedValue;
+            _lastAgreedValue = committedValue;
             // Once the browser listener owns the input the DOM is the authority
             // (see CommitClientBufferedTypingAsync); before that, @bind keeps the
             // rendered value in step with it.
@@ -510,6 +525,7 @@ else
                     committedValue = committedValue[..MaxLength.Value];
 
                 Value = committedValue;
+                _lastAgreedValue = committedValue;
                 // The browser listener owns the input, so the DOM is the authority:
                 // the rendered value stays the one the input last rendered, and no
                 // later render writes this (by then older) text over characters
@@ -568,6 +584,8 @@ else
     private TextContextMenuState _textContextMenuState = new();
     private bool _suppressNextNativeInputRender;
     private bool _showPassword;
+    private bool _lastShowPasswordToggle = true;
+    private bool _lastCanRevealPassword = true;
     private bool _clientBufferedTypingAttached;
     private bool _clientBufferedHandlesNavigationKeys;
     private bool _clientBufferedKeepNativeTab;
@@ -581,6 +599,21 @@ else
     private string? _uncontrolledValue;
     private bool _uncontrolledInitialized;
 
+    // The last value this control and its parent agreed on: the value the draft was seeded
+    // from, or the value the control last committed through ValueChanged. A parent re-render
+    // that hands the same value back is an echo (or an unrelated render) and must not touch the
+    // live draft — that write-back is exactly what erased a cleared field the moment the page
+    // repainted. A DIFFERENT value was set by code (a load, a reset, a programmatic default)
+    // and re-seeds the draft, so a plain form field needs no per-session @key to show it.
+    private string? _lastAgreedValue;
+
+    /// <summary>Plain browser-owned form field (Uncontrolled, no cell host, no ClientBuffered
+    /// key ownership): re-seed the draft when the parent changes Value from outside. Hosted and
+    /// ClientBuffered editors keep their per-generation @key contract unchanged.</summary>
+    private bool AutoReseedsOnOutsideChange =>
+        ReseedOnOutsideChange && Uncontrolled && CellHost is null
+        && TypingBehavior != TextBoxTypingBehavior.ClientBuffered;
+
     /// <summary>The value rendered into the input. In Uncontrolled mode this is the
     /// browser's latest draft (independent of parent re-renders); otherwise it
     /// tracks the live <see cref="Value"/>.</summary>
@@ -592,23 +625,43 @@ else
     private bool IsPasswordInput =>
         !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
 
-    private string EffectiveInputType => IsPasswordInput && ShowPasswordToggle && _showPassword ? "text" : InputType;
+    private bool CanRevealPassword => string.IsNullOrWhiteSpace(PasswordRevealUnavailableReason);
 
-    private string PasswordToggleLabel => _showPassword ? "Hide password" : "Show password";
+    private string EffectiveInputType => IsPasswordInput && ShowPasswordToggle && CanRevealPassword && _showPassword ? "text" : InputType;
+
+    private string PasswordToggleLabel => !CanRevealPassword ? PasswordRevealUnavailableReason! : _showPassword ? "Hide password" : "Show password";
 
     protected override void OnParametersSet()
     {
+        if (_lastShowPasswordToggle != ShowPasswordToggle || _lastCanRevealPassword != CanRevealPassword)
+        {
+            // A replacement/withheld password starts masked, even if the previous value was revealed.
+            _showPassword = false;
+            _lastShowPasswordToggle = ShowPasswordToggle;
+            _lastCanRevealPassword = CanRevealPassword;
+            _suppressNextNativeInputRender = false;
+        }
         if (UsesBrowserOwnedValue && !_uncontrolledInitialized)
         {
             // Typing started a hosted edit: the typed text REPLACES the value
             // (vsFlexGrid Editable — the first character begins the entry).
             _uncontrolledValue = HostEditing && CellHost!.InitialText is { } initial ? initial : Value;
             _uncontrolledInitialized = true;
+            _lastAgreedValue = Value;
+        }
+        else if (UsesBrowserOwnedValue && AutoReseedsOnOutsideChange
+                 && !string.Equals(Value, _lastAgreedValue, StringComparison.Ordinal))
+        {
+            // Code changed Value from outside — not an echo of this control's own commit.
+            // Re-seed the browser-owned draft so the box shows the new value.
+            _uncontrolledValue = Value;
+            _lastAgreedValue = Value;
         }
         else if (!UsesBrowserOwnedValue)
         {
             _uncontrolledValue = null;
             _uncontrolledInitialized = false;
+            _lastAgreedValue = null;
         }
     }
 
@@ -861,7 +914,10 @@ else
             InputValueChanged?.Invoke(typed);
             _suppressNextNativeInputRender = true;
             if (UpdateOnInput && ValueChanged.HasDelegate)
+            {
+                _lastAgreedValue = typed;
                 await ValueChanged.InvokeAsync(typed);
+            }
             if (UpdateOnInput) NotifyNativeFieldChanged();
             return;
         }
@@ -890,6 +946,7 @@ else
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        _lastAgreedValue = Value;
         if (UsesBrowserOwnedValue)
             _uncontrolledValue = Value;
         if (ValueChanged.HasDelegate)
@@ -953,7 +1010,7 @@ else
 
     private void TogglePasswordVisibility()
     {
-        if (!ShowPasswordToggle || !Enabled) return;
+        if (!ShowPasswordToggle || !Enabled || !CanRevealPassword) return;
         _suppressNextNativeInputRender = false;
         _showPassword = !_showPassword;
     }
@@ -992,6 +1049,9 @@ else
             if (result.ValueChanged)
             {
                 Value = result.Value;
+                _lastAgreedValue = Value;
+                if (UsesBrowserOwnedValue)
+                    _uncontrolledValue = Value;   // the command already wrote the DOM; keep the draft in step
                 if (ValueChanged.HasDelegate)
                     await ValueChanged.InvokeAsync(Value);
             }
