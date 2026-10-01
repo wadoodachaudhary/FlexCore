@@ -22,6 +22,7 @@ public partial class DropDownListControl<TValue, TItem>
         value = Value?.ToString() ?? "",
         enabled = Enabled && (CellHost is null || CellHost.IsEditing),
         liveText = TextChanged.HasDelegate && !DelegateVerticalArrows,
+        stagesText = TextChanged.HasDelegate,
         commitOnBlur = CommitEditableTextOnBlur,
         hosted = CellHost is not null,
         forwardKeys = OnKeyDown.HasDelegate,
@@ -148,6 +149,11 @@ public partial class DropDownListControl<TValue, TItem>
                     }
                     if (navigation) await ForwardKeyAsync(key);
                     else if (action.WasOpen && CellHost is not null) CellHost.EndEdit();
+                    // The client path's counterpart of HandleEditableBlur: a host that stages
+                    // keystrokes sees no ValueChanged (the value already matches), so tell it the
+                    // text edit finished — on blur, and on Enter that committed free text.
+                    if (!pick && action.Kind is "text" or "blur")
+                        await EditableCommitted.InvokeAsync();
                 }
             }
             else if (action.Kind is "cancel" or "close")

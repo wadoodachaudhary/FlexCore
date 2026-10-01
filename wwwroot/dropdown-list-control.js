@@ -334,7 +334,7 @@ export function enableClientEditableDropdown(host, dotNetRef) {
         active = Math.max(0, Math.min(options.length - 1, index));
         keyboard = true;
         if (open) paint();
-        else send("select", event, options[active], false);
+        else { send("select", event, options[active], false); keyboard = false; }   // a closed list has no live highlight
     };
     listen("mousedown", event => {
         if (!config.enabled || event.button !== 0) return;
@@ -394,7 +394,14 @@ export function enableClientEditableDropdown(host, dotNetRef) {
         if (event.target !== input) return;
         event.stopImmediatePropagation();
         if (composing || host.contains(event.relatedTarget)) return;
+        // A host that stages every keystroke (stagesText) has already fed the typed text back as
+        // the control's value, so "dirty" can be false for a real edit — typed before this handler
+        // attached, or cleared. Always hand such a host the blur; the server commits it either way.
         if (config.commitOnBlur && (dirty || (open && keyboard))) finish(event);
+        // No visible edit, but a host that stages keystrokes may hold text the server never saw as a
+        // change — hand it the blur as a plain commit of the draft, never as a pick: a closed list
+        // keeps its last arrow highlight, and turning a blur into a SELECT would re-fire the value.
+        else if (config.commitOnBlur && config.stagesText) finish(event, false, null);
         else if (open) { setOpen(false); send("close", event, null, true); }
         else if (!config.commitOnBlur) { draft = config.text; dirty = false; paint(); }
     });

@@ -780,6 +780,11 @@
     private async Task HandleEditableBlur()
     {
         _editableInputFocused = false;
+        // Blazor dispatches blur from a document-level capture listener, so this runs even when the
+        // browser module owns the input. Once that module is registered its blur action carries the
+        // live draft (text typed after it attached never reaches _editableText); committing here
+        // first would write a stale value and tear down a hosted editor before the real one lands.
+        if (_clientDropdownRegistered) return;
 
         if (CommitEditableTextOnBlur)
         {
