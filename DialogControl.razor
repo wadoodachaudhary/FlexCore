@@ -1,4 +1,5 @@
 @namespace Fx.ControlKit
+@using System.Globalization
 @using Microsoft.AspNetCore.Components.Web
 @using Microsoft.JSInterop
 @implements IAsyncDisposable
@@ -87,7 +88,7 @@
                  @oncontextmenu:stopPropagation="true">
                 <button type="button" role="menuitem" disabled>Restore</button>
                 <button type="button" role="menuitem" disabled="@(!Draggable)" @onclick="HandleSystemMenuMove">Move</button>
-                <button type="button" role="menuitem" disabled="@(!Resizable)" @onclick="CloseSystemMenu">Size</button>
+                <button type="button" role="menuitem" disabled>Size</button>
                 <button type="button" role="menuitem" disabled>Minimize</button>
                 <button type="button" role="menuitem" disabled>Maximize</button>
                 <span class="fx-dialog-system-menu-separator"></span>
@@ -170,11 +171,44 @@
     [Parameter] public EventCallback<string?> HeightChanged { get; set; }
 
     private bool _isResizing;
+    // A press on the title bar ("move") or a resize handle (its edge) whose box is still being measured:
+    // a gesture starts from where the box is painted, which a host rule may have put somewhere other
+    // than the stored offset. The pointer keeps moving meanwhile, and may even be released; the last
+    // point seen before the release is applied once the box is known. Presses run one after another,
+    // so a second press measures the box the first one moved.
+    private sealed class GesturePress(string kind, double x, double y, int generation)
+    {
+        public string Kind { get; } = kind;
+        public double X { get; } = x;
+        public double Y { get; } = y;
+        public int Generation { get; } = generation;
+        public double? PendingX { get; set; }
+        public double? PendingY { get; set; }
+        public bool Released { get; set; }
+    }
+    private GesturePress? _press;
+    private Task _pressChain = Task.CompletedTask;
+    private int _openGenerationForPress;
+    private double _gestureOffsetBeforeX;
+    private double _gestureOffsetBeforeY;
+    private bool _resizeChangedWidth;
+    private bool _resizeChangedHeight;
+    private double? _resizeRuntimeWidthBefore;
+    private double? _resizeRuntimeHeightBefore;
     private string? _resizeEdge;
     private double _resizeStartX;
     private double _resizeStartY;
     private double _resizeStartWidth;
     private double _resizeStartHeight;
+    private double _resizeStartOffsetX;
+    private double _resizeStartOffsetY;
+    private double _resizeMinWidth;
+    private double _resizeMinHeight;
+    private double _resizeMaxWidth;
+    private double _resizeMaxHeight;
+    // How the overlay places the box on each axis: 0 start, 0.5 centre, 1 end.
+    private double _resizeAlignX = 0.5;
+    private double _resizeAlignY = 0.5;
     private double? _runtimeWidth;
     private double? _runtimeHeight;
     private bool _suppressNextOverlayClick;
@@ -216,7 +250,7 @@
         get
         {
             var cls = "fx-dialog-overlay";
-            if (_isResizing || _isDragging)
+            if (_isResizing || _press != null || _isDragging)
                 cls += " fx-dialog-overlay-resizing";
             if (_isDragging)
                 cls += " fx-dialog-overlay-dragging";
@@ -245,6 +279,8 @@
                 parts.Add("fx-dialog-dragging");
             else if (_moveArmed)
                 parts.Add("fx-dialog-move-armed");
+            if (_isResizing)
+                parts.Add("fx-dialog-resizing");
             if (!string.IsNullOrWhiteSpace(CssClass))
                 parts.Add(CssClass);
             return string.Join(" ", parts);
@@ -258,29 +294,33 @@
             var parts = new List<string>();
 
             if (_runtimeWidth.HasValue)
-                parts.Add($"width:{_runtimeWidth.Value:0.##}px");
+                parts.Add($"width:{Px(_runtimeWidth.Value)}");
             else if (!string.IsNullOrWhiteSpace(Width))
                 parts.Add($"width:{Width}");
 
             if (_runtimeHeight.HasValue)
-                parts.Add($"height:{ClampResize(_runtimeHeight.Value, MinResizeHeight, MaxResizeHeight):0.##}px");
+                parts.Add($"height:{Px(ClampResize(_runtimeHeight.Value, MinResizeHeight, MaxResizeHeight))}");
             else if (!string.IsNullOrWhiteSpace(Height))
             {
                 var heightPixels = TryParsePixelValue(Height);
                 parts.Add(heightPixels.HasValue
-                    ? $"height:{ClampResize(heightPixels.Value, MinResizeHeight, MaxResizeHeight):0.##}px"
+                    ? $"height:{Px(ClampResize(heightPixels.Value, MinResizeHeight, MaxResizeHeight))}"
                     : $"height:{Height}");
             }
 
+            // A relative shift, not a transform: a transformed box becomes the containing block of every
+            // position:fixed popup inside it (menus, dropdown panels, nested dialogs), which would then
+            // open displaced by the offset.
             if (_dialogOffsetX != 0 || _dialogOffsetY != 0)
-                parts.Add($"transform:translate({_dialogOffsetX:0.##}px,{_dialogOffsetY:0.##}px)");
+                parts.Add($"position:relative;left:{Px(_dialogOffsetX)};top:{Px(_dialogOffsetY)}");
 
             return string.Join(";", parts);
         }
     }
 
-    private string SystemMenuStyle =>
-        $"left:{_systemMenuX:0.##}px;top:{_systemMenuY:0.##}px";
+    private static string Px(double value) => value.ToString("0.##", CultureInfo.InvariantCulture) + "px";
+
+    private string SystemMenuStyle => $"left:{Px(_systemMenuX)};top:{Px(_systemMenuY)}";
 
     // A press on a dialog button that slides off onto the backdrop (or the reverse) ends in
     // a click on the overlay, the nearest element containing both points. Only a press AND a
@@ -385,30 +425,45 @@
 
     private Task HandleOverlayMouseMove(MouseEventArgs e)
     {
-        if (_isDragging)
+        if (_press is { } press)
         {
-            _dialogOffsetX = _dragStartOffsetX + e.ClientX - _dragStartX;
-            _dialogOffsetY = _dragStartOffsetY + e.ClientY - _dragStartY;
-            return Task.CompletedTask;
+            // Hover after the release is not part of the gesture.
+            if (!press.Released)
+                (press.PendingX, press.PendingY) = (e.ClientX, e.ClientY);
         }
-
-        return HandleResizeMove(e);
+        else if (_isDragging)
+            ApplyDrag(e.ClientX, e.ClientY);
+        else if (_isResizing)
+            ApplyResize(e.ClientX, e.ClientY);
+        return Task.CompletedTask;
     }
 
+    // Also the overlay's mouseleave: the gesture ends where the pointer left.
     private async Task HandleOverlayMouseUp(MouseEventArgs e, bool suppressOverlayClick)
     {
-        if (_isDragging)
+        if (_press is { } press)
         {
-            _isDragging = false;
-            var position = new DialogPosition(_dialogOffsetX, _dialogOffsetY);
-            _lastPosition = position;
-            await PositionChanged.InvokeAsync(position);
-            if (suppressOverlayClick)
-                _suppressNextOverlayClick = true;
+            // Released before the box was measured: the press applies this point and finishes itself.
+            // The click this release produces arrives before then, so it is suppressed now.
+            if (!press.Released)
+            {
+                (press.PendingX, press.PendingY) = (e.ClientX, e.ClientY);
+                press.Released = true;
+                if (suppressOverlayClick)
+                    _suppressNextOverlayClick = true;
+            }
             return;
         }
 
-        await HandleResizeEnd(e, suppressOverlayClick);
+        if (!_isDragging && !_isResizing)
+            return;
+        if (_isDragging)
+            ApplyDrag(e.ClientX, e.ClientY);
+        else
+            ApplyResize(e.ClientX, e.ClientY);
+        if (suppressOverlayClick)
+            _suppressNextOverlayClick = true;
+        await FinishGestureAsync();
     }
 
     private Task HandleDragStart(MouseEventArgs e)
@@ -418,12 +473,118 @@
 
         _systemMenuVisible = false;
         _moveArmed = false;
-        _isDragging = true;
-        _dragStartX = e.ClientX;
-        _dragStartY = e.ClientY;
-        _dragStartOffsetX = _dialogOffsetX;
-        _dragStartOffsetY = _dialogOffsetY;
-        return Task.CompletedTask;
+        return BeginGestureAsync("move", e);
+    }
+
+    // Shared by the title bar and the resize handles. The press takes the pointer at once; it starts
+    // after any earlier press has finished.
+    private Task BeginGestureAsync(string kind, MouseEventArgs e)
+    {
+        var press = new GesturePress(kind, e.ClientX, e.ClientY, _openGenerationForPress);
+        _press = press;
+        var previous = _pressChain;
+        var run = RunPressAsync(press, previous);
+        _pressChain = run;
+        return run;
+    }
+
+    private async Task RunPressAsync(GesturePress press, Task previous)
+    {
+        try { await previous; } catch { /* the earlier press failed on its own */ }
+
+        // A gesture whose release was never seen (released outside the window) ends here, so its host
+        // still hears about it, and paints it before this press measures the box.
+        if (_isDragging || _isResizing)
+        {
+            await FinishGestureAsync();
+            StateHasChanged();
+        }
+
+        double[]? box = null;
+        if (Visible && press.Generation == _openGenerationForPress)
+        {
+            try
+            {
+                _focusModule ??= await JS.InvokeAsync<IJSObjectReference>("import", DialogJsModulePath);
+                box = await _focusModule.InvokeAsync<double[]?>("measureDialogBox", _dialogElement);
+            }
+            catch { /* stale module or circuit teardown: the stored offset and declared size are the fallback */ }
+        }
+
+        // The pointer now belongs to this press's gesture, or to a newer press.
+        if (_press == press)
+            _press = null;
+        // Closed, or closed and reopened, while the measurement was out.
+        if (!Visible || press.Generation != _openGenerationForPress)
+            return;
+
+        var kind = press.Kind;
+        var measured = box is { Length: 10 } && box[0] > 0 && box[1] > 0;
+        _gestureOffsetBeforeX = _dialogOffsetX;
+        _gestureOffsetBeforeY = _dialogOffsetY;
+        if (measured)
+        {
+            _dialogOffsetX = box![8];
+            _dialogOffsetY = box[9];
+        }
+
+        if (kind == "move")
+        {
+            _dragStartX = press.X;
+            _dragStartY = press.Y;
+            _dragStartOffsetX = _dialogOffsetX;
+            _dragStartOffsetY = _dialogOffsetY;
+            _isDragging = true;
+        }
+        else
+        {
+            _resizeEdge = kind;
+            _resizeStartX = press.X;
+            _resizeStartY = press.Y;
+            _resizeStartWidth = measured ? box![0] : ResolveCurrentWidth();
+            _resizeStartHeight = measured ? box![1] : ResolveCurrentHeight();
+            _resizeStartOffsetX = _dialogOffsetX;
+            _resizeStartOffsetY = _dialogOffsetY;
+            _resizeMinWidth = Math.Max(MinResizeWidth, measured ? box![2] : 0);
+            _resizeMinHeight = Math.Max(MinResizeHeight, measured ? box![3] : 0);
+            // CSS lets a minimum win over a smaller maximum; so does the resize.
+            _resizeMaxWidth = MinimumWins(TighterLimit(MaxResizeWidth, measured ? box![4] : 0), _resizeMinWidth);
+            _resizeMaxHeight = MinimumWins(TighterLimit(MaxResizeHeight, measured ? box![5] : 0), _resizeMinHeight);
+            _resizeAlignX = measured ? box![6] : 0.5;
+            _resizeAlignY = measured ? box![7] : 0.5;
+            _resizeRuntimeWidthBefore = _runtimeWidth;
+            _resizeRuntimeHeightBefore = _runtimeHeight;
+            _resizeChangedWidth = _resizeChangedHeight = false;
+            _isResizing = true;
+        }
+
+        if (press.PendingX is { } x && press.PendingY is { } y)
+        {
+            if (_isDragging) ApplyDrag(x, y);
+            else ApplyResize(x, y);
+        }
+        if (press.Released)
+        {
+            await FinishGestureAsync();
+            StateHasChanged();
+        }
+    }
+
+    private void ApplyDrag(double clientX, double clientY)
+    {
+        _dialogOffsetX = _dragStartOffsetX + clientX - _dragStartX;
+        _dialogOffsetY = _dragStartOffsetY + clientY - _dragStartY;
+    }
+
+    private Task FinishGestureAsync() => _isDragging ? FinishDragAsync() : _isResizing ? FinishResize() : Task.CompletedTask;
+
+    private async Task FinishDragAsync()
+    {
+        _isDragging = false;
+        // _lastPosition stays the host's last Position: a host that does not bind it must not see the
+        // moved window snap back on its next render, and one that does bind it gets the new value.
+        if (_dialogOffsetX != _gestureOffsetBeforeX || _dialogOffsetY != _gestureOffsetBeforeY)
+            await PositionChanged.InvokeAsync(new DialogPosition(_dialogOffsetX, _dialogOffsetY));
     }
 
     private Task HandleHeaderContextMenu(MouseEventArgs e)
@@ -462,68 +623,89 @@
         await RequestClose();
     }
 
+    // A resize starts from the box as rendered — CSS caps and non-pixel sizes included — and from where it
+    // is painted, and the edge opposite the dragged one stays put: the overlay re-aligns a box whose size
+    // changes, so the offset takes that shift back.
     private Task HandleResizeStart(string edge, MouseEventArgs e)
     {
-        if (!Resizable)
+        if (!Resizable || e.Button != 0)
             return Task.CompletedTask;
 
         _systemMenuVisible = false;
-        _isDragging = false;
-        _isResizing = true;
-        _resizeEdge = edge;
-        _resizeStartX = e.ClientX;
-        _resizeStartY = e.ClientY;
-        _resizeStartWidth = ResolveCurrentWidth();
-        _resizeStartHeight = ResolveCurrentHeight();
-        return Task.CompletedTask;
+        _moveArmed = false;
+        return BeginGestureAsync(edge, e);
     }
 
-    private Task HandleResizeMove(MouseEventArgs e)
+    private static double TighterLimit(double a, double b)
+        => a > 0 && b > 0 ? Math.Min(a, b) : Math.Max(a, b);
+
+    private static double MinimumWins(double maximum, double minimum)
+        => maximum > 0 && maximum < minimum ? minimum : maximum;
+
+    private void ApplyResize(double clientX, double clientY)
     {
-        if (!_isResizing || string.IsNullOrWhiteSpace(_resizeEdge))
-            return Task.CompletedTask;
+        if (string.IsNullOrWhiteSpace(_resizeEdge))
+            return;
 
-        var dx = e.ClientX - _resizeStartX;
-        var dy = e.ClientY - _resizeStartY;
-        var width = _resizeStartWidth;
-        var height = _resizeStartHeight;
+        var dx = clientX - _resizeStartX;
+        var dy = clientY - _resizeStartY;
+        var west = _resizeEdge.Contains('w');
+        var north = _resizeEdge.Contains('n');
 
-        if (_resizeEdge.Contains('e'))
-            width += dx;
-        if (_resizeEdge.Contains('w'))
-            width -= dx;
-        if (_resizeEdge.Contains('s'))
-            height += dy;
-        if (_resizeEdge.Contains('n'))
-            height -= dy;
+        // An axis the pointer has not moved on keeps its rendered size (a click on a handle changes nothing,
+        // even on a box smaller than the resize minimum).
+        if (west || _resizeEdge.Contains('e'))
+        {
+            var width = dx == 0 ? _resizeStartWidth : ClampResize(_resizeStartWidth + (west ? -dx : dx), _resizeMinWidth, _resizeMaxWidth);
+            var grown = width - _resizeStartWidth;
+            _resizeChangedWidth = Math.Abs(grown) >= 0.5;
+            _runtimeWidth = width;
+            _dialogOffsetX = _resizeStartOffsetX + (west ? -(1 - _resizeAlignX) : _resizeAlignX) * grown;
+        }
 
-        _runtimeWidth = ClampResize(width, MinResizeWidth, MaxResizeWidth);
-        _runtimeHeight = ClampResize(height, MinResizeHeight, MaxResizeHeight);
-        return Task.CompletedTask;
+        if (north || _resizeEdge.Contains('s'))
+        {
+            var height = dy == 0 ? _resizeStartHeight : ClampResize(_resizeStartHeight + (north ? -dy : dy), _resizeMinHeight, _resizeMaxHeight);
+            var grown = height - _resizeStartHeight;
+            _resizeChangedHeight = Math.Abs(grown) >= 0.5;
+            _runtimeHeight = height;
+            _dialogOffsetY = _resizeStartOffsetY + (north ? -(1 - _resizeAlignY) : _resizeAlignY) * grown;
+        }
     }
 
-    private async Task HandleResizeEnd(MouseEventArgs e, bool suppressOverlayClick)
+    private async Task FinishResize()
     {
-        if (!_isResizing) return;
         _isResizing = false;
         _resizeEdge = null;
-        if (suppressOverlayClick)
-            _suppressNextOverlayClick = true;
 
-        if (_runtimeWidth.HasValue)
+        // A dimension the gesture did not change keeps its declared size, and its host hears nothing.
+        if (!_resizeChangedWidth)
         {
-            var newWidth = $"{_runtimeWidth.Value:0.##}px";
-            Width = newWidth;
-            if (WidthChanged.HasDelegate)
-                await WidthChanged.InvokeAsync(newWidth);
+            _runtimeWidth = _resizeRuntimeWidthBefore;
+            _dialogOffsetX = _resizeStartOffsetX;
         }
-        if (_runtimeHeight.HasValue)
+        if (!_resizeChangedHeight)
         {
-            var newHeight = $"{_runtimeHeight.Value:0.##}px";
-            Height = newHeight;
-            if (HeightChanged.HasDelegate)
-                await HeightChanged.InvokeAsync(newHeight);
+            _runtimeHeight = _resizeRuntimeHeightBefore;
+            _dialogOffsetY = _resizeStartOffsetY;
         }
+
+        // Read before the host runs: a newer gesture may start while it does.
+        var moved = _dialogOffsetX != _gestureOffsetBeforeX || _dialogOffsetY != _gestureOffsetBeforeY;
+        var position = new DialogPosition(_dialogOffsetX, _dialogOffsetY);
+        var newWidth = _resizeChangedWidth && _runtimeWidth.HasValue ? Px(_runtimeWidth.Value) : null;
+        var newHeight = _resizeChangedHeight && _runtimeHeight.HasValue ? Px(_runtimeHeight.Value) : null;
+        if (newWidth != null) Width = newWidth;
+        if (newHeight != null) Height = newHeight;
+
+        // Position first: a host that places the window itself (FDBGrid's resting rule) then never paints
+        // the new size at the old spot.
+        if (moved)
+            await PositionChanged.InvokeAsync(position);
+        if (newWidth != null && WidthChanged.HasDelegate)
+            await WidthChanged.InvokeAsync(newWidth);
+        if (newHeight != null && HeightChanged.HasDelegate)
+            await HeightChanged.InvokeAsync(newHeight);
     }
 
     private bool _lastVisible;
@@ -539,6 +721,8 @@
             _systemMenuVisible = false;
             _isDragging = false;
             _isResizing = false;
+            _press = null;
+            _openGenerationForPress++;
             _moveArmed = false;
 
             // Rising edge: the dialog renders AFTER this method, so a capture
@@ -561,7 +745,7 @@
                 _openerCaptured = false;
             }
         }
-        if (Position != _lastPosition && !_isDragging)
+        if (Position != _lastPosition && !_isDragging && !_isResizing)
         {
             _dialogOffsetX = Position?.X ?? 0; _dialogOffsetY = Position?.Y ?? 0;
         }
@@ -588,7 +772,7 @@
         if (!trimmed.EndsWith("px", StringComparison.OrdinalIgnoreCase))
             return null;
 
-        return double.TryParse(trimmed[..^2], out var pixels) ? pixels : null;
+        return double.TryParse(trimmed[..^2], NumberStyles.Float, CultureInfo.InvariantCulture, out var pixels) ? pixels : null;
     }
 
     private static double ClampResize(double value, double minimum, double maximum)

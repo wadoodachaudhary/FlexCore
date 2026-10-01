@@ -9,6 +9,7 @@
 }
 
 .fx-dialog {
+    box-sizing: border-box;
     background: var(--fx-dialog-bg, #fff);
     border-radius: var(--fx-border-radius, 8px);
     border: var(--fx-dialog-border, none);
@@ -58,7 +59,8 @@
     pointer-events: auto;
 }
 
-.fx-dialog-overlay-nonmodal.fx-dialog-overlay-resizing {
+.fx-dialog-overlay-nonmodal.fx-dialog-overlay-resizing,
+.fx-dialog-overlay-nonmodal:has(.fx-dialog-resize-handle:active, .fx-dialog-draggable .fx-dialog-header:active) {
     pointer-events: auto;
 }
 
