@@ -48,7 +48,7 @@ else
     if (IsPasswordInput)
     {
         <div class="fx-textbox fx-textbox-password-host" style="@HostWidthStyle">
-            <input class="@ResolvedPasswordInputCssClass"
+            <input @key="_passwordInputVersion" class="@ResolvedPasswordInputCssClass"
                    @bind:event="oninput"
                    @bind:get="EffectiveValue"
                    @bind:set="OnNativeInput"
@@ -256,6 +256,15 @@ else
     /// input. Browser-local; pasted, autofilled and programmatic values stay masked.</summary>
     [Parameter] public bool RevealLastTypedCharacter { get; set; } = true;
     [Parameter] public bool ShowPasswordToggle { get; set; } = true;
+    /// <summary>Whether a saved password may populate this editor. False starts blank,
+    /// never renders the supplied Value, and ignores an untouched blank commit. A typed
+    /// replacement uses normal masking/reveal and ValueChanged behavior. Keep the saved
+    /// value server-side; use a fresh @key when loading another record or after saving.
+    /// The ValueChanged handler must store exactly the value it is given before the next
+    /// render: a Value that is neither the saved one nor the typed one reads as another
+    /// record being loaded and clears the replacement.
+    /// This presentation policy does not replace server-side authorization.</summary>
+    [Parameter] public bool ExistingPasswordViewable { get; set; } = true;
     /// <summary>Explains why a stored password cannot be revealed (for example, a
     /// one-way hash). Keeps the eye visible but disabled; clear when the user replaces it.</summary>
     [Parameter] public string? PasswordRevealUnavailableReason { get; set; }
@@ -482,7 +491,10 @@ else
             if (MaxLength is > 0 && committedValue.Length > MaxLength.Value)
                 committedValue = committedValue[..MaxLength.Value];
 
+            if (!AcceptPasswordEdit(committedValue))
+                return;
             Value = committedValue;
+            _observedPasswordValue = Value;
             _lastAgreedValue = committedValue;
             // Once the browser listener owns the input the DOM is the authority
             // (see CommitClientBufferedTypingAsync); before that, @bind keeps the
@@ -518,13 +530,14 @@ else
     {
         return InvokeAsync(async () =>
         {
-            if (!string.Equals(key, "Escape", StringComparison.Ordinal))
+            if (!string.Equals(key, "Escape", StringComparison.Ordinal) && AcceptPasswordEdit(value))
             {
                 var committedValue = value ?? string.Empty;
                 if (MaxLength is > 0 && committedValue.Length > MaxLength.Value)
                     committedValue = committedValue[..MaxLength.Value];
 
                 Value = committedValue;
+                _observedPasswordValue = Value;
                 _lastAgreedValue = committedValue;
                 // The browser listener owns the input, so the DOM is the authority:
                 // the rendered value stays the one the input last rendered, and no
@@ -586,7 +599,15 @@ else
     private bool _showPassword;
     private bool _lastShowPasswordToggle = true;
     private bool _lastCanRevealPassword = true;
+    private bool _passwordPolicyInitialized;
+    private bool _lastExistingPasswordViewable = true;
+    private bool _passwordHasReplacement;
+    private string? _lastPasswordEditValue;
+    private string? _observedPasswordValue;
+    private int _passwordInputVersion;
+    private bool _passwordInputRecreated;
     private bool _clientBufferedTypingAttached;
+    private ElementReference _clientBufferedTypingInput;
     private bool _clientBufferedHandlesNavigationKeys;
     private bool _clientBufferedKeepNativeTab;
     // Blazor's capture-phase blur dispatch (BlurDispatch) runs ahead of the browser
@@ -620,7 +641,18 @@ else
     private bool UsesBrowserOwnedValue =>
         Uncontrolled || EffectiveTypingBehavior == TextBoxTypingBehavior.ClientBuffered;
 
-    private string? EffectiveValue => UsesBrowserOwnedValue ? _uncontrolledValue : Value;
+    private bool WithholdExistingPassword => IsPasswordInput && !ExistingPasswordViewable && !_passwordHasReplacement;
+
+    private string? EffectiveValue => WithholdExistingPassword ? string.Empty : UsesBrowserOwnedValue ? _uncontrolledValue : Value;
+
+    private bool AcceptPasswordEdit(string? value)
+    {
+        if (!IsPasswordInput) return true;
+        if (WithholdExistingPassword && string.IsNullOrEmpty(value)) return false;
+        _passwordHasReplacement = true;
+        _lastPasswordEditValue = value;
+        return true;
+    }
 
     private bool IsPasswordInput =>
         !Multiline && string.Equals(InputType, "password", StringComparison.OrdinalIgnoreCase);
@@ -633,6 +665,30 @@ else
 
     protected override void OnParametersSet()
     {
+        if (IsPasswordInput)
+        {
+            var policyChanged = _passwordPolicyInitialized && _lastExistingPasswordViewable != ExistingPasswordViewable;
+            var replacementEcho = _passwordHasReplacement && string.Equals(Value, _lastPasswordEditValue, StringComparison.Ordinal);
+            var outsideChange = _passwordPolicyInitialized && !replacementEcho && !string.Equals(Value, _observedPasswordValue, StringComparison.Ordinal);
+            if (!_passwordPolicyInitialized || policyChanged || outsideChange)
+            {
+                var keepReplacement = policyChanged && ExistingPasswordViewable && _passwordHasReplacement && !outsideChange;
+                if (!keepReplacement) _passwordHasReplacement = false;
+                _showPassword = false;
+                _suppressNextNativeInputRender = false;
+                if (!ExistingPasswordViewable && (policyChanged || outsideChange))
+                {
+                    // Replace the DOM input too: a buffered draft may differ from its last rendered value.
+                    _passwordInputVersion++;
+                    _passwordInputRecreated = true;
+                }
+                if (UsesBrowserOwnedValue && !keepReplacement && (policyChanged || (!ExistingPasswordViewable && outsideChange)))
+                    _uncontrolledInitialized = false;
+            }
+            _passwordPolicyInitialized = true;
+            _lastExistingPasswordViewable = ExistingPasswordViewable;
+            _observedPasswordValue = Value;
+        }
         if (_lastShowPasswordToggle != ShowPasswordToggle || _lastCanRevealPassword != CanRevealPassword)
         {
             // A replacement/withheld password starts masked, even if the previous value was revealed.
@@ -645,7 +701,10 @@ else
         {
             // Typing started a hosted edit: the typed text REPLACES the value
             // (vsFlexGrid Editable — the first character begins the entry).
-            _uncontrolledValue = HostEditing && CellHost!.InitialText is { } initial ? initial : Value;
+            if (HostEditing && CellHost!.InitialText is { } initial && AcceptPasswordEdit(initial))
+                _uncontrolledValue = initial;
+            else
+                _uncontrolledValue = WithholdExistingPassword ? string.Empty : Value;
             _uncontrolledInitialized = true;
             _lastAgreedValue = Value;
         }
@@ -654,7 +713,7 @@ else
         {
             // Code changed Value from outside — not an echo of this control's own commit.
             // Re-seed the browser-owned draft so the box shows the new value.
-            _uncontrolledValue = Value;
+            _uncontrolledValue = WithholdExistingPassword ? string.Empty : Value;
             _lastAgreedValue = Value;
         }
         else if (!UsesBrowserOwnedValue)
@@ -691,7 +750,8 @@ else
         var clientBindingChanged = wantsClientBufferedTyping != _clientBufferedTypingAttached
             || (wantsClientBufferedTyping
                 && (handlesNavigationKeys != _clientBufferedHandlesNavigationKeys
-                    || keepNativeTab != _clientBufferedKeepNativeTab));
+                    || keepNativeTab != _clientBufferedKeepNativeTab
+                    || _clientBufferedTypingInput.Id != _inputElement.Id));
         var revealDuration = IsPasswordInput && Enabled && !_showPassword && RevealLastTypedCharacter
             ? Math.Clamp(PasswordRevealDurationMs, 0, 2000) : 0;
         var passwordBindingChanged = revealDuration != _passwordRevealDurationMs
@@ -700,9 +760,10 @@ else
         // Only AutoFocus seizes focus on load. SelectOnFocus must NOT auto-focus on render — otherwise a
         // second SelectOnFocus field (e.g. Description) steals focus from the AutoFocus field (Number).
         // SelectOnFocus still selects the text when the user actually focuses the field (OnInputFocus).
-        var needsFirstRenderSetup = firstRender
+        var needsFirstRenderSetup = (firstRender || _passwordInputRecreated)
             && (EffectiveAutoFocus || ReplaceOnFirstInput || TypingKeysStayLocal
                 || (MaxLength is > 0 && OnPasteTruncated.HasDelegate));
+        _passwordInputRecreated = false;
         if (!needsFirstRenderSetup && !clientBindingChanged && !passwordBindingChanged)
             return;
 
@@ -741,6 +802,10 @@ else
         {
             try
             {
+                // Only a replaced input needs its old binding removed; the same element is updated in place.
+                if (_clientBufferedTypingAttached
+                    && (!wantsClientBufferedTyping || _clientBufferedTypingInput.Id != _inputElement.Id))
+                    await module.InvokeVoidAsync("disableClientBufferedTyping", _clientBufferedTypingInput);
                 if (wantsClientBufferedTyping)
                 {
                     _clientBufferedTypingRef ??= DotNetObjectReference.Create(this);
@@ -755,6 +820,7 @@ else
                         // local — the host moves rows on Tab, Enter and Escape only.
                         CellHost is not null);
                     _clientBufferedTypingAttached = true;
+                    _clientBufferedTypingInput = _inputElement;
                     _clientBufferedHandlesNavigationKeys = handlesNavigationKeys;
                     _clientBufferedKeepNativeTab = keepNativeTab;
                     if (CellHost is not null && !_disposed)
@@ -772,7 +838,6 @@ else
                 }
                 else
                 {
-                    await module.InvokeVoidAsync("disableClientBufferedTyping", _inputElement);
                     _clientBufferedTypingAttached = false;
                     _clientBufferedHandlesNavigationKeys = false;
                     _clientBufferedKeepNativeTab = false;
@@ -799,7 +864,9 @@ else
                 _pasteNoticeRef ??= DotNetObjectReference.Create(this);
                 await module.InvokeVoidAsync("enableMaxLengthPasteNotice", _inputElement, _pasteNoticeRef, MaxLength.Value);
             }
-            if (EffectiveAutoFocus && !_disposed)
+            // A recreated input is not a first render: focusing it would pull the keyboard
+            // out of whatever field the user has moved on to.
+            if (EffectiveAutoFocus && !_disposed && (firstRender || CellHost is not null))
             {
                 // Hosted: the host focuses only while it still owns the keyboard.
                 if (CellHost is not null)
@@ -874,7 +941,11 @@ else
             if (!Enabled && !merged.ContainsKey("disabled"))
                 merged["disabled"] = "disabled";
             if (IsPasswordInput)
+            {
                 merged["type"] = EffectiveInputType;
+                if (!ExistingPasswordViewable)
+                    merged.Remove("value");
+            }
             else if (!Multiline && !string.IsNullOrWhiteSpace(InputType) && !merged.ContainsKey("type"))
                 merged["type"] = InputType;
             if (AutoFocus && !merged.ContainsKey("autofocus"))
@@ -904,6 +975,7 @@ else
 
     private async Task OnNativeInput(string? typed)
     {
+        if (!AcceptPasswordEdit(typed)) return;
         if (UsesBrowserOwnedValue)
         {
             // @bind updates Blazor's value frame for each input event. Keep
@@ -916,6 +988,7 @@ else
             if (UpdateOnInput && ValueChanged.HasDelegate)
             {
                 _lastAgreedValue = typed;
+                _observedPasswordValue = typed;
                 await ValueChanged.InvokeAsync(typed);
             }
             if (UpdateOnInput) NotifyNativeFieldChanged();
@@ -927,6 +1000,7 @@ else
         // Commit to the parent on each keystroke only when UpdateOnInput; otherwise
         // the parent is notified on change (blur/Enter).
         Value = typed;
+        _observedPasswordValue = Value;
         InputValueChanged?.Invoke(Value);
         if (!UpdateOnInput)
             _suppressNextNativeInputRender = true;
@@ -945,7 +1019,9 @@ else
 
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
+        if (!AcceptPasswordEdit(e.Value?.ToString())) return;
         Value = e.Value?.ToString();
+        _observedPasswordValue = Value;
         _lastAgreedValue = Value;
         if (UsesBrowserOwnedValue)
             _uncontrolledValue = Value;
@@ -1046,9 +1122,10 @@ else
         {
             var result = await module.InvokeAsync<TextContextCommandResult>(
                 "applyTextContextCommand", _inputElement, command);
-            if (result.ValueChanged)
+            if (result.ValueChanged && AcceptPasswordEdit(result.Value))
             {
                 Value = result.Value;
+                _observedPasswordValue = Value;
                 _lastAgreedValue = Value;
                 if (UsesBrowserOwnedValue)
                     _uncontrolledValue = Value;   // the command already wrote the DOM; keep the draft in step
@@ -1095,7 +1172,7 @@ else
         }
         if (_clientBufferedTypingAttached && _controlJsModule != null)
         {
-            try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }
+            try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _clientBufferedTypingInput); }
             catch { }
         }
         _clientBufferedTypingRef?.Dispose();
