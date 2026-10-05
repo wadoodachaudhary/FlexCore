@@ -1,5 +1,6 @@
 using System.Xml;
 using System.Runtime.Versioning;
+using Fx.ControlKit.Charts;
 
 namespace Fx.ControlKit.Reports.NativeCrystal;
 
@@ -179,6 +180,7 @@ public static class NativeCrystalRptConverter
             model.ConversionDiagnostics.Add(diagnostic);
             options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{function.Name}: {diagnostic.Message}");
         }
+        BindLinkedCharts(model);
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
@@ -196,10 +198,11 @@ public static class NativeCrystalRptConverter
                     obj.AnalysisDiagnostic = "The containing analytical group scope could not be resolved.";
                 }
             }
-            if (obj.Analysis is not null)
+            if (obj.Analysis is { } bound)
             {
                 var defaults = new CrystalConversionDiagnostic("CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
-                    "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained.");
+                    "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained."
+                    + (bound.BindingNotes.Count == 0 ? "" : " " + string.Join(" ", bound.BindingNotes.Distinct(StringComparer.Ordinal))));
                 model.ConversionDiagnostics.Add(defaults);
                 options.Progress?.Invoke($"[{defaults.Code}] {model.Name}/{section.Name}/{obj.Name}: {defaults.Message}");
                 continue;
@@ -213,6 +216,44 @@ public static class NativeCrystalRptConverter
         }
         CrystalPictureStorage.Apply(model, streams, prefix, options.Progress);
         return model;
+    }
+
+    private static void BindLinkedCharts(CrystalReportModel model)
+    {
+        var crosstabs = model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections).SelectMany(section => section.ReportObjects)
+            .Where(obj => obj.Kind == "CrossTab" && obj.Analysis is { Measures.Count: > 0 }).Select(obj => obj.Analysis!).ToList();
+        foreach (var chart in model.DataDefinition.ReportDefinition.Areas.SelectMany(area => area.Sections).SelectMany(section => section.ReportObjects)
+            .Where(obj => obj.Kind == "Chart" && obj.Analysis is { LinkedToCrossTab: true, Measures.Count: 0 }))
+        {
+            var source = crosstabs.FirstOrDefault();
+            if (source is null)
+            {
+                chart.Analysis = null;
+                chart.AnalysisDiagnostic = "The linked chart has no cross-tab with summary fields to draw.";
+                continue;
+            }
+            var analysis = chart.Analysis!;
+            analysis.Measures = source.Measures.Select(measure => measure.Clone()).ToList();
+            analysis.RowFields = [.. source.RowFields];
+            analysis.ColumnFields = [.. source.ColumnFields];
+            analysis.GroupKinds = new Dictionary<string, int>(source.GroupKinds, StringComparer.OrdinalIgnoreCase);
+            analysis.CategoryField = source.RowFields.FirstOrDefault(field => field.Length > 0) ?? source.ColumnFields.FirstOrDefault(field => field.Length > 0) ?? "";
+            analysis.SeriesField = analysis.CategoryField.Length > 0 && source.ColumnFields.FirstOrDefault(field => field.Length > 0 && !field.Equals(analysis.CategoryField, StringComparison.OrdinalIgnoreCase)) is { } series ? series : "";
+            analysis.SummariesAsCategories = analysis.CategoryField.Length == 0;
+            if (analysis.ChartType is ChartType.Pie or ChartType.Donut)
+            {
+                analysis.SeriesField = "";
+                if (!analysis.SummariesAsCategories && analysis.Measures.Count > 1) analysis.Measures = [analysis.Measures[0]];
+            }
+            analysis.SortCategories = !analysis.SummariesAsCategories;
+            analysis.LinkedToCrossTab = false;
+            analysis.BindingNotes.Add("The chart is drawn from the cross-tab's row, column and summary fields.");
+            if (analysis.Validate("Chart") is { } error)
+            {
+                chart.Analysis = null;
+                chart.AnalysisDiagnostic = error;
+            }
+        }
     }
 
     private static string NormalizeReportName(string currentName, string fallbackName)

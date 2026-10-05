@@ -47,6 +47,10 @@ public sealed partial class ReportLayoutSession
 
     private ReportLayoutGroupOptions? Options(int level) => _layout.GroupOptions.GetValueOrDefault(level);
 
+    /// <summary>The period a chart or cross-tab axis uses for a Crystal group condition. Kind 0 leaves the value unchanged.</summary>
+    internal static object? AnalyticalPeriod(object? value, int kind)
+        => kind == 0 || value is null or DBNull ? value : Period(value, new ReportLayoutGroupOptions(kind), false);
+
     // The value a group compares: the period of a date, date-time or time condition, the named group of a specified order, or the value itself.
     private object? GroupKey(int level, int row)
     {

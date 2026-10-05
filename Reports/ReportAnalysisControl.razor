@@ -1,7 +1,6 @@
 @namespace Fx.ControlKit.Reports
 @using Fx.ControlKit.Charts
 @using Fx.ControlKit.Grid
-@using System.Globalization
 
 <div class="fx-report-analysis" style="white-space:normal;">
 @if (_error is not null)
@@ -55,64 +54,8 @@ else if (Element.Kind is "Table" or "CrossTab")
             var definition = Snapshot.Definition;
             if (Element.Kind == "Chart")
             {
-                _series = [];
-                if (definition.EachRecord)
-                {
-                    if (Snapshot.Rows.Count > 5000) throw new InvalidDataException("Each-record chart exceeds 5,000 points.");
-                    foreach (var measure in definition.Measures)
-                    {
-                        var points = Snapshot.Rows.Select((row, index) =>
-                        {
-                            var label = definition.CategoryField.Length == 0 ? (index + 1).ToString(CultureInfo.CurrentCulture) : Label(Value(row, definition.CategoryField));
-                            var value = Value(row, measure.Field);
-                            var valid = decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var number);
-                            if (valid) ValidateChartValue(number, definition.ChartType);
-                            return new ChartDataPoint(label, valid ? (double)number : 0) { IsEmpty = !valid };
-                        }).ToList();
-                        _series.Add(new(measure.Caption.Length == 0 ? measure.Field : measure.Caption, definition.ChartType, points));
-                    }
-                    return;
-                }
-                var categories = Snapshot.Rows.Select(row => Label(Value(row, definition.CategoryField))).Distinct(StringComparer.Ordinal).ToArray();
-                var descending = definition.DescendingFields.Contains(definition.CategoryField, StringComparer.OrdinalIgnoreCase);
-                if (definition.SortCategories || descending)
-                {
-                    var values = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.CategoryField)), StringComparer.Ordinal)
-                        .ToDictionary(group => group.Key, group => Value(group.First(), definition.CategoryField));
-                    Array.Sort(categories, (a, b) => descending ? CompareCategory(values[b], values[a]) : CompareCategory(values[a], values[b]));
-                }
-                if (categories.Length > 5000) throw new InvalidDataException("Chart exceeds 5,000 categories.");
-                IEnumerable<IGrouping<string, Dictionary<string, object>>> partitions = Snapshot.Rows.GroupBy(row => Label(Value(row, definition.SeriesField)));
-                if (definition.SortCategories || definition.DescendingFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase))
-                {
-                    var comparer = Comparer<object?>.Create(CompareCategory);
-                    partitions = definition.DescendingFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase)
-                        ? partitions.OrderByDescending(group => Value(group.First(), definition.SeriesField), comparer)
-                        : partitions.OrderBy(group => Value(group.First(), definition.SeriesField), comparer);
-                }
-                foreach (var partition in partitions)
-                foreach (var measure in definition.Measures)
-                {
-                    var table = new System.Data.DataTable(); table.Columns.Add("value", typeof(object));
-                    var points = new List<ChartDataPoint>();
-                    var categoryRows = partition.ToLookup(row => Label(Value(row, definition.CategoryField)), StringComparer.Ordinal);
-                    foreach (var category in categories)
-                    {
-                        table.Clear();
-                        foreach (var row in categoryRows[category]) table.Rows.Add(Value(row, measure.Field) ?? DBNull.Value);
-                        var formatted = ReportValueFormatting.Aggregate(table.Rows.Cast<System.Data.DataRow>(),
-                            new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
-                        if (decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
-                        {
-                            ValidateChartValue(number, definition.ChartType);
-                            points.Add(new(category, (double)number));
-                        }
-                        else if (definition.ChartType is not (ChartType.Pie or ChartType.Donut)) points.Add(new(category, 0) { IsEmpty = true });
-                    }
-                    var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
-                    _series.Add(new(partition.Key.Length == 0 ? caption : partition.Key + " / " + caption, definition.ChartType, points));
-                    if (_series.Count > 64) throw new InvalidDataException("Chart exceeds 64 series.");
-                }
+                _series = ReportAnalysisGraphic.Series(Snapshot);
+                return;
             }
             else if (Element.Kind == "Table" || definition.Cells.Count > 0)
             {
@@ -147,21 +90,4 @@ else if (Element.Kind is "Table" or "CrossTab")
     }
 
     private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
-    private static void ValidateChartValue(decimal value, ChartType type)
-    {
-        if (value < 0 && type is ChartType.Pie or ChartType.Donut)
-            throw new InvalidDataException("Pie charts cannot represent negative values. Use a bar or line chart.");
-        if (value < 0 && type is ChartType.StackedBar or ChartType.StackedBar100)
-            throw new InvalidDataException("Negative values are not supported by this chart adapter. Use an ordinary bar or line chart.");
-    }
-    private static int CompareCategory(object? left, object? right)
-    {
-        if (left is DBNull) left = null;
-        if (right is DBNull) right = null;
-        if (left is null) return right is null ? 0 : -1;
-        if (right is null) return 1;
-        if (left.GetType() == right.GetType() && left is IComparable comparable) return comparable.CompareTo(right);
-        return StringComparer.CurrentCulture.Compare(Label(left), Label(right));
-    }
-    private static string Label(object? value) => value is null or DBNull ? "" : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
 }

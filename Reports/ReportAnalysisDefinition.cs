@@ -36,8 +36,18 @@ public sealed partial class ReportAnalysisDefinition
     public bool ShowLegend { get; set; } = true;
     public bool ShowTotals { get; set; } = true;
     public bool EachRecord { get; set; }
+    /// <summary>No category group: each measure is one bar or pie slice, aggregated over the chart's rows.</summary>
+    public bool SummariesAsCategories { get; set; }
+    /// <summary>The chart record points at a cross-tab. The converter copies that cross-tab's fields before the chart is drawn.</summary>
+    internal bool LinkedToCrossTab { get; set; }
     public bool SortCategories { get; set; }
     public List<string> DescendingFields { get; set; } = [];
+    /// <summary>Axis fields whose Crystal direction is original or specified order, so categories stay in record order.</summary>
+    public List<string> OriginalOrderFields { get; set; } = [];
+    /// <summary>Bindings that were read but not evaluated (linked chart, OLAP, calculated member, per-measure transform). Conversion records them; the drawn values are the summaries that were imported.</summary>
+    internal List<string> BindingNotes { get; } = [];
+    /// <summary>Crystal group condition for an axis field (1 daily … 7 annually, 8–11 time-of-day). 0, or a missing entry, groups every distinct value.</summary>
+    public Dictionary<string, int> GroupKinds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public List<ReportMatrixCell> Cells { get; set; } = [];
     public List<ReportTableColumn> TableColumns { get; set; } = [];
     public bool RepeatHeaders { get; set; } = true;
@@ -72,11 +82,12 @@ public sealed partial class ReportAnalysisDefinition
         if (Measures.Count == 0 || Measures.Any(m => string.IsNullOrWhiteSpace(m.Field))) return "Choose at least one measure field.";
         if (Measures.Any(m => m.Aggregate is not (ReportAggregateType.Sum or ReportAggregateType.Count or ReportAggregateType.Average or ReportAggregateType.Min or ReportAggregateType.Max or ReportAggregateType.DistinctCount or ReportAggregateType.Median)))
             return "This item supports Sum, Count, DistinctCount, Average, Median, Min and Max. Percentage summaries need a denominator.";
-        if (kind == "Chart" && !EachRecord && string.IsNullOrWhiteSpace(CategoryField)) return "Choose a category field.";
-        if (kind == "Chart" && ChartType is not (ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100 or ChartType.Line or ChartType.Pie or ChartType.Donut)) return "This report adapter supports bar, stacked/percent bar, line, pie and donut charts.";
-        if (kind == "Chart" && ChartType is ChartType.Pie or ChartType.Donut && (Measures.Count != 1 || SeriesField.Length > 0)) return "Pie charts require one measure and no series field.";
+        if (kind == "Chart" && !EachRecord && !SummariesAsCategories && string.IsNullOrWhiteSpace(CategoryField)) return "Choose a category field.";
+        if (GroupKinds.Values.Any(groupKind => groupKind is < 0 or > 11)) return "Analytical group periods must be a Crystal date or time condition.";
+        if (kind == "Chart" && ChartType is not (ChartType.Bar or ChartType.HorizontalBar or ChartType.StackedBar or ChartType.StackedBar100 or ChartType.Line or ChartType.Area or ChartType.StackedArea or ChartType.Pie or ChartType.Donut)) return "This report adapter supports bar, stacked/percent bar, line, area, pie and donut charts.";
+        if (kind == "Chart" && ChartType is ChartType.Pie or ChartType.Donut && !SummariesAsCategories && (Measures.Count != 1 || SeriesField.Length > 0)) return "Pie charts require one measure and no series field.";
         if (kind == "Chart" && EachRecord && SeriesField.Length > 0) return "Each-record charts cannot also aggregate a series grouping.";
-        if (kind == "CrossTab" && (RowFields.Count == 0 || RowFields.Any(string.IsNullOrWhiteSpace) || ColumnFields.Any(string.IsNullOrWhiteSpace))) return "Choose the cross-tab row fields.";
+        if (kind == "CrossTab" && (RowFields.Count == 0 && ColumnFields.Count == 0 || RowFields.Any(string.IsNullOrWhiteSpace) || ColumnFields.Any(string.IsNullOrWhiteSpace))) return "Choose the cross-tab row fields.";
         if (kind == "CrossTab" && (RowFields.Count > 3 || ColumnFields.Count > 3)) return "The current pivot adapter supports up to three row and column levels.";
         return null;
     }
@@ -90,7 +101,9 @@ public sealed partial class ReportAnalysisDefinition
     {
         Title = Title, ChartType = ChartType, CategoryField = CategoryField, SeriesField = SeriesField, GroupScope = GroupScope,
         RowFields = [.. RowFields], ColumnFields = [.. ColumnFields], Measures = Measures.Select(m => m.Clone()).ToList(), ShowLegend = ShowLegend, ShowTotals = ShowTotals,
-        EachRecord = EachRecord, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], Cells = Cells.Select(cell => cell.Copy(cell.Region?.CloneNode())).ToList(),
+        EachRecord = EachRecord, SummariesAsCategories = SummariesAsCategories, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], OriginalOrderFields = [.. OriginalOrderFields],
+        GroupKinds = new Dictionary<string, int>(GroupKinds, StringComparer.OrdinalIgnoreCase),
+        Cells = Cells.Select(cell => cell.Copy(cell.Region?.CloneNode())).ToList(),
         TableColumns = TableColumns.Select(column => column.Clone()).ToList(), RepeatHeaders = RepeatHeaders,
         RowHeaderWidthTwips = RowHeaderWidthTwips, ValueColumnWidthTwips = ValueColumnWidthTwips, RowHeightTwips = RowHeightTwips
     };
@@ -103,7 +116,9 @@ public sealed partial class ReportAnalysisDefinition
     private XElement ToXmlNode() => new("FlexKitAnalysis", new XAttribute("Title", Title), new XAttribute("ChartType", ChartType),
         new XAttribute("CategoryField", CategoryField), new XAttribute("SeriesField", SeriesField), new XAttribute("GroupScope", GroupScope),
         new XAttribute("ShowLegend", ShowLegend), new XAttribute("ShowTotals", ShowTotals),
-        new XAttribute("EachRecord", EachRecord), new XAttribute("SortCategories", SortCategories), new XElement("DescendingFields", DescendingFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
+        new XAttribute("EachRecord", EachRecord), new XAttribute("SummariesAsCategories", SummariesAsCategories), new XAttribute("SortCategories", SortCategories), new XElement("DescendingFields", DescendingFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
+        new XElement("OriginalOrderFields", OriginalOrderFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
+        new XElement("GroupKinds", GroupKinds.Select(pair => new XElement("Field", new XAttribute("Binding", pair.Key), new XAttribute("Kind", pair.Value)))),
         new XElement("Cells", Cells.Select(cell => new XElement("Cell", new XAttribute("Row", cell.Row), new XAttribute("Column", cell.Column),
             new XAttribute("RowSpan", cell.RowSpan), new XAttribute("ColumnSpan", cell.ColumnSpan), new XAttribute("RegionKind", cell.RegionKind),
             cell.Text is null ? null : new XElement("Text", cell.Text), cell.Region?.ToXmlNode()))),
@@ -130,8 +145,13 @@ public sealed partial class ReportAnalysisDefinition
             ShowLegend = !bool.TryParse((string?)xml.Attribute("ShowLegend"), out var legend) || legend,
             ShowTotals = !bool.TryParse((string?)xml.Attribute("ShowTotals"), out var totals) || totals,
             EachRecord = bool.TryParse((string?)xml.Attribute("EachRecord"), out var eachRecord) && eachRecord,
+            SummariesAsCategories = bool.TryParse((string?)xml.Attribute("SummariesAsCategories"), out var summariesAsCategories) && summariesAsCategories,
             SortCategories = bool.TryParse((string?)xml.Attribute("SortCategories"), out var sortCategories) && sortCategories,
             DescendingFields = xml.Element("DescendingFields")?.Elements("Field").Select(field => (string?)field.Attribute("Binding") ?? "").ToList() ?? [],
+            OriginalOrderFields = xml.Element("OriginalOrderFields")?.Elements("Field").Select(field => (string?)field.Attribute("Binding") ?? "").Where(field => field.Length > 0).ToList() ?? [],
+            GroupKinds = xml.Element("GroupKinds")?.Elements("Field").Select(field => ((string?)field.Attribute("Binding") ?? "", (int?)field.Attribute("Kind") ?? 0))
+                .Where(pair => pair.Item1.Length > 0).GroupBy(pair => pair.Item1, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Last().Item2, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase),
             Cells = xml.Element("Cells")?.Elements("Cell").Select(cell => new ReportMatrixCell
             {
                 Row = (int?)cell.Attribute("Row") ?? 0, Column = (int?)cell.Attribute("Column") ?? 0,
