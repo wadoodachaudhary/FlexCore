@@ -130,19 +130,331 @@ export function watchDropdownOpening(host, dotNetRef) {
     unwatchDropdownOpening(host);
     const prepare = () => {
         const panel = host.querySelector(":scope > .fx-dropdown-panel");
-        if (panel) prepareDropdown(host, panel, !!host.querySelector(".fx-dropdown-input"), dotNetRef);
+        if (panel) {
+            const input = host.querySelector(".fx-dropdown-input");
+            prepareDropdown(host, panel, !!input, dotNetRef);
+            // Editable combos keep focus in the input. Scroll the active option
+            // during the render batch instead of a second server/interop trip.
+            const activeId = input?.getAttribute("aria-activedescendant");
+            const option = activeId && document.getElementById(activeId);
+            if (option && panel.contains(option)) {
+                const top = option.offsetTop, bottom = top + option.offsetHeight;
+                if (top < panel.scrollTop) panel.scrollTop = top;
+                else if (bottom > panel.scrollTop + panel.clientHeight)
+                    panel.scrollTop = bottom - panel.clientHeight;
+            }
+        }
         else unwatchFocusLeave(host);
     };
+    const onMouseDown = event => {
+        const input = host.querySelector(".fx-dropdown-input");
+        if (!input || input.disabled || event.button !== 0 || !event.target.closest(".fx-dropdown-arrow")) return;
+        // A span otherwise focuses the surrounding dialog, losing all list keys.
+        event.preventDefault();
+        input.focus({ preventScroll: true });
+    };
+    const onKeyDown = event => {
+        if (!event.target.matches(".fx-dropdown-input")) return;
+        const open = !!host.querySelector(":scope > .fx-dropdown-panel");
+        if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "F4"
+            || (open && (event.key === "Home" || event.key === "End")))
+            event.preventDefault();
+    };
     const observer = new MutationObserver(prepare);
-    observer.observe(host, { childList: true });
-    openingWatchers.set(host, observer);
+    observer.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-activedescendant"] });
+    host.addEventListener("mousedown", onMouseDown);
+    host.addEventListener("keydown", onKeyDown);
+    openingWatchers.set(host, { observer, onMouseDown, onKeyDown });
     prepare();
 }
 
 export function unwatchDropdownOpening(host) {
-    openingWatchers.get(host)?.disconnect();
+    editableDropdowns.get(host)?.dispose();
+    const watcher = openingWatchers.get(host);
+    watcher?.observer.disconnect();
+    if (watcher) {
+        host.removeEventListener("mousedown", watcher.onMouseDown);
+        host.removeEventListener("keydown", watcher.onKeyDown);
+    }
     openingWatchers.delete(host);
     unwatchFocusLeave(host);
+}
+
+const editableDropdowns = new WeakMap();
+
+// Blazor renders the options once, including templates and stable values. The
+// browser owns presentation and caret state; only a complete commit crosses the
+// circuit. Never recreate/reparent Blazor-owned DOM or refocus on a late reply.
+export function enableClientEditableDropdown(host, dotNetRef) {
+    if (!host || editableDropdowns.has(host)) return;
+    unwatchDropdownOpening(host);
+    const readConfig = () => JSON.parse(host.getAttribute("data-fx-editable-dropdown") || "null");
+    let config = readConfig();
+    if (!config) return;
+    let input, panel, options = [], open = false, active = -1, keyboard = false;
+    let draft = host.querySelector(".fx-dropdown-input")?.value ?? config.text;
+    let value = config.value, dirty = draft !== config.text, composing = false;
+    let sequence = config.ack, editVersion = 0, command = -1, optionsVersion = -1;
+    let lastServerText = config.text, lastPointer = null, disposed = false;
+    const listeners = [];
+    const listen = (name, handler, capture = true) => {
+        host.addEventListener(name, handler, capture);
+        listeners.push([name, handler, capture]);
+    };
+    const setAttribute = (element, name, text) => {
+        if (!element) return;
+        if (text === null) { if (element.hasAttribute(name)) element.removeAttribute(name); }
+        else if (element.getAttribute(name) !== text) element.setAttribute(name, text);
+    };
+    const scrollActive = () => {
+        const option = options[active];
+        if (!open || !option || !panel) return;
+        const top = option.offsetTop, bottom = top + option.offsetHeight;
+        if (top < panel.scrollTop) panel.scrollTop = top;
+        else if (bottom > panel.scrollTop + panel.clientHeight) panel.scrollTop = bottom - panel.clientHeight;
+    };
+    const paint = () => {
+        setAttribute(host, "data-fx-local-open", open ? "" : null);
+        setAttribute(host, "data-fx-key-scope", open ? "" : null);
+        setAttribute(input, "aria-expanded", open ? "true" : "false");
+        setAttribute(input, "aria-activedescendant", open && options[active] ? options[active].id : null);
+        for (let i = 0; i < options.length; i++) {
+            setAttribute(options[i], "data-fx-local-highlight", open && i === active ? "" : null);
+            setAttribute(options[i], "aria-selected", options[i].dataset.fxOptionValue === value ? "true" : "false");
+        }
+        if (input && input.value !== draft) input.value = draft;
+        scrollActive();
+    };
+    const layout = () => {
+        if (!open || !panel) return;
+        // Measure without temporarily adding overflow to the containing dialog.
+        panel.style.top = "0";
+        panel.style.maxHeight = "0";
+        const geometry = measureDropdown(host, 180, 8, 0, panel);
+        host.classList.toggle("fx-dropdown-open-up", geometry.openUp);
+        panel.style.removeProperty("top");
+        panel.style.maxHeight = `${geometry.maxHeight}px`;
+        panel.style.removeProperty("opacity");
+        panel.style.removeProperty("pointer-events");
+        if (!panel.classList.contains("fx-dropdown-panel-fit"))
+            panel.style.width = panel.style.minWidth = panel.style.maxWidth = `${geometry.minWidth}px`;
+        paint();
+    };
+    const selectedIndex = () => options.findIndex(option => option.dataset.fxOptionValue === value);
+    const setOpen = next => {
+        open = !!next && config.enabled && !!panel;
+        keyboard = false;
+        if (open) {
+            active = Math.max(0, selectedIndex());
+            paint();
+            layout();
+            // Open with the current option as the first visible row, as VB6 does.
+            if (options[active]) panel.scrollTop = options[active].offsetTop;
+        } else paint();
+    };
+    const send = (kind, event, option = null, wasOpen = open, edited = dirty || (!!option && keyboard)) => {
+        const preserveDraft = dirty && wasOpen && (kind === "cancel" || kind === "close");
+        const picked = option ? { value: option.dataset.fxOptionValue, text: option.dataset.fxOptionText } : null;
+        if (picked) { draft = picked.text; value = picked.value; }
+        const version = ++editVersion, request = ++sequence;
+        const text = draft;
+        dirty = preserveDraft;
+        if (input) input.setCustomValidity("");
+        paint();
+        dotNetRef.invokeMethodAsync("OnClientDropdownActionAsync", {
+            sequence: request, optionsVersion: optionsVersion, kind, text,
+            value: picked?.value ?? null, wasOpen, edited, key: event?.key || "",
+            shiftKey: !!event?.shiftKey, ctrlKey: !!event?.ctrlKey,
+            altKey: !!event?.altKey, metaKey: !!event?.metaKey
+        }).then(result => {
+            if (disposed || !host.isConnected || sequence !== request || editVersion !== version) return;
+            if (!result.accepted) {
+                dirty = true;
+                input?.setCustomValidity("This choice is no longer available. Choose again.");
+                input?.reportValidity();
+                return;
+            }
+            if (preserveDraft) return;
+            draft = result.text;
+            value = result.value ?? readConfig()?.value ?? value;
+            paint();
+        }).catch(error => {
+            if (disposed || !host.isConnected || sequence !== request || editVersion !== version) return;
+            dirty = true;
+            input?.setCustomValidity("Unable to save this value. Try again when connected.");
+            input?.reportValidity();
+            console.error("Editable dropdown commit failed", error);
+        });
+    };
+    const currentChoice = () => {
+        if (keyboard) return options[active];
+        const selected = options[selectedIndex()];
+        return !dirty && selected?.dataset.fxOptionText === draft ? selected : null;
+    };
+    const finish = (event, navigation = false, pick = currentChoice()) => {
+        const wasOpen = open;
+        const edited = dirty || (!!pick && keyboard);
+        setOpen(false);
+        const kind = navigation ? "navigate" : pick ? "select" : event?.type === "blur" ? "blur" : "text";
+        send(kind, event, pick, wasOpen, edited);
+    };
+    const refresh = () => {
+        const next = readConfig();
+        if (!next) { binding.dispose(); return; }
+        const previous = options[active]?.dataset.fxOptionValue;
+        config = next;
+        input = host.querySelector(".fx-dropdown-input");
+        panel = host.querySelector(":scope > .fx-dropdown-panel");
+        options = panel ? Array.from(panel.querySelectorAll(".fx-dropdown-option")) : [];
+        if (config.optionsVersion !== optionsVersion) {
+            optionsVersion = config.optionsVersion;
+            active = options.findIndex(option => option.dataset.fxOptionValue === previous);
+            if (active < 0) { active = Math.max(0, selectedIndex()); keyboard = false; }
+        }
+        if (config.ack >= sequence && !dirty && !open && config.text !== lastServerText) {
+            draft = config.text;
+            value = config.value;
+        }
+        lastServerText = config.text;
+        if (!config.enabled) setOpen(false);
+        if (config.command !== command) {
+            command = config.command;
+            setOpen(config.open);
+            if (open && config.initialText) {
+                const prefix = config.initialText.toLocaleLowerCase();
+                active = options.findIndex(option => option.dataset.fxOptionText.toLocaleLowerCase().startsWith(prefix));
+                keyboard = active >= 0;
+            }
+        }
+        paint();
+        if (open) layout();
+    };
+    const move = (index, event) => {
+        if (!options.length) return;
+        active = Math.max(0, Math.min(options.length - 1, index));
+        keyboard = true;
+        if (open) paint();
+        else { send("select", event, options[active], false); keyboard = false; }   // a closed list has no live highlight
+    };
+    listen("mousedown", event => {
+        if (!config.enabled || event.button !== 0) return;
+        if (event.target.closest(".fx-dropdown-arrow")) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            input?.focus({ preventScroll: true });
+        } else if (open && panel?.contains(event.target)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }
+    });
+    listen("click", event => {
+        if (!config.enabled) return;
+        const target = event.target;
+        const option = target.closest(".fx-dropdown-option");
+        if (target.closest(".fx-dropdown-arrow")) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            input?.focus({ preventScroll: true });
+            if (open && (dirty || keyboard)) finish(event);
+            else if (open) { const wasOpen = open; setOpen(false); send("close", event, null, wasOpen); }
+            else setOpen(true);
+        } else if (open && option && panel.contains(option)) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            finish(event, false, option);
+        } else if (target.closest(".fx-dropdown-backdrop")) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            if (dirty || keyboard) finish(event);
+            else { setOpen(false); send("close", event, null, true); }
+        }
+    });
+    listen("mouseover", event => {
+        if (panel?.contains(event.target)) event.stopImmediatePropagation();
+    });
+    listen("mousemove", event => {
+        if (!open || (lastPointer?.x === event.clientX && lastPointer?.y === event.clientY)) return;
+        lastPointer = { x: event.clientX, y: event.clientY };
+        const index = options.indexOf(event.target.closest(".fx-dropdown-option"));
+        if (index >= 0) { active = index; paint(); }
+    });
+    listen("input", event => {
+        if (event.target !== input) return;
+        draft = input.value; dirty = true; keyboard = false; editVersion++;
+        input.setCustomValidity("");
+        if (open && draft) {
+            const prefix = draft.toLocaleLowerCase();
+            active = options.findIndex(option => option.dataset.fxOptionText.toLocaleLowerCase().startsWith(prefix)
+                || option.dataset.fxOptionValue.toLocaleLowerCase().startsWith(prefix));
+            paint();
+        }
+        if (!config.liveText) event.stopImmediatePropagation();
+    });
+    listen("compositionstart", () => { composing = true; });
+    listen("compositionend", () => { composing = false; });
+    listen("focus", event => { if (event.target === input) event.stopImmediatePropagation(); });
+    listen("blur", event => {
+        if (event.target !== input) return;
+        event.stopImmediatePropagation();
+        if (composing || host.contains(event.relatedTarget)) return;
+        // A host that stages every keystroke (stagesText) has already fed the typed text back as
+        // the control's value, so "dirty" can be false for a real edit — typed before this handler
+        // attached, or cleared. Always hand such a host the blur; the server commits it either way.
+        if (config.commitOnBlur && (dirty || (open && keyboard))) finish(event);
+        // No visible edit, but a host that stages keystrokes may hold text the server never saw as a
+        // change — hand it the blur as a plain commit of the draft, never as a pick: a closed list
+        // keeps its last arrow highlight, and turning a blur into a SELECT would re-fire the value.
+        else if (config.commitOnBlur && config.stagesText) finish(event, false, null);
+        else if (open) { setOpen(false); send("close", event, null, true); }
+        else if (!config.commitOnBlur) { draft = config.text; dirty = false; paint(); }
+    });
+    listen("keydown", event => {
+        if (event.target !== input || !config.enabled) return;
+        if (composing || event.isComposing || event.keyCode === 229) { event.stopImmediatePropagation(); return; }
+        const key = event.key;
+        const navigation = config.gridKeys || config.hosted;
+        if (key === "F4" || (event.altKey && key === "ArrowDown")) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            if (open) finish(event); else setOpen(true);
+        } else if (open && event.altKey && key === "ArrowUp") {
+            event.preventDefault(); event.stopImmediatePropagation(); finish(event);
+        } else if (key === "ArrowDown" || key === "ArrowUp") {
+            event.preventDefault(); event.stopImmediatePropagation();
+            if (!open && config.delegateArrows) finish(event, true);
+            else move((open ? active : selectedIndex()) + (key === "ArrowDown" ? 1 : -1), event);
+        } else if (open && ["Home", "End", "PageUp", "PageDown"].includes(key)) {
+            event.preventDefault(); event.stopImmediatePropagation();
+            const page = Math.max(1, Math.floor(panel.clientHeight / (options[active]?.offsetHeight || 18)));
+            move(key === "Home" ? 0 : key === "End" ? options.length - 1 : active + (key === "PageDown" ? page : -page), event);
+        } else if (key === "Enter" || key === "NumpadEnter") {
+            event.preventDefault(); event.stopImmediatePropagation();
+            finish(event, !open && navigation);
+        } else if (key === "Tab") {
+            event.stopImmediatePropagation();
+            const delegate = config.gridKeys || (config.hosted && !open) || (config.forwardKeys && !config.hosted);
+            if (config.gridKeys || (config.hosted && !open)) event.preventDefault();
+            if (dirty || open || delegate) finish(event, delegate);
+        } else if (key === "Escape") {
+            event.preventDefault(); event.stopImmediatePropagation();
+            const wasOpen = open;
+            setOpen(false); send("cancel", event, null, wasOpen);
+        } else if (config.gridKeys && !open && !event.shiftKey && !event.ctrlKey && !event.metaKey
+            && input.selectionStart === input.selectionEnd
+            && ((key === "ArrowLeft" && input.selectionStart === 0)
+                || (key === "ArrowRight" && input.selectionEnd === input.value.length))) {
+            event.preventDefault(); event.stopImmediatePropagation(); finish(event, true);
+        } else if (!event.altKey && !event.ctrlKey && !event.metaKey) event.stopImmediatePropagation();
+    });
+    const observer = new MutationObserver(refresh);
+    const binding = { dispose() {
+        disposed = true; observer.disconnect();
+        for (const args of listeners) host.removeEventListener(...args);
+        editableDropdowns.delete(host);
+        host.removeAttribute("data-fx-local-ready");
+        host.removeAttribute("data-fx-local-open");
+    } };
+    editableDropdowns.set(host, binding);
+    host.setAttribute("data-fx-local-ready", "");
+    observer.observe(host, { childList: true, subtree: true, attributes: true,
+        attributeFilter: ["data-fx-editable-dropdown", "value", "disabled"] });
+    refresh();
 }
 
 

@@ -64,7 +64,7 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: var(--fx-grid-row-selected-bg, #f0f0f0);
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
-    --fx-grid-cell-selected-row-bg: #f5f5f5;
+    --fx-grid-cell-selected-row-bg: #e8e8e8;
     --fx-grid-selected-editable-cell-bg: #fff;
     --fx-grid-selected-editable-cell-shade: transparent;
     --fx-grid-selected-row-active-cell-bg: #fff;
@@ -287,7 +287,7 @@
     --fx-grid-selected-row-color: inherit;
     --fx-grid-selected-cell-bg: #f0f0f0;
     --fx-grid-selected-cell-shade: rgba(0, 0, 0, 0.09);
-    --fx-grid-cell-selected-row-bg: #f5f5f5;
+    --fx-grid-cell-selected-row-bg: #e8e8e8;
     --fx-grid-selected-editable-cell-bg: #fff;
     --fx-grid-selected-editable-cell-shade: transparent;
     --fx-grid-selected-row-active-cell-bg: #fff;
@@ -2295,18 +2295,18 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     color: #aaa;
     cursor: default;
 }
-.fx-grid ::deep .fx-cell.fx-cell-selected,
-.fx-cell.fx-cell-selected {
+.fx-grid ::deep .fx-cell.fx-cell-selected:where(:not([data-fx-selection-muted])),
+.fx-cell.fx-cell-selected:where(:not([data-fx-selection-muted])) {
     background-color: transparent;
     box-shadow: none;
     outline: none;
 }
-.fx-grid ::deep .fx-cell.fx-cell-selected:not(.fx-cell-active),
-.fx-cell.fx-cell-selected:not(.fx-cell-active) {
-    background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5);
+.fx-grid ::deep .fx-cell.fx-cell-selected:not(.fx-cell-active):where(:not([data-fx-selection-muted])),
+.fx-cell.fx-cell-selected:not(.fx-cell-active):where(:not([data-fx-selection-muted])) {
+    background-color: var(--fx-grid-cell-selected-row-bg, #e8e8e8);
 }
-.fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-grid ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])),
+.fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg));
     outline: none;
     box-shadow:
@@ -2322,8 +2322,8 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-active-editable:not(.fx-batch-editing)::after {
     content: none;
 }
-.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-grid.fx-grid-single-cell-batch ::deep .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])),
+.fx-grid.fx-grid-single-cell-batch .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg));
     box-shadow:
         inset 0 0 0 1px var(--fx-grid-active-cell-border, #808080),
@@ -3940,6 +3940,7 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 6px;
     min-height: 24px;
     padding: 2px 6px 2px 8px;
     border-bottom: 1px solid #c8c8c8;
@@ -3947,7 +3948,18 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     font-weight: 600;
 }
 
+/* The title is the raw colkey. Like a caption bar it ends in an ellipsis
+   instead of pushing the close box out of the dialog. */
+.fx-grid-rename-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .fx-grid-rename-close {
+    flex: 0 0 auto;
     width: 18px;
     height: 18px;
     padding: 0;
@@ -3976,10 +3988,18 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     padding: 14px 12px 12px;
 }
 
+/* The prompt quotes the current caption, which can be one unbroken token.
+   Break it inside the label, as the InputBox prompt word-breaks, so it never
+   paints over OK/Cancel or past the dialog; a very tall prompt (narrow window,
+   large zoom) scrolls instead of pushing the entry box off screen. */
 .fx-grid-rename-prompt {
     grid-area: prompt;
     min-width: 0;
     align-self: start;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-height: 40vh;
+    overflow-y: auto;
 }
 
 .fx-grid-rename-input-host {
@@ -4085,9 +4105,9 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 /* Client-side drag-selection preview — painted by grid-control.js the instant the
    pointer crosses a row, before the server's authoritative render lands. Mirrors
    the .fx-selected look exactly so the handoff is invisible. */
-.fx-row.fx-drag-preview > td,
-.fx-row.fx-drag-preview .fx-cell,
-td.fx-drag-preview-cell {
+.fx-row.fx-drag-preview > td:where(:not([data-fx-selection-muted])),
+.fx-row.fx-drag-preview .fx-cell:where(:not([data-fx-selection-muted])),
+td.fx-drag-preview-cell:where(:not([data-fx-selection-muted])) {
     background: var(--fx-grid-selected-row-bg) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
 }
@@ -4105,19 +4125,25 @@ td.fx-drag-preview-cell {
     background: var(--fx-grid-selected-row-hover-bg, var(--fx-grid-selected-row-bg)) !important;
     color: var(--fx-grid-selected-row-color, inherit) !important;
 }
-.fx-row.fx-cell-row-selected > td,
-.fx-row.fx-cell-row-selected .fx-cell,
-.fx-grid ::deep tr.fx-row.fx-cell-row-selected > td,
-.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell {
-    background: var(--fx-grid-cell-selected-row-bg, #f5f5f5) !important;
+/* Suppression removes only selection styling, revealing the host's column
+   colours. :where keeps the committed and preview selector priorities equal. */
+.fx-grid ::deep td.fx-cell-pointer-preview:where(:not([data-fx-selection-muted])) {
+    background-color: var(--fx-grid-cell-selected-row-bg, #e8e8e8) !important;
 }
-.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected,
-.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected {
-    background-color: var(--fx-grid-cell-selected-row-bg, #f5f5f5) !important;
+.fx-grid[data-fx-selection-mode="cell"] ::deep tr.fx-row.fx-cell-row-preview:where(:not([data-fx-selection-muted])) > td:where(:not([data-fx-selection-muted])),
+.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) > td:where(:not([data-fx-selection-muted])),
+.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell:where(:not([data-fx-selection-muted])),
+.fx-grid[data-fx-selection-mode="cell"] ::deep tr.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) > td:where(:not([data-fx-selection-muted])),
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell:where(:not([data-fx-selection-muted])) {
+    background: var(--fx-grid-cell-selected-row-bg, #e8e8e8) !important;
+}
+.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell.fx-cell-selected:where(:not([data-fx-selection-muted])),
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell.fx-cell-selected:where(:not([data-fx-selection-muted])) {
+    background-color: var(--fx-grid-cell-selected-row-bg, #e8e8e8) !important;
     box-shadow: inset 0 0 0 1px var(--fx-grid-selected-cell-border, #808080) !important;
 }
-.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid ::deep tr.fx-row.fx-cell-row-selected .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])),
+.fx-grid ::deep tr.fx-row.fx-cell-row-selected:where(:not([data-fx-selection-muted])) .fx-cell.fx-cell-selected.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]):where(:not([data-fx-selection-muted])) {
     background-color: var(--fx-grid-selected-editable-cell-bg, var(--fx-grid-selected-cell-bg)) !important;
     box-shadow:
         inset 0 0 0 1px var(--fx-grid-selected-cell-border, #808080),
@@ -4140,8 +4166,8 @@ td.fx-drag-preview-cell {
     box-shadow: inset 0 0 0 1px var(--fx-grid-active-cell-border) !important;
     z-index: 2;
 }
-.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing),
-.fx-grid ::deep tr.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing) {
+.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]),
+.fx-grid ::deep tr.fx-row.fx-selected .fx-cell.fx-cell-active.fx-cell-pointer-selected.fx-cell-active-editable:not(.fx-batch-editing):not([data-fx-nav-cue-muted]) {
     background: var(--fx-grid-selected-row-active-cell-bg, color-mix(in srgb, var(--fx-grid-selected-row-bg, #b6c8dd) 64%, white)) !important;
     color: var(--fx-grid-selected-row-active-cell-color, var(--fx-grid-text-color, inherit)) !important;
     outline: none;

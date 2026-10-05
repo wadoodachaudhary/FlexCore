@@ -1,8 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
-  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><RootNamespace>CounterpartBrowser</RootNamespace></PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../../FlexCore.csproj" />
-    <Content Include="../../../FlexCore.Showcase/Components/Pages/Demos/CounterpartsDemo.razor" Link="CounterpartsDemo.razor" />
-    <Content Include="../../../FlexCore.Showcase/Components/Pages/Demos/CounterpartsDemo.razor.css" Link="CounterpartsDemo.razor.css" />
-  </ItemGroup>
-</Project>

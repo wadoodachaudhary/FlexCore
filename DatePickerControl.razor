@@ -69,9 +69,11 @@
                calendar is open can only mean focus went elsewhere — see
                OnInputBlur). ShowTime's embedded time box must take focus, so
                there only the buttons suppress it. *@
+            @* title="": a popup opened inside a grid cell must not show the row's tooltip (GridControl.RowTooltipSelector). *@
             <div @ref="_popupLayerElement"
                  @key="_dropdownOpenKey"
                  popover="manual"
+                 title=""
                  class="fx-datepicker-popup-layer">
                 <button type="button" class="fx-datepicker-backdrop" tabindex="-1" @onmousedown:preventDefault="true" @onclick="CloseDropdown"></button>
 

@@ -285,6 +285,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public double MinRowHeight { get; set; } = 16;
     [Parameter] public Func<TValue, int, double?>? RowHeightSelector { get; set; }
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
+    /// <summary>Optional row hover tooltip: the returned text becomes the data row's
+    /// <c>title</c>, so it shows wherever the pointer is on that row (a cell with its own
+    /// title, e.g. <see cref="ClipMode.EllipsisWithTooltip"/>, keeps its own). Null or empty
+    /// = no row tooltip. Arguments match <see cref="RowCssClassSelector"/>.</summary>
+    [Parameter] public Func<TValue, int, string?>? RowTooltipSelector { get; set; }
 
     // Feature flags
     /// <summary>
@@ -297,6 +302,27 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// (VB6 ValidateEdit re-check parity) and by Tab/Enter edit navigation.
     /// </summary>
     [Parameter] public Func<TValue, string, bool>? CellEditablePredicate { get; set; }
+
+    /// <summary>Optional cell-mode selection gate, shared by pointer, ranges and
+    /// keyboard navigation. Null preserves selection of read-only cells.</summary>
+    [Parameter] public Func<TValue, string, bool>? CellSelectablePredicate { get; set; }
+
+    // An item the caller could not resolve stays selectable, exactly as
+    // IsCellEditableForItem treats a null item: on a virtualized grid
+    // GetItemAtResolvedRowIndex returns default for every row outside the
+    // provider window, and pruning those would silently drop a selection the
+    // consumer's predicate never rejected.
+    private bool IsCellSelectable(TValue? item, GridColumn? col)
+        => SelectionSettingsRef?.Mode != SelectionMode.Cell || CellSelectablePredicate == null
+           || item == null || col == null || CellSelectablePredicate(item, col.Field);
+
+    // The row-selection checkbox cell is structural, not a data cell: it carries
+    // no column and no field for a predicate to judge, and the keyboard cursor
+    // must still be able to rest on it.
+    private bool IsCellSelectable(int rowIndex, int cellIndex)
+        => CellSelectablePredicate == null || SelectionSettingsRef?.Mode != SelectionMode.Cell
+           || (ShowCheckboxColumn && cellIndex == RowSelectionCellIndex)
+           || IsCellSelectable(GetItemAtResolvedRowIndex(rowIndex), VisibleColumns.ElementAtOrDefault(cellIndex));
 
     private bool IsCellEditableForItem(TValue? item, GridColumn? col)
         => col != null && !string.IsNullOrEmpty(col.Field)
@@ -945,6 +971,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return IsPagingActive
                 ? "overflow-x:auto; overflow-y:hidden; flex:1;"
                 : "overflow:auto; flex:1;";
+        }
+    }
+
+    private string? GetRowTooltip(TValue item, int rowIndex)
+    {
+        if (RowTooltipSelector == null)
+            return null;
+
+        try
+        {
+            var tooltip = RowTooltipSelector.Invoke(item, rowIndex);
+            return string.IsNullOrEmpty(tooltip) ? null : tooltip;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -4646,7 +4688,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         var columns = VisibleColumns.ToList();
-        var cellIndex = columns.FindIndex(IsKeyboardNavigationTargetColumn);
+        var selectedItem = GetItemAtResolvedRowIndex(_lastSelectedRowIndex.Value);
+        var cellIndex = columns.FindIndex(c => IsKeyboardNavigationTargetColumn(c) && IsCellSelectable(selectedItem, c));
         if (cellIndex < 0)
             return;
 
@@ -5996,6 +6039,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         var mouseDownColumn = VisibleColumns.ElementAtOrDefault(cellIndex);
 
+        if (!IsCellSelectable(item, mouseDownColumn))
+        {
+            await SynchronizeClientBufferedBatchEditorValueAsync();
+            await CommitBatchEdit();
+            return;
+        }
+
         if (args.Button == 0)
         {
             var previousActiveCell = _activeCell;
@@ -6275,6 +6325,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void HandleCellContextMenu(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        if (!IsCellSelectable(item, VisibleColumns.ElementAtOrDefault(cellIndex)))
+        {
+            // No cell cursor on a blocked cell, but the current RECORD still follows the
+            // right-click: unless the host sets EnableCellContextMenu the event bubbles on
+            // to OnContextMenu, and its menu would otherwise act on the previous row.
+            _lastSelectedItem = item;
+            _lastSelectedRowIndex = resolvedRowIndex;
+            return;
+        }
         SetActiveCell(resolvedRowIndex, cellIndex);
         _lastSelectedCell = (resolvedRowIndex, cellIndex);
         _lastSelectedItem = item;
@@ -6640,14 +6699,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var rawStart = Math.Min(anchorResolvedRowIndex, targetResolvedRowIndex);
             var rawEnd = Math.Max(anchorResolvedRowIndex, targetResolvedRowIndex);
             for (var i = rawStart; i <= rawEnd; i++)
-                yield return (i, cellIndex);
+                if (IsCellSelectable(i, cellIndex))
+                    yield return (i, cellIndex);
             yield break;
         }
 
         var start = Math.Min(anchorVisibleIndex, targetVisibleIndex);
         var end = Math.Max(anchorVisibleIndex, targetVisibleIndex);
         for (var i = start; i <= end && i < visible.Count; i++)
-            yield return (ResolveRowIndex(visible[i], i), cellIndex);
+        {
+            var rowIndex = ResolveRowIndex(visible[i], i);
+            if (IsCellSelectable(rowIndex, cellIndex))
+                yield return (rowIndex, cellIndex);
+        }
     }
 
     private bool ConsumeDragSelectClickSuppression()
@@ -7268,6 +7332,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleCellDblClick(TValue item, int rowIndex, GridColumn col, MouseEventArgs args)
     {
+        // Not gated on IsCellSelectable: a double-click is not a selection, and the
+        // consumer's OnRecordDoubleClick fires only on columns that do NOT open an
+        // editor — the very cells a selection predicate blocks. Editing stays gated
+        // by CellEditablePredicate inside the editor branch below.
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
 
         if (IsBatchDoubleClickEditCell(col))
@@ -7681,6 +7749,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
         var clickedCol = VisibleColumns.ElementAtOrDefault(cellIndex);
+        if (!IsCellSelectable(item, clickedCol))
+            return;
         ClearTypeSearchBuffer();
         _typeSearchHeaderField = null; // a cell click retargets type-search to that column
 
@@ -7912,6 +7982,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// notice. False when a consumer vetoed the selection.</summary>
     private async Task<bool> SelectCellFromPointerAsync(TValue item, int resolvedRowIndex, int cellIndex, bool isCtrl, bool isShift)
     {
+        if (!IsCellSelectable(item, VisibleColumns.ElementAtOrDefault(cellIndex)))
+            return false;
         if (EventsRef?.CellSelecting.HasDelegate == true)
         {
             var selectingArgs = new CellSelectingEventArgs<TValue>
@@ -7943,7 +8015,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 for (var i = start; i <= end; i++)
                 {
                     var cell = (resolvedRowIndex, i);
-                    if (!_selectedCells.Contains(cell))
+                    if (IsCellSelectable(resolvedRowIndex, i) && !_selectedCells.Contains(cell))
                         _selectedCells.Add(cell);
                 }
             }
@@ -7980,6 +8052,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void SelectSingleCellColumnMassEditCells(int rowIndex, int cellIndex, bool isCtrl, bool isShift)
     {
+        if (!IsCellSelectable(rowIndex, cellIndex))
+            return;
         var cell = (rowIndex, cellIndex);
 
         if (!isCtrl && !isShift)
@@ -8100,15 +8174,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     private bool TrySeedKeyboardActiveCell()
     {
-        var cellIndex = VisibleColumns.ToList().FindIndex(IsKeyboardNavigationTargetColumn);
-        if (cellIndex < 0)
-            return false;
-
         var rows = PagedData as IList<TValue> ?? PagedData.ToList();
         if (rows.Count == 0)
             return false;
 
         var rowIndex = _lastSelectedRowIndex ?? ResolveRowIndex(rows[0], 0);
+        var item = GetItemAtResolvedRowIndex(rowIndex);
+        var cellIndex = VisibleColumns.ToList().FindIndex(c =>
+            IsKeyboardNavigationTargetColumn(c) && IsCellSelectable(item, c));
+        if (cellIndex < 0)
+            return false;
         _activeCell = (rowIndex, cellIndex);
         _lastSelectedCell = _activeCell.Value;
         return true;
@@ -8116,6 +8191,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void SetActiveCell(int rowIndex, int cellIndex, bool preservePointerFill = false)
     {
+        if (!IsCellSelectable(rowIndex, cellIndex))
+            return;
         var col = VisibleColumns.ElementAtOrDefault(cellIndex);
         _activeCell = col != null || (ShowCheckboxColumn && cellIndex == RowSelectionCellIndex)
             ? (rowIndex, cellIndex) : null;
@@ -9466,6 +9543,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (col.MaxLength is > 0)
                 builder.AddAttribute(sequence + 16, "MaxLength", col.MaxLength.Value);
             builder.AddAttribute(sequence + 14, "AutoFocus", col.AllowCustomEditOptionValue);
+            builder.AddAttribute(sequence + 19, "TextChanged", EventCallback.Factory.Create<string>(this,
+                text => UpdateBatchEditValue(editItem, editField, text)));
+            // Staging every keystroke above makes the control's Value equal the typed text, so its
+            // blur publish is a no-op and ValueChanged never fires. Without this the typed custom
+            // value is staged but never written to the row.
+            builder.AddAttribute(sequence + 20, "EditableCommitted", EventCallback.Factory.Create(this, async () =>
+            {
+                if (await CommitBatchEdit(editItem, editField))
+                    await FocusGridHostAsync();
+            }));
             builder.AddComponentReferenceCapture(sequence + 15, component =>
                 _batchDropdownEditorRef = component as DropDownListControl<string, GridEditOption>);
             builder.CloseComponent();
@@ -9525,6 +9612,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             // re-renders cannot revert characters or reset the caret. The
             // opt-in client buffer also keeps ordinary keys off the circuit.
             builder.AddAttribute(sequence + 15, "Uncontrolled", true);
+            // Server-applied keys (the pre-attach relay) reach the DOM only through
+            // setBatchEditorValue, which yields to text the user typed meanwhile; a
+            // render-driven re-seed would be a second, unguarded write over it.
+            builder.AddAttribute(sequence + 19, "ReseedOnOutsideChange", false);
             builder.AddAttribute(sequence + 4, "style", GetEditorInputStyle(col));
             if (col.Type == ColumnType.Number && !col.ShowNumericSpinner)
                 builder.AddAttribute(sequence + 5, "inputmode", "decimal");
@@ -10531,13 +10622,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (rows.Count == 0 || columns.Count == 0)
             return false;
 
-        var targetCellIndex = end
-            ? FindLastKeyboardNavigationTargetColumnIndex(columns)
-            : columns.FindIndex(IsKeyboardNavigationTargetColumn);
-        if (targetCellIndex < 0)
+        if (!TryFindSelectableGridEdge(rows, columns, end, out var targetVisibleRowIndex, out var targetCellIndex))
             return false;
 
-        var targetVisibleRowIndex = end ? rows.Count - 1 : 0;
         var targetItem = rows[targetVisibleRowIndex];
         var targetResolvedRowIndex = ResolveRowIndex(targetItem, targetVisibleRowIndex);
         var targetColumn = columns[targetCellIndex];
@@ -10852,6 +10939,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return -1;
     }
 
+    private bool TryFindSelectableGridEdge(IReadOnlyList<TValue> rows, IReadOnlyList<GridColumn> columns,
+        bool end, out int rowIndex, out int cellIndex)
+    {
+        var step = end ? -1 : 1;
+        if (CellSelectablePredicate == null || SelectionSettingsRef?.Mode != SelectionMode.Cell)
+        {
+            // No gate: the edge is the first/last navigable COLUMN of the first/last row,
+            // the O(columns) lookup this replaced. Evaluated once per render.
+            cellIndex = end
+                ? FindLastKeyboardNavigationTargetColumnIndex(columns)
+                : columns.ToList().FindIndex(IsKeyboardNavigationTargetColumn);
+            rowIndex = end ? rows.Count - 1 : 0;
+            return cellIndex >= 0 && rows.Count > 0;
+        }
+        for (var r = end ? rows.Count - 1 : 0; r >= 0 && r < rows.Count; r += step)
+            for (var c = end ? columns.Count - 1 : 0; c >= 0 && c < columns.Count; c += step)
+                if (IsKeyboardNavigationTargetColumn(columns[c]) && IsCellSelectable(rows[r], columns[c]))
+                {
+                    rowIndex = r;
+                    cellIndex = c;
+                    return true;
+                }
+        rowIndex = cellIndex = -1;
+        return false;
+    }
+
     private bool TryFindAdjacentEditTarget(
         TValue currentItem,
         int currentRowIndex,
@@ -10996,7 +11109,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         bool allowSelectionOnly = false,
         bool requestRender = true)
     {
-        if (string.IsNullOrWhiteSpace(column.Field))
+        if (string.IsNullOrWhiteSpace(column.Field) || !IsCellSelectable(item, column))
             return false;
 
         // A keyboard move must save the current editor against its original
@@ -11340,6 +11453,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         if (_typeAheadBuffer.Length == 0) return false;
         if (string.IsNullOrWhiteSpace(col.Field)) return false;
+        if (!IsCellEditableForItem(item, col)) return false;
 
         var target = ResolveTypeAheadTargetField();
         if (string.IsNullOrWhiteSpace(target)
@@ -11640,7 +11754,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             var targetCol = ResolveTypeAheadTargetColumn();
             if (e.Key is { Length: 1 })
             {
-                if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol))
+                if (targetCol == null || !IsEditableTypeAheadKey(e, targetCol)
+                    || !_selectedItems.Any(item => IsCellEditableForItem(item, targetCol)))
                     return;
 
                 // Prevent multiple decimal points
@@ -11787,7 +11902,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         EnsureCurrentPageInRange();
 
         var matchDisplayIndex = rows.FindIndex(item =>
-            GetCellDisplayValue(item, targetColumn)
+            IsCellSelectable(item, targetColumn) && GetCellDisplayValue(item, targetColumn)
                 .StartsWith(_typeSearchBuffer, StringComparison.CurrentCultureIgnoreCase));
 
         if (matchDisplayIndex < 0)
@@ -12221,6 +12336,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var targetVisibleRowIndex = Math.Clamp(currentVisibleRowIndex + rowDelta, 0, rows.Count - 1);
         var targetCellIndex = Math.Clamp(currentCellIndex + cellDelta, 0, columns.Count - 1);
+        while (!IsCellSelectable(rows[targetVisibleRowIndex], columns[targetCellIndex]))
+        {
+            var nextRow = targetVisibleRowIndex + rowDelta;
+            var nextCell = targetCellIndex + cellDelta;
+            if (nextRow < 0 || nextRow >= rows.Count || nextCell < 0 || nextCell >= columns.Count)
+                return true;
+            targetVisibleRowIndex = nextRow;
+            targetCellIndex = nextCell;
+        }
         var targetItem = rows[targetVisibleRowIndex];
         var targetResolvedRowIndex = ResolveRowIndex(targetItem, targetVisibleRowIndex);
         var anchorVisibleRowIndex = rows.IndexOf(_keyboardRangeAnchorItem);
@@ -12249,7 +12373,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             {
                 var resolvedRow = ResolveRowIndex(rows[r], r);
                 for (var c = startCell; c <= endCell; c++)
-                    _selectedCells.Add((resolvedRow, c));
+                    if (IsCellSelectable(rows[r], columns[c]))
+                        _selectedCells.Add((resolvedRow, c));
             }
         }
         else
@@ -12435,14 +12560,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var candidateCol = VisibleColumns.ElementAtOrDefault(_activeCell.Value.CellIndex);
         if (candidateCol == null
-            || string.IsNullOrWhiteSpace(candidateCol.Field)
-            || !candidateCol.AllowEditing
-            || candidateCol.IsPrimaryKey
-            || candidateCol.Type == ColumnType.CheckBox)
+            || !CanReceiveTypeAhead(candidateCol))
             return false;
 
         var candidateItem = GetItemAtResolvedRowIndex(_activeCell.Value.RowIndex);
-        if (candidateItem == null)
+        if (candidateItem == null || !IsCellEditableForItem(candidateItem, candidateCol))
             return false;
 
         item = candidateItem;
@@ -12844,8 +12966,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _showInsertColumnSubmenu;
 #pragma warning restore CS0414
     private bool _showRenameColumn;
-    /// <summary>Maximum length accepted by the column rename dialog.</summary>
+    /// <summary>Longest description the header rename box accepts (0 = no page limit).
+    /// A registered <see cref="IGridColumnCaptionLimit"/> can lower it, never raise it.</summary>
     [Parameter] public int ColumnRenameMaxLength { get; set; } = 255;
+    // Limit in force for the open rename dialog; resolved before its first render.
+    private int _renameColumnMaxLength;
     private string _renameColumnDraft = "";
     private bool _showPrintOptionsDialog;
     private bool _printDefaultsInitialized;
@@ -12978,7 +13103,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private string RenameColumnPrompt =>
-        $"Change description from \"{HeaderColumnDisplay(RenameColumn)}\" to:";
+        $"Change description from \"{HeaderColumnDisplay(RenameColumn).Trim()}\" to:";
 
     /// <summary>Toggles grouping on the right-clicked column.</summary>
     private async Task HeaderMenuToggleGroup()
@@ -13373,15 +13498,44 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         StateHasChanged();
     }
 
-    private void HeaderMenuStartRename()
+    private async Task HeaderMenuStartRename()
     {
         var col = CurrentHeaderColumn;
         if (col == null) return;
+        _showHeaderContextMenu = false;
+        _showInsertColumnSubmenu = false;
+        // TextBoxControl reads MaxLength on its first render, so resolve it first.
+        var maxLength = await ResolveColumnRenameMaxLengthAsync(col.Field);
         _renameColumnField = col.Field;
         _renameColumnDraft = "";
-        _showHeaderContextMenu = false;
+        _renameColumnMaxLength = maxLength;
         _showRenameColumn = true;
-        _showInsertColumnSubmenu = false;
+    }
+
+    /// <summary>The page limit and the host's storage limit, whichever is smaller; 0 = none.</summary>
+    private async Task<int> ResolveColumnRenameMaxLengthAsync(string field)
+    {
+        var pageLimit = Math.Max(0, ColumnRenameMaxLength);
+        if (Services?.GetService(typeof(IGridColumnCaptionLimit)) is not IGridColumnCaptionLimit host)
+            return pageLimit;
+        int? hostLimit;
+        try
+        {
+            hostLimit = await host.GetMaxLengthAsync(field);
+        }
+        catch (Exception ex)
+        {
+            var logger = (Services.GetService(typeof(Microsoft.Extensions.Logging.ILoggerFactory))
+                    as Microsoft.Extensions.Logging.ILoggerFactory)?
+                .CreateLogger("Fx.ControlKit.Grid.GridControl");
+            if (logger != null)
+                Microsoft.Extensions.Logging.LoggerExtensions.LogWarning(logger, ex,
+                    "Column caption limit lookup failed for '{Field}'; the rename box keeps ColumnRenameMaxLength ({Limit}).",
+                    field, pageLimit);
+            return pageLimit;
+        }
+        if (hostLimit is not > 0) return pageLimit;
+        return pageLimit == 0 ? hostLimit.Value : Math.Min(pageLimit, hostLimit.Value);
     }
 
     private Task HeaderMenuRenameKeyDown(KeyboardEventArgs e)
@@ -13396,8 +13550,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var field = _renameColumnField;
         var draft = _renameColumnDraft?.Trim() ?? "";
-        if (ColumnRenameMaxLength > 0 && draft.Length > ColumnRenameMaxLength)
-            draft = draft[..ColumnRenameMaxLength];
+        var maxLength = _renameColumnMaxLength;
+        if (maxLength > 0 && draft.Length > maxLength)
+            draft = draft[..maxLength];
         HeaderMenuCancelRename();
         if (string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
@@ -13415,6 +13570,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _showRenameColumn = false;
         _renameColumnField = "";
         _renameColumnDraft = "";
+        _renameColumnMaxLength = 0;
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -14087,6 +14243,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                         var rowStyle = GetRowStyle(item, currentIdx, isSelected);
                         if (rowStyle.Length > 0)
                             builder.AddAttribute(73, "style", rowStyle);
+                        // Conditional attributes last, in rising sequence order, so a row
+                        // whose tooltip clears loses only its title in the diff.
+                        var rowTooltip = GetRowTooltip(item, resolvedRowIdx);
+                        if (rowTooltip != null)
+                            builder.AddAttribute(79, "title", rowTooltip);
 
                         // Checkbox column
                         if (ShowCheckboxColumn)
@@ -14176,6 +14337,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                             builder.AddAttribute(119, "data-label", HeaderColumnDisplay(capturedCol));
                             builder.AddAttribute(121, "aria-colindex", GetColumnAriaIndex(capturedColIdx));
                             builder.AddAttribute(122, "id", GetGridCellDomId(resolvedRowIdx, capturedColIdx));
+                            builder.AddAttribute(123, "data-fx-selectable", IsCellSelectable(item, capturedCol) ? null : "false");
                             // data-field exposes the bound field name as a CSS hook so
                             // consumers can colour / style specific columns from their
                             // own .razor.css (e.g. FPricingWorkSheet greens the
@@ -14462,6 +14624,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(19, "data-label", HeaderColumnDisplay(capturedCol));
             builder.AddAttribute(21, "aria-colindex", GetColumnAriaIndex(capturedColIdx));
             builder.AddAttribute(22, "id", GetGridCellDomId(resolvedRowIndex, capturedColIdx));
+            builder.AddAttribute(23, "data-fx-selectable", IsCellSelectable(item, capturedCol) ? null : "false");
             // data-field CSS hook — see same comment on the row-render path above.
             if (!string.IsNullOrEmpty(capturedCol.Field))
                 builder.AddAttribute(7, "data-field", capturedCol.Field);
@@ -15492,6 +15655,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var val = ResolveCellDisplayValue(item, col, rawVal);
         if (val == null) return "";
 
+        if (col.DisplayFormatter != null)
+            return col.DisplayFormatter(val);
+
         if (string.IsNullOrWhiteSpace(col.DisplayField)
             && TryGetEditOptionDisplayValue(col, item, val, out var optionText))
             return optionText;
@@ -15772,13 +15938,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (displayRowIndex < 0)
                 return "none";
 
-            var firstCell = columns.FindIndex(IsKeyboardNavigationTargetColumn);
-            if (firstCell < 0)
+            if (!TryFindSelectableGridEdge(rows, columns, false, out var firstRow, out var firstCell)
+                || !TryFindSelectableGridEdge(rows, columns, true, out var lastRow, out var lastCell))
                 return "both";
-            var lastCell = FindLastKeyboardNavigationTargetColumnIndex(columns);
 
-            var atFirst = displayRowIndex == 0 && active.CellIndex <= firstCell;
-            var atLast = displayRowIndex == rows.Count - 1 && active.CellIndex >= lastCell;
+            var atFirst = displayRowIndex == firstRow && active.CellIndex <= firstCell;
+            var atLast = displayRowIndex == lastRow && active.CellIndex >= lastCell;
             return atFirst && atLast ? "both" : atFirst ? "first" : atLast ? "last" : "none";
         }
     }
@@ -16019,6 +16184,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     private async Task NotifySelectionChangedAsync(GridSelectionChangeSource source = GridSelectionChangeSource.Unknown)
     {
+        if (CellSelectablePredicate != null && SelectionSettingsRef?.Mode == SelectionMode.Cell)
+            _selectedCells.RemoveWhere(c => !IsCellSelectable(c.RowIndex, c.CellIndex));
         if (_selectedItems.Count <= 1)
             ResetRowSelectionTypeAheadTarget();
 
@@ -16047,6 +16214,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     public async Task SelectCellAsync((int RowIndex, int CellIndex) cell, bool isCtrlPressed = false)
     {
+        if (!IsCellSelectable(cell.RowIndex, cell.CellIndex))
+            return;
         if (!isCtrlPressed)
         {
             _selectedCells.Clear();
@@ -16070,7 +16239,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public async Task SelectCellsAsync(IEnumerable<(int RowIndex, int CellIndex)> cells)
     {
         _selectedCells.Clear();
-        _selectedCells.UnionWith(cells);
+        _selectedCells.UnionWith(cells.Where(c => IsCellSelectable(c.RowIndex, c.CellIndex)));
         await InvokeAsync(StateHasChanged);
         await NotifyGridStateChangedAsync(GridStateChangeKind.Selection);
     }
@@ -16756,7 +16925,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var visibleColumns = VisibleColumns.ToList();
         var cellIndex = visibleColumns.FindIndex(column =>
             string.Equals(column.Field, field, StringComparison.OrdinalIgnoreCase));
-        if (cellIndex < 0)
+        if (cellIndex < 0 || !IsCellSelectable(item, visibleColumns[cellIndex]))
             return;
 
         // With selection off the grid keeps only its cursor: the active cell

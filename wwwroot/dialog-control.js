@@ -243,6 +243,25 @@ const DIALOG_ENTER_OWNERS =
 // closed combo presses the default button, so the key is taken before the list can open.
 const DIALOG_CLOSED_LIST_TRIGGER = "button[aria-haspopup='listbox']:not([aria-expanded='true'])";
 
+// The dialog's rendered box for a resize: [width, height, minWidth, minHeight, maxWidth, maxHeight,
+// alignX, alignY, offsetX, offsetY]. Limits are the CSS ones in px (0 = none); align is how the overlay
+// places the box on that axis (0 start, 0.5 centre, 1 end); offset is where the box is painted
+// relative to that placement, whatever rule put it there.
+export function measureDialogBox(dialog) {
+    if (!dialog) return null;
+    const rect = dialog.getBoundingClientRect();
+    const style = getComputedStyle(dialog);
+    const overlay = dialog.parentElement ? getComputedStyle(dialog.parentElement) : null;
+    const px = value => /px$/.test(value) ? parseFloat(value) : 0;
+    const align = value => /center/.test(value) ? 0.5 : /end|right|bottom/.test(value) ? 1 : 0;
+    const self = style.alignSelf && !/auto|normal/.test(style.alignSelf) ? style.alignSelf : overlay?.alignItems;
+    const shift = style.transform && style.transform !== "none" ? new DOMMatrixReadOnly(style.transform) : null;
+    const relative = style.position === "relative";
+    return [rect.width, rect.height, px(style.minWidth), px(style.minHeight), px(style.maxWidth), px(style.maxHeight),
+        align(overlay?.justifyContent || ""), align(self || ""),
+        (shift ? shift.m41 : 0) + (relative ? px(style.left) : 0), (shift ? shift.m42 : 0) + (relative ? px(style.top) : 0)];
+}
+
 // "control": the default button fires after the focused control handles Enter.
 // "trigger": the default button takes the key from a closed list trigger.
 // null: Enter belongs to the focused control, a nested dialog, or nobody.

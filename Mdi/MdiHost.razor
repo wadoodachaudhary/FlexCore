@@ -22,6 +22,15 @@
    SetPageTitle` and calls SetPageTitle("…") will update ITS own tab's
    title — the closure captures the right MdiWindow instance per pane.
 
+   Per-window CloseThisWindow: the same wrapper cascades a
+   Name="CloseThisWindow" Func<Task>. A child that does
+   `[CascadingParameter(Name="CloseThisWindow")] Func<Task>? CloseThisWindow`
+   and invokes it asks the consumer to close ITS own tab, through the same
+   OnCloseRequested path as the tab's × button. A page that closes itself
+   after a long write therefore closes its own window, not whichever tab
+   the user moved to in the meantime. The consumer still runs its close
+   guards, and the pane may already be gone when the task completes.
+
    Why the visible-pane CSS toggle instead of @if:
      @if would unmount inactive panes → kills grid state, edits, drafts.
      display:none keeps the Blazor component instance alive; Blazor
@@ -133,11 +142,15 @@
             <CascadingValue Name="SetPageTitle"
                             Value="@(BuildTitleSetter(win))"
                             IsFixed="true">
+            <CascadingValue Name="CloseThisWindow"
+                            Value="@(BuildCloseRequester(win))"
+                            IsFixed="true">
                 <div class="fx-mdi-pane" style="@(paneVisible ? "" : "display:none;")">
                     <MdiPane @key="win.Id" Window="win"
                              OnError="@(w => OnWindowError.InvokeAsync(w))"
                              OnCloseRequested="@(w => OnCloseRequested.InvokeAsync(w.Id))" />
                 </div>
+            </CascadingValue>
             </CascadingValue>
         }
         @* EmptyState renders whenever no window is active — either there are
@@ -291,5 +304,16 @@
         if (string.Equals(w.Title, newTitle, StringComparison.Ordinal)) return;
         w.Title = newTitle;
         InvokeAsync(StateHasChanged);
+    };
+
+    // Each pane also gets its OWN close requester, bound to that window's Id, so a
+    // page closes its own tab whichever tab is in front when it finishes. It raises
+    // OnCloseRequested exactly as the tab's × button does, so the consumer's close
+    // guards still run. The delegate reads OnCloseRequested when invoked, so the
+    // fixed cascade stays valid across re-renders.
+    private Func<Task> BuildCloseRequester(MdiWindow w) => () =>
+    {
+        _tabSystemMenuVisible = false;
+        return OnCloseRequested.HasDelegate ? OnCloseRequested.InvokeAsync(w.Id) : Task.CompletedTask;
     };
 }

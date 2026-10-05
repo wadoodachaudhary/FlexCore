@@ -15,6 +15,7 @@
        inputmode="@InputMode"
        placeholder="@Placeholder"
        tabindex="@TabIndex"
+       aria-invalid="@(_rejectedText != null ? "true" : null)"
        @oninput="OnInputBuffer"
        @onchange="OnNativeChange"
        @onkeydown="OnKeyDown" />
@@ -50,6 +51,7 @@
     {
         get
         {
+            if (_rejectedText != null) return _rejectedText;
             if (Value == null) return "";
             if (Value is IFormattable formattable && !string.IsNullOrEmpty(Format))
             {
@@ -82,9 +84,11 @@
     private ElementReference _inputRef;
     private bool _refocusAfterEpochBump;
     private bool _pendingRefocus;
+    private string? _rejectedText;
     private void OnInputBuffer(ChangeEventArgs e)
     {
         _pendingText = e.Value?.ToString();
+        if (_rejectedText != null) _rejectedText = _pendingText;
         _suppressDuplicateChange = false;
         _refocusAfterEpochBump = false;
     }
@@ -118,25 +122,36 @@
 
     private async Task CommitAsync(string rawText)
     {
-        await OnValueChanged(new ChangeEventArgs { Value = rawText });
-
-        // VB6 apply-and-clear (txtDollarChange.Text = "" after Validate): the
-        // CONTROL clears itself. Waiting on the parent is unsound — a host
-        // handler that runs synchronously renders the parent only after its
-        // field is already back to null, so the parameter never transitions
-        // and Blazor skips this child. Clearing locally (fresh @key element)
-        // is deterministic regardless of how the host handler is written.
-        if (ClearOnCommit)
+        try
         {
-            Value = default;
-            if (ValueChanged.HasDelegate)
-                await ValueChanged.InvokeAsync(default);   // keep the bind in sync
-            _inputEpoch++;                                  // recreate → shows the cleared value
-            _pendingRefocus = _refocusAfterEpochBump;       // Enter keeps the caret (VB6)
+            if (!await OnValueChanged(new ChangeEventArgs { Value = rawText }))
+            {
+                // Preserve the exact draft, including numbers beyond TValue's range.
+                _rejectedText = rawText;
+                _pendingText = rawText;
+                _pendingRefocus = true;
+                return;
+            }
+            _rejectedText = null;
+
+            // Clear locally after an accepted commit: parent renders can coalesce
+            // a null -> value -> null transition and leave the DOM text unchanged.
+            if (ClearOnCommit)
+            {
+                Value = default;
+                if (ValueChanged.HasDelegate)
+                    await ValueChanged.InvokeAsync(default);
+                _inputEpoch++;
+                _pendingRefocus = _refocusAfterEpochBump;
+            }
         }
-        _refocusAfterEpochBump = false;
-        StateHasChanged();
+        finally
+        {
+            _refocusAfterEpochBump = false;
+            StateHasChanged();
+        }
     }
+
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -148,7 +163,7 @@
 
     }
 
-    private async Task OnValueChanged(ChangeEventArgs e)
+    private async Task<bool> OnValueChanged(ChangeEventArgs e)
     {
         var strVal = NormalizeInput(e.Value?.ToString() ?? "");
         TValue? newValue = default;
@@ -196,14 +211,19 @@
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
 
+        var args = new NumericChangeEventArgs<TValue> { Value = newValue };
         if (ValueChange.HasDelegate)
-            await ValueChange.InvokeAsync(new NumericChangeEventArgs<TValue> { Value = newValue });
+            await ValueChange.InvokeAsync(args);
+        return !args.Cancel;
     }
 
-	    public class NumericChangeEventArgs<T>
-	    {
-	        public T? Value { get; set; }
-	    }
+    public class NumericChangeEventArgs<T>
+    {
+        public T? Value { get; set; }
+
+        /// <summary>Reject the commit, retaining the typed text and input focus instead of clearing.</summary>
+        public bool Cancel { get; set; }
+    }
 
     private static string NormalizeInput(string value) =>
         value.Trim()
@@ -223,6 +243,12 @@
 
     private static int ParseIntBoundary(string value)
     {
+        // Scientific notation within int range ("1e2") is that number, rounded like VB6 CInt.
+        if (value.IndexOfAny(['e', 'E']) >= 0
+            && double.TryParse(value, System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowThousands,
+                System.Globalization.CultureInfo.InvariantCulture, out var number)
+            && number >= int.MinValue && number <= int.MaxValue)
+            return (int)Math.Round(number, MidpointRounding.ToEven);
         if (LooksNumeric(value, out var negative))
             return negative ? int.MinValue : int.MaxValue;
         return 0;
@@ -244,6 +270,13 @@
 
     private static bool LooksNumeric(string value, out bool negative)
     {
+        // Number inputs accept scientific notation, including exponents beyond decimal range.
+        if (double.TryParse(value, System.Globalization.NumberStyles.Float | System.Globalization.NumberStyles.AllowThousands,
+            System.Globalization.CultureInfo.InvariantCulture, out var number) && !double.IsNaN(number))
+        {
+            negative = number < 0;
+            return true;
+        }
         negative = false;
         var s = value.Trim();
         if (s.Length == 0)

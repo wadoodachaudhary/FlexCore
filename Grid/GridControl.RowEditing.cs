@@ -71,6 +71,10 @@ public partial class GridControl<TValue>
                 ["inputmode"] = column.Type == ColumnType.Number ? "decimal" : "text"
             });
             builder.AddAttribute(30, "OnKeyDown", EventCallback.Factory.Create<KeyboardEventArgs>(this, HandleRowEditorKeyDown));
+            // Per-keystroke SetRowEditProperty echoes a NORMALISED value back ("1." -> "1", "-" -> the
+            // old value); a render-driven re-seed would erase the draft under the caret. The editor is
+            // @key'ed per (item, field), so a new edit session already re-seeds it.
+            builder.AddAttribute(31, "ReseedOnOutsideChange", false);
             builder.CloseComponent();
         }
     };

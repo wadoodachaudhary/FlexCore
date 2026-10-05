@@ -1,7 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
-<PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><RootNamespace>FlexKitTester</RootNamespace></PropertyGroup>
-<ItemGroup><ProjectReference Include="../../FlexCore.csproj" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/**/*.razor" Link="Components/Pages/ControlBenches/%(Filename)%(Extension)" />
-<Content Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/**/*.razor.css" Link="Components/Pages/ControlBenches/%(Filename)%(Extension)" />
-<Compile Include="../../../HomeFront/FlexKitTester/Components/Pages/ControlBenches/ControlBenchCatalog.cs" Link="Components/Pages/ControlBenches/ControlBenchCatalog.cs" />
-</ItemGroup></Project>

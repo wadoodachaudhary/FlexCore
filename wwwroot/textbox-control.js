@@ -167,7 +167,18 @@ export function configurePasswordReveal(input, canvas, durationMs) {
     listen(document, "visibilitychange", hide);
     listen(window, "blur", hide);
     listen(window, "resize", hide);
-    const observer = new MutationObserver(hide);
+    const observer = new MutationObserver(records => {
+        if (records.some(record => ["type", "disabled", "readonly"].includes(record.attributeName))) {
+            hide();
+        } else if (active) {
+            // A binding echo or style render must not cancel a trusted keystroke's
+            // preview. Revalidate/reposition it without extending its original timer.
+            if (input.value.length !== active.length - (active.end - active.start) + active.character.length)
+                hide();
+            else
+                scheduleDraw();
+        }
+    });
     observer.observe(input, { attributes: true, attributeFilter: ["type", "value", "disabled", "readonly", "style", "class"] });
     hide();
     passwordRevealBindings.set(input, () => {
