@@ -1,0 +1,126 @@
+@namespace Fx.ControlKit.Artifacts.Crystal
+@inject CrystalReportDataExecutor Data
+@inject CrystalXmlReportLoader Loader
+
+<section class="crystal-viewer">
+    <dl>
+        <dt>Report</dt><dd>@Model.File.Title</dd>
+        <dt>XML</dt><dd>@Model.File.RelativePath</dd>
+        <dt>Status</dt><dd>@Model.File.Status</dd>
+    </dl>
+    @if (!string.IsNullOrWhiteSpace(Model.File.Note))
+    {
+        <p class="workflow-note">@Model.File.Note</p>
+    }
+    <p class="workflow-note">Charts are drawn by ChartControl and cross-tabs by PivotControl, the same FlexCore controls the positioned page uses.</p>
+    <div class="artifact-toolbar">
+        <label>Data source
+            <DropDownListControl TValue="CrystalReportDataMode" TItem="ModeChoice" DataSource="@_modes" Value="@Data.Mode" ValueChanged="ChangeMode"
+                                 TextFieldName="Label" ValueFieldName="Mode" Width="260px" AriaLabel="Report data source" />
+        </label>
+        <ButtonControl Disabled="@(_busy || !CanRun)" OnClick="Run">Run in viewer</ButtonControl>
+    </div>
+    @if (Data.Mode == CrystalReportDataMode.LayoutOnly)
+    {
+        <p class="workflow-finding" role="status">Layout only: no records. The page still paginates.</p>
+    }
+    @if (Data.Mode == CrystalReportDataMode.SyntheticSqlite)
+    {
+        <p class="workflow-finding" role="status">Synthetic SQLite records. Original filters and formulas stay active. While-printing formulas that the runtime cannot evaluate are field diagnostics, not a failed conversion.</p>
+    }
+    <p role="status" class="@(_error ? "workflow-error" : "workflow-note")">@_status</p>
+    <div class="crystal-frame">
+        <ReportWriterControl @key="_writerKey" @ref="_writer" UsePositionedLayout="true" ShowChrome="true" PromptOptionalParameters="false" />
+    </div>
+</section>
+
+@code {
+    private sealed record ModeChoice(CrystalReportDataMode Mode, string Label);
+    private readonly List<ModeChoice> _modes =
+    [
+        new(CrystalReportDataMode.SyntheticSqlite, "Synthetic SQLite samples"),
+        new(CrystalReportDataMode.LayoutOnly, "Layout only (no records)")
+    ];
+
+    [Parameter, EditorRequired] public TranslatedFileView Model { get; set; } = default!;
+    private ReportWriterControl? _writer;
+    private int _writerKey;
+    private bool _busy, _error, _pending;
+    private string _status = "Ready.";
+    private string? _loadedId;
+
+    private bool CanRun => Data.Mode == CrystalReportDataMode.LayoutOnly
+        || Data.Mode == CrystalReportDataMode.SyntheticSqlite && Model.File.DataPath is not null && Model.File.Fingerprint is not null;
+
+    protected override void OnParametersSet()
+    {
+        if (_loadedId == Model.File.Id) return;
+        _loadedId = Model.File.Id;
+        _writerKey++;
+        _writer = null;
+        _error = false;
+        _pending = false;
+        if (Model.File.Status == "fail" || !Model.File.RelativePath.EndsWith(CrystalXmlViewerDescriptor.XmlExtension, StringComparison.OrdinalIgnoreCase))
+        {
+            _status = Model.File.Note ?? "This report did not convert.";
+            _error = true;
+            Data.Mode = CrystalReportDataMode.None;
+            return;
+        }
+        if (Model.File.DataPath is not null && Model.File.Fingerprint is not null)
+        {
+            Data.UseSamples(Model.File.DataPath);
+            Data.SampleReportHash = Model.File.Fingerprint;
+            Data.Mode = CrystalReportDataMode.SyntheticSqlite;
+            _status = "Synthetic samples are ready. Running the converted XML.";
+            _pending = true;
+        }
+        else
+        {
+            Data.Mode = CrystalReportDataMode.LayoutOnly;
+            _status = "No sample pack for this report. Running layout only.";
+            _pending = true;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_pending && _writer is not null && !_busy)
+        {
+            _pending = false;
+            await Run();
+        }
+    }
+
+    private void ChangeMode(CrystalReportDataMode mode)
+    {
+        Data.Mode = mode;
+        _writerKey++;
+        _writer = null;
+        _pending = CanRun;
+        _error = false;
+        _status = "Data source changed. The viewer will run the converted XML.";
+    }
+
+    private async Task Run()
+    {
+        if (_writer is null || !CanRun || _busy) return;
+        _busy = true;
+        try
+        {
+            var xml = Model.Bundle.FullPath(Model.File);
+            IReadOnlyDictionary<string, string>? seed = null;
+            if (Data.Mode == CrystalReportDataMode.SyntheticSqlite)
+                seed = new CrystalSampleStore(Model.File.DataPath!).Parameters(Model.File.Fingerprint!, Loader.LoadPositioned(xml));
+            await _writer.ShowReportAsync(xml, seed);
+            _error = !string.IsNullOrEmpty(_writer.ErrorMessage);
+            _status = _error ? _writer.ErrorMessage! : _writer.StatusMessage;
+        }
+        catch (Exception ex)
+        {
+            _error = true;
+            _status = ex.Message;
+        }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,5 @@
+.artifact-browser { display: flex; flex-direction: column; gap: 12px; }
+.artifact-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+.artifact-toolbar { display: flex; align-items: center; gap: 16px; }
+.artifact-browser h2 { margin: 0; font-size: 22px; }
+.artifact-browser h3 { margin: 8px 0 0; }

@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><NoWarn>BL0005</NoWarn>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="Fixtures\*.rpt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Fixtures\**\*.*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
