@@ -155,7 +155,7 @@ internal static class ArtifactChecks
             && described.Any(file => file.Format == ExstreamPackViewerDescriptor.ResourceFormat),
             "a pack lists the manifest, documents, scripts, and resources");
         check(ExstreamPackReader.GapMessages(pack.Path).Count == 0, "a pack with a document has nothing to warn about");
-        var loaded = ExstreamPackReader.LoadDocument(pack.Path, described.Single(file => file.Title == "Letter").RelativePath);
+        var loaded = ExstreamPackReader.LoadDocument(pack.Path, described.Single(file => file.Format == ExstreamPackViewerDescriptor.DocumentFormat).RelativePath);
         check(loaded is not null && loaded.Pages.Count == 1 && loaded.Pages[0].Outline[0].Type == "Textbox"
             && loaded.Pages[0].Outline[0].Children[0].Type == "Flow"
             && loaded.Stories.Values.Any(story => story.Text.Contains("thank you", StringComparison.OrdinalIgnoreCase))
@@ -235,9 +235,14 @@ internal static class ArtifactChecks
             var crystalView = await renderer.RenderComponentAsync<CrystalXmlViewer>(Parameters(
                 ("Model", new TranslatedFileView { Bundle = browserBundle, File = chartFile! })));
             var crystalHtml = crystalView.ToHtmlString();
-            check(crystalHtml.Contains("fx-chart", StringComparison.Ordinal) && crystalHtml.Contains("<svg", StringComparison.Ordinal)
+            // Static HTML rendering does not populate component refs or run OnAfterRenderAsync, so the
+            // automatic ShowReportAsync pass is covered by the pagination checks above. This render checks
+            // that the viewer mounts ReportWriterControl and selects the synthetic sample source.
+            check(crystalHtml.Contains("fx-rpt-viewer-container", StringComparison.Ordinal)
+                && crystalHtml.Contains("Synthetic samples are ready", StringComparison.Ordinal)
+                && crystalHtml.Contains("ChartControl", StringComparison.Ordinal)
                 && !crystalHtml.Contains("workflow-error"),
-                "the Crystal viewer runs the converted chart through ReportWriterControl");
+                "the Crystal viewer hosts ReportWriterControl on the synthetic sample source");
         });
     }
 
