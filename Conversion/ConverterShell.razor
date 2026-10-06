@@ -1,0 +1,223 @@
+@namespace Fx.ControlKit.Conversion
+@inherits FlexControlBase
+@implements IAsyncDisposable
+
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@ResolvedStyle"
+     id="@Id"
+     title="@Title"
+     data-mode="@EffectiveMode"
+     data-expanded="@ExpandedPane"
+     aria-busy='@(IsBusy ? "true" : "false")'
+     aria-label="@ShellLabel">
+    <div class="fx-converter-kinds">
+        <div class="fx-converter-kind">
+            @if (SourceKindAdornment is not null)
+            {
+                <span class="fx-converter-kind-adornment">@SourceKindAdornment(SelectedKind(SourceKinds, SourceKindId))</span>
+            }
+            <DropDownListControl TValue="string" TItem="ConverterKind"
+                                 DataSource="@SourceKindList"
+                                 Value="@SourceKindId"
+                                 ValueChanged="OnSourceKindChanged"
+                                 TextFieldName="Label"
+                                 ValueFieldName="Id"
+                                 Placeholder="@SourceKindPlaceholder"
+                                 AriaLabel="@SourceKindAriaLabel"
+                                 Width="220px"
+                                 Enabled="@CanEdit" />
+        </div>
+        <div class="fx-converter-kind">
+            @if (TargetKindAdornment is not null)
+            {
+                <span class="fx-converter-kind-adornment">@TargetKindAdornment(SelectedKind(TargetKinds, TargetKindId))</span>
+            }
+            <DropDownListControl TValue="string" TItem="ConverterKind"
+                                 DataSource="@TargetKindList"
+                                 Value="@TargetKindId"
+                                 ValueChanged="OnTargetKindChanged"
+                                 TextFieldName="Label"
+                                 ValueFieldName="Id"
+                                 Placeholder="@TargetKindPlaceholder"
+                                 AriaLabel="@TargetKindAriaLabel"
+                                 Width="220px"
+                                 Enabled="@CanEdit" />
+        </div>
+    </div>
+
+    @if (ShowModeToggle)
+    {
+        <div class="fx-converter-mode">
+            <SegmentedControl Items="@ModeItems"
+                              Value="@EffectiveMode.ToString()"
+                              ValueChanged="OnModeSelected"
+                              AriaLabel="Converter layout"
+                              Enabled="@CanEdit" />
+        </div>
+    }
+
+    <div class="@PanesClass">
+        @if (ExpandedPane != ConverterPane.Output)
+        {
+            <div class="fx-converter-column">
+                <section class="fx-converter-pane" aria-label="Source">
+                    @if (EffectiveMode == ConverterShellMode.FileBrowser)
+                    {
+                        <div class="fx-converter-browser">
+                            <div class="fx-converter-filelist">
+                                <div class="fx-converter-filelist-title">Source files</div>
+                                @if (SourceFileList.Count == 0)
+                                {
+                                    <p class="fx-converter-empty">No source files</p>
+                                }
+                                else
+                                {
+                                    <ul class="fx-converter-files" role="listbox" aria-label="Source files">
+                                        @foreach (var file in SourceFileList)
+                                        {
+                                            var fileId = file.Id;
+                                            <li @key="fileId">
+                                                <button type="button" role="option" aria-selected='@(fileId == SelectedSource()?.Id ? "true" : "false")'
+                                                        title="@file.RelativePath" disabled="@(!CanEdit)"
+                                                        @onclick="() => SelectSourceFileAsync(fileId)">@file.DisplayName</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <ConverterEditor Value="@SourceEditorText"
+                                             ValueChanged="SetSourceTextAsync"
+                                             Placeholder="@SourcePlaceholder"
+                                             AriaLabel="Source"
+                                             Enabled="@CanEdit"
+                                             Expanded="@(ExpandedPane == ConverterPane.Source)"
+                                             ExpandText="@SourceExpandText"
+                                             OnExpand="ToggleSourceExpandAsync"
+                                             EditorHeight="@EditorHeight" />
+                        </div>
+                    }
+                    else
+                    {
+                        <ConverterEditor Value="@SourceEditorText"
+                                         ValueChanged="SetSourceTextAsync"
+                                         Placeholder="@SourcePlaceholder"
+                                         AriaLabel="Source"
+                                         Enabled="@CanEdit"
+                                         Expanded="@(ExpandedPane == ConverterPane.Source)"
+                                         ExpandText="@SourceExpandText"
+                                         OnExpand="ToggleSourceExpandAsync"
+                                         EditorHeight="@EditorHeight" />
+                    }
+                    <div class="fx-converter-pane-footer">
+                        <span class="fx-converter-filename">@SourceCaption</span>
+                        <FilePickerControl Accept="@AcceptList"
+                                           Multiple="@(EffectiveMode == ConverterShellMode.FileBrowser)"
+                                           Enabled="@CanEdit"
+                                           Label="Upload"
+                                           OnChange="OnUploadAsync">
+                            <span class="fx-converter-upload">Have a file? <span class="fx-converter-upload-link">Upload</span></span>
+                        </FilePickerControl>
+                    </div>
+                </section>
+                @if (ShowInstructions)
+                {
+                    <label class="fx-converter-instructions">
+                        <span>@InstructionsLabel</span>
+                        <textarea value="@Instructions"
+                                  rows="3"
+                                  placeholder="@InstructionsPlaceholder"
+                                  aria-label="@InstructionsLabel"
+                                  disabled="@(!CanEdit)"
+                                  @oninput="OnInstructionsInput"></textarea>
+                    </label>
+                }
+            </div>
+        }
+        @if (ExpandedPane != ConverterPane.Source)
+        {
+            <div class="fx-converter-column">
+                <section class="fx-converter-pane" aria-label="Converted output">
+                    @if (EffectiveMode == ConverterShellMode.FileBrowser)
+                    {
+                        <div class="fx-converter-browser">
+                            <div class="fx-converter-filelist">
+                                <div class="fx-converter-filelist-title">Converted files</div>
+                                @if (OutputFileList.Count == 0)
+                                {
+                                    <p class="fx-converter-empty">No converted files</p>
+                                }
+                                else
+                                {
+                                    <ul class="fx-converter-files" role="listbox" aria-label="Converted files">
+                                        @foreach (var file in OutputFileList)
+                                        {
+                                            var fileId = file.Id;
+                                            <li @key="fileId">
+                                                <button type="button" role="option" aria-selected='@(fileId == SelectedOutput()?.Id ? "true" : "false")'
+                                                        title="@file.RelativePath" disabled="@(!CanEdit)"
+                                                        @onclick="() => SelectOutputFileAsync(fileId)">@file.DisplayName</button>
+                                            </li>
+                                        }
+                                    </ul>
+                                }
+                            </div>
+                            <ConverterEditor Value="@OutputEditorText"
+                                             ValueChanged="SetOutputTextAsync"
+                                             Placeholder="@OutputPlaceholder"
+                                             AriaLabel="Converted output"
+                                             ReadOnly="@OutputReadOnly"
+                                             Enabled="@CanEdit"
+                                             Expanded="@(ExpandedPane == ConverterPane.Output)"
+                                             ExpandText="@OutputExpandText"
+                                             OnExpand="ToggleOutputExpandAsync"
+                                             EditorHeight="@EditorHeight" />
+                        </div>
+                    }
+                    else
+                    {
+                        <ConverterEditor Value="@OutputEditorText"
+                                         ValueChanged="SetOutputTextAsync"
+                                         Placeholder="@OutputPlaceholder"
+                                         AriaLabel="Converted output"
+                                         ReadOnly="@OutputReadOnly"
+                                         Enabled="@CanEdit"
+                                         Expanded="@(ExpandedPane == ConverterPane.Output)"
+                                         ExpandText="@OutputExpandText"
+                                         OnExpand="ToggleOutputExpandAsync"
+                                         EditorHeight="@EditorHeight" />
+                    }
+                    <div class="fx-converter-pane-footer fx-converter-pane-footer-end">
+                        <span class="fx-converter-filename">@OutputCaption</span>
+                        <span class="fx-converter-output-actions">
+                            <button type="button" class="fx-converter-tool" disabled="@(!CanEdit)" @onclick="CopyOutputAsync">Copy</button>
+                            <a class="fx-converter-download @(!CanEdit ? "is-disabled" : null)"
+                               download="@CurrentDownload.FileName"
+                               href="@CurrentDownload.Href"
+                               aria-disabled='@(CanEdit ? "false" : "true")'
+                               @onclick="DownloadOutputAsync"
+                               @onclick:preventDefault="@(!CanEdit)">Download</a>
+                        </span>
+                    </div>
+                </section>
+            </div>
+        }
+    </div>
+
+    <div class="fx-converter-actions">
+        <ButtonControl CssClass="fx-converter-clear" Disabled="@(!CanEdit)" OnClick="ClearAsync">@ClearText</ButtonControl>
+        <ButtonControl CssClass="btn-success btn-lg fx-converter-convert" Disabled="@(!CanConvert)" OnClick="ConvertAsync">@ConvertText</ButtonControl>
+    </div>
+    @if (IsBusy)
+    {
+        <p class="fx-converter-status" role="status">@BusyText</p>
+    }
+    else if (!string.IsNullOrEmpty(StatusMessage))
+    {
+        <p class="fx-converter-status" role="@(LastSucceeded ? "status" : "alert")">@StatusMessage</p>
+    }
+    @if (!string.IsNullOrWhiteSpace(FooterText))
+    {
+        <p class="fx-converter-footer">@FooterText</p>
+    }
+</div>

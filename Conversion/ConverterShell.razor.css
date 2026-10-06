@@ -1,0 +1,241 @@
+.fx-converter {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+    color: #1c1c1c;
+}
+
+.fx-converter-kinds,
+.fx-converter-panes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+}
+
+.fx-converter-panes.is-expanded {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.fx-converter-kind {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.fx-converter-kind-adornment {
+    display: inline-flex;
+    align-items: center;
+}
+
+.fx-converter-mode {
+    display: flex;
+    justify-content: center;
+}
+
+.fx-converter-column {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+}
+
+.fx-converter-pane {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 340px;
+    background: #fff;
+    border: 1px solid #e4dfd6;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.fx-converter-browser {
+    display: grid;
+    grid-template-columns: minmax(140px, 34%) minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.fx-converter-filelist {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    border-right: 1px solid #eeeae4;
+    background: #fbfaf8;
+}
+
+.fx-converter-filelist-title {
+    padding: 10px 12px 6px;
+    font-size: 12px;
+    font-weight: 650;
+    color: #5f5f5f;
+}
+
+.fx-converter-files {
+    list-style: none;
+    margin: 0;
+    padding: 0 6px 8px;
+    overflow: auto;
+    max-height: 280px;
+}
+
+.fx-converter-files button {
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    padding: 6px 8px;
+    font: inherit;
+    font-size: 13px;
+    color: #222;
+    cursor: pointer;
+}
+
+.fx-converter-files button[aria-selected="true"] {
+    background: #e7f5ec;
+    font-weight: 650;
+}
+
+.fx-converter-files button:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.fx-converter-empty {
+    margin: 0;
+    padding: 8px 12px 12px;
+    color: #8a8a8a;
+    font-size: 13px;
+}
+
+.fx-converter-pane-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px 10px;
+    border-top: 1px solid #f0ece6;
+}
+
+.fx-converter-pane-footer-end {
+    justify-content: flex-end;
+}
+
+.fx-converter-filename {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #6d6d6d;
+    font-size: 12px;
+}
+
+.fx-converter-upload {
+    color: #6d6d6d;
+    font-size: 13px;
+}
+
+.fx-converter-upload-link {
+    color: #1f7a3a;
+    font-weight: 650;
+}
+
+.fx-converter-output-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.fx-converter-tool,
+.fx-converter-download {
+    border: 1px solid #e4dfd6;
+    background: #fff;
+    color: #333;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 13px;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.fx-converter-tool:hover:not(:disabled),
+.fx-converter-download:hover {
+    background: #f6f4f0;
+}
+
+.fx-converter-tool:disabled,
+.fx-converter-download.is-disabled {
+    opacity: 0.5;
+    cursor: default;
+    pointer-events: none;
+}
+
+.fx-converter-instructions {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.fx-converter-instructions textarea {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 72px;
+    padding: 10px 12px;
+    border: 1px solid #e4dfd6;
+    border-radius: 12px;
+    resize: vertical;
+    font: inherit;
+    font-weight: 400;
+    font-size: 14px;
+    background: #fff;
+}
+
+.fx-converter-actions {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+}
+
+.fx-converter ::deep .fx-converter-convert {
+    min-width: 280px;
+    border-radius: 8px;
+}
+
+.fx-converter-status,
+.fx-converter-footer {
+    margin: 0;
+    text-align: center;
+    color: #6d6d6d;
+    font-size: 13px;
+}
+
+.fx-converter-status[role="alert"] {
+    color: #9b2c2c;
+}
+
+@media (max-width: 860px) {
+    .fx-converter-kinds,
+    .fx-converter-panes {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fx-converter-browser {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .fx-converter-filelist {
+        border-right: 0;
+        border-bottom: 1px solid #eeeae4;
+    }
+}

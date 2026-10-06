@@ -1,0 +1,44 @@
+@namespace Fx.ControlKit.Conversion
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="fx-converter-editor" data-line-count="@LineCount" @ref="_root">
+    <div class="fx-converter-gutter" aria-hidden="true">
+        @for (var line = 1; line <= ShownLines; line++)
+        {
+            <span>@line</span>
+        }
+    </div>
+    <textarea class="fx-converter-input"
+              value="@Value"
+              rows="12"
+              wrap="off"
+              spellcheck="false"
+              placeholder="@Placeholder"
+              aria-label="@AriaLabel"
+              readonly="@ReadOnly"
+              disabled="@(!Enabled)"
+              style="@InputStyle"
+              @oninput="OnInput"></textarea>
+    @if (ShowExpand)
+    {
+        <button type="button"
+                class="fx-converter-expand"
+                title="@ExpandText"
+                aria-label="@ExpandText"
+                aria-pressed="@Expanded"
+                disabled="@(!Enabled)"
+                @onclick="OnExpand">
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                @if (Expanded)
+                {
+                    <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                }
+                else
+                {
+                    <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+                }
+            </svg>
+        </button>
+    }
+</div>
