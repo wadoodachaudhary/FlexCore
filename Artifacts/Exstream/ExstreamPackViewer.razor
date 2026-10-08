@@ -1,0 +1,193 @@
+@namespace Fx.ControlKit.Artifacts.Exstream
+
+<section class="exstream-viewer">
+    <TabStripControl Items="@_tabs" SelectedIndex="@_tab" SelectedIndexChanged="@(i => _tab = i)" />
+    @if (_tab == 0)
+    {
+        <div class="exstream-split">
+            <div>
+                <h3>Project explorer</h3>
+                <p class="exstream-note">@_resources.Count resource(s) in resources.xml · @_onDisk on disk · @_documents.Count translated document(s)</p>
+                @foreach (var group in _resources.GroupBy(r => r.Type).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    <details>
+                        <summary>@group.Key (@group.Count())</summary>
+                        <ul>
+                            @foreach (var entry in group.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).Take(40))
+                            {
+                                <li class="@(entry.OnDisk ? "" : "missing")">@entry.Name@(entry.OnDisk ? "" : " — not in this sample")</li>
+                            }
+                            @if (group.Count() > 40)
+                            {
+                                <li>@(group.Count() - 40) more</li>
+                            }
+                        </ul>
+                    </details>
+                }
+            </div>
+            <div>
+                <h3>Translated pack</h3>
+                <p>@(_communication ?? Model.Bundle.Title)</p>
+                <ul>
+                    @foreach (var doc in _documents)
+                    {
+                        <li><ButtonControl OnClick="@(() => Open(doc.RelativePath))">@doc.Name</ButtonControl> <span>@doc.Kind</span></li>
+                    }
+                </ul>
+                @if (_documents.Count == 0)
+                {
+                    <p class="exstream-note">No document JSON was written. The source sample has no .ssd files on disk.</p>
+                }
+            </div>
+        </div>
+    }
+    else if (_tab == 1)
+    {
+        <h3>Asset library</h3>
+        <GridControl TValue="AssetRow" DataSource="@_assets" Height="280px" Width="100%" RowHeight="30">
+            <GridColumnsBase>
+                <GridColumn Field="Type" HeaderText="Type" Width="180px" />
+                <GridColumn Field="Count" HeaderText="Assets" Width="90px" />
+                <GridColumn Field="Names" HeaderText="Names" Width="640px" />
+            </GridColumnsBase>
+        </GridControl>
+        <p class="exstream-note">Counts come from the design-pack manifest the exporter wrote. resources.xml lists the source catalog, including files this sample did not include.</p>
+    }
+    else if (_tab == 2)
+    {
+        <h3>Designer</h3>
+        @if (_open is null)
+        {
+            <p class="exstream-note">Select a translated document. The outline and story text are the exporter's document JSON.</p>
+        }
+        else
+        {
+            <p><strong>@_open.Name</strong> · @_open.Kind · @_open.Pages.Count page(s) · @_open.PageWidthPt.ToString("0") × @_open.PageHeightPt.ToString("0") pt</p>
+            <div class="exstream-split">
+                <div>
+                    @foreach (var page in _open.Pages)
+                    {
+                        <details open="@(page == _open.Pages.FirstOrDefault())">
+                            <summary>Page @(page.Number) @(page.PageObjectId)</summary>
+                            @Outline(page.Outline)
+                        </details>
+                    }
+                </div>
+                <div>
+                    <h3>@(_storyTitle ?? "Story")</h3>
+                    <pre>@(_storyText ?? "Select an outline node that has a story.")</pre>
+                    @if (_open.Variables.Count > 0)
+                    {
+                        <p class="exstream-note">Variables: @string.Join(", ", _open.Variables)</p>
+                    }
+                </div>
+            </div>
+        }
+    }
+    else
+    {
+        <h3>Communication composer</h3>
+        <p><strong>@(_communication ?? Model.Bundle.Title)</strong></p>
+        <p class="exstream-note">The communication is the design pack. Documents are its pages, in the order the exporter wrote them. This composer reads the pack; it does not push to an Exstream server.</p>
+        <ol>
+            @foreach (var doc in _documents)
+            {
+                <li>
+                    <ButtonControl OnClick="@(() => Open(doc.RelativePath))">@doc.Name</ButtonControl>
+                    @{
+                        var loaded = ExstreamPackReader.LoadDocument(Model.Bundle.OutputDirectory, doc.RelativePath);
+                    }
+                    @if (loaded is not null)
+                    {
+                        <span>@loaded.Pages.Count page(s), @loaded.Variables.Count variable(s)</span>
+                    }
+                </li>
+            }
+        </ol>
+    }
+    @if (Model.File.Format == ExstreamPackViewerDescriptor.ScriptFormat)
+    {
+        <h3>@Model.File.Title</h3>
+        <pre>@_script</pre>
+    }
+</section>
+
+@code {
+    private sealed record AssetRow(string Type, int Count, string Names);
+
+    [Parameter, EditorRequired] public TranslatedFileView Model { get; set; } = default!;
+    private readonly List<TabStripItem> _tabs = [new("Explorer", ""), new("Asset library", ""), new("Designer", ""), new("Composer", "")];
+    private int _tab;
+    private string? _loaded;
+    private string? _communication;
+    private string? _script;
+    private string? _storyTitle;
+    private string? _storyText;
+    private PackDocument? _open;
+    private IReadOnlyList<ExstreamResourceEntry> _resources = [];
+    private IReadOnlyList<(string Name, string Kind, string RelativePath)> _documents = [];
+    private List<AssetRow> _assets = [];
+    private int _onDisk;
+
+    protected override void OnParametersSet()
+    {
+        if (_loaded == Model.Bundle.OutputDirectory + "|" + Model.File.Id) return;
+        _loaded = Model.Bundle.OutputDirectory + "|" + Model.File.Id;
+        _communication = ExstreamPackReader.CommunicationName(Model.Bundle.OutputDirectory);
+        _resources = Directory.Exists(Model.Bundle.SourceDirectory) ? ExstreamProjectIndex.Read(Model.Bundle.SourceDirectory) : [];
+        _onDisk = _resources.Count(r => r.OnDisk);
+        _documents = ExstreamPackReader.ListDocuments(Model.Bundle.OutputDirectory);
+        _assets = ExstreamPackReader.ResourceCounts(Model.Bundle.OutputDirectory)
+            .OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(p => new AssetRow(p.Key, p.Value, string.Join(", ", ExstreamPackReader.Resources(Model.Bundle.OutputDirectory).Where(r => r.Type == p.Key).Select(r => r.Name).Take(12))))
+            .ToList();
+        _script = Model.File.Format == ExstreamPackViewerDescriptor.ScriptFormat && File.Exists(Model.Bundle.FullPath(Model.File))
+            ? File.ReadAllText(Model.Bundle.FullPath(Model.File))
+            : null;
+        _tab = Model.File.Format switch
+        {
+            ExstreamPackViewerDescriptor.DocumentFormat => 2,
+            ExstreamPackViewerDescriptor.ScriptFormat => 0,
+            ExstreamPackViewerDescriptor.ResourceFormat => 1,
+            _ => 0
+        };
+        if (Model.File.Format == ExstreamPackViewerDescriptor.DocumentFormat)
+            Open(Model.File.RelativePath);
+        else
+            _open = null;
+    }
+
+    private void Open(string relative)
+    {
+        _open = ExstreamPackReader.LoadDocument(Model.Bundle.OutputDirectory, relative);
+        _storyTitle = null;
+        _storyText = _open?.Stories.Values.Select(s => s.Text).FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+        _tab = 2;
+    }
+
+    private void ShowStory(PackOutlineNode node)
+    {
+        _storyTitle = node.Label;
+        _storyText = node.StoryId is not null && _open is not null && _open.Stories.TryGetValue(node.StoryId, out var story)
+            ? story.Text
+            : "This node has no story.";
+    }
+
+    private RenderFragment Outline(IReadOnlyList<PackOutlineNode> nodes) => builder =>
+    {
+        builder.OpenElement(0, "ul");
+        foreach (var node in nodes)
+        {
+            builder.OpenElement(1, "li");
+            builder.OpenElement(2, "button");
+            builder.AddAttribute(3, "type", "button");
+            builder.AddAttribute(4, "onclick", EventCallback.Factory.Create(this, () => ShowStory(node)));
+            builder.AddContent(5, string.IsNullOrWhiteSpace(node.Label) ? node.Type : node.Label);
+            builder.CloseElement();
+            if (node.Children.Count > 0)
+                builder.AddContent(6, Outline(node.Children));
+            builder.CloseElement();
+        }
+        builder.CloseElement();
+    };
+}

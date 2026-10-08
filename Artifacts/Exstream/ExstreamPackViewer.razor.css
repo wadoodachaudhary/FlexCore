@@ -1,0 +1,7 @@
+.exstream-viewer { display: flex; flex-direction: column; gap: 12px; }
+.exstream-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.exstream-note { color: #5c6b7c; font-size: 13px; }
+.exstream-viewer li.missing { color: #8a6a2f; }
+.exstream-viewer pre { white-space: pre-wrap; background: #f6f8fb; padding: 12px; border-radius: 6px; max-height: 360px; overflow: auto; }
+.exstream-viewer button { background: none; border: 0; color: #1b5c91; cursor: pointer; text-align: left; }
+@media (max-width: 760px) { .exstream-split { grid-template-columns: 1fr; } }

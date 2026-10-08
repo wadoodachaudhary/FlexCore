@@ -1,0 +1,87 @@
+@namespace Fx.ControlKit.Artifacts
+
+<div class="artifact-browser">
+    <header>
+        <h2>@Bundle.Title</h2>
+        <p>@Bundle.Files.Count translated file(s). Select one to open its viewer.</p>
+    </header>
+    @foreach (var message in Bundle.Messages)
+    {
+        <p class="workflow-finding" role="status">@message</p>
+    }
+    <div class="artifact-picks">
+        @foreach (var file in Bundle.Files)
+        {
+            <ButtonControl OnClick="@(() => _selected = file)">@file.Title</ButtonControl>
+        }
+    </div>
+    @if (_selected is null)
+    {
+        <p class="workflow-note">Choose a translated file. Each format opens in its own viewer.</p>
+    }
+    else if (ViewerFor(_selected) is { } viewer)
+    {
+        <h3>@viewer.Title</h3>
+        <DynamicComponent Type="viewer.Component" Parameters="@Parameters()" />
+    }
+    else
+    {
+        <p class="workflow-error" role="alert">No viewer is registered for @_selected.Format.</p>
+    }
+    <div class="artifact-toolbar">
+        <TextBoxControl Value="@_search" ValueChanged="Search" UpdateOnInput="true" Placeholder="Filter translated files" Width="280px" AriaLabel="Filter translated files" />
+        <span>@_visible.Count / @Bundle.Files.Count</span>
+    </div>
+    <GridControl TValue="TranslatedFile" DataSource="@_visible" EventsRef="@_events" Height="180px" Width="100%" RowHeight="30" AllowResizing="true">
+        <GridColumnsBase>
+            <GridColumn Field="Title" HeaderText="Translated file" Width="280px" />
+            <GridColumn Field="Format" HeaderText="Viewer" Width="160px" />
+            <GridColumn Field="Status" HeaderText="Status" Width="90px" />
+            <GridColumn Field="RelativePath" HeaderText="Path" Width="360px" />
+            <GridColumn Field="Note" HeaderText="Note" Width="420px" />
+        </GridColumnsBase>
+    </GridControl>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public TranslationBundle Bundle { get; set; } = default!;
+    [Parameter] public IReadOnlyList<ITranslatedFileViewer> Viewers { get; set; } = [];
+    [Parameter] public string? InitialFileId { get; set; }
+
+    private readonly GridControlEvents<TranslatedFile> _events = new();
+    private List<TranslatedFile> _visible = [];
+    private TranslatedFile? _selected;
+    private string? _search;
+
+    protected override void OnInitialized()
+    {
+        _events.RowSelected = EventCallback.Factory.Create<RowSelectEventArgs<TranslatedFile>>(this, args =>
+        {
+            if (args.Data is not null) _selected = args.Data;
+        });
+        Apply();
+        _selected = Bundle.Files.FirstOrDefault(f => f.Id == InitialFileId) ?? _visible.FirstOrDefault(f => f.Status != "fail") ?? _visible.FirstOrDefault();
+    }
+
+    protected override void OnParametersSet()
+    {
+        Apply();
+        if (_selected is null || Bundle.Files.All(f => f.Id != _selected.Id))
+            _selected = _visible.FirstOrDefault();
+    }
+
+    private void Search(string? value) { _search = value; Apply(); }
+    private void Apply() => _visible = Bundle.Files.Where(f =>
+        string.IsNullOrWhiteSpace(_search)
+        || f.Title.Contains(_search, StringComparison.OrdinalIgnoreCase)
+        || f.RelativePath.Contains(_search, StringComparison.OrdinalIgnoreCase)
+        || (f.Note?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+
+    private ITranslatedFileViewer? ViewerFor(TranslatedFile file) =>
+        Viewers.FirstOrDefault(v => string.Equals(v.Format, file.Format, StringComparison.OrdinalIgnoreCase));
+
+    private Dictionary<string, object?> Parameters() => new()
+    {
+        ["Model"] = new TranslatedFileView { Bundle = Bundle, File = _selected! }
+    };
+}
