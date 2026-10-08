@@ -20,7 +20,8 @@ public readonly record struct CrystalSampleBinding(string Fingerprint, string Da
 
 /// <summary>
 /// The synthetic SQLite sample pack the Crystal viewer reads. Report SQL is never sent to SQLite.
-/// A translation writes a pack in this shape when an offline corpus pack does not already hold the report.
+/// The shared corpus is <see cref="CrystalSampleDatabase.Path"/>. A translation writes a session pack
+/// named <see cref="DefaultFileName"/> only when that corpus does not already hold the report.
 /// The store uses SQLite and runs in the server host, the same place report conversion runs.
 /// </summary>
 public sealed class CrystalSampleStore
@@ -32,7 +33,16 @@ public sealed class CrystalSampleStore
 
     public string DatabasePath { get; }
     public bool Available => File.Exists(DatabasePath);
-    public CrystalSampleStore(string path) => DatabasePath = Path.GetFullPath(path);
+
+    /// <summary>Opens the shared corpus at <see cref="CrystalSampleDatabase.Path"/>.</summary>
+    public CrystalSampleStore() : this(CrystalSampleDatabase.Path) { }
+
+    /// <summary>Opens a pack at an explicit path. Session packs use <see cref="DefaultFileName"/>.</summary>
+    public CrystalSampleStore(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("A sample database path is required.", nameof(path));
+        DatabasePath = Path.GetFullPath(path);
+    }
 
     public bool Contains(string hash)
     {
@@ -86,22 +96,27 @@ public sealed class CrystalSampleStore
     }
 
     /// <summary>
-    /// Points a converted report at sample rows. When <paramref name="external"/> already contains the .rpt
-    /// fingerprint, that pack is used and this store is not written. Otherwise deterministic rows for
-    /// <paramref name="definition"/> and <paramref name="subreports"/> are seeded here.
+    /// Points a converted report at sample rows. The corpus is <paramref name="external"/> when one is passed,
+    /// and otherwise the shared pack at <see cref="CrystalSampleDatabase.Path"/>. When that corpus already
+    /// contains the .rpt fingerprint and the schema keys, it is used and this store is not written.
+    /// Otherwise deterministic rows for <paramref name="definition"/> and <paramref name="subreports"/> are seeded here.
     /// </summary>
     public CrystalSampleBinding Bind(string rptPath, string name, string relativePath, string status, ReportDefinition definition, IEnumerable<ReportDefinition>? subreports = null, CrystalSampleStore? external = null)
     {
         var fingerprint = Fingerprint(rptPath);
-        if (external is not null && external.Contains(fingerprint))
-            return new CrystalSampleBinding(fingerprint, external.DatabasePath);
-        Seed(new CrystalSampleReport(fingerprint, name, relativePath, "Translation", status, 0, 0, []), definition, subreports ?? []);
+        var others = subreports ?? [];
+        var corpus = external ?? SharedCorpus();
+        if (corpus is not null && corpus.CanServe(fingerprint, definition, others))
+            return new CrystalSampleBinding(fingerprint, corpus.DatabasePath);
+        Seed(new CrystalSampleReport(fingerprint, name, relativePath, "Translation", status, 0, 0, []), definition, others);
         return new CrystalSampleBinding(fingerprint, DatabasePath);
     }
 
     /// <summary>Writes deterministic rows for one report into this pack. An existing catalog row for the same binary is replaced.</summary>
     public void Seed(CrystalSampleReport report, ReportDefinition definition, IEnumerable<ReportDefinition> also)
     {
+        if (IsShippedCorpus)
+            throw new InvalidOperationException("The shipped Crystal sample corpus is read-only. Seed a session pack, or pass another database path.");
         var datasets = also.Prepend(definition).Select(DatasetFor).GroupBy(d => d.Key, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).Take(32).ToList();
         Directory.CreateDirectory(Path.GetDirectoryName(DatabasePath)!);
         using var connection = Open(readOnly: false);
@@ -142,6 +157,39 @@ public sealed class CrystalSampleStore
         var json = command.ExecuteScalar() as string ?? throw new InvalidDataException(
             "No matching SQLite sample schema. Generate a sample pack for this RPT or load a matching data fixture; no substitute data was used.");
         return JsonSerializer.Deserialize<CrystalSampleDataset>(json, Json)!;
+    }
+
+    private static CrystalSampleStore? SharedCorpus()
+    {
+        var path = CrystalSampleDatabase.Path;
+        return File.Exists(path) ? new CrystalSampleStore(path) : null;
+    }
+
+    private bool IsShippedCorpus => string.Equals(DatabasePath, Path.GetFullPath(CrystalSampleDatabase.Path), StringComparison.OrdinalIgnoreCase);
+
+    private bool CanServe(string hash, ReportDefinition definition, IEnumerable<ReportDefinition> also)
+    {
+        if (!Contains(hash)) return false;
+        foreach (var key in also.Prepend(definition).Select(Key).Distinct(StringComparer.OrdinalIgnoreCase).Take(32))
+            if (!HasDataset(hash, key)) return false;
+        return true;
+    }
+
+    private bool HasDataset(string hash, string key)
+    {
+        try
+        {
+            using var connection = Open(readOnly: true);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT 1 FROM SampleDatasets WHERE ReportHash=$hash AND DatasetKey=$key";
+            command.Parameters.AddWithValue("$hash", hash);
+            command.Parameters.AddWithValue("$key", key);
+            return command.ExecuteScalar() is not null;
+        }
+        catch (SqliteException)
+        {
+            return false;
+        }
     }
 
     private SqliteConnection Open(bool readOnly)

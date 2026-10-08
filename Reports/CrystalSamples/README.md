@@ -12,7 +12,7 @@ using Fx.ControlKit.Reports;
 var databasePath = CrystalSampleDatabase.Path;
 ```
 
-This path is the shared corpus (530 reports). A translation that still has to seed a report writes a separate session file named `samples.db` beside its XML. Pass `CrystalSampleDatabase.Path` in as the existing corpus so a fingerprint that is already here is reused instead of written again.
+This path is the shared corpus (530 reports). `new CrystalSampleStore()` opens it. A translation that still has to seed a report writes a separate session file named `samples.db` beside its XML. `CrystalSampleStore.Bind` consults this corpus first, and writes the session file only when the report fingerprint or schema is not already here. Pass another store when a different pack should be used instead. The shipped file is read-only.
 
 The pack uses this shape:
 

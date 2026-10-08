@@ -107,6 +107,23 @@ internal static class ArtifactChecks
         var kept = rebound.Bind(chartRpt, "chart", "chart_baseline.rpt", "pass", plain, [], external);
         check(kept.DataPath == external.DatabasePath && !rebound.Available, "an existing corpus pack is reused instead of writing a second database");
 
+        var corpus = new CrystalSampleStore();
+        check(string.Equals(corpus.DatabasePath, Path.GetFullPath(CrystalSampleDatabase.Path), StringComparison.Ordinal) && corpus.Available,
+            "CrystalSampleStore opens CrystalSampleDatabase.Path by default");
+        var catalog = corpus.ReadCatalog();
+        check(catalog.Count == 530 && catalog.Any(report => report.Hash.Equals(CrystalSampleStore.Fingerprint(chartRpt), StringComparison.OrdinalIgnoreCase)),
+            "the default corpus catalog has 530 reports, including the chart sample");
+        var overridden = new CrystalSampleStore(samples.Full("override.db"));
+        check(overridden.DatabasePath == Path.GetFullPath(samples.Full("override.db"))
+            && !string.Equals(overridden.DatabasePath, corpus.DatabasePath, StringComparison.OrdinalIgnoreCase),
+            "an explicit sample database path overrides the shipped corpus");
+        var chartDefinition = loader.LoadPositioned(chartXml!);
+        using var shippedBind = new TempDir();
+        var sessionOnly = new CrystalSampleStore(shippedBind.Full(CrystalSampleStore.DefaultFileName));
+        var fromCorpus = sessionOnly.Bind(chartRpt, "chart", "chart_baseline.rpt", "pass", chartDefinition);
+        check(fromCorpus.DataPath == corpus.DatabasePath && !sessionOnly.Available,
+            "Bind uses the shipped corpus when the report schema is already there");
+
         roundTrip.Mode = CrystalReportDataMode.LayoutOnly;
         var empty = roundTrip.Execute(plain, null);
         check(empty.Rows.Count == 0 && empty.Columns.Contains("Name"), "layout-only mode returns the columns and no rows");
