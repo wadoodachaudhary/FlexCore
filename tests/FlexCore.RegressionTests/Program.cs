@@ -325,6 +325,8 @@ AnalysisRenderingChecks.Run(Check);
 DocumentChecks.Run(Check);
 await renderer.Dispatcher.InvokeAsync(() => TreeChecks.Run(renderer, activation.All, Check));
 await renderer.Dispatcher.InvokeAsync(() => TreeGridOperationChecks.Run(renderer, activation.All, Check));
+CrystalSampleChecks.Run(Check);
+await ArtifactChecks.Run(Check);
 var converterStart = checks;
 await renderer.Dispatcher.InvokeAsync(() => ConverterChecks.Run(renderer, activation.All, Check));
 Console.WriteLine($"Converter shell checks: {checks - converterStart}");

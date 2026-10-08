@@ -42,6 +42,13 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <EmbeddedResource Include="Charts/ChartControl.razor.css" LogicalName="Fx.Reports.ChartStyles" />
     <EmbeddedResource Include="Grid/PivotControl.razor.css" LogicalName="Fx.Reports.PivotStyles" />
+    <!-- Corpus pack. Copied next to this assembly and into NuGet consumers at the same relative path.
+         CrystalSampleDatabase.Path is that location. Session packs named samples.db stay beside a translation. -->
+    <None Update="Reports\CrystalSamples\CrystalSamples.db"
+          CopyToOutputDirectory="PreserveNewest"
+          Pack="true"
+          PackagePath="contentFiles\any\any\Reports\CrystalSamples\CrystalSamples.db"
+          PackageCopyToOutput="true" />
   </ItemGroup>
 
   <ItemGroup>
@@ -62,6 +69,8 @@
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
     <PackageReference Include="AngleSharp" Version="1.8.1" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 
