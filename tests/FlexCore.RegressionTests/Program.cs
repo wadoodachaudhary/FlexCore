@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Fx.ControlKit;
 using Fx.ControlKit.Charts;
+using Fx.ControlKit.Conversion;
 using Fx.ControlKit.Grid;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
@@ -326,6 +327,9 @@ await renderer.Dispatcher.InvokeAsync(() => TreeChecks.Run(renderer, activation.
 await renderer.Dispatcher.InvokeAsync(() => TreeGridOperationChecks.Run(renderer, activation.All, Check));
 CrystalSampleChecks.Run(Check);
 await ArtifactChecks.Run(Check);
+var converterStart = checks;
+await renderer.Dispatcher.InvokeAsync(() => ConverterChecks.Run(renderer, activation.All, Check));
+Console.WriteLine($"Converter shell checks: {checks - converterStart}");
 Console.WriteLine($"All {checks} regression checks passed.");
 public class PivotRow { public string Region {get;set;}="";public int Number{get;set;}public int Year{get;set;}public int Month{get;set;}public decimal Amount{get;set;} }
 public enum Status { Open, Closed }

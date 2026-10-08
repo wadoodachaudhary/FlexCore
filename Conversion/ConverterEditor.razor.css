@@ -1,0 +1,83 @@
+.fx-converter-editor {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    min-height: 220px;
+    background: #fff;
+    flex: 1 1 auto;
+}
+
+.fx-converter-gutter {
+    flex: 0 0 46px;
+    overflow: hidden;
+    padding: 12px 8px 12px 0;
+    text-align: right;
+    color: #b0b0b0;
+    background: #fff;
+    user-select: none;
+    font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.fx-converter-gutter span {
+    display: block;
+    height: 20px;
+}
+
+.fx-converter-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
+    margin: 0;
+    padding: 12px 40px 12px 10px;
+    border: 0;
+    resize: none;
+    overflow: auto;
+    background: transparent;
+    color: #1c1c1c;
+    font: 13px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre;
+}
+
+.fx-converter-input:focus {
+    outline: 2px solid #1f7a3a;
+    outline-offset: -2px;
+}
+
+.fx-converter-input::placeholder {
+    color: #b9b9b9;
+}
+
+.fx-converter-input:disabled {
+    color: #6b6b6b;
+    background: #f7f7f7;
+}
+
+.fx-converter-expand {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: #8d8d8d;
+    cursor: pointer;
+}
+
+.fx-converter-expand:hover:not(:disabled) {
+    background: #f3f1ec;
+    color: #333;
+}
+
+.fx-converter-expand svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+.fx-converter-expand:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
