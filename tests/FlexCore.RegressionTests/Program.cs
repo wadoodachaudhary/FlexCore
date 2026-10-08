@@ -324,6 +324,7 @@ AnalysisRenderingChecks.Run(Check);
 DocumentChecks.Run(Check);
 await renderer.Dispatcher.InvokeAsync(() => TreeChecks.Run(renderer, activation.All, Check));
 await renderer.Dispatcher.InvokeAsync(() => TreeGridOperationChecks.Run(renderer, activation.All, Check));
+CrystalSampleChecks.Run(Check);
 Console.WriteLine($"All {checks} regression checks passed.");
 public class PivotRow { public string Region {get;set;}="";public int Number{get;set;}public int Year{get;set;}public int Month{get;set;}public decimal Amount{get;set;} }
 public enum Status { Open, Closed }
