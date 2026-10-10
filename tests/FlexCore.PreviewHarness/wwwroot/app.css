@@ -1,0 +1,24 @@
+body {
+    margin: 0;
+    font-family: "Segoe UI", sans-serif;
+    background: #f6f3ee;
+    color: #1c1c1c;
+}
+
+main {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 28px 24px 48px;
+}
+
+h1 {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 650;
+}
+
+.note {
+    margin: 0 0 22px;
+    color: #6d6d6d;
+    font-size: 14px;
+}

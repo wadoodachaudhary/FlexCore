@@ -1,0 +1,35 @@
+@namespace Fx.ControlKit.Preview
+@inherits FlexControlBase
+@implements IAsyncDisposable
+
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@ResolvedStyle"
+     id="@Id"
+     title="@Title"
+     aria-label="@PairLabel">
+    <div class="fx-preview-pair-toolbar">
+        <span class="fx-preview-pair-title">@PairLabel</span>
+        <span class="fx-preview-pair-tools">
+            <button type="button" class="fx-preview-pair-start" disabled="@(!Enabled || _busy)" @onclick="StartAsync">@StartText</button>
+            <button type="button" class="fx-preview-pair-tool" disabled="@(!Enabled || _busy)" @onclick="RestartAsync">@RestartText</button>
+            <button type="button" class="fx-preview-pair-tool" disabled="@(!Enabled)" @onclick="StopAsync">@StopText</button>
+        </span>
+    </div>
+    <div class="fx-preview-pair-panes">
+        <ProgramPreviewWindow @ref="_source"
+                              Launch="SourceLaunch"
+                              Label="@SourceLabel"
+                              OwnerKey="@EffectiveOwner"
+                              ShowToolbar="false"
+                              ShowOutput="true"
+                              AutoStart="false" />
+        <ProgramPreviewWindow @ref="_target"
+                              Launch="TargetLaunch"
+                              Label="@TargetLabel"
+                              OwnerKey="@EffectiveOwner"
+                              ShowToolbar="false"
+                              ShowOutput="true"
+                              AutoStart="false" />
+    </div>
+</div>

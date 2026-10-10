@@ -1,0 +1,64 @@
+@namespace Fx.ControlKit.Preview
+@inherits FlexControlBase
+@implements IAsyncDisposable
+
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@ResolvedStyle"
+     id="@Id"
+     title="@Title"
+     data-status="@StatusName"
+     aria-busy='@(IsStarting ? "true" : "false")'
+     aria-label="@SurfaceLabel">
+    @if (ShowToolbar)
+    {
+        <div class="fx-preview-toolbar">
+            <span class="fx-preview-label">@Label</span>
+            <span class="fx-preview-tools">
+                <button type="button" class="fx-preview-tool" disabled="@(!CanStart)" @onclick="StartAsync">@StartText</button>
+                <button type="button" class="fx-preview-tool" disabled="@(!CanRestart)" @onclick="RestartAsync">@RestartText</button>
+                <button type="button" class="fx-preview-tool" disabled="@(!CanStop)" @onclick="StopAsync">@StopText</button>
+            </span>
+        </div>
+    }
+    else if (!string.IsNullOrWhiteSpace(Label))
+    {
+        <div class="fx-preview-toolbar">
+            <span class="fx-preview-label">@Label</span>
+        </div>
+    }
+    <div class="fx-preview-stage" tabindex="0" @ref="_stage"
+         @onkeydown="OnKeyDown" @onkeydown:preventDefault="true"
+         @onkeyup:preventDefault="true">
+        @if (ShowConsole)
+        {
+            <pre class="fx-preview-console" aria-label="@($"{Label} output")">@ConsoleText</pre>
+        }
+        else if (FrameSource is not null)
+        {
+            <img @ref="_image"
+                 src="@FrameSource"
+                 width="@FrameWidth"
+                 height="@FrameHeight"
+                 alt="@($"{Label} live preview")"
+                 draggable="false"
+                 @onmousedown="OnMouseDown"
+                 @onmousedown:preventDefault="true"
+                 @onmouseup="OnMouseUp"
+                 @onmouseup:preventDefault="true"
+                 @onmousemove="OnMouseMove"
+                 @onwheel="OnWheel"
+                 @onwheel:preventDefault="true"
+                 @oncontextmenu:preventDefault="true" />
+        }
+        else
+        {
+            <p class="fx-preview-placeholder" role="@(IsAlert ? "alert" : "status")">@Placeholder</p>
+        }
+    </div>
+    <p class="fx-preview-status" role="@(IsAlert ? "alert" : "status")">@StatusLine</p>
+    @if (ShowOutput)
+    {
+        <pre class="fx-preview-log" aria-label="Error output">@(string.IsNullOrWhiteSpace(ErrorText) ? "No error output" : ErrorText)</pre>
+    }
+</div>

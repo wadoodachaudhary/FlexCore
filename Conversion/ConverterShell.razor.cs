@@ -1,5 +1,6 @@
 using System.Text;
 using Fx.ControlKit;
+using Fx.ControlKit.Preview;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Forms;
 using Microsoft.AspNetCore.Components.Web;
@@ -30,11 +31,23 @@ namespace Fx.ControlKit.Conversion;
 /// </remarks>
 public partial class ConverterShell
 {
-    private static readonly IReadOnlyList<SelectionItem> ModeItems =
+    private static readonly IReadOnlyList<SelectionItem> EditorModes =
     [
         new(nameof(ConverterShellMode.SingleFile), "Single file"),
         new(nameof(ConverterShellMode.FileBrowser), "File browser")
     ];
+
+    private static readonly IReadOnlyList<SelectionItem> PreviewModes =
+    [
+        new(nameof(ConverterShellMode.SingleFile), "Single file"),
+        new(nameof(ConverterShellMode.FileBrowser), "File browser"),
+        new(nameof(ConverterShellMode.RunPreview), "Run / Preview")
+    ];
+
+    private IReadOnlyList<SelectionItem> ModeItems =>
+        EnableRunPreview || Mode == ConverterShellMode.RunPreview || _pinnedMode == ConverterShellMode.RunPreview
+            ? PreviewModes
+            : EditorModes;
 
     [Inject] private IJSRuntime JS { get; set; } = default!;
 
@@ -55,6 +68,14 @@ public partial class ConverterShell
     [Parameter] public EventCallback<ConverterShellMode> ModeChanged { get; set; }
     [Parameter] public bool AutoMode { get; set; } = true;
     [Parameter] public bool ShowModeToggle { get; set; } = true;
+
+    /// <summary>Adds Run / Preview to the mode toggle. The launch values are supplied by the host.</summary>
+    [Parameter] public bool EnableRunPreview { get; set; }
+    [Parameter] public ProgramLaunch? SourcePreview { get; set; }
+    [Parameter] public ProgramLaunch? TargetPreview { get; set; }
+    [Parameter] public string SourcePreviewLabel { get; set; } = "Source";
+    [Parameter] public string TargetPreviewLabel { get; set; } = "Target";
+    [Parameter] public bool AutoStartPreview { get; set; }
 
     [Parameter] public string SourceText { get; set; } = "";
     [Parameter] public EventCallback<string> SourceTextChanged { get; set; }
