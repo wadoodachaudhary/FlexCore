@@ -1,0 +1,41 @@
+@page "/"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+
+<PageTitle>Live program preview</PageTitle>
+
+<h1>Live program preview</h1>
+<p class="note">Both windows are real programs on this server. Clicks and keystrokes in a window are delivered to that process.</p>
+
+<ConverterShell EnableRunPreview="true"
+                Mode="ConverterShellMode.RunPreview"
+                AutoMode="false"
+                ShowInstructions="false"
+                SourcePreview="@_source"
+                TargetPreview="@_target"
+                SourcePreviewLabel="Source"
+                TargetPreviewLabel="Target"
+                AutoStartPreview="true"
+                SourceKinds="@_kinds"
+                TargetKinds="@_kinds"
+                SourceKindId="source"
+                TargetKindId="target"
+                FooterText="Run / Preview keeps the programs on the server." />
+
+@code {
+    private static readonly IReadOnlyList<ConverterKind> _kinds =
+    [
+        new() { Id = "source", Label = "Source program" },
+        new() { Id = "target", Label = "Target program" }
+    ];
+
+    private readonly ProgramLaunch _source = Launch("source_form.py");
+    private readonly ProgramLaunch _target = Launch("target_form.py");
+
+    private static ProgramLaunch Launch(string script) => new()
+    {
+        FileName = "python3",
+        Arguments = [Path.Combine(AppContext.BaseDirectory, "Fixtures", "Preview", script)],
+        WorkingDirectory = AppContext.BaseDirectory,
+        Kind = ProgramPreviewKind.Gui
+    };
+}
