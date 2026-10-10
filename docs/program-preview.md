@@ -96,7 +96,7 @@ A GUI session:
 2. Starts `Xvfb` on that display, with an `Xauthority` cookie when `xauth` and `mcookie` exist. Otherwise it starts with `-ac` and listens only on a local socket (`-nolisten tcp`).
 3. Starts the program with `DISPLAY` pointed at that display. `WAYLAND_DISPLAY` is removed. `GDK_BACKEND=x11` and `QT_QPA_PLATFORM=xcb` are set when the launch did not set them.
 4. Captures the framebuffer with `ffmpeg` (`x11grab`) or, if ffmpeg is missing, with `xwd`.
-5. Relays pointer and key events with `xdotool`.
+5. Relays pointer and key events with `xdotool`. Pointer motion keeps only the latest position, so a burst of hover events cannot sit ahead of a click or a key.
 6. Stops the process tree on Stop, on dispose, on idle timeout, and on the maximum lifetime.
 
 The program's standard error is shown as error output. Standard output is kept on the session and shown for console previews.
@@ -187,7 +187,9 @@ Add the toolkit packages the migrated programs need. Enable WebSockets (Blazor S
 dotnet run --project tests/FlexCore.PreviewHarness
 ```
 
-Open the printed URL. Start is automatic. Click a field, type, and click Sign in. Those events go to the Python process on the server.
+Open the printed URL. `dotnet run` uses the Development launch profile so library scripts and styles are served from the project. A published build copies those files into the output. The page links `FlexCore.PreviewHarness.styles.css`; a host app does the same with its own `YourApp.styles.css` bundle, which pulls in FlexCore's scoped styles.
+
+Start is automatic. Click a field, type, and click Sign in. Those events go to the Python process on the server.
 
 The regression runner also drives a real click and keystroke without a browser:
 

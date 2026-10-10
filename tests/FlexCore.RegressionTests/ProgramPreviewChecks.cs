@@ -135,7 +135,7 @@ internal static class ProgramPreviewChecks
         check(echo.Snapshot.Status == ProgramPreviewStatus.Failed, "the global session limit still applies to console previews");
         var limitedPid = first.Snapshot.ProcessId ?? 0;
         limitedHost.Release(first.SessionId!, first.Token!);
-        check(!Alive(limitedPid), "releasing a preview kills its process");
+        check(await WaitUntilDead(limitedPid), "releasing a preview kills its process");
         if (third.SessionId is not null && third.Token is not null)
             limitedHost.Release(third.SessionId, third.Token);
 
@@ -238,9 +238,20 @@ internal static class ProgramPreviewChecks
             await Key(host, source, "a");
             await Key(host, source, "b");
             await Task.Delay(200);
+            for (var i = 0; i < 300; i++)
+            {
+                await host.SendInputAsync(source.SessionId!, source.Token!, new ProgramPreviewInput
+                {
+                    Kind = ProgramPreviewInputKind.MouseMove,
+                    X = 20 + (i % 40),
+                    Y = 20 + (i % 25)
+                });
+            }
+            var clicked = DateTime.UtcNow;
             await Click(host, source, 130, 254);
             await WaitForColor(host, source, 700, 80, 0x1F, 0x7A, 0x3A);
             await WaitForOutput(host, source, "CLICKED:ab");
+            check((DateTime.UtcNow - clicked).TotalSeconds < 5, "a burst of pointer moves does not delay the click");
             await WaitForColor(host, target, 700, 80, 0x1D, 0x4E, 0x89);
             check(!host.GetSnapshot(target.SessionId!, target.Token!).OutputText.Contains("CLICKED", StringComparison.Ordinal), "input reaches only the preview that was clicked");
             check(true, "a click and keystrokes change the real source program");
@@ -250,7 +261,7 @@ internal static class ProgramPreviewChecks
             if (source.SessionId is not null && source.Token is not null) host.Release(source.SessionId, source.Token);
             if (target.SessionId is not null && target.Token is not null) host.Release(target.SessionId, target.Token);
         }
-        check(!Alive(sourcePid) && !Alive(targetPid), "releasing a preview kills both programs");
+        check(await WaitUntilDead(sourcePid) && await WaitUntilDead(targetPid), "releasing a preview kills both programs");
     }
 
     private static ProgramLaunch GuiLaunch(string script) => new()
@@ -318,6 +329,14 @@ internal static class ProgramPreviewChecks
             await Task.Delay(100);
         }
         throw new Exception($"Pixel {x},{y} stayed {seen}; expected {red:X2}{green:X2}{blue:X2}. Status: {host.GetSnapshot(handle.SessionId!, handle.Token!).StatusText} {host.GetSnapshot(handle.SessionId!, handle.Token!).ErrorText}");
+    }
+
+    private static async Task<bool> WaitUntilDead(int pid)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (Alive(pid) && DateTime.UtcNow < deadline)
+            await Task.Delay(50);
+        return !Alive(pid);
     }
 
     private static bool Alive(int pid)

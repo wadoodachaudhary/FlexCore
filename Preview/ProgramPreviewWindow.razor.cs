@@ -23,6 +23,7 @@ public partial class ProgramPreviewWindow
     private bool _disposed;
     private bool _loopStarted;
     private bool _busy;
+    private readonly SemaphoreSlim _pointerOrder = new(1, 1);
     private long _lastMove;
     private string? _localMessage;
 
@@ -207,6 +208,7 @@ public partial class ProgramPreviewWindow
         {
             try { await _module.DisposeAsync(); } catch { }
         }
+        _pointerOrder.Dispose();
     }
 
     private async Task PollAsync()
@@ -238,31 +240,45 @@ public partial class ProgramPreviewWindow
 
     private async Task OnMouseDown(MouseEventArgs args)
     {
+        await InPointerOrder(() => PointerFromEventAsync(ProgramPreviewInputKind.MouseDown, args, (int)args.Button));
         await FocusAsync();
-        await PointerFromEventAsync(ProgramPreviewInputKind.MouseDown, args, (int)args.Button);
     }
 
     private Task OnMouseUp(MouseEventArgs args)
-        => PointerFromEventAsync(ProgramPreviewInputKind.MouseUp, args, (int)args.Button);
+        => InPointerOrder(() => PointerFromEventAsync(ProgramPreviewInputKind.MouseUp, args, (int)args.Button));
 
     private Task OnMouseMove(MouseEventArgs args)
     {
         var now = Environment.TickCount64;
-        if (now - _lastMove < 40) return Task.CompletedTask;
+        if (now - _lastMove < 80) return Task.CompletedTask;
         _lastMove = now;
-        return PointerFromEventAsync(ProgramPreviewInputKind.MouseMove, args, (int)args.Button);
+        return InPointerOrder(() => PointerFromEventAsync(ProgramPreviewInputKind.MouseMove, args, (int)args.Button));
     }
 
-    private async Task OnWheel(WheelEventArgs args)
-    {
-        var point = await MapAsync(args.ClientX, args.ClientY, args.OffsetX, args.OffsetY);
-        await SendAsync(new ProgramPreviewInput
+    private Task OnWheel(WheelEventArgs args)
+        => InPointerOrder(async () =>
         {
-            Kind = ProgramPreviewInputKind.Wheel,
-            X = point.X,
-            Y = point.Y,
-            WheelDelta = (int)Math.Round(args.DeltaY)
+            var point = await MapAsync(args.ClientX, args.ClientY, args.OffsetX, args.OffsetY);
+            await SendAsync(new ProgramPreviewInput
+            {
+                Kind = ProgramPreviewInputKind.Wheel,
+                X = point.X,
+                Y = point.Y,
+                WheelDelta = (int)Math.Round(args.DeltaY)
+            });
         });
+
+    private async Task InPointerOrder(Func<Task> send)
+    {
+        await _pointerOrder.WaitAsync(_lifetime.Token);
+        try
+        {
+            await send();
+        }
+        finally
+        {
+            _pointerOrder.Release();
+        }
     }
 
     private Task OnKeyDown(KeyboardEventArgs args)

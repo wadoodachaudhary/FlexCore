@@ -19,6 +19,8 @@ internal sealed class PreviewSession : IDisposable
     private CancellationTokenSource _cts = new();
     private CancellationTokenSource? _linked;
     private Channel<ProgramPreviewInput>? _inputs;
+    private ProgramPreviewInput? _pendingMove;
+    private int _moveArmed;
     private Process? _app;
     private Process? _xvfb;
     private Process? _ffmpeg;
@@ -179,7 +181,26 @@ internal sealed class PreviewSession : IDisposable
             if (_status is not (ProgramPreviewStatus.Running or ProgramPreviewStatus.Starting)) return false;
             channel = _inputs;
         }
-        if (channel is null || !AdmitInput()) return false;
+        if (channel is null) return false;
+
+        // Pointer motion is one slot. A burst of hovers must not sit ahead of a click.
+        if (input.Kind == ProgramPreviewInputKind.MouseMove)
+        {
+            TouchActivity();
+            lock (_gate)
+                _pendingMove = input;
+            if (Interlocked.CompareExchange(ref _moveArmed, 1, 0) == 0)
+                return channel.Writer.TryWrite(input);
+            return true;
+        }
+
+        if (input.Kind is ProgramPreviewInputKind.MouseDown or ProgramPreviewInputKind.MouseUp)
+        {
+            lock (_gate)
+                _pendingMove = null;
+        }
+
+        if (!AdmitInput()) return false;
         return channel.Writer.TryWrite(input);
     }
 
@@ -440,6 +461,13 @@ internal sealed class PreviewSession : IDisposable
             {
                 try
                 {
+                    if (input.Kind == ProgramPreviewInputKind.MouseMove)
+                    {
+                        var move = TakePendingMove(channel);
+                        if (move is null || Kind == ProgramPreviewKind.Console) continue;
+                        await WriteGuiAsync(move, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
                     if (Kind == ProgramPreviewKind.Console)
                         await WriteConsoleAsync(input, cancellationToken).ConfigureAwait(false);
                     else
@@ -688,6 +716,29 @@ internal sealed class PreviewSession : IDisposable
             _frameVersion++;
             _revision++;
         }
+    }
+
+    private ProgramPreviewInput? TakePendingMove(Channel<ProgramPreviewInput> channel)
+    {
+        ProgramPreviewInput? move;
+        lock (_gate)
+        {
+            move = _pendingMove;
+            _pendingMove = null;
+        }
+        Interlocked.Exchange(ref _moveArmed, 0);
+        ProgramPreviewInput? again;
+        lock (_gate)
+            again = _pendingMove;
+        if (again is not null && Interlocked.CompareExchange(ref _moveArmed, 1, 0) == 0)
+            channel.Writer.TryWrite(again);
+        return move;
+    }
+
+    private void TouchActivity()
+    {
+        lock (_gate)
+            _lastActivity = DateTimeOffset.UtcNow;
     }
 
     private bool AdmitInput()
