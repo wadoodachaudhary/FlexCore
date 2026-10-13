@@ -1444,19 +1444,25 @@ public static partial class ReportDesignerXmlSerializer
         var kind = Attribute(objectElement, "Kind");
         if (ReportObjectCapabilities.UnsupportedCrystalKind(kind, objectElement.Name.LocalName) is { } unsupportedKind)
             return unsupportedKind;
+        // Crystal's SDK export writes the object class as its kind ("FieldObject", "SubreportObject"); the designer and the
+        // positioned runtime name the kind alone ("Field", "Subreport"), as the native converter writes it.
         if (!string.IsNullOrWhiteSpace(kind))
-            return kind!;
+            return KindFromObjectClass(kind!) ?? kind!;
 
-        return objectElement.Name.LocalName switch
-        {
-            "TextObject" => "Text",
-            "FieldHeadingObject" => "FieldHeading",
-            "SubreportObject" => "Subreport",
-            "BoxObject" => "Box",
-            "LineObject" => "Line",
-            _ => "Field"
-        };
+        return KindFromObjectClass(objectElement.Name.LocalName) ?? "Field";
     }
+
+    private static string? KindFromObjectClass(string objectClass) => objectClass switch
+    {
+        "TextObject" => "Text",
+        "FieldHeadingObject" => "FieldHeading",
+        "SubreportObject" => "Subreport",
+        "BoxObject" => "Box",
+        "LineObject" => "Line",
+        "PictureObject" => "Picture",
+        "FieldObject" => "Field",
+        _ => null
+    };
 
     private static bool IsReportObjectElement(XElement element)
     {
