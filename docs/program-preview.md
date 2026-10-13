@@ -24,6 +24,7 @@ builder.Services.AddFlexCoreProgramPreview(options =>
 Frames can travel inside the Blazor circuit. For a side-by-side preview, map an image route so the browser loads the PNG directly. `AddFlexCoreProgramPreview` does not reference ASP.NET Core endpoint types, so the host maps the route:
 
 ```csharp
+app.UseWebSockets();
 app.MapGet(ProgramPreviewHttp.DefaultRoutePrefix + "/{sessionId}/frame",
     async (string sessionId, string? token, IProgramPreviewHost host, HttpContext http) =>
     {
@@ -33,9 +34,43 @@ app.MapGet(ProgramPreviewHttp.DefaultRoutePrefix + "/{sessionId}/frame",
         http.Response.Headers.CacheControl = "no-store";
         await http.Response.Body.WriteAsync(frame.Body);
     });
+app.Map(ProgramPreviewHttp.DefaultRoutePrefix + "/{sessionId}/app/{**path}", async (HttpContext http, string sessionId, IProgramPreviewHost host) =>
+{
+    var token = ProgramPreviewHttp.TokenFrom(http.Request.Query["token"], http.Request.Headers.Cookie);
+    var prefix = ProgramPreviewHttp.AppPrefix(ProgramPreviewHttp.DefaultRoutePrefix, sessionId);
+    var pathAndQuery = UpstreamPath(http.Request);
+    if (http.WebSockets.IsWebSocketRequest)
+    {
+        using var socket = await http.WebSockets.AcceptWebSocketAsync();
+        await ProgramPreviewProxy.ForwardWebSocketAsync(host, sessionId, token, pathAndQuery, socket, http.RequestAborted);
+        return;
+    }
+
+    var headers = http.Request.Headers.Select(header =>
+        new KeyValuePair<string, IEnumerable<string>>(header.Key, header.Value.Select(value => value ?? "").ToArray()));
+    await ProgramPreviewProxy.ForwardHttpAsync(host, sessionId, token, http.Request.Method, pathAndQuery, headers,
+        http.Request.Body, prefix, http.Response.Body, (status, responseHeaders) =>
+        {
+            http.Response.StatusCode = status;
+            foreach (var header in responseHeaders)
+                http.Response.Headers.Append(header.Key, header.Value.ToArray());
+        }, http.RequestAborted);
+});
+
+static string UpstreamPath(HttpRequest request)
+{
+    var query = QueryString.Empty;
+    foreach (var pair in request.Query)
+    {
+        if (pair.Key.Equals("token", StringComparison.OrdinalIgnoreCase)) continue;
+        foreach (var value in pair.Value)
+            query = query.Add(pair.Key, value ?? "");
+    }
+    return (request.Path.Value ?? "/") + query.Value;
+}
 ```
 
-Leave `FrameRoutePrefix` null to embed frames in the circuit instead. Set the prefix only when this route is mapped.
+Leave `FrameRoutePrefix` null to embed frames in the circuit instead. Set the prefix when the frame route is mapped. A launched web app also needs that prefix and the app route: the browser cannot open the server's loopback port, so the host proxies `http://127.0.0.1:<port>` through `{prefix}/{sessionId}/app`.
 
 The host is a singleton. Disposing the service provider stops every program. Blazor Server already does that on shutdown.
 
@@ -52,6 +87,8 @@ The host is a singleton. Disposing the service provider stops every program. Bla
                     TargetLabel="Target"
                     OwnerKey="@userId"
                     AutoStart="true" />
+
+<ProgramPreviewGroup OwnerKey="@userId" AutoStart="true" Items="_panes" />
 ```
 
 `ProgramLaunch` is the command. It is not taken from the browser.
@@ -66,11 +103,38 @@ var source = new ProgramLaunch
 };
 ```
 
-`Kind` is `Auto`, `Gui`, or `Console`. `Auto` uses a virtual display when the server has one, and fails with the prerequisite message when it does not. It does not silently turn a GUI program into a console pipe. Set `Console` for a terminal program. Console preview writes keystrokes to standard input and shows standard output. It is line-oriented: there is no terminal emulator, so full-screen text UIs and cooked backspace are not reproduced.
+`Kind` is `Auto`, `Gui`, `Console`, or `Web`. `Auto` uses a virtual display when the server has one, and fails with the prerequisite message when it does not. It does not silently turn a GUI program into a console pipe. Set `Console` for a terminal program. Console preview writes keystrokes to standard input and shows standard output. It is line-oriented: there is no terminal emulator, so full-screen text UIs and cooked backspace are not reproduced.
 
-`ProgramPreviewPair` starts, restarts, and stops both programs together. Each pane has its own status and error output.
+`ProgramPreviewPair` starts, restarts, and stops both programs together. Each pane has its own kind, status, and error output, so one side can be a GUI program and the other a web app. `ProgramPreviewGroup` does the same for any number of panes and one toolbar. A three-pane group uses three session slots.
 
-Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When it is omitted, the pair uses one generated owner for both windows.
+Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When it is omitted, the pair or group uses one generated owner for every window.
+
+## Web apps
+
+`ProgramPreviewKind.Web` is either a process the host starts, or an address that is already hosted.
+
+```csharp
+var blazor = new ProgramLaunch
+{
+    FileName = "dotnet",
+    Arguments = ["MyApp.dll", "--urls", "http://127.0.0.1:{port}"],
+    Kind = ProgramPreviewKind.Web
+};
+
+var hosted = new ProgramLaunch
+{
+    Kind = ProgramPreviewKind.Web,
+    Url = "https://preview.example/"
+};
+```
+
+A started server gets a port from `FirstPreviewPort` (41000) through `PreviewPortCount` (200), or `ProgramLaunch.Port` when that port must be fixed. `{port}`, `{url}`, and `{pathBase}` in arguments, environment values, and `Url` are replaced. The process also receives `FLEXCORE_PREVIEW_PORT`, `FLEXCORE_PREVIEW_URL`, and `FLEXCORE_PREVIEW_PATHBASE`. Unless the arguments contain `--urls` or the launch environment sets `ASPNETCORE_URLS`, the host replaces any inherited `ASPNETCORE_URLS` with the loopback origin and removes inherited `ASPNETCORE_HTTP_PORTS` and `ASPNETCORE_HTTPS_PORTS`. When `FrameRoutePrefix` is set, it sets `ASPNETCORE_PATHBASE` to `{prefix}/{sessionId}/app` so a Blazor app generates links under the proxy, replacing a path base inherited from the host.
+
+The host waits until that URL returns any HTTP response, then shows it. The same start timeout and idle and lifetime limits apply. Stopping, releasing, or the process exiting frees the port. The preview window polls the session, which keeps a running web preview from going idle while the page is open. An address-only launch probes `Url` and does not start a process; `Url` must be absolute `http` or `https` with no user info. `javascript:` and other schemes are rejected.
+
+The window shows the page in an iframe and an **Open** link (`target="_blank"`). For a server this host launched, both use `{prefix}/{sessionId}/app/?token=...` when the frame prefix is set. The app route forwards HTTP and WebSockets to loopback, strips `X-Frame-Options` and `Content-Security-Policy`, rewrites root-relative links and redirects onto the prefix, and sets an `HttpOnly` `FlexCore.Preview` cookie so later asset requests stay authorized. The app's own cookies are forwarded. An address that is already public is iframed directly and is not proxied; a site that refuses framing still opens from the **Open** link.
+
+Closing the preview page releases the session and stops a server this host started. The separate tab uses that same session.
 
 ## Converter shell
 
@@ -78,6 +142,7 @@ Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When 
 
 ```razor
 <ConverterShell EnableRunPreview="true"
+                OwnerKey="@userId"
                 SourcePreview="_source"
                 TargetPreview="_target"
                 SourcePreviewLabel="Source"
@@ -85,6 +150,8 @@ Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When 
                 AutoStartPreview="false"
                 Convert="@convert" />
 ```
+
+`OwnerKey` is passed through to the pair, so Run / Preview counts against the signed-in user's `MaxSessionsPerOwner` limit.
 
 Setting `Mode` to `ConverterShellMode.RunPreview` opens that layout directly. The editors stay in memory while the preview is visible. Convert and Clear still operate on that text.
 
@@ -99,6 +166,8 @@ A GUI session:
 5. Relays pointer and key events with `xdotool`. Pointer motion keeps only the latest position, so a burst of hover events cannot sit ahead of a click or a key.
 6. Stops the process tree on Stop, on dispose, on idle timeout, and on the maximum lifetime.
 
+A web session allocates its port under the same host lock that enforces the session limits, probes the URL until the start timeout, and proxies the browser to loopback only while the session is running and the token matches. `ResolveWeb` returns 401 for a bad token and 404 when the session is missing or is not a server this host started.
+
 The program's standard error is shown as error output. Standard output is kept on the session and shown for console previews.
 
 Calls accept at most 80 input events per second per session. Frame size defaults to 800×600. Change it with `DisplayWidth` and `DisplayHeight` (160–1920 by 120–1200). The launched process sees `FLEXCORE_PREVIEW_WIDTH` and `FLEXCORE_PREVIEW_HEIGHT`.
@@ -110,20 +179,25 @@ Sessions live in the server process. Scale-out needs affinity so the frame reque
 | Type | Role |
 | --- | --- |
 | `AddFlexCoreProgramPreview` | Registers `IProgramPreviewHost` and `ProgramPreviewOptions`. |
-| `IProgramPreviewHost` | Starts, stops, restarts, releases, reads frames, copies pixels, and sends input. |
-| `ProgramLaunch` | `FileName`, `Arguments`, `WorkingDirectory`, `Environment`, `Kind`, `Label`. |
-| `ProgramPreviewKind` | `Auto`, `Gui`, `Console`. |
-| `ProgramPreviewOptions` | Limits, display size, tool paths, `FrameRoutePrefix`. |
+| `IProgramPreviewHost` | Starts, stops, restarts, releases, reads frames, copies pixels, sends input, `Touch`, and `ResolveWeb`. |
+| `ProgramLaunch` | `FileName`, `Arguments`, `WorkingDirectory`, `Environment`, `Kind`, `Label`, `Url`, `Port`. `FileName` is optional for an address-only web preview. |
+| `ProgramPreviewKind` | `Auto`, `Gui`, `Console`, `Web`. |
+| `ProgramPreviewOptions` | Limits, display size, tool paths, `FrameRoutePrefix`, `FirstPreviewPort`, `PreviewPortCount`. |
 | `ProgramPreviewCapability` | Which tools were found, and `Message` when GUI is unavailable. |
 | `ProgramPreviewHandle` | `SessionId`, `Token`, and the first `Snapshot`. |
-| `ProgramPreviewSnapshot` | Status, status text, stdout, stderr, exit code, process id, display number, frame version. |
+| `ProgramPreviewSnapshot` | Status, status text, stdout, stderr, exit code, process id, display number, port, browser URL, frame version. |
 | `ProgramPreviewStatus` | `Missing`, `Unavailable`, `Starting`, `Running`, `Exited`, `Failed`, `Stopped`. |
 | `ProgramPreviewInput` | Mouse move/down/up, wheel, key, or text. Coordinates are framebuffer pixels. |
 | `ProgramPreviewFrame` | Status code, content type, and body for the image route. |
-| `ProgramPreviewHttp.DefaultRoutePrefix` | `/_flexcore/program-preview`. |
-| `ProgramPreviewWindow` | One preview. Parameters: `Launch`, `Label`, `AutoStart`, `ShowToolbar`, `ShowOutput`, `OwnerKey`, `StartText`, `RestartText`, `StopText`. |
+| `ProgramPreviewHttp` | `DefaultRoutePrefix` (`/_flexcore/program-preview`), `CookieName`, `AppPrefix`, `AppPath`, `TokenFrom`. |
+| `ProgramPreviewProxy` | `ForwardHttpAsync` and `ForwardWebSocketAsync`. The host maps the route. |
+| `ProgramPreviewWebTarget` | Status code and loopback upstream from `ResolveWeb`. |
+| `ProgramPreviewPane` | `Label` and `Launch` for one group pane. |
+| `ProgramPreviewWindow` | One preview. Parameters: `Launch`, `Label`, `AutoStart`, `ShowToolbar`, `ShowOutput`, `OwnerKey`, `StartText`, `RestartText`, `StopText`. A web snapshot adds an **Open** link. |
 | `ProgramPreviewPair` | Two previews. Parameters: `SourceLaunch`, `TargetLaunch`, `SourceLabel`, `TargetLabel`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `PairLabel`. |
+| `ProgramPreviewGroup` | N previews, one toolbar. Parameters: `Items`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `GroupLabel`. |
 | `ConverterShell.EnableRunPreview` | Adds the Run / Preview mode. |
+| `ConverterShell.OwnerKey` | Owner passed to that mode's pair. |
 | `ConverterShell.SourcePreview` / `TargetPreview` | Launches used by that mode. |
 
 `ProgramPreviewWindow` also exposes `StartAsync`, `RestartAsync`, `StopAsync`, `PointerAsync`, and `KeyAsync`.
@@ -181,7 +255,7 @@ Add the toolkit packages the migrated programs need. Enable WebSockets (Blazor S
 
 ## Try the harness
 
-`tests/FlexCore.PreviewHarness` is a Blazor Server page that hosts `ConverterShell` in Run / Preview with two small Tk windows. It is a facility check, not a product sample.
+`tests/FlexCore.PreviewHarness` is a Blazor Server page that hosts `ConverterShell` in Run / Preview with two small Tk windows, plus a group that mixes a GUI program, a console program, and a local web server. It is a facility check, not a product sample. The page maps the frame route and the web app route.
 
 ```sh
 dotnet run --project tests/FlexCore.PreviewHarness

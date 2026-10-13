@@ -481,9 +481,9 @@ with `dotnet run --project tests/FlexCore.RegressionTests/FlexCore.RegressionTes
 
 ## Live program preview
 
-`ProgramPreviewWindow` and `ProgramPreviewPair` run a program on the server and show it in the browser. Clicks and keystrokes in the preview are delivered to that process. `ConverterShell` can show the pair as a Run / Preview mode when the host passes `EnableRunPreview` and the launch commands.
+`ProgramPreviewWindow`, `ProgramPreviewPair`, and `ProgramPreviewGroup` run programs on the server and show them in the browser. A pane is a GUI window, a console, or a web app. Clicks and keystrokes in a GUI preview are delivered to that process. A web pane starts a server and waits until its URL responds, or shows an address that is already hosted. The page iframes it and can open the same URL in a separate tab. `ConverterShell` can show a pair as a Run / Preview mode when the host passes `EnableRunPreview`, the launch commands, and `OwnerKey` for the signed-in user.
 
-The host registers `AddFlexCoreProgramPreview` and, for image delivery outside the circuit, maps `ProgramPreviewHttp.DefaultRoutePrefix`. GUI sessions need Xvfb, xdotool, and ffmpeg (or xwd) on the server. When those tools are missing, the preview stays on the page and names the packages to install. Console programs can be relayed without a virtual display.
+The host registers `AddFlexCoreProgramPreview` and, for image delivery outside the circuit, maps `ProgramPreviewHttp.DefaultRoutePrefix`. A launched web app also needs the `{prefix}/{sessionId}/app` proxy route. GUI sessions need Xvfb, xdotool, and ffmpeg (or xwd) on the server. When those tools are missing, the preview stays on the page and names the packages to install. Console and web programs can be relayed without a virtual display.
 
 See [live program preview](docs/program-preview.md) for the API, the Linux packages, macOS containers, and Azure App Service.
 

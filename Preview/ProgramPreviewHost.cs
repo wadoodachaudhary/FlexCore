@@ -137,6 +137,22 @@ internal sealed class ProgramPreviewHost : IProgramPreviewHost, IDisposable
         return Task.FromResult(session.Post(input));
     }
 
+    public void Touch(string sessionId, string? token)
+    {
+        if (token is not null && TryGet(sessionId, token, out var session))
+            session.Touch();
+    }
+
+    public ProgramPreviewWebTarget ResolveWeb(string sessionId, string? token)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var session))
+            return new ProgramPreviewWebTarget(404, null);
+        if (!session.TokenEquals(token))
+            return new ProgramPreviewWebTarget(401, null);
+        var upstream = session.ProxiedUpstream;
+        return upstream is null ? new ProgramPreviewWebTarget(404, null) : new ProgramPreviewWebTarget(200, upstream);
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -177,6 +193,7 @@ internal sealed class ProgramPreviewHost : IProgramPreviewHost, IDisposable
     {
         ProgramPreviewKind.Console => ProgramPreviewKind.Console,
         ProgramPreviewKind.Gui => ProgramPreviewKind.Gui,
+        ProgramPreviewKind.Web => ProgramPreviewKind.Web,
         _ => Capability.CanRunGui ? ProgramPreviewKind.Gui : null
     };
 

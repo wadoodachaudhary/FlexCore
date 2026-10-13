@@ -77,6 +77,9 @@ public partial class ConverterShell
     [Parameter] public string TargetPreviewLabel { get; set; } = "Target";
     [Parameter] public bool AutoStartPreview { get; set; }
 
+    /// <summary>Owner passed to the Run / Preview pair so <c>MaxSessionsPerOwner</c> follows the signed-in user.</summary>
+    [Parameter] public string? OwnerKey { get; set; }
+
     [Parameter] public string SourceText { get; set; } = "";
     [Parameter] public EventCallback<string> SourceTextChanged { get; set; }
     [Parameter] public string? SourceFileName { get; set; }

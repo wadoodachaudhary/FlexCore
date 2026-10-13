@@ -28,6 +28,10 @@ internal sealed class PreviewSession : IDisposable
     private Task? _capture;
     private int _display = -1;
     private string? _displayLockPath;
+    private int _port = -1;
+    private string? _portLockPath;
+    private Uri? _upstream;
+    private string? _browserUrl;
     private string? _authority;
     private ProgramPreviewStatus _status;
     private string _statusText;
@@ -70,6 +74,17 @@ internal sealed class PreviewSession : IDisposable
     public ProgramPreviewKind Kind { get; }
     public string Home { get; }
     public bool OccupiesSlot { get { lock (_gate) return _status is ProgramPreviewStatus.Starting or ProgramPreviewStatus.Running; } }
+
+    public void Touch() => TouchActivity();
+
+    public Uri? ProxiedUpstream
+    {
+        get
+        {
+            lock (_gate)
+                return _status == ProgramPreviewStatus.Running && _upstream is { IsLoopback: true } ? _upstream : null;
+        }
+    }
 
     public bool TokenEquals(string? token)
     {
@@ -133,6 +148,8 @@ internal sealed class PreviewSession : IDisposable
             _inputs = Channel.CreateUnbounded<ProgramPreviewInput>(new UnboundedChannelOptions { SingleReader = true });
             if (Kind == ProgramPreviewKind.Console)
                 StartConsole();
+            else if (Kind == ProgramPreviewKind.Web)
+                await StartWebAsync(token).ConfigureAwait(false);
             else
                 await StartGuiAsync(token).ConfigureAwait(false);
             var channel = _inputs;
@@ -218,6 +235,8 @@ internal sealed class PreviewSession : IDisposable
                 ExitCode = _exitCode,
                 ProcessId = _processId,
                 DisplayNumber = _display >= 0 ? _display : null,
+                Port = _port >= 0 ? _port : null,
+                Url = _browserUrl,
                 FrameVersion = _frameVersion,
                 FrameWidth = _frameWidth,
                 FrameHeight = _frameHeight,
@@ -300,6 +319,143 @@ internal sealed class PreviewSession : IDisposable
         if (_app.HasExited)
             throw new InvalidOperationException($"The program exited ({_app.ExitCode}). {FirstDetail()}");
     }
+
+    private async Task StartWebAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_launch.FileName))
+        {
+            var address = new Uri(_launch.Url!);
+            if (!await ProbeAsync(address, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("The preview URL did not respond.");
+            lock (_gate)
+            {
+                _browserUrl = address.AbsoluteUri;
+                _revision++;
+            }
+            return;
+        }
+
+        var slot = PreviewPorts.Allocate(_options, _launch.Port);
+        _port = slot.Port;
+        _portLockPath = slot.LockPath;
+        var origin = new Uri($"http://127.0.0.1:{_port}/");
+        var pathBase = WebPathBase();
+        var ready = ReadyUrl(origin, pathBase);
+        lock (_gate)
+        {
+            _upstream = origin;
+            _browserUrl = pathBase is null
+                ? origin.AbsoluteUri
+                : pathBase + "/?token=" + Uri.EscapeDataString(Token);
+        }
+        _app = StartText(WebProcess(origin, pathBase), userVisible: true);
+        _processId = _app.Id;
+        await WaitForWebAsync(ready, cancellationToken).ConfigureAwait(false);
+    }
+
+    private string? WebPathBase()
+    {
+        var prefix = _options.FrameRoutePrefix;
+        if (string.IsNullOrWhiteSpace(prefix)) return null;
+        return prefix.TrimEnd('/') + "/" + Id + "/app";
+    }
+
+    private Uri ReadyUrl(Uri origin, string? pathBase)
+    {
+        if (string.IsNullOrWhiteSpace(_launch.Url)) return origin;
+        var text = ApplyTokens(_launch.Url, _port, origin.AbsoluteUri, pathBase);
+        if (!Uri.TryCreate(text, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            throw new InvalidOperationException("Url must be an absolute http or https address.");
+        return uri;
+    }
+
+    private ProcessStartInfo WebProcess(Uri origin, string? pathBase)
+    {
+        var url = origin.AbsoluteUri;
+        var psi = new ProcessStartInfo(_launch.FileName!)
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+        if (!string.IsNullOrEmpty(_launch.WorkingDirectory))
+            psi.WorkingDirectory = _launch.WorkingDirectory;
+        var mentionsUrls = false;
+        foreach (var argument in _launch.Arguments)
+        {
+            var value = ApplyTokens(argument, _port, url, pathBase);
+            if (value == "--urls") mentionsUrls = true;
+            psi.ArgumentList.Add(value);
+        }
+        psi.Environment["FLEXCORE_PREVIEW_PORT"] = _port.ToString();
+        psi.Environment["FLEXCORE_PREVIEW_URL"] = url;
+        if (pathBase is not null)
+            psi.Environment["FLEXCORE_PREVIEW_PATHBASE"] = pathBase;
+        if (_launch.Environment is not null)
+        {
+            foreach (var pair in _launch.Environment)
+            {
+                if (pair.Value is null) psi.Environment.Remove(pair.Key);
+                else psi.Environment[pair.Key] = ApplyTokens(pair.Value, _port, url, pathBase);
+            }
+        }
+        // The host process often already has ASPNETCORE_URLS. A started server must bind the
+        // preview port unless this launch names the binding itself.
+        if (!mentionsUrls && !LaunchSets("ASPNETCORE_URLS"))
+            psi.Environment["ASPNETCORE_URLS"] = url.TrimEnd('/');
+        if (!mentionsUrls && !LaunchSets("ASPNETCORE_HTTP_PORTS"))
+            psi.Environment.Remove("ASPNETCORE_HTTP_PORTS");
+        if (!mentionsUrls && !LaunchSets("ASPNETCORE_HTTPS_PORTS"))
+            psi.Environment.Remove("ASPNETCORE_HTTPS_PORTS");
+        if (pathBase is not null && !LaunchSets("ASPNETCORE_PATHBASE"))
+            psi.Environment["ASPNETCORE_PATHBASE"] = pathBase;
+        return psi;
+    }
+
+    private bool LaunchSets(string name)
+        => _launch.Environment?.ContainsKey(name) == true;
+
+    private async Task WaitForWebAsync(Uri ready, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_app is { HasExited: true })
+                throw new InvalidOperationException($"The program exited ({_app.ExitCode}). {FirstDetail()}");
+            if (await ProbeAsync(ready, cancellationToken).ConfigureAwait(false))
+                return;
+            await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task<bool> ProbeAsync(Uri ready, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(2));
+            using var request = new HttpRequestMessage(HttpMethod.Get, ready);
+            using var response = await WebProbe.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch (HttpRequestException)
+        {
+            return false;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+    }
+
+    private static string ApplyTokens(string value, int port, string url, string? pathBase)
+        => value.Replace("{port}", port.ToString(), StringComparison.Ordinal)
+            .Replace("{url}", url, StringComparison.Ordinal)
+            .Replace("{pathBase}", pathBase ?? "", StringComparison.Ordinal);
+
+    private static readonly HttpClient WebProbe = new(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false })
+    {
+        Timeout = TimeSpan.FromSeconds(2)
+    };
 
     private void StartConsole()
     {
@@ -614,6 +770,8 @@ internal sealed class PreviewSession : IDisposable
         catch (OperationCanceledException) { return; }
         catch (Exception) { return; }
         if (cancellationToken.IsCancellationRequested) return;
+        if (Kind == ProgramPreviewKind.Web)
+            ReleaseWebEndpoint();
         lock (_gate)
         {
             if (_status is not ProgramPreviewStatus.Running) return;
@@ -627,7 +785,7 @@ internal sealed class PreviewSession : IDisposable
 
     private ProcessStartInfo Child(bool gui)
     {
-        var psi = new ProcessStartInfo(_launch.FileName)
+        var psi = new ProcessStartInfo(_launch.FileName!)
         {
             UseShellExecute = false,
             CreateNoWindow = true
@@ -788,6 +946,19 @@ internal sealed class PreviewSession : IDisposable
         }
     }
 
+    private void ReleaseWebEndpoint()
+    {
+        string? path;
+        lock (_gate)
+        {
+            path = _portLockPath;
+            _portLockPath = null;
+            _port = -1;
+            _upstream = null;
+        }
+        PreviewPorts.Release(path);
+    }
+
     private void StopCore(string? reason)
     {
         try { _cts.Cancel(); } catch (ObjectDisposedException) { }
@@ -800,6 +971,7 @@ internal sealed class PreviewSession : IDisposable
         DisplaySlots.Release(_displayLockPath);
         _displayLockPath = null;
         _display = -1;
+        ReleaseWebEndpoint();
         if (reason is null) return;
         lock (_gate)
         {

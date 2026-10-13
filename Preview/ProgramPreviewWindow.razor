@@ -14,6 +14,10 @@
     {
         <div class="fx-preview-toolbar">
             <span class="fx-preview-label">@Label</span>
+            @if (WebUrl is not null)
+            {
+                <a class="fx-preview-open" href="@WebUrl" target="_blank" rel="noopener noreferrer">Open</a>
+            }
             <span class="fx-preview-tools">
                 <button type="button" class="fx-preview-tool" disabled="@(!CanStart)" @onclick="StartAsync">@StartText</button>
                 <button type="button" class="fx-preview-tool" disabled="@(!CanRestart)" @onclick="RestartAsync">@RestartText</button>
@@ -25,12 +29,20 @@
     {
         <div class="fx-preview-toolbar">
             <span class="fx-preview-label">@Label</span>
+            @if (WebUrl is not null)
+            {
+                <a class="fx-preview-open" href="@WebUrl" target="_blank" rel="noopener noreferrer">Open</a>
+            }
         </div>
     }
     <div class="fx-preview-stage" tabindex="0" @ref="_stage"
          @onkeydown="OnKeyDown" @onkeydown:preventDefault="true"
          @onkeyup:preventDefault="true">
-        @if (ShowConsole)
+        @if (ShowWeb)
+        {
+            <iframe class="fx-preview-web" src="@WebUrl" title="@($"{Label} live preview")" referrerpolicy="no-referrer"></iframe>
+        }
+        else if (ShowConsole)
         {
             <pre class="fx-preview-console" aria-label="@($"{Label} output")">@ConsoleText</pre>
         }

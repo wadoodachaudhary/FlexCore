@@ -4,12 +4,13 @@
 <PageTitle>Live program preview</PageTitle>
 
 <h1>Live program preview</h1>
-<p class="note">Both windows are real programs on this server. Clicks and keystrokes in a window are delivered to that process.</p>
+<p class="note">The windows are real programs on this server. Clicks and keystrokes in a GUI window are delivered to that process. The web window is the same server, shown in the page and openable in its own tab.</p>
 
 <ConverterShell EnableRunPreview="true"
                 Mode="ConverterShellMode.RunPreview"
                 AutoMode="false"
                 ShowInstructions="false"
+                OwnerKey="harness-user"
                 SourcePreview="@_source"
                 TargetPreview="@_target"
                 SourcePreviewLabel="Source"
@@ -21,6 +22,11 @@
                 TargetKindId="target"
                 FooterText="Run / Preview keeps the programs on the server." />
 
+<ProgramPreviewGroup GroupLabel="GUI, console, and web"
+                     OwnerKey="harness-user"
+                     AutoStart="true"
+                     Items="@_group" />
+
 @code {
     private static readonly IReadOnlyList<ConverterKind> _kinds =
     [
@@ -30,6 +36,29 @@
 
     private readonly ProgramLaunch _source = Launch("source_form.py");
     private readonly ProgramLaunch _target = Launch("target_form.py");
+    private readonly IReadOnlyList<ProgramPreviewPane> _group =
+    [
+        new() { Label = "GUI", Launch = Launch("source_form.py") },
+        new()
+        {
+            Label = "Console",
+            Launch = new ProgramLaunch
+            {
+                FileName = "python3",
+                Arguments = ["-c", "print('console-ready', flush=True); input()"],
+                Kind = ProgramPreviewKind.Console
+            }
+        },
+        new() { Label = "Web", Launch = WebLaunch() }
+    ];
+
+    private static ProgramLaunch WebLaunch() => new()
+    {
+        FileName = "python3",
+        Arguments = [Path.Combine(AppContext.BaseDirectory, "Fixtures", "Preview", "web_ok.py"), "{port}"],
+        WorkingDirectory = AppContext.BaseDirectory,
+        Kind = ProgramPreviewKind.Web
+    };
 
     private static ProgramLaunch Launch(string script) => new()
     {

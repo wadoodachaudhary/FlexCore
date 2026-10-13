@@ -52,6 +52,8 @@ public partial class ProgramPreviewWindow
     private bool CanRestart => Enabled && !_busy && Launch is not null && _sessionId is not null;
     private bool CanStop => Enabled && Status is ProgramPreviewStatus.Running or ProgramPreviewStatus.Starting;
     private bool ShowConsole => _snapshot?.Kind == ProgramPreviewKind.Console && _sessionId is not null;
+    private bool ShowWeb => _snapshot?.Kind == ProgramPreviewKind.Web && _sessionId is not null && !string.IsNullOrEmpty(_snapshot.Url);
+    private string? WebUrl => ShowWeb ? _snapshot?.Url : null;
     private bool IsAlert => Status is ProgramPreviewStatus.Failed or ProgramPreviewStatus.Unavailable || _localMessage is not null && _snapshot is null;
     private string SurfaceLabel => string.IsNullOrWhiteSpace(Label) ? "Live preview" : Label + " live preview";
     private string ConsoleText => string.IsNullOrEmpty(_snapshot?.OutputText) ? "" : _snapshot.OutputText;
@@ -83,7 +85,7 @@ public partial class ProgramPreviewWindow
     }
 
     private string? GuiBlocked
-        => Launch?.Kind == ProgramPreviewKind.Console ? null
+        => Launch?.Kind is ProgramPreviewKind.Console or ProgramPreviewKind.Web ? null
             : Host is { Capability.CanRunGui: false } host ? host.Capability.Message : null;
 
     private string? FrameSource
@@ -221,6 +223,8 @@ public partial class ProgramPreviewWindow
                 var host = Host;
                 if (host is null || _sessionId is null || _token is null) continue;
                 var snapshot = host.GetSnapshot(_sessionId, _token);
+                if (snapshot.Kind == ProgramPreviewKind.Web)
+                    host.Touch(_sessionId, _token);
                 if (snapshot.Status == ProgramPreviewStatus.Missing) continue;
                 if (_snapshot is null || snapshot.Revision != _snapshot.Revision)
                     await ApplySnapshotAsync(snapshot);

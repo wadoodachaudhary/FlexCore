@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Fx.ControlKit.Conversion;
 using Fx.ControlKit.Preview;
 using Microsoft.AspNetCore.Components;
@@ -45,6 +46,7 @@ internal static class ProgramPreviewChecks
             var shellRoot = await renderer.RenderComponentAsync<ConverterShell>(ParameterView.FromDictionary(new Dictionary<string, object?>
             {
                 ["EnableRunPreview"] = true,
+                ["OwnerKey"] = "user-42",
                 ["SourcePreviewLabel"] = "Left program",
                 ["TargetPreviewLabel"] = "Right program",
                 ["ShowInstructions"] = false
@@ -55,6 +57,7 @@ internal static class ProgramPreviewChecks
             var previewHtml = shellRoot.ToHtmlString();
             check(shell.EffectiveMode == ConverterShellMode.RunPreview && previewHtml.Contains("data-mode=\"RunPreview\""), "run preview mode replaces the editors");
             check(previewHtml.Contains("Left program") && previewHtml.Contains("Right program") && previewHtml.Contains(">Start<") && previewHtml.Contains(">Stop<"), "the shell hosts the side-by-side preview");
+            check(previewHtml.Contains("data-owner=\"user-42\""), "run preview keeps the signed-in owner");
             check(previewHtml.Contains("AddFlexCoreProgramPreview") && !previewHtml.Contains("Your input code here"), "a preview without the host service explains how to register it");
         });
 
@@ -80,7 +83,33 @@ internal static class ProgramPreviewChecks
             var host = (RecordingPreviewHost)uiServices.GetRequiredService<IProgramPreviewHost>();
             check(host.Inputs.Any(input => input.Kind == ProgramPreviewInputKind.MouseDown && input.X == 130 && input.Y == 254)
                 && host.Inputs.Any(input => input.Kind == ProgramPreviewInputKind.KeyDown && input.Key == "a"), "preview window events reach the host as pointer and key input");
+            var webRoot = await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Web app",
+                ["Launch"] = new ProgramLaunch { Kind = ProgramPreviewKind.Web, Url = "http://127.0.0.1:9/" }
+            }));
+            var webWindow = activation.All.OfType<ProgramPreviewWindow>().Last();
+            await webWindow.StartAsync();
+            var webHtml = webRoot.ToHtmlString();
+            check(webHtml.Contains("<iframe") && webHtml.Contains(">Open<") && webHtml.Contains("http://127.0.0.1:9/"), "a web preview shows the page and an open link");
+            var groupRoot = await uiRenderer.RenderComponentAsync<ProgramPreviewGroup>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["OwnerKey"] = "user-42",
+                ["Items"] = new ProgramPreviewPane[]
+                {
+                    new() { Label = "C++", Launch = new ProgramLaunch { FileName = "echo", Kind = ProgramPreviewKind.Gui } },
+                    new() { Label = "Python", Launch = new ProgramLaunch { FileName = "python3", Kind = ProgramPreviewKind.Console } },
+                    new() { Label = "Blazor", Launch = new ProgramLaunch { Kind = ProgramPreviewKind.Web, Url = "http://127.0.0.1:9/" } }
+                }
+            }));
+            var groupHtml = groupRoot.ToHtmlString();
+            check(groupHtml.Contains("data-owner=\"user-42\"", StringComparison.Ordinal)
+                && groupHtml.Contains("C&#x2B;&#x2B;", StringComparison.Ordinal)
+                && groupHtml.Contains("Python", StringComparison.Ordinal)
+                && groupHtml.Contains("Blazor", StringComparison.Ordinal)
+                && groupHtml.Split(">Start<").Length == 2, "a preview group mixes GUI, console, and web under one toolbar");
             await window.DisposeAsync();
+            await webWindow.DisposeAsync();
         });
 
         await using var blind = Build(options =>
@@ -89,6 +118,7 @@ internal static class ProgramPreviewChecks
             options.XdotoolPath = "/no/such/flexcore-xdotool";
             options.FfmpegPath = "/no/such/flexcore-ffmpeg";
             options.XwdPath = "/no/such/flexcore-xwd";
+            options.FrameRoutePrefix = ProgramPreviewHttp.DefaultRoutePrefix;
         });
         var blindHost = blind.GetRequiredService<IProgramPreviewHost>();
         check(!blindHost.Capability.CanRunGui && blindHost.Capability.Message.Contains("apt-get", StringComparison.OrdinalIgnoreCase), "missing virtual-display tools produce an install message");
@@ -107,6 +137,7 @@ internal static class ProgramPreviewChecks
         check(true, "console preview relays program output");
         if (consoleOnly.SessionId is not null && consoleOnly.Token is not null)
             blindHost.Release(consoleOnly.SessionId, consoleOnly.Token);
+        await ExerciseWeb(blindHost, check);
 
         await using var limited = Build(options =>
         {
@@ -220,6 +251,138 @@ internal static class ProgramPreviewChecks
                 xwdHost.Release(xwdSession.SessionId, xwdSession.Token);
         }
     }
+
+    private static async Task ExerciseWeb(IProgramPreviewHost host, Action<bool, string> check)
+    {
+        var rejected = await host.StartAsync(new ProgramLaunch { Kind = ProgramPreviewKind.Web, Url = "javascript:alert(1)" });
+        check(rejected.Snapshot.Status == ProgramPreviewStatus.Failed && !rejected.HasSession, "a script URL is rejected");
+
+        Environment.SetEnvironmentVariable("ASPNETCORE_URLS", "http://127.0.0.1:9");
+        Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", "9");
+        Environment.SetEnvironmentVariable("ASPNETCORE_PATHBASE", "/host-base");
+        try
+        {
+        var server = await host.StartAsync(WebLaunch(), "web-user");
+        try
+        {
+            check(server.Snapshot.Status == ProgramPreviewStatus.Running && server.Snapshot.Port is > 0, "a web server reaches Running: " + server.Snapshot.StatusText);
+            check(server.Snapshot.Url is not null && server.Snapshot.Url.Contains("/app/?token=", StringComparison.Ordinal), "a launched web preview publishes an openable route");
+            var upstream = $"http://127.0.0.1:{server.Snapshot.Port}/";
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            var direct = await client.GetStringAsync(upstream);
+            check(direct.StartsWith("preview-web-ok", StringComparison.Ordinal)
+                && direct.Contains($"urls=http://127.0.0.1:{server.Snapshot.Port}", StringComparison.Ordinal)
+                && direct.Contains("base=" + ProgramPreviewHttp.AppPrefix(ProgramPreviewHttp.DefaultRoutePrefix, server.SessionId!), StringComparison.Ordinal)
+                && !direct.Contains("/host-base", StringComparison.Ordinal)
+                && !direct.Contains("urls=http://127.0.0.1:9", StringComparison.Ordinal),
+                "the launched web server answers on its port with the preview URL and path base");
+
+            var body = new MemoryStream();
+            var headers = new List<KeyValuePair<string, IEnumerable<string>>>();
+            await ProgramPreviewProxy.ForwardHttpAsync(host, server.SessionId!, server.Token, "GET", "/check", [], null,
+                ProgramPreviewHttp.AppPrefix(ProgramPreviewHttp.DefaultRoutePrefix, server.SessionId!), body,
+                (status, responseHeaders) =>
+                {
+                    check(status == 200 && !responseHeaders.Any(header => header.Key.Equals("X-Frame-Options", StringComparison.OrdinalIgnoreCase)), "the web proxy returns the app and strips frame blocking");
+                    headers.AddRange(responseHeaders);
+                }, CancellationToken.None);
+            check(Encoding.UTF8.GetString(body.ToArray()).Contains("preview-web-ok /check", StringComparison.Ordinal)
+                && headers.Any(header => header.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase)), "the web proxy relays the response and sets the preview cookie");
+            check(host.ResolveWeb(server.SessionId!, "not-the-token").StatusCode == 401, "a web proxy rejects the wrong token");
+
+            var prefix = ProgramPreviewHttp.AppPrefix(ProgramPreviewHttp.DefaultRoutePrefix, server.SessionId!);
+            var page = new MemoryStream();
+            var pageHeaders = new List<KeyValuePair<string, IEnumerable<string>>>();
+            await ProgramPreviewProxy.ForwardHttpAsync(host, server.SessionId!, server.Token, "GET", "/html", [], null, prefix, page,
+                (status, responseHeaders) =>
+                {
+                    check(status == 200
+                        && !responseHeaders.Any(header => header.Key.Equals("X-Frame-Options", StringComparison.OrdinalIgnoreCase))
+                        && !responseHeaders.Any(header => header.Key.Equals("Content-Security-Policy", StringComparison.OrdinalIgnoreCase)),
+                        "the web proxy strips frame and content-security headers");
+                    pageHeaders.AddRange(responseHeaders);
+                }, CancellationToken.None);
+            var html = Encoding.UTF8.GetString(page.ToArray());
+            check(html.Contains($"href=\"{prefix}/app.css\"", StringComparison.Ordinal)
+                && html.Contains("href=\"//cdn.example/lib\"", StringComparison.Ordinal)
+                && html.Contains($"src=\"{prefix}/pic.png\"", StringComparison.Ordinal)
+                && html.Contains($"action=\"{prefix}/save\"", StringComparison.Ordinal)
+                && html.Contains($"url({prefix}/bg.png)", StringComparison.Ordinal),
+                "the web proxy rewrites root-relative links and leaves protocol-relative URLs");
+
+            var redirectHeaders = new List<KeyValuePair<string, IEnumerable<string>>>();
+            await ProgramPreviewProxy.ForwardHttpAsync(host, server.SessionId!, server.Token, "GET", "/redirect", [], null, prefix, new MemoryStream(),
+                (_, responseHeaders) => redirectHeaders.AddRange(responseHeaders), CancellationToken.None);
+            check(redirectHeaders.Any(header => header.Key.Equals("Location", StringComparison.OrdinalIgnoreCase)
+                && header.Value.Contains(prefix + "/next")), "the web proxy rewrites a root-relative redirect");
+
+            var echoed = new MemoryStream();
+            await ProgramPreviewProxy.ForwardHttpAsync(host, server.SessionId!, server.Token, "GET", "/echo",
+                [new("Cookie", [$"{ProgramPreviewHttp.CookieName}=secret; theme=dark"])], null, prefix, echoed,
+                (_, _) => { }, CancellationToken.None);
+            var cookieText = Encoding.UTF8.GetString(echoed.ToArray());
+            check(cookieText.Contains("theme=dark", StringComparison.Ordinal) && !cookieText.Contains("secret", StringComparison.Ordinal),
+                "the web proxy forwards the app cookie and drops the preview cookie");
+
+            var other = await host.StartAsync(WebLaunch(), "web-user");
+            check(other.Snapshot.Status == ProgramPreviewStatus.Running && other.Snapshot.Port != server.Snapshot.Port, "two web previews receive different ports");
+            if (other.SessionId is not null && other.Token is not null)
+                host.Release(other.SessionId, other.Token);
+
+            var address = await host.StartAsync(new ProgramLaunch { Kind = ProgramPreviewKind.Web, Url = upstream }, "web-user");
+            check(address.Snapshot.Status == ProgramPreviewStatus.Running && address.Snapshot.ProcessId is null && address.Snapshot.Url == new Uri(upstream).AbsoluteUri
+                && host.ResolveWeb(address.SessionId!, address.Token!).Upstream is null, "an address preview shows the hosted URL without a process");
+            if (address.SessionId is not null && address.Token is not null)
+                host.Release(address.SessionId, address.Token);
+
+            var console = await host.StartAsync(new ProgramLaunch
+            {
+                FileName = "python3",
+                Arguments = ["-c", "print('mixed-ok', flush=True)"],
+                Kind = ProgramPreviewKind.Console
+            }, "web-user");
+            check(console.Snapshot.Status == ProgramPreviewStatus.Running && server.Snapshot.Status == ProgramPreviewStatus.Running, "console and web previews run together");
+            if (console.SessionId is not null && console.Token is not null)
+                host.Release(console.SessionId, console.Token);
+        }
+        finally
+        {
+            var pid = server.Snapshot.ProcessId ?? 0;
+            if (server.SessionId is not null && server.Token is not null)
+                host.Release(server.SessionId, server.Token);
+            check(await WaitUntilDead(pid), "releasing a web preview kills its server");
+        }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ASPNETCORE_URLS", null);
+            Environment.SetEnvironmentVariable("ASPNETCORE_HTTP_PORTS", null);
+            Environment.SetEnvironmentVariable("ASPNETCORE_PATHBASE", null);
+        }
+
+        await using var limited = Build(options =>
+        {
+            options.PreviewPortCount = 1;
+            options.FirstPreviewPort = 42000;
+            options.MaxConcurrentSessions = 4;
+            options.XvfbPath = "/no/such/flexcore-xvfb";
+            options.XdotoolPath = "/no/such/flexcore-xdotool";
+        });
+        var limitedHost = limited.GetRequiredService<IProgramPreviewHost>();
+        var firstPort = await limitedHost.StartAsync(WebLaunch(), "ports");
+        var secondPort = await limitedHost.StartAsync(WebLaunch(), "ports");
+        check(firstPort.Snapshot.Status == ProgramPreviewStatus.Running && secondPort.Snapshot.Status == ProgramPreviewStatus.Failed
+            && secondPort.Snapshot.StatusText.Contains("port", StringComparison.OrdinalIgnoreCase), "the preview port range rejects an extra web server");
+        if (firstPort.SessionId is not null && firstPort.Token is not null)
+            limitedHost.Release(firstPort.SessionId, firstPort.Token);
+    }
+
+    private static ProgramLaunch WebLaunch() => new()
+    {
+        FileName = "python3",
+        Arguments = [Fixture("web_ok.py"), "{port}"],
+        Kind = ProgramPreviewKind.Web
+    };
 
     private static async Task ExerciseFreshSocketDirectory(IProgramPreviewHost host, Action<bool, string> check)
     {
@@ -450,21 +613,27 @@ internal static class ProgramPreviewChecks
         public ProgramPreviewOptions Options { get; } = new();
         public ProgramPreviewCapability Capability { get; } = new() { CanRunGui = true, CanRunConsole = true };
         public Task<ProgramPreviewHandle> StartAsync(ProgramLaunch launch, string? ownerKey = null, CancellationToken cancellationToken = default)
-            => Task.FromResult(new ProgramPreviewHandle
+        {
+            var kind = launch.Kind == ProgramPreviewKind.Auto ? ProgramPreviewKind.Gui : launch.Kind;
+            return Task.FromResult(new ProgramPreviewHandle
             {
                 SessionId = "recorded",
                 Token = "token",
                 Snapshot = new ProgramPreviewSnapshot
                 {
                     Status = ProgramPreviewStatus.Running,
-                    Kind = ProgramPreviewKind.Gui,
+                    Kind = kind,
                     StatusText = "Running",
-                    FrameVersion = 1,
+                    Url = kind == ProgramPreviewKind.Web ? launch.Url ?? "http://127.0.0.1:9/" : null,
+                    FrameVersion = kind == ProgramPreviewKind.Web ? 0 : 1,
                     FrameWidth = 1,
                     FrameHeight = 1,
                     Revision = 1
                 }
             });
+        }
+        public void Touch(string sessionId, string? token) { }
+        public ProgramPreviewWebTarget ResolveWeb(string sessionId, string? token) => new(404, null);
         public Task<ProgramPreviewSnapshot> RestartAsync(string sessionId, string token, CancellationToken cancellationToken = default)
             => Task.FromResult(GetSnapshot(sessionId, token));
         public Task<ProgramPreviewSnapshot> StopAsync(string sessionId, string token, string? reason = null, CancellationToken cancellationToken = default)

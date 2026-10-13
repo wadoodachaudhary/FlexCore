@@ -1,0 +1,66 @@
+.fx-preview-group {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    color: #1c1c1c;
+}
+
+.fx-preview-group-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.fx-preview-group-title {
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.fx-preview-group-tools {
+    display: inline-flex;
+    gap: 8px;
+}
+
+.fx-preview-group-start,
+.fx-preview-group-tool {
+    border-radius: 8px;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.fx-preview-group-start {
+    border: 1px solid #1f7a3a;
+    background: #1f7a3a;
+    color: #fff;
+}
+
+.fx-preview-group-tool {
+    border: 1px solid #e4dfd6;
+    background: #fff;
+    color: #333;
+}
+
+.fx-preview-group-start:hover:not(:disabled) {
+    background: #186330;
+}
+
+.fx-preview-group-tool:hover:not(:disabled) {
+    background: #f6f4f0;
+}
+
+.fx-preview-group-start:disabled,
+.fx-preview-group-tool:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-preview-group-panes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
