@@ -1,0 +1,351 @@
+.fx-preview {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    color: #1c1c1c;
+}
+
+.fx-preview-chrome-default {
+    background: #fff;
+    border: 1px solid #d7d1c6;
+    border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(28, 28, 28, 0.04), 0 8px 24px rgba(28, 28, 28, 0.06);
+}
+
+.fx-preview-chrome-windows {
+    background: #d4d0c8;
+    color: #000;
+    border-radius: 0;
+    border: 2px solid #fff;
+    box-shadow: inset -1px -1px 0 #404040, inset 1px 1px 0 #dfdfdf, 1px 1px 0 #000;
+    font-family: Tahoma, "Segoe UI", sans-serif;
+}
+
+.fx-preview-chrome-fusion {
+    background: #eff0f1;
+    color: #232629;
+    border: 1px solid #bdc3c7;
+    border-radius: 4px;
+    box-shadow: inset 0 1px 0 #fff;
+}
+
+.fx-preview-chrome-browser {
+    background: #dee1e6;
+    border: 1px solid #c4c7cc;
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.fx-preview-chrome-none {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.fx-preview-titlebar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 12px;
+}
+
+.fx-preview-chrome-default .fx-preview-titlebar {
+    background: #f7f4ef;
+    border-bottom: 1px solid #efeae2;
+}
+
+.fx-preview-chrome-windows .fx-preview-titlebar {
+    min-height: 22px;
+    padding: 2px 6px;
+    background: linear-gradient(90deg, #000080, #1084d0);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.fx-preview-chrome-fusion .fx-preview-titlebar {
+    background: #fcfcfc;
+    border-bottom: 1px solid #bdc3c7;
+    color: #232629;
+    font-weight: 600;
+}
+
+.fx-preview-chrome-browser .fx-preview-titlebar {
+    align-items: flex-end;
+    padding: 8px 10px 0;
+    background: transparent;
+}
+
+.fx-preview-title-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    flex: 0 0 auto;
+}
+
+.fx-preview-chrome-status {
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.fx-preview-chrome-default .fx-preview-chrome-status[data-chrome-status="Running"],
+.fx-preview-chrome-fusion .fx-preview-chrome-status[data-chrome-status="Running"],
+.fx-preview-chrome-browser .fx-preview-chrome-status[data-chrome-status="Running"] {
+    color: #1f7a3a;
+}
+
+.fx-preview-chrome-fusion .fx-preview-chrome-status[data-chrome-status="Running"] {
+    color: #1d99f3;
+}
+
+.fx-preview-chrome-default .fx-preview-chrome-status[data-chrome-status="Failed"],
+.fx-preview-chrome-default .fx-preview-chrome-status[data-chrome-status="Unavailable"],
+.fx-preview-chrome-fusion .fx-preview-chrome-status[data-chrome-status="Failed"],
+.fx-preview-chrome-fusion .fx-preview-chrome-status[data-chrome-status="Unavailable"],
+.fx-preview-chrome-browser .fx-preview-chrome-status[data-chrome-status="Failed"],
+.fx-preview-chrome-browser .fx-preview-chrome-status[data-chrome-status="Unavailable"] {
+    color: #9b2c2c;
+}
+
+.fx-preview-chrome-windows .fx-preview-chrome-status,
+.fx-preview-chrome-windows .fx-preview-open {
+    color: #fff;
+    font-weight: 400;
+}
+
+.fx-preview-icon,
+.fx-preview-icon-text {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+}
+
+.fx-preview-icon {
+    object-fit: contain;
+}
+
+.fx-preview-icon-text {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.fx-preview-dots {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    padding: 0 4px 8px 2px;
+}
+
+.fx-preview-dots i {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: block;
+}
+
+.fx-preview-dots i:nth-child(1) { background: #ed6a5e; }
+.fx-preview-dots i:nth-child(2) { background: #f4bf4f; }
+.fx-preview-dots i:nth-child(3) { background: #61c554; }
+
+.fx-preview-address {
+    margin: 6px 8px 8px;
+    padding: 4px 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    background: #fff;
+    border: 1px solid #c4c7cc;
+    border-radius: 999px;
+    color: #3c4043;
+    font-size: 12px;
+}
+
+.fx-preview-chrome-browser .fx-preview-titlebar .fx-preview-label {
+    flex: 0 1 auto;
+    max-width: 50%;
+    margin-top: 6px;
+    padding: 6px 14px;
+    background: #fff;
+    border-radius: 8px 8px 0 0;
+}
+
+.fx-preview-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid #f0ece6;
+}
+
+.fx-preview-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.fx-preview-tools {
+    display: inline-flex;
+    gap: 6px;
+    flex: 0 0 auto;
+    margin-left: auto;
+}
+
+.fx-preview-tool {
+    border: 1px solid #e4dfd6;
+    background: #fff;
+    color: #333;
+    border-radius: 8px;
+    padding: 4px 10px;
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.fx-preview-tool:hover:not(:disabled) {
+    background: #f6f4f0;
+}
+
+.fx-preview-tool:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-preview-chrome-windows .fx-preview-toolbar {
+    background: #d4d0c8;
+    border-bottom: 1px solid #808080;
+}
+
+.fx-preview-chrome-windows .fx-preview-tool {
+    border-radius: 0;
+    border: 2px solid #fff;
+    box-shadow: inset -1px -1px 0 #404040, 1px 1px 0 #000;
+    background: #d4d0c8;
+    color: #000;
+}
+
+.fx-preview-chrome-windows .fx-preview-stage {
+    border-top: 1px solid #808080;
+    border-left: 1px solid #808080;
+    border-right: 1px solid #fff;
+    border-bottom: 1px solid #fff;
+}
+
+.fx-preview-chrome-fusion .fx-preview-toolbar,
+.fx-preview-chrome-fusion .fx-preview-status,
+.fx-preview-chrome-fusion .fx-preview-log {
+    background: #eff0f1;
+    color: #232629;
+}
+
+.fx-preview-chrome-fusion .fx-preview-tool {
+    border-radius: 3px;
+    border-color: #bdc3c7;
+    background: #fcfcfc;
+    color: #232629;
+}
+
+.fx-preview-chrome-windows .fx-preview-status,
+.fx-preview-chrome-windows .fx-preview-log {
+    background: #d4d0c8;
+    color: #000;
+}
+
+.fx-preview-chrome-browser .fx-preview-toolbar {
+    background: #dee1e6;
+    border-bottom: 0;
+}
+
+.fx-preview-stage {
+    min-height: 180px;
+    background: #1c1c1c;
+    outline: none;
+}
+
+.fx-preview-stage:focus {
+    box-shadow: inset 0 0 0 2px #1f7a3a;
+}
+
+.fx-preview-stage img,
+.fx-preview-web {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #111;
+    user-select: none;
+}
+
+.fx-preview-web {
+    height: 480px;
+    border: 0;
+    background: #fff;
+}
+
+.fx-preview-open {
+    color: #1f7a3a;
+    font-size: 13px;
+    font-weight: 650;
+    text-decoration: none;
+}
+
+.fx-preview-open:hover {
+    text-decoration: underline;
+}
+
+.fx-preview-placeholder,
+.fx-preview-status {
+    margin: 0;
+    color: #d9d3c8;
+    font-size: 13px;
+}
+
+.fx-preview-placeholder {
+    padding: 28px 16px;
+}
+
+.fx-preview-placeholder[role="alert"] {
+    color: #ffd2d2;
+}
+
+.fx-preview-status {
+    padding: 8px 12px 0;
+    color: #6d6d6d;
+    background: #fff;
+}
+
+.fx-preview-status[role="alert"] {
+    color: #9b2c2c;
+}
+
+.fx-preview-log,
+.fx-preview-console {
+    margin: 0;
+    padding: 8px 12px 12px;
+    max-height: 120px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    background: #fff;
+    color: #3a3a3a;
+}
+
+.fx-preview-console {
+    max-height: 360px;
+    min-height: 180px;
+    background: #1c1c1c;
+    color: #f4f0e8;
+}

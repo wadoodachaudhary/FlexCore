@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>FlexCore.PreviewHarness</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\FlexCore.csproj" />
+    <Content Include="..\FlexCore.RegressionTests\Fixtures\Preview\*.py" CopyToOutputDirectory="PreserveNewest" Link="Fixtures\Preview\%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

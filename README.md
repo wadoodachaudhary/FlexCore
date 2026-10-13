@@ -479,6 +479,14 @@ that label, and `AriaDescribedBy` can refer to a short caller-supplied descripti
 Run [the component regression checks](tests/FlexCore.RegressionTests/README.md)
 with `dotnet run --project tests/FlexCore.RegressionTests/FlexCore.RegressionTests.csproj`.
 
+## Live program preview
+
+`ProgramPreviewWindow`, `ProgramPreviewPair`, and `ProgramPreviewGroup` run programs on the server and show them in the browser. A pane is a GUI window, a console, or a web app. Each pane has a frame and a title bar; `Chrome` can be the default card, a classic Windows frame, a Qt Fusion frame, a browser window, or none. Clicks and keystrokes in a GUI preview are delivered to that process. A web pane starts a server and waits until its URL responds, or shows an address that is already hosted. The page iframes it and can open the same URL in a separate tab. `ConverterShell` can show a pair as a Run / Preview mode when the host passes `EnableRunPreview`, the launch commands, and `OwnerKey` for the signed-in user.
+
+The host registers `AddFlexCoreProgramPreview` and, for image delivery outside the circuit, maps `ProgramPreviewHttp.DefaultRoutePrefix`. A launched web app also needs the `{prefix}/{sessionId}/app` proxy route. GUI sessions need Xvfb, xdotool, and ffmpeg (or xwd) on the server. When those tools are missing, the preview stays on the page and names the packages to install. Console and web programs can be relayed without a virtual display.
+
+See [live program preview](docs/program-preview.md) for the API, the Linux packages, macOS containers, and Azure App Service.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

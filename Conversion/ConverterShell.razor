@@ -57,6 +57,17 @@
         </div>
     }
 
+    @if (EffectiveMode == ConverterShellMode.RunPreview)
+    {
+        <ProgramPreviewPair SourceLaunch="SourcePreview"
+                            TargetLaunch="TargetPreview"
+                            SourceLabel="@SourcePreviewLabel"
+                            TargetLabel="@TargetPreviewLabel"
+                            OwnerKey="@OwnerKey"
+                            AutoStart="AutoStartPreview" />
+    }
+    else
+    {
     <div class="@PanesClass">
         @if (ExpandedPane != ConverterPane.Output)
         {
@@ -203,6 +214,7 @@
             </div>
         }
     </div>
+    }
 
     <div class="fx-converter-actions">
         <ButtonControl CssClass="fx-converter-clear" Disabled="@(!CanEdit)" OnClick="ClearAsync">@ClearText</ButtonControl>

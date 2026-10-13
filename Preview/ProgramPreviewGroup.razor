@@ -1,0 +1,38 @@
+@namespace Fx.ControlKit.Preview
+@inherits FlexControlBase
+@implements IAsyncDisposable
+
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@ResolvedStyle"
+     id="@Id"
+     title="@Title"
+     aria-label="@GroupLabel"
+     data-owner="@EffectiveOwner"
+     data-chrome="@Chrome">
+    <div class="fx-preview-group-toolbar">
+        <span class="fx-preview-group-title">@GroupLabel</span>
+        <span class="fx-preview-group-tools">
+            <button type="button" class="fx-preview-group-start" disabled="@(!Enabled || _busy)" @onclick="StartAsync">@StartText</button>
+            <button type="button" class="fx-preview-group-tool" disabled="@(!Enabled || _busy)" @onclick="RestartAsync">@RestartText</button>
+            <button type="button" class="fx-preview-group-tool" disabled="@(!Enabled)" @onclick="StopAsync">@StopText</button>
+        </span>
+    </div>
+    <div class="fx-preview-group-panes">
+        @for (var index = 0; index < _windows.Length; index++)
+        {
+            var paneIndex = index;
+            var pane = Items![paneIndex];
+            <ProgramPreviewWindow @key="paneIndex"
+                                  @ref="_windows[paneIndex]"
+                                  Launch="pane.Launch"
+                                  Label="@pane.Label"
+                                  Icon="@pane.Icon"
+                                  Chrome="@(pane.Chrome ?? Chrome)"
+                                  OwnerKey="@EffectiveOwner"
+                                  ShowToolbar="false"
+                                  ShowOutput="true"
+                                  AutoStart="false" />
+        }
+    </div>
+</div>

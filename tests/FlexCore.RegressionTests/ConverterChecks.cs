@@ -59,6 +59,7 @@ internal static class ConverterChecks
         check(html.Contains("Expand source") && html.Contains("Expand output"), "each pane can expand");
         check(html.Contains(">Convert<") && html.Contains(">Clear<") && html.Contains("Additional Instructions"), "convert, clear, and instructions are present");
         check(html.Contains("Single file") && html.Contains("File browser") && html.Contains("data-mode=\"SingleFile\""), "mode toggle starts on the single-file layout");
+        check(!html.Contains("Run / Preview"), "run preview stays off until the host enables it");
         check(html.Contains("2 of 2 free uses left today"), "footer text is host content");
         check(html.Contains("btn-success") && ConvertButton(html).Contains("disabled"), "convert stays disabled until a callback is bound");
         check(!ClearButton(html).Contains("disabled"), "clear stays available without a convert callback");

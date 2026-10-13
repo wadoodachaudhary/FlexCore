@@ -62,6 +62,7 @@
          BrowserInterop) — granting that is preferable to widening FlexCore's
          public API just to accommodate the split. -->
     <InternalsVisibleTo Include="FlexCore.Documents" />
+    <InternalsVisibleTo Include="FlexCore.RegressionTests" />
   </ItemGroup>
 
   <ItemGroup>

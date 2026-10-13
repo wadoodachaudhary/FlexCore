@@ -1,0 +1,109 @@
+@namespace Fx.ControlKit.Preview
+@inherits FlexControlBase
+@implements IAsyncDisposable
+
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@ResolvedStyle"
+     id="@Id"
+     title="@Title"
+     data-status="@StatusName"
+     data-chrome="@Chrome"
+     aria-busy='@(IsStarting ? "true" : "false")'
+     aria-label="@SurfaceLabel">
+    @if (ShowChrome)
+    {
+        <div class="fx-preview-titlebar">
+            @if (Chrome == ProgramPreviewChrome.Browser)
+            {
+                <span class="fx-preview-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            }
+            @if (IconIsImage)
+            {
+                <img class="fx-preview-icon" src="@Icon" alt="" />
+            }
+            else if (!string.IsNullOrWhiteSpace(Icon))
+            {
+                <span class="fx-preview-icon-text" aria-hidden="true">@Icon</span>
+            }
+            <span class="fx-preview-label">@Label</span>
+            <span class="fx-preview-title-meta">
+                @if (WebUrl is not null)
+                {
+                    <a class="fx-preview-open" href="@WebUrl" target="_blank" rel="noopener noreferrer">Open</a>
+                }
+                <span class="fx-preview-chrome-status" data-chrome-status="@ChromeStatus" aria-hidden="true">@ChromeStatus</span>
+            </span>
+        </div>
+        @if (Chrome == ProgramPreviewChrome.Browser)
+        {
+            <div class="fx-preview-address">@(WebUrl ?? "about:blank")</div>
+        }
+    }
+    @if (ShowToolbar)
+    {
+        <div class="fx-preview-toolbar">
+            @if (!ShowChrome)
+            {
+                <span class="fx-preview-label">@Label</span>
+                @if (WebUrl is not null)
+                {
+                    <a class="fx-preview-open" href="@WebUrl" target="_blank" rel="noopener noreferrer">Open</a>
+                }
+            }
+            <span class="fx-preview-tools">
+                <button type="button" class="fx-preview-tool" disabled="@(!CanStart)" @onclick="StartAsync">@StartText</button>
+                <button type="button" class="fx-preview-tool" disabled="@(!CanRestart)" @onclick="RestartAsync">@RestartText</button>
+                <button type="button" class="fx-preview-tool" disabled="@(!CanStop)" @onclick="StopAsync">@StopText</button>
+            </span>
+        </div>
+    }
+    else if (!ShowChrome && !string.IsNullOrWhiteSpace(Label))
+    {
+        <div class="fx-preview-toolbar">
+            <span class="fx-preview-label">@Label</span>
+            @if (WebUrl is not null)
+            {
+                <a class="fx-preview-open" href="@WebUrl" target="_blank" rel="noopener noreferrer">Open</a>
+            }
+        </div>
+    }
+    <div class="fx-preview-stage" tabindex="0" @ref="_stage"
+         @onkeydown="OnKeyDown" @onkeydown:preventDefault="true"
+         @onkeyup:preventDefault="true">
+        @if (ShowWeb)
+        {
+            <iframe class="fx-preview-web" src="@WebUrl" title="@($"{Label} live preview")" referrerpolicy="no-referrer"></iframe>
+        }
+        else if (ShowConsole)
+        {
+            <pre class="fx-preview-console" aria-label="@($"{Label} output")">@ConsoleText</pre>
+        }
+        else if (FrameSource is not null)
+        {
+            <img @ref="_image"
+                 src="@FrameSource"
+                 width="@FrameWidth"
+                 height="@FrameHeight"
+                 alt="@($"{Label} live preview")"
+                 draggable="false"
+                 @onmousedown="OnMouseDown"
+                 @onmousedown:preventDefault="true"
+                 @onmouseup="OnMouseUp"
+                 @onmouseup:preventDefault="true"
+                 @onmousemove="OnMouseMove"
+                 @onwheel="OnWheel"
+                 @onwheel:preventDefault="true"
+                 @oncontextmenu:preventDefault="true" />
+        }
+        else
+        {
+            <p class="fx-preview-placeholder" role="@(IsAlert ? "alert" : "status")">@Placeholder</p>
+        }
+    </div>
+    <p class="fx-preview-status" role="@(IsAlert ? "alert" : "status")">@StatusLine</p>
+    @if (ShowOutput)
+    {
+        <pre class="fx-preview-log" aria-label="Error output">@(string.IsNullOrWhiteSpace(ErrorText) ? "No error output" : ErrorText)</pre>
+    }
+</div>

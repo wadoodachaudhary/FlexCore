@@ -1,0 +1,72 @@
+.fx-preview-pair {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+    color: #1c1c1c;
+}
+
+.fx-preview-pair-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.fx-preview-pair-title {
+    font-size: 14px;
+    font-weight: 650;
+}
+
+.fx-preview-pair-tools {
+    display: inline-flex;
+    gap: 8px;
+}
+
+.fx-preview-pair-start,
+.fx-preview-pair-tool {
+    border-radius: 8px;
+    padding: 6px 14px;
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.fx-preview-pair-start {
+    border: 1px solid #1f7a3a;
+    background: #1f7a3a;
+    color: #fff;
+}
+
+.fx-preview-pair-tool {
+    border: 1px solid #e4dfd6;
+    background: #fff;
+    color: #333;
+}
+
+.fx-preview-pair-start:hover:not(:disabled) {
+    background: #186330;
+}
+
+.fx-preview-pair-tool:hover:not(:disabled) {
+    background: #f6f4f0;
+}
+
+.fx-preview-pair-start:disabled,
+.fx-preview-pair-tool:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-preview-pair-panes {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+}
+
+@media (max-width: 860px) {
+    .fx-preview-pair-panes {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}

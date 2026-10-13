@@ -7,7 +7,13 @@ namespace Fx.ControlKit.Conversion;
 public enum ConverterShellMode
 {
     SingleFile,
-    FileBrowser
+    FileBrowser,
+
+    /// <summary>
+    /// Replaces the editors with a side-by-side live preview.
+    /// The host turns it on with EnableRunPreview or by setting this mode.
+    /// </summary>
+    RunPreview
 }
 
 /// <summary>Which pane is filling the shell, if either.</summary>
