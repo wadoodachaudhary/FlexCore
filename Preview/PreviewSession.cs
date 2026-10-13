@@ -279,24 +279,20 @@ internal sealed class PreviewSession : IDisposable
         _display = slot.Number;
         _displayLockPath = slot.LockPath;
         _authority = await TryCreateAuthorityAsync(_display, cancellationToken).ConfigureAwait(false);
-        var xvfb = Tool(_capability.XvfbPath);
-        xvfb.ArgumentList.Add(":" + _display);
-        xvfb.ArgumentList.Add("-screen");
-        xvfb.ArgumentList.Add("0");
-        xvfb.ArgumentList.Add($"{_options.DisplayWidth}x{_options.DisplayHeight}x24");
-        xvfb.ArgumentList.Add("-nolisten");
-        xvfb.ArgumentList.Add("tcp");
-        if (_authority is null)
+        ClearToolLog();
+        _xvfb = StartXvfb();
+        try
         {
-            xvfb.ArgumentList.Add("-ac");
+            await WaitForDisplayAsync(cancellationToken).ConfigureAwait(false);
         }
-        else
+        catch (InvalidOperationException ex) when (IsSocketDirectoryRace(ex.Message))
         {
-            xvfb.ArgumentList.Add("-auth");
-            xvfb.ArgumentList.Add(_authority);
+            Kill(ref _xvfb);
+            DisplaySlots.EnsureSocketDirectory();
+            ClearToolLog();
+            _xvfb = StartXvfb();
+            await WaitForDisplayAsync(cancellationToken).ConfigureAwait(false);
         }
-        _xvfb = StartText(xvfb, userVisible: false);
-        await WaitForDisplayAsync(cancellationToken).ConfigureAwait(false);
         _capture = Task.Run(() => CaptureAsync(_cts.Token));
         _app = StartText(Child(gui: true), userVisible: true);
         _processId = _app.Id;
@@ -322,14 +318,38 @@ internal sealed class PreviewSession : IDisposable
         _app.BeginErrorReadLine();
     }
 
+    private Process StartXvfb()
+    {
+        var xvfb = Tool(_capability.XvfbPath!);
+        xvfb.ArgumentList.Add(":" + _display);
+        xvfb.ArgumentList.Add("-screen");
+        xvfb.ArgumentList.Add("0");
+        xvfb.ArgumentList.Add($"{_options.DisplayWidth}x{_options.DisplayHeight}x24");
+        xvfb.ArgumentList.Add("-nolisten");
+        xvfb.ArgumentList.Add("tcp");
+        if (_authority is null)
+        {
+            xvfb.ArgumentList.Add("-ac");
+        }
+        else
+        {
+            xvfb.ArgumentList.Add("-auth");
+            xvfb.ArgumentList.Add(_authority);
+        }
+        return StartText(xvfb, userVisible: false);
+    }
+
     private async Task WaitForDisplayAsync(CancellationToken cancellationToken)
     {
         var socket = "/tmp/.X11-unix/X" + _display;
         for (var attempt = 0; attempt < 50; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            var detail = FirstDetail();
+            if (IsSocketDirectoryRace(detail))
+                throw new InvalidOperationException("Xvfb did not open a display. " + detail);
             if (_xvfb is { HasExited: true })
-                throw new InvalidOperationException("Xvfb exited. " + FirstDetail());
+                throw new InvalidOperationException("Xvfb exited. " + detail);
             if (File.Exists(socket))
             {
                 await Task.Delay(100, cancellationToken).ConfigureAwait(false);
@@ -338,6 +358,16 @@ internal sealed class PreviewSession : IDisposable
             await Task.Delay(100, cancellationToken).ConfigureAwait(false);
         }
         throw new InvalidOperationException("Xvfb did not open a display. " + FirstDetail());
+    }
+
+    private static bool IsSocketDirectoryRace(string message)
+        => message.Contains("Cannot create /tmp/.X11-unix", StringComparison.Ordinal)
+            || message.Contains("mkdir(/tmp/.X11-unix) failed", StringComparison.Ordinal);
+
+    private void ClearToolLog()
+    {
+        lock (_gate)
+            _toolLog.Clear();
     }
 
     private async Task CaptureAsync(CancellationToken cancellationToken)
@@ -911,6 +941,7 @@ internal sealed class PreviewSession : IDisposable
 internal static class DisplaySlots
 {
     private static readonly object Gate = new();
+    private static readonly object SocketDirectoryGate = new();
 
     public static (int Number, string LockPath) Allocate(ProgramPreviewOptions options)
     {
@@ -918,6 +949,7 @@ internal static class DisplaySlots
         Directory.CreateDirectory(directory);
         lock (Gate)
         {
+            EnsureSocketDirectory();
             for (var number = options.FirstDisplayNumber; number < options.FirstDisplayNumber + options.DisplayCount; number++)
             {
                 if (File.Exists("/tmp/.X11-unix/X" + number)) continue;
@@ -941,6 +973,32 @@ internal static class DisplaySlots
             }
         }
         throw new InvalidOperationException("No virtual display numbers are free.");
+    }
+
+    /// <summary>
+    /// Xvfb creates <c>/tmp/.X11-unix</c> itself. Two servers that both see it missing
+    /// race in <c>trans_mkdir</c>: the loser gets EEXIST and exits with
+    /// "Cannot create /tmp/.X11-unix". Create the directory before either server starts.
+    /// </summary>
+    public static void EnsureSocketDirectory()
+    {
+        const string path = "/tmp/.X11-unix";
+        lock (SocketDirectoryGate)
+        {
+            if (!Directory.Exists(path))
+                Directory.CreateDirectory(path);
+            try
+            {
+                File.SetUnixFileMode(path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                    UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute |
+                    UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute |
+                    UnixFileMode.StickyBit);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
+            {
+            }
+        }
     }
 
     public static void Release(string? path)

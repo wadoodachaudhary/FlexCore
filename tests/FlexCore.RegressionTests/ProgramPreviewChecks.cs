@@ -192,6 +192,7 @@ internal static class ProgramPreviewChecks
         });
         var gui = guiProvider.GetRequiredService<IProgramPreviewHost>();
         check(gui.Capability.CanRunGui, "virtual display tools are installed for the live preview check: " + gui.Capability.Message);
+        await ExerciseFreshSocketDirectory(gui, check);
         await ExerciseGui(gui, check);
 
         await using var xwdProvider = Build(options =>
@@ -218,6 +219,52 @@ internal static class ProgramPreviewChecks
             if (xwdSession.SessionId is not null && xwdSession.Token is not null)
                 xwdHost.Release(xwdSession.SessionId, xwdSession.Token);
         }
+    }
+
+    private static async Task ExerciseFreshSocketDirectory(IProgramPreviewHost host, Action<bool, string> check)
+    {
+        RemoveSocketDirectory();
+        check(!Directory.Exists("/tmp/.X11-unix"), "a pair starts with no X socket directory");
+        var sourceTask = host.StartAsync(GuiLaunch("source_form.py"), "fresh-pair");
+        var targetTask = host.StartAsync(GuiLaunch("target_form.py"), "fresh-pair");
+        var source = await sourceTask;
+        var target = await targetTask;
+        try
+        {
+            check(source.Snapshot.Status == ProgramPreviewStatus.Running
+                && target.Snapshot.Status == ProgramPreviewStatus.Running
+                && source.Snapshot.DisplayNumber is int left
+                && target.Snapshot.DisplayNumber is int right
+                && left != right,
+                "both previews reach Running when the X socket directory was missing: "
+                + source.Snapshot.StatusText + " | " + target.Snapshot.StatusText);
+        }
+        finally
+        {
+            if (source.SessionId is not null && source.Token is not null) host.Release(source.SessionId, source.Token);
+            if (target.SessionId is not null && target.Token is not null) host.Release(target.SessionId, target.Token);
+        }
+    }
+
+    private static void RemoveSocketDirectory()
+    {
+        const string path = "/tmp/.X11-unix";
+        if (!Directory.Exists(path)) return;
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        if (!Directory.Exists(path)) return;
+        using var process = Process.Start(new ProcessStartInfo("sudo")
+        {
+            ArgumentList = { "-n", "rm", "-rf", path },
+            UseShellExecute = false,
+            RedirectStandardError = true
+        });
+        if (process is null || !process.WaitForExit(5000) || process.ExitCode != 0 || Directory.Exists(path))
+            throw new InvalidOperationException("Could not remove /tmp/.X11-unix before the paired preview check.");
     }
 
     private static async Task ExerciseGui(IProgramPreviewHost host, Action<bool, string> check)

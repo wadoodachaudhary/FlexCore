@@ -93,7 +93,7 @@ Setting `Mode` to `ConverterShellMode.RunPreview` opens that layout directly. Th
 A GUI session:
 
 1. Allocates a private X display and a private `HOME` / temp directory.
-2. Starts `Xvfb` on that display, with an `Xauthority` cookie when `xauth` and `mcookie` exist. Otherwise it starts with `-ac` and listens only on a local socket (`-nolisten tcp`).
+2. Creates `/tmp/.X11-unix` (mode 1777) if it is missing, then starts `Xvfb` on that display. An `Xauthority` cookie is used when `xauth` and `mcookie` exist. Otherwise Xvfb starts with `-ac` and listens only on a local socket (`-nolisten tcp`). Two displays started together used to race inside Xvfb while creating that directory; the host creates it first and retries a start once if Xvfb still reports the race.
 3. Starts the program with `DISPLAY` pointed at that display. `WAYLAND_DISPLAY` is removed. `GDK_BACKEND=x11` and `QT_QPA_PLATFORM=xcb` are set when the launch did not set them.
 4. Captures the framebuffer with `ffmpeg` (`x11grab`) or, if ffmpeg is missing, with `xwd`.
 5. Relays pointer and key events with `xdotool`. Pointer motion keeps only the latest position, so a burst of hover events cannot sit ahead of a click or a key.
