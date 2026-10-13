@@ -393,6 +393,28 @@ public sealed partial class ReportLayoutSession
     private sealed record SubreportLinkState(ReportLayoutSession Owner, string Section, int Row, string Element, List<ReportLayoutParameterLink> Links, object?[] Values);
     private SubreportLinkState? _link;
     private static object?[]? Multiple(object? value) => value is string or byte[] or null or DBNull || value is not System.Collections.IEnumerable items ? null : items.Cast<object?>().ToArray();
+    // SQL binds a parameter by its identifier name ("Pm-Orders.Number" binds as @PmOrdersNumber; formulas keep the Crystal name).
+    // A multi-value entry cannot bind as one value: "= @Name" becomes IN (@Name_0, ...) on a copy of the query, one value binds as
+    // itself and no value binds NULL (nothing matches, as in Crystal).
+    private static (ReportDefinition Query, Dictionary<string, object> Bound) SqlQuery(ReportDefinition query, IReadOnlyDictionary<string, object> parameters)
+    {
+        var scalars = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var lists = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in parameters)
+        {
+            var name = new string(key.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
+            if (name.Length == 0) continue;
+            var items = Multiple(value)?.Where(item => item is not (null or DBNull)).ToArray();
+            if (items is null) scalars[name] = value;
+            else if (items.Length == 0) scalars[name] = DBNull.Value;
+            else if (items.Length == 1) scalars[name] = items[0]!;
+            else lists[name] = items.Select(item => Convert.ToString(item, CultureInfo.InvariantCulture) ?? "").ToArray();
+        }
+        if (lists.Count == 0) return (query, scalars);
+        var copy = new ReportDefinition { Sql = query.Sql, Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters.ToList(),
+            FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout };
+        return (copy, MultiValueParameterRewriter.Apply(copy, lists, scalars));
+    }
     // Equality under CrystalFormula.Compare; same-kind text, number and date values use a set instead of a scan.
     private static Func<object?, bool> LinkMatcher(object? expected)
     {
@@ -450,8 +472,7 @@ public sealed partial class ReportLayoutSession
         var (data, filtered) = (cached.Data, cached.Filtered);
         if (data is null)
         {
-            var query = subreport.Definition;
-            var bound = new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase);
+            var (query, bound) = SqlQuery(subreport.Definition, parameters);
             if (filters.Count > 0)
             {
                 var predicates = new List<string>();
