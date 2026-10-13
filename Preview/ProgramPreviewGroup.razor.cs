@@ -21,9 +21,20 @@ public partial class ProgramPreviewGroup
     [Parameter] public string StopText { get; set; } = "Stop";
     [Parameter] public string GroupLabel { get; set; } = "Live program preview";
 
-    private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
+    /// <summary>Frame used for panes that leave <see cref="ProgramPreviewPane.Chrome"/> null, and for the group itself.</summary>
+    [Parameter] public ProgramPreviewChrome Chrome { get; set; } = ProgramPreviewChrome.Default;
 
-    protected override string? BaseCssClass => "fx-preview-group";
+    private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
+    private string ChromeCss => Chrome switch
+    {
+        ProgramPreviewChrome.Windows => "windows",
+        ProgramPreviewChrome.Fusion => "fusion",
+        ProgramPreviewChrome.Browser => "browser",
+        ProgramPreviewChrome.None => "none",
+        _ => "default"
+    };
+
+    protected override string? BaseCssClass => "fx-preview-group fx-preview-chrome-" + ChromeCss;
 
     protected override void OnParametersSet()
     {

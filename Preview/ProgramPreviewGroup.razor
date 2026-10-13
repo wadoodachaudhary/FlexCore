@@ -8,7 +8,8 @@
      id="@Id"
      title="@Title"
      aria-label="@GroupLabel"
-     data-owner="@EffectiveOwner">
+     data-owner="@EffectiveOwner"
+     data-chrome="@Chrome">
     <div class="fx-preview-group-toolbar">
         <span class="fx-preview-group-title">@GroupLabel</span>
         <span class="fx-preview-group-tools">
@@ -26,6 +27,8 @@
                                   @ref="_windows[paneIndex]"
                                   Launch="pane.Launch"
                                   Label="@pane.Label"
+                                  Icon="@pane.Icon"
+                                  Chrome="@(pane.Chrome ?? Chrome)"
                                   OwnerKey="@EffectiveOwner"
                                   ShowToolbar="false"
                                   ShowOutput="true"

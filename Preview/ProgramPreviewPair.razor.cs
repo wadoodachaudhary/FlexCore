@@ -24,6 +24,10 @@ public partial class ProgramPreviewPair
     [Parameter] public string RestartText { get; set; } = "Restart";
     [Parameter] public string StopText { get; set; } = "Stop";
     [Parameter] public string PairLabel { get; set; } = "Live program preview";
+    [Parameter] public ProgramPreviewChrome SourceChrome { get; set; } = ProgramPreviewChrome.Default;
+    [Parameter] public ProgramPreviewChrome TargetChrome { get; set; } = ProgramPreviewChrome.Default;
+    [Parameter] public string? SourceIcon { get; set; }
+    [Parameter] public string? TargetIcon { get; set; }
 
     private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
 

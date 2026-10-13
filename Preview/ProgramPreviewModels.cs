@@ -316,11 +316,39 @@ public interface IProgramPreviewHost
 /// <summary>Result of <see cref="IProgramPreviewHost.ResolveWeb"/>.</summary>
 public sealed record ProgramPreviewWebTarget(int StatusCode, Uri? Upstream);
 
+/// <summary>Frame drawn around a <see cref="ProgramPreviewWindow"/>.</summary>
+public enum ProgramPreviewChrome
+{
+    /// <summary>A quiet border, title bar, and status. This is the default.</summary>
+    Default,
+
+    /// <summary>Classic Windows / Visual Basic 6 caption and raised border.</summary>
+    Windows,
+
+    /// <summary>Qt Fusion / KDE-style frame.</summary>
+    Fusion,
+
+    /// <summary>A modern browser window, suited to a web target.</summary>
+    Browser,
+
+    /// <summary>No frame and no title bar. Start, restart, and stop stay available.</summary>
+    None
+}
+
 /// <summary>One pane in <see cref="ProgramPreviewGroup"/>.</summary>
 public sealed class ProgramPreviewPane
 {
     public string Label { get; init; } = "Program";
     public ProgramLaunch? Launch { get; init; }
+
+    /// <summary>Frame for this pane. Null uses <see cref="ProgramPreviewGroup.Chrome"/>.</summary>
+    public ProgramPreviewChrome? Chrome { get; init; }
+
+    /// <summary>
+    /// Optional title-bar icon. An <c>http</c>, <c>https</c>, <c>data:image</c>, or root-relative
+    /// value is shown as an image. Any other text is shown as the icon itself.
+    /// </summary>
+    public string? Icon { get; init; }
 }
 
 /// <summary>Frame-route helpers that do not reference ASP.NET Core types.</summary>

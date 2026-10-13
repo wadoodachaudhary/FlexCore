@@ -38,10 +38,12 @@
     private readonly ProgramLaunch _target = Launch("target_form.py");
     private readonly IReadOnlyList<ProgramPreviewPane> _group =
     [
-        new() { Label = "GUI", Launch = Launch("source_form.py") },
+        new() { Label = "GUI", Chrome = ProgramPreviewChrome.Windows, Icon = "W", Launch = Launch("source_form.py") },
         new()
         {
             Label = "Console",
+            Chrome = ProgramPreviewChrome.Fusion,
+            Icon = "Qt",
             Launch = new ProgramLaunch
             {
                 FileName = "python3",
@@ -49,7 +51,7 @@
                 Kind = ProgramPreviewKind.Console
             }
         },
-        new() { Label = "Web", Launch = WebLaunch() }
+        new() { Label = "Web", Chrome = ProgramPreviewChrome.Browser, Icon = "B", Launch = WebLaunch() }
     ];
 
     private static ProgramLaunch WebLaunch() => new()

@@ -109,6 +109,32 @@ var source = new ProgramLaunch
 
 Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When it is omitted, the pair or group uses one generated owner for every window.
 
+## Window chrome
+
+Each pane has a frame, a title bar (label, running status, and an optional icon), and space from the next pane. `Chrome` selects the frame. The default is a quiet card. `Windows` is a classic Windows / Visual Basic 6 caption. `Fusion` is a Qt / KDE frame. `Browser` is a modern browser window, which suits a web target. `None` removes the frame and the title bar. Start, restart, and stop stay on the toolbar in every theme.
+
+Set it on a window, on each side of a pair, or on each `ProgramPreviewPane`. A pane that leaves `Chrome` null uses the group's `Chrome`.
+
+```razor
+<ProgramPreviewWindow Launch="_program" Label="Sample" Chrome="ProgramPreviewChrome.Fusion" Icon="Qt" />
+
+<ProgramPreviewPair SourceLaunch="_source"
+                    TargetLaunch="_target"
+                    SourceChrome="ProgramPreviewChrome.Windows"
+                    TargetChrome="ProgramPreviewChrome.Browser"
+                    SourceIcon="W" />
+```
+
+```csharp
+var panes = new ProgramPreviewPane[]
+{
+    new() { Label = "Source", Chrome = ProgramPreviewChrome.Windows, Icon = "W", Launch = source },
+    new() { Label = "Blazor", Chrome = ProgramPreviewChrome.Browser, Launch = blazor }
+};
+```
+
+An `http`, `https`, `data:image`, or root-relative `Icon` is an image. Any other text is drawn as the icon. `javascript:` is not loaded as an image.
+
 ## Web apps
 
 `ProgramPreviewKind.Web` is either a process the host starts, or an address that is already hosted.
@@ -192,10 +218,11 @@ Sessions live in the server process. Scale-out needs affinity so the frame reque
 | `ProgramPreviewHttp` | `DefaultRoutePrefix` (`/_flexcore/program-preview`), `CookieName`, `AppPrefix`, `AppPath`, `TokenFrom`. |
 | `ProgramPreviewProxy` | `ForwardHttpAsync` and `ForwardWebSocketAsync`. The host maps the route. |
 | `ProgramPreviewWebTarget` | Status code and loopback upstream from `ResolveWeb`. |
-| `ProgramPreviewPane` | `Label` and `Launch` for one group pane. |
-| `ProgramPreviewWindow` | One preview. Parameters: `Launch`, `Label`, `AutoStart`, `ShowToolbar`, `ShowOutput`, `OwnerKey`, `StartText`, `RestartText`, `StopText`. A web snapshot adds an **Open** link. |
-| `ProgramPreviewPair` | Two previews. Parameters: `SourceLaunch`, `TargetLaunch`, `SourceLabel`, `TargetLabel`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `PairLabel`. |
-| `ProgramPreviewGroup` | N previews, one toolbar. Parameters: `Items`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `GroupLabel`. |
+| `ProgramPreviewChrome` | `Default`, `Windows`, `Fusion`, `Browser`, `None`. |
+| `ProgramPreviewPane` | `Label`, `Launch`, `Chrome`, `Icon`. Null `Chrome` uses the group theme. |
+| `ProgramPreviewWindow` | One preview. Parameters: `Launch`, `Label`, `Chrome`, `Icon`, `AutoStart`, `ShowToolbar`, `ShowOutput`, `OwnerKey`, `StartText`, `RestartText`, `StopText`. A web snapshot adds an **Open** link. |
+| `ProgramPreviewPair` | Two previews. Parameters: `SourceLaunch`, `TargetLaunch`, `SourceLabel`, `TargetLabel`, `SourceChrome`, `TargetChrome`, `SourceIcon`, `TargetIcon`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `PairLabel`. |
+| `ProgramPreviewGroup` | N previews, one toolbar. Parameters: `Items`, `Chrome`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `GroupLabel`. |
 | `ConverterShell.EnableRunPreview` | Adds the Run / Preview mode. |
 | `ConverterShell.OwnerKey` | Owner passed to that mode's pair. |
 | `ConverterShell.SourcePreview` / `TargetPreview` | Launches used by that mode. |

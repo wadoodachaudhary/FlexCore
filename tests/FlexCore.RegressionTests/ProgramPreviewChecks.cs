@@ -77,7 +77,13 @@ internal static class ProgramPreviewChecks
             var window = activation.All.OfType<ProgramPreviewWindow>().Single();
             check(root.ToHtmlString().Contains("Recorded") && root.ToHtmlString().Contains(">Start<") && root.ToHtmlString().Contains("Press Start"), "one preview window shows its label and start action");
             await window.StartAsync();
-            check(root.ToHtmlString().Contains("data-status=\"Running\""), "starting a preview window shows the running status");
+            var runningHtml = root.ToHtmlString();
+            check(runningHtml.Contains("data-status=\"Running\""), "starting a preview window shows the running status");
+            check(runningHtml.Contains("data-chrome=\"Default\"", StringComparison.Ordinal)
+                && runningHtml.Contains("fx-preview-chrome-default", StringComparison.Ordinal)
+                && runningHtml.Contains("fx-preview-titlebar", StringComparison.Ordinal)
+                && runningHtml.Contains("data-chrome-status=\"Running\"", StringComparison.Ordinal)
+                && runningHtml.Contains(">Start<", StringComparison.Ordinal), "the default chrome frames the pane and keeps the toolbar");
             await window.PointerAsync(ProgramPreviewInputKind.MouseDown, 130, 254);
             await window.KeyAsync("a");
             var host = (RecordingPreviewHost)uiServices.GetRequiredService<IProgramPreviewHost>();
@@ -108,6 +114,93 @@ internal static class ProgramPreviewChecks
                 && groupHtml.Contains("Python", StringComparison.Ordinal)
                 && groupHtml.Contains("Blazor", StringComparison.Ordinal)
                 && groupHtml.Split(">Start<").Length == 2, "a preview group mixes GUI, console, and web under one toolbar");
+            var classic = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Classic",
+                ["Chrome"] = ProgramPreviewChrome.Windows,
+                ["Icon"] = "VB",
+                ["Launch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(classic.Contains("data-chrome=\"Windows\"", StringComparison.Ordinal)
+                && classic.Contains("fx-preview-chrome-windows", StringComparison.Ordinal)
+                && classic.Contains("fx-preview-titlebar", StringComparison.Ordinal)
+                && classic.Contains(">VB<", StringComparison.Ordinal)
+                && classic.Contains("fx-preview-toolbar", StringComparison.Ordinal)
+                && classic.Contains(">Start<", StringComparison.Ordinal), "a Windows frame shows the icon and keeps the toolbar");
+            var fusion = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Qt",
+                ["Chrome"] = ProgramPreviewChrome.Fusion,
+                ["Icon"] = "https://example.com/qt.png",
+                ["Launch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(fusion.Contains("data-chrome=\"Fusion\"", StringComparison.Ordinal)
+                && fusion.Contains("fx-preview-chrome-fusion", StringComparison.Ordinal)
+                && fusion.Contains("src=\"https://example.com/qt.png\"", StringComparison.Ordinal)
+                && !fusion.Contains("src=\"javascript:", StringComparison.Ordinal), "a Fusion frame shows an image icon");
+            var scriptIcon = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Script",
+                ["Icon"] = "javascript:alert(1)",
+                ["Launch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(scriptIcon.Contains("javascript:alert(1)", StringComparison.Ordinal) && !scriptIcon.Contains("<img", StringComparison.Ordinal), "a script icon stays text");
+            var browser = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Page",
+                ["Chrome"] = ProgramPreviewChrome.Browser,
+                ["Launch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(browser.Contains("data-chrome=\"Browser\"", StringComparison.Ordinal)
+                && browser.Contains("fx-preview-chrome-browser", StringComparison.Ordinal)
+                && browser.Contains("fx-preview-dots", StringComparison.Ordinal)
+                && browser.Contains("fx-preview-address", StringComparison.Ordinal)
+                && browser.Contains(">Start<", StringComparison.Ordinal), "a browser frame draws a window around the page");
+            var bare = (await uiRenderer.RenderComponentAsync<ProgramPreviewWindow>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Label"] = "Bare",
+                ["Chrome"] = ProgramPreviewChrome.None,
+                ["Launch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(bare.Contains("data-chrome=\"None\"", StringComparison.Ordinal)
+                && bare.Contains("fx-preview-chrome-none", StringComparison.Ordinal)
+                && !bare.Contains("fx-preview-titlebar", StringComparison.Ordinal)
+                && bare.Contains(">Start<", StringComparison.Ordinal), "chrome none keeps the toolbar and omits the title bar");
+            var themed = (await uiRenderer.RenderComponentAsync<ProgramPreviewGroup>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["Chrome"] = ProgramPreviewChrome.Browser,
+                ["Items"] = new ProgramPreviewPane[]
+                {
+                    new() { Label = "Classic", Chrome = ProgramPreviewChrome.Windows, Icon = "W", Launch = new ProgramLaunch { FileName = "echo", Kind = ProgramPreviewKind.Gui } },
+                    new() { Label = "Qt", Chrome = ProgramPreviewChrome.Fusion, Icon = "Qt", Launch = new ProgramLaunch { FileName = "python3", Kind = ProgramPreviewKind.Console } },
+                    new() { Label = "Page", Launch = new ProgramLaunch { Kind = ProgramPreviewKind.Web, Url = "http://127.0.0.1:9/" } },
+                    new() { Label = "Plain", Chrome = ProgramPreviewChrome.None, Launch = new ProgramLaunch { FileName = "echo" } }
+                }
+            }))).ToHtmlString();
+            check(themed.Contains("data-chrome=\"Browser\"", StringComparison.Ordinal)
+                && themed.Contains("fx-preview-chrome-windows", StringComparison.Ordinal)
+                && themed.Contains("fx-preview-chrome-fusion", StringComparison.Ordinal)
+                && themed.Contains("fx-preview-chrome-none", StringComparison.Ordinal)
+                && themed.Contains("fx-preview-group-panes", StringComparison.Ordinal)
+                && themed.Split("fx-preview-titlebar").Length == 4
+                && themed.Split("fx-preview-dots").Length == 2
+                && themed.Split(">Start<").Length == 2, "each pane keeps its own chrome under one toolbar");
+            var pairHtml = (await uiRenderer.RenderComponentAsync<ProgramPreviewPair>(ParameterView.FromDictionary(new Dictionary<string, object?>
+            {
+                ["SourceLabel"] = "Left",
+                ["TargetLabel"] = "Right",
+                ["SourceChrome"] = ProgramPreviewChrome.Windows,
+                ["TargetChrome"] = ProgramPreviewChrome.Browser,
+                ["SourceIcon"] = "W",
+                ["TargetIcon"] = "B",
+                ["SourceLaunch"] = new ProgramLaunch { FileName = "echo" },
+                ["TargetLaunch"] = new ProgramLaunch { FileName = "echo" }
+            }))).ToHtmlString();
+            check(pairHtml.Contains("fx-preview-chrome-windows", StringComparison.Ordinal)
+                && pairHtml.Contains("fx-preview-chrome-browser", StringComparison.Ordinal)
+                && pairHtml.Contains(">W<", StringComparison.Ordinal)
+                && pairHtml.Contains(">B<", StringComparison.Ordinal)
+                && pairHtml.Split(">Start<").Length == 2, "a pair can frame each side differently");
             await window.DisposeAsync();
             await webWindow.DisposeAsync();
         });

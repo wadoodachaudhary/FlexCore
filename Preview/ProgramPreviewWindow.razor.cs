@@ -39,6 +39,16 @@ public partial class ProgramPreviewWindow
     [Parameter] public string StartText { get; set; } = "Start";
     [Parameter] public string RestartText { get; set; } = "Restart";
     [Parameter] public string StopText { get; set; } = "Stop";
+
+    /// <summary>Frame around this preview. <see cref="ProgramPreviewChrome.None"/> leaves the toolbar in place.</summary>
+    [Parameter] public ProgramPreviewChrome Chrome { get; set; } = ProgramPreviewChrome.Default;
+
+    /// <summary>
+    /// Optional title-bar icon. An <c>http</c>, <c>https</c>, <c>data:image</c>, or root-relative
+    /// value is shown as an image. Any other text is shown as the icon itself.
+    /// </summary>
+    [Parameter] public string? Icon { get; set; }
+
     [Parameter] public EventCallback<ProgramPreviewSnapshot> SnapshotChanged { get; set; }
 
     private IProgramPreviewHost? Host => Services.GetService<IProgramPreviewHost>();
@@ -56,6 +66,21 @@ public partial class ProgramPreviewWindow
     private string? WebUrl => ShowWeb ? _snapshot?.Url : null;
     private bool IsAlert => Status is ProgramPreviewStatus.Failed or ProgramPreviewStatus.Unavailable || _localMessage is not null && _snapshot is null;
     private string SurfaceLabel => string.IsNullOrWhiteSpace(Label) ? "Live preview" : Label + " live preview";
+    private bool ShowChrome => Chrome != ProgramPreviewChrome.None;
+    private string ChromeCss => Chrome switch
+    {
+        ProgramPreviewChrome.Windows => "windows",
+        ProgramPreviewChrome.Fusion => "fusion",
+        ProgramPreviewChrome.Browser => "browser",
+        ProgramPreviewChrome.None => "none",
+        _ => "default"
+    };
+    private string ChromeStatus => _snapshot is null ? "Ready" : _snapshot.Status.ToString();
+    private bool IconIsImage => Icon is { Length: > 1 } && (
+        Icon.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        || Icon.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+        || Icon.StartsWith("data:image/", StringComparison.OrdinalIgnoreCase)
+        || (Icon.StartsWith('/') && !Icon.StartsWith("//", StringComparison.Ordinal)));
     private string ConsoleText => string.IsNullOrEmpty(_snapshot?.OutputText) ? "" : _snapshot.OutputText;
     private string ErrorText => _snapshot?.ErrorText ?? "";
     private int FrameWidth => _snapshot is { FrameWidth: > 0 } ? _snapshot.FrameWidth : Host?.Options.DisplayWidth ?? 800;
@@ -104,7 +129,7 @@ public partial class ProgramPreviewWindow
         }
     }
 
-    protected override string? BaseCssClass => "fx-preview";
+    protected override string? BaseCssClass => "fx-preview fx-preview-chrome-" + ChromeCss;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
