@@ -333,6 +333,7 @@ Console.WriteLine($"Converter shell checks: {checks - converterStart}");
 var previewStart = checks;
 await ProgramPreviewChecks.Run(renderer, activation.All, Check);
 Console.WriteLine($"Program preview checks: {checks - previewStart}");
+await PositionedCrystalChecks.Run(Check);
 Console.WriteLine($"All {checks} regression checks passed.");
 public class PivotRow { public string Region {get;set;}="";public int Number{get;set;}public int Year{get;set;}public int Month{get;set;}public decimal Amount{get;set;} }
 public enum Status { Open, Closed }

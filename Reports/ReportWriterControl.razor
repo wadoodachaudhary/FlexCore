@@ -1015,7 +1015,12 @@ else
     /// <summary>
     /// Executes a SQL-based report definition and renders it as paginated HTML.
     /// </summary>
-    public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null)
+    /// <param name="definition">The SQL report to execute. A positioned layout renders through the Crystal runtime.</param>
+    /// <param name="parameterValues">The values SQL binds; a multi-value prompt arrives here as its IN (...) expansion.</param>
+    /// <param name="formulaParameterValues">Positioned layout only: values the report's formulas read instead of the SQL ones, such as
+    /// the whole array of a multi-value prompt for <c>{?Name}</c>. Null reads the SQL values, as before.</param>
+    public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null,
+        IReadOnlyDictionary<string, object>? formulaParameterValues = null)
     {
         IsLoading = true;
         ErrorMessage = null;
@@ -1062,7 +1067,10 @@ else
 
             if (definition.PositionedLayout is { } layout)
             {
-                var session = new ReportLayoutSession(layout, dt, sqlParams, (child, values) =>
+                // Formulas read the prompt values: {?Name} of a multi-value prompt is the whole array; SQL binds the rewritten scalars.
+                var formulaParams = new Dictionary<string, object>(sqlParams, StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in formulaParameterValues ?? new Dictionary<string, object>()) formulaParams[kv.Key] = kv.Value;
+                var session = new ReportLayoutSession(layout, dt, formulaParams, (child, values) =>
                 {
                     var childParameters = new Dictionary<string, object>(values);
                     AutoInjectSessionParameters(childParameters, child.Sql);
@@ -1388,8 +1396,11 @@ else
                         typedParams.Remove(key);
                     }
                 }
+                IReadOnlyDictionary<string, object>? formulaValues = null;
                 if (multiSelections.Count > 0)
                 {
+                    // The positioned runtime's formulas keep the whole selection as an array for {?Name}.
+                    formulaValues = multiSelections.ToDictionary(kv => kv.Key, kv => (object)kv.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
                     typedParams = MultiValueParameterRewriter.Apply(definition, multiSelections, typedParams);
 
                     // Drill-down tabs re-load a fresh definition from the
@@ -1416,7 +1427,7 @@ else
                 }
 
                 SetXmlSource(xmlPath);
-                await ShowSqlReport(definition, typedParams);
+                await ShowSqlReport(definition, typedParams, formulaValues);
                 ReportLoaded = string.IsNullOrEmpty(ErrorMessage);
                 StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)" : ErrorMessage!;
             }

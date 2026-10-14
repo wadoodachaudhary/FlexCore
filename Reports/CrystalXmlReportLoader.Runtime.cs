@@ -54,7 +54,7 @@ public partial class CrystalXmlReportLoader
                         var field = ResolveSubreportLinkField(child, parsed);
                         childReference = "{" + field.Table + "." + field.Field + "}";
                     }
-                    return new ReportLayoutParameterLink((string?)link.Attribute("LinkedParameterName") ?? "",
+                    return new ReportLayoutParameterLink(LinkParameterName((string?)link.Attribute("LinkedParameterName")),
                         (string?)link.Attribute("MainReportFieldName") ?? "", childReference);
                 }).ToList();
                 var childDefinition = LoadPositionedSource(child, childPath, ancestry, depth + 1);
@@ -64,22 +64,80 @@ public partial class CrystalXmlReportLoader
                     AddProjection(definition.PositionedLayout, link.MainField);
                     AddProjection(childDefinition.PositionedLayout!, link.ChildField);
                 }
-                RefreshSql(childDefinition, child);
+                RefreshSql(childDefinition, child, subreport: true);
             }
-            RefreshSql(definition, report);
+            RefreshSql(definition, report, subreport: depth > 0);
             return definition;
         }
         finally { ancestry.Remove(identity); }
     }
 
-    private void RefreshSql(ReportDefinition definition, XElement report)
+    // Crystal's SDK export names a linked parameter "{?Pm-Table.Field}"; the native converter writes "Pm-Table.Field". Formulas and
+    // the session read the value by the bare name.
+    private static string LinkParameterName(string? name)
+    {
+        name = (name ?? "").Trim();
+        return name.StartsWith("{?", StringComparison.Ordinal) && name.EndsWith('}') ? name[2..^1].Trim() : name;
+    }
+
+    private void RefreshSql(ReportDefinition definition, XElement report, bool subreport)
     {
         report = new XElement(report);
         report.Elements("SubReports").Remove();
         var tables = ParseTables(report);
-        var projections = definition.PositionedLayout!.Projections;
+        var layout = definition.PositionedLayout!;
+        // An SDK export lists the main-report field a subreport link reads among the subreport's fields; it is no column of
+        // the child query (the link hands its value over as the parameter), so only this report's tables are projected.
+        var known = tables.Select(t => t.Alias).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (reference, alias) in layout.Bindings.ToList())
+        {
+            if (ParseCrystalFieldRef(reference) is not { } field || known.Contains(field.Table)) continue;
+            layout.Bindings.Remove(reference);
+            layout.Projections.RemoveAll(p => p.EndsWith(" AS [" + alias.Replace("]", "]]", StringComparison.Ordinal) + "]", StringComparison.Ordinal));
+        }
+        var projections = layout.Projections;
         definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-            : BuildSql(tables, ParseTableLinks(report), "", "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            : BuildSql(tables, ParseTableLinks(report), PositionedSelectionWhere(definition, report, subreport), "",
+                projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+    }
+
+    // A record selection that only compares query fields, prompt values and literals (AND/OR of "V op V") also filters the query in
+    // SQL, as the tabular loader does, so the result is the report's rows rather than the whole table; the runtime still evaluates
+    // the formula over the rows. Every other shape (formula fields, functions, ranges, arrays, Boolean fields, IF) keeps the whole
+    // query for the runtime. A subreport binds its link parameters from the main row; the main report binds its discrete prompts.
+    // A multi-value prompt, or a link (whose main field may be one), is expanded to IN (...) only behind "{field} = {?Name}".
+    private string PositionedSelectionWhere(ReportDefinition definition, XElement report, bool subreport)
+    {
+        var formula = (string?)report.Element("DataDefinition")?.Element("RecordSelectionFormula") ?? "";
+        formula = string.Join('\n', formula.Split('\n').Select(line => Regex.Replace(line, @"//.*$", "")));
+        if (string.IsNullOrWhiteSpace(formula)) return "";
+        var fields = ExtractTableFieldIndex(report);
+        var parameters = subreport
+            ? report.Elements("SubReportLinks").Elements("SubReportLink").Select(l => SanitizeParamName(LinkParameterName((string?)l.Attribute("LinkedParameterName"))))
+                .Where(name => name.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToDictionary(name => name, _ => true, StringComparer.OrdinalIgnoreCase)
+            : definition.Parameters.Where(p => !p.AllowRange).GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Any(p => p.AllowMultiple), StringComparer.OrdinalIgnoreCase);
+        var simple = true;
+        bool Field(string table, string field) => Regex.IsMatch(field = field.Trim(), @"^[A-Za-z_]\w*$")
+            && fields.TryGetValue(table, out var known) && known.Contains(field);
+        var shape = Regex.Replace(formula, "\"[^\"]*\"|'[^']*'", " V ");
+        shape = Regex.Replace(shape, @"(?:\{(?<table>[A-Za-z_]\w*)\.(?<field>[^}]+)\}\s*=\s*)?\{\?(?<name>[^}]+)\}", m =>
+        {
+            var compared = m.Groups["table"].Success;
+            if (compared && !Field(m.Groups["table"].Value, m.Groups["field"].Value)) simple = false;
+            if (!parameters.TryGetValue(SanitizeParamName(m.Groups["name"].Value), out var multiple) || multiple && !compared) simple = false;
+            return compared ? " V = V " : " V ";
+        });
+        shape = Regex.Replace(shape, @"\{(?<table>[A-Za-z_]\w*)\.(?<field>[^}]+)\}", m =>
+        {
+            if (!Field(m.Groups["table"].Value, m.Groups["field"].Value)) simple = false;
+            return " V ";
+        });
+        if (shape.Contains('{')) simple = false;
+        shape = Regex.Replace(shape, @"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", " V ");
+        const string comparison = @"(?:\(\s*)*V\s*(?:<>|<=|>=|=|<|>)\s*V(?:\s*\))*";
+        if (!simple || !Regex.IsMatch(shape, @"^\s*" + comparison + @"(?:\s+(?:AND|OR)\s+" + comparison + @")*\s*$", RegexOptions.IgnoreCase)) return "";
+        return ConvertRecordSelectionFormula(report, new Dictionary<string, string>());
     }
 
     private static ReportPositionedLayout BuildPositionedLayout(ReportDesignerDocument document, XElement report, List<string> diagnostics)
@@ -334,6 +392,8 @@ public partial class CrystalXmlReportLoader
         if (seen.Count > 2048) throw new InvalidDataException("Formula dependency limit exceeded.");
         if (layout.Formulas.TryGetValue(reference, out var formula))
         { foreach (var dependency in formula.References) AddProjection(layout, dependency, seen); return; }
+        // A parameter is read from the report's values (ReportPositionedLayout.Value), never from the query.
+        if (reference.StartsWith("{?", StringComparison.Ordinal)) return;
         if (layout.Bindings.ContainsKey(reference) || ParseCrystalFieldRef(reference) is not { } field) return;
         var alias = field.Table + "_" + field.Field;
         var suffix = layout.Bindings.Count;
