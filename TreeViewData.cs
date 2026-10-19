@@ -78,4 +78,23 @@ public static class TreeViewData
         newList.Insert(at, source.Node);
         if (position == TreeDropPosition.Inside) target.Node.IsExpanded = true;
     }
+
+    /// <summary>
+    /// Sets each parent's <see cref="TreeNode.Status"/> from its children (all complete = Complete, any progress = InProgress,
+    /// otherwise NotStarted). Children with Status None are ignored. With <paramref name="setBadges"/>, parents get a "done/total" badge.
+    /// </summary>
+    public static void RollUpStatus(IEnumerable<TreeNode> roots, bool setBadges = false)
+    {
+        foreach (var info in Flatten(roots).AsEnumerable().Reverse())
+        {
+            var node = info.Node;
+            var tracked = node.Children.Where(c => c.Status != TreeNodeStatus.None).ToArray();
+            if (tracked.Length == 0) continue;
+            var done = tracked.Count(c => c.Status == TreeNodeStatus.Complete);
+            node.Status = done == tracked.Length ? TreeNodeStatus.Complete
+                : done > 0 || tracked.Any(c => c.Status == TreeNodeStatus.InProgress) ? TreeNodeStatus.InProgress
+                : TreeNodeStatus.NotStarted;
+            if (setBadges) node.BadgeText = $"{done}/{tracked.Length}";
+        }
+    }
 }

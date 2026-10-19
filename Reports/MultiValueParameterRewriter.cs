@@ -66,6 +66,8 @@ public static class MultiValueParameterRewriter
     {
         if (definition == null) throw new ArgumentNullException(nameof(definition));
         selections ??= new Dictionary<string, IReadOnlyList<string>>();
+        definition.PositionedSqlSelection?.ConfigureLists(selections, extraSqlParameters);
+        var integerSelection = definition.RestoreIntegerSelectionForRewrite();
 
         var sqlParams = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         if (extraSqlParameters != null)
@@ -78,13 +80,18 @@ public static class MultiValueParameterRewriter
             var name = kv.Key;
             var values = kv.Value ?? Array.Empty<string>();
             if (string.IsNullOrWhiteSpace(name) || values.Count == 0) continue;
+            // A prompt's choices travel as text whatever the prompt's type (numeric choices arrive as
+            // invariant text such as "-1.0"). SQL Server cannot convert '-1.0' to an int column, so each member is bound
+            // with the prompt's declared type; a string prompt keeps its text.
+            var parameterType = definition.Parameters
+                .FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.ParameterType;
 
             if (values.Count == 1)
             {
                 // Scalar — leave the SQL alone; just bind the single value.
                 // The Crystal-emitted "= @Name" already matches; no rewrite
                 // needed.
-                sqlParams[name] = values[0];
+                sqlParams[name] = TypedValue(values[0], parameterType);
                 continue;
             }
 
@@ -106,6 +113,19 @@ public static class MultiValueParameterRewriter
                 Enumerable.Range(0, values.Count).Select(i => $"@{name}_{i}"));
             var replacement = $"IN ({placeholders})";
 
+            // Positioned text selectors retain a guarded predicate over a parameter
+            // rowset. Expand that rowset so non-ASCII fallbacks apply to every value.
+            var rowset = $"SELECT @{name} AS [Value]";
+            if (definition.PositionedLayout?.SqlStringParameters.Contains(name, StringComparer.OrdinalIgnoreCase) == true
+                && definition.Sql.Contains(rowset, StringComparison.OrdinalIgnoreCase))
+            {
+                definition.Sql = definition.Sql.Replace(rowset,
+                    string.Join(" UNION ALL ", Enumerable.Range(0, values.Count).Select(i => $"SELECT @{name}_{i} AS [Value]")),
+                    StringComparison.OrdinalIgnoreCase);
+                definition.ExpandedSqlStringParameters = definition.ExpandedSqlStringParameters
+                    .Concat(Enumerable.Range(0, values.Count).Select(i => $"{name}_{i}")).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+
             if (!string.IsNullOrEmpty(definition.Sql))
                 definition.Sql = pattern.Replace(definition.Sql, replacement);
 
@@ -113,7 +133,7 @@ public static class MultiValueParameterRewriter
                 definition.TreeSql = pattern.Replace(definition.TreeSql, replacement);
 
             for (var i = 0; i < values.Count; i++)
-                sqlParams[$"{name}_{i}"] = values[i];
+                sqlParams[$"{name}_{i}"] = TypedValue(values[i], parameterType);
 
             // Crystal formulas sometimes reference the same parameter both as
             // an IN-rewrite target AND as a sentinel predicate test (e.g.
@@ -123,7 +143,7 @@ public static class MultiValueParameterRewriter
             // without a scalar @Name binding SQL Server fails with
             // "Must declare the scalar variable '@Name'". Bind to the first
             // picked value — preserves the user's selection in the cond test.
-            sqlParams[name] = values[0];
+            sqlParams[name] = TypedValue(values[0], parameterType);
         }
 
         // Drop the now-rewritten Crystal scalar parameters so neither
@@ -139,6 +159,21 @@ public static class MultiValueParameterRewriter
             .Where(p => !rewrittenAllNames.Contains(p.Name))
             .ToList();
 
+        // A trusted list expansion changes the generated template, not the
+        // integral clauses. Never revive a plan for caller-replaced SQL.
+        definition.PositionedIntegerSelection = integerSelection?.WithTemplate(definition.Sql);
         return sqlParams;
     }
+
+    /// <summary>The SQL value for one prompt choice: numbers, dates and booleans by the prompt's declared
+    /// type (invariant text, as the converter writes defaults), anything else as the text it arrived as.</summary>
+    internal static object TypedValue(string value, ReportParameterType? type) => type switch
+    {
+        ReportParameterType.Integer when long.TryParse(value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var integer) => integer,
+        ReportParameterType.Integer when decimal.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var whole) && whole == decimal.Truncate(whole) => (long)whole,
+        ReportParameterType.Decimal when decimal.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var number) => number,
+        ReportParameterType.Boolean when bool.TryParse(value, out var flag) => flag,
+        ReportParameterType.Date when DateTime.TryParse(value, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var date) => date,
+        _ => value
+    };
 }

@@ -1,21 +1,38 @@
 @namespace Fx.ControlKit
 @typeparam TItem
+@using Fx.ControlKit.Grid
 
 @*
     Multi-Select Dual List Control
     -------------------------------
-    A two-pane "shuttle" control imitating the VB6 Reports parameter screen:
+    A two-pane "shuttle" control imitating the Crystal / VB6 Reports parameter screen:
 
-        [ Available items ]   [ > ]   [ Selected items ]
-                              [ >> ]
-                              [ <  ]
-                              [ << ]
+        [ Available values ]   [ > ]   [ Selected values ]
+                               [ >> ]
+                                       Remove  Remove All
+
+    Each pane is a one-column GridControl, so both lists have the grid's header
+    search (the magnifier), header sorting, type-to-jump (type the first letters of
+    a value while the list has the focus) and, for the Available pane, paging.
 
     Buttons:
-      >   Move single highlighted item from Available  -> Selected
-      >>  Move ALL items from Available -> Selected
-      <   Move single highlighted item from Selected   -> Available
-      <<  Move ALL items from Selected -> Available
+      >            Move the highlighted Available rows to Selected (double-click too)
+      >>           Move every Available row on screen (the current batch, after any
+                   search and sort) to Selected
+      Remove       Take the highlighted Selected rows out (double-click too)
+      Remove All   Empty Selected
+
+    Crystal prompt mode (opt-in, used by the report parameter dialog):
+      BatchSize > 0               the Available pane pages the pool BatchSize values at
+                                  a time (Crystal's "Enter Parameter Values" lists a
+                                  dynamic list of values 200 at a time) and >> adds only
+                                  the batch on screen, as Crystal's >> does.
+      KeepAvailableItems          the Available pane always lists the whole pool; adding
+                                  copies an item to Selected and removing only takes it
+                                  out of Selected (Crystal layout).
+      RemoveButtonsBelowSelected  "Remove" / "Remove All" sit under the Selected pane and
+                                  only > and >> stay between the panes. Otherwise < and <<
+                                  stay between the panes.
 
     Public API:
       - SelectedItems  (two-way bindable IList<TItem>)
@@ -28,66 +45,109 @@
 
 <div class="fx-dual-list @CssClass" style="@RootStyle">
     <div class="fx-dual-pane">
-        @if (!string.IsNullOrEmpty(LeftHeader))
-        {
-            <div class="fx-dual-header">@LeftHeader</div>
-        }
-        <select class="fx-dual-select"
-                multiple
-                size="@VisibleRows"
-                style="@PaneStyle"
-                @onchange="OnLeftSelectionChanged"
-                @ondblclick="MoveSelectedRight">
-            @foreach (var item in _availableItems)
-            {
-                var key = ResolveKey(item);
-                var label = ResolveLabel(item);
-                var sel = _leftHighlighted.Contains(key);
-                <option value="@key" selected="@sel">@label</option>
-            }
-        </select>
-        <div class="fx-dual-meta">@_availableItems.Count item(s)</div>
+        <GridControl @ref="_availableGrid"
+                     TValue="MultiSelectDualListRow"
+                     DataSource="@_availableRows"
+                     AllowSorting="true"
+                     AllowMultiSorting="false"
+                     AllowFiltering="true"
+                     AllowSelection="true"
+                     HighlightSelectedRows="true"
+                     AllowResizing="false"
+                     AllowColumnReorder="false"
+                     EnableHeaderContextMenu="false"
+                     EnableTypeSearch="true"
+                     TypeSearchDelaySeconds="@TypeSearchDelaySeconds"
+                     AllowPaging="@(BatchSize > 0)"
+                     PageSize="@(BatchSize > 0 ? BatchSize : 50)"
+                     PageSizes="@_pageSizes"
+                     ShowSelectionInfoBar="false"
+                     ShowGridToolbar="false"
+                     ClearFiltersOnDataSourceChange="false"
+                     GridLines="GridLines.None"
+                     EnableAltRow="false"
+                     Height="@PaneHeight"
+                     Width="100%"
+                     SelectionSettingsRef="@_availableSelection"
+                     FilterSettingsRef="@_availableFilter"
+                     EventsRef="@_availableEvents"
+                     CssClass="fx-dual-grid">
+            <GridColumnsBase>
+                <GridColumn Field="Label" HeaderText="@(LeftHeader ?? "Available")" AllowSorting="true" AllowFiltering="true" />
+            </GridColumnsBase>
+        </GridControl>
+        <div class="fx-dual-meta">@_availableRows.Count value(s)</div>
     </div>
 
     <div class="fx-dual-buttons">
         <button type="button" class="fx-dual-btn"
                 title="Move selected"
-                disabled="@(_availableItems.Count == 0)"
+                disabled="@(_availableRows.Count == 0)"
                 @onclick="MoveSelectedRight">&gt;</button>
         <button type="button" class="fx-dual-btn"
-                title="Move all"
-                disabled="@(_availableItems.Count == 0)"
+                title="@MoveAllTitle"
+                disabled="@(_availableRows.Count == 0)"
                 @onclick="MoveAllRight">&gt;&gt;</button>
-        <button type="button" class="fx-dual-btn"
-                title="Remove selected"
-                disabled="@(_selectedItems.Count == 0)"
-                @onclick="MoveSelectedLeft">&lt;</button>
-        <button type="button" class="fx-dual-btn"
-                title="Remove all"
-                disabled="@(_selectedItems.Count == 0)"
-                @onclick="MoveAllLeft">&lt;&lt;</button>
+        @if (!RemoveButtonsBelowSelected)
+        {
+            <button type="button" class="fx-dual-btn"
+                    title="Remove selected"
+                    disabled="@(_selectedRows.Count == 0)"
+                    @onclick="MoveSelectedLeft">&lt;</button>
+            <button type="button" class="fx-dual-btn"
+                    title="Remove all"
+                    disabled="@(_selectedRows.Count == 0)"
+                    @onclick="MoveAllLeft">&lt;&lt;</button>
+        }
     </div>
 
     <div class="fx-dual-pane">
-        @if (!string.IsNullOrEmpty(RightHeader))
+        <GridControl @ref="_selectedGrid"
+                     TValue="MultiSelectDualListRow"
+                     DataSource="@_selectedRows"
+                     AllowSorting="true"
+                     AllowMultiSorting="false"
+                     AllowFiltering="true"
+                     AllowSelection="true"
+                     HighlightSelectedRows="true"
+                     AllowResizing="false"
+                     AllowColumnReorder="false"
+                     EnableHeaderContextMenu="false"
+                     EnableTypeSearch="true"
+                     TypeSearchDelaySeconds="@TypeSearchDelaySeconds"
+                     ShowSelectionInfoBar="false"
+                     ShowGridToolbar="false"
+                     ClearFiltersOnDataSourceChange="false"
+                     GridLines="GridLines.None"
+                     EnableAltRow="false"
+                     Height="@PaneHeight"
+                     Width="100%"
+                     SelectionSettingsRef="@_selectedSelection"
+                     FilterSettingsRef="@_selectedFilter"
+                     EventsRef="@_selectedEvents"
+                     CssClass="fx-dual-grid">
+            <GridColumnsBase>
+                <GridColumn Field="Label" HeaderText="@(RightHeader ?? "Selected")" AllowSorting="true" AllowFiltering="true" />
+            </GridColumnsBase>
+        </GridControl>
+        @if (RemoveButtonsBelowSelected)
         {
-            <div class="fx-dual-header">@RightHeader</div>
+            <div class="fx-dual-remove-row">
+                <span class="fx-dual-meta fx-dual-remove-meta">@_selectedRows.Count selected</span>
+                <button type="button" class="fx-dual-btn fx-dual-remove"
+                        title="Remove selected"
+                        disabled="@(_selectedRows.Count == 0)"
+                        @onclick="MoveSelectedLeft">Remove</button>
+                <button type="button" class="fx-dual-btn fx-dual-remove"
+                        title="Remove all"
+                        disabled="@(_selectedRows.Count == 0)"
+                        @onclick="MoveAllLeft">Remove All</button>
+            </div>
         }
-        <select class="fx-dual-select"
-                multiple
-                size="@VisibleRows"
-                style="@PaneStyle"
-                @onchange="OnRightSelectionChanged"
-                @ondblclick="MoveSelectedLeft">
-            @foreach (var item in _selectedItems)
-            {
-                var key = ResolveKey(item);
-                var label = ResolveLabel(item);
-                var sel = _rightHighlighted.Contains(key);
-                <option value="@key" selected="@sel">@label</option>
-            }
-        </select>
-        <div class="fx-dual-meta">@_selectedItems.Count selected</div>
+        else
+        {
+            <div class="fx-dual-meta">@_selectedRows.Count selected</div>
+        }
     </div>
 </div>
 
@@ -115,32 +175,65 @@
     /// <summary>Function returning the unique key.  Wins over ValueField if both are set.</summary>
     [Parameter] public Func<TItem, string>? KeySelector { get; set; }
 
-    /// <summary>Header text shown above the left (Available) pane.</summary>
+    /// <summary>Header text of the left (Available) pane: the column caption that carries the search and sort.</summary>
     [Parameter] public string? LeftHeader { get; set; } = "Available";
 
-    /// <summary>Header text shown above the right (Selected) pane.</summary>
+    /// <summary>Header text of the right (Selected) pane.</summary>
     [Parameter] public string? RightHeader { get; set; } = "Selected";
 
-    /// <summary>Number of rows visible in each pane (HTML "size" attribute).</summary>
+    /// <summary>Number of rows visible in each pane when <see cref="Height"/> is not set.</summary>
     [Parameter] public int VisibleRows { get; set; } = 10;
 
     /// <summary>Optional fixed pane width (CSS value).  Default = flex.</summary>
     [Parameter] public string? PaneWidth { get; set; }
 
-    /// <summary>Optional fixed control height (CSS value).</summary>
+    /// <summary>Optional fixed height of each pane's grid (CSS value).</summary>
     [Parameter] public string? Height { get; set; }
 
     /// <summary>Extra CSS class applied to the root.</summary>
     [Parameter] public string? CssClass { get; set; }
 
+    /// <summary>
+    /// When greater than zero, the Available pane pages the pool this many values at a
+    /// time and <c>&gt;&gt;</c> adds only the batch on screen. Crystal's "Enter Parameter
+    /// Values" dialog lists a dynamic list of values 200 at a time and its <c>&gt;&gt;</c>
+    /// adds the loaded batch only (SAP's default batch size); the report parameter dialog
+    /// passes 200 so a prompt answered the same way in both applications submits the same
+    /// values. 0 (the default) lists every value.
+    /// </summary>
+    [Parameter] public int BatchSize { get; set; }
+
+    /// <summary>
+    /// When true the Available pane always lists the whole pool (Crystal's prompt):
+    /// adding puts a copy in Selected, an item already selected is not added twice,
+    /// and removing only takes the item out of Selected. When false (the default)
+    /// items shuttle between the panes.
+    /// </summary>
+    [Parameter] public bool KeepAvailableItems { get; set; }
+
+    /// <summary>
+    /// When true, "Remove" and "Remove All" sit under the Selected pane and only
+    /// <c>&gt;</c> / <c>&gt;&gt;</c> stay between the panes (Crystal's prompt layout).
+    /// </summary>
+    [Parameter] public bool RemoveButtonsBelowSelected { get; set; }
+
+    /// <summary>Seconds before the type-to-jump buffer resets (VB6 AutoSearchDelay).</summary>
+    [Parameter] public int TypeSearchDelaySeconds { get; set; } = 2;
+
     // --- State ---
 
-    private List<TItem> _availableItems = new();
-    private List<TItem> _selectedItems = new();
-    /// <summary>Keys of items currently highlighted in the LEFT pane.</summary>
-    private HashSet<string> _leftHighlighted = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Keys of items currently highlighted in the RIGHT pane.</summary>
-    private HashSet<string> _rightHighlighted = new(StringComparer.OrdinalIgnoreCase);
+    private GridControl<MultiSelectDualListRow>? _availableGrid;
+    private GridControl<MultiSelectDualListRow>? _selectedGrid;
+    private List<MultiSelectDualListRow> _availableRows = new();
+    private List<MultiSelectDualListRow> _selectedRows = new();
+    private int[] _pageSizes = [50];
+
+    private readonly SelectionSettings _availableSelection = new() { Type = SelectionType.Multiple, Mode = SelectionMode.Row };
+    private readonly SelectionSettings _selectedSelection = new() { Type = SelectionType.Multiple, Mode = SelectionMode.Row };
+    private readonly FilterSettings _availableFilter = new() { Type = FilterType.Menu, SearchAsYouType = true };
+    private readonly FilterSettings _selectedFilter = new() { Type = FilterType.Menu, SearchAsYouType = true };
+    private readonly GridControlEvents<MultiSelectDualListRow> _availableEvents = new();
+    private readonly GridControlEvents<MultiSelectDualListRow> _selectedEvents = new();
 
     /// <summary>Tracks the last (Items, SelectedItems) reference pair we synced from.</summary>
     private object? _lastItemsRef;
@@ -148,33 +241,44 @@
 
     // --- Lifecycle ---
 
+    protected override void OnInitialized()
+    {
+        _availableEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnAvailableDoubleClick);
+        _selectedEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnSelectedDoubleClick);
+    }
+
     protected override void OnParametersSet()
     {
+        _pageSizes = [BatchSize > 0 ? BatchSize : 50];
+
         // Re-sync only when the parent passes a different reference; avoid
         // clobbering local moves on every render.
         var itemsChanged = !ReferenceEquals(Items, _lastItemsRef);
         var selectedChanged = !ReferenceEquals(SelectedItems, _lastSelectedRef);
+        if (!itemsChanged && !selectedChanged) return;
 
-        if (itemsChanged || selectedChanged)
-        {
-            var allItems = (Items ?? Enumerable.Empty<TItem>()).ToList();
-            var selected = (SelectedItems ?? new List<TItem>()).ToList();
+        var allItems = (Items ?? Enumerable.Empty<TItem>()).ToList();
+        var selected = (SelectedItems ?? new List<TItem>()).ToList();
+        var selectedKeys = new HashSet<string>(selected.Select(ResolveKey), StringComparer.OrdinalIgnoreCase);
 
-            // Build a fast key lookup of currently selected items
-            var selectedKeys = new HashSet<string>(selected.Select(ResolveKey),
-                StringComparer.OrdinalIgnoreCase);
-
-            _selectedItems = selected;
-            _availableItems = allItems
-                .Where(i => !selectedKeys.Contains(ResolveKey(i)))
+        _selectedRows = selected.Select(ToRow).ToList();
+        if (itemsChanged || !KeepAvailableItems)
+            _availableRows = allItems
+                .Where(i => KeepAvailableItems || !selectedKeys.Contains(ResolveKey(i)))
+                .Select(ToRow)
                 .ToList();
 
-            _lastItemsRef = Items;
-            _lastSelectedRef = SelectedItems;
-        }
+        _lastItemsRef = Items;
+        _lastSelectedRef = SelectedItems;
     }
 
     // --- Helpers ---
+
+    private string MoveAllTitle => BatchSize > 0 ? "Move all values on screen (this batch)" : "Move all values on screen";
+
+    private MultiSelectDualListRow ToRow(TItem item) => new() { Key = ResolveKey(item), Label = ResolveLabel(item), Item = item };
+
+    private static TItem ItemOf(MultiSelectDualListRow row) => (TItem)row.Item!;
 
     private string ResolveKey(TItem item)
     {
@@ -206,88 +310,62 @@
     }
 
     private string RootStyle =>
-        string.IsNullOrEmpty(Height) ? string.Empty : $"height:{Height};";
+        string.IsNullOrEmpty(PaneWidth) ? string.Empty : $"--fx-dual-pane-width:{PaneWidth};";
 
-    private string PaneStyle =>
-        string.IsNullOrEmpty(PaneWidth) ? string.Empty : $"width:{PaneWidth};";
-
-    // --- Selection-change handlers (track which options the user highlighted) ---
-
-    private void OnLeftSelectionChanged(ChangeEventArgs e)
-    {
-        _leftHighlighted = ExtractKeys(e.Value);
-    }
-
-    private void OnRightSelectionChanged(ChangeEventArgs e)
-    {
-        _rightHighlighted = ExtractKeys(e.Value);
-    }
-
-    private static HashSet<string> ExtractKeys(object? raw)
-    {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (raw is string[] arr)
-        {
-            foreach (var v in arr) if (!string.IsNullOrEmpty(v)) set.Add(v);
-        }
-        else if (raw is IEnumerable<string> en)
-        {
-            foreach (var v in en) if (!string.IsNullOrEmpty(v)) set.Add(v);
-        }
-        else if (raw is string s && !string.IsNullOrEmpty(s))
-        {
-            set.Add(s);
-        }
-        return set;
-    }
+    /// <summary>Each pane's grid height: the explicit Height, else room for VisibleRows rows plus the header and pager.</summary>
+    private string PaneHeight => !string.IsNullOrEmpty(Height) ? Height! : $"{Math.Max(3, VisibleRows) * 22 + 64}px";
 
     // --- Move actions ---
 
-    private async Task MoveSelectedRight()
+    private Task OnAvailableDoubleClick(CellClickEventArgs<MultiSelectDualListRow> args)
+        => args.Data is { } row ? AddRowsAsync([row]) : Task.CompletedTask;
+
+    private Task OnSelectedDoubleClick(CellClickEventArgs<MultiSelectDualListRow> args)
+        => args.Data is { } row ? RemoveRowsAsync([row]) : Task.CompletedTask;
+
+    private Task MoveSelectedRight()
+        => AddRowsAsync(_availableGrid?.GetSelectedRecords().ToList() ?? []);
+
+    /// <summary>Crystal's &gt;&gt;: every value on screen, i.e. the current batch after search and sort.</summary>
+    private Task MoveAllRight()
+        => AddRowsAsync(_availableGrid?.GetCurrentViewRecords().ToList() ?? _availableRows.ToList());
+
+    private Task MoveSelectedLeft()
+        => RemoveRowsAsync(_selectedGrid?.GetSelectedRecords().ToList() ?? []);
+
+    private Task MoveAllLeft()
+        => RemoveRowsAsync(_selectedRows.ToList());
+
+    private async Task AddRowsAsync(List<MultiSelectDualListRow> moving)
     {
-        if (_leftHighlighted.Count == 0) return;
-        var moving = _availableItems.Where(i => _leftHighlighted.Contains(ResolveKey(i))).ToList();
         if (moving.Count == 0) return;
-
-        foreach (var m in moving)
+        // An item already selected is not added twice (the Available pane keeps every row in Crystal mode).
+        var selectedKeys = new HashSet<string>(_selectedRows.Select(r => r.Key), StringComparer.OrdinalIgnoreCase);
+        var added = moving.Where(r => selectedKeys.Add(r.Key)).ToList();
+        if (added.Count == 0)
         {
-            _availableItems.Remove(m);
-            _selectedItems.Add(m);
+            if (_availableGrid != null) await _availableGrid.ClearSelectionAsync();
+            return;
         }
-        _leftHighlighted.Clear();
+        _selectedRows = [.. _selectedRows, .. added];
+        if (!KeepAvailableItems)
+        {
+            var addedKeys = new HashSet<string>(added.Select(r => r.Key), StringComparer.OrdinalIgnoreCase);
+            _availableRows = _availableRows.Where(r => !addedKeys.Contains(r.Key)).ToList();
+        }
+        if (_availableGrid != null) await _availableGrid.ClearSelectionAsync();
         await NotifyChanged();
     }
 
-    private async Task MoveAllRight()
+    private async Task RemoveRowsAsync(List<MultiSelectDualListRow> moving)
     {
-        if (_availableItems.Count == 0) return;
-        _selectedItems.AddRange(_availableItems);
-        _availableItems.Clear();
-        _leftHighlighted.Clear();
-        await NotifyChanged();
-    }
-
-    private async Task MoveSelectedLeft()
-    {
-        if (_rightHighlighted.Count == 0) return;
-        var moving = _selectedItems.Where(i => _rightHighlighted.Contains(ResolveKey(i))).ToList();
         if (moving.Count == 0) return;
-
-        foreach (var m in moving)
-        {
-            _selectedItems.Remove(m);
-            _availableItems.Add(m);
-        }
-        _rightHighlighted.Clear();
-        await NotifyChanged();
-    }
-
-    private async Task MoveAllLeft()
-    {
-        if (_selectedItems.Count == 0) return;
-        _availableItems.AddRange(_selectedItems);
-        _selectedItems.Clear();
-        _rightHighlighted.Clear();
+        var removedKeys = new HashSet<string>(moving.Select(r => r.Key), StringComparer.OrdinalIgnoreCase);
+        var removed = _selectedRows.Where(r => removedKeys.Contains(r.Key)).ToList();
+        if (removed.Count == 0) return;
+        _selectedRows = _selectedRows.Where(r => !removedKeys.Contains(r.Key)).ToList();
+        if (!KeepAvailableItems) _availableRows = [.. _availableRows, .. removed];
+        if (_selectedGrid != null) await _selectedGrid.ClearSelectionAsync();
         await NotifyChanged();
     }
 
@@ -295,7 +373,7 @@
     {
         // Hand the parent a fresh List so [Parameter] change-detection fires
         // (Blazor compares references for IList).
-        var snapshot = _selectedItems.ToList();
+        var snapshot = _selectedRows.Select(ItemOf).ToList();
         SelectedItems = snapshot;
         _lastSelectedRef = snapshot;
         if (SelectedItemsChanged.HasDelegate)
@@ -310,15 +388,16 @@
     /// the caller doesn't bind two-way and wants to read the value on demand
     /// (e.g. a "Run Report" button click handler).
     /// </summary>
-    public IReadOnlyList<TItem> GetSelected() => _selectedItems.ToList();
+    public IReadOnlyList<TItem> GetSelected() => _selectedRows.Select(ItemOf).ToList();
 
     /// <summary>
-    /// Returns the items in the "Available" pane (i.e. NOT chosen).
+    /// Returns the items in the "Available" pane (i.e. NOT chosen; with
+    /// <see cref="KeepAvailableItems"/> the whole pool).
     /// </summary>
-    public IReadOnlyList<TItem> GetAvailable() => _availableItems.ToList();
+    public IReadOnlyList<TItem> GetAvailable() => _availableRows.Select(ItemOf).ToList();
 
     /// <summary>
     /// Convenience helper returning the resolved keys of the selected items.
     /// </summary>
-    public IReadOnlyList<string> GetSelectedKeys() => _selectedItems.Select(ResolveKey).ToList();
+    public IReadOnlyList<string> GetSelectedKeys() => _selectedRows.Select(r => r.Key).ToList();
 }

@@ -434,7 +434,12 @@ public sealed class ReportDesignerElement
     public string HorizontalAlignment { get; set; } = "Default";
     public bool IsSuppressed { get; set; }
     public bool CanGrow { get; set; }
+    /// <summary>Authored maximum text lines when growing; zero means unlimited.</summary>
+    public int MaxNumberOfLines { get; set; }
     public string FormatString { get; set; } = "";
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
+    public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
     public bool LockFormat { get; set; }
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
@@ -483,7 +488,11 @@ public sealed class ReportDesignerElement
             HorizontalAlignment = HorizontalAlignment,
             IsSuppressed = IsSuppressed,
             CanGrow = CanGrow,
+            MaxNumberOfLines = MaxNumberOfLines,
             FormatString = FormatString,
+            NativeDateTimeFormat = NativeDateTimeFormat,
+            NativeNumberFormat = NativeNumberFormat,
+            NativeNumericFormat = NativeNumericFormat,
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
@@ -725,6 +734,7 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("HasSavedData", "False"));
 
         root.Add(new XElement("Summaryinfo", new XAttribute("ReportTitle", document.Title ?? "")));
+        root.Add(NewReportOptions());
         root.Add(new XElement("PrintOptions",
             new XAttribute("PageContentHeight", document.Page.ContentHeightTwips),
             new XAttribute("PageContentWidth", document.Page.ContentWidthTwips),
@@ -870,6 +880,11 @@ public static partial class ReportDesignerXmlSerializer
         objectElement.SetAttributeValue("Width", element.WidthTwips);
         objectElement.SetAttributeValue("Height", element.HeightTwips);
 
+        if (element.MaxNumberOfLines < 0)
+            throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
+        if (objectElement.Name.LocalName is "FieldObject" or "TextObject" or "FieldHeadingObject")
+            objectElement.SetAttributeValue("MaxNumberOfLines", element.MaxNumberOfLines);
+
         var kind = element.Kind.Trim();
         if (string.Equals(kind, "Text", StringComparison.OrdinalIgnoreCase))
         {
@@ -912,6 +927,12 @@ public static partial class ReportDesignerXmlSerializer
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
         objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
+        objectElement.Elements("FlexKitNativeDateTimeFormat").Remove();
+        if (element.NativeDateTimeFormat is { } nativeDateTime) objectElement.Add(nativeDateTime.ToXml());
+        objectElement.Elements("FlexKitNativeNumberFormat").Remove();
+        if (element.NativeNumberFormat is { } nativeNumber) objectElement.Add(nativeNumber.ToXml());
+        objectElement.Elements("FlexKitNativeNumericFormat").Remove();
+        if (element.NativeNumericFormat is { } nativeNumeric) objectElement.Add(nativeNumeric.ToXml());
         objectFormat.SetAttributeValue("FlexKitLockFormat", Lower(element.LockFormat));
         objectFormat.SetAttributeValue("FlexKitLockSizePosition", Lower(element.LockSizePosition));
         objectFormat.SetAttributeValue("FlexKitIndentTwips", element.IndentTwips);
@@ -1108,7 +1129,11 @@ public static partial class ReportDesignerXmlSerializer
                 HorizontalAlignment = Attribute(objectFormat, "HorizontalAlignment") ?? "Default",
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
+                MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
                 FormatString = Attribute(objectFormat, "FlexKitFormatString") ?? "",
+                NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(objectElement),
+                NativeNumberFormat = ReportNativeNumberFormat.Read(objectElement),
+                NativeNumericFormat = ReportNativeNumericFormat.Read(objectElement),
                 LockFormat = ParseBool(Attribute(objectFormat, "FlexKitLockFormat")),
                 LockSizePosition = ParseBool(Attribute(objectFormat, "FlexKitLockSizePosition")),
                 IndentTwips = ParseInt(Attribute(objectFormat, "FlexKitIndentTwips")),
@@ -1233,6 +1258,13 @@ public static partial class ReportDesignerXmlSerializer
     {
         var metadata = Child(root, MetadataElementName);
         document.CustomSql = Attribute(metadata?.Element("Sql"), "Query") ?? "";
+        foreach (var field in metadata?.Element("Sql")?.Element("ResultFields")?.Elements("Field") ?? [])
+            document.Fields.Add(new ReportDesignerField
+            {
+                Name = (string?)field.Attribute("Name") ?? "",
+                LongName = (string?)field.Attribute("Name") ?? "",
+                Type = (string?)field.Attribute("Type") ?? "String"
+            });
     }
 
     private static (string Table, string Field)? ParseCrystalFieldReference(string formulaName)
@@ -1493,6 +1525,14 @@ public static partial class ReportDesignerXmlSerializer
     private static int ParseInt(string? value, int fallback = 0)
     {
         return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) ? parsed : fallback;
+    }
+
+    private static int ParseMaxNumberOfLines(string? value)
+    {
+        if (value is null) return 0;
+        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed >= 0)
+            return parsed;
+        throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
     }
 
     private static decimal ParseDecimal(string? value, decimal fallback = 0m)

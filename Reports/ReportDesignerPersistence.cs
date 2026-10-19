@@ -111,7 +111,8 @@ public sealed class ReportDesignerPreview : IDisposable
         for (var suffix = 1; copied.Values.Contains(output, StringComparer.OrdinalIgnoreCase); suffix++)
             output = System.IO.Path.Combine(_directory, $"{suffix}-{fileName}");
         copied[sourcePath] = output;
-        var root = XDocument.Parse(xml);
+        // Whitespace-only rich-text runs are authored content (spaces and line breaks).
+        var root = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
         foreach (var obj in root.Descendants("SubreportObject"))
         {
             var name = (string?)obj.Attribute("SubreportName") ?? "";
@@ -166,7 +167,7 @@ public sealed class ReportDesignerPreview : IDisposable
         {
             if (!ancestors.Add(path))
                 throw new InvalidDataException("A cyclic external subreport cannot be saved as a self-contained report.");
-            var xml = XDocument.Load(path);
+            var xml = XDocument.Load(path, LoadOptions.PreserveWhitespace);
             foreach (var obj in xml.Descendants("SubreportObject").ToList())
             {
                 var name = (string?)obj.Attribute("SubreportName") ?? "";

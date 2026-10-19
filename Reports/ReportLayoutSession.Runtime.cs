@@ -10,6 +10,13 @@ public sealed partial class ReportLayoutSession
         public DateTime PrintTime { get; init; } = DateTime.Now;
         public Dictionary<string, object?> Shared { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, DataTable Data, DataTable Filtered)> Queries { get; } = [];
+        /// <summary>Accepts a subreport query failure in place of the subreport's records; null accepts none and the run fails.</summary>
+        public Func<Exception, bool>? TolerateSubreportQueryError { get; init; }
+        /// <summary>Subreport queries that failed with an accepted error, keyed as <see cref="Queries"/>, so none is sent twice.
+        /// A drill view shares its run's list.</summary>
+        public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, string Message)> FailedQueries { get; init; } = [];
+        /// <summary>The subreport objects of this run that printed an error in place of their records.</summary>
+        public List<ReportSubreportError> SubreportErrors { get; } = [];
         public int Instances { get; set; }
         public int QueryRows { get; set; }
         public bool HasPageConditions { get; set; }
@@ -48,6 +55,7 @@ public sealed partial class ReportLayoutSession
         SharedVariables = _state.Shared, GlobalVariables = _globals, Now = _printTime,
         RecordIndex = row, RecordCount = _rows.Length, PageNumber = page ?? _formulaPage ?? 1, TotalPageCount = count ?? _formulaPages ?? 1,
         InRepeatedGroupHeader = _repeatedHeader, GroupNumber = () => GroupNumber(row),
+        DrillDownGroupLevel = _drillDownGroupLevel,
         GroupingLevel = field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
         HierarchicalChildren = level => HierarchicalChildren(level, row),
         DocumentProperty = name => name switch
@@ -175,20 +183,24 @@ public sealed partial class ReportLayoutSession
     }
     private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _groupStarts.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
 
-    private string DeferredPageValue(string reference, int row, string format)
+    private string DeferredPageValue(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime, ReportNativeNumberFormat? nativeNumber, ReportNativeNumericFormat? nativeNumeric)
     {
         if (NeedsPrintState(reference)) throw new NotSupportedException("Page formulas cannot mutate shared/global variables during pagination.");
         var token = Guid.NewGuid().ToString("N") + "-formula";
         _state.PageValues[token] = (page, count, repeated) =>
         {
             var previousPage = _formulaPage; var previousCount = _formulaPages; var previousRepeat = _repeatedHeader;
-            try { _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated; return Format(reference, row, format); }
+            try { _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated; return Format(reference, row, format, nativeDateTime, nativeNumber, nativeNumeric); }
             finally { _formulaPage = previousPage; _formulaPages = previousCount; _repeatedHeader = previousRepeat; }
         };
         return token;
     }
     private string ResolvePageValues(string html, int page, int count, bool repeated = false)
     {
+        // Every deferred token ends in "-formula". Ordinary object text cannot
+        // contain one without that marker, so avoid scanning all row variants.
+        // Possible tokens retain the existing ordered replacement semantics.
+        if (_state.PageValues.Count == 0 || !html.Contains("-formula", StringComparison.Ordinal)) return html;
         foreach (var entry in _state.PageValues)
             if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, ReportObjectRenderer.Encode(entry.Value(page, count, repeated)), StringComparison.Ordinal);
         return html;
@@ -291,6 +303,7 @@ public sealed partial class ReportLayoutSession
                     break;
                 case "horizontalalignment": element.HorizontalAlignment = value?.ToString() ?? "Left"; break;
                 case "bordercolor": element.Visual.BorderColor = FormulaColor(value); break;
+                case "linewidth": element.Visual.LineWidthTwips = Math.Max(0, (int)CrystalFormula.Number(value)); break;
                 case "leftlinestyle": element.Visual.LeftLine = FormulaLine(value); break;
                 case "rightlinestyle": element.Visual.RightLine = FormulaLine(value); break;
                 case "toplinestyle": element.Visual.TopLine = FormulaLine(value); break;
@@ -366,7 +379,7 @@ public sealed partial class ReportLayoutSession
                     var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
                         ? RestylePrintedRuns(template, element)
                         : richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
-                            ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString)) : template;
+                            ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)) : template;
                     html = ResolvePageValues(html.Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                         .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                         .Replace(owner._pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
@@ -376,7 +389,7 @@ public sealed partial class ReportLayoutSession
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
             }
             var hidden = _state.PrintedVisibility.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var visible) && !visible;
-            return source with { Section = section, Items = items, Suppressed = !Visible(section) || hidden, RepeatedHeader = repeated };
+            return source with { Section = section, Items = items, Suppressed = !sectionOwner.Visible(section) || hidden, RepeatedHeader = repeated };
         }
         finally { sectionOwner._formulaPage = previousPage; sectionOwner._formulaPages = previousCount; sectionOwner._repeatedHeader = previousRepeat; }
     }
@@ -398,6 +411,7 @@ public sealed partial class ReportLayoutSession
     // itself and no value binds NULL (nothing matches, as in Crystal).
     private static (ReportDefinition Query, Dictionary<string, object> Bound) SqlQuery(ReportDefinition query, IReadOnlyDictionary<string, object> parameters)
     {
+        query.PositionedSqlSelection?.ValidateUnexpandedLists(parameters);
         var scalars = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var lists = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in parameters)
@@ -412,7 +426,8 @@ public sealed partial class ReportLayoutSession
         }
         if (lists.Count == 0) return (query, scalars);
         var copy = new ReportDefinition { Sql = query.Sql, Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters.ToList(),
-            FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout };
+            FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout, PositionedSqlSelection = query.PositionedSqlSelection?.Clone(),
+            PositionedIntegerSelection = query.CopyIntegerSelectionForSql(query.Sql) };
         return (copy, MultiValueParameterRewriter.Apply(copy, lists, scalars));
     }
     // Equality under CrystalFormula.Compare; same-kind text, number and date values use a set instead of a scan.
@@ -437,6 +452,25 @@ public sealed partial class ReportLayoutSession
             : left is null or DBNull ? right is null or DBNull : right is not (null or DBNull) && Multiple(right) is null && CrystalFormula.Compare(left, right) == 0;
     private bool Resolvable(string reference) => reference.Trim() is var name && (_layout.Formulas.ContainsKey(name) || _layout.FormulaErrors.ContainsKey(name) || _layout.RunningTotals.ContainsKey(name)
         || _layout.GroupNames.ContainsKey(name) || _layout.Bindings.ContainsKey(name) || _layout.Summaries.ContainsKey(name) || IsParameter(name) || IsSpecial(name));
+
+    /// <summary>Subreport objects whose query failed with an accepted error, by element id, with the error's message.</summary>
+    private readonly Dictionary<string, string> _subreportErrors = new(StringComparer.Ordinal);
+
+    private static bool SameSubreportQuery(ReportDefinition definition, Dictionary<string, object> parameters, List<(string Alias, object? Value)> filters,
+        ReportDefinition otherDefinition, Dictionary<string, object> otherParameters, List<(string Alias, object? Value)> otherFilters) =>
+        ReferenceEquals(definition, otherDefinition) && filters.SequenceEqual(otherFilters)
+        && parameters.Count == otherParameters.Count && parameters.All(p => otherParameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value));
+
+    /// <summary>The subreport object prints <paramref name="message"/> in place of its records (ReportPositionedLayout.CreateBand);
+    /// the run lists it once per object in its diagnostics and its <see cref="ReportLayoutResult.SubreportErrors"/>.</summary>
+    private ReportLayoutSession? SubreportQueryFailed(ReportDesignerElement element, string message)
+    {
+        if (_subreportErrors.TryAdd(element.Id, message))
+            _diagnostics.Add($"{element.Name}: subreport '{element.SubreportName}' did not run: {message}");
+        if (!_state.SubreportErrors.Any(error => error.ElementId == element.Id && error.Message == message))
+            _state.SubreportErrors.Add(new(element.Id, element.Name, element.SubreportName, message));
+        return null;
+    }
 
     private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row)
     {
@@ -466,12 +500,14 @@ public sealed partial class ReportLayoutSession
             else if (childLayout.Formulas.ContainsKey(link.ChildField)) selections.Add((link.ChildField, value));
             else throw new InvalidDataException($"{element.Name}: subreport link '{link.MainField}' -> '{{?{link.Parameter}}}' selects on '{link.ChildField}', which is not a field or formula of subreport '{element.SubreportName}'.");
         }
-        var cached = _state.Queries.FirstOrDefault(q => ReferenceEquals(q.Definition, subreport.Definition) &&
-            q.Filters.SequenceEqual(filters) &&
-            q.Parameters.Count == parameters.Count && q.Parameters.All(p => parameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value)));
+        var cached = _state.Queries.FirstOrDefault(q => SameSubreportQuery(q.Definition, q.Parameters, q.Filters, subreport.Definition, parameters, filters));
         var (data, filtered) = (cached.Data, cached.Filtered);
         if (data is null)
         {
+            // A failure the run accepted is not sent again: page furniture prepared for every row, repeated
+            // instances and drill views of the run print the same error.
+            var failed = _state.FailedQueries.FirstOrDefault(q => SameSubreportQuery(q.Definition, q.Parameters, q.Filters, subreport.Definition, parameters, filters));
+            if (failed.Message is not null) return SubreportQueryFailed(element, failed.Message);
             var (query, bound) = SqlQuery(subreport.Definition, parameters);
             if (filters.Count > 0)
             {
@@ -492,10 +528,20 @@ public sealed partial class ReportLayoutSession
                     else { bound[key] = filters[index].Value ?? DBNull.Value; predicates.Add(column + " = @" + key); }
                 }
                 if (bound.Count > 2100) throw new InvalidDataException($"{element.Name}: the subreport query would bind {bound.Count} SQL parameters; SQL Server accepts at most 2,100.");
-                query = new ReportDefinition { Sql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates),
-                    Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout };
+                var wrappedSql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates);
+                query = new ReportDefinition { Sql = wrappedSql,
+                    Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout,
+                    PositionedSqlSelection = query.PositionedSqlSelection?.Clone(), PositionedIntegerSelection = query.CopyIntegerSelectionForSql(wrappedSql) };
             }
-            data = _executeSubreport(query, bound);
+            try { data = _executeSubreport(query, bound); }
+            catch (Exception error) when (error is not OperationCanceledException && _state.TolerateSubreportQueryError?.Invoke(error) == true)
+            {
+                // The host accepts this failure (TolerateSubreportQueryError): the main report still prints and
+                // the subreport object shows the reason. Every other failure, and every failure without the
+                // option, ends the run as before.
+                _state.FailedQueries.Add((subreport.Definition, parameters, filters, error.Message));
+                return SubreportQueryFailed(element, error.Message);
+            }
             if (data.Rows.Count > 100000) throw new InvalidDataException("Subreport exceeds the 100,000-row limit.");
             _state.QueryRows += data.Rows.Count;
             if (_state.QueryRows > 250000) throw new InvalidDataException("Inline subreport queries exceed the 250,000-row combined limit.");

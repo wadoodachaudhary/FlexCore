@@ -66,6 +66,11 @@ internal static partial class CrystalReportContentsParser
         var recordSortCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
         var groupSortCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
         var areaPairCount = reader.BytesLeftInRecord >= 2 ? reader.LoadUInt16() : 0;
+        // Legacy header102: an additional count and legacy option precede this flag.
+        // The native model defaults ShowAllHeadersOnDrillDown to false when absent.
+        if (reader.BytesLeftInRecord >= 2) _ = reader.LoadUInt16();
+        if (reader.BytesLeftInRecord > 0) _ = reader.LoadBoolean();
+        if (reader.BytesLeftInRecord > 0) core.ShowAllHeadersOnDrillDown = reader.LoadBoolean();
         reader.SkipRestOfRecord();
 
         if (reader.Fork().LoadAnyRecord().Type == 351)
@@ -163,6 +168,8 @@ internal static partial class CrystalReportContentsParser
             NormalizeGroupConditions(database, dataDefinition);
             ResolveDeferredGroupNameReferences(dataDefinition);
             ResolveDeferredSummaryReferences(dataDefinition);
+            ResolveNativeFieldFormats(database, dataDefinition);
+            ResolveNumericFormats(database, dataDefinition);
             foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects)
             {
                 try { reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition); }
@@ -1839,7 +1846,7 @@ internal static partial class CrystalReportContentsParser
         reader.SkipRestOfRecord();
         ReadCommonReportObjectRecords(reader, reportObject);
         ReadFontColourProperties(reader, reportObject);
-        SkipUntilRecord(reader, 160);
+        ReadNativeFieldFormats(reader, reportObject);
         return reportObject;
     }
 
@@ -2191,6 +2198,7 @@ internal static partial class CrystalReportContentsParser
             {
                 border.BackgroundColor = ReadCrystalColor(reader, nullColor: CrystalColorModel.TransparentWhite());
             }
+            if (reader.BytesLeftInRecord >= 4) border.LineWidth = reader.LoadInt32();
             reader.SkipRestOfRecord();
             ReadConditionReferences(reader, border.ConditionReferences, ["LeftLineStyle", "RightLineStyle", "TopLineStyle", "BottomLineStyle",
                 "EnableTightHorizontal", "", "HasDropShadow", "BorderColor", "BackgroundColor", "LineWidth", "FillStyle"]);

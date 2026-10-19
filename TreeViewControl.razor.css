@@ -287,3 +287,77 @@
 .fx-treeview-vb6.fx-treeview-no-folder .fx-treeview-folder-spacer {
     display: none;
 }
+
+/* ---------- Built-in search box (ShowSearchBox) ---------- */
+.fx-treeview-search { position: relative; margin: 0 0 8px; }
+.fx-treeview-search ::deep .fx-treeview-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--fx-tree-search-icon-color, #6b7280); pointer-events: none; z-index: 1; }
+.fx-treeview-search ::deep input { width: 100%; box-sizing: border-box; padding-left: 36px; }
+.fx-treeview-search-outline ::deep input {
+    min-height: var(--fx-tree-search-height, 44px); border: 1px solid var(--fx-tree-outline-search-border, #c9cbd1); border-radius: 4px;
+    background: #fff; font-size: 1rem; color: inherit;
+}
+.fx-treeview-search-outline ::deep input:focus { outline: none; border-color: var(--fx-tree-outline-accent, #1e9be9); box-shadow: 0 0 0 2px color-mix(in srgb, var(--fx-tree-outline-accent, #1e9be9) 25%, transparent); }
+.fx-treeview-empty { padding: 12px 16px; color: var(--fx-tree-outline-muted, #6b7280); font-size: 0.9em; }
+
+/* ---------- Outline / checklist mode (DisplayMode="TreeViewDisplayMode.Outline") ---------- */
+.fx-treeview-outline {
+    border: none; border-radius: 0; padding: 0; background: transparent;
+    color: var(--fx-tree-outline-ink, #3b3e4f);
+    font-size: inherit;
+}
+.fx-treeview-outline:focus { outline: none; }
+.fx-treeview-outline:focus-visible .fx-treeview-current { outline: 2px solid var(--fx-tree-outline-accent, #1e9be9); outline-offset: -2px; }
+.fx-treeview-outline .fx-treeview-node {
+    position: relative; margin: 0; border-radius: 0; min-height: 0; gap: 12px; align-items: center;
+    color: inherit; font-weight: inherit;
+}
+.fx-treeview-outline .fx-treeview-text { white-space: normal; overflow: visible; line-height: 1.3; }
+.fx-treeview-outline-body { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+
+/* group rows: status circle, caption + bold title, count badge, chevron on the right */
+.fx-treeview-outline .fx-treeview-group {
+    padding: 18px 16px 18px calc(var(--tree-depth, 0) * var(--tree-indent, 16px) + var(--fx-tree-outline-inset, 16px));
+    border-bottom: 1px solid var(--fx-tree-outline-divider, #d6d8dd);
+}
+.fx-treeview-outline .fx-treeview-group .fx-treeview-text { font-weight: 800; font-size: 1.08em; }
+.fx-treeview-outline .fx-treeview-group-open { border-bottom-color: var(--fx-tree-outline-ink, #3b3e4f); }
+.fx-treeview-outline .fx-treeview-group:hover { background: var(--fx-tree-outline-hover-bg, #e7e8eb); }
+.fx-treeview-outline .fx-treeview-group.fx-treeview-node-selected { background: transparent; }
+.fx-treeview-caption { display: block; font-size: 0.72em; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fx-tree-outline-muted, #5d6070); }
+.fx-treeview-badge { flex: none; font-variant-numeric: tabular-nums; color: inherit; }
+.fx-treeview-outline-chevron { flex: none; display: inline-flex; color: var(--fx-tree-outline-muted, #5d6070); cursor: pointer; }
+
+/* item rows: connector line with a status dot, title, secondary type line */
+.fx-treeview-outline .fx-treeview-item {
+    gap: 28px;
+    padding: 11px 16px 11px calc(max(0px, (var(--tree-depth, 1) - 1) * var(--tree-indent, 16px)) + var(--fx-tree-outline-inset, 16px) + 6px);
+}
+.fx-treeview-outline .fx-treeview-item:hover { background: var(--fx-tree-outline-hover-bg, #e7e8eb); }
+.fx-treeview-outline .fx-treeview-item.fx-treeview-node-selected { background: var(--fx-tree-outline-selected-bg, #d5d6da); }
+.fx-treeview-outline .fx-treeview-item.fx-treeview-node-selected .fx-treeview-text { font-weight: 700; }
+.fx-treeview-outline .fx-treeview-group + .fx-treeview-item { margin-top: 4px; }
+.fx-treeview-rail { position: relative; flex: none; width: 14px; align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.fx-treeview-rail::before {
+    content: ""; position: absolute; left: 6px; width: 2px; top: -11px; bottom: -11px;
+    background: var(--fx-tree-outline-line, #c9ccd3);
+}
+.fx-treeview-first .fx-treeview-rail::before { top: 50%; }
+.fx-treeview-last .fx-treeview-rail::before { bottom: 50%; }
+.fx-treeview-first.fx-treeview-last .fx-treeview-rail::before { display: none; }
+.fx-treeview-status-complete .fx-treeview-rail::before { background: var(--fx-tree-outline-accent, #1e9be9); }
+.fx-treeview-secondary {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 0.74em; text-transform: uppercase; letter-spacing: 0.02em;
+    color: var(--fx-tree-outline-muted, #5d6070);
+}
+
+/* status marks */
+.fx-treeview-status-circle, .fx-treeview-status-dot {
+    flex: none; position: relative; z-index: 1; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    background: var(--fx-tree-outline-mark-bg, #fff); border: 2px solid var(--fx-tree-outline-mark, #b9bcc5); color: transparent; box-sizing: border-box;
+}
+.fx-treeview-status-circle { width: 26px; height: 26px; }
+.fx-treeview-status-dot { width: 14px; height: 14px; }
+.fx-treeview-mark-none.fx-treeview-status-circle { display: none; }
+.fx-treeview-mark-inprogress { border-color: var(--fx-tree-outline-accent, #1e9be9); color: var(--fx-tree-outline-accent, #1e9be9); }
+.fx-treeview-status-dot.fx-treeview-mark-inprogress { color: transparent; box-shadow: inset 0 0 0 3px #fff; background: var(--fx-tree-outline-accent, #1e9be9); }
+.fx-treeview-mark-complete { background: var(--fx-tree-outline-accent, #1e9be9); border-color: var(--fx-tree-outline-accent, #1e9be9); color: #fff; }

@@ -7,7 +7,13 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 public class ReportDefinition
 {
+    internal ReportSqlSelectionPlan? PositionedSqlSelection { get; set; }
+    internal ReportSqlIntegerSelectionPlan? PositionedIntegerSelection { get; set; }
+    private string? _preparedSql;
+    private string? _preparedSqlTemplate;
     public ReportPositionedLayout? PositionedLayout { get; set; }
+    /// <summary>Authored detail print visibility for the tabular renderer; never filters its source rows.</summary>
+    public ReportTabularLayout? TabularLayout { get; set; }
     /// <summary>Report identifier (typically the .rpt filename without extension).</summary>
     public string ReportId { get; set; } = "";
 
@@ -25,6 +31,64 @@ public class ReportDefinition
 
     /// <summary>SQL query that produces the report data. Use @ParameterName for parameter placeholders.</summary>
     public string Sql { get; set; } = "";
+
+    internal IReadOnlyList<string> ExpandedSqlStringParameters { get; set; } = [];
+
+    /// <summary>
+    /// Validates actual values required by positioned SQL narrowing. Call before
+    /// executing <see cref="Sql"/> directly; ReportWriterControl does so automatically.
+    /// Scalar narrowing requires actual string values where declared. Bounded
+    /// date/string narrowing also requires an unspecified-kind midnight DateTime
+    /// and typed scalar/expanded string bindings, then supplies reserved guard
+    /// and constant parameters. No text/date or list-element coercion is performed.
+    /// </summary>
+    public void ValidateSqlParameters(IDictionary<string, object>? parameters)
+    {
+        PositionedSqlSelection?.ValidateAndBind(parameters);
+        foreach (var name in (PositionedLayout?.SqlStringParameters ?? []).Concat(ExpandedSqlStringParameters).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var matches = parameters?.Where(pair => pair.Key.Equals(name, StringComparison.OrdinalIgnoreCase)).Take(2).ToArray() ?? [];
+            if (matches.Length != 1 || matches[0].Value is not string)
+                throw new InvalidDataException($"Positioned SQL parameter '{name}' requires one non-null string value; numeric, date, range and list values cannot be coerced safely for this selector.");
+        }
+    }
+
+    /// <summary>
+    /// Validates SQL bindings and returns an execution-local definition. Proven
+    /// integral selectors use direct parameter equality only for exact, in-range
+    /// integer or decimal values; uncertain values keep the conservative SQL.
+    /// The original definition and numeric parameter values are never changed.
+    /// Re-preparing this copy uses its original guarded template, unless the
+    /// caller has replaced its SQL, in which case that SQL is left untouched.
+    /// </summary>
+    public ReportDefinition PrepareSqlExecution(IDictionary<string, object>? parameters)
+    {
+        ValidateSqlParameters(parameters);
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        var copy = (ReportDefinition)MemberwiseClone();
+        copy.PositionedSqlSelection = PositionedSqlSelection?.Clone();
+        copy.Sql = PositionedIntegerSelection?.Prepare(template, parameters) ?? template;
+        copy._preparedSqlTemplate = template;
+        copy._preparedSql = copy.Sql;
+        return copy;
+    }
+
+    // Only internally composed copies of the unchanged generated SQL retain the
+    // specialization plan. Caller-supplied SQL is not parsed or rewritten.
+    internal ReportSqlIntegerSelectionPlan? CopyIntegerSelectionForSql(string sql)
+        => PositionedIntegerSelection is { } plan && Sql == plan.TemplateSql ? plan.WithTemplate(sql) : null;
+
+    // The public list rewriter can also receive an execution copy. Restore
+    // only that copy's still-unchanged generated template before rewriting so
+    // later unsafe numeric values cannot inherit an earlier direct equality.
+    internal ReportSqlIntegerSelectionPlan? RestoreIntegerSelectionForRewrite()
+    {
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        if (PositionedIntegerSelection is not { } plan || template != plan.TemplateSql) return null;
+        Sql = template;
+        _preparedSql = _preparedSqlTemplate = null;
+        return plan;
+    }
 
     /// <summary>
     /// Optional secondary SQL that selects the full group-hierarchy (all group levels,
@@ -97,6 +161,12 @@ public class ReportColumn
 
     /// <summary>Column width in pixels (approximate — CSS may adjust).</summary>
     public int Width { get; set; } = 100;
+
+    /// <summary>The Crystal object's authored width in pixels (0 when unknown). <see cref="Width"/> may be narrowed to fit the page.</summary>
+    public int AuthoredWidth { get; set; }
+
+    /// <summary>Authored no-grow field height in pixels. Limits HTML display only; stored/exported text remains complete.</summary>
+    public double? NoGrowHeight { get; set; }
 
     /// <summary>Text alignment.</summary>
     public ReportAlignment Alignment { get; set; } = ReportAlignment.Left;
@@ -334,7 +404,7 @@ public class ReportParameter
     /// parameter is rendered as a dual-list-box in the parameter dialog.
     ///
     /// <para>
-    /// Two sources fill this in:
+    /// Three sources fill this in, in ascending precedence:
     /// <list type="bullet">
     ///   <item><description>
     ///   <b>Auto-derived from binding</b> — the default. When
@@ -344,6 +414,13 @@ public class ReportParameter
     ///   BindingTable WHERE [DivisionID=@DivisionID]</c>. No host config
     ///   needed — picklist follows the Crystal XML wherever the report
     ///   filters on <c>{T.F} = {?Param}</c>.
+    ///   </description></item>
+    ///   <item><description>
+    ///   <b>Authored (Crystal LOV)</b> — a <c>&lt;ParameterPickList&gt;</c> child written
+    ///   by the native converter from the report's PromptManager stream: one row per
+    ///   distinct value of the LOV's value field in its table (<c>MIN</c> of the description
+    ///   field per value), sorted per the prompt, no other filter. Marked by
+    ///   <see cref="PickListIsAuthored"/>; wins over the binding form.
     ///   </description></item>
     ///   <item><description>
     ///   <b>Explicit override</b> — a non-Crystal-native
@@ -368,6 +445,17 @@ public class ReportParameter
     /// </para>
     /// </summary>
     public string? PickListSql { get; set; }
+
+    /// <summary>
+    /// True when <see cref="PickListSql"/> is the report's own prompt list: Crystal's authored
+    /// dynamic list of values, carried in the XML as <c>&lt;ParameterPickList&gt;</c> (the same
+    /// table, value field, description field and sort as Crystal's "Enter Parameter Values"
+    /// dialog). An authored list is authoritative — it takes precedence over host name-based
+    /// lists and over dependent pick-list providers, which must not replace or narrow it. False
+    /// for an explicit <c>&lt;PickListSql&gt;</c> override and for lists synthesized from the
+    /// record-selection binding.
+    /// </summary>
+    public bool PickListIsAuthored { get; set; }
 
     /// <summary>
     /// Table the parameter is bound to in the Crystal RecordSelectionFormula

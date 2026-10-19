@@ -16,7 +16,7 @@ public sealed partial class ReportLayoutSession
             throw new NotSupportedException("Data export is unavailable for page-dependent visibility or formatting. Export HTML for the rendered result.");
         var table = new GridExportTable { Title = _layout.Document.Title, SheetName = _layout.Document.Title };
         foreach (var column in columns) table.Columns.Add(new(column.Name, column.FormatString, width: column.WidthTwips / 15d));
-        foreach (var row in _bands.Where(b => b.Section.Kind == "Detail" && !b.Suppressed).GroupBy(b => b.Row))
+        foreach (var row in _bands.Where(b => b.Section.Kind == "Detail" && b.Row >= 0 && !b.Suppressed).GroupBy(b => b.Row))
         {
             var export = new GridExportRow();
             foreach (var column in columns)
@@ -24,7 +24,7 @@ public sealed partial class ReportLayoutSession
                 var visible = row.SelectMany(b => b.Items).Any(i => i.Element.Binding == column.Binding);
                 var value = visible ? Value(column.Binding, row.Key) : null;
                 export.XlsxValues.Add(value); export.XlsxFormats.Add(column.FormatString);
-                export.Values.Add(visible ? Format(column.Binding, row.Key, column.FormatString) : "");
+                export.Values.Add(visible ? Format(column.Binding, row.Key, column.FormatString, column.NativeDateTimeFormat, column.NativeNumberFormat, column.NativeNumericFormat) : "");
             }
             table.Rows.Add(export);
         }

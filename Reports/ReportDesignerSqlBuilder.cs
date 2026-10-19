@@ -4,9 +4,13 @@ using System.Text.RegularExpressions;
 
 namespace Fx.ControlKit.Reports;
 
-internal static class ReportDesignerSqlBuilder
+internal static partial class ReportDesignerSqlBuilder
 {
-    internal sealed record Query(string Sql, Dictionary<string, object> Parameters);
+    internal sealed record Query(string Sql, Dictionary<string, object> Parameters)
+    {
+        public IReadOnlyList<string> RequiredParameters { get; init; } = [];
+        public string Notice { get; init; } = "";
+    }
 
     public static string BuildSql(
         IReadOnlyList<ReportDesignerDataTable> tables,
@@ -107,6 +111,7 @@ internal static class ReportDesignerSqlBuilder
         IReadOnlyList<ReportDesignerDataLink> links)
     {
         var joined = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { TableAlias(tables[0]) };
+        var crossedComponent = false;
         var sb = new StringBuilder();
         sb.Append("FROM ").Append(QualifiedTable(tables[0])).Append(" AS ").Append(QuoteIdentifier(TableAlias(tables[0])));
 
@@ -121,6 +126,7 @@ internal static class ReportDesignerSqlBuilder
             var connecting = links.Where(candidate => ConnectsJoinedTable(candidate, tableAlias, joined)).ToList();
             if (connecting.Count == 0)
             {
+                crossedComponent = true;
                 sb.AppendLine();
                 sb.Append("CROSS JOIN ").Append(QualifiedTable(table)).Append(" AS ").Append(QuoteIdentifier(tableAlias));
                 joined.Add(tableAlias);
@@ -132,6 +138,10 @@ internal static class ReportDesignerSqlBuilder
             var requiredMatch = joinKinds.Contains("INNER JOIN");
             if (joinKinds.Count != 1 && !requiredMatch)
                 throw new NotSupportedException($"Mixed join directions for '{tableAlias}' require an explicit SQL command.");
+            // A flat RIGHT/FULL join after CROSS JOIN would also null-extend the
+            // previously independent component. Do not silently change that graph.
+            if (crossedComponent && !requiredMatch && joinKinds[0] is "RIGHT OUTER JOIN" or "FULL OUTER JOIN")
+                throw new NotSupportedException("A disconnected table component with a right/full outer join requires an explicit grouped SQL command.");
             sb.AppendLine();
             sb.Append(requiredMatch ? "INNER JOIN" : joinKinds[0])
                 .Append(' ')

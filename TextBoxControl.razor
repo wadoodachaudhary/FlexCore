@@ -468,12 +468,14 @@ else
         CellHost?.EndEdit();
     }
 
-    private async Task SynchronizeClientBufferedDomValueAsync()
+    private async Task SynchronizeClientBufferedDomValueAsync(bool requireCurrentValue = false)
     {
         if (EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
             return;
 
         var module = await GetControlJsModuleAsync();
+        if (module == null && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current textbox value.");
         if (module == null)
             return;
 
@@ -507,7 +509,7 @@ else
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(committedValue);
         }
-        catch
+        catch when (!requireCurrentValue)
         {
             // The editor may have unmounted while a navigation key was in flight.
         }
@@ -518,6 +520,11 @@ else
 
     /// <summary>Publish the current browser draft before a form confirms without waiting for blur.</summary>
     public Task FlushClientBufferedValueAsync() => SynchronizeClientBufferedDomValueAsync();
+
+    /// <summary>Publish the current browser draft before a form confirms without waiting for blur.
+    /// Set requireCurrentValue to prevent a failed read from silently using an older value.</summary>
+    public Task FlushClientBufferedValueAsync(bool requireCurrentValue) =>
+        SynchronizeClientBufferedDomValueAsync(requireCurrentValue);
 
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(

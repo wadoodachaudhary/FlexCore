@@ -7,6 +7,8 @@ namespace Fx.ControlKit.Reports;
 public sealed class ReportPositionedLayout
 {
     public ReportDesignerDocument Document { get; init; } = ReportDesignerDocument.CreateBlank();
+    /// <summary>Authored native report option; null means older XML did not preserve this drill contract.</summary>
+    public bool? ShowAllHeadersOnDrillDown { get; init; }
     public Dictionary<string, string> Bindings { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> GroupNames { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, ReportLayoutSummary> Summaries { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -28,6 +30,8 @@ public sealed class ReportPositionedLayout
     /// <summary>Crystal "Format with Multiple Columns" on the details area; null prints every section across the page.</summary>
     public ReportLayoutColumns? Columns { get; set; }
     internal List<string> Projections { get; } = [];
+    // Stays with the layout when subreport query definitions are cloned with link filters.
+    internal IReadOnlyList<string> SqlStringParameters { get; set; } = [];
 }
 
 /// <summary>Crystal GroupOptions: <see cref="ConditionKind"/> is the date/date-time period (0 daily ... 7 annually; 8-11 by second, minute, hour, AM/PM
@@ -76,15 +80,25 @@ public sealed record ReportLayoutArea(bool Suppressed, bool RepeatHeader, bool N
 /// as fit across the page with <see cref="HorizontalGap"/> between them and <see cref="VerticalGap"/> below each area. A nonzero <see cref="DetailHeight"/> fixes the
 /// height of each detail (mailing labels) when the groups print across the page. Down then across fills a column before the next; across then down fills a row.</summary>
 public sealed record ReportLayoutColumns(int DetailWidth, int DetailHeight = 0, int HorizontalGap = 0, int VerticalGap = 0, bool AcrossThenDown = false, bool FormatGroups = false);
-public sealed record ReportTextMeasurement(string Style, string Html);
+public sealed record ReportTextMeasurement(string Style, string Html, int MaxNumberOfLines = 0);
 public sealed record ReportLayoutResult(List<string> Pages, List<string> Diagnostics)
 {
     public List<ReportPageSnapshot> Snapshots { get; init; } = [];
+    /// <summary>Group navigation from this native run and its final physical page placements.</summary>
+    public List<FxGroupNode> Tree { get; init; } = [];
+    /// <summary>Inline subreports that printed an error in place of their records. Only a run that accepts subreport query
+    /// failures (the session's <c>tolerateSubreportQueryError</c>) has any; without it a failure ends the run.</summary>
+    public List<ReportSubreportError> SubreportErrors { get; init; } = [];
 }
+/// <summary>An inline subreport object whose query failed with an error the run accepted: the element, the subreport it
+/// shows and the error's message, which the object prints as "[Subreport error: ...]".</summary>
+public sealed record ReportSubreportError(string ElementId, string ElementName, string SubreportName, string Message);
 public sealed record ReportLayoutParameterLink(string Parameter, string MainField, string ChildField);
 public sealed record ReportLayoutSubreport(ReportDefinition Definition, List<ReportLayoutParameterLink> Links);
 
-/// <summary>Detail rows -> measured bands -> fixed-size pages. No browser, SQL, or Crystal dependency.</summary>
+/// <summary>Detail rows -> measured bands -> fixed-size pages. No browser, SQL, or Crystal dependency.
+/// The session owns copies of input records and parameter arrays. Its layout is shared and must remain
+/// unchanged for the lifetime of the main and drill-down sessions.</summary>
 public sealed partial class ReportLayoutSession
 {
     private readonly ReportPositionedLayout _layout;
@@ -125,15 +139,26 @@ public sealed partial class ReportLayoutSession
         public bool HasHeaders { get; set; }
     }
 
+    /// <summary>Lays out <paramref name="layout"/> over <paramref name="data"/>. <c>executeSubreport</c> runs inline subreport
+    /// queries. <c>tolerateSubreportQueryError</c> decides which failures of those queries the run accepts: an accepted
+    /// failure prints "[Subreport error: ...]" in the subreport object and is listed in <see cref="ReportLayoutResult.SubreportErrors"/>,
+    /// and the same query is not sent again in this run or its drill views. Null (the default) accepts none: the failure
+    /// ends the run. Cancellation is never accepted.</summary>
     public ReportLayoutSession(ReportPositionedLayout layout, DataTable data, IReadOnlyDictionary<string, object>? parameters = null,
-        Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport = null, DateTime? printTime = null)
-        : this(layout, data, parameters, executeSubreport, new RuntimeState { PrintTime = printTime ?? DateTime.Now }, 0) { }
+        Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport = null, DateTime? printTime = null,
+        Func<Exception, bool>? tolerateSubreportQueryError = null)
+        : this(layout, CaptureNavigationData(data), parameters, executeSubreport,
+            new RuntimeState { PrintTime = printTime ?? DateTime.Now, TolerateSubreportQueryError = tolerateSubreportQueryError }, 0) { }
 
     private ReportLayoutSession(ReportPositionedLayout layout, DataTable data, IReadOnlyDictionary<string, object>? parameters,
         Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport, RuntimeState state, int depth, ReportLayoutSession? parent = null,
-        IReadOnlyList<(string Field, object? Value)>? linkSelections = null)
+        IReadOnlyList<(string Field, object? Value)>? linkSelections = null, int drillDownGroupLevel = 0,
+        string? navigationRoot = null, int[]? navigationRows = null, (DataRow[] Rows, int[] Indexes)? summaryRows = null,
+        DrillReadPass? readPass = null)
     {
         _layout = layout;
+        _navigationRoot = navigationRoot ?? Guid.NewGuid().ToString("N");
+        _drillDownGroupLevel = drillDownGroupLevel;
         _parent = parent;
         _linkSelections = linkSelections ?? [];
         _printTime = state.PrintTime;
@@ -145,11 +170,22 @@ public sealed partial class ReportLayoutSession
         var reportName = layout.Document.SourceDocument?.Root is { } root ? (string?)root.Attribute("Name") ?? "Report" : layout.Document.Title;
         foreach (var section in layout.Document.Sections)
         foreach (var element in section.Elements)
+        {
             if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is { } kind && element.Analysis is null)
                 _diagnostics.Add(ReportObjectCapabilities.Diagnostic(reportName, section.Name, element.Name, kind, true,
                     layout.Document.SourceObjects.GetValueOrDefault(element.SourceKey)));
+            if (string.IsNullOrEmpty(element.FormatString) && element.NativeDateTimeFormat?.UnsupportedReason is { } reason)
+                _diagnostics.Add($"{element.Name}: native date/time format: {reason}.");
+            if (string.IsNullOrEmpty(element.FormatString) && element.NativeNumericFormat is null && element.NativeNumberFormat?.UnsupportedReason is { } numberReason)
+                _diagnostics.Add($"{element.Name}: native numeric format: {numberReason}; the value prints with the default format.");
+            if (string.IsNullOrEmpty(element.FormatString) && element.NativeNumericFormat?.UnsupportedReason is { } numericReason)
+                _diagnostics.Add($"{element.Name}: native numeric format: {numericReason}; the value prints with the default format.");
+            if (element.NativeNumericFormat?.LayoutLimitation is { } numericLayout)
+                _diagnostics.Add($"{element.Name}: native numeric layout: {numericLayout}.");
+        }
         _rows = data.Rows.Cast<DataRow>().ToArray();
-        _parameters = new Dictionary<string, object>(parameters ?? new Dictionary<string, object>(), StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < _rows.Length; index++) _navigationRows.Add(_rows[index], navigationRows?[index] ?? index);
+        _parameters = CopyNavigationParameters(parameters);
         _executeSubreport = executeSubreport; _state = state; _depth = depth;
         _state.Sessions.Add(this);
         _state.HasGrowingText |= layout.Document.Elements.Any(e => e.CanGrow);
@@ -157,8 +193,21 @@ public sealed partial class ReportLayoutSession
         _state.HasPageConditions |= layout.Formulas.Values.Any(f => f.UsesPageContext || f.References.Any(IsSpecial))
             || layout.Document.Elements.Any(e => IsSpecial(e.Binding) || e.Visual.Runs.Any(r => IsSpecial(r.Binding)));
         if (ReportDesignerEditing.ValidatePage(layout.Document.Page) is { } error) throw new InvalidDataException(error);
+        // A drill run's records keep the parent run's read-time values, so its schedule reads none of them again.
+        if (readPass is not null)
+            foreach (var (row, values) in readPass.Values) _readValues.Add(row, new(values, StringComparer.OrdinalIgnoreCase));
         PrepareFormulaSchedule();
-        PrepareRows();
+        if (readPass is not null) RestoreVariables(readPass.Variables);
+        // A drill run already owns the selected, ordered group from the parent run.
+        // Applying selection or sorting again must not change that membership.
+        if (summaryRows is { } source)
+        {
+            // Its summaries read the main run's records (Summary), each drill record at its place there.
+            _summaryRows = source.Rows;
+            _summaryRowIndexes = new(_rows.Length);
+            for (var index = 0; index < _rows.Length; index++) _summaryRowIndexes.Add(_rows[index], source.Indexes[index]);
+        }
+        else PrepareRows();
         PreparePhysicalPageSchedule();
         if (_physicalPageSchedule) { _formulaPage = 1; _formulaPages = 1; }
         try { BuildBands(); }
@@ -203,9 +252,9 @@ public sealed partial class ReportLayoutSession
         }
         if (IsSpecial(reference)) return SpecialName(reference) switch
         {
-            "pagenumber" => _formulaPage ?? _pageToken, "totalpagecount" => _formulaPages ?? _countToken, "pagenofm" => (_formulaPage ?? _pageToken) + " / " + (_formulaPages ?? _countToken),
+            "pagenumber" => _formulaPage ?? _pageToken, "totalpagecount" => _formulaPages ?? _countToken, "pagenofm" => "Page " + (_formulaPage ?? _pageToken) + " of " + (_formulaPages ?? _countToken),
             "reporttitle" => ReportTitle, "reportfilename" => _layout.Document.SourceName,
-            "printdate" => _printTime.ToShortDateString(), "printtime" => _printTime.ToShortTimeString(), "recordnumber" => row + 1,
+            "printdate" => _printTime.Date, "printtime" => _printTime.ToShortTimeString(), "recordnumber" => row + 1,
             // The session reads its records when it is created, so the data date/time is the print time.
             "datadate" => _printTime.ToShortDateString(), "datatime" => _printTime.ToShortTimeString(), "groupnumber" => GroupNumber(row),
             "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
@@ -225,16 +274,26 @@ public sealed partial class ReportLayoutSession
     private object? Summary(ReportLayoutSummary summary, int row, int? stop = null)
     {
         if (_summaryRows is null || ReferenceEquals(_rows, _summaryRows)) return SummaryCore(summary, row, stop);
-        // Group selection is a print-pass filter. First-pass summaries still include the excluded groups.
+        // Group selection is a print-pass filter. First-pass summaries still include the excluded groups,
+        // and a drill view's summaries are the main run's.
         var displayed = _rows;
-        _summaryRowIndexes ??= _summaryRows.Select((data, index) => (data, index)).ToDictionary(pair => pair.data, pair => pair.index);
-        var sourceRow = row >= 0 && row < displayed.Length ? _summaryRowIndexes[displayed[row]] : row;
+        var sourceRow = SummaryRowIndex(row);
         try { _rows = _summaryRows; return SummaryCore(summary, sourceRow, stop); }
         finally { _rows = displayed; }
     }
 
+    private int SummaryRowIndex(int row)
+    {
+        if (_summaryRows is null || ReferenceEquals(_rows, _summaryRows) || row < 0 || row >= _rows.Length) return row;
+        _summaryRowIndexes ??= _summaryRows.Select((data, index) => (data, index)).ToDictionary(pair => pair.data, pair => pair.index);
+        return _summaryRowIndexes[_rows[row]];
+    }
+
     private object? SummaryCore(ReportLayoutSummary summary, int row, int? stop)
     {
+        // With no group instance, its summary fields are blank. Report-level
+        // aggregates keep their ordinary empty-set semantics (for example Sum = 0).
+        if (row < 0 && summary.Group.Length > 0) return null;
         if (_layout.Formulas.TryGetValue(summary.Field, out var formula)) RequireReadTime(formula, "Summary");
         if (_layout.Summaries.ContainsKey(summary.Field)) { _diagnostics.Add("Nested summaries are not supported."); return "[Nested summary]"; }
         var start = 0;
@@ -263,7 +322,10 @@ public sealed partial class ReportLayoutSession
         var values = Enumerable.Range(start, end - start).Select(index => Value(summary.Field, index)).Where(value => value is not null).ToList();
         if (summary.Operation is "Count") return _summaryCache[key] = values.Count;
         if (summary.Operation is "DistinctCount") return _summaryCache[key] = values.Distinct().Count();
-        if (values.Count == 0) return _summaryCache[key] = summary.Operation == "Sum" ? 0m : null;
+        // A nonempty source range containing only null values has no numeric
+        // result. Keep that distinct from a true empty-set Sum, whose identity
+        // is zero; otherwise nullable costs become fabricated $0.00 subtotals.
+        if (values.Count == 0) return _summaryCache[key] = summary.Operation == "Sum" && start == end ? 0m : null;
         if (summary.Operation is "Minimum" or "Maximum")
             return _summaryCache[key] = values.Aggregate((left, right) => (CrystalFormula.Compare(left, right) < 0) == (summary.Operation == "Minimum") ? left : right);
         try
@@ -276,14 +338,27 @@ public sealed partial class ReportLayoutSession
         object Unsupported() { _diagnostics.Add($"Summary operation '{summary.Operation}' is not implemented."); return "[Unsupported summary]"; }
     }
 
-    private string Format(string reference, int row, string format)
+    private string Format(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime = null,
+        ReportNativeNumberFormat? nativeNumber = null, ReportNativeNumericFormat? nativeNumeric = null)
     {
         try
         {
-            if (_formulaPage is null && DependsOn(reference, true)) return DeferredPageValue(reference, row, format);
-            var value = Value(reference, row);
+            if (_formulaPage is null && DependsOn(reference, true)) return DeferredPageValue(reference, row, format, nativeDateTime, nativeNumber, nativeNumeric);
+            // A native date/time format this renderer cannot honour (reported once per object in the
+            // constructor) falls back to the special field's default text, never to a formula error.
+            var value = nativeDateTime is { UnsupportedReason: null } && (SpecialName(reference) is "printdate" or "printtime")
+                ? _printTime : Value(reference, row);
+            // A saved format this renderer cannot honour is reported once per object (see the constructor);
+            // the value still prints, with the default format, rather than as a formula error.
+            if (string.IsNullOrEmpty(format) && nativeNumeric is null && nativeNumber is { UnsupportedReason: null } && value is not (null or DBNull or string))
+                return nativeNumber.Format(value, CultureInfo.CurrentCulture);
+            if (string.IsNullOrEmpty(format) && value is DateTime dateTime && nativeDateTime is { UnsupportedReason: null })
+                return nativeDateTime.Format(dateTime, CultureInfo.CurrentCulture);
+            if (string.IsNullOrEmpty(format) && nativeNumeric is { UnsupportedReason: null }
+                && value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)
+                return nativeNumeric.Format(value);
             // Without a field format a Crystal Date prints as a short date, without the time of day.
-            if (value is DateTime date && string.IsNullOrEmpty(format) && ReferenceType(reference)?.BaseType == CrystalBaseType.Date)
+            if (value is DateTime date && string.IsNullOrEmpty(format) && (ReferenceType(reference)?.BaseType == CrystalBaseType.Date || SpecialName(reference) == "printdate"))
                 return date.ToString("d", CultureInfo.CurrentCulture);
             return value is IFormattable formattable ? formattable.ToString(string.IsNullOrEmpty(format) ? null : format, CultureInfo.CurrentCulture) ?? "" : value?.ToString() ?? "";
         }
@@ -291,7 +366,10 @@ public sealed partial class ReportLayoutSession
         { _diagnostics.Add($"{reference}: {ex.Message}"); return "[Formula error: " + reference + "]"; }
     }
 
-    private bool Visible(ReportDesignerSection section) => !section.IsSuppressed && !section.HideForDrillDown;
+    // Hide (Drill-Down OK) hides main output but permits it inside the selected drill scope.
+    // Suppress and its conditional formulas remain effective in both views.
+    private bool Visible(ReportDesignerSection section) => InDrillScope(section) && !section.IsSuppressed
+        && (!section.HideForDrillDown || _drillDownGroupLevel > 0 && DrillSectionDepth(section) <= _drillDownGroupLevel + 1);
 
     private Band CreateBand(ReportDesignerSection section, int row, List<Band> repeats)
     {
@@ -310,7 +388,7 @@ public sealed partial class ReportLayoutSession
             if (element.IsSuppressed)
             {
                 if (element.Kind is not "Subreport" && FieldBindings(element).Any(NeedsPrintState))
-                    items.Add(new(element, ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString)), -1, Owner: this, Row: row));
+                    items.Add(new(element, ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)), -1, Owner: this, Row: row));
                 continue;
             }
             if (element.Kind == "Picture" && element.Visual.VectorImage is null && !ReportObjectVisual.IsEmbeddedImage(element.Visual.ImageDataUrl))
@@ -321,18 +399,21 @@ public sealed partial class ReportLayoutSession
             if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
                 && element.Kind is not ("Text" or "Field" or "FieldHeading" or "Picture" or "Line" or "Box" or "Subreport" or "Table"))
                 _diagnostics.Add($"{element.Name}: {element.Kind} objects are not implemented in positioned rendering.");
-            var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString));
+            var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat));
+            if (element.Kind == "Subreport" && child is null && _subreportErrors.TryGetValue(element.Id, out var subreportError))
+                html = "<span class=\"fx-report-subreport-error\" style=\"color:#b00020;font-style:italic\">[Subreport error: " + System.Net.WebUtility.HtmlEncode(subreportError) + "]</span>";
             var measure = -1;
             if (element.CanGrow && element.Kind is "Text" or "Field" or "FieldHeading")
             {
                 var style = ReportObjectRenderer.Style(element, false);
                 var measuredHtml = ResolvePageValues(html.Replace(_pageToken, "88888", StringComparison.Ordinal).Replace(_countToken, "88888", StringComparison.Ordinal), 88888, 88888);
-                var key = style + "\n" + measuredHtml;
+                var measurement = new ReportTextMeasurement(style, measuredHtml, ReportObjectRenderer.TextLineLimit(element));
+                var key = MeasurementKey(measurement);
                 if (!_measurementKeys.TryGetValue(key, out measure))
                 {
                     measure = Measurements.Count;
                     _measurementKeys[key] = measure;
-                    Measurements.Add(new(style, measuredHtml));
+                    Measurements.Add(measurement);
                 }
             }
             ReportAnalysisSnapshot? analysis = null;
@@ -387,7 +468,7 @@ public sealed partial class ReportLayoutSession
 
     private void BuildBands()
     {
-        var sections = _layout.Document.Sections.ToList();
+        var sections = _layout.Document.Sections.Where(InDrillScope).ToList();
         var repeats = new List<Band>();
         void Add(string kind, int row, int? group = null)
         {
@@ -401,6 +482,19 @@ public sealed partial class ReportLayoutSession
         }
         Add("ReportHeader", _rows.Length > 0 ? 0 : -1);
         _rowBefore[-1] = _rowAfter[-1] = CaptureVariables();
+        if (_rows.Length == 0)
+        {
+            // Crystal retains the empty template's group furniture and detail
+            // spacing. A sentinel leaves database/group fields blank without
+            // inventing a data row, running a query, or changing export counts.
+            for (var group = 0; group < _layout.Document.Groups.Count; group++) Add("GroupHeader", -1, group);
+            Add("Detail", -1);
+            for (var group = _layout.Document.Groups.Count - 1; group >= 0; group--)
+            {
+                Add("GroupFooter", -1, group);
+                repeats.RemoveAll(band => ReportDesignerEditing.GetGroupNumber(_layout.Document, band.Section) == group + 1);
+            }
+        }
         for (var row = 0; row < _rows.Length; row++)
         {
             _rowBefore[row] = CaptureVariables();
@@ -446,8 +540,8 @@ public sealed partial class ReportLayoutSession
         var size = _layout.Document.Page;
         var bands = _bands.Select(band => Expand(band, 0)).ToList();
         var pages = new List<Page>();
-        var headers = _layout.Document.Sections.Where(section => section.Kind == "PageHeader").ToList();
-        var footers = _layout.Document.Sections.Where(section => section.Kind == "PageFooter").ToList();
+        var headers = _layout.Document.Sections.Where(section => section.Kind == "PageHeader" && InDrillScope(section)).ToList();
+        var footers = _layout.Document.Sections.Where(section => section.Kind == "PageFooter" && InDrillScope(section)).ToList();
         var pendingHidden = new List<(Band Band, int Height, int Sequence)>();
         var sequence = -1;
         var underlays = new List<(int Index, int Page, int Top)>();
@@ -730,6 +824,7 @@ public sealed partial class ReportLayoutSession
             if (scheduleAttempt >= 15) _diagnostics.Add("Mutable page formula layout did not stabilize within sixteen replays; the last computed layout is retained.");
             else return Paginate(measuredHeights, pages.Count, 0, counts, nextInlineContexts, nextFooterRows, scheduleAttempt + 1);
         }
+        var navigation = BuildNativeNavigation(pages);
         var output = new List<string>();
         var snapshots = new List<ReportPageSnapshot>();
         for (var index = 0; index < pages.Count; index++)
@@ -748,6 +843,9 @@ public sealed partial class ReportLayoutSession
                 html.Append("<section data-section=\"").Append(ReportObjectRenderer.Encode(placement.Band.Section.Name)).Append("\" style=\"position:absolute;overflow:hidden;")
                     .Append(placement.Width > 0 ? "left:" + Px(placement.Left) + "px;width:" + Px(placement.Width) + "px" : "left:0;width:100%").Append(";top:").Append(Px(placement.Top))
                     .Append("px;height:").Append(Px(placement.Height)).Append("px;background:").Append(ReportObjectRenderer.Color(placement.Band.Section.BackgroundColor)).Append(";\">");
+                var anchors = navigation.Anchors.GetValueOrDefault(placement) ?? [];
+                foreach (var anchor in anchors)
+                    html.Append("<span id=\"").Append(anchor).Append("\" class=\"fx-rpt-native-anchor\" style=\"position:absolute;inset:0;pointer-events:none;\"></span>");
                 foreach (var item in placement.Band.Items)
                 {
                     if (item.Element.IsSuppressed) continue;
@@ -762,7 +860,10 @@ public sealed partial class ReportLayoutSession
                         element.HeightTwips = metric.Lines.Where(l => l.Bottom <= placement.Height - element.TopTwips)
                             .Select(l => l.Bottom).DefaultIfEmpty(0).Max();
                     }
-                    if (element.TopTwips >= placement.Height || element.TopTwips + element.HeightTwips <= 0) continue;
+                    // A horizontal line has zero geometric height but a visible
+                    // stroke, including when it lies exactly at the section top.
+                    var visibleHeight = element.Kind == "Line" && element.HeightTwips == 0 ? 1 : element.HeightTwips;
+                    if (element.TopTwips >= placement.Height || element.TopTwips + visibleHeight <= 0) continue;
                     if (element.Kind == "Box")
                     {
                         var end = element.TopTwips + element.HeightTwips;
@@ -780,7 +881,8 @@ public sealed partial class ReportLayoutSession
                     html.Append("<div data-object=\"").Append(ReportObjectRenderer.Encode(element.Name)).Append("\" style=\"").Append(ReportObjectRenderer.Style(element)).Append("\">")
                         .Append(content).Append("</div>");
                 }
-                pageBands.Add(new(placement.Band.Section.Name, placement.Top, placement.Height, placement.Band.Section.BackgroundColor, objects) { LeftTwips = placement.Left, WidthTwips = placement.Width });
+                pageBands.Add(new(placement.Band.Section.Name, placement.Top, placement.Height, placement.Band.Section.BackgroundColor, objects)
+                    { LeftTwips = placement.Left, WidthTwips = placement.Width, NavigationAnchors = anchors });
                 html.Append("</section>");
             }
             snapshots.Add(new(_layout.Document.Title, index + 1, new ReportDesignerPage
@@ -797,7 +899,8 @@ public sealed partial class ReportLayoutSession
             foreach (var diagnostic in session._diagnostics)
                 if (!diagnostics.Any(d => d == diagnostic || d.EndsWith(": " + diagnostic, StringComparison.Ordinal)))
                     diagnostics.Add(diagnostic);
-        return new(output, diagnostics.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList()) { Snapshots = snapshots };
+        return new(output, diagnostics.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList())
+            { Snapshots = snapshots, Tree = navigation.Tree, SubreportErrors = _state.SubreportErrors.ToList() };
 
         int ExpectedCount(int index) => expectedCounts is not null && index < expectedCounts.Count ? expectedCounts[index] : expectedPages;
         void HiddenEvent(Band hidden)
@@ -1160,6 +1263,25 @@ public sealed partial class ReportLayoutSession
                             item.Element.LeftTwips, item.Element.LeftTwips + item.Element.WidthTwips));
                     continue;
                 }
+                // Expanding a subreport replaces its container with child bands. Keep its
+                // authored frame behind those children and use normal Box fragmentation at
+                // page breaks; otherwise every border/background on the container is lost.
+                ReportDesignerElement? childFrame = null;
+                var visual = item.Element.Visual;
+                if (new[] { visual.TopLine, visual.BottomLine, visual.LeftLine, visual.RightLine }
+                    .Any(line => line is "Single" or "Double" or "Dash" or "Dot")
+                    || ReportObjectRenderer.Color(item.Element.BackgroundColor) != "transparent")
+                {
+                    childFrame = item.Element.CloneFor(item.Element.SectionId, item.Element.Name);
+                    // The frame must not reuse the scheduled original subreport item:
+                    // that item carries placeholder HTML rather than expanded child text.
+                    childFrame.Id = item.Element.Id + "-subreport-frame";
+                    childFrame.Kind = "Box";
+                    childFrame.TopTwips = top;
+                    childFrame.LeftTwips = item.Element.LeftTwips;
+                    childFrame.CanGrow = false;
+                    items.Add(item with { Element = childFrame, Html = "", TemplateHtml = "", Measurement = -1, Child = null, Analysis = null, Table = null });
+                }
                 var cursor = top;
                 var extent = top;
                 var active = new Dictionary<Band, (int Start, Band Header)>();
@@ -1199,6 +1321,8 @@ public sealed partial class ReportLayoutSession
                     breaks.Add(end);
                 }
                 foreach (var header in active.Values) inlineHeaders.Add(new(header.Start, cursor, header.Header));
+                if (childFrame is not null)
+                    childFrame.HeightTwips = Math.Max(item.Element.HeightTwips, extent - top);
                 growth.Add((item.Element.TopTwips + item.Element.HeightTwips, Math.Max(0, extent - item.Element.TopTwips - item.Element.HeightTwips),
                     item.Element.LeftTwips, item.Element.LeftTwips + item.Element.WidthTwips));
             }
@@ -1235,7 +1359,9 @@ public sealed partial class ReportLayoutSession
             var text = System.Text.RegularExpressions.Regex.Replace(item.Html, "<[^>]+>", "");
             var font = Math.Max(item.Element.FontSize, item.Element.Visual.Runs.Select(run => run.FontSize).DefaultIfEmpty(1).Max());
             var capacity = Math.Max(1, (int)(item.Element.WidthTwips / Math.Max(1, font * 10)));
-            return Math.Max(item.Element.HeightTwips, (int)Math.Ceiling(text.Split('\n').Sum(line => Math.Max(1, Math.Ceiling(line.Length / (double)capacity))) * (double)font * 23));
+            var lines = text.Split('\n').Sum(line => Math.Max(1, Math.Ceiling(line.Length / (double)capacity)));
+            if (ReportObjectRenderer.TextLineLimit(item.Element) is > 0 and var limit) lines = Math.Min(lines, limit);
+            return Math.Max(item.Element.HeightTwips, (int)Math.Ceiling(lines * (double)font * 23));
         }
         List<int> SafeBreaks(Band band)
         {

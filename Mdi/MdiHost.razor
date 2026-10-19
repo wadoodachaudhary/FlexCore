@@ -4,8 +4,9 @@
 
 @*
    Fx.ControlKit.Mdi.MdiHost — tab-strip MDI shell that hosts a list of
-   child Blazor components (one per open "window") and renders only the
-   active one as visible. Inactive panes stay mounted with display:none
+   child Blazor components (one per open "window") and renders the active
+   one as visible (in split view, see SplitMode, a partner window is
+   visible in a second pane as well). Other panes stay mounted with display:none
    so each child preserves its in-memory state (form fields, grid scroll
    position, edits-in-progress) across tab switches.
 
@@ -31,6 +32,12 @@
    the user moved to in the meantime. The consumer still runs its close
    guards, and the pane may already be gone when the task completes.
 
+   Per-window IsActiveWindow: the same wrapper cascades a Name="IsActiveWindow"
+   Func<bool> that tells a page whether its window is the active one when it
+   asks. In split view the partner page is visible, so a page that sets focus
+   after a long load checks it first rather than taking the keyboard from the
+   page the user moved to.
+
    Why the visible-pane CSS toggle instead of @if:
      @if would unmount inactive panes → kills grid state, edits, drafts.
      display:none keeps the Blazor component instance alive; Blazor
@@ -41,15 +48,33 @@
 *@
 
 @{
+    // This render shows the current state, so a skip a drag handler asked for while a render was already
+    // queued (StateHasChanged then never reaches ShouldRender, as on a slow link) no longer applies.
+    _skipRender = false;
     // "Home" is active whenever no MdiWindow is. Used by both the home-tab
     // highlight and the EmptyState fallback. Treats a stale ActiveWindowId
     // (referring to a window that's no longer in the list) the same as null.
     var homeActive = ActiveWindowId == null
         || !Windows.Any(w => string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal));
+    // Split view shows the active window and its partner in two panes; every other pane stays mounted
+    // and hidden. The panes are never moved in the DOM (CSS order places them), so no page remounts.
+    var split = IsSplitShown;
+    var stripClass = "fx-mdi-tabs"
+        + (_draggedTabId != null ? " fx-mdi-tabs-drag-active" : "")
+        + (split ? " fx-mdi-tabs-split" : "");
 }
 
 <div class="fx-mdi">
-    <div class="fx-mdi-tabs">
+    @* dragenter is cancelled too: a drop zone that appears under a still pointer gets only a dragenter
+       before the release, and an uncancelled one refuses the drop. *@
+    <div class="@stripClass"
+         @ondragenter="OnStripDragEnter"
+         @ondragenter:preventDefault="true"
+         @ondragleave="OnStripDragLeave"
+         @ondragover="OnStripDragOver"
+         @ondragover:preventDefault="true"
+         @ondrop="OnStripDropAsync"
+         @ondrop:preventDefault="true">
         @if (HomeTab != null)
         {
             @* Permanent leftmost "home" tab. No close button — it's the way
@@ -59,6 +84,12 @@
                or "Home" label). *@
             <div class="fx-mdi-tab fx-mdi-tab-home @(homeActive ? "active" : "")"
                  @onclick="OnHomeClick"
+                 @ondragover="OnHomeDragOver"
+                 @ondragover:preventDefault="true"
+                 @ondragover:stopPropagation="true"
+                 @ondrop="OnHomeDropAsync"
+                 @ondrop:preventDefault="true"
+                 @ondrop:stopPropagation="true"
                  title="Home">
                 @HomeTab
             </div>
@@ -66,7 +97,21 @@
         @foreach (var w in Windows)
         {
             var win = w;  // capture per-iteration for the close-button closure
-            <div class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "")"
+            var isDragging = string.Equals(win.Id, _draggedTabId, StringComparison.Ordinal);
+            var dropMark = !isDragging && string.Equals(win.Id, _dropTargetId, StringComparison.Ordinal)
+                ? (_dropAfter ? "fx-mdi-tab-drop-after" : "fx-mdi-tab-drop-before")
+                : "";
+            <div @key="win.Id"
+                 class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "") @(IsSplitPartner(win.Id) ? "fx-mdi-tab-split-partner" : "") @(isDragging ? "fx-mdi-tab-dragging" : "") @dropMark"
+                 draggable="true"
+                 @ondragstart="(DragEventArgs e) => OnTabDragStart(win.Id, e)"
+                 @ondragover="(DragEventArgs e) => OnTabDragOver(win.Id, null, e)"
+                 @ondragover:preventDefault="true"
+                 @ondragover:stopPropagation="true"
+                 @ondrop="(DragEventArgs e) => OnTabDropAsync(win.Id, null, e)"
+                 @ondrop:preventDefault="true"
+                 @ondrop:stopPropagation="true"
+                 @ondragend="OnTabDragEnd"
                  @onclick="() => OnTabClick(win.Id)"
                  @oncontextmenu="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
                  @oncontextmenu:preventDefault="@ShowTabSystemMenu"
@@ -85,21 +130,48 @@
                                 @oncontextmenu="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
                                 @oncontextmenu:preventDefault="true"
                                 @oncontextmenu:stopPropagation="true">
-                            <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" />
+                            <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" draggable="false" />
                         </button>
                     }
                     else
                     {
-                        <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" />
+                        <img class="fx-mdi-tab-icon" src="@win.IconUrl" alt="" aria-hidden="true" draggable="false" />
                     }
                 }
                 <span class="fx-mdi-tab-title">@win.Title</span>
+                @* While a tab is dragged, the left half of another tab means "before it" and the
+                   right half "after it", as the grid's column headers do; the bar marks that edge. *@
+                <span class="fx-mdi-tab-drop-zone fx-mdi-tab-drop-zone-left"
+                      @ondragover="(DragEventArgs e) => OnTabDragOver(win.Id, false, e)"
+                      @ondragover:preventDefault="true"
+                      @ondragover:stopPropagation="true"
+                      @ondrop="(DragEventArgs e) => OnTabDropAsync(win.Id, false, e)"
+                      @ondrop:preventDefault="true"
+                      @ondrop:stopPropagation="true"></span>
+                <span class="fx-mdi-tab-drop-zone fx-mdi-tab-drop-zone-right"
+                      @ondragover="(DragEventArgs e) => OnTabDragOver(win.Id, true, e)"
+                      @ondragover:preventDefault="true"
+                      @ondragover:stopPropagation="true"
+                      @ondrop="(DragEventArgs e) => OnTabDropAsync(win.Id, true, e)"
+                      @ondrop:preventDefault="true"
+                      @ondrop:stopPropagation="true"></span>
                 <button class="fx-mdi-tab-close"
                         type="button"
                         title="Close"
                         @onclick:stopPropagation="true"
                         @onclick="() => OnCloseClick(win.Id)">×</button>
             </div>
+        }
+        @if (_draggedTabId != null)
+        {
+            @* The blank strip after the last tab: the dragged tab goes to the end. *@
+            <div class="fx-mdi-tabs-end"
+                 @ondragover="OnStripEndDragOver"
+                 @ondragover:preventDefault="true"
+                 @ondragover:stopPropagation="true"
+                 @ondrop="OnStripEndDropAsync"
+                 @ondrop:preventDefault="true"
+                 @ondrop:stopPropagation="true"></div>
         }
     </div>
     @if (ShowTabSystemMenu && _tabSystemMenuVisible && TabSystemMenuWindow is { } menuWindow)
@@ -130,28 +202,48 @@
             </button>
         </div>
     }
-    <div class="fx-mdi-panes">
+    <div class="@(split ? (SplitMode == MdiSplitMode.Stacked ? "fx-mdi-panes fx-mdi-split fx-mdi-split-stacked" : "fx-mdi-panes fx-mdi-split fx-mdi-split-side") : "fx-mdi-panes")"
+         @attributes="PanesDragAttributes">
         @foreach (var w in Windows)
         {
             var win = w;  // capture for the per-tab SetPageTitle closure
-            var paneVisible = string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal);
-            @* IsFixed: the cascading value is bound to this specific window
-               instance for its lifetime. Setting IsFixed prevents Blazor
-               from re-subscribing every render, which would churn the
-               child's [CascadingParameter] receiver. *@
-            <CascadingValue Name="SetPageTitle"
-                            Value="@(BuildTitleSetter(win))"
-                            IsFixed="true">
-            <CascadingValue Name="CloseThisWindow"
-                            Value="@(BuildCloseRequester(win))"
-                            IsFixed="true">
-                <div class="fx-mdi-pane" style="@(paneVisible ? "" : "display:none;")">
-                    <MdiPane @key="win.Id" Window="win"
+            var isActivePane = string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal);
+            var isPartnerPane = split && IsSplitPartner(win.Id);
+            var paneStyle = split
+                ? (isActivePane || isPartnerPane
+                    ? $"order:{(string.Equals(win.Id, _splitFirstId, StringComparison.Ordinal) ? 1 : 3)};"
+                    : "display:none;")
+                : (isActivePane ? "" : "display:none;");
+            @* @key on the outermost element of the @foreach so reordering tabs
+               preserves each pane's mounted component instance and its IsFixed
+               cascading delegates without unmounting. *@
+            var paneClass = "fx-mdi-pane"
+                + (split && isActivePane ? " fx-mdi-pane-active" : "")
+                + (isPartnerPane ? " fx-mdi-pane-partner" : "");
+            <div @key="win.Id"
+                 class="@paneClass"
+                 style="@paneStyle"
+                 @attributes="PartnerPaneAttributes(win.Id, isPartnerPane)">
+                <CascadingValue Name="SetPageTitle"
+                                Value="@(BuildTitleSetter(win))"
+                                IsFixed="true">
+                <CascadingValue Name="CloseThisWindow"
+                                Value="@(BuildCloseRequester(win))"
+                                IsFixed="true">
+                <CascadingValue Name="IsActiveWindow"
+                                Value="@(BuildActiveTester(win))"
+                                IsFixed="true">
+                    <MdiPane Window="win"
                              OnError="@(w => OnWindowError.InvokeAsync(w))"
                              OnCloseRequested="@(w => OnCloseRequested.InvokeAsync(w.Id))" />
-                </div>
-            </CascadingValue>
-            </CascadingValue>
+                </CascadingValue>
+                </CascadingValue>
+                </CascadingValue>
+            </div>
+        }
+        @if (split)
+        {
+            <div class="fx-mdi-split-divider" style="order:2;" aria-hidden="true"></div>
         }
         @* EmptyState renders whenever no window is active — either there are
            zero tabs or the consumer set ActiveWindowId = null to "switch to
@@ -181,6 +273,24 @@
     /// decides whether to actually close (dirty-check prompts, etc.) and
     /// then removes the window from Windows and re-renders.</summary>
     [Parameter] public EventCallback<string> OnCloseRequested { get; set; }
+
+    /// <summary>Raised when the user drops a dragged tab: TargetId is the tab it was dropped beside (a drop on
+    /// Home or at the end of the strip names the first or the last tab). The side is not reported, and the
+    /// event is raised even when the drop leaves the order as it was. When <see cref="Windows"/> is a mutable
+    /// list the host has already moved the tab in it, so the consumer reads the order from Windows and keeps
+    /// it; a read-only list is not reordered.</summary>
+    [Parameter] public EventCallback<(string DraggedId, string TargetId)> OnTabReorder { get; set; }
+
+    /// <summary>
+    /// Split view: <see cref="MdiSplitMode.SideBySide"/> or <see cref="MdiSplitMode.Stacked"/> shows the active
+    /// window and a partner in two equal panes (left / right or top / bottom); <see cref="MdiSplitMode.None"/>
+    /// (the default) shows the active window alone. The partner is the window that was active before, else
+    /// the next tab. Clicking the partner's tab, or a mouse press or focus moving into its pane, makes it the
+    /// active window (raises <see cref="OnActivate"/>); activating any other tab shows it in the active pane. Both
+    /// panes stay where they are, and every page stays mounted whatever the mode. With one window, or with
+    /// no active window, the host shows what it shows without a split.
+    /// </summary>
+    [Parameter] public MdiSplitMode SplitMode { get; set; }
 
     /// <summary>When true, right-clicking a tab or clicking its icon opens the
     /// legacy MDI system menu (Restore, Move, Size, Minimize, Maximize, Close).</summary>
@@ -217,6 +327,112 @@
     private string? _tabSystemMenuWindowId;
     private double _tabSystemMenuX;
     private double _tabSystemMenuY;
+    private string? _draggedTabId;
+    private string? _dropTargetId;
+    private bool _dropAfter;
+    // dragenter minus dragleave over the strip and its children (both bubble): 0 once the pointer has left it.
+    private int _stripDragDepth;
+
+    // Split view: the window in the first (left / top) and second (right / bottom) pane, and the
+    // most recently active windows, newest first.
+    private string? _splitFirstId;
+    private string? _splitSecondId;
+    private readonly List<string> _recentWindowIds = new();
+
+    // Set by a drag handler that changed nothing on screen, so the render after the event is skipped
+    // (dragover repeats while the pointer rests).
+    private bool _skipRender;
+
+    protected override bool ShouldRender()
+    {
+        if (!_skipRender) return true;
+        _skipRender = false;
+        return false;
+    }
+
+    protected override void OnParametersSet()
+    {
+        _skipRender = false;
+        var open = new HashSet<string>(Windows.Select(w => w.Id), StringComparer.Ordinal);
+        // The dragged tab's window closed during the drag: its dragend never arrives, so end the drag here.
+        if (_draggedTabId != null && !open.Contains(_draggedTabId)) EndDrag();
+        else if (_dropTargetId != null && !open.Contains(_dropTargetId)) _dropTargetId = null;
+        _recentWindowIds.RemoveAll(id => !open.Contains(id));
+        var active = ActiveWindowId != null && open.Contains(ActiveWindowId) ? ActiveWindowId : null;
+        if (active != null)
+        {
+            _recentWindowIds.Remove(active);
+            _recentWindowIds.Insert(0, active);
+        }
+        if (_splitFirstId != null && !open.Contains(_splitFirstId)) _splitFirstId = null;
+        if (_splitSecondId != null && !open.Contains(_splitSecondId)) _splitSecondId = null;
+        if (SplitMode == MdiSplitMode.None)
+        {
+            _splitFirstId = _splitSecondId = null;
+            return;
+        }
+        if (active == null) return;   // home view: keep the panes for when a window is active again
+
+        if (!string.Equals(active, _splitFirstId, StringComparison.Ordinal)
+            && !string.Equals(active, _splitSecondId, StringComparison.Ordinal))
+        {
+            // The newly active window takes the pane of the window that was active (the most recent
+            // one of the two), or an empty pane; the first pane when the split has just started.
+            var previous = _recentWindowIds.Skip(1).FirstOrDefault(id =>
+                string.Equals(id, _splitFirstId, StringComparison.Ordinal) || string.Equals(id, _splitSecondId, StringComparison.Ordinal));
+            if (_splitFirstId == null && _splitSecondId == null) _splitFirstId = active;
+            else if (_splitFirstId == null) _splitFirstId = active;
+            else if (_splitSecondId == null) _splitSecondId = active;
+            else if (string.Equals(previous, _splitSecondId, StringComparison.Ordinal)) _splitSecondId = active;
+            else _splitFirstId = active;
+        }
+
+        // The other pane shows the most recently active other window, else the next tab.
+        if (_splitFirstId == null || _splitSecondId == null)
+        {
+            var partner = _recentWindowIds.FirstOrDefault(id => !string.Equals(id, active, StringComparison.Ordinal))
+                ?? NeighbourOf(active);
+            if (_splitFirstId == null) _splitFirstId = partner;
+            else _splitSecondId = partner;
+        }
+    }
+
+    private string? NeighbourOf(string id)
+    {
+        var i = IndexOfWindow(id);
+        if (i < 0) return null;
+        if (i + 1 < Windows.Count) return Windows[i + 1].Id;
+        return i > 0 ? Windows[i - 1].Id : null;
+    }
+
+    /// <summary>Two different open windows, one of them active: the split is on screen.</summary>
+    private bool IsSplitShown =>
+        SplitMode != MdiSplitMode.None
+        && _splitFirstId != null && _splitSecondId != null
+        && !string.Equals(_splitFirstId, _splitSecondId, StringComparison.Ordinal)
+        && ActiveWindowId != null
+        && (string.Equals(ActiveWindowId, _splitFirstId, StringComparison.Ordinal) || string.Equals(ActiveWindowId, _splitSecondId, StringComparison.Ordinal))
+        && IndexOfWindow(_splitFirstId) >= 0 && IndexOfWindow(_splitSecondId) >= 0;
+
+    /// <summary>The window shown in the split pane that is not the active one.</summary>
+    private bool IsSplitPartner(string id) =>
+        IsSplitShown && !string.Equals(id, ActiveWindowId, StringComparison.Ordinal)
+        && (string.Equals(id, _splitFirstId, StringComparison.Ordinal) || string.Equals(id, _splitSecondId, StringComparison.Ordinal));
+
+    // Only the partner pane listens: a press or focus inside it makes its window the active one. The
+    // active pane carries no handler, so ordinary clicks in a page send nothing extra to the server.
+    private Dictionary<string, object>? PartnerPaneAttributes(string id, bool isPartner) => !isPartner ? null : new()
+    {
+        ["onmousedown"] = EventCallback.Factory.Create<MouseEventArgs>(this, () => ActivatePartnerAsync(id)),
+        ["onfocusin"] = EventCallback.Factory.Create<FocusEventArgs>(this, () => ActivatePartnerAsync(id)),
+    };
+
+    private async Task ActivatePartnerAsync(string id)
+    {
+        if (string.Equals(id, ActiveWindowId, StringComparison.Ordinal) || !IsSplitPartner(id)) return;
+        if (OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(id);
+    }
 
     private MdiWindow? TabSystemMenuWindow
         => string.IsNullOrWhiteSpace(_tabSystemMenuWindowId)
@@ -225,6 +441,162 @@
 
     private string TabSystemMenuStyle
         => $"left:{_tabSystemMenuX:0.##}px;top:{_tabSystemMenuY:0.##}px";
+
+    private void OnTabDragStart(string id, DragEventArgs e)
+    {
+        _tabSystemMenuVisible = false;
+        // The window closed before this dragstart reached the server (its tab is going): nothing to drag.
+        if (IndexOfWindow(id) < 0) return;
+        EndDrag();
+        _draggedTabId = id;
+        if (e.DataTransfer != null)
+            e.DataTransfer.EffectAllowed = "move";
+    }
+
+    /// <summary>The pointer is over <paramref name="id"/>: its left half (<paramref name="after"/> false) or
+    /// right half (true), or the tab itself before the half zones are shown (null), when the side keeps the
+    /// last half seen on that tab, else follows the drag direction.</summary>
+    private void OnTabDragOver(string id, bool? after, DragEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_draggedTabId) || string.Equals(_draggedTabId, id, StringComparison.Ordinal))
+        {
+            SetDropTarget(null, false);
+            return;
+        }
+        var side = after ?? (string.Equals(_dropTargetId, id, StringComparison.Ordinal)
+            ? _dropAfter
+            : IndexOfWindow(id) > IndexOfWindow(_draggedTabId));
+        SetDropTarget(id, side);
+    }
+
+    /// <summary>Moves the insertion bar; when it is already there the render is skipped.</summary>
+    private void SetDropTarget(string? id, bool after)
+    {
+        if (string.Equals(id, _dropTargetId, StringComparison.Ordinal) && (id == null || after == _dropAfter))
+        {
+            _skipRender = true;
+            return;
+        }
+        _dropTargetId = id;
+        _dropAfter = after;
+    }
+
+    private Task OnTabDropAsync(string targetId, bool? after, DragEventArgs e)
+    {
+        var side = after ?? (string.Equals(_dropTargetId, targetId, StringComparison.Ordinal)
+            ? _dropAfter
+            : IndexOfWindow(targetId) > IndexOfWindow(_draggedTabId));
+        return MoveDraggedTabAsync(targetId, side);
+    }
+
+    private void OnStripDragEnter(DragEventArgs e)
+    {
+        _skipRender = true;
+        if (_draggedTabId != null) _stripDragDepth++;
+    }
+
+    /// <summary>Leaving the strip by any edge (up into a menu, sideways) takes the bar away, as the pane area's
+    /// dragover does below it. Moving between the strip's own children enters the next one first.</summary>
+    private void OnStripDragLeave(DragEventArgs e)
+    {
+        if (_draggedTabId == null || --_stripDragDepth > 0)
+        {
+            _skipRender = true;
+            return;
+        }
+        _stripDragDepth = 0;
+        SetDropTarget(null, false);
+    }
+
+    /// <summary>A point of the strip between or around tabs (a gap, the padding, the bottom edge): it lies
+    /// beside the tab or Home that drew the bar, so the bar stays where it is.</summary>
+    private void OnStripDragOver(DragEventArgs e) => _skipRender = true;
+
+    /// <summary>A drop between or around tabs lands where the bar shows.</summary>
+    private Task OnStripDropAsync(DragEventArgs e)
+        => _dropTargetId == null ? ClearDragAsync() : MoveDraggedTabAsync(_dropTargetId, _dropAfter);
+
+    /// <summary>Blank strip after the last tab: the dragged tab goes to the end.</summary>
+    private void OnStripEndDragOver(DragEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_draggedTabId)) return;
+        var last = Windows.LastOrDefault(w => !string.Equals(w.Id, _draggedTabId, StringComparison.Ordinal));
+        SetDropTarget(last?.Id, true);
+    }
+
+    private Task OnStripEndDropAsync(DragEventArgs e)
+    {
+        var last = Windows.LastOrDefault(w => !string.Equals(w.Id, _draggedTabId, StringComparison.Ordinal));
+        return last == null ? ClearDragAsync() : MoveDraggedTabAsync(last.Id, after: true);
+    }
+
+    /// <summary>The home tab, or the space between it and the first tab: the dragged tab goes first.</summary>
+    private void OnHomeDragOver(DragEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_draggedTabId)) return;
+        var first = Windows.FirstOrDefault(w => !string.Equals(w.Id, _draggedTabId, StringComparison.Ordinal));
+        SetDropTarget(first?.Id, false);
+    }
+
+    // While a tab is dragged, the page area hears dragover too: the pointer has left the strip, so the bar
+    // goes. The page area does not accept the drop (no preventDefault), so a release there moves nothing.
+    // Only attached during a tab drag, so drags inside a page send nothing to the host.
+    private Dictionary<string, object>? PanesDragAttributes => _draggedTabId == null ? null : new()
+    {
+        ["ondragover"] = EventCallback.Factory.Create<DragEventArgs>(this, () => SetDropTarget(null, false)),
+    };
+
+    private Task OnHomeDropAsync(DragEventArgs e)
+    {
+        var first = Windows.FirstOrDefault(w => !string.Equals(w.Id, _draggedTabId, StringComparison.Ordinal));
+        return first == null ? ClearDragAsync() : MoveDraggedTabAsync(first.Id, after: false);
+    }
+
+    private Task ClearDragAsync()
+    {
+        EndDrag();
+        return Task.CompletedTask;
+    }
+
+    private void EndDrag()
+    {
+        _draggedTabId = null;
+        _dropTargetId = null;
+        _stripDragDepth = 0;
+    }
+
+    /// <summary>Moves the dragged tab just before or after <paramref name="targetId"/> in the consumer's list
+    /// (when it is a mutable list) and raises <see cref="OnTabReorder"/>.</summary>
+    private async Task MoveDraggedTabAsync(string targetId, bool after)
+    {
+        var draggedId = _draggedTabId;
+        EndDrag();
+        if (string.IsNullOrEmpty(draggedId) || string.Equals(draggedId, targetId, StringComparison.Ordinal))
+            return;
+
+        if (Windows is IList<MdiWindow> { IsReadOnly: false } list)
+        {
+            var from = IndexOfWindow(draggedId);
+            if (from < 0 || IndexOfWindow(targetId) < 0) return;
+            var item = list[from];
+            list.RemoveAt(from);
+            var to = IndexOfWindow(targetId);
+            list.Insert(after ? to + 1 : to, item);
+        }
+
+        if (OnTabReorder.HasDelegate)
+            await OnTabReorder.InvokeAsync((draggedId, targetId));
+    }
+
+    private int IndexOfWindow(string? id)
+    {
+        for (var i = 0; i < Windows.Count; i++)
+            if (string.Equals(Windows[i].Id, id, StringComparison.Ordinal))
+                return i;
+        return -1;
+    }
+
+    private void OnTabDragEnd() => EndDrag();
 
     private async Task OnTabClick(string id)
     {
@@ -316,4 +688,10 @@
         _tabSystemMenuVisible = false;
         return OnCloseRequested.HasDelegate ? OnCloseRequested.InvokeAsync(w.Id) : Task.CompletedTask;
     };
+
+    // Each pane can ask whether its window is the active one at the moment it asks. In split view the
+    // partner page is visible, so a focus it sets after a long load would take the keyboard (and, through
+    // the pane's focusin, the active window) from the page the user moved to; such a page checks this first.
+    private Func<bool> BuildActiveTester(MdiWindow w) => () =>
+        string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal);
 }

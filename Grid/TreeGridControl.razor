@@ -322,7 +322,7 @@
                         aria-expanded="@(node.HasChildren ? DisplayExpanded(node) ? "true" : "false" : null)"
                         tabindex="-1"
                         @ref="node.RowElement"
-                        @onclick="() => HandleRowClick(node, currentIdx)"
+                        @onclick="e => HandleRowClick(node, currentIdx, e)"
                         @ondblclick="() => HandleRowDoubleClick(node, currentIdx)"
                         @oncontextmenu="() => HandleRowContextMenu(node, currentIdx)">
 
@@ -549,6 +549,20 @@
                             colIdx++;
                         }
                     </tr>
+                    @if (node.IsExpanded && HasRowDetails(node.Data))
+                    {
+                        var detailKey = (node.Id, "details");
+                        <tr @key="detailKey" class="fx-treegrid-details-row" role="presentation">
+                            <td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))"
+                                class="fx-treegrid-details-cell" role="presentation"
+                                @onclick:stopPropagation="true" @ondblclick:stopPropagation="true"
+                                @oncontextmenu:stopPropagation="true" @onkeydown:stopPropagation="true">
+                                <div class="fx-treegrid-details-content" role="group">
+                                    @(RowDetailsTemplate!(node.Data))
+                                </div>
+                            </td>
+                        </tr>
+                    }
                     @if (_activeEdit?.Id.Equals(node.Id) == true && !_editDialog)
                     {
                         <tr class="fx-treegrid-edit-actions"><td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))" @onkeydown:stopPropagation="true">

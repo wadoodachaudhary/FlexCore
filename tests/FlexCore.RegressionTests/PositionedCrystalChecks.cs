@@ -18,16 +18,24 @@ internal static class PositionedCrystalChecks
             using var factory = LoggerFactory.Create(builder => { });
             var loader = new CrystalXmlReportLoader(factory.CreateLogger<CrystalXmlReportLoader>(), new ReportOptions { SchemaPrefix = "" });
 
+            // Record selection reaches SQL only through the AST subsets in
+            // CrystalXmlReportLoader.Selection.cs (an AND tree of typed field = {?Param}
+            // equalities) and CrystalXmlReportLoader.BoundedSelection.cs (those equalities
+            // as guarded, bound list membership, beside field/literal comparisons that are
+            // not translated). SQL is only ever a superset: every other shape stays
+            // unfiltered and the runtime evaluates the full formula on the returned rows.
             var plainPath = Write(directory, "plain.xml", PlainReport());
             var plain = loader.LoadPositioned(plainPath);
-            check(plain.Sql.Contains(" WHERE ", StringComparison.Ordinal)
-                && plain.Sql.Contains("[POMaster].PONumber", StringComparison.Ordinal)
-                && plain.Sql.Contains("@PONumber", StringComparison.Ordinal)
-                && plain.Sql.Contains("[POMaster].DivisionID", StringComparison.Ordinal)
-                && plain.Sql.Contains("'Open'", StringComparison.Ordinal)
+            var plainNarrowed = plain.Sql.Contains(" WHERE ", StringComparison.Ordinal)
+                && plain.Sql.Contains("(@__fxPositionedSelectionGuard0 = 1 OR CONVERT(nvarchar(max), [POMaster].[PONumber]) COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR CONVERT(nvarchar(max), [POMaster].[PONumber]) COLLATE Latin1_General_100_CI_AS = @PONumber)", StringComparison.Ordinal)
+                && plain.Sql.Contains("[POMaster].[DivisionID] AS", StringComparison.Ordinal)
+                && plain.PositionedLayout!.RecordSelection is not null
+                && !plain.Sql.Contains("'Open'", StringComparison.Ordinal)
                 && !plain.Sql.Contains("Secret", StringComparison.Ordinal)
-                && !plain.Sql.Contains("//", StringComparison.Ordinal),
-                "plain AND selection of fields, parameters and literals becomes the positioned WHERE");
+                && !plain.Sql.Contains("//", StringComparison.Ordinal);
+            check(plainNarrowed, plainNarrowed
+                ? "an AND selection narrows SQL by its {?Name} equality and leaves the literal comparison to the positioned runtime"
+                : "an AND selection narrows SQL by its {?Name} equality and leaves the literal comparison to the positioned runtime sql=[" + plain.Sql + "]");
             check(plain.PositionedLayout!.RecordSelection is not null
                 && !plain.PositionedLayout.Bindings.ContainsKey("{?Pm-POMaster.PONumber}")
                 && !plain.Sql.Contains("?Pm-POMaster", StringComparison.Ordinal),
@@ -35,21 +43,57 @@ internal static class PositionedCrystalChecks
 
             var either = loader.LoadPositioned(Write(directory, "either.xml", SelectionReport(
                 "({POMaster.PONumber} = {?PONumber}) OR ({POMaster.DivisionID} = 7)")));
-            check(either.Sql.Contains(" WHERE ", StringComparison.Ordinal)
-                && either.Sql.Contains(" OR ", StringComparison.Ordinal)
-                && either.Sql.Contains("@PONumber", StringComparison.Ordinal)
-                && either.Sql.Contains("[POMaster].DivisionID", StringComparison.Ordinal),
-                "parenthesized OR of field, parameter and number stays in the positioned WHERE");
+            check(!either.Sql.Contains(" WHERE ", StringComparison.Ordinal) && either.PositionedLayout!.RecordSelection is not null,
+                "a parenthesized OR stays with the positioned runtime");
 
             var shaped = loader.LoadPositioned(Write(directory, "shaped.xml", SelectionReport(
                 "Year({POMaster.OrderDate}) = 2026 OR {POMaster.PONumber} = {?PONumber}")));
             check(!shaped.Sql.Contains(" WHERE ", StringComparison.Ordinal) && shaped.PositionedLayout!.RecordSelection is not null,
                 "a selection that calls a function stays with the positioned runtime");
 
+            var scalar = loader.LoadPositioned(Write(directory, "scalar.xml", SelectionReport(
+                "{POMaster.PONumber} = {?PONumber}")));
+            var scalarPushed = scalar.Sql.Contains(" WHERE ", StringComparison.Ordinal)
+                && scalar.Sql.Contains("CONVERT(nvarchar(max), [POMaster].[PONumber]) COLLATE Latin1_General_100_CI_AS = CONVERT(nvarchar(max), @PONumber) COLLATE Latin1_General_100_CI_AS", StringComparison.Ordinal)
+                && scalar.Sql.Contains("Latin1_General_100_BIN2 LIKE N'%[^ -~]%'", StringComparison.Ordinal)
+                && !scalar.Sql.Contains("__fx_selection", StringComparison.Ordinal)
+                && scalar.PositionedLayout!.RecordSelection is not null
+                && Accepts(scalar, new Dictionary<string, object> { ["ponumber"] = "PO-100" })
+                && !Accepts(scalar, new Dictionary<string, object> { ["PONumber"] = 100 })
+                && !Accepts(scalar, new Dictionary<string, object>());
+            check(scalarPushed, scalarPushed
+                ? "a typed field = {?Name} string selection narrows SQL with the guarded case-insensitive predicate"
+                : "a typed field = {?Name} string selection narrows SQL with the guarded case-insensitive predicate sql=[" + scalar.Sql + "]");
+
+            var mismatched = loader.LoadPositioned(Write(directory, "mismatched.xml", SelectionReport(
+                "{POMaster.PONumber} = {?PONumber}", valueKind: "Number")));
+            check(!mismatched.Sql.Contains(" WHERE ", StringComparison.Ordinal) && mismatched.PositionedLayout!.RecordSelection is not null,
+                "a prompt whose type differs from the field stays with the positioned runtime");
+
+            var multiPath = Write(directory, "multi.xml", SelectionReport("{POMaster.PONumber} = {?PONumber}", multiple: true));
+            var multi = loader.LoadPositioned(multiPath);
+            var guardedSql = multi.Sql.Contains("(@__fxPositionedSelectionGuard0 = 1 OR CONVERT(nvarchar(max), [POMaster].[PONumber]) COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR CONVERT(nvarchar(max), [POMaster].[PONumber]) COLLATE Latin1_General_100_CI_AS = @PONumber)", StringComparison.Ordinal)
+                && !multi.Sql.Contains("__fx_selection", StringComparison.Ordinal);
+            var multiBound = MultiValueParameterRewriter.Apply(multi, new Dictionary<string, IReadOnlyList<string>> { ["PONumber"] = ["PO-100", "PO-200"] });
+            var nonAscii = new Dictionary<string, object>(multiBound) { ["PONumber_1"] = "\u00c9tage" };
+            var expanded = guardedSql
+                && multi.Sql.Contains("COLLATE Latin1_General_100_CI_AS IN (@PONumber_0, @PONumber_1)", StringComparison.Ordinal)
+                && !multi.Sql.Contains("PO-100", StringComparison.Ordinal)
+                && Equals(multiBound["PONumber_1"], "PO-200")
+                && Accepts(multi, multiBound)
+                && Equals(multiBound["__fxPositionedSelectionGuard0"], false)
+                && Accepts(multi, nonAscii)
+                && Equals(nonAscii["__fxPositionedSelectionGuard0"], true)
+                && !Accepts(multi, new Dictionary<string, object>(multiBound) { ["PONumber_1"] = 200 });
+            check(expanded, expanded
+                ? "a multi-value field = {?Name} selection narrows SQL through guarded, bound IN-list membership"
+                : "a multi-value field = {?Name} selection narrows SQL through guarded, bound IN-list membership sql=[" + multi.Sql + "]");
+
             var reversed = loader.LoadPositioned(Write(directory, "reversed.xml", SelectionReport(
                 "{?PONumber} = {POMaster.PONumber}", multiple: true)));
-            check(!reversed.Sql.Contains(" WHERE ", StringComparison.Ordinal) && reversed.PositionedLayout!.RecordSelection is not null,
-                "a multi-value prompt is pushed to SQL only behind field = {?Name}");
+            check(reversed.Sql == loader.LoadPositioned(multiPath).Sql
+                && reversed.PositionedLayout!.RecordSelection is not null,
+                "a reversed {?Name} = field equality narrows SQL the same way");
 
             var range = loader.LoadPositioned(Write(directory, "range.xml", SelectionReport(
                 "{POMaster.OrderDate} = {?When}", range: true, name: "When")));
@@ -60,20 +104,23 @@ internal static class PositionedCrystalChecks
             var subreport = linked.PositionedLayout!.Subreports.Values.Single();
             check(subreport.Links.Single().Parameter == "Pm-POMaster.PONumber",
                 "a {?Pm-X} subreport link is stored by its bare name");
+            // The {?Pm-X} link selection is not a SQL identifier, so the child query is
+            // not narrowed; the session binds the link value (BindSubreport below) and
+            // the runtime applies the child's selection to its rows.
             var childSql = subreport.Definition.Sql;
-            var childProjectsOwnTables = childSql.Contains(" WHERE ", StringComparison.Ordinal)
-                && childSql.Contains("[POLines].PONumber", StringComparison.Ordinal)
-                && childSql.Contains("@PmPOMasterPONumber", StringComparison.Ordinal)
-                && childSql.Contains("[POLines].[Item]", StringComparison.Ordinal)
+            var childProjectsOwnTables = childSql.Contains("[POLines].[Item]", StringComparison.Ordinal)
+                && childSql.Contains("[POLines].[PONumber]", StringComparison.Ordinal)
+                && !childSql.Contains(" WHERE ", StringComparison.Ordinal)
+                && subreport.Definition.PositionedLayout!.RecordSelection is not null
                 && !childSql.Contains("[POMaster]", StringComparison.Ordinal)
                 && !childSql.Contains("[Vendor]", StringComparison.Ordinal)
-                && !subreport.Definition.PositionedLayout!.Bindings.ContainsKey("{POMaster.DivisionID}")
+                && !subreport.Definition.PositionedLayout.Bindings.ContainsKey("{POMaster.DivisionID}")
                 && !subreport.Definition.PositionedLayout.Bindings.ContainsKey("{?Pm-POMaster.PONumber}");
             check(childProjectsOwnTables, childProjectsOwnTables
-                ? "a subreport query projects only its own tables and binds the link parameter"
-                : "a subreport query projects only its own tables and binds the link parameter sql=[" + childSql
+                ? "a subreport query projects only its own tables and leaves its link selection to the runtime"
+                : "a subreport query projects only its own tables and leaves its link selection to the runtime sql=[" + childSql
                     + "] bindings=[" + string.Join(", ", subreport.Definition.PositionedLayout!.Bindings.Keys) + "]");
-            var mainProjectsOwnTables = linked.Sql.Contains("[POMaster].PONumber", StringComparison.Ordinal)
+            var mainProjectsOwnTables = linked.Sql.Contains("[POMaster].[PONumber]", StringComparison.Ordinal)
                 && !linked.Sql.Contains("POLines", StringComparison.Ordinal)
                 && !linked.Sql.Contains("[Vendor]", StringComparison.Ordinal)
                 && !linked.PositionedLayout.Bindings.ContainsKey("{Vendor.Name}");
@@ -101,7 +148,8 @@ internal static class PositionedCrystalChecks
                 bound => bound["PmOrdersNumber"] is DBNull,
                 null, "a subreport link with no values binds NULL");
 
-            await ShowPositioned(check, plainPath);
+            await ShowPositioned(check, plainPath, literalResidual: true);
+            await ShowPositioned(check, multiPath, literalResidual: false);
         }
         finally
         {
@@ -151,7 +199,7 @@ internal static class PositionedCrystalChecks
             check(true, name);
     }
 
-    private static async Task ShowPositioned(Action<bool, string> check, string path)
+    private static async Task ShowPositioned(Action<bool, string> check, string path, bool literalResidual)
     {
         var captured = new CapturedExecutor();
         var activation = new Components();
@@ -178,21 +226,37 @@ internal static class PositionedCrystalChecks
             var html = string.Join('\n', writer.Tabs.SelectMany(tab => tab.Pages));
             var call = captured.Calls.FirstOrDefault();
             var diagnostics = string.Join(" | ", writer.Tabs.SelectMany(tab => tab.RuntimeDiagnostics));
+            // The executor returns PO-999 either way: SQL is only ever a superset, and the
+            // runtime evaluates the full selection formula on every returned row. A literal
+            // comparison beside the {?Name} equality never reaches SQL.
+            var sqlShape = call.Sql is not null
+                && call.Sql.Contains("COLLATE Latin1_General_100_CI_AS IN (@PONumber_0, @PONumber_1)", StringComparison.Ordinal)
+                && call.Sql.Contains("@__fxPositionedSelectionGuard0 = 1", StringComparison.Ordinal)
+                && !call.Sql.Contains("'Open'", StringComparison.Ordinal);
             var passed = string.IsNullOrEmpty(writer.ErrorMessage)
-                && call.Sql is not null
-                && call.Sql.Contains("IN (@PONumber_0, @PONumber_1)", StringComparison.Ordinal)
-                && call.Sql.Contains("[POMaster].DivisionID", StringComparison.Ordinal)
+                && sqlShape
                 && call.Parameters is not null
                 && Equals(call.Parameters["PONumber_0"], "PO-100")
                 && Equals(call.Parameters["PONumber_1"], "PO-200")
+                && Equals(call.Parameters["__fxPositionedSelectionGuard0"], false)
                 && call.Parameters["PONumber"] is string
                 && html.Contains("PO-100,PO-200", StringComparison.Ordinal)
                 && !html.Contains("PO-999", StringComparison.Ordinal);
+            var name = literalResidual
+                ? "positioned formulas keep the multi-value array and the runtime still filters a narrowed query whose literal comparison stays out of SQL"
+                : "a narrowed multi-value query binds the expanded list and the runtime still filters its rows";
             check(passed, passed
-                ? "positioned formulas keep the multi-value array while SQL binds the rewritten parameters"
-                : "positioned formulas keep the multi-value array while SQL binds the rewritten parameters error=[" + writer.ErrorMessage
+                ? name
+                : name + " error=[" + writer.ErrorMessage
                     + "] sql=[" + call.Sql + "] html=[" + html + "] diag=[" + diagnostics + "]");
         });
+    }
+
+    // A narrowed string selector takes exactly one string value per SQL parameter.
+    private static bool Accepts(ReportDefinition definition, IDictionary<string, object> parameters)
+    {
+        try { definition.ValidateSqlParameters(parameters); return true; }
+        catch (InvalidDataException) { return false; }
     }
 
     private static string Write(string directory, string name, XElement report)
@@ -235,9 +299,9 @@ internal static class PositionedCrystalChecks
             new XElement("FieldObject",
                 new XAttribute("Name", "LinkValue"), new XAttribute("Kind", "FieldObject"), new XAttribute("DataSource", "{?Pm-POMaster.PONumber}"))));
 
-    private static XElement SelectionReport(string selection, bool multiple = false, bool range = false, string name = "PONumber")
+    private static XElement SelectionReport(string selection, bool multiple = false, bool range = false, string name = "PONumber", string valueKind = "String")
     {
-        var parameters = new XElement("ParameterFieldDefinitions", Parameter(name, multiple, range));
+        var parameters = new XElement("ParameterFieldDefinitions", Parameter(name, multiple, range, valueKind));
         if (name != "PONumber") parameters.Add(Parameter("PONumber", false, false));
         return new XElement("Report",
             new XAttribute("Name", "PO"),
@@ -254,10 +318,13 @@ internal static class PositionedCrystalChecks
                 new XElement("FieldObject", new XAttribute("Name", "Number"), new XAttribute("Kind", "FieldObject"), new XAttribute("DataSource", "{POMaster.PONumber}"))));
     }
 
-    private static XElement Parameter(string name, bool multiple, bool range) => new("ParameterFieldDefinition",
+    // ValueType as the SDK export writes it ("Xsd:stringField"); the SQL selector
+    // requires the declared, prompt and field types to agree.
+    private static XElement Parameter(string name, bool multiple, bool range, string valueKind = "String") => new("ParameterFieldDefinition",
         new XAttribute("Name", name),
         new XAttribute("ParameterType", "ReportParameter"),
-        new XAttribute("ParameterValueKind", "StringParameter"),
+        new XAttribute("ParameterValueKind", valueKind + "Parameter"),
+        new XAttribute("ValueType", valueKind == "String" ? "Xsd:stringField" : "Xsd:decimalField"),
         new XAttribute("ParameterFieldUsage", "InUse, DataFetching"),
         new XAttribute("PromptText", name),
         new XAttribute("EnableAllowMultipleValue", multiple ? "True" : "False"),

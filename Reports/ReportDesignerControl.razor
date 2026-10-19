@@ -223,6 +223,7 @@
     private List<ReportDesignerSection> _expertSections = new();
     private List<ReportDesignerDataLink> _expertLinks = new();
     private string _expertSql = "";
+    private string _expertSqlNotice = "";
     private string _expertSqlValidationMessage = "";
     private bool? _expertSqlValidationSucceeded;
     private bool _expertSqlEditedByUser;
@@ -1023,6 +1024,7 @@
         _expertLinks = _document.Links.Select(CloneLink).ToList();
         _expertSqlValidationMessage = "";
         _expertSqlValidationSucceeded = null;
+        _expertSqlNotice = "";
         _expertSql = string.IsNullOrWhiteSpace(_document.CustomSql) ? BuildExpertSql() : _document.CustomSql;
         _expertSqlEditedByUser = !string.IsNullOrWhiteSpace(_document.CustomSql);
         _expertPage = ClonePage(_document.Page);
@@ -1644,6 +1646,10 @@
                 }
             </div>
             <Fx.ControlKit.TextAreaControl CssClass="fx-rd-sql-editor" @bind-Value="_expertSql" UpdateOnInput="true" @bind-Value:after="OnExpertSqlEdited" Rows="12" />
+            @if (!string.IsNullOrWhiteSpace(_expertSqlNotice))
+            {
+                <div class="fx-rd-sql-status">@_expertSqlNotice</div>
+            }
         </div>
     </div>;
 
@@ -1977,16 +1983,17 @@
 
     private Task RegenerateExpertSql()
     {
-        _expertSql = BuildExpertSql();
         _expertSqlEditedByUser = false;
         _expertSqlValidationMessage = "";
         _expertSqlValidationSucceeded = null;
+        _expertSql = BuildExpertSql();
         return Task.CompletedTask;
     }
 
     private void OnExpertSqlEdited()
     {
         _expertSqlEditedByUser = true;
+        _expertSqlNotice = "";
         _expertSqlValidationMessage = "";
         _expertSqlValidationSucceeded = null;
     }
@@ -2010,9 +2017,17 @@
 
         try
         {
-            var query = ReportDesignerSqlBuilder.BuildQuery(ExpertLinkTables, AllDesignerFields, _expertLinks, _expertFilters, topRows: 100);
+            var query = _expertSqlEditedByUser
+                ? new ReportDesignerSqlBuilder.Query(_expertSql, ReportDesignerSqlBuilder.BuildFilterQuery(_expertFilters, field => field.Reference).Parameters)
+                : ReportDesignerSqlBuilder.BuildDocumentQuery(BuildExpertQueryDocument(), topRows: 100);
+            if (!_expertSqlEditedByUser && query.RequiredParameters.Count > 0)
+            {
+                _expertSqlValidationMessage = "SQL not executed. Supply report prompt values through Preview: " + string.Join(", ", query.RequiredParameters) + ".";
+                _expertSqlValidationSucceeded = null;
+                return;
+            }
             var table = executor.Execute(_expertSqlEditedByUser ? _expertSql : query.Sql, query.Parameters);
-            _expertSqlValidationMessage = $"SQL valid. Returned {table.Rows.Count} rows and {table.Columns.Count} columns.";
+            _expertSqlValidationMessage = $"SQL sample returned {table.Rows.Count} rows and {table.Columns.Count} columns. This does not validate native selection or pagination.";
             _expertSqlValidationSucceeded = true;
         }
         catch (Exception ex)
@@ -2036,7 +2051,13 @@
 
     private string BuildExpertSql()
     {
-        try { return ReportDesignerSqlBuilder.BuildSql(ExpertLinkTables, AllDesignerFields, _expertLinks, _expertFilters); }
+        _expertSqlNotice = "";
+        try
+        {
+            var query = ReportDesignerSqlBuilder.BuildDocumentQuery(BuildExpertQueryDocument());
+            _expertSqlNotice = query.Notice;
+            return query.Sql;
+        }
         catch (Exception error) when (error is FormatException or InvalidDataException or NotSupportedException or OverflowException)
         {
             _expertSqlValidationMessage = "Query is incomplete: " + error.Message;
@@ -2044,6 +2065,18 @@
             return "";
         }
     }
+
+    private ReportDesignerDocument BuildExpertQueryDocument() => new()
+    {
+        DataSources = _expertSelectedTables,
+        Fields = AllDesignerFields,
+        Links = _expertLinks,
+        Filters = _expertFilters,
+        Parameters = _expertParameters,
+        RecordSelectionFormula = _expertRecordSelectionFormula,
+        Groups = _expertGroups,
+        Sorts = _expertSorts
+    };
 
     private void TrimExpertLinksToSelectedTables()
     {
@@ -2819,7 +2852,11 @@
         target.BackgroundColor = source.BackgroundColor;
         target.HorizontalAlignment = source.HorizontalAlignment;
         target.CanGrow = source.CanGrow;
+        target.MaxNumberOfLines = source.MaxNumberOfLines;
         target.FormatString = source.FormatString;
+        target.NativeNumberFormat = source.NativeNumberFormat;
+        target.NativeNumericFormat = source.NativeNumericFormat;
+        target.NativeDateTimeFormat = source.NativeDateTimeFormat;
         target.LockFormat = source.LockFormat;
         target.IndentTwips = source.IndentTwips;
         target.HighlightRule = source.HighlightRule.Clone();

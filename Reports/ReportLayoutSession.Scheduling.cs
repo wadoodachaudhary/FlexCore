@@ -290,7 +290,7 @@ public sealed partial class ReportLayoutSession
                                 { /* Format records the diagnostic when it evaluates this reference. */ }
                             }
                             element = owner.ApplyObjectConditions(owner.ApplyObjectConditions(original, item.Row), item.Row, true);
-                            html = ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString));
+                            html = ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat));
                         }
                         finally { owner._replayingPrint = false; }
                         printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2 });

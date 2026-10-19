@@ -35,9 +35,21 @@ export async function measureTextLayout(items) {
             node.style.cssText = item.style + ';position:relative;height:auto;min-height:0;max-height:none;';
             node.innerHTML = item.html;
             host.append(node);
+            const limit = item.maxNumberOfLines ?? 0;
+            if (!Number.isInteger(limit) || limit < 0) throw new Error('Invalid maximum report field line count.');
+            if (limit > 0) {
+                // The actual browser font/line box bounds growth before C# places bands.
+                // Keep the complete text in the DOM; the final measured box clips its tail.
+                const style = getComputedStyle(node);
+                const lineHeight = parseFloat(style.lineHeight);
+                if (!Number.isFinite(lineHeight) || lineHeight <= 0) throw new Error('Report field line height is unavailable.');
+                const edges = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+                    + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+                node.style.maxHeight = `${lineHeight * limit + edges}px`;
+            }
             return node;
         });
-        return nodes.map(node => {
+        return nodes.map((node, index) => {
             const bounds = node.getBoundingClientRect();
             const rectangles = [];
             const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
@@ -68,7 +80,11 @@ export async function measureTextLayout(items) {
             const lines = [];
             for (const rect of rectangles) {
                 const last = lines[lines.length - 1];
-                if (last && rect.top < last.bottom) {
+                // Glyph boxes can overlap the next line slightly (Arial 9pt at
+                // 1.15 line height does). Only substantial overlap joins glyphs
+                // on the same line, including mixed font sizes on one baseline.
+                const overlap = last ? Math.min(last.bottom, rect.bottom) - Math.max(last.top, rect.top) : 0;
+                if (last && overlap > Math.min(last.bottom - last.top, rect.bottom - rect.top) / 2) {
                     last.bottom = Math.max(last.bottom, rect.bottom);
                     last.start = Math.min(last.start, rect.start);
                     last.end = Math.max(last.end, rect.end);
@@ -77,7 +93,8 @@ export async function measureTextLayout(items) {
             }
             // Include invisible wrapping whitespace in the preceding line's consumed prefix.
             for (let i = 0; i < lines.length; i++) lines[i].end = i + 1 < lines.length ? lines[i + 1].start : text.length;
-            return { height: Math.ceil(bounds.height * 15), lines };
+            const limit = items[index].maxNumberOfLines ?? 0;
+            return { height: Math.ceil(bounds.height * 15), lines: limit > 0 ? lines.slice(0, limit) : lines };
         });
     } finally {
         host.remove();

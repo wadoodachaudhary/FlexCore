@@ -30,6 +30,7 @@
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
      @onmousedown="HandleGridHostMouseDown"
+     @onmousemove="@(_resizingCol != null ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleGridResizeMove) : default)"
      @onmouseup="@NonRenderingGridMouseUp">
 
     @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
@@ -836,6 +837,8 @@
                                           @onmousedown="e => StartResize(col, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
+                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
+                                          @onmouseup:stopPropagation="true"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
                                           @ondblclick:preventDefault="true"
@@ -853,6 +856,8 @@
                                           @onmousedown="e => StartResize(capturedPrev, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
+                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
+                                          @onmouseup:stopPropagation="true"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
                                           @ondblclick:preventDefault="true"
@@ -1818,8 +1823,8 @@
         </div>
     }
 
-    @* ── Resize Overlay (captures mousemove/mouseup during resize) ─ *@
-    @if (_resizingCol != null || _resizingRowIndex >= 0)
+    @* A stationary grip press must leave the divider hittable for the second click. *@
+    @if ((_resizingCol != null && _columnResizeDragged) || _resizingRowIndex >= 0)
     {
         <div class="fx-resize-overlay @(_resizingRowIndex >= 0 ? "fx-row-resize-overlay" : "")"
              @onmousemove="HandleGridResizeMove"

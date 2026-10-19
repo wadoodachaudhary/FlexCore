@@ -130,7 +130,9 @@ public partial class CrystalXmlReportLoader
     /// <summary>Retains Crystal bands and selects detail-level values for native positioned pagination.</summary>
     public ReportDefinition LoadPositioned(string xmlFilePath)
     {
-        var report = XDocument.Load(xmlFilePath).Root ?? throw new InvalidDataException("Missing report root.");
+        var report = XDocument.Load(xmlFilePath, LoadOptions.PreserveWhitespace).Root ?? throw new InvalidDataException("Missing report root.");
+        // Explicit custom SQL is a tabular contract, including when launched from a positioned viewer.
+        if (!string.IsNullOrWhiteSpace(ExtractFlexKitCustomSql(report))) return Load(xmlFilePath);
         return LoadPositionedSource(report, Path.GetFullPath(xmlFilePath), new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
     }
 
@@ -157,6 +159,7 @@ public partial class CrystalXmlReportLoader
     {
         var subreportObjects = ExtractSubreportObjects(report, xmlFilePath);
         var flexKitCustomSql = ExtractFlexKitCustomSql(report);
+        if (!string.IsNullOrWhiteSpace(flexKitCustomSql)) _options.ValidateCustomSql?.Invoke(flexKitCustomSql);
 
         // Strip <SubReports> blocks from the tree before any parsing. Subreports
         // are rendered separately by Crystal at runtime — we don't render them in
@@ -256,12 +259,12 @@ public partial class CrystalXmlReportLoader
             definition.PositionedLayout = BuildPositionedLayout(positionedDesign, report, definition.RuntimeDiagnostics);
             var projections = definition.PositionedLayout.Projections;
             definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-                : BuildSql(tables, tableLinks, "", "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
             if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
                 throw new NotSupportedException("Positioned rendering needs field projections from the report model; custom SQL reports currently use the tabular viewer.");
             return definition;
         }
-        var detailFields = ParseDetailFields(report);
+        var detailFields = ParseDetailFields(report, definition.RuntimeDiagnostics);
         // Column headers can live in PageHeader OR GroupHeader sections (Crystal's choice varies by report).
         var headerLabels = ParseHeaderLabels(report);
         var groups = ParseGroups(report);
@@ -336,7 +339,7 @@ public partial class CrystalXmlReportLoader
             // output row, which matches how VB6 renders the initial main report.
             var visibleSection = FindInnermostVisibleDataSection(report);
             var summaryFieldsFromHeader = visibleSection != null
-                ? ExtractSectionFields(visibleSection, formulaFields, detectFormulas: true)
+                ? ExtractSectionFields(visibleSection, formulaFields, detectFormulas: true, definition.RuntimeDiagnostics)
                 : detailFields;
             columns = BuildColumnsFromSection(summaryFieldsFromHeader, headerLabels, formulaFields, subreportObjects);
             selectFields = BuildSelectFieldsForSummary(columns, groups, formulaFields, detailFields);
@@ -423,13 +426,26 @@ public partial class CrystalXmlReportLoader
         var orderByClause = BuildOrderByClause(
             useDistinct ? sortFields.Where(s => s.SortType != "RecordSortField").ToList() : sortFields,
             effectiveGroups, formulaFields);
-        var sql = BuildSql(tables, tableLinks, whereSql, orderByClause, selectFields,
-                            useDistinct: useDistinct);
-        if (ShouldUseFlexKitCustomSql(flexKitCustomSql, drillPath, fieldFilters))
-            sql = flexKitCustomSql;
+        AddTabularLayout(definition, report, selectFields, columns, parameters, useDistinct,
+            ShouldUseFlexKitCustomSql(flexKitCustomSql, drillPath, fieldFilters));
+        var sql = ShouldUseFlexKitCustomSql(flexKitCustomSql, drillPath, fieldFilters)
+            ? flexKitCustomSql : BuildSql(tables, tableLinks, whereSql, orderByClause, selectFields, useDistinct: useDistinct);
 
         definition.Sql = sql;
         definition.Columns = columns;
+        if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
+            foreach (var field in report.Element("FlexKitReportDesigner")?.Element("Sql")?.Element("ResultFields")?.Elements("Field") ?? [])
+            {
+                var column = columns.FirstOrDefault(c => c.Field == (string?)field.Attribute("Name"));
+                if (column is null) continue;
+                column.ColumnType = (string?)field.Attribute("Type") switch
+                {
+                    "Number" => ReportColumnType.Decimal, "Date" => ReportColumnType.Date,
+                    "DateTime" => ReportColumnType.DateTime, "Boolean" => ReportColumnType.Boolean, _ => ReportColumnType.Text
+                };
+                column.Format = column.ColumnType == ReportColumnType.Decimal ? "N2" : column.ColumnType == ReportColumnType.Date ? "d" : "";
+                if (column.ColumnType == ReportColumnType.Decimal) column.Alignment = ReportAlignment.Right;
+            }
         definition.Parameters = parameters;
 
         // --- Build a separate "tree SQL" for drill-down-style reports so the group tree
@@ -541,7 +557,7 @@ public partial class CrystalXmlReportLoader
         string Name, string Table, string Field, int Left, int Width, string Alignment,
         string DataSource, bool IsFormula, string TextColor = "", bool Bold = false,
         ConditionalStyleInfo? ConditionalStyle = null,
-        string AreaKind = "", string SectionKind = "", string SectionName = "");
+        string AreaKind = "", string SectionKind = "", string SectionName = "", double? NoGrowHeight = null);
     private sealed record PageHeaderLabel(string Text, int Left, int Width, string? FieldObjectName);
     private sealed record ConditionalStyleInfo(
         string FieldAlias, string Operator, string Value,
@@ -1018,10 +1034,9 @@ public partial class CrystalXmlReportLoader
             // check for "InUse" wrongly matches "NotInUse" too, which is what
             // caused Open PO's v1 to prompt for orphan parameters.
             //
-            // The Java Crystal SDK can mark every prompt as NotInUse even
-            // when RecordSelectionFormula clearly references it. Treat the
-            // formula reference as authoritative so Java-converted reports
-            // still prompt for @Date, @Worksheet, @Community, etc.
+            // Exported usage flags can be NotInUse even for live parameters.
+            // References in selection, named and formatting formulas are
+            // authoritative, including parameters used only to suppress a band.
             var usageFlags = usage.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var isInUse = usageFlags.Any(f => string.Equals(f, "InUse", StringComparison.OrdinalIgnoreCase))
                 || referencedParameters.Contains(name);
@@ -1057,6 +1072,16 @@ public partial class CrystalXmlReportLoader
             // SQL stays readable when re-emitted from the XML viewer.
             var pickListSql = p.Element("PickListSql")?.Value;
             if (string.IsNullOrWhiteSpace(pickListSql)) pickListSql = null;
+
+            // <ParameterPickList> is the list Crystal's own prompt dialog offers (the report's
+            // PromptManager LOV, written by the native converter). Being the authored list it
+            // beats the binding-derived synthesis below; only an explicit <PickListSql> wins over it.
+            var pickListIsAuthored = false;
+            if (pickListSql == null)
+            {
+                pickListSql = BuildAuthoredPickListSql(p.Element("ParameterPickList"));
+                pickListIsAuthored = pickListSql != null;
+            }
 
             // Resolve the parameter's table-field binding from the
             // RecordSelectionFormula. Picklist runtime uses this to ask
@@ -1099,6 +1124,7 @@ public partial class CrystalXmlReportLoader
                 DefaultValue = defaultVal,
                 DefaultValues = defaultValues,
                 PickListSql = pickListSql,
+                PickListIsAuthored = pickListIsAuthored,
                 BindingTable = bindingTable,
                 BindingField = bindingField,
                 BindingDescriptionField = bindingDescField
@@ -1155,25 +1181,41 @@ public partial class CrystalXmlReportLoader
     {
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var formulaTexts = new List<string>();
+        var formulaTexts = new List<(string Text, string Syntax)>();
         var dataDefinition = report.Element("DataDefinition");
         if (dataDefinition != null)
         {
-            formulaTexts.Add((string?)dataDefinition.Element("RecordSelectionFormula") ?? "");
-            formulaTexts.Add((string?)dataDefinition.Element("GroupSelectionFormula") ?? "");
-            formulaTexts.AddRange(dataDefinition
-                .Descendants("FormulaFieldDefinition")
-                .Select(f => f.Value ?? ""));
+            formulaTexts.AddRange(dataDefinition.Elements()
+                .Where(e => e.Name.LocalName is "RecordSelectionFormula" or "GroupSelectionFormula")
+                .Concat(dataDefinition.Descendants("FormulaFieldDefinition").Where(e => !e.Ancestors("SubReports").Any()))
+                .Select(e => (e.Value, (string?)e.Attribute("Syntax") ?? "Crystal")));
         }
 
-        foreach (var formula in formulaTexts)
+        foreach (var container in report.Descendants().Where(e => e.Name.LocalName.EndsWith("ConditionFormulas", StringComparison.Ordinal)
+            && !e.Ancestors("SubReports").Any()))
         {
-            if (string.IsNullOrWhiteSpace(formula)) continue;
-            foreach (Match match in Regex.Matches(formula, @"\{\?([^}]+)\}"))
+            var syntax = (string?)container.Attribute("Syntax") ?? "Crystal";
+            formulaTexts.AddRange(container.Attributes().Where(a => a.Name.LocalName != "Syntax").Select(a => (a.Value, syntax)));
+            formulaTexts.AddRange(container.Elements().Select(e => ((string?)e.Attribute("Text") ?? e.Value,
+                (string?)e.Attribute("Syntax") ?? syntax)));
+        }
+
+        foreach (var (text, syntax) in formulaTexts)
+        {
+            if (string.IsNullOrWhiteSpace(text)) continue;
+            try
             {
-                var name = SanitizeParamName(match.Groups[1].Value);
-                if (!string.IsNullOrEmpty(name))
-                    names.Add(name);
+                foreach (var reference in CrystalFormula.ReadFieldReferences(text, syntax).Where(r => r.StartsWith("{?", StringComparison.Ordinal)))
+                {
+                    var name = SanitizeParamName(reference[2..^1]);
+                    if (!string.IsNullOrEmpty(name)) names.Add(name);
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+            {
+                // Invalid/unsupported formula metadata must not break an otherwise loadable report.
+                // Do not fall back to a regex that treats quoted or commented text as parameter usage.
+                _logger.LogWarning(error, "Unable to read report parameter usage from a {Syntax} formula", syntax);
             }
         }
 
@@ -1269,6 +1311,47 @@ public partial class CrystalXmlReportLoader
         return $"{selectExpr} FROM [{table}] {where} ORDER BY [{field}]";
     }
 
+    /// <summary>
+    /// Turns a <c>&lt;ParameterPickList Table ValueField [DescriptionField] Sort&gt;</c> element
+    /// into Crystal's prompt list query: one row per distinct value, sorted by the value. Crystal
+    /// lists each value once, so a description field is reduced with <c>MIN</c> per value. No
+    /// other filter is added — the authored list has none. Returns null when the element is
+    /// missing or a name is unusable (empty, longer than 128 characters or with control characters).
+    /// </summary>
+    private static string? BuildAuthoredPickListSql(XElement? pickList)
+    {
+        if (pickList is null) return null;
+        var table = QuoteAuthoredIdentifier((string?)pickList.Attribute("Table"));
+        var valueField = QuoteAuthoredIdentifier((string?)pickList.Attribute("ValueField"));
+        if (table is null || valueField is null) return null;
+
+        string? descriptionField = null;
+        var descriptionName = (string?)pickList.Attribute("DescriptionField");
+        if (!string.IsNullOrEmpty(descriptionName))
+        {
+            descriptionField = QuoteAuthoredIdentifier(descriptionName);
+            if (descriptionField is null) return null;
+        }
+
+        var sort = (string?)pickList.Attribute("Sort");
+        var orderBy = string.Equals(sort, "NoSort", StringComparison.OrdinalIgnoreCase) ? ""
+            : string.Equals(sort, "Descending", StringComparison.OrdinalIgnoreCase) ? $" ORDER BY {valueField} DESC"
+            : $" ORDER BY {valueField}";
+
+        return descriptionField is null
+            ? $"SELECT DISTINCT {valueField} AS [Value] FROM {table}{orderBy}"
+            : $"SELECT {valueField} AS [Value], MIN({descriptionField}) AS [Description] FROM {table} GROUP BY {valueField}{orderBy}";
+    }
+
+    /// <summary>Bracket-quotes an authored table or column name (<c>]</c> doubled); null when the name is unusable.</summary>
+    private static string? QuoteAuthoredIdentifier(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128) return null;
+        foreach (var c in name)
+            if (char.IsControl(c)) return null;
+        return "[" + name.Replace("]", "]]") + "]";
+    }
+
     /// <summary>Strips Crystal parameter names down to a SQL-safe identifier — keeps
     /// letters, digits, and underscore. "{?Job Filter (optional)}" → "JobFilteroptional".</summary>
     private static string SanitizeParamName(string raw)
@@ -1283,6 +1366,7 @@ public partial class CrystalXmlReportLoader
     private static ReportParameterType MapParameterType(string valueKind) => valueKind switch
     {
         "NumberParameter" => ReportParameterType.Decimal,
+        "IntegerParameter" => ReportParameterType.Integer,
         "CurrencyParameter" => ReportParameterType.Decimal,
         "DateParameter" => ReportParameterType.Date,
         "DateTimeParameter" => ReportParameterType.Date,
@@ -1370,7 +1454,7 @@ public partial class CrystalXmlReportLoader
     /// resolved to their underlying SQL expression via <paramref name="formulaFields"/>.
     /// </summary>
     private List<DetailFieldInfo> ExtractSectionFields(XElement section,
-        Dictionary<string, string> formulaFields, bool detectFormulas)
+        Dictionary<string, string> formulaFields, bool detectFormulas, List<string>? diagnostics = null)
     {
         var list = new List<DetailFieldInfo>();
         var area = section.Ancestors("Area").FirstOrDefault();
@@ -1419,7 +1503,8 @@ public partial class CrystalXmlReportLoader
                         ConditionalStyle: conditionalStyle,
                         AreaKind: areaKind,
                         SectionKind: sectionKind,
-                        SectionName: sectionName));
+                        SectionName: sectionName,
+                        NoGrowHeight: ReadNoGrowHeight(field, diagnostics)));
                 }
                 continue;
             }
@@ -1440,7 +1525,8 @@ public partial class CrystalXmlReportLoader
                     ConditionalStyle: conditionalStyle,
                     AreaKind: areaKind,
                     SectionKind: sectionKind,
-                    SectionName: sectionName));
+                    SectionName: sectionName,
+                    NoGrowHeight: ReadNoGrowHeight(field, diagnostics)));
             }
             else if (isFormula && detectFormulas)
             {
@@ -1458,7 +1544,8 @@ public partial class CrystalXmlReportLoader
                     ConditionalStyle: conditionalStyle,
                     AreaKind: areaKind,
                     SectionKind: sectionKind,
-                    SectionName: sectionName));
+                    SectionName: sectionName,
+                    NoGrowHeight: ReadNoGrowHeight(field, diagnostics)));
             }
         }
         return list.OrderBy(f => f.Left).ToList();
@@ -1530,12 +1617,14 @@ public partial class CrystalXmlReportLoader
                 // "no XML hint" so the renderer's adaptive sizer falls back to
                 // header + data measurement for that column.
                 Width = TwipsToPx(df.Width),
+                AuthoredWidth = TwipsToPx(df.Width),
                 Alignment = MapAlignment(df.Alignment),
                 ColumnType = InferColumnType(formulaKey: df.IsFormula ? df.Field : null, headerText: header, fieldName: df.Field),
                 TextColor = df.TextColor,
                 Bold = df.Bold,
                 ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle),
-                LayoutLeft = df.Left
+                LayoutLeft = df.Left,
+                NoGrowHeight = df.NoGrowHeight
             });
         }
         return AddSubreportObjectColumns(cols, fields, subreportObjects);
@@ -1853,7 +1942,7 @@ public partial class CrystalXmlReportLoader
         });
     }
 
-    private List<DetailFieldInfo> ParseDetailFields(XElement report)
+    private List<DetailFieldInfo> ParseDetailFields(XElement report, List<string>? diagnostics = null)
     {
         var list = new List<DetailFieldInfo>();
         var detailAreas = report.Descendants("Area")
@@ -1883,7 +1972,9 @@ public partial class CrystalXmlReportLoader
                 var ds = (string?)field.Attribute("DataSource") ?? "";
                 var parsed = ParseCrystalFieldRef(ds);
                 var isFormula = ds.StartsWith("{@"); // formula field like {@Total Cost}
-                if (!parsed.HasValue && !isFormula) continue;
+                var resultColumn = !string.IsNullOrWhiteSpace(ExtractFlexKitCustomSql(report))
+                    && ds.StartsWith('{') && ds.EndsWith('}') && ds.Length > 2 && ds[1] is not ('@' or '?') && !ds.Contains('.');
+                if (!parsed.HasValue && !isFormula && !resultColumn) continue;
 
                 var name = (string?)field.Attribute("Name") ?? "";
                 var left = ParseInt(field.Attribute("Left"));
@@ -1911,7 +2002,8 @@ public partial class CrystalXmlReportLoader
                     ConditionalStyle: conditionalStyle,
                     AreaKind: areaKind,
                     SectionKind: sectionKind,
-                    SectionName: sectionName));
+                    SectionName: sectionName,
+                    NoGrowHeight: ReadNoGrowHeight(field, diagnostics)));
             }
         }
         return list.OrderBy(f => f.Left).ToList();
@@ -2739,7 +2831,7 @@ public partial class CrystalXmlReportLoader
             else
             {
                 // Alias the column as "{Table}_{Field}" to avoid duplicate names when two tables share a field.
-                alias = $"{df.Table}_{df.Field}";
+                alias = string.IsNullOrEmpty(df.Table) ? df.Field : $"{df.Table}_{df.Field}";
                 header = MatchHeaderLabel(headerLabels, df, usedLabels);
                 if (string.IsNullOrWhiteSpace(header))
                     header = df.Field;
@@ -2760,6 +2852,7 @@ public partial class CrystalXmlReportLoader
                 // "no XML hint" so the renderer's adaptive sizer falls back to
                 // header + data measurement for that column.
                 Width = TwipsToPx(df.Width),
+                AuthoredWidth = TwipsToPx(df.Width),
                 Alignment = MapAlignment(df.Alignment),
                 ColumnType = colType,
                 Format = colType == ReportColumnType.Currency ? "C2"
@@ -2768,7 +2861,8 @@ public partial class CrystalXmlReportLoader
                 TextColor = df.TextColor,
                 Bold = df.Bold,
                 ConditionalStyle = ToReportConditionalStyle(df.ConditionalStyle),
-                LayoutLeft = df.Left
+                LayoutLeft = df.Left,
+                NoGrowHeight = df.NoGrowHeight
             });
         }
         return AddSubreportObjectColumns(columns, detailFields, subreportObjects);

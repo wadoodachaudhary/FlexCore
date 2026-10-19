@@ -28,6 +28,13 @@ public sealed class XlsxCell
 
     public bool Bold { get; set; }
 
+    public bool Italic { get; set; }
+
+    public bool Strikethrough { get; set; }
+
+    /// <summary>Font color, 6-digit hex without '#'. Null uses default font color.</summary>
+    public string? FontColorHex { get; set; }
+
     /// <summary>Solid fill, 6-digit hex without '#'. Null leaves the cell unfilled.</summary>
     public string? FillHex { get; set; }
 
@@ -136,7 +143,15 @@ public static class XlsxWriter
             };
         }
 
-        var styleIndex = styles.GetIndex(cell.Bold, cell.FillHex, cell.BorderHex, numberFormat, cell.Align);
+        var styleIndex = styles.GetIndex(
+            cell.Bold,
+            cell.Italic,
+            cell.Strikethrough,
+            cell.FontColorHex,
+            cell.FillHex,
+            cell.BorderHex,
+            numberFormat,
+            cell.Align);
 
         if (!string.IsNullOrWhiteSpace(cell.Formula))
             return new ResolvedCell(styleIndex, null, null, cell.Formula);
@@ -306,8 +321,50 @@ public static class XlsxWriter
         return name;
     }
 
-    private static string Escape(string value) =>
-        new XmlDocument().CreateTextNode(value).OuterXml;
+    private static string Escape(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        var sb = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            switch (ch)
+            {
+                case '&':
+                    sb.Append("&amp;");
+                    break;
+                case '<':
+                    sb.Append("&lt;");
+                    break;
+                case '>':
+                    sb.Append("&gt;");
+                    break;
+                case '"':
+                    sb.Append("&quot;");
+                    break;
+                case '\'':
+                    sb.Append("&apos;");
+                    break;
+                default:
+                    // A surrogate pair is one character outside the Basic Multilingual Plane
+                    // (emoji, CJK Extension B). IsXmlChar rejects each half on its own, so the
+                    // pair is kept together and only lone surrogates are dropped.
+                    if (char.IsHighSurrogate(ch) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                    {
+                        sb.Append(ch).Append(value[i + 1]);
+                        i++;
+                    }
+                    else if (XmlConvert.IsXmlChar(ch))
+                    {
+                        sb.Append(ch);
+                    }
+                    break;
+            }
+        }
+        return sb.ToString();
+    }
 
     private static void WriteEntry(ZipArchive zip, string path, string xml)
     {
@@ -367,31 +424,45 @@ public static class XlsxWriter
     /// </summary>
     private sealed class StyleTable
     {
-        private readonly record struct Key(bool Bold, string? Fill, string? Border, string? NumberFormat, XlsxAlign Align);
+        private readonly record struct FontKey(bool Bold, bool Italic, bool Strikethrough, string? Color);
+        private readonly record struct Key(FontKey Font, string? Fill, string? Border, string? NumberFormat, XlsxAlign Align);
 
         private readonly Dictionary<Key, int> _xfIndex = new();
         private readonly List<Key> _xfs = new();
+        private readonly List<FontKey> _fonts = new();
         private readonly List<string> _fills = new();
         private readonly List<string> _borders = new();
         private readonly List<string> _numberFormats = new();
 
         public StyleTable()
         {
-            // cellXfs[0] must be the default style.
+            // fonts[0] and cellXfs[0] must be the default style.
+            _fonts.Add(default);
             _xfs.Add(default);
             _xfIndex[default] = 0;
         }
 
-        public int GetIndex(bool bold, string? fill, string? border, string? numberFormat, XlsxAlign align)
+        public int GetIndex(
+            bool bold,
+            bool italic,
+            bool strikethrough,
+            string? fontColor,
+            string? fill,
+            string? border,
+            string? numberFormat,
+            XlsxAlign align)
         {
+            fontColor = Normalize(fontColor);
             fill = Normalize(fill);
             border = Normalize(border);
             numberFormat = string.IsNullOrWhiteSpace(numberFormat) ? null : numberFormat.Trim();
 
-            var key = new Key(bold, fill, border, numberFormat, align);
+            var font = new FontKey(bold, italic, strikethrough, fontColor);
+            var key = new Key(font, fill, border, numberFormat, align);
             if (_xfIndex.TryGetValue(key, out var existing))
                 return existing;
 
+            if (!_fonts.Contains(font)) _fonts.Add(font);
             if (fill is not null && !_fills.Contains(fill)) _fills.Add(fill);
             if (border is not null && !_borders.Contains(border)) _borders.Add(border);
             if (numberFormat is not null && !_numberFormats.Contains(numberFormat)) _numberFormats.Add(numberFormat);
@@ -425,7 +496,22 @@ public static class XlsxWriter
                 sb.Append("</numFmts>");
             }
 
-            sb.Append("""<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>""");
+            sb.Append(CultureInfo.InvariantCulture, $"""<fonts count="{_fonts.Count}">""");
+            foreach (var font in _fonts)
+            {
+                sb.Append("<font>");
+                if (font.Bold)
+                    sb.Append("<b/>");
+                if (font.Italic)
+                    sb.Append("<i/>");
+                if (font.Strikethrough)
+                    sb.Append("<strike/>");
+                sb.Append("""<sz val="11"/>""");
+                if (font.Color is not null)
+                    sb.Append(CultureInfo.InvariantCulture, $"""<color rgb="FF{font.Color}"/>""");
+                sb.Append("""<name val="Calibri"/></font>""");
+            }
+            sb.Append("</fonts>");
 
             // Excel requires fills[0]=none and fills[1]=gray125; custom fills follow.
             sb.Append(CultureInfo.InvariantCulture, $"""<fills count="{_fills.Count + 2}">""");
@@ -450,7 +536,7 @@ public static class XlsxWriter
             sb.Append(CultureInfo.InvariantCulture, $"""<cellXfs count="{_xfs.Count}">""");
             foreach (var xf in _xfs)
             {
-                var fontId = xf.Bold ? 1 : 0;
+                var fontId = _fonts.IndexOf(xf.Font);
                 var fillId = xf.Fill is null ? 0 : _fills.IndexOf(xf.Fill) + 2;
                 var borderId = xf.Border is null ? 0 : _borders.IndexOf(xf.Border) + 1;
                 var numFmtId = xf.NumberFormat is null ? 0 : 164 + _numberFormats.IndexOf(xf.NumberFormat);

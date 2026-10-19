@@ -9,6 +9,18 @@ public static class NativeCrystalRptConverter
 {
     public static CrystalReportModel ReadModel(string rptPath, CrystalRptConversionOptions? options = null)
     {
+        return ReadModel(rptPath, options, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Reads the report model; <paramref name="cancellationToken"/> is checked between the
+    /// report's streams and subreports and while the prompt definitions are decoded.
+    /// </summary>
+    public static CrystalReportModel ReadModel(
+        string rptPath,
+        CrystalRptConversionOptions? options,
+        CancellationToken cancellationToken)
+    {
         options ??= new CrystalRptConversionOptions();
         var inspection = CrystalRptBinaryReader.Open(rptPath);
         var model = ReadModelFromStreams(
@@ -16,7 +28,8 @@ public static class NativeCrystalRptConverter
             prefix: "",
             sourcePath: Path.GetFullPath(rptPath),
             fallbackName: Path.GetFileNameWithoutExtension(rptPath),
-            options);
+            options,
+            cancellationToken);
 
         foreach (var subreportPrefix in FindSubreportPrefixes(inspection.Streams))
         {
@@ -25,7 +38,8 @@ public static class NativeCrystalRptConverter
                 subreportPrefix,
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
-                options);
+                options,
+                cancellationToken);
             model.Subreports.Add(subreport);
         }
 
@@ -37,6 +51,20 @@ public static class NativeCrystalRptConverter
 
     public static void Convert(string rptPath, string xmlPath, CrystalRptConversionOptions options)
     {
+        Convert(rptPath, xmlPath, options, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Converts the report to XML; <paramref name="cancellationToken"/> is checked between the
+    /// report's streams and subreports, while the prompt definitions are decoded and before the
+    /// XML is written, so a cancelled conversion writes nothing.
+    /// </summary>
+    public static void Convert(
+        string rptPath,
+        string xmlPath,
+        CrystalRptConversionOptions options,
+        CancellationToken cancellationToken)
+    {
         var inspection = CrystalRptBinaryReader.Open(rptPath);
         options.Progress?.Invoke(
             $"Found {inspection.Streams.Count} compound-file streams in {Path.GetFileName(rptPath)}.");
@@ -46,7 +74,8 @@ public static class NativeCrystalRptConverter
             prefix: "",
             sourcePath: Path.GetFullPath(rptPath),
             fallbackName: Path.GetFileNameWithoutExtension(rptPath),
-            options);
+            options,
+            cancellationToken);
 
         foreach (var subreportPrefix in FindSubreportPrefixes(inspection.Streams))
         {
@@ -56,13 +85,15 @@ public static class NativeCrystalRptConverter
                 subreportPrefix,
                 Path.GetFullPath(rptPath) + "#" + subreportPrefix.TrimEnd('/'),
                 subreportPrefix.Trim('/'),
-                options);
+                options,
+                cancellationToken);
             model.Subreports.Add(subreport);
         }
 
         ApplySubreportLayoutOrder(model);
         AssignSubreportObjectNames(model);
         ApplySubreportLinks(model, options);
+        cancellationToken.ThrowIfCancellationRequested();
         options.Progress?.Invoke("Writing Crystal XML from native C# model.");
         CrystalReportXmlWriter.Write(model, xmlPath);
     }
@@ -72,8 +103,10 @@ public static class NativeCrystalRptConverter
         string prefix,
         string sourcePath,
         string fallbackName,
-        CrystalRptConversionOptions options)
+        CrystalRptConversionOptions options,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var model = new CrystalReportModel
         {
             SourcePath = sourcePath,
@@ -97,6 +130,7 @@ public static class NativeCrystalRptConverter
             model.Core.HasSavedData = core.HasSavedData;
             model.Core.EnableSaveDataWithReport = core.EnableSaveDataWithReport;
             model.Core.EnableSaveSummariesWithReport = core.EnableSaveSummariesWithReport;
+            model.Core.ShowAllHeadersOnDrillDown = core.ShowAllHeadersOnDrillDown;
             model.Core.LeftMargin = core.LeftMargin;
             model.Core.RightMargin = core.RightMargin;
             model.Core.TopMargin = core.TopMargin;
@@ -130,11 +164,13 @@ public static class NativeCrystalRptConverter
             throw new InvalidDataException("The RPT file does not contain the Query Engine session stream needed to materialize database metadata.");
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         options.Progress?.Invoke("Parsing Crystal Query Engine tables, fields, and joins.");
         model.Database = queryEngine is not null
             ? QueryEngineSessionParser.Parse(queryEngine)
             : LegacyCrystalDatabaseParser.Parse(legacyDatabase!);
 
+        cancellationToken.ThrowIfCancellationRequested();
         if (contents is not null)
         {
             options.Progress?.Invoke("Parsing Crystal report formulas and sort metadata from Contents stream.");
@@ -145,7 +181,7 @@ public static class NativeCrystalRptConverter
         if (promptManager is not null)
         {
             options.Progress?.Invoke("Parsing Crystal prompt metadata.");
-            CrystalPromptManagerParser.ApplyPromptMetadata(promptManager, model.DataDefinition);
+            CrystalPromptManagerParser.ApplyPromptMetadata(promptManager, model.DataDefinition, cancellationToken);
         }
 
         var reportParameters = FindStream(streams, prefix, "ReportParametersStream 0l");
@@ -155,6 +191,7 @@ public static class NativeCrystalRptConverter
             CrystalReportParametersParser.ApplySavedParameterValues(reportParameters, model.DataDefinition);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         model.Name = NormalizeReportName(model.Name, fallbackName);
         foreach (var warning in model.Database.ParseWarnings.Concat(model.DataDefinition.ParseWarnings))
         {

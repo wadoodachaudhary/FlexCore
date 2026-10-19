@@ -26,6 +26,7 @@
 @using System.Data
 @using System.Globalization
 @using System.IO
+@using System.Runtime.CompilerServices
 @using System.Text.Json
 @using Microsoft.JSInterop
 @using Microsoft.AspNetCore.Components.Web
@@ -136,10 +137,10 @@
 
             <ToolbarSeparatorControl />
 
-            <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="What happens when you click a group node">
+            <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="@(NativeDrillDownUnavailable ?? "What happens when you click a group node")">
                 <span class="fx-rpt-tree-mode-label">Tree:</span>
-                <RadioGroupControl TValue="TreeNavigationMode" Items="@(new RadioGroupItem<TreeNavigationMode>[] { new(TreeNavigationMode.Group, "Group"), new(TreeNavigationMode.DrillDown, "Drill down") })"
-                    Value="TreeMode" ValueChanged="SetTreeMode" Enabled="@CanShowGroupTree" AriaLabel="Tree navigation" />
+                <RadioGroupControl TValue="TreeNavigationMode" Items="@(new RadioGroupItem<TreeNavigationMode>[] { new(TreeNavigationMode.Group, "Group"), new(TreeNavigationMode.DrillDown, "Drill down", NativeDrillDownUnavailable is not null) })"
+                    Value="EffectiveTreeMode" ValueChanged="SetTreeMode" Enabled="@CanShowGroupTree" AriaLabel="Tree navigation" />
             </div>
         </ToolbarControl>
 
@@ -151,7 +152,11 @@
                     <strong style="font-size: calc(13px * var(--fx-zoom, 1)); display: block; margin-bottom: 8px;">Report Groups</strong>
                     @if (GroupTree.Any())
                     {
-                        <TreeViewControl Nodes="@ViewerTreeNodes" ShowIcons="false" ToggleOnNodeClick="false"
+                        var tree = ViewerTree;
+                        <TreeViewControl @key="tree" Nodes="@tree.Nodes" SelectedNode="@tree.SelectedNode"
+                            SelectedNodeChanged="node => tree.SelectedNode = node" ExpandedNodeIdsChanged="ids => RememberGroupExpansion(tree, ids)"
+                            UseVb6TreeStyle="true" FolderStyle="TreeFolderStyle.Grey" ShowIcons="true" CssClass="fx-rpt-crystal-tree" ToggleOnNodeClick="false"
+                            OnNodeActivated="node => node.Tag is FxGroupNode group ? OnGroupNodeClicked(group) : Task.CompletedTask"
                             OnNodeClick="node => node.Tag is FxGroupNode group ? OnGroupNodeClicked(group) : Task.CompletedTask" AriaLabel="Report groups" />
                     }
                     else
@@ -161,7 +166,7 @@
                 </div>
             }
 
-            <div class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
+            <div @key="ActiveTab" class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
                 @RenderReportContent()
             </div>
         </div>
@@ -302,6 +307,7 @@ else
     // the tree-click handler can build drill-down tabs without re-parsing the XML.
     private string? _xmlFilePath;
     private Dictionary<string, object>? _lastParameters;
+    private Dictionary<string, object>? _lastFormulaParameters;
 
     // .NET ↔ JS bridge for row-cell click drill-down (every rendered row is clickable).
     private DotNetObjectReference<ReportWriterControl>? _dotNetRef;
@@ -327,6 +333,11 @@ else
     // Tree-click mode — Group scrolls to / highlights the matching group
     // header on the current tab; DrillDown opens a new filtered tab.
     private TreeNavigationMode TreeMode { get; set; } = TreeNavigationMode.Group;
+
+    // A native run whose layout cannot open drill views keeps its tree for Group navigation;
+    // the chosen mode returns on a report that can drill.
+    private string? NativeDrillDownUnavailable => ActiveTab?.NativeSession?.DrillDownUnsupportedReason;
+    private TreeNavigationMode EffectiveTreeMode => NativeDrillDownUnavailable is null ? TreeMode : TreeNavigationMode.Group;
 
     // Zoom (percent; 0 = Fit Page, -1 = Fit Width). Loaded from
     // IReportViewerSettings on first render.
@@ -363,12 +374,6 @@ else
     // from IReportViewerSettings. Prevents the value from snapping back
     // to 100 if a render fires before the load completes.
     private bool _settingsLoaded;
-
-    // Currently-selected tree node — set in OnGroupNodeClicked, read by
-    // RenderGroupTreeNode to apply the .selected class so the user can
-    // see which node they last clicked even after the page navigation
-    // settles. Cleared on report reload.
-    private FxGroupNode? _selectedTreeNode;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -565,8 +570,10 @@ else
     {
         if (tabIndex <= 0 || tabIndex >= Tabs.Count) return;
         Tabs.RemoveAt(tabIndex);
+        if (tabIndex < ActiveTabIndex) ActiveTabIndex--;
         if (ActiveTabIndex >= Tabs.Count) ActiveTabIndex = Tabs.Count - 1;
         if (ActiveTabIndex < 0) ActiveTabIndex = 0;
+        SearchText = ActiveTab?.Search?.Query ?? "";
         StateHasChanged();
         OnRenderComplete?.Invoke();
     }
@@ -578,6 +585,11 @@ else
     /// </summary>
     public async Task OpenDrillDown(FxGroupNode node, List<DrillDownFilter> fullPath)
     {
+        if (ActiveTab?.NativeSession is not null)
+        {
+            await OpenNativeDrillDown(node);
+            return;
+        }
         if (string.IsNullOrEmpty(_xmlFilePath))
         {
             Logger.LogWarning("Drill-down requested but no source XML file is tracked.");
@@ -625,26 +637,15 @@ else
             var dt = ExecuteReportData(drillDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             var visibleCols = drillDef.Columns.Where(c => !c.Hidden).ToList();
-            var rowsPerPage = drillDef.RowsPerPage > 0
-                ? drillDef.RowsPerPage
-                : (drillDef.Orientation == ReportOrientation.Landscape ? 49 : 70);
 
             // Same adaptive width pass as the main report — keeps drill-down
             // tabs visually consistent and avoids horizontal overflow when the
             // drill-down columns differ from the summary columns.
             ComputeAdaptiveColumnWidths(drillDef, visibleCols, dt);
 
-            var tab = new ReportTab
-            {
-                Title = node.Label,
-                RuntimeDiagnostics = drillDef.RuntimeDiagnostics,
-                Path = fullPath.ToList(),
-                Pages = RenderHtmlPages(drillDef, dt, visibleCols),
-                CreateDataExport = ReportNativeExport.CaptureData(node.Label, dt, visibleCols),
-                Tree = BuildGroupTree(dt, drillDef, rowsPerPage),
-                CurrentPage = 1,
-                Orientation = drillDef.Orientation
-            };
+            var formulaParams = SnapshotFormulaParameters(drillDef, sqlParams, _lastFormulaParameters);
+            var tab = CreateTabularTab(node.Label, drillDef, dt, visibleCols, formulaParams, fullPath.Count);
+            tab.Path = fullPath.ToList();
 
             if (dt.Rows.Count == 0 || AllRowsAreEmpty(dt, visibleCols))
             {
@@ -680,6 +681,79 @@ else
             await InvokeAsync(StateHasChanged);
             OnRenderComplete?.Invoke();
         }
+    }
+
+    private int _nativeNavigationVersion;
+
+    private async Task<ReportLayoutResult> PaginateNativeSession(ReportLayoutSession session)
+    {
+        try
+        {
+            await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
+            if (module is null) throw new InvalidOperationException("Browser report measurement module is unavailable.");
+            return await session.PaginateAsync(async (batch, cancellationToken) =>
+                await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch));
+        }
+        catch (Exception error) when (error is JSException or InvalidOperationException)
+        {
+            Logger.LogWarning(error, "Browser report text measurement unavailable");
+            return session.Paginate();
+        }
+    }
+
+    private async Task OpenNativeDrillDown(FxGroupNode node)
+    {
+        var source = ActiveTab;
+        if (source?.NativeSession is not { } run || IsLoading) return;
+        ErrorMessage = null;
+        if (run.DrillDownUnsupportedReason is { } unsupported)
+        {
+            ReportNativeDrillDownFailure(source, node, unsupported);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+        var existing = Tabs.FindIndex(tab => tab.NativeGroupId == node.AnchorId && tab.NativeSession is not null);
+        if (existing >= 0) { SwitchTab(existing); return; }
+        var version = _nativeNavigationVersion;
+        IsLoading = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var session = run.CreateDrillDown(node);
+            var result = await PaginateNativeSession(session);
+            if (version != _nativeNavigationVersion || !Tabs.Contains(source)) return;
+            Tabs.Add(new ReportTab
+            {
+                Title = node.Label, NativeGroupId = node.AnchorId, NativeSession = session,
+                Pages = result.Pages, PageSnapshots = result.Snapshots, Tree = result.Tree,
+                PositionedPage = source.PositionedPage, Orientation = source.Orientation,
+                RuntimeDiagnostics = result.Diagnostics, CreateDataExport = session.CreateDataExport
+            });
+            ActiveTabIndex = Tabs.Count - 1;
+            SearchText = "";
+            StatusMessage = $"Drill down: {node.Label}";
+        }
+        catch (Exception error)
+        {
+            // The tab that asked keeps its pages; the failure joins its runtime limitations.
+            if (version == _nativeNavigationVersion && Tabs.Contains(source)) ReportNativeDrillDownFailure(source, node, error.Message);
+            Logger.LogWarning(error, "Native report drill-down failed");
+        }
+        finally
+        {
+            if (version == _nativeNavigationVersion)
+            {
+                IsLoading = false;
+                await InvokeAsync(StateHasChanged);
+                OnRenderComplete?.Invoke();
+            }
+        }
+    }
+
+    private void ReportNativeDrillDownFailure(ReportTab source, FxGroupNode node, string reason)
+    {
+        if (!source.RuntimeDiagnostics.Contains(reason, StringComparer.Ordinal)) source.RuntimeDiagnostics.Add(reason);
+        StatusMessage = $"Drill down: {node.Label} was not opened. {reason}";
     }
 
     /// <summary>
@@ -758,27 +832,18 @@ else
             var dt = ExecuteReportData(subDef, sqlParams.Count > 0 ? sqlParams : null);
             GuardRowLimit(dt);
             var visibleCols = subDef.Columns.Where(c => !c.Hidden).ToList();
-            var rowsPerPage = subDef.RowsPerPage > 0
-                ? subDef.RowsPerPage
-                : (subDef.Orientation == ReportOrientation.Landscape ? 49 : 70);
 
             ComputeAdaptiveColumnWidths(subDef, visibleCols, dt);
 
             var tabTitle = string.IsNullOrWhiteSpace(title)
                 ? Path.GetFileNameWithoutExtension(fullXmlPath)
                 : title;
-            var tab = new ReportTab
-            {
-                Title = tabTitle,
-                RuntimeDiagnostics = subDef.RuntimeDiagnostics,
-                SourceXmlPath = sourceKey,
-                FieldFilters = filters.ToList(),
-                Pages = RenderHtmlPages(subDef, dt, visibleCols),
-                CreateDataExport = ReportNativeExport.CaptureData(tabTitle, dt, visibleCols),
-                Tree = BuildGroupTree(dt, subDef, rowsPerPage),
-                CurrentPage = 1,
-                Orientation = subDef.Orientation
-            };
+            var formulaParams = SnapshotFormulaParameters(subDef, sqlParams, _lastFormulaParameters);
+            AddLinkedSubreportParameters(formulaParams, subDef, linkedParameterValues);
+            foreach (var parameter in subDef.FixedParameters) formulaParams[parameter.Key] = parameter.Value;
+            var tab = CreateTabularTab(tabTitle, subDef, dt, visibleCols, formulaParams, 0);
+            tab.SourceXmlPath = sourceKey;
+            tab.FieldFilters = filters.ToList();
 
             if (dt.Rows.Count == 0 || AllRowsAreEmpty(dt, visibleCols))
             {
@@ -1015,13 +1080,14 @@ else
     /// <summary>
     /// Executes a SQL-based report definition and renders it as paginated HTML.
     /// </summary>
-    /// <param name="definition">The SQL report to execute. A positioned layout renders through the Crystal runtime.</param>
+    /// <param name="definition">The query, parameters and authored report layout.</param>
     /// <param name="parameterValues">The values SQL binds; a multi-value prompt arrives here as its IN (...) expansion.</param>
-    /// <param name="formulaParameterValues">Positioned layout only: values the report's formulas read instead of the SQL ones, such as
+    /// <param name="formulaParameterValues">Values the report's formulas read instead of the SQL ones, such as
     /// the whole array of a multi-value prompt for <c>{?Name}</c>. Null reads the SQL values, as before.</param>
     public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null,
         IReadOnlyDictionary<string, object>? formulaParameterValues = null)
     {
+        _nativeNavigationVersion++;
         IsLoading = true;
         ErrorMessage = null;
         ClearPdfPreview();
@@ -1058,6 +1124,9 @@ else
             foreach (var parameter in definition.FixedParameters)
                 sqlParams[parameter.Key] = parameter.Value;
 
+            var formulaParams = SnapshotFormulaParameters(definition, sqlParams, formulaParameterValues);
+
+            sqlParams = ReportRangeParameters.BindSql(sqlParams);
             LogQuery("Main report", definition.Sql, sqlParams);
 
             // Execute SQL
@@ -1068,8 +1137,6 @@ else
             if (definition.PositionedLayout is { } layout)
             {
                 // Formulas read the prompt values: {?Name} of a multi-value prompt is the whole array; SQL binds the rewritten scalars.
-                var formulaParams = new Dictionary<string, object>(sqlParams, StringComparer.OrdinalIgnoreCase);
-                foreach (var kv in formulaParameterValues ?? new Dictionary<string, object>()) formulaParams[kv.Key] = kv.Value;
                 var session = new ReportLayoutSession(layout, dt, formulaParams, (child, values) =>
                 {
                     var childParameters = new Dictionary<string, object>(values);
@@ -1078,41 +1145,19 @@ else
                     var childRows = ExecuteReportData(child, childParameters);
                     GuardRowLimit(childRows);
                     return childRows;
-                });
-                ReportLayoutResult result;
-                try
-                {
-                    await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
-                    if (module is null) throw new InvalidOperationException("Browser report measurement module is unavailable.");
-                    result = await session.PaginateAsync(async (batch, cancellationToken) =>
-                        await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch));
-                }
-                catch (Exception error) when (error is JSException or InvalidOperationException)
-                {
-                    Logger.LogWarning(error, "Browser report text measurement unavailable");
-                    result = session.Paginate();
-                }
+                }, tolerateSubreportQueryError: Options.TolerateSubreportQueryError);
+                var result = await PaginateNativeSession(session);
                 Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, PageSnapshots = result.Snapshots, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
-                    CreateDataExport = session.CreateDataExport,
+                    CreateDataExport = session.CreateDataExport, NativeSession = session, Tree = result.Tree,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
-                _lastParameters = new Dictionary<string, object>(sqlParams);
+                _lastParameters = CopyParameterValues(sqlParams);
+                _lastFormulaParameters = formulaParams;
                 OnRenderComplete?.Invoke();
                 return;
             }
 
             // Render to HTML pages
             var visibleColumns = definition.Columns.Where(c => !c.Hidden).ToList();
-            // Compute rows-per-page here so RenderHtmlPages and BuildGroupTree stay in sync
-            // (the tree needs to know which page each group's first row lands on).
-            var rowsPerPage = definition.RowsPerPage > 0
-                ? definition.RowsPerPage
-                // Fallback when the report definition didn't carry a row cap
-                  // (e.g. code-built reports). Now interpreted as a cap on
-                  // total VISIBLE rows (data + group headers + footers) — the
-                  // splitter counts each transition's overhead so the cap
-                  // gives a uniform visual page height regardless of how
-                  // many transitions a particular page contains.
-                  : (definition.Orientation == ReportOrientation.Landscape ? 49 : 70);
 
             // If the definition includes a separate TreeSql, run it to populate the tree
             // with ALL group levels (outermost → innermost). Without this the tree would
@@ -1140,24 +1185,13 @@ else
             ComputeAdaptiveColumnWidths(definition, visibleColumns, dt);
 
             // Populate the Main Report tab (index 0). Drill-downs are appended by OpenDrillDown.
-            var mainTab = new ReportTab
-            {
-                Title = "Main Report",
-                Path = new(),  // empty path = no drill
-                RuntimeDiagnostics = definition.RuntimeDiagnostics,
-                Pages = RenderHtmlPages(definition, dt, visibleColumns),
-                CreateDataExport = ReportNativeExport.CaptureData(definition.Title, dt, visibleColumns),
-                Tree = BuildGroupTree(treeData, definition, rowsPerPage),
-                CurrentPage = 1,
-                Orientation = definition.Orientation
-            };
+            var mainTab = CreateTabularTab("Main Report", definition, dt, visibleColumns, formulaParams, 0, treeData, definition.Title);
             Tabs.Add(mainTab);
             ActiveTabIndex = 0;
 
             // Remember parameters for drill-down queries.
-            _lastParameters = parameterValues != null
-                ? new Dictionary<string, object>(parameterValues)
-                : new Dictionary<string, object>();
+            _lastParameters = CopyParameterValues(sqlParams);
+            _lastFormulaParameters = formulaParams;
 
             Logger.LogInformation("SQL Report rendered: {Title} ({Rows} rows, {Pages} pages, {Groups} top groups)",
                 definition.Title, dt.Rows.Count, mainTab.Pages.Count, mainTab.Tree.Count);
@@ -1369,7 +1403,9 @@ else
                     await InvokeAsync(StateHasChanged);
 
                     var title = $"Report: {Path.GetFileNameWithoutExtension(xmlPath)}";
-                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, _lastPromptedValues);
+                    var promptContext = new ReportPickListContext(Path.GetFileNameWithoutExtension(file),
+                        definition.Parameters.ToArray(), new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase));
+                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, _lastPromptedValues, promptContext);
                     if (userValues == null)
                     {
                         StatusMessage = "Report cancelled.";
@@ -1399,7 +1435,7 @@ else
                 IReadOnlyDictionary<string, object>? formulaValues = null;
                 if (multiSelections.Count > 0)
                 {
-                    // The positioned runtime's formulas keep the whole selection as an array for {?Name}.
+                    // Report formulas keep the whole selection as an array for {?Name}.
                     formulaValues = multiSelections.ToDictionary(kv => kv.Key, kv => (object)kv.Value.ToArray(), StringComparer.OrdinalIgnoreCase);
                     typedParams = MultiValueParameterRewriter.Apply(definition, multiSelections, typedParams);
 
@@ -1486,25 +1522,27 @@ else
     ];
     private sealed record ReportZoomChoice(int Value, string Text);
     private static readonly ReportZoomChoice[] ZoomChoices = [new(25, "25%"), new(50, "50%"), new(75, "75%"), new(100, "100%"), new(125, "125%"), new(150, "150%"), new(200, "200%"), new(0, "Fit page"), new(-1, "Fit width")];
-    private List<FxGroupNode>? _treeSource;
-    private List<TreeNode> _viewerTreeNodes = [];
-    private List<TreeNode> ViewerTreeNodes
+    // Each report/drill snapshot retains its own UI state. Weak keys release closed tabs;
+    // identical anchor IDs in a different snapshot must not transfer selection or focus.
+    private readonly ConditionalWeakTable<List<FxGroupNode>, ReportGroupTreeState> _groupTreeViews = new();
+    private ReportGroupTreeState ViewerTree => _groupTreeViews.GetValue(GroupTree, static groups => new(groups));
+    private sealed class ReportGroupTreeState(List<FxGroupNode> groups)
     {
-        get
-        {
-            if (!ReferenceEquals(_treeSource, GroupTree))
-            {
-                _treeSource = GroupTree;
-                _viewerTreeNodes = _treeSource.Select(MapGroupNode).ToList();
-            }
-            return _viewerTreeNodes;
-        }
+        public List<TreeNode> Nodes { get; } = groups.Select(MapGroupNode).ToList();
+        public TreeNode? SelectedNode { get; set; }
     }
     private static TreeNode MapGroupNode(FxGroupNode group) => new()
     {
         Id = group.AnchorId, Text = group.Label, Tag = group, IsExpanded = group.Expanded,
+        IconCss = group.Children.Count == 0 ? "fx-rpt-tree-document-icon" : null,
         Children = group.Children.Select(MapGroupNode).ToList()
     };
+    private static void RememberGroupExpansion(ReportGroupTreeState tree, IReadOnlyList<string> expandedIds)
+    {
+        var expanded = expandedIds.ToHashSet(StringComparer.Ordinal);
+        foreach (var info in TreeViewData.Flatten(tree.Nodes))
+            if (info.Node.Tag is FxGroupNode group) group.Expanded = expanded.Contains(info.Node.Id);
+    }
 
     private async Task ChromeOnExport(string format)
     {
@@ -1638,13 +1676,12 @@ else
 
     private async Task OnGroupNodeClicked(FxGroupNode node)
     {
-        // Capture the click for the visual "selected" highlight on the
-        // tree label — read back in RenderGroupTreeNode to add the
-        // .selected class. Survives the page navigation that happens
-        // immediately below.
-        _selectedTreeNode = node;
-
-        if (TreeMode == TreeNavigationMode.DrillDown && _xmlFilePath != null && _lastParameters != null)
+        if (EffectiveTreeMode == TreeNavigationMode.DrillDown && ActiveTab?.NativeSession is not null)
+        {
+            await OpenNativeDrillDown(node);
+            return;
+        }
+        if (EffectiveTreeMode == TreeNavigationMode.DrillDown && _xmlFilePath != null && _lastParameters != null)
         {
             // Build the drill-down path: every ancestor up to this node.
             var path = new List<DrillDownFilter>();
@@ -1683,6 +1720,11 @@ else
         // Group mode) flash the matching group-header row in red so
         // the user can spot exactly which row they navigated to.
         // Mirrors the legacy FReportRunner.NavigateToGroupHeader flow.
+        if (ActiveTab?.NativeSession is not null && node.PageIndex <= 0)
+        {
+            StatusMessage = $"Group: {node.Label} (no printed content)";
+            return;
+        }
         StatusMessage = $"Group: {node.Label} (page {node.PageIndex} of {PageCount})";
         if (node.PageIndex > 0)
         {
@@ -1759,30 +1801,58 @@ else
     /// </para>
     /// </summary>
     private List<FxGroupNode> BuildGroupTree(DataTable data, ReportDefinition def, int rowsPerPage)
+        => BuildTabularGroupTree(data, def, rowsPerPage,
+            SuppressedDetails(def, data, _lastFormulaParameters ?? _lastParameters), data);
+
+    private List<FxGroupNode> BuildTabularGroupTree(DataTable data, ReportDefinition def, int rowsPerPage,
+        IReadOnlySet<DataRow> suppressed, DataTable paginationData)
     {
         if (def.Groups.Count == 0 || data.Rows.Count == 0)
             return new List<FxGroupNode>();
 
         // Sort rows outermost-first, matching what RenderHtmlPages does.
-        var rows = data.AsEnumerable().ToList();
-        foreach (var group in def.Groups.AsEnumerable().Reverse())
-        {
-            rows = group.SortDirection == ReportSortDirection.Ascending
-                ? rows.OrderBy(r => (r.Table.Columns.Contains(group.Field) ? r[group.Field]?.ToString() : "") ?? "").ToList()
-                : rows.OrderByDescending(r => (r.Table.Columns.Contains(group.Field) ? r[group.Field]?.ToString() : "") ?? "").ToList();
-        }
+        var rows = SortedTabularRows(data, def);
+        var paginationRows = ReferenceEquals(data, paginationData) ? rows : SortedTabularRows(paginationData, def);
 
         // Build a row-to-page lookup using the SAME pagination logic the
         // renderer uses (rowsPerPage cap + ReportGroup.PageBreakBefore).
         // Without this the tree's PageIndex would be off whenever a group has
         // PageBreakBefore set (e.g. Model Costs Report breaks per Model).
         var renderGroups = def.Groups
-            .Where(g => data.Columns.Contains(g.Field))
+            .Where(g => paginationData.Columns.Contains(g.Field))
             .ToList();
-        var pageSlices = SplitIntoPages(rows, renderGroups, rowsPerPage);
-        var rowToPage = new Dictionary<DataRow, int>(rows.Count);
+        var pageSlices = SplitIntoPages(paginationRows, renderGroups, rowsPerPage, suppressed);
+        var rowToPage = new Dictionary<DataRow, int>(paginationRows.Count);
         for (int p = 0; p < pageSlices.Count; p++)
             foreach (var r in pageSlices[p].Rows) rowToPage[r] = p + 1;
+
+        // A separate TreeSql can return only hierarchy fields, without payload dependencies.
+        // Map its paths to the main report's actual page plan rather than evaluating formulas
+        // against incomplete tree rows or counting those rows as printed details.
+        if (!ReferenceEquals(data, paginationData))
+        {
+            var groupPages = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var row in paginationRows)
+                for (int level = 0; level < def.Groups.Count; level++)
+                {
+                    var field = def.Groups[level].Field;
+                    if (!paginationData.Columns.Contains(field)) break;
+                    var value = (row[field]?.ToString() ?? "").TrimEnd();
+                    groupPages.TryAdd(ReportValueFormatting.GroupAnchor(row, def.Groups, level, value), rowToPage[row]);
+                }
+            foreach (var row in rows)
+            {
+                var page = 1;
+                for (int level = 0; level < def.Groups.Count; level++)
+                {
+                    var field = def.Groups[level].Field;
+                    if (!data.Columns.Contains(field)) break;
+                    var value = (row[field]?.ToString() ?? "").TrimEnd();
+                    if (groupPages.TryGetValue(ReportValueFormatting.GroupAnchor(row, def.Groups, level, value), out var match)) page = match;
+                }
+                rowToPage[row] = page;
+            }
+        }
 
         // Pair each row with its sorted index AND its actual page number.
         var indexedRows = rows.Select((r, idx) =>
@@ -1954,6 +2024,22 @@ else
         }
     }
 
+    // Tabular cells print at 10px with a 1.15 line height (.fx-rpt-table).
+    private const double TabularLinePitchPx = 11.5;
+
+    /// <summary>
+    /// A no-grow Crystal field shows what fits in its authored box. Lines is the box height in lines. Wrap is
+    /// authored / rendered width (1 when the column was not narrowed), rounded up to 4 decimals: each authored
+    /// line takes ceil(Wrap) lines at text zoom 1, and ceil(Wrap x zoom) where the viewer's text zoom
+    /// enlarges the text but not the px column widths (.fx-rpt-fixed-field in the stylesheet).
+    /// </summary>
+    private static (int Lines, double Wrap) NoGrowLineBudget(ReportColumn col, double height)
+    {
+        var lines = Math.Max(1, (int)Math.Round(height / TabularLinePitchPx, MidpointRounding.AwayFromZero));
+        var wrap = col.Width > 0 && col.AuthoredWidth > col.Width ? Math.Ceiling(col.AuthoredWidth * 10000d / col.Width) / 10000d : 1d;
+        return (lines, wrap);
+    }
+
     /// <summary>True for columns that must show in full without wrapping.</summary>
     private static bool IsRigidColumnType(ReportColumnType t) =>
         t is ReportColumnType.Integer
@@ -2029,7 +2115,78 @@ else
         { Col = col; HeaderPx = headerPx; DataMaxPx = dataMaxPx; XmlHintPx = xmlHintPx; IsRigid = isRigid; }
     }
 
+    private static Dictionary<string, object> CopyParameterValues(IEnumerable<KeyValuePair<string, object>> values)
+        => values.ToDictionary(pair => pair.Key, pair => pair.Value is Array array ? array.Clone() : pair.Value,
+            StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<string, object> SnapshotFormulaParameters(ReportDefinition definition,
+        IDictionary<string, object> sqlParameters, IReadOnlyDictionary<string, object>? originalValues)
+    {
+        var values = new Dictionary<string, object>(sqlParameters, StringComparer.OrdinalIgnoreCase);
+        if (originalValues is not null)
+            foreach (var pair in originalValues) values[pair.Key] = pair.Value;
+        foreach (var pair in definition.FixedParameters) values[pair.Key] = pair.Value;
+        // Own prompt arrays independently of the caller and SQL IN-expansion dictionaries.
+        return CopyParameterValues(values);
+    }
+
+    private static HashSet<DataRow> SuppressedDetails(ReportDefinition definition, DataTable data,
+        IReadOnlyDictionary<string, object>? parameters, int drillDownGroupLevel = 0)
+    {
+        var suppressed = new HashSet<DataRow>();
+        if (definition.TabularLayout is not { } layout) return suppressed;
+        void Diagnostic(string message)
+        {
+            if (!definition.RuntimeDiagnostics.Contains(message, StringComparer.Ordinal))
+                definition.RuntimeDiagnostics.Add(message);
+        }
+        foreach (DataRow row in data.Rows)
+            if (!layout.IsDetailVisible(row, parameters, drillDownGroupLevel, Diagnostic)) suppressed.Add(row);
+        return suppressed;
+    }
+
+    private ReportTab CreateTabularTab(string title, ReportDefinition definition, DataTable data,
+        List<ReportColumn> columns, IReadOnlyDictionary<string, object>? parameters, int drillDownGroupLevel,
+        DataTable? treeData = null, string? exportTitle = null)
+    {
+        // Suppression is a printing decision. Source rows remain available for totals and group navigation.
+        var suppressed = SuppressedDetails(definition, data, parameters, drillDownGroupLevel);
+        var rowsPerPage = definition.RowsPerPage > 0 ? definition.RowsPerPage
+            : definition.Orientation == ReportOrientation.Landscape ? 49 : 70;
+        var exportData = data;
+        if (suppressed.Count > 0)
+        {
+            exportData = data.Clone();
+            foreach (DataRow row in data.Rows)
+                if (!suppressed.Contains(row)) exportData.ImportRow(row);
+        }
+        return new ReportTab
+        {
+            Title = title,
+            RuntimeDiagnostics = definition.RuntimeDiagnostics,
+            Pages = RenderTabularPages(definition, data, columns, suppressed),
+            CreateDataExport = ReportNativeExport.CaptureData(exportTitle ?? title, exportData, columns),
+            Tree = BuildTabularGroupTree(treeData ?? data, definition, rowsPerPage, suppressed, data),
+            CurrentPage = 1,
+            Orientation = definition.Orientation
+        };
+    }
+
+    private static List<DataRow> SortedTabularRows(DataTable data, ReportDefinition definition)
+    {
+        var rows = data.AsEnumerable().ToList();
+        foreach (var group in definition.Groups.Where(g => data.Columns.Contains(g.Field)).Reverse())
+            rows = group.SortDirection == ReportSortDirection.Ascending
+                ? rows.OrderBy(row => row[group.Field]?.ToString() ?? "").ToList()
+                : rows.OrderByDescending(row => row[group.Field]?.ToString() ?? "").ToList();
+        return rows;
+    }
+
     private List<string> RenderHtmlPages(ReportDefinition def, DataTable data, List<ReportColumn> columns)
+        => RenderTabularPages(def, data, columns, SuppressedDetails(def, data, _lastFormulaParameters ?? _lastParameters));
+
+    private List<string> RenderTabularPages(ReportDefinition def, DataTable data, List<ReportColumn> columns,
+        IReadOnlySet<DataRow> suppressed)
     {
         // Cap on TOTAL VISIBLE rows per page (data + group headers + group
         // footers). CrystalXmlReportLoader populates RowsPerPage from
@@ -2041,18 +2198,7 @@ else
         // Only groups whose Field is present in the DataTable can be used for sorting —
         // `def.Groups` may include deeper levels that live only in the separate TreeSql
         // query result, not in the main summary result.
-        var rows = data.AsEnumerable().ToList();
-        var sortableGroups = def.Groups.Where(g => data.Columns.Contains(g.Field)).ToList();
-        if (sortableGroups.Count > 0)
-        {
-            rows = rows.OrderBy(r => 0).ToList(); // stable placeholder
-            foreach (var group in sortableGroups.AsEnumerable().Reverse())
-            {
-                rows = group.SortDirection == ReportSortDirection.Ascending
-                    ? rows.OrderBy(r => r[group.Field]?.ToString() ?? "").ToList()
-                    : rows.OrderByDescending(r => r[group.Field]?.ToString() ?? "").ToList();
-            }
-        }
+        var rows = SortedTabularRows(data, def);
 
         // Only groups whose field lives in the DataTable can be rendered (others
         // are tree-only navigation levels for drill-down). Computed once and
@@ -2069,7 +2215,7 @@ else
         // fires at level L, the outgoing page is told to flush footers for
         // levels L..innermost so the totals appear on the page that's
         // ENDING (not orphaned at the top of the next page).
-        var pageSlices = SplitIntoPages(rows, renderGroups, rowsPerPage);
+        var pageSlices = SplitIntoPages(rows, renderGroups, rowsPerPage, suppressed);
 
         // ── Pass 2: render with SHARED lastValues across pages ──────────
         // Sharing the array means a group header is emitted only when its
@@ -2082,11 +2228,11 @@ else
         {
             bool isLast = (p == pageSlices.Count - 1);
             var slice = pageSlices[p];
-            pages.Add(RenderPage(def, columns, slice.Rows, rows,
+            pages.Add(RenderTabularPage(def, columns, slice.Rows, rows,
                 pageNum: p + 1, totalPages: pageSlices.Count,
                 isFirstPage: p == 0, isLastPage: isLast,
                 renderGroups, lastValues,
-                closingFooterLevel: slice.ClosingFooterLevel));
+                closingFooterLevel: slice.ClosingFooterLevel, suppressed: suppressed));
         }
         return pages;
     }
@@ -2123,7 +2269,8 @@ else
     /// </para>
     /// </summary>
     private static List<PageSlice> SplitIntoPages(
-        List<DataRow> rows, List<ReportGroup> renderGroups, int visibleRowsPerPage)
+        List<DataRow> rows, List<ReportGroup> renderGroups, int visibleRowsPerPage,
+        IReadOnlySet<DataRow>? suppressed = null)
     {
         var result = new List<PageSlice>();
         var current = new List<DataRow>();
@@ -2159,7 +2306,8 @@ else
                     break;
                 }
             }
-            int rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues);
+            bool detailVisible = suppressed?.Contains(row) != true;
+            int rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues, detailVisible);
 
             // ── Detect forced page-break (PageBreakBefore on any group) ──
             int forcedBreakLevel = -1;
@@ -2177,10 +2325,16 @@ else
                     }
                 }
             }
+            // Only footers actually closed by this break can make an otherwise empty
+            // page printable. An outer footer stays open across an inner group break.
+            if (forcedBreakLevel >= 0 && visibleUsed == 0
+                && !Enumerable.Range(forcedBreakLevel, renderGroups.Count - forcedBreakLevel)
+                    .Any(level => renderGroups[level].ShowFooter && lastValues[level] is not null))
+                forcedBreakLevel = -1;
 
             // ── Decide whether to flush the current page ──
             bool needBreak = forcedBreakLevel >= 0
-                          || (current.Count > 0 && visibleUsed + rowCost > visibleRowsPerPage);
+                          || (visibleUsed > 0 && visibleUsed + rowCost > visibleRowsPerPage);
 
             if (needBreak)
             {
@@ -2209,7 +2363,7 @@ else
                             break;
                         }
                     }
-                    rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues);
+                    rowCost = ComputeVisibleCost(transitionLevel, renderGroups, lastValues, detailVisible);
                 }
                 // For row-cap break: lastValues stays — groups continue on
                 // next page, no closing footers, transition cost remains as
@@ -2253,15 +2407,16 @@ else
     /// <summary>
     /// Visible-row cost of one detail row given the transition level.
     /// Mirrors what <see cref="RenderPage"/> emits per row:
-    ///   • Always 1 detail row.
+    ///   • One detail row unless the authored suppression formula hides it.
     ///   • If a transition fires at level L, emit footers for every
     ///     currently-OPEN inner level (lastValues[i] != null) from
     ///     innermost down to L — innermost-first ordering — plus headers
     ///     for [L..innermost] (always).
     /// </summary>
-    private static int ComputeVisibleCost(int transitionLevel, List<ReportGroup> renderGroups, string?[] lastValues)
+    private static int ComputeVisibleCost(int transitionLevel, List<ReportGroup> renderGroups, string?[] lastValues,
+        bool detailVisible = true)
     {
-        int cost = 1;   // detail row
+        int cost = detailVisible ? 1 : 0;
         if (transitionLevel < renderGroups.Count)
         {
             // Footers — only emitted when the level was previously open.
@@ -2282,6 +2437,13 @@ else
     private string RenderPage(ReportDefinition def, List<ReportColumn> columns, List<DataRow> pageRows,
         List<DataRow> allRows, int pageNum, int totalPages, bool isFirstPage, bool isLastPage,
         List<ReportGroup> renderGroups, string?[] lastValues, int closingFooterLevel = -1)
+        => RenderTabularPage(def, columns, pageRows, allRows, pageNum, totalPages, isFirstPage, isLastPage,
+            renderGroups, lastValues, closingFooterLevel, null);
+
+    private string RenderTabularPage(ReportDefinition def, List<ReportColumn> columns, List<DataRow> pageRows,
+        List<DataRow> allRows, int pageNum, int totalPages, bool isFirstPage, bool isLastPage,
+        List<ReportGroup> renderGroups, string?[] lastValues, int closingFooterLevel,
+        IReadOnlySet<DataRow>? suppressed)
     {
         var html = new System.Text.StringBuilder();
         var now = DateTime.Now;
@@ -2298,7 +2460,8 @@ else
         html.AppendLine("</div>");
 
         // Table
-        html.AppendLine("<table class='fx-rpt-table'>");
+        // Essential geometry travels with the page into standalone HTML exports and printing.
+        html.AppendLine("<table class='fx-rpt-table' style='width:100%;table-layout:fixed;font-family:Arial,sans-serif;font-size:calc(10px * var(--fx-zoom, 1));line-height:1.15;'>");
 
         // Column headers — emit a CSS class that mirrors the column type so
         // numeric / date columns can opt out of wrapping and text columns can
@@ -2389,6 +2552,9 @@ else
                     lastCellValues.Clear();
             }
 
+            // Suppression does not suppress group transitions or change summary inputs.
+            if (suppressed?.Contains(row) == true) continue;
+
             // Detail row — clickable for drill-down (data-path = full group path of the row).
             var rowPath = BuildCellPathAttribute(row, def.Groups);
             var rowAttrs = string.IsNullOrEmpty(rowPath)
@@ -2421,7 +2587,16 @@ else
                     else
                         lastCellValues[col.Field] = value;
                 }
-                html.Append($"<td class='{cellCls}'{style}>{Escape(rendered)}</td>");
+                var content = Escape(rendered);
+                if (col.NoGrowHeight is { } height && double.IsFinite(height) && height > 0)
+                {
+                    // Whole lines, so no sliver of a cut line shows. The inline cap counts them at text zoom 1 (1lh where the
+                    // browser has it, else the table's line pitch); the stylesheet counts them again at the viewer's text zoom.
+                    var (lines, wrap) = NoGrowLineBudget(col, height);
+                    var capLines = lines * (int)Math.Ceiling(wrap);
+                    content = $"<div class='fx-rpt-fixed-field' style='--fx-nogrow-lines:{lines};--fx-nogrow-wrap:{wrap.ToString("0.####", CultureInfo.InvariantCulture)};max-height:calc({(capLines * TabularLinePitchPx).ToString("0.###", CultureInfo.InvariantCulture)}px * var(--fx-zoom, 1));max-height:calc({capLines} * 1lh);overflow:hidden;'>{content}</div>";
+                }
+                html.Append($"<td class='{cellCls}'{style}>{content}</td>");
             }
             html.AppendLine("</tr>");
         }
@@ -2952,8 +3127,14 @@ else
     /// the UI from runaway result sets (a badly-filtered report could otherwise return
     /// millions of rows and lock up the browser). Configurable per-installation.
     /// </summary>
-    private System.Data.DataTable ExecuteReportData(ReportDefinition definition, IDictionary<string, object>? parameters) =>
-        db is IReportDefinitionDataExecutor structured ? structured.Execute(definition, parameters) : db.Execute(definition.Sql, parameters);
+    private System.Data.DataTable ExecuteReportData(ReportDefinition definition, IDictionary<string, object>? parameters)
+    {
+        if (parameters is not null) parameters = ReportRangeParameters.BindSql(new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase));
+        var execution = definition.PrepareSqlExecution(parameters);
+        if (execution.Sql != definition.Sql)
+            LogQuery("Prepared report execution", execution.Sql, parameters ?? new Dictionary<string, object>());
+        return db is IReportDefinitionDataExecutor structured ? structured.Execute(execution, parameters) : db.Execute(execution.Sql, parameters);
+    }
 
     private void GuardRowLimit(System.Data.DataTable dt)
     {
@@ -3077,7 +3258,7 @@ else
                 <div class="fx-report-positioned-print" aria-hidden="true">
                     @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
                     {
-                        @foreach (var snapshot in ActiveTab.PageSnapshots) { <ReportPageControl Page="snapshot" /> }
+                        @foreach (var snapshot in ActiveTab.PageSnapshots) { <ReportPageControl Page="snapshot" IncludeNavigationAnchors="false" /> }
                     }
                     else
                     {

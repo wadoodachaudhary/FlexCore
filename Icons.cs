@@ -14,6 +14,10 @@ public static class FlexIcons
         ["edit"]="m4 16-1 5 5-1L21 7l-4-4ZM14 6l4 4", ["delete"]="M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7M14 10v7",
         ["warning"]="M12 3 2 21h20ZM12 9v5M12 17v1", ["info"]="M12 10v7M12 6v1M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0",
         ["menu"]="M3 5h18M3 12h18M3 19h18", ["pin"]="M8 3h8l-1 6 4 4H5l4-4ZM12 13v8",
-        ["undock"]="M9 3h12v12M21 3 10 14M6 3H3v18h18v-3", ["sparkles"]="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z"
+        ["undock"]="M9 3h12v12M21 3 10 14M6 3H3v18h18v-3", ["sparkles"]="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3Z",
+        ["document"]="M6 2h9l5 5v15H6ZM14 2v6h6M9 13h8M9 17h8M9 9h3", ["video"]="M3 6h13v12H3ZM16 10l5-3v10l-5-3",
+        ["presentation"]="M3 4h18v11H3ZM12 15v5M8 20h8", ["question"]="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7v.5M12 17v.5M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0",
+        ["flask"]="M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7.5 14h9", ["award"]="M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12ZM8.5 14 7 22l5-3 5 3-1.5-8",
+        ["lock"]="M5 11h14v10H5ZM8 11V7a4 4 0 0 1 8 0v4"
     });
 }

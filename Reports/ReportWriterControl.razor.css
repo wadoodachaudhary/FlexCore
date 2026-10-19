@@ -1,5 +1,11 @@
 /* ReportWriterControl - Report rendering styles (screen + print) */
 
+::deep .fx-rpt-native-anchor.fx-rpt-group-active {
+    background: rgba(255, 0, 0, 0.12);
+    outline: 1px solid #cc0000;
+    outline-offset: -1px;
+}
+
 .fx-report-container {
     width: 100%;
     height: 100%;
@@ -240,6 +246,14 @@
     vertical-align: top;
 }
 
+/* A no-grow field's inline cap counts its whole lines at text zoom 1. The text zoom enlarges the text but
+   not the px column widths, so each of the authored box's lines takes ceil(wrap x zoom) lines here. */
+@supports (max-height: calc(round(up, 1.5, 1) * 1lh)) {
+    ::deep .fx-rpt-fixed-field {
+        max-height: calc(var(--fx-nogrow-lines) * round(up, var(--fx-nogrow-wrap) * var(--fx-zoom, 1), 1) * 1lh) !important;
+    }
+}
+
 ::deep .fx-rpt-table tbody tr:hover {
     background: #f8f8f8;
 }
@@ -476,46 +490,47 @@
     max-width: 400px;
     border-right: 2px solid #dee2e6;
     overflow-y: auto;
-    background: #fafafa;
+    background: #fff;
     padding: 8px;
     resize: horizontal;
 }
-.fx-rpt-group-tree ul { list-style: none; padding-left: 16px; margin: 0; }
-.fx-rpt-group-tree > ul { padding-left: 0; }
-.fx-rpt-group-tree li { padding: 2px 0; }
-
-.fx-rpt-tree-node {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 6px;
-    border-radius: 3px;
-    font-size: calc(13px * var(--fx-zoom, 1));
-    user-select: none;
+/* Use the shared compact plus/minus tree and dotted connectors; report icons use a grey palette. */
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree {
+    border: 0;
+    border-radius: 0;
+    --fx-tree-bg: #fff;
 }
-.fx-rpt-tree-node:hover { background-color: #e8f0fe; }
-
-.fx-rpt-tree-toggle {
-    width: 16px;
-    text-align: center;
-    font-size: calc(10px * var(--fx-zoom, 1));
-    color: #666;
-    cursor: pointer;
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon::before,
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon::after {
+    border-color: #777;
+    background: #fff;
 }
-.fx-rpt-tree-toggle.leaf { cursor: default; }
-
-.fx-rpt-tree-label {
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 3px;
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon.open::after {
+    left: 1px;
+    transform: skewX(-12deg);
 }
-/* Persistent "this is the node you last clicked" indicator. Stronger
-   than the :hover rule so the user can still see it after the mouse
-   moves away. Updated in OnGroupNodeClicked → _selectedTreeNode. */
-.fx-rpt-tree-label.selected {
-    background-color: #cce5ff;
-    color: #084298;
-    font-weight: 600;
+.fx-rpt-group-tree ::deep .fx-rpt-tree-document-icon {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 13px;
+    width: 13px;
+    height: 14px;
+    margin-right: 4px;
+    box-sizing: border-box;
+    border: 1px solid #777;
+    background: #fff;
+}
+.fx-rpt-group-tree ::deep .fx-rpt-tree-document-icon::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    width: 4px;
+    height: 4px;
+    box-sizing: border-box;
+    border-left: 1px solid #777;
+    border-bottom: 1px solid #777;
+    background: #e8e8e8;
 }
 
 .fx-rpt-tree-mode {
@@ -546,6 +561,11 @@
     flex-direction: column;
     align-items: safe center;
     padding: 16px;
+}
+
+/* The authored page keeps its physical height; it must not collapse the drill tabs. */
+.fx-rpt-viewer-panel ::deep .fx-tabstrip {
+    flex-shrink: 0;
 }
 
 .fx-rpt-status-bar {

@@ -3,6 +3,14 @@
 @implements IAsyncDisposable
 @inject IJSRuntime JS
 
+@if(ShowSearchBox)
+{
+    <div class="fx-treeview-search@(IsOutline ? " fx-treeview-search-outline" : "")" role="search">
+        <SvgIconControl Name="search" Size="16px" CssClass="fx-treeview-search-icon" />
+        <TextBoxControl Value="@_searchText" ValueChanged="OnSearchInput" UpdateOnInput="true" Placeholder="@SearchPlaceholder" Width="100%"
+                        HtmlAttributes="@SearchBoxAttributes" />
+    </div>
+}
 <div class="@RootCssClass @(EnableVirtualization ? "fx-treeview-virtual" : "")" style="@RootStyle" @ref="_host"
      role="tree" aria-label="@AriaLabel" aria-multiselectable="@(AllowMultiSelect ? "true" : "false")"
      aria-activedescendant="@(_focusId is null ? null : NodeElementId(_focusId))" tabindex="@TabIndex" @onkeydown="HandleKeyDown">
@@ -15,11 +23,12 @@
         @foreach(var info in _visible){@NodeRow(info)}
     }
 </div>
+@if(!string.IsNullOrWhiteSpace(ActiveFilter) && _visible.Count == 0){<div class="fx-treeview-empty" role="status">@EmptyFilterText</div>}
 @if(_error is not null){<AlertControl Text="@_error" />}
 
 @code {
     private RenderFragment NodeRow(TreeNodeInfo info)=>@<div @key="info.Node.Id" id="@NodeElementId(info.Node.Id)" data-node-id="@info.Node.Id"
-        class="@GetNodeCss(info.Node,info.Level) @(info.Node.Id==_focusId ? "fx-treeview-current" : "")" style="@(GetNodeStyle(info.Level)+(EnableVirtualization ? $"height:{ItemSize}px;min-height:{ItemSize}px;margin-block:0;box-sizing:border-box;" : ""))"
+        class="@(GetNodeCss(info.Node,info.Level)+GetOutlineCss(info)) @(info.Node.Id==_focusId ? "fx-treeview-current" : "")" style="@(GetNodeStyle(info.Level)+(EnableVirtualization ? $"height:{ItemSize}px;min-height:{ItemSize}px;margin-block:0;box-sizing:border-box;" : ""))"
         role="treeitem" aria-label="@info.Node.Text" aria-level="@(info.Level+1)" aria-posinset="@info.Position" aria-setsize="@info.SetSize"
         aria-expanded="@(info.Node.HasChildren ? DisplayExpanded(info.Node) ? "true" : "false" : null)" aria-selected="@(info.Node.IsSelected ? "true" : "false")"
         aria-checked="@(ShowCheckboxes ? info.Node.IsIndeterminate ? "mixed" : info.Node.IsChecked ? "true" : "false" : null)"
@@ -27,23 +36,70 @@
         @onclick="e=>HandleNodeClick(info.Node,e)" @ondblclick="()=>HandleNodeDoubleClick(info.Node)"
         draggable="@(AllowDragAndDrop&&!info.Node.IsDisabled ? "true" : "false")" @ondragstart="()=>_dragId=info.Node.Id" @ondragend="()=>_dragId=null"
         @ondragover:preventDefault="@AllowDragAndDrop" @ondrop="()=>DropAsync(info.Node)">
-        <span class="@GetArrowCss(info.Node)" role="@(info.Node.HasChildren ? "button" : null)" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
-              aria-hidden="@(!info.Node.HasChildren ? "true" : null)" @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true"></span>
-        @if(ShowCheckboxes)
+        @if(IsOutline){@OutlineContent(info)}
+        else
         {
-            <span class="fx-treeview-check" @onclick:stopPropagation="true"><CheckBoxControl Checked="@info.Node.IsChecked" Indeterminate="@info.Node.IsIndeterminate" Disabled="@info.Node.IsDisabled"
-                CheckedChanged="v=>SetCheckedAsync(info.Node.Id,v)" TabIndex="-1" StopClickPropagation="true" StopKeyDownPropagation="true" /></span>
+            <span class="@GetArrowCss(info.Node)" role="@(info.Node.HasChildren ? "button" : null)" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
+                  aria-hidden="@(!info.Node.HasChildren ? "true" : null)" @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true"></span>
+            @if(ShowCheckboxes)
+            {
+                <span class="fx-treeview-check" @onclick:stopPropagation="true"><CheckBoxControl Checked="@info.Node.IsChecked" Indeterminate="@info.Node.IsIndeterminate" Disabled="@info.Node.IsDisabled"
+                    CheckedChanged="v=>SetCheckedAsync(info.Node.Id,v)" TabIndex="-1" StopClickPropagation="true" StopKeyDownPropagation="true" /></span>
+            }
+            @if(ShowIcons&&!string.IsNullOrEmpty(GetRenderedIconCss(info.Node))){<span class="@GetRenderedIconCss(info.Node)" aria-hidden="true"></span>}
+            @if(_editingId==info.Node.Id)
+            {
+                <span @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+                    <TextBoxControl Value="@_editText" ValueChanged="v=>_editText=v??string.Empty" UpdateOnInput="true" AutoFocus="true" OnKeyDown="EditKeyDown" aria-label="Rename node" />
+                    <ButtonControl OnClick="CommitEditAsync">Save</ButtonControl><ButtonControl OnClick="CancelEditAsync">Cancel</ButtonControl>
+                </span>
+            }
+            else if(NodeTemplate is not null){<span @onkeydown:stopPropagation="true">@NodeTemplate(info.Node)</span>}
+            else{<span class="fx-treeview-text">@info.Node.Text</span>}
         }
-        @if(ShowIcons&&!string.IsNullOrEmpty(GetRenderedIconCss(info.Node))){<span class="@GetRenderedIconCss(info.Node)" aria-hidden="true"></span>}
+        @if(_loading.Contains(info.Node.Id)){<span role="status">Loading…</span>}
+    </div>;
+
+    private RenderFragment OutlineContent(TreeNodeInfo info)=>@<text>
+        @if(info.Node.HasChildren)
+        {
+            <span class="@GetStatusCss(info.Node,true)" aria-hidden="true">@if(info.Node.Status!=TreeNodeStatus.None){<SvgIconControl Name="check" Size="14px" StrokeWidth="3" />}</span>
+        }
+        else
+        {
+            <span class="fx-treeview-rail" aria-hidden="true">@if(info.Node.Status!=TreeNodeStatus.None){<span class="@GetStatusCss(info.Node,false)"><SvgIconControl Name="check" Size="10px" StrokeWidth="3.5" /></span>}</span>
+        }
+        @if(ShowIcons&&!string.IsNullOrEmpty(GetIconCss(info.Node))){<span class="fx-treeview-icon @GetIconCss(info.Node)" aria-hidden="true"></span>}
         @if(_editingId==info.Node.Id)
         {
-            <span @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+            <span class="fx-treeview-outline-body" @onclick:stopPropagation="true" @ondblclick:stopPropagation="true" @onkeydown:stopPropagation="true">
                 <TextBoxControl Value="@_editText" ValueChanged="v=>_editText=v??string.Empty" UpdateOnInput="true" AutoFocus="true" OnKeyDown="EditKeyDown" aria-label="Rename node" />
                 <ButtonControl OnClick="CommitEditAsync">Save</ButtonControl><ButtonControl OnClick="CancelEditAsync">Cancel</ButtonControl>
             </span>
         }
-        else if(NodeTemplate is not null){<span @onkeydown:stopPropagation="true">@NodeTemplate(info.Node)</span>}
-        else{<span class="fx-treeview-text">@info.Node.Text</span>}
-        @if(_loading.Contains(info.Node.Id)){<span role="status">Loading…</span>}
-    </div>;
+        else
+        {
+            <span class="fx-treeview-outline-body">
+                @if(!string.IsNullOrEmpty(info.Node.Caption)){<span class="fx-treeview-caption">@info.Node.Caption</span>}
+                @if(NodeTemplate is not null){<span @onkeydown:stopPropagation="true">@NodeTemplate(info.Node)</span>}
+                else{<span class="fx-treeview-text">@info.Node.Text</span>}
+                @if(!string.IsNullOrEmpty(info.Node.SecondaryText)||!string.IsNullOrEmpty(info.Node.SecondaryIcon))
+                {
+                    <span class="fx-treeview-secondary">
+                        @if(IsNamedIcon(info.Node.SecondaryIcon)){<SvgIconControl Name="@(info.Node.SecondaryIcon!)" Size="14px" StrokeWidth="1.7" />}
+                        else if(!string.IsNullOrEmpty(info.Node.SecondaryIcon)){<SvgIconControl Path="@info.Node.SecondaryIcon" Size="14px" StrokeWidth="1.7" />}
+                        @info.Node.SecondaryText
+                    </span>
+                }
+            </span>
+        }
+        @if(!string.IsNullOrEmpty(info.Node.BadgeText)){<span class="fx-treeview-badge">@info.Node.BadgeText</span>}
+        @if(info.Node.HasChildren)
+        {
+            <span class="fx-treeview-outline-chevron" role="button" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
+                  @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true">
+                <SvgIconControl Name="@(DisplayExpanded(info.Node) ? "chevron-up" : "chevron-down")" Size="18px" />
+            </span>
+        }
+    </text>;
 }

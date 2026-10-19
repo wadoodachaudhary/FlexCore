@@ -432,6 +432,23 @@ function replaceWholeText(element, text) {
     setTextSelection(element, next.length);
 }
 
+// A host command inserts a complete token into the latest browser draft, not a
+// server snapshot. The selection survives focus moving to a toolbar or list.
+export function insertTextAtSelection(element, text) {
+    if (!element) return { accepted: false, value: "" };
+    if (element.disabled || element.readOnly)
+        return { accepted: false, value: getTextValue(element) };
+    const value = getTextValue(element);
+    const selection = getTextSelection(element);
+    const nextLength = value.length - (selection.end - selection.start) + text.length;
+    if (element.maxLength >= 0 && nextLength > element.maxLength)
+        return { accepted: false, value };
+    replaceSelection(element, text);
+    element.focus({ preventScroll: true });
+    updateTextAreaScrollBar(element);
+    return { accepted: true, value: getTextValue(element) };
+}
+
 function notifyTextChanged(element) {
     element.dispatchEvent(new Event("input", { bubbles: true }));
 }

@@ -7,7 +7,7 @@ public sealed partial class ReportLayoutSession
 {
     private Dictionary<string, ReportTextMetrics>? _textMetrics;
     private readonly Dictionary<string, ReportTextMeasurement> _measurementRequests = new(StringComparer.Ordinal);
-    private static string MeasurementKey(ReportTextMeasurement measurement) => measurement.Style + "\n" + measurement.Html;
+    private static string MeasurementKey(ReportTextMeasurement measurement) => measurement.MaxNumberOfLines + "\n" + measurement.Style + "\n" + measurement.Html;
 
     /// <summary>Measures actual page-conditioned text until both font metrics and pagination settle.</summary>
     public async Task<ReportLayoutResult> PaginateAsync(
@@ -79,7 +79,7 @@ public sealed partial class ReportLayoutSession
     private ReportTextMetrics? TextMetrics(Item item)
     {
         if (_textMetrics is null || item.Element.Kind is not ("Text" or "Field" or "FieldHeading")) return null;
-        var measurement = new ReportTextMeasurement(ReportObjectRenderer.Style(item.Element, false), item.Html);
+        var measurement = new ReportTextMeasurement(ReportObjectRenderer.Style(item.Element, false), item.Html, ReportObjectRenderer.TextLineLimit(item.Element));
         var key = MeasurementKey(measurement);
         if (_textMetrics.TryGetValue(key, out var metric)) return metric;
         _measurementRequests.TryAdd(key, measurement);

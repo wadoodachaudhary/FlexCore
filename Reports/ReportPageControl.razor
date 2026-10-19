@@ -6,6 +6,10 @@
         @foreach (var band in Page.Bands)
         {
             <section data-section="@band.Name" style="@($"position:absolute;overflow:hidden;{(band.WidthTwips > 0 ? $"left:{Px(band.LeftTwips)}px;width:{Px(band.WidthTwips)}px" : "left:0;width:100%")};top:{Px(band.TopTwips)}px;height:{Px(band.HeightTwips)}px;background:{ReportObjectRenderer.Color(band.Background)};")">
+                @foreach (var anchor in IncludeNavigationAnchors ? band.NavigationAnchors : Array.Empty<string>())
+                {
+                    <span id="@anchor" class="fx-rpt-native-anchor" style="position:absolute;inset:0;pointer-events:none;"></span>
+                }
                 @foreach (var item in band.Objects)
                 {
                     <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">
@@ -30,5 +34,6 @@
 
 @code {
     [Parameter, EditorRequired] public ReportPageSnapshot Page { get; set; } = default!;
+    [Parameter] public bool IncludeNavigationAnchors { get; set; } = true;
     private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
 }

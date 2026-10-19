@@ -16,6 +16,7 @@
                   value="@EffectiveValue"
                   rows="@(Rows ?? 4)"
                   wrap="@WrapMode"
+                  spellcheck="@(SpellCheck?.ToString().ToLowerInvariant())"
                   placeholder="@Placeholder"
                   maxlength="@MaxLength"
                   disabled="@(!Enabled)"
@@ -46,6 +47,7 @@ else
               value="@EffectiveValue"
               rows="@(Rows ?? 4)"
               wrap="@WrapMode"
+              spellcheck="@(SpellCheck?.ToString().ToLowerInvariant())"
               placeholder="@Placeholder"
               maxlength="@MaxLength"
               disabled="@(!Enabled)"
@@ -157,6 +159,7 @@ else
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public int? Rows { get; set; }
+    [Parameter] public bool? SpellCheck { get; set; }
     /// <summary>Controls which native textarea scrollbars are available.</summary>
     [Parameter] public TextAreaScrollBars ScrollBars { get; set; } = TextAreaScrollBars.Auto;
     /// <summary>Enables the classic VB6-style dedicated vertical scrollbar with disabled/enabled states.</summary>
@@ -217,8 +220,8 @@ else
                 committed = committed[..MaxLength.Value];
 
             Value = committed;
-            _uncontrolledRenderedText = committed;
-            _uncontrolledInitialized = true;
+            // Only OnParametersSet initializes the browser-owned render seed.
+            // A delayed blur must not repaint over typing resumed in the meantime.
             _suppressNextNativeInputRender = true;
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(committed);
@@ -234,6 +237,49 @@ else
     [Parameter] public bool SelectAllOnDoubleClick { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
+
+    /// <summary>Focus this editor without changing its caret or selection.</summary>
+    public ValueTask FocusAsync() => _inputElement.FocusAsync();
+
+    /// <summary>Read the current browser draft before a host command, without waiting for blur.</summary>
+    public async Task FlushClientBufferedValueAsync()
+    {
+        if (!IsDomOwned) return;
+        // Without the browser module the editor never took the text over: Value is already current.
+        var module = await GetControlJsModuleAsync();
+        if (module is null) return;
+        var value = await module.InvokeAsync<string>("getTextValue", _inputElement);
+        await PublishBrowserValueAsync(value);
+    }
+
+    /// <summary>Replace the selection (or insert at the caret) with the complete text.
+    /// Returns false if MaxLength would be exceeded; no partial token is inserted.</summary>
+    public async Task<bool> InsertTextAsync(string text)
+    {
+        if (!Enabled || string.IsNullOrEmpty(text)) return false;
+        var module = await GetControlJsModuleAsync()
+            ?? throw new InvalidOperationException("The text editor is not available.");
+        var result = await module.InvokeAsync<TextInsertionResult>("insertTextAtSelection", _inputElement, text);
+        if (!result.Accepted) return false;
+        await PublishBrowserValueAsync(result.Value);
+        return true;
+    }
+
+    private async Task PublishBrowserValueAsync(string value)
+    {
+        Value = value;
+        if (!ValueChanged.HasDelegate) return;
+        // The DOM already contains this draft. Keep the browser-owned render seed
+        // unchanged so the host's re-render cannot repaint over subsequent typing.
+        _suppressNextNativeInputRender = true;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    private sealed class TextInsertionResult
+    {
+        public bool Accepted { get; set; }
+        public string Value { get; set; } = "";
+    }
 
     /// <summary>Bind only events that have observable behavior. A bound Blazor
     /// event crosses the SignalR circuit even when its handler is a no-op.

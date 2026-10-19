@@ -36,6 +36,22 @@
     margin-left: 30px;
 }
 
+/* Expanded forms are not compact data cells and must grow to their content. */
+.fx-treegrid-details-cell {
+    height: auto;
+    padding: 8px;
+    white-space: normal;
+    vertical-align: top;
+    background: #f0f0f0;
+    border-bottom: 1px solid #c8c8c8;
+}
+
+.fx-treegrid-details-content {
+    min-width: 0;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
 .fx-treegrid-toolbar {
     display: flex;
     align-items: center;

@@ -4307,11 +4307,15 @@ export function positionDatePickerDropdown(hostEl, dropdownEl, popupLayerEl) {
  * Rows are sampled around the scroll viewport so one long value far off-screen
  * cannot stretch the column. Returns { field: px } for the fields it could measure;
  * the caller falls back to its own estimate for anything missing.
+ *
+ * `texts` ({ field: [display text, ...] }, optional): sent when the host asked for every
+ * row. They cover rows the grid does not render, and they are ranked by their width in
+ * the column's own cell font, not by character count.
  */
 // `dom` names the control's markup (header cells, header label, data cells, scroll
 // surface); omitted = GridControl. TreeGridControl passes its own selectors and shares
 // everything below.
-export function measureColumnContentWidths(gridRoot, fields, sampleSize, dom) {
+export function measureColumnContentWidths(gridRoot, fields, sampleSize, dom, texts) {
     if (!gridRoot || !fields || !fields.length) return null;
 
     // headerSlack / iconWidth: fixed allowances (GridControl's original numbers); null =
@@ -4415,6 +4419,38 @@ export function measureColumnContentWidths(gridRoot, fields, sampleSize, dom) {
         for (const [field, cells] of byField) {
             cells.sort((a, b) => proxy(b) - proxy(a));
             for (const td of cells.slice(0, 3)) bump(field, intrinsic(td) + 6);
+        }
+    }
+
+    // Every-row best fit (VB6 AutoResize over the whole sheet): rank the column's texts on a
+    // canvas in the font of one of its rendered plain-text cells, then lay the widest three
+    // out exactly like that cell (its font, letter spacing, padding and borders). A failure
+    // here keeps the rendered-row widths above rather than losing the whole measurement.
+    const ctx = texts ? (measureColumnContentWidths.canvas ||= document.createElement("canvas")).getContext("2d") : null;
+    if (ctx) {
+        for (const field of Object.keys(texts)) {
+            try {
+                const list = texts[field];
+                if (!wanted.has(field) || !Array.isArray(list) || !list.length) continue;
+                const sample = [...gridRoot.querySelectorAll(`tbody td[${o.fieldAttribute}]`)]
+                    .find(td => td.getAttribute(o.fieldAttribute) === field && td.children.length === 0);
+                if (!sample) continue;
+                const cs = getComputedStyle(sample);
+                ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+                if ("letterSpacing" in ctx) ctx.letterSpacing = cs.letterSpacing === "normal" ? "0px" : cs.letterSpacing;
+                const widest = list.map(text => [String(text), ctx.measureText(String(text)).width])
+                    .sort((a, b) => b[1] - a[1]).slice(0, 3);
+                host.style.font = cs.font;
+                host.style.letterSpacing = cs.letterSpacing;
+                for (const [text] of widest) {
+                    host.textContent = text;
+                    bump(field, host.getBoundingClientRect().width + edges(sample) + 6);
+                }
+            } catch (_) {
+                // This column keeps its rendered-row width.
+            } finally {
+                host.textContent = "";
+            }
         }
     }
 

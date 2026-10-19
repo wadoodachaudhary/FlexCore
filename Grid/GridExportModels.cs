@@ -123,6 +123,15 @@ public sealed class GridExportColumn
     public GridPrintCellIcon PrintCellIcon { get; set; }
 }
 
+public sealed class GridExportCellStyle
+{
+    public string? ForeColorHex { get; set; }
+    public string? BackColorHex { get; set; }
+    public bool? Bold { get; set; }
+    public bool? Italic { get; set; }
+    public bool? Strikethrough { get; set; }
+}
+
 public sealed class GridExportRow
 {
     public GridExportRow()
@@ -148,6 +157,11 @@ public sealed class GridExportRow
     /// <summary>Optional per-cell .NET formats for native XLSX values.</summary>
     public List<string?> XlsxFormats { get; } = new();
     public bool IsBold { get; set; }
+    public bool IsItalic { get; set; }
+    public bool IsStrikethrough { get; set; }
+    public string? ForeColorHex { get; set; }
+    public string? BackColorHex { get; set; }
+    public List<GridExportCellStyle?> CellStyles { get; } = new();
 
     /// <summary>
     /// Allows XLSX output to apply formulas declared by the corresponding
@@ -299,10 +313,27 @@ public static class GridExporter
                         ? row.Values[colIndex]
                         : null;
 
+                var cellStyle = colIndex < row.CellStyles.Count ? row.CellStyles[colIndex] : null;
+                var bold = cellStyle?.Bold ?? row.IsBold;
+                var italic = cellStyle?.Italic ?? row.IsItalic;
+                var strikethrough = cellStyle?.Strikethrough ?? row.IsStrikethrough;
+                var foreColorHex = NormalizeExportColorHex(
+                    cellStyle?.ForeColorHex ?? row.ForeColorHex,
+                    ignoreWhite: false,
+                    ignoreBlack: true);
+                var backColorHex = NormalizeExportColorHex(
+                        cellStyle?.BackColorHex ?? row.BackColorHex,
+                        ignoreWhite: true,
+                        ignoreBlack: false)
+                    ?? (table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null);
+
                 var cell = new XlsxCell
                 {
-                    Bold = row.IsBold,
-                    FillHex = table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null,
+                    Bold = bold,
+                    Italic = italic,
+                    Strikethrough = strikethrough,
+                    FontColorHex = foreColorHex,
+                    FillHex = backColorHex,
                     BorderHex = "e6e6e6"
                 };
 
@@ -351,6 +382,27 @@ public static class GridExporter
         }
 
         return XlsxWriter.Write(sheet);
+    }
+
+    private static string? NormalizeExportColorHex(string? hex, bool ignoreWhite, bool ignoreBlack)
+    {
+        if (string.IsNullOrWhiteSpace(hex))
+            return null;
+
+        var trimmed = hex.Trim().TrimStart('#');
+        if (trimmed.Length == 3 && trimmed.All(Uri.IsHexDigit))
+            trimmed = string.Concat(trimmed[0], trimmed[0], trimmed[1], trimmed[1], trimmed[2], trimmed[2]);
+
+        if (trimmed.Length != 6 || !trimmed.All(Uri.IsHexDigit))
+            return null;
+
+        var upper = trimmed.ToUpperInvariant();
+        if (ignoreWhite && upper == "FFFFFF")
+            return null;
+        if (ignoreBlack && upper == "000000")
+            return null;
+
+        return upper;
     }
 
     private static double ConvertPixelsToExcelColumnWidth(double width)
@@ -845,11 +897,38 @@ public static class GridExporter
             sb.Append(row.IsBold ? "<tr class=\"bold\">" : "<tr>");
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
-                var css = table.HighlightColumnIndexes.Contains(colIndex) ? " class=\"highlight\"" : "";
-                var align = colIndex < table.Columns.Count && table.Columns[colIndex].TextAlign != TextAlign.Left
-                    ? $" style=\"text-align:{(table.Columns[colIndex].TextAlign == TextAlign.Right ? "right" : "center")}\""
-                    : "";
-                sb.Append("<td").Append(css).Append(align).Append(">")
+                var cellStyle = colIndex < row.CellStyles.Count ? row.CellStyles[colIndex] : null;
+                var bold = cellStyle?.Bold ?? row.IsBold;
+                var italic = cellStyle?.Italic ?? row.IsItalic;
+                var strikethrough = cellStyle?.Strikethrough ?? row.IsStrikethrough;
+                var foreColorHex = NormalizeExportColorHex(
+                    cellStyle?.ForeColorHex ?? row.ForeColorHex,
+                    ignoreWhite: false,
+                    ignoreBlack: true);
+                var backColorHex = NormalizeExportColorHex(
+                    cellStyle?.BackColorHex ?? row.BackColorHex,
+                    ignoreWhite: true,
+                    ignoreBlack: false);
+
+                var css = table.HighlightColumnIndexes.Contains(colIndex) && backColorHex == null ? " class=\"highlight\"" : "";
+                var styles = new List<string>(6);
+                if (colIndex < table.Columns.Count && table.Columns[colIndex].TextAlign != TextAlign.Left)
+                    styles.Add($"text-align:{(table.Columns[colIndex].TextAlign == TextAlign.Right ? "right" : "center")}");
+                if (foreColorHex != null)
+                    styles.Add($"color:#{foreColorHex}");
+                if (backColorHex != null)
+                    styles.Add($"background:#{backColorHex}");
+                if (bold && !row.IsBold)
+                    styles.Add("font-weight:bold");
+                else if (!bold && row.IsBold)
+                    styles.Add("font-weight:normal");
+                if (italic)
+                    styles.Add("font-style:italic");
+                if (strikethrough)
+                    styles.Add("text-decoration:line-through");
+
+                var styleAttr = styles.Count > 0 ? $" style=\"{string.Join(";", styles)}\"" : "";
+                sb.Append("<td").Append(css).Append(styleAttr).Append(">")
                   .Append(Html(colIndex < row.Values.Count ? ToExportString(row.Values[colIndex]) : ""))
                   .Append("</td>");
             }

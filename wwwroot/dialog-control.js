@@ -274,8 +274,35 @@ function dialogDefaultEnterKind(root, e) {
     return target.closest(DIALOG_ENTER_OWNERS) ? null : "control";
 }
 
+// The gesture of a key event as GridControl's custom shortcuts spell it: modifiers in the order Ctrl, Alt,
+// Shift, Meta, then the key, lower-cased ("ctrl+s").
+function keyGesture(e) {
+    const key = e.key === " " ? "Space" : e.key === "Esc" ? "Escape" : e.key;
+    const parts = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Meta");
+    parts.push(key);
+    return parts.join("+").toLowerCase();
+}
+
 export function registerDialogKeys(root, dotNetRef) {
     if (!root) return;
+    // Gestures the host handles itself for the whole window (DialogControl.HostKeyboardShortcuts, on the
+    // overlay as data-fx-dialog-shortcuts): the browser's own default is prevented wherever the key is
+    // pressed in the window — the backdrop included, which a click leaves focused outside the dialog element
+    // and outside any grid's guard — and the event still bubbles to the host's keydown handler. Capture phase
+    // on the overlay, so a control that stops propagation cannot keep it from the browser. A nested dialog's
+    // keys are its own. Read at each key, so a changed parameter applies without re-registering.
+    const overlay = root.parentElement;
+    if (overlay) overlay.addEventListener("keydown", e => {
+        const gestures = overlay.dataset.fxDialogShortcuts;
+        if (!gestures || e.isComposing) return;
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target || (target !== overlay && target.closest("[role='dialog']") !== root)) return;
+        if (gestures.split("|").includes(keyGesture(e))) e.preventDefault();
+    }, true);
     // Text boxes typed into since their last change event. A text input only
     // fires change on blur, so the default button commits it first — as a
     // blur would — or OnEnter would read the value from before the typing.
@@ -313,15 +340,21 @@ export function registerDialogKeys(root, dotNetRef) {
             // overlay (where focus becomes invisible and Tab looks dead).
             const active = document.activeElement;
             if (active?.dataset?.fxTabCapture) return; // TabSpaces editor owns Tab
-            const tabbables = [...root.querySelectorAll(DIALOG_TABBABLE)]
-                .filter(el => !el.closest(".fx-dialog-header") && el.offsetParent !== null);
-            if (!tabbables.length) return;
-            const first = tabbables[0], last = tabbables[tabbables.length - 1];
-            const inCycle = tabbables.includes(active);
-            if (!e.shiftKey && (active === last || !inCycle)) {
+            // The stops are the controls the browser's own Tab visits. A control with a negative
+            // tabindex (a label that acts as a link, a grid's cell editor, a menu) takes the focus from a
+            // click or a script but is no stop, so it never bounds the cycle: a dialog whose last stop is
+            // followed by such controls used to let Tab out to the covered page. From one of them Tab goes
+            // on to the next stop in the dialog and wraps when none is left.
+            const stops = [...root.querySelectorAll(DIALOG_TABBABLE)]
+                .filter(el => !el.closest(".fx-dialog-header") && el.offsetParent !== null && el.tabIndex >= 0);
+            if (!stops.length) return;
+            const first = stops[0], last = stops[stops.length - 1];
+            const inside = active instanceof Element && root.contains(active) && !active.closest(".fx-dialog-header");
+            const noStop = position => !stops.some(el => active.compareDocumentPosition(el) & position);
+            if (!e.shiftKey && (!inside || noStop(Node.DOCUMENT_POSITION_FOLLOWING))) {
                 e.preventDefault();
                 first.focus();
-            } else if (e.shiftKey && (active === first || !inCycle)) {
+            } else if (e.shiftKey && (!inside || noStop(Node.DOCUMENT_POSITION_PRECEDING))) {
                 e.preventDefault();
                 last.focus();
             }

@@ -4,8 +4,10 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    public const int Current = 2;
+    public const int Current = 6;
     public const string Attribute = "FlexKitXmlVersion";
+    /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
+    internal const int DrillHeaderOption = 5;
 
     /// <summary>The converter version stamped on a report XML file, or 0 when it has none (an earlier FlexKit conversion or another exporter).</summary>
     public static int Stored(string xmlPath)
@@ -78,6 +80,8 @@ public sealed class CrystalReportCore
     public bool EnableSaveDataWithReport { get; set; } = true;
 
     public bool EnableSaveSummariesWithReport { get; set; } = true;
+
+    public bool ShowAllHeadersOnDrillDown { get; set; }
 
     public int LeftMargin { get; set; } = 360;
 
@@ -394,6 +398,9 @@ public sealed class CrystalParameterFieldModel
 
     public List<CrystalParameterDefaultValueModel> CurrentValues { get; } = [];
 
+    /// <summary>Crystal's authored list of values for this prompt (the PromptManager LOV source); null when the prompt has none.</summary>
+    public CrystalParameterPickListModel? PickList { get; set; }
+
     public string FormulaName => "{?" + Name + "}";
 }
 
@@ -402,6 +409,23 @@ public sealed class CrystalParameterDefaultValueModel
     public string Value { get; set; } = "";
 
     public string Description { get; set; } = "";
+}
+
+/// <summary>
+/// The list Crystal's own "Enter Parameter Values" dialog offers for a prompt: the values of
+/// <see cref="ValueField"/> in <see cref="Table"/>, optionally described by
+/// <see cref="DescriptionField"/> and sorted per <see cref="Sort"/>. Crystal applies no other filter.
+/// </summary>
+public sealed class CrystalParameterPickListModel
+{
+    public string Table { get; set; } = "";
+
+    public string ValueField { get; set; } = "";
+
+    public string? DescriptionField { get; set; }
+
+    /// <summary>The prompt's SortingType: "Ascending", "Descending" or "NoSort".</summary>
+    public string Sort { get; set; } = "Ascending";
 }
 
 public sealed class CrystalSummaryFieldModel
@@ -541,6 +565,11 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
+    internal ReportNativeNumberFormat? NativeCurrencyFormat { get; set; }
+    public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
+    internal List<ReportNativeNumericFormat> NativeNumericCandidates { get; } = [];
     public ReportAnalysisDefinition? Analysis { get; set; }
     public string AnalysisDiagnostic { get; set; } = "";
     public CrystalUnsupportedObjectSource? UnsupportedSource { get; set; }
@@ -614,6 +643,7 @@ public sealed class CrystalObjectFormatModel
 
 public sealed class CrystalBorderModel
 {
+    public int LineWidthTwips { get => LineWidth ?? 15; set => LineWidth = value; }
     internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string BottomLineStyle { get; set; } = "NoLine";
@@ -625,6 +655,9 @@ public sealed class CrystalBorderModel
     public string RightLineStyle { get; set; } = "NoLine";
 
     public string TopLineStyle { get; set; } = "NoLine";
+
+    /// <summary>Saved stroke width in twips; zero denotes a device hairline, null means absent metadata.</summary>
+    public int? LineWidth { get; set; }
 
     public CrystalColorModel BackgroundColor { get; set; } = CrystalColorModel.TransparentWhite();
 

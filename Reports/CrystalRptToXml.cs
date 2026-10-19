@@ -4,6 +4,13 @@ using Fx.ControlKit.Reports.NativeCrystal;
 
 namespace Fx.ControlKit.Reports;
 
+/// <param name="ExtractSubreports">Writes each embedded subreport to its own XML file as well.</param>
+/// <param name="Progress">Receives a line per conversion stage and per diagnostic.</param>
+/// <param name="Timeout">
+/// How long the conversion may run; past it the conversion stops at its next check and throws a
+/// <see cref="TimeoutException"/>. Null or <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+/// sets no limit; zero or less stops it before it starts.
+/// </param>
 public sealed record CrystalRptConversionOptions(
     bool ExtractSubreports = true,
     Action<string>? Progress = null,
@@ -24,11 +31,7 @@ public static class CrystalRptToXml
         CrystalRptConversionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        return await Task.Run(() =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Convert(rptPath, xmlPath, options);
-        }, cancellationToken);
+        return await Task.Run(() => Convert(rptPath, xmlPath, options, cancellationToken), cancellationToken);
     }
 
     public static CrystalRptConversionResult Convert(
@@ -36,8 +39,55 @@ public static class CrystalRptToXml
         string xmlPath,
         CrystalRptConversionOptions? options = null)
     {
-        options ??= new CrystalRptConversionOptions();
+        return Convert(rptPath, xmlPath, options, CancellationToken.None);
+    }
 
+    /// <summary>
+    /// Converts the report; <paramref name="cancellationToken"/> and
+    /// <see cref="CrystalRptConversionOptions.Timeout"/> are checked between the report's streams
+    /// and subreports and while its prompt definitions are decoded.
+    /// </summary>
+    /// <exception cref="TimeoutException">The conversion ran past <see cref="CrystalRptConversionOptions.Timeout"/>.</exception>
+    public static CrystalRptConversionResult Convert(
+        string rptPath,
+        string xmlPath,
+        CrystalRptConversionOptions? options,
+        CancellationToken cancellationToken)
+    {
+        options ??= new CrystalRptConversionOptions();
+        if (options.Timeout is not { } limit || limit == Timeout.InfiniteTimeSpan)
+        {
+            return ConvertCore(rptPath, xmlPath, options, cancellationToken);
+        }
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        if (limit > TimeSpan.Zero)
+        {
+            deadline.CancelAfter(limit);
+        }
+        else
+        {
+            deadline.Cancel();
+        }
+
+        try
+        {
+            return ConvertCore(rptPath, xmlPath, options, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Converting '{Path.GetFileName(rptPath)}' took longer than {limit.TotalSeconds:0.#} seconds and was stopped.");
+        }
+    }
+
+    private static CrystalRptConversionResult ConvertCore(
+        string rptPath,
+        string xmlPath,
+        CrystalRptConversionOptions options,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var reportPath = Path.GetFullPath(rptPath);
         var outputPath = Path.GetFullPath(xmlPath);
         if (!File.Exists(reportPath))
@@ -62,7 +112,7 @@ public static class CrystalRptToXml
         }
 
         options.Progress?.Invoke("Reading Crystal RPT binary.");
-        NativeCrystalRptConverter.Convert(reportPath, outputPath, options);
+        NativeCrystalRptConverter.Convert(reportPath, outputPath, options, cancellationToken);
 
         if (!File.Exists(outputPath))
         {

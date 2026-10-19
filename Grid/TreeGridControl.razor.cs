@@ -16,6 +16,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>Optional form/content below an expanded node, spanning all columns.
+    /// Detail controls keep their own keyboard and mouse events; the outline's
+    /// expand/collapse and selection behavior is unchanged for other rows.</summary>
+    [Parameter] public RenderFragment<TValue>? RowDetailsTemplate { get; set; }
+    [Parameter] public Func<TValue, bool>? RowDetailsPredicate { get; set; }
+
+    private bool HasRowDetails(TValue item) =>
+        RowDetailsTemplate != null && (RowDetailsPredicate?.Invoke(item) ?? true);
+
     /// <summary>Property name of the unique ID field (e.g. "NodeID").</summary>
     [Parameter] public string IdMapping { get; set; } = "";
 
@@ -27,6 +36,10 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     /// <summary>Start with all nodes collapsed.</summary>
     [Parameter] public bool EnableCollapseAll { get; set; }
+
+    /// <summary>Optional initial expansion for each new node. Existing expansion
+    /// still follows PreserveExpansionOnDataChange when the data is refreshed.</summary>
+    [Parameter] public Func<TValue, bool>? InitialExpansionPredicate { get; set; }
 
     /// <summary>When false a new DataSource renders every node at its initial state
     /// (collapsed when EnableCollapseAll) instead of inheriting the previous tree's
@@ -224,6 +237,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     // Events
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
+    /// <summary>Pointer click after selection/focus, separate from keyboard or programmatic selection.</summary>
+    [Parameter] public EventCallback<TreeRowClickEventArgs<TValue>> RowClicked { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
     /// <summary>Fires when a row is right-clicked, AFTER the row has been selected —
@@ -238,6 +253,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// back to <see cref="RowDoubleClicked"/> so mouse and keyboard activation can
     /// share the same host handler.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
+    /// <summary>Keep keyboard focus on the tree after Enter. Disable when the
+    /// activation handler transfers focus to an editor.</summary>
+    [Parameter] public bool RetainFocusOnActivation { get; set; } = true;
     /// <summary>Fires for every keydown reaching the tree grid, BEFORE the built-in
     /// tree navigation runs — the host-form hook for form-specific keys (VB6
     /// gData_KeyDown parity, e.g. Delete clearing a cell value). Purely additive:
@@ -1037,14 +1055,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             {
                 var (item, id) = children[index];
                 var hasChildren = (childrenMap.ContainsKey(id) && childrenMap[id].Count > 0)
-                    || MayHaveUnloadedChildren(item, id);
+                    || MayHaveUnloadedChildren(item, id) || HasRowDetails(item);
                 var isLastSibling = index == children.Count - 1;
                 nextNodes.Add(new TreeNode<TValue>
                 {
                     Data = item,
                     Level = level,
                     HasChildren = hasChildren,
-                    IsExpanded = !EnableCollapseAll,
+                    IsExpanded = InitialExpansionPredicate?.Invoke(item) ?? !EnableCollapseAll,
                     Id = id,
                     ParentId = parentKey,
                     IsLastSibling = isLastSibling,
@@ -1064,14 +1082,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         {
             var root = roots[index];
             var hasChildren = (root.Id != null && childrenMap.ContainsKey(root.Id) && childrenMap[root.Id].Count > 0)
-                || (root.Id is not null && MayHaveUnloadedChildren(root.Item, root.Id));
+                || (root.Id is not null && MayHaveUnloadedChildren(root.Item, root.Id)) || HasRowDetails(root.Item);
             var isLastSibling = index == roots.Count - 1;
             nextNodes.Add(new TreeNode<TValue>
             {
                 Data = root.Item,
                 Level = 0,
                 HasChildren = hasChildren,
-                IsExpanded = !EnableCollapseAll,
+                IsExpanded = InitialExpansionPredicate?.Invoke(root.Item) ?? !EnableCollapseAll,
                 Id = root.Id,
                 ParentId = root.ParentId,
                 IsLastSibling = isLastSibling,
@@ -1156,7 +1174,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         StateHasChanged();
     }
 
-    private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
+    private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex, MouseEventArgs? mouse = null)
     {
         if (_activeEdit is not null && !await FinishActiveEditorAsync()) return;
         node = _flatNodes.FirstOrDefault(n => Equals(n.Id, node.Id)) ?? node;
@@ -1169,6 +1187,12 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
         await SelectNodeAsync(node, visibleIndex);
         await FocusAsync();
+        if (mouse != null && RowClicked.HasDelegate)
+            await RowClicked.InvokeAsync(new TreeRowClickEventArgs<TValue>
+            {
+                Data = node.Data, RowIndex = visibleIndex, Level = node.Level,
+                HasChildren = node.HasChildren, IsExpanded = node.IsExpanded, MouseEvent = mouse
+            });
     }
 
     // ── In-cell editing (CellEditTemplate columns): the cell editor host ──────
@@ -1844,7 +1868,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
 
         var node = visible[selectedIndex];
-        _pendingTreeFocus = true;
+        _pendingTreeFocus = RetainFocusOnActivation;
+        if (!RetainFocusOnActivation) _pendingKeyboardFocusNode = null;
         if (RowActivated.HasDelegate)
             await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
         else if (RowDoubleClicked.HasDelegate)
@@ -2572,6 +2597,11 @@ public class TreeNode<TValue>
     public bool IsLastSibling { get; set; }
     public IReadOnlyList<bool> AncestorLineContinuations { get; set; } = Array.Empty<bool>();
     public ElementReference RowElement { get; set; }
+}
+
+public class TreeRowClickEventArgs<TValue> : TreeRowSelectEventArgs<TValue>
+{
+    public MouseEventArgs MouseEvent { get; set; } = new();
 }
 
 public class TreeRowSelectEventArgs<TValue>

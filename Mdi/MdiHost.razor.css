@@ -29,6 +29,7 @@
 }
 
 .fx-mdi-tab {
+    position: relative; /* anchors the drag drop zones and the insertion bar */
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -59,6 +60,91 @@
     margin-bottom: -1px;
     position: relative;
     z-index: 1;
+}
+
+.fx-mdi-tab.fx-mdi-tab-dragging {
+    opacity: 0.55;
+    cursor: grabbing;
+}
+
+/* Dragging a tab: each other tab's left half means "before it", its right half "after it"
+   (the grid's column-header zones); the zones exist only while a tab is dragged. */
+/* The zones reach over the tab's border, half the 2px gap to each neighbour and the strip's top
+   padding, so the point under the bar belongs to the tab beside it. */
+.fx-mdi-tab-drop-zone {
+    position: absolute;
+    top: -3px;
+    bottom: 0;
+    width: calc(50% + 2px);
+    display: none;
+    z-index: 3;
+}
+
+.fx-mdi-tab-drop-zone-left {
+    left: -2px;
+}
+
+.fx-mdi-tab-drop-zone-right {
+    right: -2px;
+}
+
+.fx-mdi-tabs.fx-mdi-tabs-drag-active .fx-mdi-tab-drop-zone {
+    display: block;
+}
+
+/* The space between Home and the first tab (its margin and the gap) counts as Home: "first". */
+.fx-mdi-tabs.fx-mdi-tabs-drag-active .fx-mdi-tab-home::after {
+    content: "";
+    position: absolute;
+    top: -3px;
+    bottom: 0;
+    left: 100%;
+    width: 8px;
+}
+
+/* Blank strip after the last tab while a tab is dragged: "to the end". */
+.fx-mdi-tabs-end {
+    flex: 1 1 0;
+    min-width: 0;
+    align-self: stretch;
+}
+
+/* The insertion bar between two tabs, drawn as the grid draws its column-move bar
+   (3px, --fx-grid-reorder-pipe-color), over the 2px gap between tabs. */
+.fx-mdi-tab.fx-mdi-tab-drop-before::before,
+.fx-mdi-tab.fx-mdi-tab-drop-after::after {
+    content: "";
+    position: absolute;
+    top: -1px;
+    bottom: -1px;
+    width: 3px;
+    background: var(--fx-grid-reorder-pipe-color, #2b2b2b);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, .28);
+    pointer-events: none;
+    z-index: 4;
+}
+
+.fx-mdi-tab.fx-mdi-tab-drop-before::before {
+    left: -3px;
+}
+
+.fx-mdi-tab.fx-mdi-tab-drop-after::after {
+    right: -3px;
+}
+
+/* Split view: the tabs carry the strips over the panes, blue on the active window's tab and grey
+   on the partner's, which sits between an active and a hidden tab. */
+.fx-mdi-tab.fx-mdi-tab-split-partner {
+    background: #e6e6e6;
+    box-shadow: inset 0 3px 0 #c8c8c8;
+}
+
+.fx-mdi-tab.fx-mdi-tab-split-partner:hover {
+    background: #eeeeee;
+}
+
+.fx-mdi-tabs.fx-mdi-tabs-split .fx-mdi-tab.active {
+    box-shadow: inset 0 3px 0 #3c7fb1;
 }
 
 .fx-mdi-tab-icon {
@@ -250,6 +336,52 @@
     box-sizing: border-box;
 }
 
+
+/* Split view: two equal panes side by side or one above the other. Panes keep their DOM
+   place; CSS order puts the first pane, the divider and the second pane in line. */
+.fx-mdi-panes.fx-mdi-split-side {
+    flex-direction: row;
+}
+
+.fx-mdi-panes.fx-mdi-split-stacked {
+    flex-direction: column;
+}
+
+/* Each split pane is the containing block of its page, so a page's absolute overlay (a loading
+   veil) covers its own pane only. */
+.fx-mdi-panes.fx-mdi-split > .fx-mdi-pane {
+    position: relative;
+    flex: 1 1 0;
+    width: auto;
+    max-width: none;
+    height: auto;
+    max-height: none;
+}
+
+/* A page sized to the viewport (calc(100vh - N)) is held to its pane, and what still does not fit
+   (a min-height, a narrow pane) scrolls rather than being cut off. */
+.fx-mdi-panes.fx-mdi-split > .fx-mdi-pane ::deep .fx-mdi-component {
+    overflow: auto;
+}
+
+.fx-mdi-panes.fx-mdi-split > .fx-mdi-pane ::deep .fx-mdi-component > * {
+    max-height: 100%;
+}
+
+.fx-mdi-split-divider {
+    flex: 0 0 4px;
+    background: #b3b3b3;
+}
+
+/* A strip over each split pane; blue over the pane whose window is active (menus and
+   toolbar act on it). A border, so no page content paints over it. */
+.fx-mdi-panes.fx-mdi-split > .fx-mdi-pane {
+    border-top: 3px solid #c8c8c8;
+}
+
+.fx-mdi-panes.fx-mdi-split > .fx-mdi-pane-active {
+    border-top-color: #3c7fb1;
+}
 
 .fx-mdi-empty {
     flex: 1 1 auto;

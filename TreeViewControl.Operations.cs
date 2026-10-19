@@ -34,7 +34,10 @@ public partial class TreeViewControl
     private List<TreeNode> Roots => Nodes ??= [];
     private List<TreeNodeInfo> _all = [], _visible = [];
     private HashSet<string> _filteredParentIds = new(StringComparer.Ordinal);
-    private bool DisplayExpanded(TreeNode node) => string.IsNullOrWhiteSpace(FilterText) ? node.IsExpanded : _filteredParentIds.Contains(node.Id);
+    private string? _searchText, _lastSearchParam;
+    /// <summary>FilterText wins when set; otherwise the built-in search box text applies.</summary>
+    private string? ActiveFilter => !string.IsNullOrWhiteSpace(FilterText) ? FilterText : _searchText;
+    private bool DisplayExpanded(TreeNode node) => string.IsNullOrWhiteSpace(ActiveFilter) ? node.IsExpanded : _filteredParentIds.Contains(node.Id);
     private readonly Dictionary<string, bool> _expansionIntent = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loading = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
@@ -52,6 +55,7 @@ public partial class TreeViewControl
     protected override void OnParametersSet()
     {
         if (!float.IsFinite(ItemSize) || ItemSize < 20) throw new ArgumentException("Tree ItemSize must be at least 20 pixels.");
+        if (!string.Equals(SearchText, _lastSearchParam, StringComparison.Ordinal)) { _lastSearchParam = SearchText; _searchText = SearchText; }
         if (!ReferenceEquals(_lastRoots, Roots))
         {
             _lastRoots = Roots;
@@ -93,13 +97,14 @@ public partial class TreeViewControl
         TreeViewData.RefreshChecks(Roots, AutoCheck);
         var included = new HashSet<string>(StringComparer.Ordinal);
         var index = _all.ToDictionary(n => n.Node.Id, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(FilterText))
-            foreach (var info in _all.Where(n => n.Node.Text.Contains(FilterText, StringComparison.CurrentCultureIgnoreCase)))
+        var filter = ActiveFilter;
+        if (!string.IsNullOrWhiteSpace(filter))
+            foreach (var info in _all.Where(n => n.Node.Text.Contains(filter, StringComparison.CurrentCultureIgnoreCase)))
                 for (var ancestor = info; ancestor is not null; ancestor = ancestor.Parent is null ? null : index[ancestor.Parent.Id]) included.Add(ancestor.Node.Id);
         _visible = []; var hiddenDepth = int.MaxValue;
         foreach (var info in _all)
         {
-            if (!string.IsNullOrWhiteSpace(FilterText)) { if (included.Contains(info.Node.Id)) _visible.Add(info); continue; }
+            if (!string.IsNullOrWhiteSpace(filter)) { if (included.Contains(info.Node.Id)) _visible.Add(info); continue; }
             if (info.Level > hiddenDepth) continue;
             hiddenDepth = info.Node.IsExpanded ? int.MaxValue : info.Level; _visible.Add(info);
         }
@@ -211,7 +216,7 @@ public partial class TreeViewControl
     public async Task EnsureVisibleAsync(string id)
     {
         var info = _all.FirstOrDefault(n => n.Node.Id == id) ?? throw new ArgumentException("Unknown tree node.");
-        if (!string.IsNullOrWhiteSpace(FilterText) && !_visible.Any(n => n.Node.Id == id))
+        if (!string.IsNullOrWhiteSpace(ActiveFilter) && !_visible.Any(n => n.Node.Id == id))
             throw new InvalidOperationException("Clear the tree filter before revealing this node.");
         for (var parent = info.Parent; parent is not null; parent = _all.First(n => n.Node == parent).Parent) parent.IsExpanded = true;
         Reindex(); _focusId = id; _revealId = id; await PublishExpansionAsync(); await InvokeAsync(StateHasChanged);
@@ -219,7 +224,7 @@ public partial class TreeViewControl
     public async Task BeginEditAsync(string id)
     {
         if (!AllowEditing || Find(id) is not { } node || node.IsDisabled) return;
-        if (!string.IsNullOrWhiteSpace(FilterText) && !_visible.Any(n => n.Node.Id == id))
+        if (!string.IsNullOrWhiteSpace(ActiveFilter) && !_visible.Any(n => n.Node.Id == id))
         {
             await FailAsync("Clear the tree filter before editing this node.");
             return;

@@ -203,7 +203,7 @@ public sealed record CrystalValueType(CrystalBaseType BaseType, bool IsArray = f
             "date" => CrystalBaseType.Date, "datetime" => CrystalBaseType.DateTime, "time" => CrystalBaseType.Time,
             "boolean" or "bool" => CrystalBaseType.Boolean, "currency" => CrystalBaseType.Currency,
             "string" or "persistentmemo" or "memo" => CrystalBaseType.String,
-            "number" or "decimal" or "long" or "short" or "byte" or "float" or "double" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s" => CrystalBaseType.Number,
+            "number" or "integer" or "decimal" or "long" or "short" or "byte" or "float" or "double" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s" => CrystalBaseType.Number,
             _ => null
         };
         return type is null ? null : new(type.Value, isArray, isRange);

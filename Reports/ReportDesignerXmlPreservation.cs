@@ -15,6 +15,7 @@ public static partial class ReportDesignerXmlSerializer
         {
             var created = BuildSourceDocument(document);
             ApplySelectionMetadata(created.Root!, document);
+            ApplySqlResultFields(created.Root!, document);
             if (!string.IsNullOrWhiteSpace(document.CustomSql))
                 EnsureChild(EnsureChild(created.Root!, MetadataElementName), "Sql").SetAttributeValue("Query", document.CustomSql);
             return created;
@@ -28,6 +29,8 @@ public static partial class ReportDesignerXmlSerializer
         var sources = document.SourceItems.Concat(document.SourceSections).Concat(document.SourceObjects)
             .ToDictionary(pair => pair.Key, pair => nodes[pair.Value], StringComparer.Ordinal);
 
+        ApplyDrillHeaderOption(root);
+        ApplySqlResultFields(root, document);
         if (document.Title != before.Title)
             EnsureChild(root, "Summaryinfo").SetAttributeValue("ReportTitle", document.Title);
         PatchChild(root, BuildPrintOptions(before.Page), BuildPrintOptions(document.Page));
@@ -394,6 +397,27 @@ public static partial class ReportDesignerXmlSerializer
         TimeSpan time => $"Time({time.Hours}, {time.Minutes}, {time.Seconds})",
         _ => "\"" + value.ToString()!.Replace("\"", "\"\"", StringComparison.Ordinal) + "\""
     };
+
+    private const string DrillHeaderAttribute = "ShowAllHeadersOnDrillDown";
+
+    /// <summary>A new report's options, with ShowAllHeadersOnDrillDown off as in Crystal.</summary>
+    private static XElement NewReportOptions() => new("ReportOptions", new XAttribute(DrillHeaderAttribute, "false"));
+
+    // Native drill-down follows the main report's ShowAllHeadersOnDrillDown option. A source written before converters recorded it
+    // (or by the designer before it wrote it) gains Crystal's default for a new report; an authored value is kept. A converter's
+    // subreport definition carries the version stamp but no ReportOptions: the option belongs to the main report, so it is left alone.
+    private static void ApplyDrillHeaderOption(XElement root)
+    {
+        if (root.Element("ReportOptions") is { } options)
+        {
+            if (options.Attribute(DrillHeaderAttribute) is null) options.SetAttributeValue(DrillHeaderAttribute, "false");
+            return;
+        }
+        if (root.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null) return;
+        if (Child(root, "PrintOptions") is { } print) print.AddBeforeSelf(NewReportOptions());
+        else if (Child(root, "Summaryinfo") is { } summary) summary.AddAfterSelf(NewReportOptions());
+        else root.AddFirst(NewReportOptions());
+    }
 
     private static void ApplySelectionMetadata(XElement root, ReportDesignerDocument document)
     {

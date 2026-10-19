@@ -285,6 +285,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public double MinRowHeight { get; set; } = 16;
     [Parameter] public Func<TValue, int, double?>? RowHeightSelector { get; set; }
     [Parameter] public Func<TValue, int, string?>? RowCssClassSelector { get; set; }
+    /// <summary>Optional row style selector used when exporting rows to Excel/HTML.</summary>
+    [Parameter] public Func<TValue, int, GridExportCellStyle?>? RowExportStyleSelector { get; set; }
+    /// <summary>Optional cell style selector used when exporting cells to Excel/HTML.</summary>
+    [Parameter] public Func<TValue, string, int, GridExportCellStyle?>? CellExportStyleSelector { get; set; }
     /// <summary>Optional row hover tooltip: the returned text becomes the data row's
     /// <c>title</c>, so it shows wherever the pointer is on that row (a cell with its own
     /// title, e.g. <see cref="ClipMode.EllipsisWithTooltip"/>, keeps its own). Null or empty
@@ -543,6 +547,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// stretch the column.</summary>
     [Parameter] public int AutoFitSampleSize { get; set; } = 50;
 
+    /// <summary>Opt-in: when <see cref="AutoFitSampleSize"/> also covers every row in view, a
+    /// best fit measures every row's display text, including rows the grid does not render
+    /// (row virtualization keeps only a window in the DOM), ranked by rendered width in the
+    /// column's cell font. Default off: best fit measures the rendered rows around the
+    /// viewport only.</summary>
+    [Parameter] public bool AutoFitEveryRow { get; set; }
+
     /// <summary>Floor for a best-fit width, in px. A column's own
     /// <see cref="GridColumn.MinWidth"/> wins when it sets one.</summary>
     [Parameter] public double AutoFitMinWidth { get; set; } = 40;
@@ -550,6 +561,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Ceiling for a best-fit width, in px. A column's own
     /// <see cref="GridColumn.MaxWidth"/> wins when it sets one.</summary>
     [Parameter] public double AutoFitMaxWidth { get; set; }
+
+    /// <summary>Optional space beyond best-fit content width. Defaults to 1; column and grid maximums still apply.</summary>
+    [Parameter] public double AutoFitWidthScale { get; set; } = 1;
 
     /// <summary>Measure real rendered text through the DOM instead of estimating from
     /// character counts. Exact, because clipped cells still report their full
@@ -627,6 +641,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// header row.
     /// </summary>
     [Parameter] public Func<string, string, IReadOnlyList<TValue>, string>? GroupHeaderTextSelector { get; set; }
+
+    /// <summary>
+    /// When true, a right-click on a group header row makes that group header current, as a
+    /// left click does, before the context-menu event reaches the host, which can then read
+    /// <see cref="GetCurrentGroup"/>. Off by default: a right-click on a group header changes
+    /// nothing.
+    /// </summary>
+    [Parameter] public bool FocusGroupHeaderOnContextMenu { get; set; }
 
     /// <summary>Aggregate row definitions for group footers and grid footer.</summary>
     [Parameter] public List<AggregateRow>? AggregateRows { get; set; }
@@ -1187,6 +1209,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [Parameter] public bool EnsureTrailingNewRow { get; set; }
     /// <summary>Optional predicate that tells the grid whether its tracked trailing new row is still blank.</summary>
     [Parameter] public Func<TValue, bool>? IsTrailingNewRow { get; set; }
+    /// <summary>Show the tracked trailing new row with no cell text while it is still blank (<see cref="IsTrailingNewRow"/>,
+    /// which this option requires), whatever defaults <see cref="NewItemFactory"/> gave it, as a legacy grid's empty append
+    /// row looks; a number cell's editor there also opens empty. Other rows keep their text, zeros included. Opt-in.</summary>
+    [Parameter] public bool BlankTrailingNewRowText { get; set; }
+
+    private bool ShowsBlankTrailingNewRow(TValue row)
+        => BlankTrailingNewRowText && IsTrailingNewRow != null && IsPinnedTrailingNewRow(row);
     /// <summary>When enabled, moving forward from the last cell appends a new row and focuses its first editable cell.</summary>
     [Parameter] public bool AddNewRowOnLastCellExit { get; set; }
     /// <summary>Optional guard for <see cref="AddNewRowOnLastCellExit"/>; return false to leave focus at the grid edge.</summary>
@@ -1597,6 +1626,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private bool _initialScrollResetOnFirstDataPending = true;
     private bool _pendingFirstRowSelection;
     private string? _focusedGroupPath;
+    private GroupResult<TValue>? _focusedGroup;
     private int? _lastHostResolvedPageSize;
     private bool _renderPassActive;
     private List<GridColumn>? _renderVisibleColumns;
@@ -1700,6 +1730,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? _resizingCol;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    private bool _columnResizeDragged;
+    private bool _gripAutoFitHandled;
 
     // Double-click on the grip is detected from two mousedowns rather than from the
     // DOM's dblclick event — see GripDoubleClickDetector (shared with TreeGridControl).
@@ -6325,6 +6357,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private void HandleCellContextMenu(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
         var resolvedRowIndex = ResolveRowIndex(item, rowIndex);
+        // The right-clicked record is current, so no group header is. A grid that opted in also
+        // drops the header highlight; any other grid paints exactly as before.
+        _focusedGroup = null;
+        if (FocusGroupHeaderOnContextMenu)
+            _focusedGroupPath = null;
         if (!IsCellSelectable(item, VisibleColumns.ElementAtOrDefault(cellIndex)))
         {
             // No cell cursor on a blocked cell, but the current RECORD still follows the
@@ -6630,8 +6667,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await CommitPendingRowSelectionTypeAheadAsync(collapseSelection: false);
     }
 
-    private void HandleGridMouseUp(MouseEventArgs args)
+    private async Task HandleGridMouseUp(MouseEventArgs args)
     {
+        if (_resizingCol != null)
+        {
+            await EndGridResizeFromBrowserAsync(args.ClientX, args.ClientY);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
         // End the drag on mouseup so the cursor/visual state cannot stay
         // latched if the browser swallows the trailing click. The next click,
         // when it exists, is still swallowed so the selected range survives.
@@ -8676,7 +8719,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _batchEditItem = item;
         _batchEditRowIndex = ResolveRowIndex(item, rowIndex);
         _batchEditField = col.Field;
-        _batchEditValue = GetPropertyValue(item, col.Field)?.ToString() ?? "";
+        _batchEditValue = col.Type == ColumnType.Number && ShowsBlankTrailingNewRow(item)
+            ? ""
+            : GetPropertyValue(item, col.Field)?.ToString() ?? "";
         _batchEditDirty = false;  // Reset on every new edit start.
         _clientBufferedTypingUnattached = false;
         _batchEditReplaceOnFirstInput = replaceOnFirstInput;
@@ -13005,6 +13050,35 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     internal bool IsColumnVisible(GridColumn col)
         => _visibilityOverrides.TryGetValue(col.Field, out var ov) ? ov : col.Visible;
 
+    /// <summary>Forgets the column choices this grid holds for itself: columns shown or hidden
+    /// through Choose Columns, the column panel or "Hide this column", and renamed headers. The
+    /// declared <see cref="GridColumn.Visible"/> and <see cref="GridColumn.HeaderText"/> decide
+    /// again. For a host that owns the layout and puts another saved layout on the same grid:
+    /// those choices otherwise show on the next layout too and are saved with its next change.
+    /// Sort, filters, selection, widths and order are left alone. Nothing is written to a
+    /// settings store and no layout or state event is raised: the host that owns the layout
+    /// saves it.</summary>
+    public void ClearColumnOverrides()
+    {
+        // A column rebuild replays the last persisted settings (ReapplyAfterRebuildIfNeeded).
+        var replayed = _lastAppliedSettings is { Visibility: not null } or { HeaderOverrides: not null };
+        if (_visibilityOverrides.Count == 0 && _headerOverrides.Count == 0 && !replayed)
+            return;
+
+        _visibilityOverrides.Clear();
+        _headerOverrides.Clear();
+        if (replayed)
+        {
+            // A copy: the cached object may be the one the settings store handed over or keeps.
+            var cache = CloneGridSettings(_lastAppliedSettings!);
+            cache.Visibility = null;
+            cache.HeaderOverrides = null;
+            _lastAppliedSettings = cache;
+        }
+        _columnVirtualizationRenderLayout = null;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     /// <summary>Right-click on a column header opens the context menu.</summary>
     private void OpenHeaderContextMenu(MouseEventArgs e, string field)
     {
@@ -13915,6 +13989,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task FocusGroupHeaderAsync(GroupResult<TValue> group)
     {
         _focusedGroupPath = group.GroupPath;
+        _focusedGroup = group;
         _selectedItems.Clear();
         _selectedCells.Clear();
         _activeCell = null;
@@ -14023,6 +14098,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             builder.AddAttribute(2, "onclick", EventCallback.Factory.Create(this, () => FocusGroupHeaderAsync(group)));
             builder.AddAttribute(3, "role", "row");
             builder.AddAttribute(4, "aria-expanded", group.IsCollapsed ? "false" : "true");
+            if (FocusGroupHeaderOnContextMenu)
+            {
+                // The header is current before the first await, so a host handler further up the
+                // bubbling path already reads it from GetCurrentGroup.
+                builder.AddAttribute(5, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, () => FocusGroupHeaderAsync(group)));
+            }
 
             // Indent cells for nesting
             for (int i = 0; i < level; i++)
@@ -14796,8 +14877,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
+        if (e.Button != 0 || !AllowResizing || !col.AllowResizing)
+            return;
+
+        _gripAutoFitHandled = false;
+        _columnResizeDragged = false;
         if (_gripClicks.Register(col.Field, DateTime.UtcNow) && AllowColumnAutoFit)
         {
+            _gripAutoFitHandled = true;
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -14832,6 +14919,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_resizingCol == null) return;
 
         var delta = clientX - _resizeStartX;
+        if (!_columnResizeDragged && Math.Abs(delta) <= GripJitterPx)
+            return;
+        _columnResizeDragged = true;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
         // A deliberate drag is not half of a double-click — stop the next mousedown
@@ -14868,7 +14958,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var settled = col?.RuntimeWidth ?? _resizeStartWidth;
         if (col == null || Math.Abs(settled - _resizeStartWidth) <= GripJitterPx)
         {
-            if (col != null)
+            if (col != null && _columnResizeDragged)
                 col.RuntimeWidth = _resizeStartWidth > 0 ? _resizeStartWidth : col.RuntimeWidth;
             await UnregisterGridResizeCaptureAsync();
             return;
@@ -15651,6 +15741,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private string GetCellDisplayValue(object? item, GridColumn col)
     {
+        if (item is TValue row && ShowsBlankTrailingNewRow(row))
+            return "";
         var rawVal = ResolveCellValue(item, col);
         var val = ResolveCellDisplayValue(item, col, rawVal);
         if (val == null) return "";
@@ -15690,6 +15782,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (val == null)
             return null;
 
+        if (col.DisplayFormatter != null)
+            return GetCellDisplayValue(item, col);
+
         if (col.Type == ColumnType.CheckBox)
             return val is bool boolValue ? (boolValue ? 1 : 0) : val;
 
@@ -15701,6 +15796,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var value = ResolveCellValue(item, col);
         if (value == null || value == DBNull.Value)
             return null;
+
+        if (col.DisplayFormatter != null)
+        {
+            var formatted = GetCellDisplayValue(item, col);
+            return formatted.Length == 0 ? null : formatted;
+        }
+
+        if (col.Type == ColumnType.CheckBox)
+            return value is bool boolValue ? (boolValue ? 1 : 0) : value;
 
         // Preserve true spreadsheet types for arithmetic, sorting and native
         // Excel number/date formatting. Complex/template/display-field values
@@ -15912,6 +16016,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     public IReadOnlyList<TValue> GetFilteredRecords() => FilteredData.ToList();
 
+    /// <summary>The rows on screen in display order: filtered, sorted and, when paging is
+    /// active, the current page only (what a "move all" of the visible batch should take).</summary>
+    public IReadOnlyList<TValue> GetCurrentViewRecords() => PagedData.ToList();
+
     /// <summary>
     /// Terminal-cell state for <see cref="GridTabNavigationMode.WrapRowsUntilEdge"/>,
     /// rendered as data-fx-grid-tab-edge so the PageControl graph's capture-phase
@@ -15985,6 +16093,35 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     public int? GetCurrentRowIndex() => _lastSelectedRowIndex;
+
+    /// <summary>
+    /// The group header that is current: the one last clicked (or right-clicked, with
+    /// <see cref="FocusGroupHeaderOnContextMenu"/>), as the grid last built its groups, so rows
+    /// reloaded since then are in it. Null once a record, a cell or another selection is current,
+    /// when no group header was clicked, or when that group no longer exists.
+    /// </summary>
+    public GroupResult<TValue>? GetCurrentGroup()
+    {
+        if (_focusedGroup is null || _focusedGroupPath is null
+            || !string.Equals(_focusedGroup.GroupPath, _focusedGroupPath, StringComparison.Ordinal)
+            || _activeCell.HasValue || _selectedItems.Count > 0 || _selectedCells.Count > 0)
+            return null;
+        var groups = UsesProviderGrouping ? _providerRootGroups : _passGroups;
+        return groups is null ? null : FindGroupByPath(groups, _focusedGroupPath);
+    }
+
+    private static GroupResult<TValue>? FindGroupByPath(IEnumerable<GroupResult<TValue>> groups, string path)
+    {
+        foreach (var group in groups)
+        {
+            if (string.Equals(group.GroupPath, path, StringComparison.Ordinal))
+                return group;
+            if (path.StartsWith(group.GroupPath + "/", StringComparison.Ordinal)
+                && FindGroupByPath(group.SubGroups, path) is { } child)
+                return child;
+        }
+        return null;
+    }
 
     public TValue? GetCurrentRecord()
     {
@@ -16398,9 +16535,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// since neither one moved the column and re-persisting them would be noise.</summary>
     private async Task HandleResizeHandleDoubleClickAsync(GridColumn col)
     {
-        if (!AllowColumnAutoFit)
+        // The second mousedown may already have fitted this column. Its following
+        // native dblclick must not repeat measurement or layout persistence.
+        if (_gripAutoFitHandled)
+        {
+            _gripAutoFitHandled = false;
+            return;
+        }
+        if (!AllowResizing || !col.AllowResizing || !AllowColumnAutoFit)
             return;
 
+        _gripClicks.Reset();
         _resizingCol = null;
         await UnregisterGridResizeCaptureAsync();
         await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -16418,10 +16563,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (targets.Count == 0)
             return;
 
-        var sample = BuildAutoFitSample();
-        var measured = await MeasureColumnContentWidthsAsync(targets);
+        // The view is read once per fit: the estimate sample and the every-row texts share it.
+        var rows = BuildAutoFitRows(out var rowsAreView);
+        var sampleSize = Math.Max(1, AutoFitSampleSize);
+        var sample = rows.Count > sampleSize ? rows.GetRange(0, sampleSize) : rows;
+        var measured = await MeasureColumnContentWidthsAsync(targets, rowsAreView ? rows : null);
         var changes = ColumnAutoFit.ComputeBestFit(
-            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx);
+            BuildAutoFitTargets(targets, sample), measured, AutoFitMinWidth, AutoFitMaxWidth, _autoFitCeilingPx, AutoFitWidthScale);
         if (changes.Count == 0)
             return;
 
@@ -16466,23 +16614,32 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }).ToList();
 
     /// <summary>Rows to estimate from when the DOM measurement is unavailable — taken
-    /// from the rendered view (sorted, filtered, current page), not the raw DataSource.</summary>
-    private List<TValue> BuildAutoFitSample()
+    /// from the rendered view (sorted, filtered, current page), not the raw DataSource.
+    /// An every-row fit reads one row past the sample, to learn whether the sample covers
+    /// the view. <paramref name="isView"/> is false when the view could not be read and
+    /// the raw DataSource stands in.</summary>
+    private List<TValue> BuildAutoFitRows(out bool isView)
     {
-        var take = Math.Max(1, AutoFitSampleSize);
+        var sampleSize = Math.Max(1, AutoFitSampleSize);
+        // int.MaxValue (every row) must not wrap round to a negative Take.
+        var take = AutoFitEveryRow && sampleSize < int.MaxValue ? sampleSize + 1 : sampleSize;
         try
         {
-            return PagedData.Take(take).ToList();
+            var rows = PagedData.Take(take).ToList();
+            isView = true;
+            return rows;
         }
         catch (Exception)
         {
-            return (DataSource?.Take(take).ToList()) ?? new List<TValue>();
+            isView = false;
+            return (DataSource?.Take(sampleSize).ToList()) ?? new List<TValue>();
         }
     }
 
     private double _autoFitCeilingPx = 2000;
 
-    private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(List<GridColumn> columns)
+    private async Task<Dictionary<string, double>?> MeasureColumnContentWidthsAsync(
+        List<GridColumn> columns, IReadOnlyList<TValue>? view)
     {
         if (!AutoFitUseDomMeasurement)
             return null;
@@ -16506,8 +16663,54 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return null;
         }
         return await ColumnAutoFit.MeasureAsync(_gridJsModule, _gridHostElement, fields, AutoFitSampleSize,
-            ColumnAutoFitDomOptions.Grid, containerPx => _autoFitCeilingPx = containerPx);
+            ColumnAutoFitDomOptions.Grid, containerPx => _autoFitCeilingPx = containerPx,
+            BuildEveryRowAutoFitTexts(columns, view));
     }
+
+    /// <summary>When the host sets <see cref="AutoFitEveryRow"/> and its
+    /// <see cref="AutoFitSampleSize"/> covers every row in view (VB6 AutoResize over the whole
+    /// loaded sheet), the rows the grid does not render (row virtualization keeps only a window
+    /// in the DOM) still count: each plain-text column sends its longest display texts for the
+    /// browser to measure in that column's cell font. Otherwise null: the browser measures
+    /// the rendered rows around the viewport only. <paramref name="view"/> is the fit's rows,
+    /// read from the view with one row past the sample.</summary>
+    private Dictionary<string, string[]>? BuildEveryRowAutoFitTexts(List<GridColumn> columns, IReadOnlyList<TValue>? view)
+    {
+        if (!AutoFitEveryRow || view == null)
+            return null;
+
+        // One row past the sample means it does not cover the view.
+        var sampleSize = Math.Max(1, AutoFitSampleSize);
+        if (view.Count == 0 || view.Count > sampleSize)
+            return null;
+        try
+        {
+            var texts = new Dictionary<string, string[]>(StringComparer.Ordinal);
+            foreach (var col in columns)
+            {
+                if (string.IsNullOrEmpty(col.Field) || texts.ContainsKey(col.Field) || !IsPlainTextAutoFitColumn(col))
+                    continue;
+                // GetCellDisplayValue, not the render cache: rows outside the window are not
+                // being rendered and should not fill the display-value cache.
+                var longest = ColumnAutoFit.LongestTexts(view.Select(item => GetCellDisplayValue(item, col)));
+                if (longest.Length > 0)
+                    texts[col.Field] = longest;
+            }
+            return texts.Count > 0 ? texts : null;
+        }
+        catch (Exception)
+        {
+            // A data error on a row the grid has not rendered: measure the rendered rows only.
+            return null;
+        }
+    }
+
+    /// <summary>A column whose cells show their display text and nothing else (no template,
+    /// command buttons or checkbox), so a text's measured width is the cell's content width.</summary>
+    private static bool IsPlainTextAutoFitColumn(GridColumn col)
+        => col.EffectiveTemplate == null
+           && (col.Commands == null || col.Commands.Count == 0)
+           && col.Type != ColumnType.CheckBox;
 
     private string ResolveExportTitle(string fallback)
     {
@@ -16707,10 +16910,33 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // Local mode supplies all filtered+sorted data. Provider export-all
         // supplies pages for a stable query snapshot; legacy provider mode
         // continues to supply only its loaded window.
-        foreach (var item in items)
+        for (var rowIndex = 0; rowIndex < items.Count; rowIndex++)
         {
+            var item = items[rowIndex];
             var exportRow = new GridExportRow(cols.Select(col => GetCellExportValue(item, col)));
             exportRow.XlsxValues.AddRange(cols.Select(col => GetCellXlsxValue(item, col)));
+            if (RowExportStyleSelector != null)
+            {
+                var rowStyle = RowExportStyleSelector(item, rowIndex);
+                if (rowStyle != null)
+                {
+                    exportRow.ForeColorHex = rowStyle.ForeColorHex;
+                    exportRow.BackColorHex = rowStyle.BackColorHex;
+                    if (rowStyle.Bold.HasValue)
+                        exportRow.IsBold = rowStyle.Bold.Value;
+                    if (rowStyle.Italic.HasValue)
+                        exportRow.IsItalic = rowStyle.Italic.Value;
+                    if (rowStyle.Strikethrough.HasValue)
+                        exportRow.IsStrikethrough = rowStyle.Strikethrough.Value;
+                }
+            }
+
+            if (CellExportStyleSelector != null)
+            {
+                foreach (var col in cols)
+                    exportRow.CellStyles.Add(CellExportStyleSelector(item, col.Field, rowIndex));
+            }
+
             table.Rows.Add(exportRow);
         }
 

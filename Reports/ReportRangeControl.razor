@@ -1,0 +1,44 @@
+@namespace Fx.ControlKit.Reports
+@using System.Globalization
+<div class="fx-report-range">
+    <div>
+        <label>From</label>
+        @if (Type == ReportParameterType.Date)
+        {
+            <DatePickerControl Value="@Date(Value.Start)" ValueChanged="v => Change(Value with { Start = ReportRangeValue.Format(v) })" />
+        }
+        else if (Type is ReportParameterType.Integer or ReportParameterType.Decimal)
+        {
+            <NumericTextBoxControl TValue="decimal?" Value="@Number(Value.Start)" ValueChanged="v => Change(Value with { Start = v?.ToString(CultureInfo.InvariantCulture) })" />
+        }
+        else
+        {
+            <TextBoxControl Value="@Value.Start" ValueChanged="v => Change(Value with { Start = v })" />
+        }
+        <CheckBoxControl Label="Include start" Checked="@Value.IncludeStart" CheckedChanged="v => Change(Value with { IncludeStart = v })" />
+    </div>
+    <div>
+        <label>To</label>
+        @if (Type == ReportParameterType.Date)
+        {
+            <DatePickerControl Value="@Date(Value.End)" ValueChanged="v => Change(Value with { End = ReportRangeValue.Format(v) })" />
+        }
+        else if (Type is ReportParameterType.Integer or ReportParameterType.Decimal)
+        {
+            <NumericTextBoxControl TValue="decimal?" Value="@Number(Value.End)" ValueChanged="v => Change(Value with { End = v?.ToString(CultureInfo.InvariantCulture) })" />
+        }
+        else
+        {
+            <TextBoxControl Value="@Value.End" ValueChanged="v => Change(Value with { End = v })" />
+        }
+        <CheckBoxControl Label="Include end" Checked="@Value.IncludeEnd" CheckedChanged="v => Change(Value with { IncludeEnd = v })" />
+    </div>
+</div>
+@code {
+    [Parameter] public ReportParameterType Type { get; set; }
+    [Parameter] public ReportRangeValue Value { get; set; } = new(null, null);
+    [Parameter] public EventCallback<ReportRangeValue> ValueChanged { get; set; }
+    private Task Change(ReportRangeValue value) => ValueChanged.InvokeAsync(value);
+    private static DateTime? Date(string? value) => DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date) ? date : null;
+    private static decimal? Number(string? value) => decimal.TryParse(value, CultureInfo.InvariantCulture, out var number) ? number : null;
+}

@@ -16,6 +16,7 @@
          @onmouseup="e => HandleOverlayMouseUp(e, true)"
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
+         data-fx-dialog-shortcuts="@HostKeyboardShortcutDomValue"
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
              data-fx-dialog-enter="@(OnEnter.HasDelegate ? "true" : null)"
@@ -150,6 +151,23 @@
     /// <summary>Ctrl+Enter requests close (the OnClose path) — the keyboard
     /// "OK" for dialogs whose close commits.</summary>
     [Parameter] public bool CloseOnCtrlEnter { get; set; }
+
+    /// <summary>
+    /// Key gestures the host handles itself for the whole window (VB6 Form_KeyDown with KeyPreview: a host
+    /// <c>@onkeydown</c> around the dialog), spelled as <c>GridControl.CustomKeyboardShortcuts</c> keys are:
+    /// modifiers in the order Ctrl, Alt, Shift, Meta, then the key ("Ctrl+S", "Meta+S"). The dialog prevents the
+    /// browser's own default for them (Chrome's Save page for Ctrl+S) wherever the key is pressed in the window — a
+    /// control, the dialog box, or the backdrop, which a click leaves focused outside the box and outside any grid's
+    /// guard — and leaves the event to bubble to the host's handler. A nested dialog's keys are its own.
+    /// </summary>
+    [Parameter] public IReadOnlyCollection<string>? HostKeyboardShortcuts { get; set; }
+
+    private string? HostKeyboardShortcutDomValue =>
+        HostKeyboardShortcuts is { Count: > 0 }
+            ? string.Join('|', HostKeyboardShortcuts
+                .Where(gesture => !string.IsNullOrWhiteSpace(gesture))
+                .Select(gesture => gesture.Trim().ToLowerInvariant()))
+            : null;
     [Parameter] public bool CloseOnOverlayClick { get; set; }
     [Parameter] public bool Draggable { get; set; } = true;
     [Parameter] public bool ShowSystemMenu { get; set; } = true;

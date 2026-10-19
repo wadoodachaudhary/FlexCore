@@ -167,6 +167,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "EnableSaveDataWithReport", LowerBool(core.EnableSaveDataWithReport));
         Attr(writer, "EnableSavePreviewPicture", "True");
         Attr(writer, "EnableSaveSummariesWithReport", LowerBool(core.EnableSaveSummariesWithReport));
+        Attr(writer, "ShowAllHeadersOnDrillDown", LowerBool(core.ShowAllHeadersOnDrillDown));
         Attr(writer, "EnableUseDummyData", "false");
         Attr(writer, "initialDataContext", "");
         Attr(writer, "initialReportPartName", "");
@@ -528,6 +529,22 @@ internal static class CrystalReportXmlWriter
         }
 
         writer.WriteEndElement();
+        if (parameter.PickList is { } pickList)
+        {
+            // Crystal's authored list of values (PromptManager LOV), not a native export element:
+            // the loader turns it into the prompt's pick-list SQL.
+            writer.WriteStartElement("ParameterPickList");
+            Attr(writer, "Table", pickList.Table);
+            Attr(writer, "ValueField", pickList.ValueField);
+            if (pickList.DescriptionField is not null)
+            {
+                Attr(writer, "DescriptionField", pickList.DescriptionField);
+            }
+
+            Attr(writer, "Sort", pickList.Sort);
+            writer.WriteEndElement();
+        }
+
         writer.WriteStartElement("ParameterCurrentValues");
         foreach (var value in parameter.CurrentValues)
         {
@@ -769,12 +786,21 @@ internal static class CrystalReportXmlWriter
         else if (reportObject.ElementName == "FieldObject")
         {
             Attr(writer, "DataSource", reportObject.DataSource);
+            Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
+        }
+        else if (reportObject.ElementName == "LineObject" && reportObject.Border.LineWidth is { } thickness)
+        {
+            Attr(writer, "LineThickness", thickness);
         }
         else if (reportObject.ElementName == "SubreportObject")
         {
             Attr(writer, "SubreportName", reportObject.SubreportName);
             Attr(writer, "EnableOnDemand", LowerBool(reportObject.EnableOnDemand));
         }
+
+        reportObject.NativeDateTimeFormat?.ToXml().WriteTo(writer);
+        reportObject.NativeNumberFormat?.ToXml().WriteTo(writer);
+        reportObject.NativeNumericFormat?.ToXml().WriteTo(writer);
 
         if (reportObject.ElementName is "TextObject" or "FieldHeadingObject")
         {
@@ -837,6 +863,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "LeftLineStyle", border.LeftLineStyle);
         Attr(writer, "RightLineStyle", border.RightLineStyle);
         Attr(writer, "TopLineStyle", border.TopLineStyle);
+        if (border.LineWidth is { } width) Attr(writer, "LineWidth", width);
 
         writer.WriteStartElement("BorderConditionFormulas");
         foreach (var condition in border.ConditionFormulas) Attr(writer, condition.Key, condition.Value);
