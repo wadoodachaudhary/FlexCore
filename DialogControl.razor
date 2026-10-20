@@ -20,7 +20,7 @@
          @onkeydown="HandleKeyDown">
         <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
              data-fx-dialog-enter="@(OnEnter.HasDelegate ? "true" : null)"
-             aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && !string.IsNullOrWhiteSpace(Header) ? _titleId : null)"
+             aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && (HeaderContent != null || !string.IsNullOrWhiteSpace(Header)) ? _titleId : null)"
              aria-describedby="@AriaDescribedBy" tabindex="-1" @ref="_dialogElement" @onclick:stopPropagation="true"
              @onmousedown="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleDialogPress) : default)"
              @onmouseup="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleDialogRelease) : default)">
@@ -42,7 +42,7 @@
                             @onclick="HandleWindowIconClick"
                             @onclick:stopPropagation="true"></button>
                 }
-                <span id="@_titleId" class="fx-dialog-title">@Header</span>
+                <span id="@_titleId" class="fx-dialog-title">@(HeaderContent ?? HeaderText)</span>
                 @if (ShowCloseIcon)
                 {
                     <button class="fx-dialog-close"
@@ -120,6 +120,14 @@
     [Parameter] public bool AutoFocus { get; set; } = true;
     private readonly string _titleId = $"fx-dialog-title-{Guid.NewGuid():N}";
     [Parameter] public string? Header { get; set; }
+
+    /// <summary>
+    /// Title-bar content shown in place of <see cref="Header"/>'s plain text, e.g. a document name with a
+    /// smaller caption beside it. Dragging, the window menu and the close button work as with <see cref="Header"/>.
+    /// </summary>
+    [Parameter] public RenderFragment? HeaderContent { get; set; }
+
+    private RenderFragment HeaderText => builder => builder.AddContent(0, Header);
     [Parameter] public string? AriaLabel { get; set; }
     [Parameter] public string? AriaDescribedBy { get; set; }
     [Parameter] public string? Width { get; set; }

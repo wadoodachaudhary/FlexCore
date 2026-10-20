@@ -132,6 +132,9 @@ public class GridColumn : ComponentBase, IDisposable
 
     [Parameter] public bool AllowEditing { get; set; } = true;
     [Parameter] public bool AllowHiding { get; set; } = true;
+    /// <summary>Allows changing the caption through the header menu. Set false
+    /// when the host manages this column's caption through another workflow.</summary>
+    [Parameter] public bool AllowRenaming { get; set; } = true;
     /// <summary>
     /// Allows this column to participate in single-cell column drag selection
     /// even when <see cref="AllowEditing"/> is false. Use for lookup/picker
@@ -249,6 +252,14 @@ public class GridColumn : ComponentBase, IDisposable
 
     /// <summary>Custom header template.</summary>
     [Parameter] public RenderFragment? HeaderTemplate { get; set; }
+
+    /// <summary>
+    /// Content rendered in the header cell after the caption, the sort arrow and the search (filter) icon,
+    /// e.g. a name that labels the whole list. A click on it acts as a click anywhere else on the header.
+    /// Column best fit measures the caption and icons only, so a resizable column with a suffix needs a
+    /// Width that leaves room for it.
+    /// </summary>
+    [Parameter] public RenderFragment? HeaderSuffixTemplate { get; set; }
 
     /// <summary>Custom edit template. Context is the row data item.</summary>
     [Parameter] public RenderFragment<object>? EditTemplate { get; set; }

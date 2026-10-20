@@ -46,32 +46,77 @@
 }
 
 .fx-param-body {
-    padding: 16px;
     overflow-y: auto;
     flex: 1;
     background: #fff;
 }
 
-.fx-param-title {
-    font-size: calc(13px * var(--fx-zoom, 1));
-    color: #444;
-    margin-bottom: 12px;
+/* The overlay is position:fixed, so this wrapper only scopes the rules below to the dialog's own parts. */
+.fx-param-dialog-host {
+    display: contents;
+}
+
+/* At most 90% of the window and never over 1200px: past that the body scrolls (DialogMaxHeight in the .razor). */
+.fx-param-dialog-host ::deep .fx-dialog {
+    max-height: min(90vh, calc(1200px * var(--fx-zoom, 1)));
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-body {
+    padding: 4px 16px 6px;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-footer {
+    padding-top: 8px;
     padding-bottom: 8px;
-    border-bottom: 1px dashed #ddd;
+}
+
+/* Title bar: "Enter Parameter Values" small and grey at the left, the report's name centred.
+   The title span ends at the close button, which takes 26px more than the header's left padding;
+   padding the grid by that much centres the name on the window, and the label moves back to the edge. */
+.fx-param-heading {
+    --fx-param-heading-shift: 26px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+    align-items: baseline;
+    column-gap: 12px;
+    padding-left: var(--fx-param-heading-shift);
+}
+
+/* Colours follow the dialog header's own text colour (--fx-dialog-header-color), so themed and dark
+   title bars stay readable; the label is that colour at reduced opacity, grey on the default white bar. */
+.fx-param-heading-label {
+    margin-left: calc(-1 * var(--fx-param-heading-shift));
+    font-size: calc(11px * var(--fx-zoom, 1));
+    font-weight: 400;
+    color: inherit;
+    opacity: 0.55;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-param-heading-title {
+    font-size: calc(15px * var(--fx-zoom, 1));
+    font-weight: 600;
+    color: inherit;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* Each parameter occupies a panel matching Crystal's "Enter Parameter Values" dialog. */
 .fx-param-panel {
     border-bottom: 1px solid #d4d4d4;
-    padding: 10px 0;
-    margin-bottom: 12px;
+    padding: 6px 0;
+    margin-bottom: 4px;
 }
 
 .fx-param-panel-header {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 .fx-param-prompt-text {
@@ -129,7 +174,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    margin-top: 16px;
+    margin-top: 10px;
 }
 
 .fx-param-custom-row .fx-param-value-label {

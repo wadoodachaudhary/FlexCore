@@ -13575,11 +13575,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task HeaderMenuStartRename()
     {
         var col = CurrentHeaderColumn;
-        if (col == null) return;
+        if (col?.AllowRenaming != true) return;
         _showHeaderContextMenu = false;
         _showInsertColumnSubmenu = false;
         // TextBoxControl reads MaxLength on its first render, so resolve it first.
         var maxLength = await ResolveColumnRenameMaxLengthAsync(col.Field);
+        if (!ReferenceEquals(CurrentHeaderColumn, col) || !col.AllowRenaming) return;
         _renameColumnField = col.Field;
         _renameColumnDraft = "";
         _renameColumnMaxLength = maxLength;
@@ -13623,12 +13624,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task HeaderMenuCommitRename()
     {
         var field = _renameColumnField;
+        var canRename = RenameColumn?.AllowRenaming == true;
         var draft = _renameColumnDraft?.Trim() ?? "";
         var maxLength = _renameColumnMaxLength;
         if (maxLength > 0 && draft.Length > maxLength)
             draft = draft[..maxLength];
         HeaderMenuCancelRename();
-        if (string.IsNullOrEmpty(field)) return;
+        if (!canRename || string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
         // Load-bearing now that the box opens empty: without it, OK straight after
         // opening would wipe the caption the user is looking at.

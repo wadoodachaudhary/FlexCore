@@ -820,6 +820,11 @@
                                     </span>
                                 }
 
+                                @if (col.HeaderSuffixTemplate != null)
+                                {
+                                    @col.HeaderSuffixTemplate
+                                }
+
                                 @if (ShowColumnMenuButton && (EnableHeaderContextMenu || ShowColumnMenu))
                                 {
                                     <ButtonControl BareStyle="true" CssClass="fx-column-menu-button"
@@ -2016,6 +2021,7 @@
                     Insert a column...
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(CurrentHeaderColumn?.AllowRenaming != true)"
                         @onclick="HeaderMenuStartRename">
                     <span class="fx-grid-header-context-check"></span>
                     Rename this column...

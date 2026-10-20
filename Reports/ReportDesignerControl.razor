@@ -89,8 +89,8 @@
                 @if (IsCodeDocumentActive)
                 {
                     <XmlViewerControl Xml="@CurrentXml"
-                                      Title="XML"
-                                      OutlineTitle="Report XML"
+                                      Title="RDL"
+                                      OutlineTitle="Report RDL"
                                       CssClass="fx-rd-xml-viewer"
                                       Style="flex:1;min-height:0;"
                                       AutoExpandDepth="2" />
@@ -278,7 +278,7 @@
             Button("preview", "rd-print-preview", "Print Preview"),
             Button("browseData", "rd-browse-data", "Browse Data"),
             Button("reload", "rd-refresh", "Reload Saved Design"),
-            Button("export", "rd-export", "Export XML Definition"),
+            Button("export", "rd-export", "Export RDL Definition"),
             Button("page", "bi bi-file-earmark", "Page Setup"),
             Sep(),
             Button("cut", "rd-cut", "Cut"),
@@ -879,7 +879,7 @@
         }
         catch (Exception ex)
         {
-            _status = $"Could not load report XML: {ex.Message}";
+            _status = $"Could not load report RDL: {ex.Message}";
         }
     }
 
@@ -955,7 +955,7 @@
         else
             ShowDocumentTab(CodeDocumentTab);
 
-        _status = "XML exported; the saved report is unchanged.";
+        _status = "RDL exported; the saved report is unchanged.";
 
         await NotifyDocumentChangedAsync(markDirty: false);
     }
@@ -2484,7 +2484,7 @@
         }
         catch (Exception error)
         {
-            _status = "Could not open XML: " + error.Message;
+            _status = "Could not open RDL: " + error.Message;
         }
     }
 
@@ -2633,7 +2633,7 @@
         }
         catch (Exception ex)
         {
-            return $"<!-- Could not generate XML: {ex.Message} -->";
+            return $"<!-- Could not generate RDL: {ex.Message} -->";
         }
     }
 

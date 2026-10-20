@@ -551,6 +551,8 @@ public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
 {
     public string Name { get; set; } = "";
     public string Schema { get; set; } = "";
+    /// <summary>Whether this catalog object is a view rather than a table.</summary>
+    public bool IsView { get; set; }
     public string SourceName { get; set; } = "";
     public string CommandText { get; set; } = "";
     public List<ReportDesignerField> Fields { get; set; } = new();
@@ -669,7 +671,7 @@ public static partial class ReportDesignerXmlSerializer
     public static ReportDesignerDocument FromFile(string xmlFilePath)
     {
         if (!File.Exists(xmlFilePath))
-            throw new FileNotFoundException($"Report XML not found: {xmlFilePath}", xmlFilePath);
+            throw new FileNotFoundException($"Report RDL not found: {xmlFilePath}", xmlFilePath);
 
         return FromXml(File.ReadAllText(xmlFilePath), Path.GetFileName(xmlFilePath), xmlFilePath);
     }
@@ -677,10 +679,10 @@ public static partial class ReportDesignerXmlSerializer
     public static ReportDesignerDocument FromXml(string xml, string? sourceName = null, string? sourcePath = null)
     {
         if (string.IsNullOrWhiteSpace(xml))
-            throw new InvalidDataException("The report XML is empty.");
+            throw new InvalidDataException("The report RDL is empty.");
 
         var sourceDocument = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
-        var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report XML: missing root element.");
+        var root = sourceDocument.Root ?? throw new InvalidDataException("Invalid report RDL: missing root element.");
         var reportDefinition = Child(root, "ReportDefinition");
         if (root.Name != "Report" || reportDefinition is null || Child(reportDefinition, "Areas") is null)
             throw new InvalidDataException("Expected a Crystal Report containing ReportDefinition/Areas.");
