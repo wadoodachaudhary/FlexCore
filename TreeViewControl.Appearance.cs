@@ -20,6 +20,8 @@ public partial class TreeViewControl
     [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.Yellow;
     [Parameter] public int TreeIndentPixels { get; set; } = 16;
     [Parameter] public int TabIndex { get; set; } = 0;
+    /// <summary>Return keyboard focus to the tree after a selection/reveal. Disable when the host must preserve the user's current input focus.</summary>
+    [Parameter] public bool FocusOnSelection { get; set; } = true;
     /// <summary>Standard (default) or Outline (status circles, connector line, secondary line, badge, right chevron).</summary>
     [Parameter] public TreeViewDisplayMode DisplayMode { get; set; } = TreeViewDisplayMode.Standard;
     /// <summary>Shows a search box above the tree that filters nodes by text (combined with <c>FilterText</c>).</summary>

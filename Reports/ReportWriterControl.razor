@@ -778,7 +778,7 @@ else
         var fullXmlPath = Path.GetFullPath(xmlPath);
         if (!File.Exists(fullXmlPath))
         {
-            ErrorMessage = $"Subreport XML not found: {fullXmlPath}";
+            ErrorMessage = $"Subreport RDL not found: {fullXmlPath}";
             Logger.LogWarning("Subreport XML not found: {XmlPath}", fullXmlPath);
             await InvokeAsync(StateHasChanged);
             return;
@@ -1037,7 +1037,7 @@ else
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to render Crystal XML report: {File}", xmlFilePath);
-            ErrorMessage = $"Failed to load XML report: {ex.Message}";
+            ErrorMessage = $"Failed to load RDL report: {ex.Message}";
         }
         finally
         {
@@ -1402,7 +1402,7 @@ else
                     IsLoading = false;
                     await InvokeAsync(StateHasChanged);
 
-                    var title = $"Report: {Path.GetFileNameWithoutExtension(xmlPath)}";
+                    var title = Path.GetFileNameWithoutExtension(xmlPath);
                     var promptContext = new ReportPickListContext(Path.GetFileNameWithoutExtension(file),
                         definition.Parameters.ToArray(), new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase));
                     var userValues = await _paramDialog.PromptAsync(title, missingRequired, _lastPromptedValues, promptContext);
@@ -2478,7 +2478,8 @@ else
             var width = col.Width > 0 ? $"width:{col.Width}px;" : "";
             var typeCls = IsRigidColumnType(col.ColumnType) ? "fx-rpt-col-nowrap" : "fx-rpt-col-wrap";
             var headerHtml = BuildColumnHeaderHtml(col);
-            html.AppendLine($"  <th class='{typeCls}' style='{align};{width}'>{headerHtml}</th>");
+            var weight = col.HeaderBold is { } bold ? $"font-weight:{(bold ? "700" : "400")};" : "";
+            html.AppendLine($"  <th class='{typeCls}' style='{align};{width}{weight}'>{headerHtml}</th>");
         }
         html.AppendLine("</tr></thead>");
 

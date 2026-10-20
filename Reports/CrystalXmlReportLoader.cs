@@ -558,7 +558,7 @@ public partial class CrystalXmlReportLoader
         string DataSource, bool IsFormula, string TextColor = "", bool Bold = false,
         ConditionalStyleInfo? ConditionalStyle = null,
         string AreaKind = "", string SectionKind = "", string SectionName = "", double? NoGrowHeight = null);
-    private sealed record PageHeaderLabel(string Text, int Left, int Width, string? FieldObjectName);
+    private sealed record PageHeaderLabel(string Text, int Left, int Width, string? FieldObjectName, bool? Bold);
     private sealed record ConditionalStyleInfo(
         string FieldAlias, string Operator, string Value,
         string TrueTextColor = "", string FalseTextColor = "",
@@ -1571,11 +1571,12 @@ public partial class CrystalXmlReportLoader
         // Pre-seed usedLabels with every assigned label so fields that aren't in the
         // center-map (e.g. OrderQty, whose label was given to @TaxinRate instead) don't
         // fall back to picking up a label already reserved for a better-centered neighbor.
-        var usedLabels = new HashSet<string>(assignedLabels.Values, StringComparer.OrdinalIgnoreCase);
+        var usedLabels = new HashSet<string>(assignedLabels.Values.Select(label => label.Text), StringComparer.OrdinalIgnoreCase);
         foreach (var df in fields)
         {
             string alias;
-            string header;
+            var heading = assignedLabels.TryGetValue(df, out var assigned) ? assigned : MatchHeaderLabel(labels, df, usedLabels);
+            var header = heading?.Text ?? "";
             if (df.IsFormula)
             {
                 // Formula field like "@Total Selling" or "@Profit".
@@ -1594,16 +1595,12 @@ public partial class CrystalXmlReportLoader
                 }
                 // Prefer a center-aligned label assignment (computed above); fall back to
                 // positional overlap or formula-name.
-                header = assignedLabels.TryGetValue(df, out var assigned) ? assigned
-                       : MatchHeaderLabel(labels, df, usedLabels);
                 if (string.IsNullOrWhiteSpace(header))
                     header = formulaKey.TrimStart('@');
             }
             else
             {
                 alias = $"{df.Table}_{df.Field}";
-                header = assignedLabels.TryGetValue(df, out var assigned) ? assigned
-                       : MatchHeaderLabel(labels, df, usedLabels);
                 if (string.IsNullOrWhiteSpace(header)) header = df.Field;
             }
 
@@ -1613,6 +1610,7 @@ public partial class CrystalXmlReportLoader
             {
                 Field = alias,
                 HeaderText = header,
+                HeaderBold = heading?.Bold,
                 // Honor the Crystal author's width as-is (twips → px).  0 means
                 // "no XML hint" so the renderer's adaptive sizer falls back to
                 // header + data measurement for that column.
@@ -1698,13 +1696,13 @@ public partial class CrystalXmlReportLoader
     /// <summary>
     /// For each column-header label, picks the detail field whose horizontal center is
     /// closest to the label's center (with a tolerance threshold), and returns a map
-    /// <c>field → label text</c>. This prevents the first field in Left-order from
+    /// <c>field → label</c>. This prevents the first field in Left-order from
     /// claiming a label that's actually positioned to describe a neighbor.
     /// </summary>
-    private static Dictionary<DetailFieldInfo, string> AssignLabelsByCenter(
+    private static Dictionary<DetailFieldInfo, PageHeaderLabel> AssignLabelsByCenter(
         List<DetailFieldInfo> fields, List<PageHeaderLabel> labels)
     {
-        var map = new Dictionary<DetailFieldInfo, string>();
+        var map = new Dictionary<DetailFieldInfo, PageHeaderLabel>();
         if (fields.Count == 0 || labels.Count == 0) return map;
 
         var assignedFields = new HashSet<DetailFieldInfo>();
@@ -1737,7 +1735,7 @@ public partial class CrystalXmlReportLoader
             }
             if (best != null)
             {
-                map[best] = label.Text;
+                map[best] = label;
                 assignedFields.Add(best);
             }
         }
@@ -2057,7 +2055,8 @@ public partial class CrystalXmlReportLoader
                     var left = ParseInt(obj.Attribute("Left"));
                     var width = ParseInt(obj.Attribute("Width"));
                     var forField = (string?)obj.Attribute("FieldObjectName");
-                    list.Add(new PageHeaderLabel(text.Trim(), left, width, forField));
+                    list.Add(new PageHeaderLabel(text.Trim(), left, width, forField,
+                        bool.TryParse((string?)obj.Element("Font")?.Attribute("Bold"), out var bold) ? bold : null));
                 }
             }
         }
@@ -2808,7 +2807,8 @@ public partial class CrystalXmlReportLoader
         foreach (var df in detailFields)
         {
             string alias;
-            string header;
+            var heading = MatchHeaderLabel(headerLabels, df, usedLabels);
+            var header = heading?.Text ?? "";
             ReportColumnType colType;
 
             if (df.IsFormula)
@@ -2823,7 +2823,6 @@ public partial class CrystalXmlReportLoader
                 alias = resolved.HasValue
                     ? $"{resolved.Value.Table}_{resolved.Value.Field}"
                     : FormulaColumnAlias(formulaKey);
-                header = MatchHeaderLabel(headerLabels, df, usedLabels);
                 if (string.IsNullOrWhiteSpace(header))
                     header = formulaKey.TrimStart('@');
                 colType = InferColumnType(formulaKey: formulaKey, headerText: header, fieldName: df.Field);
@@ -2832,7 +2831,6 @@ public partial class CrystalXmlReportLoader
             {
                 // Alias the column as "{Table}_{Field}" to avoid duplicate names when two tables share a field.
                 alias = string.IsNullOrEmpty(df.Table) ? df.Field : $"{df.Table}_{df.Field}";
-                header = MatchHeaderLabel(headerLabels, df, usedLabels);
                 if (string.IsNullOrWhiteSpace(header))
                     header = df.Field;
                 colType = InferColumnType(formulaKey: null, headerText: header, fieldName: df.Field);
@@ -2848,6 +2846,7 @@ public partial class CrystalXmlReportLoader
             {
                 Field = alias,
                 HeaderText = header,
+                HeaderBold = heading?.Bold,
                 // Honor the Crystal author's width as-is (twips → px).  0 means
                 // "no XML hint" so the renderer's adaptive sizer falls back to
                 // header + data measurement for that column.
@@ -2890,7 +2889,7 @@ public partial class CrystalXmlReportLoader
     /// matched the wider "ItemDesc" heading).
     /// </para>
     /// </summary>
-    private static string MatchHeaderLabel(List<PageHeaderLabel> labels, DetailFieldInfo df,
+    private static PageHeaderLabel? MatchHeaderLabel(List<PageHeaderLabel> labels, DetailFieldInfo df,
         HashSet<string>? usedLabels = null)
     {
         bool NotUsed(PageHeaderLabel l) =>
@@ -2914,7 +2913,7 @@ public partial class CrystalXmlReportLoader
                 NotUsed(l) && SemanticOk(l) &&
                 string.Equals(l.FieldObjectName, df.Name, StringComparison.OrdinalIgnoreCase) &&
                 l.Left + l.Width >= df.Left && l.Left <= df.Left + df.Width);
-            if (bound != null) return bound.Text;
+            if (bound != null) return bound;
         }
 
         // 2. Positional fallback for fields with no explicit heading link
@@ -2925,7 +2924,7 @@ public partial class CrystalXmlReportLoader
                         l.Left + l.Width >= df.Left && l.Left <= df.Left + df.Width)
             .OrderBy(l => Math.Abs(l.Left - df.Left))
             .FirstOrDefault();
-        return positional?.Text ?? "";
+        return positional;
     }
 
     private static ReportAlignment MapAlignment(string alignment) => alignment switch

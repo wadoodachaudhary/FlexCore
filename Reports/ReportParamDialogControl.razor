@@ -1,10 +1,14 @@
 @* ReportParamDialogControl — modal prompt for Crystal Reports parameter values.
 
-   Mirrors the VB6 / Crystal "Enter Parameter Values" dialog. For each required
-   parameter it renders a panel containing:
+   Mirrors the VB6 / Crystal "Enter Parameter Values" dialog. The title bar carries the
+   report's name, centred, with "Enter Parameter Values" small and grey beside it. For
+   each required parameter it renders a panel containing:
 
      - left:  the prompt text (e.g. "Enter Job:")
      - right: a secondary label with the parameter's display name
+       (an Available/Selected pair has no heading row: the prompt text sits on the
+       Available header line after its search icon, and the display name on the
+       Selected header line only when it differs from the prompt)
      - body:  one of:
         * dual-list-box   (AllowMultiple=True with default-values or pick-list)
         * combo dropdown  (AllowMultiple=False with 2+ default values)
@@ -27,7 +31,7 @@
    Usage:
      <ReportParamDialogControl @ref="paramDialog" />
      ...
-     var values = await paramDialog.PromptAsync(reportTitle, definition.Parameters);
+     var values = await paramDialog.PromptAsync(reportName, definition.Parameters);
      if (values == null) return; // user cancelled
 *@
 
@@ -38,29 +42,41 @@
 
 @if (_visible)
 {
+  <div class="fx-param-dialog-host">
     <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" OnClose="Cancel">
+        <HeaderContent>
+            @if (string.IsNullOrWhiteSpace(_title))
+            {
+                @("Enter Parameter Values")
+            }
+            else
+            {
+                <span class="fx-param-heading">
+                    <span class="fx-param-heading-label">Enter Parameter Values</span>
+                    <span class="fx-param-heading-title" title="@_title">@_title</span>
+                    <span aria-hidden="true"></span>
+                </span>
+            }
+        </HeaderContent>
         <ChildContent>
             <div class="fx-param-body">
-                @if (!string.IsNullOrWhiteSpace(_title))
-                {
-                    <div class="fx-param-title">@_title</div>
-                }
                 @foreach (var p in _parameters)
                 {
                     var pickList = _pickLists.TryGetValue(p.Name, out var list) ? list : null;
                     var defaults = p.DefaultValues;
                     var isDependent = _dependencies.ContainsKey(p.Name);
                     var hasDefaults = !isDependent && defaults.Count > 0;
-                    var hasMultiSource = p.AllowMultiple && (hasDefaults || (pickList != null && pickList.Count > 0));
-                    <div class="fx-param-panel">
-                        <div class="fx-param-panel-header">
-                            <span class="fx-param-prompt-text">
-                                @(!string.IsNullOrEmpty(p.Prompt) ? p.Prompt : p.Name)
-                            </span>
-                            <span class="fx-param-secondary-label">
-                                @(!string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name)
-                            </span>
-                        </div>
+                    var promptText = PromptText(p);
+                    var secondaryLabel = SecondaryLabel(p);
+                    var isDualList = IsDualList(p);
+                    <div class="fx-param-panel @(isDualList ? "fx-param-panel-list" : null)">
+                        @if (!isDualList)
+                        {
+                            <div class="fx-param-panel-header">
+                                <span class="fx-param-prompt-text">@promptText</span>
+                                <span class="fx-param-secondary-label">@secondaryLabel</span>
+                            </div>
+                        }
                         <div class="fx-param-panel-body">
                             @if (p.AllowRange)
                             {
@@ -93,25 +109,28 @@
                                    it for AllowCustomCurrentValues=True
                                    parameters. *@
                                 @* Crystal's prompt lists the values in batches (200 by
-                                   default), keeps every value listed under Available,
-                                   adds only the batch on screen with >>, and puts
-                                   Remove / Remove All under Selected. The same clicks
-                                   therefore submit the same values in both applications. *@
+                                   default), keeps every value listed under Available and
+                                   adds only the batch on screen with >>, so the same clicks
+                                   submit the same values in both applications. < and <<
+                                   take values out of Selected. The prompt names the lists
+                                   on their header line; the lists share the dialog's height
+                                   so every prompt shows without scrolling. *@
                                 <MultiSelectDualListControl TItem="ListItem"
                                                             Items="@GetMultiAvailable(p.Name)"
                                                             SelectedItems="@GetMultiSelected(p.Name)"
                                                             SelectedItemsChanged="@(items => SetMultiSelected(p.Name, items))"
                                                             LeftHeader="Available Values:"
                                                             RightHeader="Selected Values:"
+                                                            LeftCaption="@promptText"
+                                                            RightCaption="@(string.Equals(secondaryLabel.Trim(), promptText.Trim(), StringComparison.OrdinalIgnoreCase) ? null : secondaryLabel)"
                                                             KeySelector="@(i => i.Key)"
                                                             LabelSelector="@(i => i.Label)"
                                                             VisibleRows="7"
-                                                            Height="236px"
+                                                            Height="@DualListHeight"
                                                             BatchSize="@PromptBatchSize"
-                                                            KeepAvailableItems="true"
-                                                            RemoveButtonsBelowSelected="true" />
+                                                            KeepAvailableItems="true" />
 
-                                @if (!isDependent && (p.AllowCustomCurrentValues || !hasMultiSource))
+                                @if (HasCustomEntryRow(p))
                                 {
                                     @* "Enter a Value" custom-entry row — mirrors
                                        the Crystal dialog's inline text input +
@@ -192,6 +211,7 @@
             <ButtonControl OnClick="Cancel">Cancel</ButtonControl>
         </FooterContent>
     </DialogControl>
+  </div>
 }
 
 @code {
@@ -262,6 +282,52 @@
     private bool _dependencySetupFailed;
     private bool _disposed;
     private bool ChoicesUnavailable => _lookupActive || _dependencySetupFailed || _listErrors.Count > 0;
+
+    private static string PromptText(ReportParameter p) => !string.IsNullOrEmpty(p.Prompt) ? p.Prompt : p.Name;
+
+    private static string SecondaryLabel(ReportParameter p) => !string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name;
+
+    /// <summary>A multi-value prompt without ranges: an Available/Selected pair.</summary>
+    private static bool IsDualList(ReportParameter p) => p.AllowMultiple && !p.AllowRange;
+
+    /// <summary>The "Enter a Value:" row under a pair: custom values allowed, or no list to pick from.</summary>
+    private bool HasCustomEntryRow(ReportParameter p)
+    {
+        if (!IsDualList(p) || _dependencies.ContainsKey(p.Name)) return false;
+        var hasPickList = _pickLists.TryGetValue(p.Name, out var list) && list is { Count: > 0 };
+        return p.AllowCustomCurrentValues || (p.DefaultValues.Count == 0 && !hasPickList);
+    }
+
+    // Heights (px at text zoom 1, measured in Chrome) of what surrounds the lists: the title bar, footer and body
+    // padding; a list panel's padding, rule, margin and count line; one other prompt; an "Enter a Value:" row.
+    // Rounded up, so fractional pixels never leave a 1-4px scrollbar on a dialog that fits.
+    private const int DialogChromeHeight = 106;
+    private const int ListPanelHeight = 34;
+    private const int OtherPromptHeight = 66;
+    private const int CustomEntryRowHeight = 42;
+
+    /// <summary>The dialog's height limit (also set in the .razor.css): 90% of the window, and never over 1200px.</summary>
+    private const string DialogMaxHeight = "min(90vh, calc(1200px * var(--fx-zoom, 1)))";
+
+    /// <summary>
+    /// Height of each Available/Selected pair, for any number of pairs and other prompts. The pairs share what
+    /// the title bar, footer and other prompts leave of <see cref="DialogMaxHeight"/>, between 136px and the
+    /// former fixed 236px each. So every prompt shows without scrolling while it fits (three pairs fit a
+    /// 720px-tall window, five a 1060px one); beyond that, or past 1200px, the lists keep 136px and the dialog
+    /// body scrolls.
+    /// </summary>
+    private string DualListHeight
+    {
+        get
+        {
+            var lists = _parameters.Count(IsDualList);
+            if (lists == 0) return "236px";
+            var around = DialogChromeHeight + lists * ListPanelHeight + (_parameters.Count - lists) * OtherPromptHeight
+                + _parameters.Count(HasCustomEntryRow) * CustomEntryRowHeight;
+            return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"clamp(calc(136px * var(--fx-zoom, 1)), calc(({DialogMaxHeight} - {around}px * var(--fx-zoom, 1)) / {lists}), calc(236px * var(--fx-zoom, 1)))");
+        }
+    }
 
     /// <summary>Internal record used as the TItem for the dual-list-box.
     /// Stable key + display label.</summary>

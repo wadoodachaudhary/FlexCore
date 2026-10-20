@@ -159,6 +159,9 @@ public class ReportColumn
     /// <summary>Display header text.</summary>
     public string HeaderText { get; set; } = "";
 
+    /// <summary>Authored column-heading weight. Null retains the viewer's default heading style.</summary>
+    public bool? HeaderBold { get; set; }
+
     /// <summary>Column width in pixels (approximate — CSS may adjust).</summary>
     public int Width { get; set; } = 100;
 
@@ -358,7 +361,8 @@ public class ReportParameter
 
     /// <summary>Original parameter name from Crystal XML, including spaces and "(optional)" hints.
     /// Used as the right-aligned secondary label in the parameter dialog (matches the
-    /// Crystal native dialog's panel title).</summary>
+    /// Crystal native dialog's panel title); for an Available/Selected pair it is the
+    /// Selected header's caption, shown only when it differs from the prompt.</summary>
     public string DisplayName { get; set; } = "";
 
     /// <summary>Display prompt text.</summary>

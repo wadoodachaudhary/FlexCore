@@ -1,15 +1,17 @@
 @namespace Fx.ControlKit
 @typeparam TItem
 @using Fx.ControlKit.Grid
+@using Microsoft.AspNetCore.Components.Rendering
 
 @*
     Multi-Select Dual List Control
     -------------------------------
     A two-pane "shuttle" control imitating the Crystal / VB6 Reports parameter screen:
 
-        [ Available values ]   [ > ]   [ Selected values ]
+        [ Available values ]   [ >  ]   [ Selected values ]
                                [ >> ]
-                                       Remove  Remove All
+                               [ <  ]
+                               [ << ]
 
     Each pane is a one-column GridControl, so both lists have the grid's header
     search (the magnifier), header sorting, type-to-jump (type the first letters of
@@ -19,8 +21,8 @@
       >            Move the highlighted Available rows to Selected (double-click too)
       >>           Move every Available row on screen (the current batch, after any
                    search and sort) to Selected
-      Remove       Take the highlighted Selected rows out (double-click too)
-      Remove All   Empty Selected
+      <            Take the highlighted Selected rows out (double-click too)
+      <<           Empty Selected
 
     Crystal prompt mode (opt-in, used by the report parameter dialog):
       BatchSize > 0               the Available pane pages the pool BatchSize values at
@@ -30,9 +32,10 @@
       KeepAvailableItems          the Available pane always lists the whole pool; adding
                                   copies an item to Selected and removing only takes it
                                   out of Selected (Crystal layout).
-      RemoveButtonsBelowSelected  "Remove" / "Remove All" sit under the Selected pane and
-                                  only > and >> stay between the panes. Otherwise < and <<
-                                  stay between the panes.
+
+    LeftCaption / RightCaption name what a pane lists (e.g. the report parameter) on its
+    header line, after the pane's caption (LeftHeader / RightHeader) and its search icon.
+    A long name ends in an ellipsis; its tooltip shows it whole.
 
     Public API:
       - SelectedItems  (two-way bindable IList<TItem>)
@@ -73,7 +76,8 @@
                      EventsRef="@_availableEvents"
                      CssClass="fx-dual-grid">
             <GridColumnsBase>
-                <GridColumn Field="Label" HeaderText="@(LeftHeader ?? "Available")" AllowSorting="true" AllowFiltering="true" />
+                <GridColumn Field="Label" HeaderText="@(LeftHeader ?? "Available")" AllowSorting="true" AllowFiltering="true"
+                            HeaderSuffixTemplate="@_leftCaptionSlot" />
             </GridColumnsBase>
         </GridControl>
         <div class="fx-dual-meta">@_availableRows.Count value(s)</div>
@@ -88,17 +92,14 @@
                 title="@MoveAllTitle"
                 disabled="@(_availableRows.Count == 0)"
                 @onclick="MoveAllRight">&gt;&gt;</button>
-        @if (!RemoveButtonsBelowSelected)
-        {
-            <button type="button" class="fx-dual-btn"
-                    title="Remove selected"
-                    disabled="@(_selectedRows.Count == 0)"
-                    @onclick="MoveSelectedLeft">&lt;</button>
-            <button type="button" class="fx-dual-btn"
-                    title="Remove all"
-                    disabled="@(_selectedRows.Count == 0)"
-                    @onclick="MoveAllLeft">&lt;&lt;</button>
-        }
+        <button type="button" class="fx-dual-btn"
+                title="Remove selected"
+                disabled="@(_selectedRows.Count == 0)"
+                @onclick="MoveSelectedLeft">&lt;</button>
+        <button type="button" class="fx-dual-btn"
+                title="Remove all"
+                disabled="@(_selectedRows.Count == 0)"
+                @onclick="MoveAllLeft">&lt;&lt;</button>
     </div>
 
     <div class="fx-dual-pane">
@@ -127,27 +128,11 @@
                      EventsRef="@_selectedEvents"
                      CssClass="fx-dual-grid">
             <GridColumnsBase>
-                <GridColumn Field="Label" HeaderText="@(RightHeader ?? "Selected")" AllowSorting="true" AllowFiltering="true" />
+                <GridColumn Field="Label" HeaderText="@(RightHeader ?? "Selected")" AllowSorting="true" AllowFiltering="true"
+                            HeaderSuffixTemplate="@_rightCaptionSlot" />
             </GridColumnsBase>
         </GridControl>
-        @if (RemoveButtonsBelowSelected)
-        {
-            <div class="fx-dual-remove-row">
-                <span class="fx-dual-meta fx-dual-remove-meta">@_selectedRows.Count selected</span>
-                <button type="button" class="fx-dual-btn fx-dual-remove"
-                        title="Remove selected"
-                        disabled="@(_selectedRows.Count == 0)"
-                        @onclick="MoveSelectedLeft">Remove</button>
-                <button type="button" class="fx-dual-btn fx-dual-remove"
-                        title="Remove all"
-                        disabled="@(_selectedRows.Count == 0)"
-                        @onclick="MoveAllLeft">Remove All</button>
-            </div>
-        }
-        else
-        {
-            <div class="fx-dual-meta">@_selectedRows.Count selected</div>
-        }
+        <div class="fx-dual-meta">@_selectedRows.Count selected</div>
     </div>
 </div>
 
@@ -212,10 +197,13 @@
     [Parameter] public bool KeepAvailableItems { get; set; }
 
     /// <summary>
-    /// When true, "Remove" and "Remove All" sit under the Selected pane and only
-    /// <c>&gt;</c> / <c>&gt;&gt;</c> stay between the panes (Crystal's prompt layout).
+    /// Optional name shown on the Available pane's header line after its caption and search icon
+    /// (the report parameter dialog puts the parameter's prompt there instead of a heading above the lists).
     /// </summary>
-    [Parameter] public bool RemoveButtonsBelowSelected { get; set; }
+    [Parameter] public string? LeftCaption { get; set; }
+
+    /// <summary>Optional name shown on the Selected pane's header line after its caption and search icon.</summary>
+    [Parameter] public string? RightCaption { get; set; }
 
     /// <summary>Seconds before the type-to-jump buffer resets (VB6 AutoSearchDelay).</summary>
     [Parameter] public int TypeSearchDelaySeconds { get; set; } = 2;
@@ -227,6 +215,10 @@
     private List<MultiSelectDualListRow> _availableRows = new();
     private List<MultiSelectDualListRow> _selectedRows = new();
     private int[] _pageSizes = [50];
+    // One slot per pane, created once, that reads the caption when the grid draws its header. A grid column's
+    // own parameters reach the grid one render late, so a changed caption must not travel as a new fragment.
+    private RenderFragment? _leftCaptionSlot;
+    private RenderFragment? _rightCaptionSlot;
 
     private readonly SelectionSettings _availableSelection = new() { Type = SelectionType.Multiple, Mode = SelectionMode.Row };
     private readonly SelectionSettings _selectedSelection = new() { Type = SelectionType.Multiple, Mode = SelectionMode.Row };
@@ -243,6 +235,8 @@
 
     protected override void OnInitialized()
     {
+        _leftCaptionSlot = builder => RenderCaption(builder, LeftCaption);
+        _rightCaptionSlot = builder => RenderCaption(builder, RightCaption);
         _availableEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnAvailableDoubleClick);
         _selectedEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnSelectedDoubleClick);
     }
@@ -273,6 +267,12 @@
     }
 
     // --- Helpers ---
+
+    private static void RenderCaption(RenderTreeBuilder __builder, string? caption)
+    {
+        if (string.IsNullOrWhiteSpace(caption)) return;
+        <span class="fx-dual-caption" title="@caption">@caption</span>
+    }
 
     private string MoveAllTitle => BatchSize > 0 ? "Move all values on screen (this batch)" : "Move all values on screen";
 

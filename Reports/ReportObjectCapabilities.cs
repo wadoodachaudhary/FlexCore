@@ -17,7 +17,7 @@ internal static class ReportObjectCapabilities
         => $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: {kind} objects are not implemented. "
             + (positioned ? "Positioned output uses an unsupported-object placeholder when visible; suppression still applies. "
                 : "Tabular output omits this object. ")
-            + "Source metadata is retained in the report XML; chart data/series and cross-tab grouping/cells are not evaluated."
+            + "Source metadata is retained in the report RDL; chart data/series and cross-tab grouping/cells are not evaluated."
             + ((string?)source?.Element("NativeCrystalSource")?.Attribute("MetadataDiagnostic") is { Length: > 0 } warning
                 ? " Native source: " + warning : "");
 

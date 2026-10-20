@@ -30,7 +30,6 @@
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
      @onmousedown="HandleGridHostMouseDown"
-     @onmousemove="@(_resizingCol != null ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleGridResizeMove) : default)"
      @onmouseup="@NonRenderingGridMouseUp">
 
     @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
@@ -820,6 +819,11 @@
                                     </span>
                                 }
 
+                                @if (col.HeaderSuffixTemplate != null)
+                                {
+                                    @col.HeaderSuffixTemplate
+                                }
+
                                 @if (ShowColumnMenuButton && (EnableHeaderContextMenu || ShowColumnMenu))
                                 {
                                     <ButtonControl BareStyle="true" CssClass="fx-column-menu-button"
@@ -837,8 +841,6 @@
                                           @onmousedown="e => StartResize(col, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
-                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
-                                          @onmouseup:stopPropagation="true"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
                                           @ondblclick:preventDefault="true"
@@ -856,8 +858,6 @@
                                           @onmousedown="e => StartResize(capturedPrev, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
-                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
-                                          @onmouseup:stopPropagation="true"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
                                           @ondblclick:preventDefault="true"
@@ -1823,8 +1823,8 @@
         </div>
     }
 
-    @* A stationary grip press must leave the divider hittable for the second click. *@
-    @if ((_resizingCol != null && _columnResizeDragged) || _resizingRowIndex >= 0)
+    @* ── Resize Overlay (captures mousemove/mouseup during resize) ─ *@
+    @if (_resizingCol != null || _resizingRowIndex >= 0)
     {
         <div class="fx-resize-overlay @(_resizingRowIndex >= 0 ? "fx-row-resize-overlay" : "")"
              @onmousemove="HandleGridResizeMove"
@@ -2016,6 +2016,7 @@
                     Insert a column...
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(CurrentHeaderColumn?.AllowRenaming != true)"
                         @onclick="HeaderMenuStartRename">
                     <span class="fx-grid-header-context-check"></span>
                     Rename this column...

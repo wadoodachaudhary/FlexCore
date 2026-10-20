@@ -13,7 +13,7 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 public class ReportOptions
 {
-    /// <summary>Optional host policy for authored custom SQL. Throws before a designer preview or viewer can execute it.</summary>
+    /// <summary>Optional host policy for authored custom SQL. Throws before a designer preview, the designer's Validate SQL buttons or a viewer can execute it.</summary>
     public Action<string>? ValidateCustomSql { get; set; }
 
     /// <summary>

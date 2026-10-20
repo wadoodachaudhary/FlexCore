@@ -313,7 +313,7 @@ public partial class TreeViewControl
         {
             _revealId = null;
             await _browser.InvokeAsync<object?>("treeReveal", _host, new { id, index = _visible.FindIndex(n => n.Node.Id == id), itemSize = ItemSize, virtualized = EnableVirtualization });
-            if (_editingId is null) await _host.FocusAsync(preventScroll: true);
+            if (FocusOnSelection && _editingId is null) await _host.FocusAsync(preventScroll: true);
         }
     }
     public async ValueTask DisposeAsync()

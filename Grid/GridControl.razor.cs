@@ -1730,8 +1730,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? _resizingCol;
     private double _resizeStartX;
     private double _resizeStartWidth;
-    private bool _columnResizeDragged;
-    private bool _gripAutoFitHandled;
 
     // Double-click on the grip is detected from two mousedowns rather than from the
     // DOM's dblclick event — see GripDoubleClickDetector (shared with TreeGridControl).
@@ -6667,14 +6665,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await CommitPendingRowSelectionTypeAheadAsync(collapseSelection: false);
     }
 
-    private async Task HandleGridMouseUp(MouseEventArgs args)
+    private void HandleGridMouseUp(MouseEventArgs args)
     {
-        if (_resizingCol != null)
-        {
-            await EndGridResizeFromBrowserAsync(args.ClientX, args.ClientY);
-            await InvokeAsync(StateHasChanged);
-            return;
-        }
         // End the drag on mouseup so the cursor/visual state cannot stay
         // latched if the browser swallows the trailing click. The next click,
         // when it exists, is still swallowed so the selected range survives.
@@ -13575,11 +13567,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task HeaderMenuStartRename()
     {
         var col = CurrentHeaderColumn;
-        if (col == null) return;
+        if (col?.AllowRenaming != true) return;
         _showHeaderContextMenu = false;
         _showInsertColumnSubmenu = false;
         // TextBoxControl reads MaxLength on its first render, so resolve it first.
         var maxLength = await ResolveColumnRenameMaxLengthAsync(col.Field);
+        if (!ReferenceEquals(CurrentHeaderColumn, col) || !col.AllowRenaming) return;
         _renameColumnField = col.Field;
         _renameColumnDraft = "";
         _renameColumnMaxLength = maxLength;
@@ -13623,12 +13616,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private async Task HeaderMenuCommitRename()
     {
         var field = _renameColumnField;
+        var canRename = RenameColumn?.AllowRenaming == true;
         var draft = _renameColumnDraft?.Trim() ?? "";
         var maxLength = _renameColumnMaxLength;
         if (maxLength > 0 && draft.Length > maxLength)
             draft = draft[..maxLength];
         HeaderMenuCancelRename();
-        if (string.IsNullOrEmpty(field)) return;
+        if (!canRename || string.IsNullOrEmpty(field)) return;
         // VB6 FMain.frm:2419 `If s <> "" Then` — OK on an empty box is a no-op.
         // Load-bearing now that the box opens empty: without it, OK straight after
         // opening would wipe the caption the user is looking at.
@@ -14877,14 +14871,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
-        if (e.Button != 0 || !AllowResizing || !col.AllowResizing)
-            return;
-
-        _gripAutoFitHandled = false;
-        _columnResizeDragged = false;
         if (_gripClicks.Register(col.Field, DateTime.UtcNow) && AllowColumnAutoFit)
         {
-            _gripAutoFitHandled = true;
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -14919,9 +14907,6 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (_resizingCol == null) return;
 
         var delta = clientX - _resizeStartX;
-        if (!_columnResizeDragged && Math.Abs(delta) <= GripJitterPx)
-            return;
-        _columnResizeDragged = true;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
         // A deliberate drag is not half of a double-click — stop the next mousedown
@@ -14958,7 +14943,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var settled = col?.RuntimeWidth ?? _resizeStartWidth;
         if (col == null || Math.Abs(settled - _resizeStartWidth) <= GripJitterPx)
         {
-            if (col != null && _columnResizeDragged)
+            if (col != null)
                 col.RuntimeWidth = _resizeStartWidth > 0 ? _resizeStartWidth : col.RuntimeWidth;
             await UnregisterGridResizeCaptureAsync();
             return;
@@ -16535,17 +16520,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// since neither one moved the column and re-persisting them would be noise.</summary>
     private async Task HandleResizeHandleDoubleClickAsync(GridColumn col)
     {
-        // The second mousedown may already have fitted this column. Its following
-        // native dblclick must not repeat measurement or layout persistence.
-        if (_gripAutoFitHandled)
-        {
-            _gripAutoFitHandled = false;
-            return;
-        }
-        if (!AllowResizing || !col.AllowResizing || !AllowColumnAutoFit)
+        if (!AllowColumnAutoFit)
             return;
 
-        _gripClicks.Reset();
         _resizingCol = null;
         await UnregisterGridResizeCaptureAsync();
         await AutoFitCoreAsync(new List<GridColumn> { col });
