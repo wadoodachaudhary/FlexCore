@@ -1,0 +1,2120 @@
+{
+  "id": "unemployment",
+  "title": "Unemployment",
+  "valueFormat": "0.0",
+  "valueSuffix": "%",
+  "noDataColor": "#C5C6C4",
+  "stroke": "#ffffff",
+  "background": "#F7F5F2",
+  "stops": [
+    {
+      "at": 0,
+      "color": "#F6E27A"
+    },
+    {
+      "at": 0.28,
+      "color": "#F0A23A"
+    },
+    {
+      "at": 0.52,
+      "color": "#E15A3C"
+    },
+    {
+      "at": 0.75,
+      "color": "#B2253A"
+    },
+    {
+      "at": 1,
+      "color": "#5A1228"
+    }
+  ],
+  "rootLevelId": "world",
+  "sources": [
+    {
+      "levelId": "world",
+      "publisher": "World Bank",
+      "dataset": "SL.UEM.TOTL.ZS and SL.TLF.TOTL.IN",
+      "period": "2025",
+      "retrieved": "2026-10-21",
+      "note": "ILO modelled estimates. Continent values are labour-force-weighted averages of the countries drawn. World Bank lastupdated 2026-10-08."
+    },
+    {
+      "levelId": "europe",
+      "publisher": "Eurostat, ONS, Rosstat via Moscow Times",
+      "dataset": "Visual Capitalist reference graphic",
+      "period": "August 2026 (Switzerland and UK: June 2026)",
+      "retrieved": "2026-10-21",
+      "note": "Exact rates from the reference graphic, not the World Bank 2025 series."
+    },
+    {
+      "levelId": "es",
+      "publisher": "Eurostat",
+      "dataset": "lfst_r_lfu3rt",
+      "period": "2024",
+      "retrieved": "2026-10-21",
+      "note": "NUTS-2, sex total, ages 15-74, all ISCED levels, unit PC. Updated 2026-09-10T23:00:00+0200."
+    },
+    {
+      "levelId": "us",
+      "publisher": "U.S. Bureau of Labor Statistics",
+      "dataset": "LAUS LASST statewide unemployment rate, seasonally adjusted",
+      "period": "September 2026",
+      "retrieved": "2026-10-21",
+      "note": "Preliminary. Public API v2."
+    }
+  ],
+  "levels": [
+    {
+      "id": "world",
+      "title": "Unemployment by continent",
+      "breadcrumb": "World",
+      "geography": "continents",
+      "projection": "Robinson",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "Labour-force-weighted average of ILO modelled national rates (World Bank SL.UEM.TOTL.ZS, 2025; labour force SL.TLF.TOTL.IN). World Bank updated 2026-10-08. Countries without a labour-force total are on the next map and out of the average. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "regions": [
+        {
+          "id": "Africa",
+          "name": "Africa",
+          "value": 6.1,
+          "childLevelId": "africa"
+        },
+        {
+          "id": "Asia",
+          "name": "Asia",
+          "value": 4.4,
+          "childLevelId": "asia"
+        },
+        {
+          "id": "Europe",
+          "name": "Europe",
+          "value": 5.0,
+          "childLevelId": "europe"
+        },
+        {
+          "id": "North America",
+          "name": "North America",
+          "value": 4.3,
+          "childLevelId": "north-america"
+        },
+        {
+          "id": "South America",
+          "name": "South America",
+          "value": 6.2,
+          "childLevelId": "south-america"
+        },
+        {
+          "id": "Oceania",
+          "name": "Oceania",
+          "value": 4.0,
+          "childLevelId": "oceania"
+        },
+        {
+          "id": "Antarctica",
+          "name": "Antarctica"
+        }
+      ]
+    },
+    {
+      "id": "europe",
+      "title": "UNEMPLOYMENT IN EUROPE",
+      "breadcrumb": "Europe",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "Europe",
+      "projection": "Albers",
+      "extent": {
+        "west": -15,
+        "south": 34.5,
+        "east": 50,
+        "north": 72
+      },
+      "clip": true,
+      "legendMin": 2.2,
+      "legendMax": 10.3,
+      "legendCaption": "Unemployment rate (Aug. 2026)",
+      "footnote": "Switzerland and UK data from June 2026. Sources: Eurostat, ONS, Rosstat via Moscow Times.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "insets": [
+        {
+          "id": "IS",
+          "corner": "west"
+        },
+        {
+          "id": "CY",
+          "corner": "southeast"
+        }
+      ],
+      "callouts": [
+        {
+          "id": "finland",
+          "regionId": "FI",
+          "placement": "east",
+          "text": "Weak hiring is keeping unemployment high in Finland."
+        },
+        {
+          "id": "germany",
+          "regionId": "DE",
+          "placement": "west",
+          "text": "Germany's automakers are cutting jobs amid U.S. tariffs and growing Chinese competition."
+        }
+      ],
+      "regions": [
+        {
+          "id": "FI",
+          "name": "Finland",
+          "value": 10.3,
+          "childLevelId": "fi"
+        },
+        {
+          "id": "ES",
+          "name": "Spain",
+          "value": 10.0,
+          "childLevelId": "es"
+        },
+        {
+          "id": "SE",
+          "name": "Sweden",
+          "value": 8.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "FR",
+          "name": "France",
+          "value": 8.2,
+          "childLevelId": "fr"
+        },
+        {
+          "id": "EE",
+          "name": "Estonia",
+          "value": 8.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GR",
+          "name": "Greece",
+          "value": 7.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LV",
+          "name": "Latvia",
+          "value": 7.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LU",
+          "name": "Luxembourg",
+          "value": 7.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "AT",
+          "name": "Austria",
+          "value": 6.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "RO",
+          "name": "Romania",
+          "value": 6.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IT",
+          "name": "Italy",
+          "value": 6.2,
+          "childLevelId": "it"
+        },
+        {
+          "id": "LT",
+          "name": "Lithuania",
+          "value": 6.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BE",
+          "name": "Belgium",
+          "value": 5.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "DK",
+          "name": "Denmark",
+          "value": 5.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IS",
+          "name": "Iceland",
+          "value": 5.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PT",
+          "name": "Portugal",
+          "value": 5.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SK",
+          "name": "Slovakia",
+          "value": 5.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CH",
+          "name": "Switzerland",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IE",
+          "name": "Ireland",
+          "value": 5.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GB",
+          "name": "UK",
+          "value": 4.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "HU",
+          "name": "Hungary",
+          "value": 4.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NO",
+          "name": "Norway",
+          "value": 4.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "HR",
+          "name": "Croatia",
+          "value": 4.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CY",
+          "name": "Cyprus",
+          "value": 4.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "DE",
+          "name": "Germany",
+          "value": 4.0,
+          "childLevelId": "de"
+        },
+        {
+          "id": "NL",
+          "name": "Netherlands",
+          "value": 4.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BG",
+          "name": "Bulgaria",
+          "value": 3.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PL",
+          "name": "Poland",
+          "value": 3.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SI",
+          "name": "Slovenia",
+          "value": 3.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MT",
+          "name": "Malta",
+          "value": 3.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CZ",
+          "name": "Czechia",
+          "value": 3.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "RU",
+          "name": "Russia",
+          "value": 2.2,
+          "childLevelId": "regional-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "africa",
+      "title": "Unemployment in Africa",
+      "breadcrumb": "Africa",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "Africa",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "ILO modelled estimates via World Bank SL.UEM.TOTL.ZS, 2025 (updated 2026-10-08). Shown to 0.1 percentage point. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "regions": [
+        {
+          "id": "DZ",
+          "name": "Algeria",
+          "value": 11.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "AO",
+          "name": "Angola",
+          "value": 14.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BJ",
+          "name": "Benin",
+          "value": 1.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BW",
+          "name": "Botswana",
+          "value": 24.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BF",
+          "name": "Burkina Faso",
+          "value": 3.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BI",
+          "name": "Burundi",
+          "value": 0.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CM",
+          "name": "Cameroon",
+          "value": 3.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CF",
+          "name": "Central African Republic",
+          "value": 6.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TD",
+          "name": "Chad",
+          "value": 1.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CI",
+          "name": "C\u00f4te d'Ivoire",
+          "value": 2.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CD",
+          "name": "Democratic Republic of the Congo",
+          "value": 4.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "DJ",
+          "name": "Djibouti",
+          "value": 26.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "EG",
+          "name": "Egypt",
+          "value": 6.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GQ",
+          "name": "Equatorial Guinea",
+          "value": 8.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ER",
+          "name": "Eritrea",
+          "value": 6.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ET",
+          "name": "Ethiopia",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GA",
+          "name": "Gabon",
+          "value": 20.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GH",
+          "name": "Ghana",
+          "value": 3.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GN",
+          "name": "Guinea",
+          "value": 5.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GW",
+          "name": "Guinea-Bissau",
+          "value": 2.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KE",
+          "name": "Kenya",
+          "value": 5.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SZ",
+          "name": "Kingdom of eSwatini",
+          "value": 34.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LS",
+          "name": "Lesotho",
+          "value": 16.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LR",
+          "name": "Liberia",
+          "value": 2.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LY",
+          "name": "Libya",
+          "value": 18.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MG",
+          "name": "Madagascar",
+          "value": 3.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MW",
+          "name": "Malawi",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ML",
+          "name": "Mali",
+          "value": 2.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MR",
+          "name": "Mauritania",
+          "value": 10.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MA",
+          "name": "Morocco",
+          "value": 9.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MZ",
+          "name": "Mozambique",
+          "value": 6.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NA",
+          "name": "Namibia",
+          "value": 19.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NE",
+          "name": "Niger",
+          "value": 0.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NG",
+          "name": "Nigeria",
+          "value": 3.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CG",
+          "name": "Republic of the Congo",
+          "value": 19.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "RW",
+          "name": "Rwanda",
+          "value": 11.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SN",
+          "name": "Senegal",
+          "value": 2.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SL",
+          "name": "Sierra Leone",
+          "value": 3.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SO",
+          "name": "Somalia",
+          "value": 18.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ZA",
+          "name": "South Africa",
+          "value": 32.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TZ",
+          "name": "Tanzania",
+          "value": 1.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GM",
+          "name": "The Gambia",
+          "value": 6.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TG",
+          "name": "Togo",
+          "value": 2.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TN",
+          "name": "Tunisia",
+          "value": 15.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "UG",
+          "name": "Uganda",
+          "value": 2.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ZM",
+          "name": "Zambia",
+          "value": 5.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ZW",
+          "name": "Zimbabwe",
+          "value": 9.3,
+          "childLevelId": "regional-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "asia",
+      "title": "Unemployment in Asia",
+      "breadcrumb": "Asia",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "Asia",
+      "projection": "Mercator",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "ILO modelled estimates via World Bank SL.UEM.TOTL.ZS, 2025 (updated 2026-10-08). Shown to 0.1 percentage point. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "regions": [
+        {
+          "id": "AF",
+          "name": "Afghanistan",
+          "value": 13.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "AM",
+          "name": "Armenia",
+          "value": 12.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "AZ",
+          "name": "Azerbaijan",
+          "value": 5.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BD",
+          "name": "Bangladesh",
+          "value": 3.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BT",
+          "name": "Bhutan",
+          "value": 3.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BN",
+          "name": "Brunei Darussalam",
+          "value": 5.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KH",
+          "name": "Cambodia",
+          "value": 0.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CN",
+          "name": "China",
+          "value": 4.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CY",
+          "name": "Cyprus",
+          "value": 4.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KP",
+          "name": "Dem. Rep. Korea",
+          "value": 3.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GE",
+          "name": "Georgia",
+          "value": 12.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IN",
+          "name": "India",
+          "value": 4.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "ID",
+          "name": "Indonesia",
+          "value": 3.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IR",
+          "name": "Iran",
+          "value": 8.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IQ",
+          "name": "Iraq",
+          "value": 15.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "IL",
+          "name": "Israel",
+          "value": 3.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "JP",
+          "name": "Japan",
+          "value": 2.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "JO",
+          "name": "Jordan",
+          "value": 16.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KZ",
+          "name": "Kazakhstan",
+          "value": 4.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KW",
+          "name": "Kuwait",
+          "value": 2.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KG",
+          "name": "Kyrgyzstan",
+          "value": 3.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LA",
+          "name": "Lao PDR",
+          "value": 1.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MY",
+          "name": "Malaysia",
+          "value": 3.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MN",
+          "name": "Mongolia",
+          "value": 5.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MM",
+          "name": "Myanmar",
+          "value": 3.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NP",
+          "name": "Nepal",
+          "value": 10.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "OM",
+          "name": "Oman",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PK",
+          "name": "Pakistan",
+          "value": 5.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PH",
+          "name": "Philippines",
+          "value": 2.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "QA",
+          "name": "Qatar",
+          "value": 0.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "KR",
+          "name": "Republic of Korea",
+          "value": 2.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SA",
+          "name": "Saudi Arabia",
+          "value": 3.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "LK",
+          "name": "Sri Lanka",
+          "value": 4.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SY",
+          "name": "Syria",
+          "value": 13.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TJ",
+          "name": "Tajikistan",
+          "value": 6.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TH",
+          "name": "Thailand",
+          "value": 0.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TL",
+          "name": "Timor-Leste",
+          "value": 1.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TR",
+          "name": "Turkey",
+          "value": 8.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TM",
+          "name": "Turkmenistan",
+          "value": 4.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "AE",
+          "name": "United Arab Emirates",
+          "value": 2.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "UZ",
+          "name": "Uzbekistan",
+          "value": 4.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "VN",
+          "name": "Vietnam",
+          "value": 1.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "YE",
+          "name": "Yemen",
+          "value": 17.3,
+          "childLevelId": "regional-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "north-america",
+      "title": "Unemployment in North America",
+      "breadcrumb": "North America",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "North America",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "ILO modelled estimates via World Bank SL.UEM.TOTL.ZS, 2025 (updated 2026-10-08). Shown to 0.1 percentage point. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "regions": [
+        {
+          "id": "BS",
+          "name": "Bahamas",
+          "value": 9.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BZ",
+          "name": "Belize",
+          "value": 8.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CA",
+          "name": "Canada",
+          "value": 6.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CR",
+          "name": "Costa Rica",
+          "value": 6.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CU",
+          "name": "Cuba",
+          "value": 1.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "DO",
+          "name": "Dominican Republic",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SV",
+          "name": "El Salvador",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GT",
+          "name": "Guatemala",
+          "value": 2.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "HT",
+          "name": "Haiti",
+          "value": 14.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "HN",
+          "name": "Honduras",
+          "value": 4.9,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "JM",
+          "name": "Jamaica",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "MX",
+          "name": "Mexico",
+          "value": 2.7,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NI",
+          "name": "Nicaragua",
+          "value": 5.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PA",
+          "name": "Panama",
+          "value": 8.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PR",
+          "name": "Puerto Rico",
+          "value": 6.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "TT",
+          "name": "Trinidad and Tobago",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "US",
+          "name": "United States",
+          "value": 4.2,
+          "childLevelId": "us"
+        }
+      ]
+    },
+    {
+      "id": "south-america",
+      "title": "Unemployment in South America",
+      "breadcrumb": "South America",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "South America",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "ILO modelled estimates via World Bank SL.UEM.TOTL.ZS, 2025 (updated 2026-10-08). Shown to 0.1 percentage point. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "regions": [
+        {
+          "id": "AR",
+          "name": "Argentina",
+          "value": 7.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BO",
+          "name": "Bolivia",
+          "value": 3.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "BR",
+          "name": "Brazil",
+          "value": 6.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CL",
+          "name": "Chile",
+          "value": 9.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "CO",
+          "name": "Colombia",
+          "value": 8.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "EC",
+          "name": "Ecuador",
+          "value": 3.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "GY",
+          "name": "Guyana",
+          "value": 12.0,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PY",
+          "name": "Paraguay",
+          "value": 4.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PE",
+          "name": "Peru",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SR",
+          "name": "Suriname",
+          "value": 7.8,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "UY",
+          "name": "Uruguay",
+          "value": 7.5,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "VE",
+          "name": "Venezuela",
+          "value": 5.3,
+          "childLevelId": "regional-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "oceania",
+      "title": "Unemployment in Oceania",
+      "breadcrumb": "Oceania",
+      "parentLevelId": "world",
+      "geography": "countries",
+      "continent": "Oceania",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2025",
+      "footnote": "ILO modelled estimates via World Bank SL.UEM.TOTL.ZS, 2025 (updated 2026-10-08). Shown to 0.1 percentage point. Boundaries: Natural Earth, public domain.",
+      "sampleData": false,
+      "defaultChildLevelId": "regional-unavailable",
+      "regions": [
+        {
+          "id": "AU",
+          "name": "Australia",
+          "value": 4.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "FJ",
+          "name": "Fiji",
+          "value": 5.3,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NC",
+          "name": "New Caledonia",
+          "value": 11.2,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "NZ",
+          "name": "New Zealand",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "PG",
+          "name": "Papua New Guinea",
+          "value": 2.6,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "SB",
+          "name": "Solomon Islands",
+          "value": 1.4,
+          "childLevelId": "regional-unavailable"
+        },
+        {
+          "id": "VU",
+          "name": "Vanuatu",
+          "value": 5.1,
+          "childLevelId": "regional-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "es",
+      "title": "Unemployment in Spain",
+      "breadcrumb": "Spain",
+      "parentLevelId": "europe",
+      "geography": "regions",
+      "parentGeographyId": "ES",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2024",
+      "footnote": "Eurostat NUTS-2 unemployment rate, ages 15\u201374, all education levels, 2024 (lfst_r_lfu3rt). Updated 2026-09-10T23:00:00+0200. Boundaries: Eurostat GISCO.",
+      "sampleData": false,
+      "insets": [
+        {
+          "id": "ES70",
+          "corner": "south"
+        }
+      ],
+      "regions": [
+        {
+          "id": "ES11",
+          "name": "Galicia",
+          "value": 9.4
+        },
+        {
+          "id": "ES12",
+          "name": "Principado de Asturias",
+          "value": 10.1
+        },
+        {
+          "id": "ES13",
+          "name": "Cantabria",
+          "value": 7.8
+        },
+        {
+          "id": "ES21",
+          "name": "Pa\u00eds Vasco",
+          "value": 8.1
+        },
+        {
+          "id": "ES22",
+          "name": "Comunidad Foral de Navarra",
+          "value": 7.6
+        },
+        {
+          "id": "ES23",
+          "name": "La Rioja",
+          "value": 9.7
+        },
+        {
+          "id": "ES24",
+          "name": "Arag\u00f3n",
+          "value": 8.1
+        },
+        {
+          "id": "ES30",
+          "name": "Comunidad de Madrid",
+          "value": 9.0
+        },
+        {
+          "id": "ES41",
+          "name": "Castilla y Le\u00f3n",
+          "value": 9.4
+        },
+        {
+          "id": "ES42",
+          "name": "Castilla-La Mancha",
+          "value": 13.3
+        },
+        {
+          "id": "ES43",
+          "name": "Extremadura",
+          "value": 15.5
+        },
+        {
+          "id": "ES51",
+          "name": "Catalu\u00f1a",
+          "value": 8.9
+        },
+        {
+          "id": "ES52",
+          "name": "Comunitat Valenciana",
+          "value": 12.6
+        },
+        {
+          "id": "ES53",
+          "name": "Illes Balears",
+          "value": 9.3
+        },
+        {
+          "id": "ES61",
+          "name": "Andaluc\u00eda",
+          "value": 16.5
+        },
+        {
+          "id": "ES62",
+          "name": "Regi\u00f3n de Murcia",
+          "value": 12.7
+        },
+        {
+          "id": "ES70",
+          "name": "Canarias",
+          "value": 13.8
+        }
+      ]
+    },
+    {
+      "id": "fr",
+      "title": "Unemployment in France",
+      "breadcrumb": "France",
+      "parentLevelId": "europe",
+      "geography": "regions",
+      "parentGeographyId": "FR",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2024",
+      "footnote": "Eurostat NUTS-2 unemployment rate, ages 15\u201374, all education levels, 2024 (lfst_r_lfu3rt). Updated 2026-09-10T23:00:00+0200. Boundaries: Eurostat GISCO.",
+      "sampleData": false,
+      "insets": [
+        {
+          "id": "FRY1",
+          "corner": "south"
+        },
+        {
+          "id": "FRY2",
+          "corner": "south"
+        },
+        {
+          "id": "FRY3",
+          "corner": "south"
+        },
+        {
+          "id": "FRY4",
+          "corner": "south"
+        },
+        {
+          "id": "FRY5",
+          "corner": "south"
+        }
+      ],
+      "regions": [
+        {
+          "id": "FR10",
+          "name": "Ile de France",
+          "value": 8.0
+        },
+        {
+          "id": "FRB0",
+          "name": "Centre \u2014 Val de Loire",
+          "value": 5.6
+        },
+        {
+          "id": "FRC1",
+          "name": "Bourgogne",
+          "value": 6.7
+        },
+        {
+          "id": "FRC2",
+          "name": "Franche-Comt\u00e9",
+          "value": 5.3
+        },
+        {
+          "id": "FRD1",
+          "name": "Basse-Normandie",
+          "value": 7.3
+        },
+        {
+          "id": "FRD2",
+          "name": "Haute-Normandie",
+          "value": 7.6
+        },
+        {
+          "id": "FRE1",
+          "name": "Nord-Pas de Calais",
+          "value": 9.5
+        },
+        {
+          "id": "FRE2",
+          "name": "Picardie",
+          "value": 7.6
+        },
+        {
+          "id": "FRF1",
+          "name": "Alsace",
+          "value": 6.0
+        },
+        {
+          "id": "FRF2",
+          "name": "Champagne-Ardenne",
+          "value": 7.2
+        },
+        {
+          "id": "FRF3",
+          "name": "Lorraine",
+          "value": 8.5
+        },
+        {
+          "id": "FRG0",
+          "name": "Pays de la Loire",
+          "value": 6.3
+        },
+        {
+          "id": "FRH0",
+          "name": "Bretagne",
+          "value": 5.7
+        },
+        {
+          "id": "FRI1",
+          "name": "Aquitaine",
+          "value": 6.9
+        },
+        {
+          "id": "FRI2",
+          "name": "Limousin",
+          "value": 5.4
+        },
+        {
+          "id": "FRI3",
+          "name": "Poitou-Charentes",
+          "value": 5.3
+        },
+        {
+          "id": "FRJ1",
+          "name": "Languedoc-Roussillon",
+          "value": 9.0
+        },
+        {
+          "id": "FRJ2",
+          "name": "Midi-Pyr\u00e9n\u00e9es",
+          "value": 6.2
+        },
+        {
+          "id": "FRK1",
+          "name": "Auvergne",
+          "value": 7.8
+        },
+        {
+          "id": "FRK2",
+          "name": "Rh\u00f4ne-Alpes",
+          "value": 6.8
+        },
+        {
+          "id": "FRL0",
+          "name": "Provence-Alpes-C\u00f4te d\u2019Azur",
+          "value": 6.9
+        },
+        {
+          "id": "FRM0",
+          "name": "Corse",
+          "value": 7.2
+        },
+        {
+          "id": "FRY1",
+          "name": "Guadeloupe",
+          "value": 16.8
+        },
+        {
+          "id": "FRY2",
+          "name": "Martinique",
+          "value": 12.3
+        },
+        {
+          "id": "FRY3",
+          "name": "Guyane",
+          "value": 17.0
+        },
+        {
+          "id": "FRY4",
+          "name": "La R\u00e9union",
+          "value": 17.3
+        },
+        {
+          "id": "FRY5",
+          "name": "Mayotte",
+          "value": 26.9
+        }
+      ]
+    },
+    {
+      "id": "de",
+      "title": "Unemployment in Germany",
+      "breadcrumb": "Germany",
+      "parentLevelId": "europe",
+      "geography": "regions",
+      "parentGeographyId": "DE",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2024",
+      "footnote": "Eurostat NUTS-2 unemployment rate, ages 15\u201374, all education levels, 2024 (lfst_r_lfu3rt). Updated 2026-09-10T23:00:00+0200. Boundaries: Eurostat GISCO.",
+      "sampleData": false,
+      "insets": [],
+      "regions": [
+        {
+          "id": "DE11",
+          "name": "Stuttgart",
+          "value": 3.2
+        },
+        {
+          "id": "DE12",
+          "name": "Karlsruhe",
+          "value": 3.2
+        },
+        {
+          "id": "DE13",
+          "name": "Freiburg",
+          "value": 2.5
+        },
+        {
+          "id": "DE14",
+          "name": "T\u00fcbingen",
+          "value": 2.8
+        },
+        {
+          "id": "DE21",
+          "name": "Oberbayern",
+          "value": 2.7
+        },
+        {
+          "id": "DE22",
+          "name": "Niederbayern",
+          "value": 2.0
+        },
+        {
+          "id": "DE23",
+          "name": "Oberpfalz",
+          "value": 2.4
+        },
+        {
+          "id": "DE24",
+          "name": "Oberfranken",
+          "value": 2.7
+        },
+        {
+          "id": "DE25",
+          "name": "Mittelfranken",
+          "value": 2.7
+        },
+        {
+          "id": "DE26",
+          "name": "Unterfranken",
+          "value": 2.9
+        },
+        {
+          "id": "DE27",
+          "name": "Schwaben",
+          "value": 2.6
+        },
+        {
+          "id": "DE30",
+          "name": "Berlin",
+          "value": 5.6
+        },
+        {
+          "id": "DE40",
+          "name": "Brandenburg",
+          "value": 3.2
+        },
+        {
+          "id": "DE50",
+          "name": "Bremen",
+          "value": 4.9
+        },
+        {
+          "id": "DE60",
+          "name": "Hamburg",
+          "value": 4.8
+        },
+        {
+          "id": "DE71",
+          "name": "Darmstadt",
+          "value": 3.4
+        },
+        {
+          "id": "DE72",
+          "name": "Gie\u00dfen",
+          "value": 3.7
+        },
+        {
+          "id": "DE73",
+          "name": "Kassel",
+          "value": 2.2
+        },
+        {
+          "id": "DE80",
+          "name": "Mecklenburg-Vorpommern",
+          "value": 3.7
+        },
+        {
+          "id": "DE91",
+          "name": "Braunschweig",
+          "value": 3.7
+        },
+        {
+          "id": "DE92",
+          "name": "Hannover",
+          "value": 3.1
+        },
+        {
+          "id": "DE93",
+          "name": "L\u00fcneburg",
+          "value": 2.7
+        },
+        {
+          "id": "DE94",
+          "name": "Weser-Ems",
+          "value": 3.1
+        },
+        {
+          "id": "DEA1",
+          "name": "D\u00fcsseldorf",
+          "value": 4.3
+        },
+        {
+          "id": "DEA2",
+          "name": "K\u00f6ln",
+          "value": 3.7
+        },
+        {
+          "id": "DEA3",
+          "name": "M\u00fcnster",
+          "value": 3.4
+        },
+        {
+          "id": "DEA4",
+          "name": "Detmold",
+          "value": 3.4
+        },
+        {
+          "id": "DEA5",
+          "name": "Arnsberg",
+          "value": 4.1
+        },
+        {
+          "id": "DEB1",
+          "name": "Koblenz",
+          "value": 3.3
+        },
+        {
+          "id": "DEB2",
+          "name": "Trier"
+        },
+        {
+          "id": "DEB3",
+          "name": "Rheinhessen-Pfalz",
+          "value": 3.4
+        },
+        {
+          "id": "DEC0",
+          "name": "Saarland",
+          "value": 3.6
+        },
+        {
+          "id": "DED2",
+          "name": "Dresden",
+          "value": 3.6
+        },
+        {
+          "id": "DED4",
+          "name": "Chemnitz",
+          "value": 3.1
+        },
+        {
+          "id": "DED5",
+          "name": "Leipzig",
+          "value": 5.5
+        },
+        {
+          "id": "DEE0",
+          "name": "Sachsen-Anhalt",
+          "value": 4.2
+        },
+        {
+          "id": "DEF0",
+          "name": "Schleswig-Holstein",
+          "value": 3.4
+        },
+        {
+          "id": "DEG0",
+          "name": "Th\u00fcringen",
+          "value": 3.5
+        }
+      ]
+    },
+    {
+      "id": "it",
+      "title": "Unemployment in Italy",
+      "breadcrumb": "Italy",
+      "parentLevelId": "europe",
+      "geography": "regions",
+      "parentGeographyId": "IT",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2024",
+      "footnote": "Eurostat NUTS-2 unemployment rate, ages 15\u201374, all education levels, 2024 (lfst_r_lfu3rt). Updated 2026-09-10T23:00:00+0200. Boundaries: Eurostat GISCO.",
+      "sampleData": false,
+      "insets": [],
+      "regions": [
+        {
+          "id": "ITC1",
+          "name": "Piemonte",
+          "value": 5.4
+        },
+        {
+          "id": "ITC2",
+          "name": "Valle d\u2019Aosta/Vall\u00e9e d\u2019Aoste",
+          "value": 3.9
+        },
+        {
+          "id": "ITC3",
+          "name": "Liguria",
+          "value": 5.4
+        },
+        {
+          "id": "ITC4",
+          "name": "Lombardia",
+          "value": 3.7
+        },
+        {
+          "id": "ITF1",
+          "name": "Abruzzo",
+          "value": 7.1
+        },
+        {
+          "id": "ITF2",
+          "name": "Molise",
+          "value": 7.9
+        },
+        {
+          "id": "ITF3",
+          "name": "Campania",
+          "value": 15.6
+        },
+        {
+          "id": "ITF4",
+          "name": "Puglia",
+          "value": 9.3
+        },
+        {
+          "id": "ITF5",
+          "name": "Basilicata",
+          "value": 6.7
+        },
+        {
+          "id": "ITF6",
+          "name": "Calabria",
+          "value": 13.1
+        },
+        {
+          "id": "ITG1",
+          "name": "Sicilia",
+          "value": 13.0
+        },
+        {
+          "id": "ITG2",
+          "name": "Sardegna",
+          "value": 8.3
+        },
+        {
+          "id": "ITH1",
+          "name": "Provincia Autonoma di Bolzano/Bozen",
+          "value": 2.0
+        },
+        {
+          "id": "ITH2",
+          "name": "Provincia Autonoma di Trento",
+          "value": 2.7
+        },
+        {
+          "id": "ITH3",
+          "name": "Veneto",
+          "value": 3.0
+        },
+        {
+          "id": "ITH4",
+          "name": "Friuli-Venezia Giulia",
+          "value": 4.3
+        },
+        {
+          "id": "ITH5",
+          "name": "Emilia-Romagna",
+          "value": 4.3
+        },
+        {
+          "id": "ITI1",
+          "name": "Toscana",
+          "value": 4.0
+        },
+        {
+          "id": "ITI2",
+          "name": "Umbria",
+          "value": 4.8
+        },
+        {
+          "id": "ITI3",
+          "name": "Marche",
+          "value": 5.1
+        },
+        {
+          "id": "ITI4",
+          "name": "Lazio",
+          "value": 6.3
+        }
+      ]
+    },
+    {
+      "id": "fi",
+      "title": "Unemployment in Finland",
+      "breadcrumb": "Finland",
+      "parentLevelId": "europe",
+      "geography": "regions",
+      "parentGeographyId": "FI",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate, 2024",
+      "footnote": "Eurostat NUTS-2 unemployment rate, ages 15\u201374, all education levels, 2024 (lfst_r_lfu3rt). Updated 2026-09-10T23:00:00+0200. Boundaries: Eurostat GISCO.",
+      "sampleData": false,
+      "insets": [],
+      "regions": [
+        {
+          "id": "FI19",
+          "name": "L\u00e4nsi-Suomi",
+          "value": 7.8
+        },
+        {
+          "id": "FI1B",
+          "name": "Helsinki-Uusimaa",
+          "value": 8.9
+        },
+        {
+          "id": "FI1C",
+          "name": "Etel\u00e4-Suomi",
+          "value": 8.9
+        },
+        {
+          "id": "FI1D",
+          "name": "Pohjois- ja It\u00e4-Suomi",
+          "value": 7.8
+        },
+        {
+          "id": "FI20",
+          "name": "\u00c5land"
+        }
+      ]
+    },
+    {
+      "id": "us",
+      "title": "Unemployment in the United States",
+      "breadcrumb": "United States",
+      "parentLevelId": "north-america",
+      "geography": "regions",
+      "parentGeographyId": "US",
+      "projection": "Albers",
+      "legendCaption": "Unemployment rate (Sep. 2026)",
+      "footnote": "U.S. Bureau of Labor Statistics, Local Area Unemployment Statistics, seasonally adjusted statewide rates, September 2026 (preliminary). The national ILO 2025 rate on the previous map is a different series.",
+      "sampleData": false,
+      "insets": [
+        {
+          "id": "AK",
+          "corner": "west"
+        },
+        {
+          "id": "HI",
+          "corner": "south"
+        }
+      ],
+      "regions": [
+        {
+          "id": "AK",
+          "name": "Alaska",
+          "value": 4.3
+        },
+        {
+          "id": "AL",
+          "name": "Alabama",
+          "value": 3.5
+        },
+        {
+          "id": "AR",
+          "name": "Arkansas",
+          "value": 3.9
+        },
+        {
+          "id": "AZ",
+          "name": "Arizona",
+          "value": 4.9
+        },
+        {
+          "id": "CA",
+          "name": "California",
+          "value": 5.1
+        },
+        {
+          "id": "CO",
+          "name": "Colorado",
+          "value": 4.1
+        },
+        {
+          "id": "CT",
+          "name": "Connecticut",
+          "value": 5.1
+        },
+        {
+          "id": "DC",
+          "name": "District of Columbia",
+          "value": 5.6
+        },
+        {
+          "id": "DE",
+          "name": "Delaware",
+          "value": 4.6
+        },
+        {
+          "id": "FL",
+          "name": "Florida",
+          "value": 4.4
+        },
+        {
+          "id": "GA",
+          "name": "Georgia",
+          "value": 3.3
+        },
+        {
+          "id": "HI",
+          "name": "Hawaii",
+          "value": 2.8
+        },
+        {
+          "id": "IA",
+          "name": "Iowa",
+          "value": 3.2
+        },
+        {
+          "id": "ID",
+          "name": "Idaho",
+          "value": 3.6
+        },
+        {
+          "id": "IL",
+          "name": "Illinois",
+          "value": 4.6
+        },
+        {
+          "id": "IN",
+          "name": "Indiana",
+          "value": 3.4
+        },
+        {
+          "id": "KS",
+          "name": "Kansas",
+          "value": 3.8
+        },
+        {
+          "id": "KY",
+          "name": "Kentucky",
+          "value": 4.7
+        },
+        {
+          "id": "LA",
+          "name": "Louisiana",
+          "value": 4.0
+        },
+        {
+          "id": "MA",
+          "name": "Massachusetts",
+          "value": 4.3
+        },
+        {
+          "id": "MD",
+          "name": "Maryland",
+          "value": 3.9
+        },
+        {
+          "id": "ME",
+          "name": "Maine",
+          "value": 3.3
+        },
+        {
+          "id": "MI",
+          "name": "Michigan",
+          "value": 5.0
+        },
+        {
+          "id": "MN",
+          "name": "Minnesota",
+          "value": 4.5
+        },
+        {
+          "id": "MO",
+          "name": "Missouri",
+          "value": 3.6
+        },
+        {
+          "id": "MS",
+          "name": "Mississippi",
+          "value": 3.3
+        },
+        {
+          "id": "MT",
+          "name": "Montana",
+          "value": 3.1
+        },
+        {
+          "id": "NC",
+          "name": "North Carolina",
+          "value": 3.4
+        },
+        {
+          "id": "ND",
+          "name": "North Dakota",
+          "value": 2.2
+        },
+        {
+          "id": "NE",
+          "name": "Nebraska",
+          "value": 2.9
+        },
+        {
+          "id": "NH",
+          "name": "New Hampshire",
+          "value": 2.6
+        },
+        {
+          "id": "NJ",
+          "name": "New Jersey",
+          "value": 4.2
+        },
+        {
+          "id": "NM",
+          "name": "New Mexico",
+          "value": 4.7
+        },
+        {
+          "id": "NV",
+          "name": "Nevada",
+          "value": 4.7
+        },
+        {
+          "id": "NY",
+          "name": "New York",
+          "value": 4.3
+        },
+        {
+          "id": "OH",
+          "name": "Ohio",
+          "value": 3.4
+        },
+        {
+          "id": "OK",
+          "name": "Oklahoma",
+          "value": 4.2
+        },
+        {
+          "id": "OR",
+          "name": "Oregon",
+          "value": 5.0
+        },
+        {
+          "id": "PA",
+          "name": "Pennsylvania",
+          "value": 3.6
+        },
+        {
+          "id": "RI",
+          "name": "Rhode Island",
+          "value": 3.6
+        },
+        {
+          "id": "SC",
+          "name": "South Carolina",
+          "value": 4.0
+        },
+        {
+          "id": "SD",
+          "name": "South Dakota",
+          "value": 2.0
+        },
+        {
+          "id": "TN",
+          "name": "Tennessee",
+          "value": 3.4
+        },
+        {
+          "id": "TX",
+          "name": "Texas",
+          "value": 4.4
+        },
+        {
+          "id": "UT",
+          "name": "Utah",
+          "value": 3.5
+        },
+        {
+          "id": "VA",
+          "name": "Virginia",
+          "value": 3.6
+        },
+        {
+          "id": "VT",
+          "name": "Vermont",
+          "value": 2.6
+        },
+        {
+          "id": "WA",
+          "name": "Washington",
+          "value": 4.8
+        },
+        {
+          "id": "WI",
+          "name": "Wisconsin",
+          "value": 3.2
+        },
+        {
+          "id": "WV",
+          "name": "West Virginia",
+          "value": 4.0
+        },
+        {
+          "id": "WY",
+          "name": "Wyoming",
+          "value": 3.0
+        }
+      ]
+    },
+    {
+      "id": "regional-unavailable",
+      "title": "Regional data not available",
+      "breadcrumb": "Regions",
+      "geography": "country",
+      "projection": "Albers",
+      "unavailableMessage": "Regional data not available",
+      "footnote": "This story has provincial figures for Spain, France, Germany, Italy, Finland (Eurostat NUTS-2, 2024) and the United States (BLS). Other countries stop at the national rate.",
+      "sampleData": false,
+      "regions": []
+    }
+  ]
+}

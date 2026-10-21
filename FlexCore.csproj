@@ -18,7 +18,7 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.48</Version>
+    <Version>0.2.49</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
@@ -42,6 +42,9 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <EmbeddedResource Include="Charts/ChartControl.razor.css" LogicalName="Fx.Reports.ChartStyles" />
     <EmbeddedResource Include="Grid/PivotControl.razor.css" LogicalName="Fx.Reports.PivotStyles" />
+    <EmbeddedResource Include="wwwroot/maps/geo/countries.geojson" LogicalName="Fx.ControlKit.maps.countries.geojson" />
+    <EmbeddedResource Include="wwwroot/maps/geo/regions.geojson" LogicalName="Fx.ControlKit.maps.regions.geojson" />
+    <EmbeddedResource Include="wwwroot/maps/stories/unemployment.json" LogicalName="Fx.ControlKit.maps.unemployment.json" />
     <!-- Corpus pack. Copied next to this assembly and into NuGet consumers at the same relative path.
          CrystalSampleDatabase.Path is that location. Session packs named samples.db stay beside a translation. -->
     <None Update="Reports\CrystalSamples\CrystalSamples.db"
