@@ -295,6 +295,13 @@ export function registerGridResizeCapture(gridRoot, dotNetRef, initialClientX = 
     };
 
     const onMouseMove = (event) => {
+        // A move with the primary button up means the release was missed: the capture was
+        // attached after it (a slow link), or it happened outside the page. End where the
+        // pointer last was with the button down, as a window blur does.
+        if ((event.buttons & 1) === 0) {
+            onWindowBlur();
+            return;
+        }
         event.preventDefault();
         keepGripVisible(event.clientX);
         invokeMove(event);

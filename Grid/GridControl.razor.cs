@@ -1730,6 +1730,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     private GridColumn? _resizingCol;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    // Set once a column-resize press moves past GripJitterPx. Until then the host's own
+    // mousemove follows the press and no overlay covers the grip; after it the overlay alone
+    // carries the drag, so each move renders once.
+    private bool _columnResizeDragged;
+    private bool _gripAutoFitHandled;
+
+    // A grip press is never a header click. The click that follows it reaches the <th> when
+    // the release drifts off the grip, or when a best fit has moved the divider from under the
+    // pointer. Events of one circuit arrive in order, so the press always sets this before its
+    // click is handled; the next press anywhere else in the grid clears it.
+    private bool _suppressHeaderClickAfterGripPress;
 
     // Double-click on the grip is detected from two mousedowns rather than from the
     // DOM's dblclick event — see GripDoubleClickDetector (shared with TreeGridControl).
@@ -5462,6 +5473,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private Task HandleHeaderClickAsync(MouseEventArgs e, GridColumn col)
     {
+        if (_suppressHeaderClickAfterGripPress)
+        {
+            _suppressHeaderClickAfterGripPress = false;
+            // A click without a click count comes from the keyboard or assistive technology,
+            // never from the grip press.
+            if (e.Detail > 0)
+                return Task.CompletedTask;
+        }
         if (HeaderClickShowsColumns && (EnableHeaderContextMenu || ShowColumnMenu))
         {
             OpenHeaderContextMenu(e, col.Field);
@@ -6653,6 +6672,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// </summary>
     private async Task HandleGridHostMouseDown(MouseEventArgs args)
     {
+        // Grip presses stop propagation, so any press arriving here starts another gesture.
+        _suppressHeaderClickAfterGripPress = false;
+        _gripClicks.Reset();
+
         if (args.Button != 0)
             return;
         if (BatchEditBehavior == GridBatchEditBehavior.SingleCell)
@@ -6665,8 +6688,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await CommitPendingRowSelectionTypeAheadAsync(collapseSelection: false);
     }
 
-    private void HandleGridMouseUp(MouseEventArgs args)
+    private async Task HandleGridMouseUp(MouseEventArgs args)
     {
+        if (_resizingCol != null)
+        {
+            await EndGridResizeFromBrowserAsync(args.ClientX, args.ClientY);
+            return;
+        }
         // End the drag on mouseup so the cursor/visual state cannot stay
         // latched if the browser swallows the trailing click. The next click,
         // when it exists, is still swallowed so the selected range survives.
@@ -14871,8 +14899,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task StartResize(GridColumn col, MouseEventArgs e)
     {
-        if (_gripClicks.Register(col.Field, DateTime.UtcNow) && AllowColumnAutoFit)
+        if (e.Button != 0 || !AllowResizing || !col.AllowResizing)
+            return;
+
+        _suppressHeaderClickAfterGripPress = true;
+        _gripAutoFitHandled = false;
+        _columnResizeDragged = false;
+        if (_gripClicks.Register(col.Field, DateTime.UtcNow, e.Detail) && AllowColumnAutoFit)
         {
+            _gripAutoFitHandled = true;
             _resizingCol = null;
             await UnregisterGridResizeCaptureAsync();
             await AutoFitCoreAsync(new List<GridColumn> { col });
@@ -14904,9 +14939,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleResizeMove(double clientX)
     {
-        if (_resizingCol == null) return;
+        var col = _resizingCol;
+        if (col == null) return;
 
         var delta = clientX - _resizeStartX;
+        if (!_columnResizeDragged && Math.Abs(delta) <= GripJitterPx)
+            return;
+        _columnResizeDragged = true;
         var newWidth = Math.Max(40, _resizeStartWidth + delta);
 
         // A deliberate drag is not half of a double-click — stop the next mousedown
@@ -14918,15 +14957,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             var args = new ResizeEventArgs
             {
-                Field = _resizingCol.Field,
-                OldWidth = _resizingCol.RuntimeWidth ?? _resizeStartWidth,
+                Field = col.Field,
+                OldWidth = col.RuntimeWidth ?? _resizeStartWidth,
                 NewWidth = newWidth
             };
             await EventsRef.ColumnResizing.InvokeAsync(args);
-            if (args.Cancel) return;
+            // The release can be handled while the host decides; the drag is over then.
+            if (args.Cancel || _resizingCol != col) return;
         }
 
-        _resizingCol.RuntimeWidth = newWidth;
+        col.RuntimeWidth = newWidth;
     }
 
     private async Task EndResize(MouseEventArgs e)
@@ -14936,6 +14976,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         var col = _resizingCol;
         _resizingCol = null;
+        // Started before the host callbacks, so a press made while they run registers
+        // its own capture.
+        var unregister = UnregisterGridResizeCaptureAsync();
 
         // A press that only jittered is not a resize. Bail before the events fire:
         // the clicks of a DOUBLE-click land here, and persisting a 1px tremor makes
@@ -14943,9 +14986,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var settled = col?.RuntimeWidth ?? _resizeStartWidth;
         if (col == null || Math.Abs(settled - _resizeStartWidth) <= GripJitterPx)
         {
-            if (col != null)
+            if (col != null && _columnResizeDragged)
                 col.RuntimeWidth = _resizeStartWidth > 0 ? _resizeStartWidth : col.RuntimeWidth;
-            await UnregisterGridResizeCaptureAsync();
+            await unregister;
             return;
         }
 
@@ -14960,7 +15003,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
         await SaveGridSettingsAsync();
         await FireLayoutChangedAsync();
-        await UnregisterGridResizeCaptureAsync();
+        await unregister;
     }
 
     private async Task StartRowResize(TValue item, int resolvedRowIndex, MouseEventArgs e)
@@ -15083,6 +15126,12 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             // The Blazor overlay still captures ordinary in-grid resize movement.
         }
+
+        // Over a slow link the press can end before the capture attaches. Its teardown then
+        // found nothing to remove, and a capture with no press behind it would send every
+        // later mousemove to the server until the next mouseup.
+        if (_gridResizeCaptureRegistered && _resizingCol == null && _resizingRowIndex < 0)
+            await UnregisterGridResizeCaptureAsync();
     }
 
     private async Task UnregisterGridResizeCaptureAsync()
@@ -15090,6 +15139,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (!_gridResizeCaptureRegistered || _gridJsModule == null)
             return;
 
+        // Cleared before the call, not after it: a press that starts while the call is in
+        // flight must register its own capture, which the browser then installs after this
+        // removal (interop calls run in the order they were sent).
+        _gridResizeCaptureRegistered = false;
         try
         {
             await _gridJsModule.InvokeVoidAsync("unregisterGridResizeCapture", _gridHostElement);
@@ -15098,17 +15151,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             // Best-effort teardown.
         }
-        finally
-        {
-            _gridResizeCaptureRegistered = false;
-        }
     }
 
     [JSInvokable]
     public async Task ContinueGridResizeFromBrowserAsync(double clientX, double clientY)
     {
         if (_resizingCol != null)
+        {
+            var wasDragged = _columnResizeDragged;
             await HandleResizeMove(clientX);
+            // Interop calls do not render. The move that turns a press into a drag must, once,
+            // to raise the overlay that carries the rest of the drag.
+            if (!wasDragged && _columnResizeDragged)
+                await InvokeAsync(StateHasChanged);
+        }
         else if (_resizingRowIndex >= 0)
             await HandleRowResizeMove(clientY);
     }
@@ -15116,15 +15172,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     [JSInvokable]
     public async Task EndGridResizeFromBrowserAsync(double clientX, double clientY)
     {
+        // The capture's calls render nothing by themselves, and the overlay a drag raised must
+        // go with the press even when no host callback re-renders the grid.
         if (_resizingCol != null)
         {
             await HandleResizeMove(clientX);
-            await EndResize();
+            var ending = EndResize();
+            await InvokeAsync(StateHasChanged);
+            await ending;
         }
         else if (_resizingRowIndex >= 0)
         {
             await HandleRowResizeMove(clientY);
             await EndRowResize();
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -16520,9 +16581,17 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// since neither one moved the column and re-persisting them would be noise.</summary>
     private async Task HandleResizeHandleDoubleClickAsync(GridColumn col)
     {
-        if (!AllowColumnAutoFit)
+        // The second mousedown may already have fitted this column. Its following
+        // native dblclick must not repeat measurement or layout persistence.
+        if (_gripAutoFitHandled)
+        {
+            _gripAutoFitHandled = false;
+            return;
+        }
+        if (!AllowResizing || !col.AllowResizing || !AllowColumnAutoFit)
             return;
 
+        _gripClicks.Reset();
         _resizingCol = null;
         await UnregisterGridResizeCaptureAsync();
         await AutoFitCoreAsync(new List<GridColumn> { col });

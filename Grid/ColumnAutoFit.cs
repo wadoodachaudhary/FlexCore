@@ -19,6 +19,9 @@ internal static class ColumnAutoFit
     public const int DefaultSampleSize = 50;
     /// <summary>Two grip mousedowns on the same column within this window are a double-click.</summary>
     public const int GripDoubleClickMs = 700;
+    /// <summary>How far apart the server may see two presses the browser itself counted as a
+    /// double-click.</summary>
+    public const int GripBrowserDoubleClickMs = 2500;
     /// <summary>Width a column with no width at all is treated as while scaling.</summary>
     public const double FallbackWidthPx = 120;
     /// <summary>Most display texts per column sent to the browser for an every-row best fit.</summary>
@@ -269,12 +272,18 @@ internal sealed class GripDoubleClickDetector
     private DateTime _at;
 
     /// <summary>Records a grip mousedown; true when it completes a double-click on
-    /// <paramref name="field"/> (a third click then starts a fresh pair).</summary>
-    public bool Register(string? field, DateTime now, int windowMs = ColumnAutoFit.GripDoubleClickMs)
+    /// <paramref name="field"/> (a third click then starts a fresh pair).
+    /// <paramref name="clickCount"/> is the browser's own count for the press
+    /// (<c>MouseEventArgs.Detail</c>): the server times the presses only after the network
+    /// has carried them, and jitter on a slow link can stretch a real double-click past
+    /// <paramref name="windowMs"/>.</summary>
+    public bool Register(string? field, DateTime now, long clickCount = 0, int windowMs = ColumnAutoFit.GripDoubleClickMs)
     {
+        var elapsedMs = (now - _at).TotalMilliseconds;
         var isDoubleClick = _field != null
             && string.Equals(_field, field, StringComparison.Ordinal)
-            && (now - _at).TotalMilliseconds <= windowMs;
+            && (elapsedMs <= windowMs
+                || clickCount >= 2 && elapsedMs <= ColumnAutoFit.GripBrowserDoubleClickMs);
         _field = field;
         _at = now;
         if (isDoubleClick)

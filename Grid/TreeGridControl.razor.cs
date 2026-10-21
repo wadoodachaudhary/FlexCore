@@ -2217,7 +2217,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (!AllowResizing || !column.AllowResizing)
             return;
 
-        if (_gripClicks.Register(GetColumnKey(column), DateTime.UtcNow) && AllowColumnAutoFit)
+        if (_gripClicks.Register(GetColumnKey(column), DateTime.UtcNow, e.Detail) && AllowColumnAutoFit)
         {
             _isColumnResizing = false;
             _resizingColumn = null;
