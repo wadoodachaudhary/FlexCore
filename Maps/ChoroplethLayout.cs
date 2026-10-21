@@ -271,7 +271,9 @@ public static class MapStoryComposer
         if (level.UnavailableMessage is null)
         {
             var keepBottom = southRow ? height - 168 : height - 28;
-            var reserved = callouts.Select(item => (item.X, item.Y, item.X + item.Width, item.Y + item.Height)).ToList();
+            var reserved = callouts.Select(item => (item.X - 8, item.Y - 6, item.X + item.Width + 8, item.Y + item.Height + 6)).ToList();
+            foreach (var inset in placedInsets)
+                reserved.Add((inset.Cx - inset.Radius - 8, inset.Cy - inset.Radius - 8, inset.Cx + inset.Radius + 8, inset.Cy + inset.Radius + 30));
             labels.AddRange(PlaceLabels(story, main.Where(item => item.Value is not null), anchors, width, keepBottom, reserved));
         }
         var anySample = level.SampleData || level.Regions.Any(region => region.Sample);
@@ -411,7 +413,7 @@ public static class MapStoryComposer
     static List<ChoroplethLabel> PlaceLabels(MapStory story, IEnumerable<DrawnFeature> features, Dictionary<string, (double X, double Y, double Left, double Top, double Right, double Bottom)> anchors, double width, double keepBottom, List<(double X, double Y, double R, double B)> reserved)
     {
         var labels = new List<ChoroplethLabel>();
-        var occupied = new List<(double L, double T, double R, double B)> { (16, 40, 260, 108) };
+        var occupied = new List<(double L, double T, double R, double B)> { (8, 24, 300, 108) };
         occupied.AddRange(reserved.Select(item => (item.X, item.Y, item.R, item.B)));
         foreach (var feature in features.OrderByDescending(item => anchors.TryGetValue(item.Id, out var box) ? (box.Right - box.Left) * (box.Bottom - box.Top) : 0))
         {
@@ -419,83 +421,166 @@ public static class MapStoryComposer
             var valueText = story.Format(value);
             var boxW = box.Right - box.Left;
             var boxH = box.Bottom - box.Top;
-            var twoLine = feature.Name.Length < 18 && ((boxW > 56 && boxH > 32) || boxH > 64 || boxW > 90);
-            var second = twoLine ? feature.Name : null;
-            var size = twoLine ? 13 : boxW < 16 ? 10 : 11;
-            var estimateW = Math.Max(valueText.Length, second?.Length ?? 0) * size * 0.56;
-            var estimateH = second is null ? size + 2 : size + 16;
-            var tiny = boxW < 18 && boxH < 14;
-            var candidates = tiny
-                ? new (double X, double Y, string Anchor)[]
-                {
-                    (box.Right + 6 + estimateW / 2, box.Y, "middle"),
-                    (box.Left - 6 - estimateW / 2, box.Y, "middle"),
-                    (box.X, box.Top - 10, "middle"),
-                    (box.X, box.Bottom + 12, "middle"),
-                    (box.X, box.Y, "middle")
-                }
-                : new (double X, double Y, string Anchor)[]
-                {
-                    (box.X, box.Y, "middle"),
-                    (box.Right + 4 + estimateW / 2, box.Y, "middle"),
-                    (box.Left - 4 - estimateW / 2, box.Y, "middle"),
-                    (box.X, box.Bottom + 12, "middle"),
-                    (box.X, box.Top - 8, "middle")
-                };
-            (double X, double Y, string Anchor) chosen = candidates[0];
-            var placed = false;
-            foreach (var candidate in candidates)
+            var shortName = ShortLabel(feature.Name);
+            var named = false;
+            if (shortName is not null)
             {
-                var rect = Rect(candidate.X, candidate.Y, estimateW, estimateH, candidate.Anchor);
-                if (rect.L < 4 || rect.R > width - 4 || rect.T < 100 || rect.B > keepBottom) continue;
-                if (occupied.Any(item => item.L < rect.R && item.R > rect.L && item.T < rect.B && item.B > rect.T)) continue;
-                chosen = candidate;
-                occupied.Add(rect);
-                placed = true;
+                var wide = Math.Max(TextWidth(shortName, 10), TextWidth(valueText, 13));
+                var fits = boxW >= wide * 0.72 && boxH >= 26;
+                var roomy = (boxW >= 64 && boxH >= 34) || boxH >= 68 || boxW >= 96;
+                if (fits || roomy)
+                {
+                    var nudges = new (double X, double Y)[]
+                    {
+                        (box.X, box.Y),
+                        (box.X, box.Y + Math.Min(14, boxH * 0.22)),
+                        (box.X, box.Y - Math.Min(14, boxH * 0.22)),
+                        (box.X, box.Y + Math.Min(36, Math.Max(16, boxH * 0.3))),
+                        (box.X + Math.Min(10, boxW * 0.12), box.Y),
+                        (box.X - Math.Min(10, boxW * 0.12), box.Y)
+                    };
+                    foreach (var nudge in nudges)
+                    {
+                        if (!TryTake(occupied, nudge.X, nudge.Y, wide, 30, width, keepBottom, 2)) continue;
+                        labels.Add(new ChoroplethLabel { X = nudge.X, Y = nudge.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13 });
+                        named = true;
+                        break;
+                    }
+                }
+            }
+            if (named) continue;
+            var size = boxW < 16 ? 10 : 11;
+            var estimateW = TextWidth(valueText, size);
+            var estimateH = size + 6;
+            var outside = estimateW > boxW * 0.85 || estimateH > boxH;
+            var spots = new List<(double X, double Y)>();
+            if (!outside) spots.Add((box.X, box.Y));
+            spots.Add((box.X, box.Bottom + estimateH));
+            spots.Add((box.X, box.Top - 8));
+            spots.Add((box.Right + 8 + estimateW / 2, box.Y));
+            spots.Add((box.Left - 8 - estimateW / 2, box.Y));
+            spots.Add((box.X, box.Bottom + estimateH + 12));
+            spots.Add((box.Right + 10 + estimateW / 2, box.Bottom + 10));
+            spots.Add((box.Left - 10 - estimateW / 2, box.Bottom + 10));
+            // Further sideways last, so a district pinched on the coast can sit in open water.
+            spots.Add((box.Right + 36 + estimateW / 2, box.Y));
+            spots.Add((box.Left - 36 - estimateW / 2, box.Y));
+            if (outside) spots.Add((box.X, box.Y));
+            foreach (var spot in spots)
+            {
+                var near = Math.Abs(spot.X - box.X) <= 36 && spot.Y >= box.Top - 8 && spot.Y <= box.Bottom + 18;
+                if (shortName is not null && near)
+                {
+                    var wide = Math.Max(TextWidth(shortName, 10), TextWidth(valueText, 13));
+                    if (TryTake(occupied, spot.X, spot.Y, wide, 30, width, keepBottom, 2))
+                    {
+                        labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13 });
+                        break;
+                    }
+                }
+                if (!TryTake(occupied, spot.X, spot.Y, estimateW, estimateH, width, keepBottom, 8)) continue;
+                labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, Anchor = "middle", Size = size });
                 break;
             }
-            if (!placed)
-            {
-                (double X, double Y, string Anchor)? inside = null;
-                foreach (var candidate in candidates)
-                {
-                    var rect = Rect(candidate.X, candidate.Y, estimateW, estimateH, candidate.Anchor);
-                    if (rect.L < 4 || rect.R > width - 4 || rect.T < 100 || rect.B > keepBottom) continue;
-                    inside = candidate;
-                    break;
-                }
-                if (inside is null) continue;
-                chosen = inside.Value;
-                occupied.Add(Rect(chosen.X, chosen.Y, estimateW, estimateH, chosen.Anchor));
-            }
-            labels.Add(new ChoroplethLabel { X = chosen.X, Y = chosen.Y, Text = valueText, SecondLine = second, Anchor = chosen.Anchor, Size = size });
         }
         return labels;
     }
 
-    static (double L, double T, double R, double B) Rect(double x, double y, double w, double h, string anchor)
+    static bool TryTake(List<(double L, double T, double R, double B)> occupied, double x, double y, double w, double h, double width, double keepBottom, double padBottom)
     {
-        var left = anchor == "start" ? x : anchor == "end" ? x - w : x - w / 2;
-        return (left, y - h, left + w, y + 2);
+        var left = x - w / 2;
+        var top = y - 13;
+        var rect = (left - 2, top - 1, left + w + 2, top + h + padBottom);
+        if (rect.Item1 < 4 || rect.Item3 > width - 4 || rect.Item2 < 100 || rect.Item4 > keepBottom) return false;
+        if (occupied.Any(item => item.L < rect.Item3 && item.R > rect.Item1 && item.T < rect.Item4 && item.B > rect.Item2)) return false;
+        occupied.Add(rect);
+        return true;
     }
+
+    static string? ShortLabel(string name)
+    {
+        if (name.Length <= 16) return name;
+        var at = name.LastIndexOf(" de ", StringComparison.Ordinal);
+        if (at >= 0)
+        {
+            var tail = name[(at + 4)..];
+            if (tail.Length is >= 3 and <= 16) return tail;
+        }
+        return name.Length <= 20 ? name : null;
+    }
+
+    static double TextWidth(string text, double size) => Math.Max(8, text.Length * size * 0.58);
 
     static List<ChoroplethCalloutGraphic> PlaceCallouts(MapStoryLevel level, Dictionary<string, (double X, double Y, double Left, double Top, double Right, double Bottom)> anchors, double width, double height)
     {
         var callouts = new List<ChoroplethCalloutGraphic>();
+        var occupied = new List<(double L, double T, double R, double B)>();
         foreach (var callout in level.Callouts)
         {
             if (!anchors.TryGetValue(callout.RegionId, out var anchor)) continue;
             var lines = ChoroplethLayout.Wrap(callout.Text, 34);
-            var boxW = 196;
-            var boxH = 12 + lines.Count * 14;
+            var boxW = 196.0;
+            var boxH = 12 + lines.Count * 14.0;
             var east = !callout.Placement.Equals("west", StringComparison.OrdinalIgnoreCase);
-            var x = east ? anchor.Right + 18 : anchor.Left - 18 - boxW;
-            var y = anchor.Y - boxH / 2;
-            x = Math.Clamp(x, 8, width - boxW - 8);
-            y = Math.Clamp(y, 112, height - boxH - 36);
-            callouts.Add(new ChoroplethCalloutGraphic { X = x, Y = y, Width = boxW, Height = boxH, AnchorX = anchor.X, AnchorY = anchor.Y, Lines = lines });
+            var preferX = east ? anchor.Right + 16 : anchor.Left - 16 - boxW;
+            var preferY = anchor.Y - boxH / 2;
+            (double X, double Y)? best = null;
+            var bestOverlap = double.PositiveInfinity;
+            var bestDistance = double.PositiveInfinity;
+            foreach (var candidate in CalloutCandidates(preferX, preferY, boxW, boxH, width, height, east))
+            {
+                var rect = (L: candidate.X, T: candidate.Y, R: candidate.X + boxW, B: candidate.Y + boxH);
+                if (occupied.Any(item => item.L < rect.R && item.R > rect.L && item.T < rect.B && item.B > rect.T)) continue;
+                var overlap = 0.0;
+                foreach (var other in anchors)
+                {
+                    if (other.Key == callout.RegionId) continue;
+                    var box = (L: other.Value.Left, T: other.Value.Top, R: other.Value.Right, B: other.Value.Bottom);
+                    var area = Intersection(rect, box);
+                    var boxArea = Math.Max(1, (box.R - box.L) * (box.B - box.T));
+                    var coversAnchor = other.Value.X >= rect.L && other.Value.X <= rect.R && other.Value.Y >= rect.T && other.Value.Y <= rect.B;
+                    overlap += (coversAnchor ? 8000 : 0) + area / boxArea * 4000 + area * 0.05;
+                }
+                var distance = Math.Abs(candidate.X - preferX) + Math.Abs(candidate.Y - preferY);
+                overlap += distance * 6;
+                if (overlap < bestOverlap - 1 || (Math.Abs(overlap - bestOverlap) <= 1 && distance < bestDistance))
+                {
+                    bestOverlap = overlap;
+                    bestDistance = distance;
+                    best = candidate;
+                }
+            }
+            if (best is null) continue;
+            var chosen = best.Value;
+            occupied.Add((chosen.X, chosen.Y, chosen.X + boxW, chosen.Y + boxH));
+            callouts.Add(new ChoroplethCalloutGraphic { X = chosen.X, Y = chosen.Y, Width = boxW, Height = boxH, AnchorX = anchor.X, AnchorY = anchor.Y, Lines = lines });
         }
         return callouts;
+    }
+
+    static IEnumerable<(double X, double Y)> CalloutCandidates(double preferX, double preferY, double boxW, double boxH, double width, double height, bool east)
+    {
+        var minX = 8.0;
+        var maxX = Math.Max(minX, width - boxW - 8);
+        var minY = 112.0;
+        var maxY = Math.Max(minY, height - boxH - 36);
+        double[] outward = [0, 40, 90, 150, 230, 340];
+        double[] shiftY = [0, -40, 40, -80, 80, -130, 130, -190, 190];
+        var seen = new HashSet<(int X, int Y)>();
+        foreach (var extra in outward)
+        foreach (var dy in shiftY)
+        {
+            var x = Math.Clamp(preferX + (east ? extra : -extra), minX, maxX);
+            var y = Math.Clamp(preferY + dy, minY, maxY);
+            if (seen.Add(((int)Math.Round(x), (int)Math.Round(y)))) yield return (x, y);
+        }
+    }
+
+    static double Intersection((double L, double T, double R, double B) a, (double L, double T, double R, double B) b)
+    {
+        var w = Math.Min(a.R, b.R) - Math.Max(a.L, b.L);
+        var h = Math.Min(a.B, b.B) - Math.Max(a.T, b.T);
+        return w > 0 && h > 0 ? w * h : 0;
     }
 }
 
