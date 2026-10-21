@@ -85,6 +85,7 @@ public sealed class ChoroplethLabel
     public string Anchor { get; init; } = "middle";
     public double Size { get; init; } = 12;
     public bool Bold { get; init; } = true;
+    public string? Key { get; init; }
 }
 
 public sealed class ChoroplethCalloutGraphic
@@ -96,6 +97,8 @@ public sealed class ChoroplethCalloutGraphic
     public required double AnchorX { get; init; }
     public required double AnchorY { get; init; }
     public required IReadOnlyList<string> Lines { get; init; }
+    public string? Key { get; init; }
+    public IReadOnlyList<(double X, double Y)>? Leader { get; set; }
 }
 
 public sealed class ChoroplethInsetGraphic
@@ -161,8 +164,16 @@ public sealed class ChoroplethLayout
         }
         foreach (var callout in Callouts)
         {
-            var edgeX = callout.AnchorX < callout.X + callout.Width / 2 ? callout.X : callout.X + callout.Width;
-            svg.Append("<line x1=\"").Append(F(callout.AnchorX)).Append("\" y1=\"").Append(F(callout.AnchorY)).Append("\" x2=\"").Append(F(edgeX)).Append("\" y2=\"").Append(F(callout.Y + callout.Height / 2)).Append("\" stroke=\"#3a342c\" stroke-width=\"1\"/>");
+            var leader = callout.Leader is { Count: >= 2 }
+                ? callout.Leader
+                : new[] { (X: callout.AnchorX, Y: callout.AnchorY), (X: callout.AnchorX < callout.X + callout.Width / 2 ? callout.X : callout.X + callout.Width, Y: callout.Y + callout.Height / 2) };
+            svg.Append("<polyline points=\"");
+            for (var i = 0; i < leader.Count; i++)
+            {
+                if (i > 0) svg.Append(' ');
+                svg.Append(F(leader[i].X)).Append(',').Append(F(leader[i].Y));
+            }
+            svg.Append("\" fill=\"none\" stroke=\"#3a342c\" stroke-width=\"1\"/>");
             svg.Append("<rect x=\"").Append(F(callout.X)).Append("\" y=\"").Append(F(callout.Y)).Append("\" width=\"").Append(F(callout.Width)).Append("\" height=\"").Append(F(callout.Height)).Append("\" rx=\"4\" fill=\"#fffdf8\" stroke=\"#3a342c\"/>");
             for (var i = 0; i < callout.Lines.Count; i++) svg.Append("<text x=\"").Append(F(callout.X + 8)).Append("\" y=\"").Append(F(callout.Y + 16 + i * 14)).Append("\" font-size=\"11\" font-family=\"Segoe UI, Helvetica, Arial, sans-serif\" fill=\"#1a1a1a\">").Append(Esc(callout.Lines[i])).Append("</text>");
         }
@@ -275,6 +286,7 @@ public static class MapStoryComposer
             foreach (var inset in placedInsets)
                 reserved.Add((inset.Cx - inset.Radius - 8, inset.Cy - inset.Radius - 8, inset.Cx + inset.Radius + 8, inset.Cy + inset.Radius + 30));
             labels.AddRange(PlaceLabels(story, main.Where(item => item.Value is not null), anchors, width, keepBottom, reserved));
+            AimCallouts(callouts, labels);
         }
         var anySample = level.SampleData || level.Regions.Any(region => region.Sample);
         var footnote = level.Footnote;
@@ -442,7 +454,7 @@ public static class MapStoryComposer
                     foreach (var nudge in nudges)
                     {
                         if (!TryTake(occupied, nudge.X, nudge.Y, wide, 30, width, keepBottom, 2)) continue;
-                        labels.Add(new ChoroplethLabel { X = nudge.X, Y = nudge.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13 });
+                        labels.Add(new ChoroplethLabel { X = nudge.X, Y = nudge.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13, Key = feature.Id });
                         named = true;
                         break;
                     }
@@ -453,8 +465,23 @@ public static class MapStoryComposer
             var estimateW = TextWidth(valueText, size);
             var estimateH = size + 6;
             var outside = estimateW > boxW * 0.85 || estimateH > boxH;
+            var holdsRate = boxW >= estimateW + 4 && boxH >= estimateH + 2;
             var spots = new List<(double X, double Y)>();
             if (!outside) spots.Add((box.X, box.Y));
+            if (box.Right - box.Left > 8)
+            {
+                var innerLeft = box.Left + 2;
+                var innerRight = box.Right - 2;
+                spots.Add((Math.Clamp(box.Right - estimateW / 2 - 2, innerLeft, innerRight), box.Y));
+                spots.Add((Math.Clamp(box.Left + estimateW / 2 + 2, innerLeft, innerRight), box.Y));
+            }
+            if (box.Bottom - box.Top > 10)
+            {
+                var innerTop = box.Top + 4;
+                var innerBottom = box.Bottom - 4;
+                spots.Add((box.X, Math.Clamp(box.Y - boxH * 0.2, innerTop, innerBottom)));
+                spots.Add((box.X, Math.Clamp(box.Y + boxH * 0.2, innerTop, innerBottom)));
+            }
             spots.Add((box.X, box.Bottom + estimateH));
             spots.Add((box.X, box.Top - 8));
             spots.Add((box.Right + 8 + estimateW / 2, box.Y));
@@ -466,22 +493,29 @@ public static class MapStoryComposer
             spots.Add((box.Right + 36 + estimateW / 2, box.Y));
             spots.Add((box.Left - 36 - estimateW / 2, box.Y));
             if (outside) spots.Add((box.X, box.Y));
+            var placedRate = false;
             foreach (var spot in spots)
             {
+                var onCountry = spot.X >= box.Left + 1 && spot.X <= box.Right - 1 && spot.Y >= box.Top + 1 && spot.Y <= box.Bottom - 1;
+                if (holdsRate && !onCountry) continue;
                 var near = Math.Abs(spot.X - box.X) <= 36 && spot.Y >= box.Top - 8 && spot.Y <= box.Bottom + 18;
                 if (shortName is not null && near)
                 {
                     var wide = Math.Max(TextWidth(shortName, 10), TextWidth(valueText, 13));
                     if (TryTake(occupied, spot.X, spot.Y, wide, 30, width, keepBottom, 2))
                     {
-                        labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13 });
+                        labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, SecondLine = shortName, Anchor = "middle", Size = 13, Key = feature.Id });
+                        placedRate = true;
                         break;
                     }
                 }
-                if (!TryTake(occupied, spot.X, spot.Y, estimateW, estimateH, width, keepBottom, 8)) continue;
-                labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, Anchor = "middle", Size = size });
+                if (!TryTake(occupied, spot.X, spot.Y, estimateW, estimateH, width, keepBottom, onCountry ? 2 : 8)) continue;
+                labels.Add(new ChoroplethLabel { X = spot.X, Y = spot.Y, Text = valueText, Anchor = "middle", Size = size, Key = feature.Id });
+                placedRate = true;
                 break;
             }
+            if (!placedRate && holdsRate)
+                labels.Add(new ChoroplethLabel { X = box.X, Y = box.Y, Text = valueText, Anchor = "middle", Size = size, Key = feature.Id });
         }
         return labels;
     }
@@ -553,7 +587,7 @@ public static class MapStoryComposer
             if (best is null) continue;
             var chosen = best.Value;
             occupied.Add((chosen.X, chosen.Y, chosen.X + boxW, chosen.Y + boxH));
-            callouts.Add(new ChoroplethCalloutGraphic { X = chosen.X, Y = chosen.Y, Width = boxW, Height = boxH, AnchorX = anchor.X, AnchorY = anchor.Y, Lines = lines });
+            callouts.Add(new ChoroplethCalloutGraphic { X = chosen.X, Y = chosen.Y, Width = boxW, Height = boxH, AnchorX = anchor.X, AnchorY = anchor.Y, Lines = lines, Key = callout.RegionId });
         }
         return callouts;
     }
@@ -581,6 +615,148 @@ public static class MapStoryComposer
         var w = Math.Min(a.R, b.R) - Math.Max(a.L, b.L);
         var h = Math.Min(a.B, b.B) - Math.Max(a.T, b.T);
         return w > 0 && h > 0 ? w * h : 0;
+    }
+
+    static void AimCallouts(List<ChoroplethCalloutGraphic> callouts, List<ChoroplethLabel> labels)
+    {
+        var boxes = labels.Select(label => (label.Key, Rect: LabelRect(label))).ToList();
+        foreach (var callout in callouts)
+        {
+            var targetLabel = labels.FirstOrDefault(label => label.Key == callout.Key);
+            var target = targetLabel is null ? (X: callout.AnchorX, Y: callout.AnchorY) : (X: targetLabel.X, Y: targetLabel.Y);
+            var targetRect = targetLabel is null ? (L: target.X - 2, T: target.Y - 2, R: target.X + 2, B: target.Y + 2) : boxes.First(item => item.Key == callout.Key).Rect;
+            var blocks = boxes.Where(item => item.Key != callout.Key).Select(item => item.Rect).ToList();
+            var path = RouteLeader(callout.X, callout.Y, callout.Width, callout.Height, target.X, target.Y, blocks);
+            if (path.Count >= 2)
+            {
+                var end = Meet(path[^2], path[^1], targetRect);
+                path[^1] = end;
+            }
+            callout.Leader = path;
+        }
+    }
+
+    static (double L, double T, double R, double B) LabelRect(ChoroplethLabel label)
+    {
+        var width = Math.Max(TextWidth(label.Text, label.Size), label.SecondLine is null ? 0 : TextWidth(label.SecondLine, 10));
+        var height = label.SecondLine is null ? label.Size + 4 : label.Size + 16;
+        var left = label.X - width / 2;
+        var top = label.Y - label.Size;
+        return (left - 3, top - 2, left + width + 3, top + height + 2);
+    }
+
+    static List<(double X, double Y)> RouteLeader(double x, double y, double w, double h, double tx, double ty, List<(double L, double T, double R, double B)> blocks)
+    {
+        var right = tx >= x + w / 2;
+        var edgeX = right ? x + w : x;
+        var exitY = Math.Clamp(ty, y + 4, y + h - 4);
+        var start = (X: edgeX, Y: exitY);
+        var direct = new List<(double X, double Y)> { start, (tx, ty) };
+        if (Clear(direct, blocks)) return direct;
+
+        var lanes = new List<double> { y + 4, y + h - 4, ty, exitY };
+        foreach (var block in blocks)
+        {
+            lanes.Add(block.T - 8);
+            lanes.Add(block.B + 8);
+        }
+        for (var step = 14.0; step <= 70; step += 14)
+        {
+            lanes.Add(y - step);
+            lanes.Add(y + h + step);
+        }
+        List<(double X, double Y)>? best = null;
+        var bestLength = double.PositiveInfinity;
+        foreach (var lane in lanes)
+        {
+            if (lane < 96 || lane > 860) continue;
+            var path = new List<(double X, double Y)> { start };
+            if (Math.Abs(lane - start.Y) > 0.5) path.Add((edgeX, lane));
+            if (Math.Abs(tx - edgeX) > 0.5) path.Add((tx, lane));
+            path.Add((tx, ty));
+            path = Collapse(path);
+            if (!Clear(path, blocks)) continue;
+            var length = Length(path);
+            if (length < bestLength)
+            {
+                bestLength = length;
+                best = path;
+            }
+        }
+        return best ?? direct;
+    }
+
+    static List<(double X, double Y)> Collapse(List<(double X, double Y)> path)
+    {
+        var kept = new List<(double X, double Y)>();
+        foreach (var point in path)
+        {
+            if (kept.Count == 0 || Math.Abs(kept[^1].X - point.X) > 0.4 || Math.Abs(kept[^1].Y - point.Y) > 0.4)
+                kept.Add(point);
+        }
+        return kept;
+    }
+
+    static bool Clear(List<(double X, double Y)> path, List<(double L, double T, double R, double B)> blocks)
+    {
+        for (var i = 1; i < path.Count; i++)
+        {
+            foreach (var block in blocks)
+                if (SegmentHitsRect(path[i - 1], path[i], block)) return false;
+        }
+        return true;
+    }
+
+    static double Length(List<(double X, double Y)> path)
+    {
+        var length = 0.0;
+        for (var i = 1; i < path.Count; i++)
+            length += Math.Abs(path[i].X - path[i - 1].X) + Math.Abs(path[i].Y - path[i - 1].Y);
+        return length;
+    }
+
+    static bool SegmentHitsRect((double X, double Y) a, (double X, double Y) b, (double L, double T, double R, double B) box)
+    {
+        if (a.X >= box.L && a.X <= box.R && a.Y >= box.T && a.Y <= box.B) return true;
+        if (b.X >= box.L && b.X <= box.R && b.Y >= box.T && b.Y <= box.B) return true;
+        return SegmentsCross(a, b, (box.L, box.T), (box.R, box.T))
+            || SegmentsCross(a, b, (box.R, box.T), (box.R, box.B))
+            || SegmentsCross(a, b, (box.R, box.B), (box.L, box.B))
+            || SegmentsCross(a, b, (box.L, box.B), (box.L, box.T));
+    }
+
+    static bool SegmentsCross((double X, double Y) a, (double X, double Y) b, (double X, double Y) c, (double X, double Y) d)
+    {
+        var c1 = Cross(a, b, c);
+        var c2 = Cross(a, b, d);
+        var c3 = Cross(c, d, a);
+        var c4 = Cross(c, d, b);
+        if (Math.Abs(c1) < 0.01 && Math.Abs(c2) < 0.01)
+            return Math.Max(Math.Min(a.X, b.X), Math.Min(c.X, d.X)) <= Math.Min(Math.Max(a.X, b.X), Math.Max(c.X, d.X)) + 0.01
+                && Math.Max(Math.Min(a.Y, b.Y), Math.Min(c.Y, d.Y)) <= Math.Min(Math.Max(a.Y, b.Y), Math.Max(c.Y, d.Y)) + 0.01;
+        return c1 * c2 < 0 && c3 * c4 < 0;
+    }
+
+    static double Cross((double X, double Y) a, (double X, double Y) b, (double X, double Y) c) =>
+        (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
+
+    static (double X, double Y) Meet((double X, double Y) from, (double X, double Y) to, (double L, double T, double R, double B) rect)
+    {
+        if (to.X < rect.L || to.X > rect.R || to.Y < rect.T || to.Y > rect.B) return to;
+        var dx = to.X - from.X;
+        var dy = to.Y - from.Y;
+        var best = 1.0;
+        void Try(double t)
+        {
+            if (t < 0.02 || t >= best) return;
+            var px = from.X + dx * t;
+            var py = from.Y + dy * t;
+            var onEdge = Math.Abs(px - rect.L) < 0.8 || Math.Abs(px - rect.R) < 0.8 || Math.Abs(py - rect.T) < 0.8 || Math.Abs(py - rect.B) < 0.8;
+            if (onEdge && px >= rect.L - 0.8 && px <= rect.R + 0.8 && py >= rect.T - 0.8 && py <= rect.B + 0.8) best = t;
+        }
+        if (Math.Abs(dx) > 1e-6) { Try((rect.L - from.X) / dx); Try((rect.R - from.X) / dx); }
+        if (Math.Abs(dy) > 1e-6) { Try((rect.T - from.Y) / dy); Try((rect.B - from.Y) / dy); }
+        return (from.X + dx * best, from.Y + dy * best);
     }
 }
 
