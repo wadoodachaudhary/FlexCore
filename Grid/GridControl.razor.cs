@@ -1306,8 +1306,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    private bool _headerPointerFocusPending;
+    private EventCallback<MouseEventArgs>? _nonRenderingHeaderMouseDown;
+    private EventCallback<MouseEventArgs> NonRenderingHeaderMouseDown =>
+        _nonRenderingHeaderMouseDown ??= NonRenderingEventHandler.Create<MouseEventArgs>(HandleHeaderMouseDown);
+
+    private void HandleHeaderMouseDown(MouseEventArgs _) => _headerPointerFocusPending = true;
+
     private async Task HandleHostFocusSeed(FocusEventArgs _)
     {
+        // A header press can focus the scroll host before its click sorts. It must
+        // not seed/reveal the first cell and pull a scrolled header out of view.
+        if (_headerPointerFocusPending)
+        {
+            _headerPointerFocusPending = false;
+            return;
+        }
         if (!SeedActiveCellOnHostFocus && PageNavigationContext?.HandlesTabNavigation != true)
             return;
 
@@ -4486,8 +4500,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// After the window offset was reset to the top on a list-identity change,
     /// pull the scroll container back to the top so the first paint of the reset
     /// window lands on real rows rather than the bottom spacer. Reuses the existing
-    /// scroll-reset helper (no new JS) — that helper also fires a scroll event,
-    /// which re-syncs the reader to scrollTop 0.
+    /// vertical scroll helper so sorting/filtering does not reset the column viewport.
     /// </summary>
     private async Task ApplyPendingWindowScrollResetAsync()
     {
@@ -4501,7 +4514,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         try
         {
-            await _gridJsModule.InvokeVoidAsync("resetInitialGridScroll", _gridHostElement);
+            await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, 0);
         }
         catch (Exception)
         {
@@ -5473,6 +5486,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private Task HandleHeaderClickAsync(MouseEventArgs e, GridColumn col)
     {
+        _headerPointerFocusPending = false;
         if (_suppressHeaderClickAfterGripPress)
         {
             _suppressHeaderClickAfterGripPress = false;
@@ -6690,6 +6704,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleGridMouseUp(MouseEventArgs args)
     {
+        _headerPointerFocusPending = false;
         if (_resizingCol != null)
         {
             await EndGridResizeFromBrowserAsync(args.ClientX, args.ClientY);
@@ -12925,6 +12940,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void EndColumnDrag()
     {
+        _headerPointerFocusPending = false;
         var generation = _headerDragGeneration;
         _ = CleanupHeaderDragStateAsync(generation);
     }
@@ -13102,6 +13118,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Right-click on a column header opens the context menu.</summary>
     private void OpenHeaderContextMenu(MouseEventArgs e, string field)
     {
+        _headerPointerFocusPending = false;
         if (!EnableHeaderContextMenu && !ShowColumnMenu)
             return;
 

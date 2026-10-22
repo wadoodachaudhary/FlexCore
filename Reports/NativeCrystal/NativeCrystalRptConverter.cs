@@ -418,9 +418,9 @@ public static class NativeCrystalRptConverter
     // object; the subreport's record selection formula does the filtering (linking only adds or removes a
     // "{field} = {?Pm-x}" operand of its top-level And). The stored subreport field is metadata that the runtime only
     // uses for dependency tracking and can be stale, so a link becomes a row filter (SubreportFieldName) only when the
-    // formula ANDs exactly one such database-field test for its discrete, single-valued parameter, and a stored field
-    // that disagrees with the formula is reported. A formula made of nothing but those tests is fully expressed by the
-    // links and is dropped; any other formula is kept verbatim.
+    // formula ANDs exactly one such database-field test for its discrete, single-valued parameter; a stored field
+    // that disagrees with the formula is ignored, as it is in Crystal. A formula made of nothing but those tests is fully
+    // expressed by the links and is dropped; any other formula is kept verbatim.
     private static void ApplySubreportLinks(CrystalReportModel model, CrystalRptConversionOptions options)
     {
         var subreportObjects = model.DataDefinition.ReportDefinition.Areas
@@ -466,15 +466,13 @@ public static class NativeCrystalRptConverter
                 var storedField = stored.SubreportFieldType < 0
                     ? ""
                     : CrystalReportContentsParser.ResolveFieldManagerReference(data, stored.SubreportFieldType, stored.SubreportFieldIndex);
+                // A stored field that disagrees with the formula (Crystal keeps the dialog's field after the formula is edited) is
+                // ignored, as Crystal ignores it; the output is Crystal's, so it is logged but not reported as a conversion diagnostic.
                 if (storedField.Length > 0 && (field.Length > 0
                         ? !storedField.Equals(field, StringComparison.OrdinalIgnoreCase)
                         : !data.RecordSelectionFormula.Contains(storedField, StringComparison.OrdinalIgnoreCase)))
-                {
-                    AddLinkDiagnostic(subreport, options, $"Subreport '{subreport.Name}' stores {storedField} as the linked field for {parameter.FormulaName}, " +
-                        (field.Length > 0
-                            ? $"but its record selection formula tests {field}; the link filters on {field}, as Crystal filters by the formula."
-                            : $"but its record selection formula does not use {storedField}; the link only supplies the parameter, as Crystal filters by the formula."));
-                }
+                    options.Progress?.Invoke($"[CRYSTAL_SUBREPORT_LINK] {subreport.Name}: stores {storedField} as the linked field for {parameter.FormulaName}, " +
+                        (field.Length > 0 ? $"but its record selection formula tests {field}; the link filters on {field}." : $"but its record selection formula does not use {storedField}; the link only supplies the parameter."));
 
                 subreport.SubreportLinks.Add(new CrystalSubreportLinkModel
                 {

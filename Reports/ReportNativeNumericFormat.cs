@@ -14,7 +14,6 @@ public sealed record ReportNativeNumericFormat(
 {
     internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric formatting is not implemented"
         : SystemDefaultFormatting && (ValueType == 7 || CurrencySymbolType != 0) ? "system-default currency formatting is not implemented"
-        : SuppressIfDuplicate ? "suppress-if-duplicate numeric fields are not implemented"
         : AccountingFormat ? "accounting numeric layout is not implemented"
         : OneCurrencySymbolPerPage && CurrencySymbolType != 0 ? "one-currency-symbol-per-page layout is not implemented"
         : SuppressIfNoHorizontalPages ? "horizontal-page numeric suppression is not implemented"
@@ -24,9 +23,6 @@ public sealed record ReportNativeNumericFormat(
         : CurrencyPosition is < 0 or > 3 ? "the saved currency position is unsupported"
         : string.IsNullOrEmpty(DecimalSymbol) ? "an empty decimal separator is unsupported"
         : ZeroValue != "<Default Format>" ? "custom zero-value layout is not implemented" : null;
-
-    internal string? LayoutLimitation => AllowFieldClipping ? null
-        : "numeric overflow masking (AllowFieldClipping=false) is not implemented; values exceeding the authored field width may clip";
 
     internal string Format(object value)
     {
@@ -44,11 +40,42 @@ public sealed record ReportNativeNumericFormat(
                     ? 11 - digits : Math.Max(RoundingType, 11 - digits),
                 ThousandsSeparators = system.NumberGroupSizes.FirstOrDefault() != 0,
                 ThousandSymbol = system.NumberGroupSeparator, DecimalSymbol = system.NumberDecimalSeparator,
-                NegativeType = system.NumberNegativePattern == 0 ? 3 : system.NumberNegativePattern is 3 or 4 ? 2 : 1,
+                NegativeType = EffectiveNegativeType,
                 ZeroValue = "<Default Format>" };
             return effective.FormatCore(value, system.NumberGroupSizes);
         }
         return FormatCore(value, [3]);
+    }
+
+    private int EffectiveNegativeType => !SystemDefaultFormatting ? NegativeType
+        : CultureInfo.CurrentCulture.NumberFormat.NumberNegativePattern switch { 0 => 3, 3 or 4 => 2, _ => 1 };
+
+    // Crystal measures the reserved sign slots as well as the visible digits. Centered
+    // fields reserve both slots; left/right alignment ignores the opposite outer slot.
+    internal string OverflowProbe(string formatted, string alignment)
+    {
+        if (formatted.Length == 0 || ValueType is 1 or 3 or 5 || EffectiveNegativeType == 0) return formatted;
+        var core = formatted.AsSpan();
+        if (!core.StartsWith(Prefix, StringComparison.Ordinal) || !core.EndsWith(Suffix, StringComparison.Ordinal)
+            || core.Length < Prefix.Length + Suffix.Length) return formatted;
+        core = core.Slice(Prefix.Length, core.Length - Prefix.Length - Suffix.Length);
+        var currency = CurrencySymbolType == 0 ? "" : CurrencySymbol;
+        // Outside currency symbols surround the sign; inside symbols do not.
+        if (CurrencyPosition == 0 && core.StartsWith(currency, StringComparison.Ordinal)) core = core[currency.Length..];
+        if (CurrencyPosition == 2 && core.EndsWith(currency, StringComparison.Ordinal)) core = core[..(core.Length - currency.Length)];
+        var (leading, trailing) = EffectiveNegativeType switch
+        {
+            1 => ("-", ""), 2 => ("", "-"), 3 => ("(", ")"), _ => ("", "")
+        };
+        if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)) leading = "";
+        if (trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) trailing = "";
+        switch (alignment.ToLowerInvariant())
+        {
+            case "right": case "default": leading = ""; break;
+            case "center": case "horizontalcenter": break;
+            default: trailing = ""; break;
+        }
+        return leading + formatted + trailing;
     }
 
     private string FormatCore(object value, int[] groupSizes)

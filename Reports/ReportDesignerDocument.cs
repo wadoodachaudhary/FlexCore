@@ -420,6 +420,8 @@ public sealed class ReportDesignerElement
     public string Binding { get; set; } = "";
     public string SubreportName { get; set; } = "";
     public string SubreportXmlPath { get; set; } = "";
+    /// <summary>Crystal's "Subreport Preview Tab" caption, when the Format Editor's formula set one.</summary>
+    public string SubreportTabText { get; set; } = "";
     public int LeftTwips { get; set; }
     public int TopTwips { get; set; }
     public int WidthTwips { get; set; } = 1440;
@@ -436,10 +438,14 @@ public sealed class ReportDesignerElement
     public bool CanGrow { get; set; }
     /// <summary>Authored maximum text lines when growing; zero means unlimited.</summary>
     public int MaxNumberOfLines { get; set; }
+    /// <summary>Hide consecutive equal field values in printed sections, preserving their space and underlying data.</summary>
+    public bool SuppressIfDuplicate { get; set; }
     public string FormatString { get; set; } = "";
     public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
     public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
     public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
+    /// <summary>Use integral 96-DPI em heights for converted Crystal screen layouts, without changing authored point sizes.</summary>
+    public bool UseCrystalScreenMetrics { get; set; }
     public bool LockFormat { get; set; }
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
@@ -474,6 +480,7 @@ public sealed class ReportDesignerElement
             Binding = Binding,
             SubreportName = SubreportName,
             SubreportXmlPath = SubreportXmlPath,
+            SubreportTabText = SubreportTabText,
             LeftTwips = LeftTwips + ReportDesignerMetrics.PixelsToTwips(12),
             TopTwips = TopTwips + ReportDesignerMetrics.PixelsToTwips(12),
             WidthTwips = WidthTwips,
@@ -489,10 +496,12 @@ public sealed class ReportDesignerElement
             IsSuppressed = IsSuppressed,
             CanGrow = CanGrow,
             MaxNumberOfLines = MaxNumberOfLines,
+            SuppressIfDuplicate = SuppressIfDuplicate,
             FormatString = FormatString,
             NativeDateTimeFormat = NativeDateTimeFormat,
             NativeNumberFormat = NativeNumberFormat,
             NativeNumericFormat = NativeNumericFormat,
+            UseCrystalScreenMetrics = UseCrystalScreenMetrics,
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
@@ -886,6 +895,8 @@ public static partial class ReportDesignerXmlSerializer
             throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
         if (objectElement.Name.LocalName is "FieldObject" or "TextObject" or "FieldHeadingObject")
             objectElement.SetAttributeValue("MaxNumberOfLines", element.MaxNumberOfLines);
+        if (objectElement.Name.LocalName == "FieldObject")
+            objectElement.SetAttributeValue("SuppressIfDuplicate", element.SuppressIfDuplicate);
 
         var kind = element.Kind.Trim();
         if (string.Equals(kind, "Text", StringComparison.OrdinalIgnoreCase))
@@ -929,6 +940,7 @@ public static partial class ReportDesignerXmlSerializer
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
         objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
+        objectFormat.SetAttributeValue("FlexKitCrystalScreenMetrics", Lower(element.UseCrystalScreenMetrics));
         objectElement.Elements("FlexKitNativeDateTimeFormat").Remove();
         if (element.NativeDateTimeFormat is { } nativeDateTime) objectElement.Add(nativeDateTime.ToXml());
         objectElement.Elements("FlexKitNativeNumberFormat").Remove();
@@ -1132,10 +1144,13 @@ public static partial class ReportDesignerXmlSerializer
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
                 MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
+                SuppressIfDuplicate = ParseBool(Attribute(objectElement, "SuppressIfDuplicate")),
                 FormatString = Attribute(objectFormat, "FlexKitFormatString") ?? "",
                 NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(objectElement),
                 NativeNumberFormat = ReportNativeNumberFormat.Read(objectElement),
                 NativeNumericFormat = ReportNativeNumericFormat.Read(objectElement),
+                UseCrystalScreenMetrics = ParseBool(Attribute(objectFormat, "FlexKitCrystalScreenMetrics"),
+                    document.SourceDocument?.Root?.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null),
                 LockFormat = ParseBool(Attribute(objectFormat, "FlexKitLockFormat")),
                 LockSizePosition = ParseBool(Attribute(objectFormat, "FlexKitLockSizePosition")),
                 IndentTwips = ParseInt(Attribute(objectFormat, "FlexKitIndentTwips")),

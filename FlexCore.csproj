@@ -45,6 +45,11 @@
     <EmbeddedResource Include="wwwroot/maps/geo/countries.geojson" LogicalName="Fx.ControlKit.maps.countries.geojson" />
     <EmbeddedResource Include="wwwroot/maps/geo/regions.geojson" LogicalName="Fx.ControlKit.maps.regions.geojson" />
     <EmbeddedResource Include="wwwroot/maps/stories/unemployment.json" LogicalName="Fx.ControlKit.maps.unemployment.json" />
+    <EmbeddedResource Include="Reports/Fonts/*.woff2" LogicalName="Fx.Reports.Fonts.%(Filename)%(Extension)" />
+    <None Update="Reports/Fonts/OFL.txt" Pack="true" PackagePath="licenses/Carlito" />
+    <EmbeddedResource Include="Grid/PdfFonts/*.ttf" LogicalName="Fx.PdfFonts.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Grid/PdfFonts/OFL.txt" LogicalName="Fx.PdfFonts.OFL.txt" />
+    <None Update="Grid/PdfFonts/OFL.txt" Pack="true" PackagePath="licenses/Liberation-Fonts.txt" />
     <!-- Corpus pack. Copied next to this assembly and into NuGet consumers at the same relative path.
          CrystalSampleDatabase.Path is that location. Session packs named samples.db stay beside a translation. -->
     <None Update="Reports\CrystalSamples\CrystalSamples.db"

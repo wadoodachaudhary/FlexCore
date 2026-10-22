@@ -765,6 +765,7 @@
                                 scope="col"
                                 aria-colindex="@GetColumnAriaIndex(columnSlot.ColumnIndex)"
                                 aria-sort="@GetColumnAriaSort(state)"
+                                @onmousedown="NonRenderingHeaderMouseDown"
                                 @onclick="e => HandleHeaderClickAsync(e, col)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                                 @oncontextmenu:preventDefault="true"

@@ -84,7 +84,7 @@ public sealed partial class ReportLayoutSession
     {
         var tree = TextTree(html);
         foreach (var (span, run) in tree.Elements().Zip(element.Visual.Runs))
-            span.SetAttributeValue("style", ReportObjectRenderer.FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color));
+            span.SetAttributeValue("style", ReportObjectRenderer.FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, element.UseCrystalScreenMetrics));
         return string.Concat(tree.Nodes().Select(n => n.ToString(SaveOptions.DisableFormatting)));
     }
 

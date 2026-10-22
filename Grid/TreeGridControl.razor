@@ -12,9 +12,9 @@
      data-fx-grid-tab-edge="@(IsPropertyGrid ? PropertyGridTabEdge : null)"
      @onkeydown="HandleKeyDown"
      @onfocus="HandleRootFocusAsync"
-     @onmousemove="HandleColumnResizeMove"
-     @onmouseup="EndColumnResize"
-     @onmouseleave="EndColumnResize">
+     @onmousemove="@(_isColumnResizing ? ResizeMoveCallback : default)"
+     @onmouseup="ResizeEndCallback"
+     @onmouseleave="ResizeEndCallback">
 
     @if (ShowEditToolbar && (EditSettingsRef is not null || AllowRowDragAndDrop))
     {
@@ -594,6 +594,7 @@
     @if (ShowLegacyScrollBar)
     {
         <div class="fx-legacy-vscroll@(_legacyScrollable ? "" : " fx-legacy-vscroll-empty")"
+             @onmouseenter="LegacyBarEnterCallback"
              @oncontextmenu="HandleLegacyScrollBarContextMenu"
              @oncontextmenu:preventDefault="true"
              @oncontextmenu:stopPropagation="true">

@@ -11,6 +11,7 @@ internal static partial class CrystalReportContentsParser
         var suppressDuplicates = false;
         var dateDefault = -1;
         ReportNativeDateComponents? dateComponents = null;
+        ReportNativeTimeComponents? timeComponents = null;
         var order = -1;
         var separator = "";
         var conditional = false;
@@ -70,6 +71,22 @@ internal static partial class CrystalReportContentsParser
                         separator = reader.LoadString() ?? "";
                         hasDateTime = true;
                         break;
+                    case 247:
+                        // The time components follow the date rule: system formatting does not use them, and they stay unextracted
+                        // from a legacy short header. Order: time base, AM/PM position, hour, minute and second styles, then the AM
+                        // and PM strings and the hour/minute and minute/second separators.
+                        if (systemDefault || reader.BytesLeftInRecord == 0) break;
+                        var timeBase = reader.LoadEnum();
+                        var amPmFormat = reader.LoadEnum();
+                        var hourType = reader.LoadEnum();
+                        var minuteType = reader.LoadEnum();
+                        var secondType = reader.LoadEnum();
+                        string Text() => reader.BytesLeftInRecord > 0 ? reader.LoadString() ?? "" : "";
+                        var amString = Text();
+                        var pmString = Text();
+                        var hourMinuteSeparator = Text();
+                        timeComponents = new(timeBase, amPmFormat, hourType, minuteType, secondType, amString, pmString, hourMinuteSeparator, Text());
+                        break;
                 }
                 reader.SkipRestOfRecord();
                 // Format formula references follow the property header. Even an unresolved reference must be
@@ -88,6 +105,7 @@ internal static partial class CrystalReportContentsParser
             if (record.Type == 235) end = reader.Position;
             if (record.Type == 160) break;
         }
+        reportObject.SuppressIfDuplicate = suppressDuplicates;
         for (var i = 0; i < reportObject.NativeNumericCandidates.Count; i++)
             reportObject.NativeNumericCandidates[i] = reportObject.NativeNumericCandidates[i] with
             {
@@ -96,7 +114,7 @@ internal static partial class CrystalReportContentsParser
             };
         if (hasDateTime || dateDefault >= 0)
             reportObject.NativeDateTimeFormat = new(systemDefault, dateDefault, hasDateTime ? order : 2, separator, suppressDuplicates, conditional,
-                start >= 0 && end > start ? Convert.ToBase64String(reader.CopyRange(start, end - start)) : "", dateComponents);
+                start >= 0 && end > start ? Convert.ToBase64String(reader.CopyRange(start, end - start)) : "", dateComponents, timeComponents);
         // Native order is Currency then Number, regardless of the field's bound type.
         if (reportObject.NativeNumericCandidates.Count == 2)
         {

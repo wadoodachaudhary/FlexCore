@@ -491,7 +491,10 @@ internal static class CrystalReportXmlWriter
         writer.WriteStartElement("ParameterFieldDefinition");
         Attr(writer, "AllowCustomCurrentValues", LowerBool(ParameterAllowsCustomValues(parameter)));
         Attr(writer, "DiscreteOrRangeKind", parameter.DiscreteOrRangeKind);
-        Attr(writer, "EditMask", "");
+        Attr(writer, "EditMask", parameter.EditMask);
+        if (parameter.ValueType is 11 or 13)
+            Attr(writer, "FlexKitAllowEmptyString", LowerBool(ParameterAllowsCustomValues(parameter)
+                && (parameter.MinimumValue is null or <= 0) && string.IsNullOrEmpty(parameter.EditMask)));
         Attr(writer, "EnableAllowEditingDefaultValue", "False");
         Attr(writer, "EnableAllowMultipleValue", LowerBool(parameter.AllowMultiple));
         Attr(writer, "EnableNullValue", LowerBool(parameter.AllowNull));
@@ -787,6 +790,7 @@ internal static class CrystalReportXmlWriter
         {
             Attr(writer, "DataSource", reportObject.DataSource);
             Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
+            Attr(writer, "SuppressIfDuplicate", LowerBool(reportObject.SuppressIfDuplicate));
         }
         else if (reportObject.ElementName == "LineObject" && reportObject.Border.LineWidth is { } thickness)
         {
@@ -828,7 +832,8 @@ internal static class CrystalReportXmlWriter
             }
         }
 
-        if (reportObject.ElementName is "TextObject" or "FieldHeadingObject" or "FieldObject")
+        if (reportObject.ElementName is "TextObject" or "FieldHeadingObject" or "FieldObject"
+            || reportObject.ElementName == "SubreportObject" && reportObject.HasFont)
         {
             WriteColor(writer, "Color", reportObject.Color);
             WriteFont(writer, reportObject.Font);

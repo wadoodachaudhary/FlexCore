@@ -51,6 +51,11 @@
     background: #fff;
 }
 
+/* A prompt with a value list keeps Crystal's tall window, so the list opens below the combo instead of into a two-row gap. */
+.fx-param-body-lists {
+    min-height: min(60vh, calc(440px * var(--fx-zoom, 1)));
+}
+
 /* The overlay is position:fixed, so this wrapper only scopes the rules below to the dialog's own parts. */
 .fx-param-dialog-host {
     display: contents;

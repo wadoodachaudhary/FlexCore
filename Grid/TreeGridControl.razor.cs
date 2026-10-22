@@ -303,6 +303,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private TreeGridColumn? _resizingColumn;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    // The root's pointer handlers render only when they change a width. Mousemove is
+    // bound only while a column is being resized; release and leave stay bound, so a
+    // release that arrives before that binding still ends the resize.
+    private EventCallback<MouseEventArgs>? _resizeMoveCallback;
+    private EventCallback<MouseEventArgs> ResizeMoveCallback =>
+        _resizeMoveCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(HandleColumnResizeMove);
+    private EventCallback<MouseEventArgs>? _resizeEndCallback;
+    private EventCallback<MouseEventArgs> ResizeEndCallback =>
+        _resizeEndCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(EndColumnResize);
     private string? _openToolbarMenuKey;
 
     // ── Column Registration ─────────────────────────────────────────────
@@ -316,6 +325,13 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     public void RemoveColumn(TreeGridColumn column)
     {
         _columns.Remove(column);
+    }
+
+    // Raised while this render's columns take their new parameters: draw once more with them.
+    void ITreeGridControlOwner.ColumnParametersChanged(TreeGridColumn column)
+    {
+        if (!_disposed)
+            StateHasChanged();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -353,6 +369,17 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 await treeScrollModule.InvokeVoidAsync(
                     "enableTreeKeyboardNavigation", _treeGridElement, _scrollViewportElement, _selfRef);
                 _treeKeyboardNavigationEnabled = true;
+            }
+            catch { }
+        }
+
+        if (ShowLegacyScrollBar && !_legacyViewportObserved && !_disposed && treeScrollModule is not null)
+        {
+            try
+            {
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await treeScrollModule.InvokeVoidAsync("observeLegacyScrollViewport", _scrollViewportElement, _selfRef);
+                _legacyViewportObserved = true;
             }
             catch { }
         }
@@ -472,6 +499,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task SyncLegacyScrollBarAsync()
     {
         var m = await ReadLegacyMetricsAsync();
+        // A hidden list (an inactive MDI tab is display:none) measures nothing: keep the bar as shown.
+        if (m is { Height: <= 0, Client: <= 0 }) return;
 
         var scrollable = _legacyScrollable;
         var top = _legacyThumbTopPct;
@@ -506,6 +535,19 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     }
 
     private Task HandleLegacyScroll() => ShowLegacyScrollBar ? SyncLegacyScrollBarAsync() : Task.CompletedTask;
+
+    // The list's visible size changed with no server event (a CSS resize grip, the window).
+    private bool _legacyViewportObserved;
+
+    [JSInvokable]
+    public Task SyncLegacyScrollBarFromBrowserAsync() =>
+        ShowLegacyScrollBar && !_disposed ? SyncLegacyScrollBarAsync() : Task.CompletedTask;
+
+    // Nothing re-renders the tree when only the page's size changes, so the bar re-reads
+    // the list's overflow when the pointer reaches it; it renders only if the thumb moved.
+    private EventCallback<MouseEventArgs>? _legacyBarEnterCallback;
+    private EventCallback<MouseEventArgs> LegacyBarEnterCallback =>
+        _legacyBarEnterCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(_ => SyncLegacyScrollBarAsync());
 
     private async Task SetLegacyScrollTopAsync(double top)
     {
@@ -591,7 +633,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// <summary>Clicking the track above/below the thumb pages, as in Windows.</summary>
     private async Task HandleLegacyTrackMouseDown(MouseEventArgs e)
     {
-        if (e.Button != 0 || !_legacyScrollable) return;
+        if (e.Button != 0) return;
+        // The list may have started to overflow since the bar last looked.
+        if (!_legacyScrollable)
+            await SyncLegacyScrollBarAsync();
+        if (!_legacyScrollable) return;
         var ratio = await LegacyTrackRatioAsync(e.ClientY) * 100;
         await ScrollByPageAsync(ratio < _legacyThumbTopPct ? -1 : 1);
     }

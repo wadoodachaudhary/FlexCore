@@ -12,4 +12,7 @@ public sealed record ReportPageBand(string Name, int TopTwips, int HeightTwips, 
 public sealed record ReportPageObject(ReportDesignerElement Element, string FormattedContent, ReportAnalysisSnapshot? Analysis)
 {
     public ReportTableFragment? Table { get; init; }
+    /// <summary>UTF-16 line ranges from completed browser measurement. PDF export retains these
+    /// breaks when realizing native fonts at the smaller legacy PDF size.</summary>
+    public IReadOnlyList<ReportTextLine>? TextLines { get; init; }
 }

@@ -113,7 +113,7 @@ public sealed partial class ReportLayoutSession
             if (!_state.PrintedItems.TryGetValue(key, out var evaluated)) return item;
             var element = evaluated.Element.CloneFor(item.Element.SectionId, item.Element.Name); element.Id = item.Element.Id;
             ReportObjectBounds.Of(item.Element).Apply(element);
-            return item with { Element = element, Html = evaluated.Html, TemplateHtml = evaluated.Html, Measurement = -2 };
+            return item with { Element = element, Html = evaluated.Html, TemplateHtml = evaluated.Html, Measurement = -2, DuplicateValue = evaluated.DuplicateValue };
         }).ToList();
         return source with { Items = items };
     }
@@ -134,6 +134,7 @@ public sealed partial class ReportLayoutSession
         var linked = new HashSet<ReportLayoutSession>();
         var blanks = new Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool>();
         var caches = new Dictionary<PrintBandKey, Dictionary<(string Name, int Row), object?>>();
+        var leaving = new Dictionary<PrintBandKey, bool>();
         var lastOffsets = LastFragmentOffsets(pages);
         try
         {
@@ -146,6 +147,30 @@ public sealed partial class ReportLayoutSession
             foreach (var value in _printStart!.Shared) _state.Shared.Add(value.Key, value.Value);
             for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
             {
+                // Crystal decides a section's New Page Before on the page it leaves: with that page's number, and before the next page's
+                // header formats (a header that resets a variable must not decide the break that brought it). Only the band that opens
+                // the page counts; a band continued from the previous page opened nothing.
+                if (pageIndex > 0 && pages[pageIndex].Placements
+                        .Where(p => p.Sequence >= 0 && !p.Band.RepeatedHeader && !p.Band.Suppressed && !p.Band.Blank && p.Band.Section.Kind != "PageFooter")
+                        .OrderBy(p => p.Sequence).FirstOrDefault() is { Offset: 0 } opener
+                    && (opener.Band.Owner ?? this) is var leavingOwner
+                    && (leavingOwner.MutableCondition(leavingOwner._layout.SectionConditions, opener.Band.Section.Id, "EnableNewPageBefore")
+                        || leavingOwner.MutableCondition(leavingOwner._layout.AreaConditions, opener.Band.Section.Id, "EnableNewPageBefore")))
+                {
+                    var key = new PrintBandKey(leavingOwner, opener.Band.Section.Id, opener.Band.Row, 0);
+                    leavingOwner._formulaPage = pages[pageIndex - 1].Number; leavingOwner._formulaPages = counts[pageIndex - 1]; leavingOwner._repeatedHeader = false;
+                    leavingOwner._bandFormulaCache.Clear();
+                    if (caches.TryGetValue(key, out var existing)) foreach (var value in existing) leavingOwner._bandFormulaCache.Add(value.Key, value.Value);
+                    leavingOwner._replayingPrint = true;
+                    try
+                    {
+                        var original = leavingOwner._layout.Document.Sections.First(s => s.Id == opener.Band.Section.Id);
+                        leaving[key] = leavingOwner.ApplySectionConditions(leavingOwner.ApplySectionConditions(original, opener.Band.Row, only: "EnableNewPageBefore"),
+                            opener.Band.Row, true, only: "EnableNewPageBefore").NewPageBefore;
+                        caches[key] = new(leavingOwner._bandFormulaCache);
+                    }
+                    finally { leavingOwner._replayingPrint = false; }
+                }
                 foreach (var placement in pages[pageIndex].Placements.OrderBy(p => p.Sequence))
                 {
                     var occurrence = placement.Band.RepeatedHeader || placement.Band.Section.Kind is "PageHeader" or "PageFooter" ? pageIndex + 1 : 0;
@@ -153,6 +178,7 @@ public sealed partial class ReportLayoutSession
                     PrintBandKey Key(Band band) => new(band.Owner ?? this, band.Section.Id, band.Row, occurrence);
                     bool Section(Band band)
                     {
+                        if (band.EvaluationOnly) return false;
                         var owner = band.Owner ?? this;
                         if (!owner.HasScheduledSection(band.Section.Id)) return !band.Suppressed;
                         var key = Key(band);
@@ -164,8 +190,11 @@ public sealed partial class ReportLayoutSession
                         try
                         {
                             var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
-                            var formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, endingOnly: false), band.Row, true, endingOnly: false);
+                            // A New Page Before already decided on the page this band left is not evaluated again (its formula may assign a variable).
+                            var decided = leaving.TryGetValue(key, out var before) ? "EnableNewPageBefore" : null;
+                            var formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, endingOnly: false, skip: decided), band.Row, true, endingOnly: false, skip: decided);
                             visible = owner.Visible(formatted); formats[key] = PrintSectionFormat.Read(formatted);
+                            if (decided is not null) formats[key] = formats[key] with { Before = before };
                             caches[key] = new(owner._bandFormulaCache);
                             visibility.Add(key, visible); return visible;
                         }
@@ -173,6 +202,7 @@ public sealed partial class ReportLayoutSession
                     }
                     void Finish(Band band)
                     {
+                        if (band.EvaluationOnly) return;
                         var key = Key(band); var owner = key.Owner;
                         if (!owner.HasScheduledSection(band.Section.Id) || !endings.Add(key)) return;
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
@@ -218,15 +248,22 @@ public sealed partial class ReportLayoutSession
                         var key = Key(band); if (!hiddenValues.Add(key)) return;
                         var owner = key.Owner;
                         var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
-                        if (original.Elements.Any(e => owner._layout.Subreports.ContainsKey(e.Id)
-                            || (owner._layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(owner.NeedsPrintState) ?? false)))
-                            owner._diagnostics.Add($"{original.Name}: hidden subreports and object-format assignments are skipped; named field assignments still run.");
+                        // Crystal does not execute a linked subreport inside a suppressed/hidden
+                        // section (SAP KBA 1535232). Skipping it is intentional, not a limitation.
+                        // Inline format assignments are separate from named formula fields.
+                        if (!band.EvaluationOnly && original.Elements.Any(e =>
+                            owner._layout.Subreports.TryGetValue(e.Id, out var child) && child.Links.Count == 0))
+                            owner._diagnostics.Add($"{original.Name}: hidden unlinked subreport side effects are not scheduled.");
+                        if (!band.EvaluationOnly && original.Elements.Any(e =>
+                            owner._layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(owner.NeedsPrintState) == true))
+                            owner._diagnostics.Add($"{original.Name}: hidden object-format assignments are skipped; named field assignments still run.");
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var existing)) foreach (var value in existing) owner._bandFormulaCache.Add(value.Key, value.Value);
                         // Suppression removes presentation, not named formula-field assignments used by later sections.
                         foreach (var reference in original.Elements.OrderBy(e => e.TopTwips)
-                            .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "")).Where(r => owner._layout.Formulas.ContainsKey(r)))
+                            .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : ""))
+                            .Where(r => owner._layout.Formulas.ContainsKey(r) && (!band.EvaluationOnly || owner.NeedsPrintState(r))))
                             _ = owner.Value(reference, band.Row);
                         caches[key] = new(owner._bandFormulaCache);
                     }
@@ -278,6 +315,7 @@ public sealed partial class ReportLayoutSession
                         owner._replayingPrint = true;
                         ReportDesignerElement element;
                         string html;
+                        DuplicateFieldValue? duplicateValue;
                         try
                         {
                             // Resolve field values before their formatting; both share the occurrence's formula cache.
@@ -290,10 +328,10 @@ public sealed partial class ReportLayoutSession
                                 { /* Format records the diagnostic when it evaluates this reference. */ }
                             }
                             element = owner.ApplyObjectConditions(owner.ApplyObjectConditions(original, item.Row), item.Row, true);
-                            html = ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat));
+                            (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
                         }
                         finally { owner._replayingPrint = false; }
-                        printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2 });
+                        printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2, DuplicateValue = duplicateValue });
                         caches[bandKey] = new(owner._bandFormulaCache);
                     }
                 }

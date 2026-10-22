@@ -718,20 +718,22 @@ internal static partial class CrystalReportContentsParser
             }
         }
 
-        if (reader.BytesLeftInRecord >= 2)
-        {
-            _ = reader.LoadBoolean();
-        }
-
+        var hasValueLimits = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
         if (reader.BytesLeftInRecord >= 16)
         {
-            _ = reader.LoadDouble();
-            _ = reader.LoadDouble();
+            // The archive stores maximum before minimum, including string-length limits.
+            var maximum = reader.LoadDouble();
+            var minimum = reader.LoadDouble();
+            if (hasValueLimits)
+            {
+                parameter.MaximumValue = maximum;
+                parameter.MinimumValue = minimum;
+            }
         }
 
         if (reader.BytesLeftInRecord > 0)
         {
-            _ = reader.LoadString();
+            parameter.EditMask = reader.LoadString() ?? "";
         }
 
         if (reader.BytesLeftInRecord >= 32)
@@ -1872,10 +1874,15 @@ internal static partial class CrystalReportContentsParser
                 ? reader.LoadBoolean()
                 : firstFlag;
         }
+        // The Format Editor's two subreport formulas follow the flags: the on-demand caption and the preview tab text.
+        var captionReferences = new List<(string Property, string Name, int Type, int Index)>();
+        ReadConditionReferences(reader, captionReferences, ["OnDemandCaption", "SubreportPreviewTabText"]);
 
         reader.SkipRestOfRecord();
         ReadCommonReportObjectRecords(reader, reportObject);
-        reportObject.Format.EnableCanGrow = true;
+        if (reportObject.EnableOnDemand) reportObject.Format.ConditionReferences.AddRange(captionReferences);
+        // The object's colour and font (records 257, 8, 258) come before its parameter links (260); a caption prints in them.
+        ReadFontColourProperties(reader, reportObject);
         while (reader.BytesLeftInRecord > 0)
         {
             var next = reader.LoadAnyRecord();
@@ -2754,7 +2761,9 @@ internal static partial class CrystalReportContentsParser
         {
             case 1:
             {
-                NormalizeMargins(core, 245);
+                // Unspecified margins use Crystal's quarter-inch page default,
+                // not the Java runtime's printer-dependent 245-twip fallback.
+                NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 reader.SkipRestOfRecord();
                 if (hasSettings)
@@ -2768,7 +2777,7 @@ internal static partial class CrystalReportContentsParser
             }
             case 3:
             {
-                NormalizeMargins(core, 245);
+                NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 _ = reader.LoadString();
                 core.PrinterName = reader.LoadString() ?? "";

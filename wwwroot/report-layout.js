@@ -49,6 +49,15 @@ export async function measureTextLayout(items) {
             }
             return node;
         });
+        // Fonts may only be requested when the first report field enters the DOM.
+        // Measuring before these loads finish permanently paginates with fallback widths.
+        const fonts = new Map();
+        for (const node of nodes) for (const run of [node, ...node.querySelectorAll('span')]) {
+            const style = getComputedStyle(run);
+            const font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+            fonts.set(font, (fonts.get(font) || '') + run.textContent);
+        }
+        await Promise.all([...fonts].map(([font, text]) => document.fonts.load(font, text)));
         return nodes.map((node, index) => {
             const bounds = node.getBoundingClientRect();
             const rectangles = [];
@@ -94,7 +103,28 @@ export async function measureTextLayout(items) {
             // Include invisible wrapping whitespace in the preceding line's consumed prefix.
             for (let i = 0; i < lines.length; i++) lines[i].end = i + 1 < lines.length ? lines[i + 1].start : text.length;
             const limit = items[index].maxNumberOfLines ?? 0;
-            return { height: Math.ceil(bounds.height * 15), lines: limit > 0 ? lines.slice(0, limit) : lines };
+            let width = -1, hashWidth = -1;
+            if (items[index].measureNumericWidth) {
+                if (textNodes.length) {
+                    range.setStart(textNodes[0].node, 0);
+                    const last = textNodes[textNodes.length - 1].node;
+                    range.setEnd(last, last.textContent.length);
+                    width = range.getBoundingClientRect().width * 15;
+                } else width = 0;
+                const hash = document.createElement('span');
+                hash.style.cssText = 'position:absolute;white-space:pre;';
+                hash.textContent = '#';
+                node.append(hash);
+                hashWidth = hash.getBoundingClientRect().width * 15;
+                hash.remove();
+            }
+            // Native report geometry is in whole twips. Browser line boxes are
+            // quantized to 1/64 px: ceiling 30.40625px adds a spurious twip to a
+            // 456-twip two-line Arial field on every row. Round native boxes to
+            // their nearest twip; retain conservative bounds for designer text.
+            const native = node.style.getPropertyValue('--fx-report-font-points') !== '';
+            const height = native ? Math.round(bounds.height * 15) : Math.ceil(bounds.height * 15);
+            return { height, lines: limit > 0 ? lines.slice(0, limit) : lines, width, hashWidth };
         });
     } finally {
         host.remove();

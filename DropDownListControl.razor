@@ -12,6 +12,7 @@
    semantics: Escape on an open list never fires the form's Cancel button. *@
 <div class="@HostCssClass" style="@HostStyle"
      @ref="_hostRef"
+     data-fx-panel-max="@(PanelMaxHeight == 180 ? null : PanelMaxHeight.ToString(CultureInfo.InvariantCulture))"
      data-fx-editable-dropdown="@(Editable ? ClientDropdownConfiguration : null)"
      data-fx-key-scope="@(_isOpen ? "" : null)"
      @onclick:stopPropagation="true"
@@ -132,6 +133,8 @@
     /// <summary>Accessible name for the dropdown's focusable input or button.</summary>
     [Parameter] public string? AriaLabel { get; set; }
     [Parameter] public string? Width { get; set; }
+    /// <summary>Tallest open list in CSS pixels before it scrolls (180 by default); the space visible around the host still clamps it.</summary>
+    [Parameter] public int PanelMaxHeight { get; set; } = 180;
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
@@ -1263,7 +1266,7 @@
                         _hostRef, panelRef, Editable, _selfRef);
                 }
                 else
-                    geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                    geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, PanelMaxHeight, 8);
                 if (!_isOpen || generation != _openGeneration) return;
                 if (geometry is null)
                 {

@@ -200,7 +200,7 @@
         try
         {
             await _surface.FocusAsync(preventScroll: true);
-            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js");
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", FxJsAsset.Versioned($"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js"));
             if (_module is not null) await _module.InvokeVoidAsync("capturePointer", _surface, pointer);
         }
         catch (Exception ex) when (ex is JSException or InvalidOperationException) { /* In-surface gestures still work without pointer capture. */ }
@@ -210,7 +210,7 @@
         if (_keyboardBound) return;
         try
         {
-            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js");
+            _module ??= await JS.InvokeAsync<IJSObjectReference>("import", FxJsAsset.Versioned($"./_content/{typeof(ReportDesignerCanvasControl).Assembly.GetName().Name}/report-layout.js"));
             if (_module is not null) { await _module.InvokeVoidAsync("bindCanvasKeyboard", _surface); _keyboardBound = true; }
         }
         catch (Exception ex) when (ex is JSException or InvalidOperationException) { }

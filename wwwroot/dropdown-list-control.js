@@ -93,12 +93,18 @@ export function measureDropdown(host, desiredMaxHeight = 180, margin = 8, panelW
 // Keep layout, scroll, focus and the first visible paint in the same browser turn.
 // The panel reference identifies this opening; a late call cannot reveal a replacement.
 const preparedPanels = new WeakMap();
+// A host may ask for a taller list (DropDownListControl.PanelMaxHeight); the visible space still clamps it.
+function panelMaxHeight(host) {
+    const value = Number(host?.dataset?.fxPanelMax);
+    return value > 0 ? value : 180;
+}
+
 export function prepareDropdown(host, panel, editable, dotNetRef) {
     if (!host?.isConnected || !panel?.isConnected || !host.contains(panel)) return null;
     // The observer may already have revealed it. Never refocus an option after
     // the user has moved or clicked while the server acknowledgment was pending.
     if (preparedPanels.has(panel)) return preparedPanels.get(panel);
-    const geometry = measureDropdown(host, 180, 8, 0, panel);
+    const geometry = measureDropdown(host, panelMaxHeight(host), 8, 0, panel);
     host.classList.toggle("fx-dropdown-open-up", geometry.openUp);
     panel.style.removeProperty("top");
     panel.style.maxHeight = `${geometry.maxHeight}px`;
@@ -230,7 +236,7 @@ export function enableClientEditableDropdown(host, dotNetRef) {
         // Measure without temporarily adding overflow to the containing dialog.
         panel.style.top = "0";
         panel.style.maxHeight = "0";
-        const geometry = measureDropdown(host, 180, 8, 0, panel);
+        const geometry = measureDropdown(host, panelMaxHeight(host), 8, 0, panel);
         host.classList.toggle("fx-dropdown-open-up", geometry.openUp);
         panel.style.removeProperty("top");
         panel.style.maxHeight = `${geometry.maxHeight}px`;

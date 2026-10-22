@@ -17,7 +17,7 @@ public partial class CrystalXmlReportLoader
             foreach (var element in design.Elements.Where(e => e.Kind == "Subreport"))
             {
                 var source = design.SourceObjects.GetValueOrDefault(element.SourceKey);
-                if (Flag(source, "EnableOnDemand")) continue;
+                var onDemand = Flag(source, "EnableOnDemand");
                 var child = report.Elements("SubReports").Elements("Report").FirstOrDefault(r =>
                     string.Equals((string?)r.Attribute("Name"), element.SubreportName, StringComparison.OrdinalIgnoreCase));
                 var childPath = path;
@@ -43,7 +43,7 @@ public partial class CrystalXmlReportLoader
                 }
                 if (child is null)
                 {
-                    definition.RuntimeDiagnostics.Add($"{element.Name}: inline subreport definition '{element.SubreportName}' is missing.");
+                    definition.RuntimeDiagnostics.Add($"{element.Name}: {(onDemand ? "on-demand" : "inline")} subreport definition '{element.SubreportName}' is missing.");
                     continue;
                 }
                 var links = child.Elements("SubReportLinks").Elements("SubReportLink").Select(link =>
@@ -58,7 +58,8 @@ public partial class CrystalXmlReportLoader
                         (string?)link.Attribute("MainReportFieldName") ?? "", childReference);
                 }).ToList();
                 var childDefinition = LoadPositionedSource(child, childPath, ancestry, depth + 1);
-                definition.PositionedLayout!.Subreports[element.Id] = new(childDefinition, links);
+                // An on-demand subreport prints its caption and runs only when the reader opens it, never inline.
+                (onDemand ? definition.PositionedLayout!.OnDemandSubreports : definition.PositionedLayout!.Subreports)[element.Id] = new(childDefinition, links);
                 foreach (var link in links)
                 {
                     AddProjection(definition.PositionedLayout, link.MainField);
@@ -96,12 +97,22 @@ public partial class CrystalXmlReportLoader
             layout.Projections.RemoveAll(p => p.EndsWith(" AS [" + alias.Replace("]", "]]", StringComparison.Ordinal) + "]", StringComparison.Ordinal));
         }
         var projections = layout.Projections;
+        var links = ParseTableLinks(report);
+        var usedTables = layout.Bindings.Keys.Select(ParseCrystalFieldRef).Where(field => field.HasValue)
+            .Select(field => field!.Value.Table).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The designer can retain unused, disconnected tables. They are not query
+        // inputs. Keep every authored join endpoint, including bridge/filter tables.
+        if (usedTables.Count > 0)
+        {
+            usedTables.UnionWith(links.SelectMany(link => link.Source.Concat(link.Destination)).Select(field => field.Table));
+            tables.RemoveAll(table => !usedTables.Contains(table.Alias));
+        }
         // Formula SQL is limited to proven scalar or bounded date/string AST shapes.
         // All shapes retain their full runtime selection; the
         // session separately preserves parameterized subreport field-link filters.
         // Do not fall back to the broader legacy regex formula-to-SQL translator.
         definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-            : BuildSql(tables, ParseTableLinks(report), PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
         if (definition.PositionedIntegerSelection is { } integers)
             definition.PositionedIntegerSelection = integers.WithTemplate(definition.Sql);
     }

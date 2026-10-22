@@ -38,14 +38,15 @@
 @inject IJSRuntime JSRuntime
 @inject ILogger<ReportWriterControl> Logger
 @inject ReportOptions Options
-@* IReportExporter is OPTIONAL — Crystal-Reports binary export is host-specific.
-   When the host has no Crystal Reports DLLs available, no implementation is
-   registered, and the writer falls back to browser print-to-PDF for export. *@
+@* IReportExporter is OPTIONAL for legacy host-specific binary report adapters.
+   Native reports export directly from their complete rendered snapshots. *@
 @inject IReportExporter? CrystalSvc
 @* IReportViewerSettings persists per-user viewer preferences (zoom level
    today; room for more). Falls back to InMemoryReportViewerSettings when
    no host adapter is registered. *@
 @inject IReportViewerSettings ViewerSettings
+
+<ReportFontStyles />
 
 @if (ShowChrome)
 {
@@ -359,6 +360,8 @@ else
     // Caller-supplied / session-injected parameters merged into every
     // ShowReportAsync run (e.g. DivisionID).
     private readonly Dictionary<string, string> _seedParameters = new(StringComparer.OrdinalIgnoreCase);
+    // "Default:<name>" seeds pre-select a prompt without answering it: the dialog still shows the parameter (FMain's job context).
+    private readonly Dictionary<string, string> _seedDefaults = new(StringComparer.OrdinalIgnoreCase);
 
     // Direct table-field filters supplied by the host through "Filter:Table.Field"
     // seed keys (see ShowReportAsync). They constrain the report query the same
@@ -487,6 +490,7 @@ else
         try
         {
             var payload = JsonSerializer.Deserialize<SubreportClickPayload>(payloadJson);
+            if (payload?.onDemand == true) { await OpenNativeOnDemandSubreport(payload); return; }
             if (payload == null || string.IsNullOrWhiteSpace(payload.xmlPath)) return;
 
             var payloadFilters = payload.filters ?? new List<SubreportClickFilter>();
@@ -523,6 +527,10 @@ else
         public string? subreportName { get; set; }
         public bool isInline { get; set; }
         public List<SubreportClickFilter>? filters { get; set; }
+        // A positioned on-demand caption: the subreport object and the row of the run it printed for.
+        public bool onDemand { get; set; }
+        public string? elementId { get; set; }
+        public int row { get; set; }
     }
 
     private sealed class SubreportClickFilter
@@ -689,7 +697,7 @@ else
     {
         try
         {
-            await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{GetType().Assembly.GetName().Name}/report-layout.js");
+            await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/report-layout.js"));
             if (module is null) throw new InvalidOperationException("Browser report measurement module is unavailable.");
             return await session.PaginateAsync(async (batch, cancellationToken) =>
                 await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch));
@@ -698,6 +706,52 @@ else
         {
             Logger.LogWarning(error, "Browser report text measurement unavailable");
             return session.Paginate();
+        }
+    }
+
+    /// <summary>Opens the on-demand subreport behind a positioned caption as a tab of its own, as Crystal's preview does.</summary>
+    private async Task OpenNativeOnDemandSubreport(SubreportClickPayload payload)
+    {
+        var source = ActiveTab;
+        if (source?.NativeSession is not { } run || IsLoading || string.IsNullOrEmpty(payload.elementId)) return;
+        var key = payload.elementId + ":" + payload.row;
+        var existing = Tabs.FindIndex(tab => tab.NativeGroupId == key && tab.NativeSession is not null);
+        if (existing >= 0) { SwitchTab(existing); return; }
+        var version = _nativeNavigationVersion;
+        ErrorMessage = null;
+        IsLoading = true;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var session = run.CreateOnDemandSubreport(payload.elementId, payload.row);
+            var result = await PaginateNativeSession(session);
+            if (version != _nativeNavigationVersion || !Tabs.Contains(source)) return;
+            var title = string.IsNullOrWhiteSpace(payload.title) ? "Subreport" : payload.title;
+            Tabs.Add(new ReportTab
+            {
+                Title = title, NativeGroupId = key, NativeSession = session,
+                Pages = result.Pages, PageSnapshots = result.Snapshots, Tree = result.Tree,
+                PositionedPage = source.PositionedPage, Orientation = source.Orientation,
+                RuntimeDiagnostics = result.Diagnostics, CreateDataExport = session.CreateDataExport
+            });
+            ActiveTabIndex = Tabs.Count - 1;
+            SearchText = "";
+            StatusMessage = $"Subreport: {title}";
+        }
+        catch (Exception error)
+        {
+            ErrorMessage = $"Subreport error: {error.Message}";
+            StatusMessage = ErrorMessage;
+            Logger.LogWarning(error, "Native on-demand subreport failed");
+        }
+        finally
+        {
+            if (version == _nativeNavigationVersion)
+            {
+                IsLoading = false;
+                await InvokeAsync(StateHasChanged);
+                OnRenderComplete?.Invoke();
+            }
         }
     }
 
@@ -1048,8 +1102,8 @@ else
 
     /// <summary>
     /// Exports the currently loaded Crystal Report to the specified format.
-    /// Returns null when no <see cref="IReportExporter"/> is registered (the
-    /// host should fall back to browser print-to-PDF in that case).
+    /// Returns null when no legacy <see cref="IReportExporter"/> is registered.
+    /// Native report tabs export through <see cref="ReportNativeExport"/> instead.
     /// </summary>
     public Task<byte[]?> ExportCrystalReport(string format)
     {
@@ -1136,9 +1190,12 @@ else
 
             if (definition.PositionedLayout is { } layout)
             {
+                var started = System.Diagnostics.Stopwatch.StartNew();
+                var childQueries = 0;
                 // Formulas read the prompt values: {?Name} of a multi-value prompt is the whole array; SQL binds the rewritten scalars.
                 var session = new ReportLayoutSession(layout, dt, formulaParams, (child, values) =>
                 {
+                    childQueries++;
                     var childParameters = new Dictionary<string, object>(values);
                     AutoInjectSessionParameters(childParameters, child.Sql);
                     foreach (var parameter in child.FixedParameters) childParameters[parameter.Key] = parameter.Value;
@@ -1146,7 +1203,11 @@ else
                     GuardRowLimit(childRows);
                     return childRows;
                 }, tolerateSubreportQueryError: Options.TolerateSubreportQueryError);
+                Logger.LogInformation("Native report prepared: {Title} ({Rows} source rows, {SubreportQueries} subreport queries, {ElapsedMs} ms)",
+                    definition.Title, dt.Rows.Count, childQueries, started.ElapsedMilliseconds);
                 var result = await PaginateNativeSession(session);
+                Logger.LogInformation("Native report paginated: {Title} ({Pages} pages, {Diagnostics} diagnostics, {ElapsedMs} ms total)",
+                    definition.Title, result.Snapshots.Count, result.Diagnostics.Count, started.ElapsedMilliseconds);
                 Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, PageSnapshots = result.Snapshots, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
                     CreateDataExport = session.CreateDataExport, NativeSession = session, Tree = result.Tree,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
@@ -1334,10 +1395,16 @@ else
                 _seedFieldFilters.Clear();
 
             _seedParameters.Clear();
+            _seedDefaults.Clear();
             if (seedParameters != null)
                 foreach (var kv in seedParameters)
                     if (!string.IsNullOrEmpty(kv.Value))
                     {
+                        if (kv.Key.StartsWith("Default:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _seedDefaults[kv.Key["Default:".Length..]] = kv.Value;
+                            continue;
+                        }
                         if (kv.Key.StartsWith("Filter:", StringComparison.OrdinalIgnoreCase))
                         {
                             var spec = kv.Key["Filter:".Length..];
@@ -1405,7 +1472,9 @@ else
                     var title = Path.GetFileNameWithoutExtension(xmlPath);
                     var promptContext = new ReportPickListContext(Path.GetFileNameWithoutExtension(file),
                         definition.Parameters.ToArray(), new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase));
-                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, _lastPromptedValues, promptContext);
+                    var initialValues = _lastPromptedValues ?? (_seedDefaults.Count > 0
+                        ? _seedDefaults.ToDictionary(kv => kv.Key, kv => (object)kv.Value, StringComparer.OrdinalIgnoreCase) : null);
+                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, initialValues, promptContext);
                     if (userValues == null)
                     {
                         StatusMessage = "Report cancelled.";
@@ -1513,9 +1582,13 @@ else
 
     private async Task ChromeOnPrint() => await Print();
 
+    // Print / Save as PDF stays the main Export action: the native PDF embeds Arial, Times and
+    // Courier only, so a report printed in any other family (Webdings, Tahoma, Calibri) cannot
+    // be written by it.
     private IList<SplitButtonItem> ExportItems =>
     [
         new("Print / Save as PDF", "bi bi-printer", "Print"),
+        new("PDF report (.pdf)", "bi bi-filetype-pdf", "Pdf"),
         new("HTML report", "bi bi-filetype-html", "Html"),
         new("Excel data (.xlsx)", "bi bi-file-earmark-spreadsheet", "Xlsx", ActiveTab?.CreateDataExport is null),
         new("CSV data", "bi bi-filetype-csv", "Csv", ActiveTab?.CreateDataExport is null)
@@ -1546,11 +1619,11 @@ else
 
     private async Task ChromeOnExport(string format)
     {
+        if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
         StatusMessage = $"Exporting as {format}...";
         await InvokeAsync(StateHasChanged);
         try
         {
-            if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
             if (ActiveTab is null) throw new InvalidOperationException("No report is loaded.");
             if (!Enum.TryParse<ReportNativeExportFormat>(format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
             var result = await ReportNativeExport.ExportAsync(ActiveTab, nativeFormat, string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath));
@@ -1560,6 +1633,13 @@ else
             using var reference = new DotNetStreamReference(stream);
             await module.InvokeVoidAsync("invoke", "download", null, new { name = result.FileName, type = result.ContentType, stream = reference }, null);
             StatusMessage = $"Downloaded {result.FileName}.";
+        }
+        catch (NotSupportedException ex) when (string.Equals(format, "Pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            // Something on the pages the native PDF cannot write: the browser's print / save as PDF can.
+            Logger.LogWarning(ex, "Native PDF export unavailable; opening Print instead");
+            await Print();
+            StatusMessage = $"PDF export is not available for this report ({ex.Message}). Print opened instead.";
         }
         catch (Exception ex)
         {
@@ -1584,6 +1664,7 @@ else
         // Re-run with no pre-seeded values — the dialog re-opens with
         // the user's last selections (we cached them in _lastPromptedValues).
         _seedParameters.Clear();
+        _seedDefaults.Clear();
         var divId = SessionState.Get("DivisionID");
         if (divId != null) _seedParameters["DivisionID"] = divId.ToString() ?? "";
         await ShowReportAsync(ReportFilePath, null);

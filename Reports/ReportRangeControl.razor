@@ -13,7 +13,7 @@
         }
         else
         {
-            <TextBoxControl Value="@Value.Start" ValueChanged="v => Change(Value with { Start = v })" />
+            <TextBoxControl Value="@Value.Start" ValueChanged="v => Change(Value with { Start = OpenWhenCleared(v) })" />
         }
         <CheckBoxControl Label="Include start" Checked="@Value.IncludeStart" CheckedChanged="v => Change(Value with { IncludeStart = v })" />
     </div>
@@ -29,7 +29,7 @@
         }
         else
         {
-            <TextBoxControl Value="@Value.End" ValueChanged="v => Change(Value with { End = v })" />
+            <TextBoxControl Value="@Value.End" ValueChanged="v => Change(Value with { End = OpenWhenCleared(v) })" />
         }
         <CheckBoxControl Label="Include end" Checked="@Value.IncludeEnd" CheckedChanged="v => Change(Value with { IncludeEnd = v })" />
     </div>
@@ -39,6 +39,9 @@
     [Parameter] public ReportRangeValue Value { get; set; } = new(null, null);
     [Parameter] public EventCallback<ReportRangeValue> ValueChanged { get; set; }
     private Task Change(ReportRangeValue value) => ValueChanged.InvokeAsync(value);
+    // Clearing the editor opens the bound; a loaded explicit empty-string bound is
+    // otherwise left intact until the user edits it.
+    private static string? OpenWhenCleared(string? value) => string.IsNullOrEmpty(value) ? null : value;
     private static DateTime? Date(string? value) => DateTime.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var date) ? date : null;
     private static decimal? Number(string? value) => decimal.TryParse(value, CultureInfo.InvariantCulture, out var number) ? number : null;
 }

@@ -4,7 +4,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    public const int Current = 6;
+    // Version 10 distinguishes an allowed empty string from a missing parameter value.
+    public const int Current = 10;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -388,6 +389,11 @@ public sealed class CrystalParameterFieldModel
 
     public bool AllowNull { get; set; }
 
+    /// <summary>Authored numeric bounds; for string parameters these are character counts.</summary>
+    public double? MinimumValue { get; set; }
+    public double? MaximumValue { get; set; }
+    public string EditMask { get; set; } = "";
+
     public bool HasPromptMetadata { get; set; }
 
     public bool HasBrowseField { get; set; }
@@ -565,6 +571,7 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    public bool SuppressIfDuplicate { get; set; }
     public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
     public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
     internal ReportNativeNumberFormat? NativeCurrencyFormat { get; set; }

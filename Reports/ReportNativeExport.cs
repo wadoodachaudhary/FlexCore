@@ -9,9 +9,9 @@ using Microsoft.Extensions.Logging;
 
 namespace Fx.ControlKit.Reports;
 
-public enum ReportNativeExportFormat { Html, Csv, Xlsx }
+public enum ReportNativeExportFormat { Html, Csv, Xlsx, Pdf }
 
-/// <summary>Native report-page HTML and typed data exports. Never invokes a Crystal engine.</summary>
+/// <summary>Native report-page PDF/HTML and typed data exports. Never invokes a browser printer or Crystal engine.</summary>
 public static class ReportNativeExport
 {
     private static readonly Lazy<string> AnalysisStyles = new(() => string.Concat(new[] { "Fx.Reports.ChartStyles", "Fx.Reports.PivotStyles" }.Select(name =>
@@ -52,6 +52,8 @@ public static class ReportNativeExport
         var name = Path.GetFileNameWithoutExtension(fileName ?? tab.Title);
         name = string.Concat(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ' ? c : '_')).Trim();
         if (name.Length == 0) name = "Report";
+        if (format == ReportNativeExportFormat.Pdf)
+            return new(ReportPdfExport.Export(tab), name + ".pdf", "application/pdf");
         if (format == ReportNativeExportFormat.Html)
         {
             if (tab.Pages.Count == 0) throw new InvalidOperationException("There are no rendered report pages to export.");
@@ -60,8 +62,8 @@ public static class ReportNativeExport
                 : ReportObjectRenderer.Number((paper.ContentWidthTwips + paper.MarginLeftTwips + paper.MarginRightTwips) / 1440d) + "in " +
                   ReportObjectRenderer.Number((paper.ContentHeightTwips + paper.MarginTopTwips + paper.MarginBottomTwips) / 1440d) + "in";
             var html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">" +
-                "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">" +
-                "<title>" + ReportObjectRenderer.Encode(tab.Title) + "</title><style>" + AnalysisStyles.Value + "body{margin:0;font-family:Arial;color:#000;background:#fff}table{border-collapse:collapse;width:100%}th,td{padding:3px 6px;text-align:left}.fx-export-page{break-after:page}.fx-export-page:last-child,.fx-report-positioned-page:last-child{break-after:auto!important}@page{size:" + size + ";margin:0}</style></head><body>" +
+                "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'\">" +
+                "<title>" + ReportObjectRenderer.Encode(tab.Title) + "</title><style>" + AnalysisStyles.Value + ReportFontCatalog.Css + "body{margin:0;font-family:Arial;color:#000;background:#fff}table{border-collapse:collapse;width:100%}th,td{padding:3px 6px;text-align:left}.fx-export-page{break-after:page}.fx-export-page:last-child,.fx-report-positioned-page:last-child{break-after:auto!important}@page{size:" + size + ";margin:0}</style></head><body>" +
                 string.Concat(tab.Pages.Select(page => "<div class=\"fx-export-page\">" + page + "</div>")) + "</body></html>";
             return new(Encoding.UTF8.GetBytes(html), name + ".html", "text/html;charset=utf-8");
         }

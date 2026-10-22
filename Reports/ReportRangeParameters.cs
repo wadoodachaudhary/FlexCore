@@ -12,7 +12,8 @@ public sealed record ReportRangeValue(string? Start, string? End, bool IncludeSt
         var end = Parse(End, type);
         if (start is not null && end is not null)
         {
-            var comparison = start is string a && end is string b ? StringComparer.Ordinal.Compare(a, b) : ((IComparable)start).CompareTo(end);
+            // Range membership uses Crystal's comparison rules, including case-insensitive strings.
+            var comparison = CrystalFormula.Compare(start, end);
             if (comparison > 0 || (comparison == 0 && (!IncludeStart || !IncludeEnd)))
                 throw new InvalidDataException("The range end must follow its start; an equal bound must be inclusive.");
         }
@@ -27,7 +28,9 @@ public sealed record ReportRangeValue(string? Start, string? End, bool IncludeSt
     };
     private static object? Parse(string? value, ReportParameterType type)
     {
-        if (string.IsNullOrEmpty(value)) return null;
+        // Null is an open bound; an explicit empty string is a real string bound and
+        // must survive persistence (particularly when that bound is exclusive).
+        if (value is null || (value.Length == 0 && type != ReportParameterType.String)) return null;
         if (value.Length > 16000) throw new InvalidDataException("The range bound is too long.");
         return type switch
         {

@@ -28,11 +28,16 @@ public sealed partial class CrystalFormula
         public object? Read(Binding binding) => Variables(binding.Scope).TryGetValue(binding.Name, out var value) ? value : TypeDefault(binding);
         public object? Write(Binding binding, object? value)
         {
+            // An unhandled null aborts the formula before its assignment. In
+            // default-null mode, assign the declared type's default instead.
+            value = AssignmentValue(binding, value);
             if (binding.IsArray && value is not (null or DBNull)) value = binding.IsRange ? ToArray(value).Select(v => Retype(ToRange(v), DateFlag(BindingKind(binding)))).ToArray() : ToArray(value);
             else if (binding.IsRange) value = Retype(ToRange(value), DateFlag(BindingKind(binding)));
             if (value is object?[] items) Stored(items);
             return Variables(binding.Scope)[binding.Name] = value;
         }
+        public object? AssignmentValue(Binding binding, object? value) =>
+            NonNull(value) is null or DBNull ? TypeDefault(binding) : value;
     }
     private static object? ToRange(object? value) => value is null or DBNull or CrystalRange ? value : new CrystalRange(value, value);
     private sealed class NullFormulaValue : Exception;
@@ -97,7 +102,7 @@ public sealed partial class CrystalFormula
         {
             var array = AsArray(f.Read(Binding)) ?? throw new InvalidDataException($"'{Binding.Name}' is not an array.");
             var index = ArrayIndex(f.NonNull(Index.Get(f)), array.Length);
-            var value = Value.Get(f);
+            var value = f.AssignmentValue(Binding with { IsArray = false }, Value.Get(f));
             var copy = (object?[])array.Clone();
             f.Tick(copy.Length / 16);
             copy[index] = Binding.IsRange ? Retype(ToRange(value), DateFlag(BindingKind(Binding))) : value;

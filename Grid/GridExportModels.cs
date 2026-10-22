@@ -982,7 +982,7 @@ public static class GridExporter
         if (table.Columns.Count == 0)
         {
             pages.Add(string.Empty);
-            return PdfDocumentWriter.Write(pageWidth, pageHeight, pages);
+            return NativePdfDocument.WriteLegacy(pageWidth, pageHeight, pages);
         }
 
         var columnWidths = ResolvePdfColumnWidths(table, contentWidth, fontSize, effectiveColumnLayout, zoomScale);
@@ -1100,7 +1100,7 @@ public static class GridExporter
             }
         }
 
-        return PdfDocumentWriter.Write(pageWidth, pageHeight, pages.Count > 0 ? pages : new List<string> { string.Empty });
+        return NativePdfDocument.WriteLegacy(pageWidth, pageHeight, pages.Count > 0 ? pages : new List<string> { string.Empty });
     }
 
     private static void DrawPdfRow(
@@ -1668,56 +1668,4 @@ public static class GridExporter
             .Replace("\r", " ", StringComparison.Ordinal)
             .Replace("\n", " ", StringComparison.Ordinal);
 
-    private static class PdfDocumentWriter
-    {
-        public static byte[] Write(double pageWidth, double pageHeight, IReadOnlyList<string> pageContents)
-        {
-            var objects = new List<string>
-            {
-                "<< /Type /Catalog /Pages 2 0 R >>",
-                "",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-                "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>"
-            };
-
-            var pageObjectNumbers = new List<int>();
-            foreach (var content in pageContents)
-            {
-                var contentBytes = Encoding.ASCII.GetBytes(content);
-                var pageObjectNumber = objects.Count + 1;
-                var contentObjectNumber = objects.Count + 2;
-                pageObjectNumbers.Add(pageObjectNumber);
-
-                objects.Add(
-                    $"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PdfNumber(pageWidth)} {PdfNumber(pageHeight)}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {contentObjectNumber} 0 R >>");
-                objects.Add($"<< /Length {contentBytes.Length} >>\nstream\n{content}\nendstream");
-            }
-
-            objects[1] = $"<< /Type /Pages /Kids [{string.Join(" ", pageObjectNumbers.Select(n => $"{n} 0 R"))}] /Count {pageObjectNumbers.Count} >>";
-
-            using var stream = new MemoryStream();
-            void WriteAscii(string text)
-            {
-                var bytes = Encoding.ASCII.GetBytes(text);
-                stream.Write(bytes, 0, bytes.Length);
-            }
-
-            WriteAscii("%PDF-1.4\n");
-            var offsets = new List<long> { 0 };
-            for (var i = 0; i < objects.Count; i++)
-            {
-                offsets.Add(stream.Position);
-                WriteAscii($"{i + 1} 0 obj\n{objects[i]}\nendobj\n");
-            }
-
-            var xrefPosition = stream.Position;
-            WriteAscii($"xref\n0 {objects.Count + 1}\n");
-            WriteAscii("0000000000 65535 f \n");
-            foreach (var offset in offsets.Skip(1))
-                WriteAscii($"{offset:0000000000} 00000 n \n");
-            WriteAscii($"trailer\n<< /Size {objects.Count + 1} /Root 1 0 R >>\nstartxref\n{xrefPosition}\n%%EOF");
-
-            return stream.ToArray();
-        }
-    }
 }

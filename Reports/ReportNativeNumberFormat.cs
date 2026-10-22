@@ -11,8 +11,7 @@ public sealed record ReportNativeNumberFormat(bool SuppressIfZero, int NegativeT
     string Prefix, string Suffix, bool SystemDefaultFormatting = false, bool SuppressIfDuplicate = false,
     bool HasConditionalFormatting = false, string NativeArchive = "")
 {
-    internal string? UnsupportedReason => SuppressIfDuplicate ? "suppress-if-duplicate numeric fields are not implemented"
-        : HasConditionalFormatting ? "conditional numeric field formatting is not implemented"
+    internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric field formatting is not implemented"
         : AccountingFormat || OneCurrencyPerPage || SuppressIfNoHorizontalPages ? "page-dependent/accounting numeric formatting is not implemented"
         : DecimalPlaces is < 0 or > 10 || RoundingType is < 1 or > 17 ? "the saved precision is unsupported"
         : NegativeType is < 0 or > 3 ? "the saved negative-number style is unsupported"

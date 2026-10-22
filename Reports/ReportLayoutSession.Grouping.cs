@@ -237,7 +237,7 @@ public sealed partial class ReportLayoutSession
                 var order = Enumerable.Range(0, instances.Count).ToList();
                 order.Sort((left, right) =>
                 {
-                    var compare = CrystalFormula.Compare(values[left], values[right]);
+                    var compare = CompareSortValues(values[left], values[right]);
                     return compare != 0 ? sort.Descending ? -compare : compare : left.CompareTo(right);
                 });
                 var keep = order.Count;

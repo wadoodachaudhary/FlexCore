@@ -12,7 +12,7 @@
                 }
                 @foreach (var item in band.Objects)
                 {
-                    <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element)">
+                    <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips)">
                         @if (item.Table is not null)
                         {
                             <ReportTableFragmentControl Fragment="item.Table" Title="item.Element.Name" />

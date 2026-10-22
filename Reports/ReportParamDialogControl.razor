@@ -59,7 +59,7 @@
             }
         </HeaderContent>
         <ChildContent>
-            <div class="fx-param-body">
+            <div class="@BodyCssClass">
                 @foreach (var p in _parameters)
                 {
                     var pickList = _pickLists.TryGetValue(p.Name, out var list) ? list : null;
@@ -152,7 +152,8 @@
                                 <DropDownListControl TValue="string" TItem="ListItem"
                                     DataSource="@defaults.Select(choice => new ListItem(choice.Value, ChoiceLabel(p, choice)))"
                                     ValueFieldName="Key" TextFieldName="Label" Value="@_values.GetValueOrDefault(p.Name)"
-                                    ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
+                                    ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name"
+                                    Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight" />
                                 @if (p.AllowCustomCurrentValues)
                                 {
                                     <label class="fx-param-value-label">Enter a Value:</label>
@@ -164,6 +165,7 @@
                                 <DropDownListControl TValue="string" TItem="PickListItem" DataSource="@_singlePickLists.GetValueOrDefault(p.Name)"
                                     ValueFieldName="Value" TextFieldName="Display" Value="@PickListValue(p)"
                                     ValueChanged="value => SetPickListValue(p.Name, value)" AllowFiltering="true" AriaLabel="@p.Name"
+                                    Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight"
                                     Enabled="@(!isDependent || _readyLists.Contains(p.Name))" />
                             }
                             else if (p.ParameterType == ReportParameterType.Integer || p.ParameterType == ReportParameterType.Decimal)
@@ -308,6 +310,12 @@
 
     /// <summary>The dialog's height limit (also set in the .razor.css): 90% of the window, and never over 1200px.</summary>
     private const string DialogMaxHeight = "min(90vh, calc(1200px * var(--fx-zoom, 1)))";
+    // Crystal's "Enter Parameter Values" gives a value list a wide combo whose list drops well below it, in a window that
+    // stays tall whatever it holds; the body reserves that room (fx-param-body-lists) so the list is not clamped to a short dialog.
+    private const string PickListWidth = "min(100%, calc(440px * var(--fx-zoom, 1)))";
+    private const int PickListPanelHeight = 320;
+    private string BodyCssClass => _singlePickLists.Count > 0 || _parameters.Any(p => !p.AllowMultiple && !p.AllowRange && p.DefaultValues.Count >= 2)
+        ? "fx-param-body fx-param-body-lists" : "fx-param-body";
 
     /// <summary>
     /// Height of each Available/Selected pair, for any number of pairs and other prompts. The pairs share what
@@ -504,7 +512,9 @@
                     var selected = new List<ListItem>();
                     foreach (var v in values)
                     {
-                        if (string.IsNullOrEmpty(v)) continue;
+                        // Authored blank keys are real choices and count toward a prompt batch.
+                        // Reopening must preserve the same array that the previous acceptance returned.
+                        if (v is null || (v.Length == 0 && !p.PickListIsAuthored)) continue;
                         var match = available.FirstOrDefault(i => string.Equals(i.Key, v, StringComparison.OrdinalIgnoreCase));
                         selected.Add(match ?? new ListItem(v, v));
                     }
@@ -814,7 +824,8 @@
     private void Accept()
     {
         if (ChoicesUnavailable) return;
-        // Validate — required (non-optional) params must be filled in.
+        // An empty free-text string is a value when the report permits it.
+        // A missing date, number or list selection still needs user input.
         var missing = new List<ReportParameter>();
         foreach (var p in _parameters)
         {
@@ -825,7 +836,10 @@
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(_values.GetValueOrDefault(p.Name))) missing.Add(p);
+                var acceptsEmptyText = p.AllowEmptyString && p.ParameterType == ReportParameterType.String
+                    && (p.DefaultValues.Count >= 2 ? p.AllowCustomCurrentValues
+                        : !_dependencies.ContainsKey(p.Name) && !_singlePickLists.ContainsKey(p.Name));
+                if (!acceptsEmptyText && string.IsNullOrWhiteSpace(_values.GetValueOrDefault(p.Name))) missing.Add(p);
             }
         }
         if (missing.Count > 0)

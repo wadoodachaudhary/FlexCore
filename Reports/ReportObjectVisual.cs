@@ -187,26 +187,51 @@ public static class ReportObjectRenderer
         return item.CanGrow && item.Kind == "Field" ? item.MaxNumberOfLines : 0;
     }
 
+    // Shared by the viewer and PDF writer: a fixed one-line string clips at
+    // the right edge rather than wrapping a trailing word into an invisible line.
+    internal static bool WrapText(ReportDesignerElement item) => !(item.Kind == "Field"
+        && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null
+            || !item.CanGrow && (item.NativeDateTimeFormat is not null || item.HeightTwips < item.FontSize * 20m * 1.15m * 2)));
+
     public static string Encode(string? value) => WebUtility.HtmlEncode(value ?? "");
     public static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
     public static string Color(string? color, string fallback = "transparent") => color is { Length: 7 or 9 } && color[0] == '#' && color.AsSpan(1).ToString().All(Uri.IsHexDigit) ? color : fallback;
     private static string Font(string value) => value.Length <= 100 && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-') ? value : "Arial";
-    public static string FontStyle(string family, decimal size, bool bold, bool italic, bool underline, string color) =>
-        $"font-family:'{Font(family)}',sans-serif;font-size:{Number((double)Math.Clamp(size, 1, 300))}pt;font-weight:{(bold ? 700 : 400)};font-style:{(italic ? "italic" : "normal")};text-decoration:{(underline ? "underline" : "none")};color:{Color(color, "#000000")};";
+    public static string FontStyle(string family, decimal size, bool bold, bool italic, bool underline, string color, bool crystalScreenMetrics = false)
+    {
+        if (family.Equals("Calibri", StringComparison.OrdinalIgnoreCase)) family = ReportFontCatalog.CalibriFamily;
+        var points = (double)Math.Clamp(size, 1, 300);
+        // Crystal lays a printed or exported report out on the printer device: the em is the LOGFONT height
+        // MulDiv(points, 600, 72) in 600-dpi pixels (83 for 10pt), with unkerned advances. Measuring at that em
+        // (13.28 CSS px for 10pt) reproduces Crystal's breaks on both Master Assembly references: the 13px screen
+        // LOGFONT of Crystal's preview let 1-2% too-wide lines ("Add Capping to Stubwall - Per") fit, and the exact
+        // 10pt em wrapped "Towel Bar - Moen YB2424CH" (131.72pt in a 131.25pt field), which Crystal prints on one line.
+        // Keep the point size in the design; measurement and painting must use the same realized size.
+        var cssSize = crystalScreenMetrics ? Number(Math.Round(points * 600 / 72, MidpointRounding.AwayFromZero) * 96 / 600) + "px" : Number(points) + "pt";
+        return (crystalScreenMetrics ? $"--fx-report-font-points:{Number(points)};font-kerning:none;" : "") + $"font-family:'{Font(family)}',sans-serif;font-size:{cssSize};font-weight:{(bold ? 700 : 400)};font-style:{(italic ? "italic" : "normal")};text-decoration:{(underline ? "underline" : "none")};color:{Color(color, "#000000")};";
+    }
 
-    public static string Style(ReportDesignerElement item, bool position = true)
+    public static string Style(ReportDesignerElement item, bool position = true, int originLeftTwips = 0, int originTopTwips = 0)
     {
         var lineLimit = TextLineLimit(item);
         var outsideBorder = NativeNumericOutsideBorder(item);
-        var bounds = position ? $"position:absolute;left:{Number(item.LeftTwips / 15d)}px;top:{Number(item.TopTwips / 15d)}px;" : outsideBorder ? "position:relative;" : "";
+        var screenText = item.UseCrystalScreenMetrics && item.Kind is "Text" or "Field" or "FieldHeading";
+        double Coordinate(int value, int origin) => screenText
+            ? Math.Floor(((double)origin + value) / 15) - origin / 15d : value / 15d;
+        // Snap the absolute paper origin, not each nested section independently.
+        // Keep authored twips and measured widths intact for wrapping and overflow.
+        var bounds = position ? $"position:absolute;left:{Number(Coordinate(item.LeftTwips, originLeftTwips))}px;top:{Number(Coordinate(item.TopTwips, originTopTwips))}px;" : outsideBorder ? "position:relative;" : "";
         var align = item.HorizontalAlignment.ToLowerInvariant() switch { "right" => "right", "center" or "horizontalcenter" => "center", "justified" => "justify", "default" when item.NativeNumericFormat is not null || item.NativeNumberFormat is not null => "right", _ => "left" };
         var geometry = item.Kind == "Line" || outsideBorder ? "overflow:visible;" : "overflow:hidden;";
-        var whiteSpace = item.Kind == "Field" && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null || !item.CanGrow && item.NativeDateTimeFormat is not null) ? "pre" : "pre-wrap";
+        // A fixed field with room for only one line clips at its right edge;
+        // word wrapping would hide an entire trailing word instead of its excess.
+        var whiteSpace = WrapText(item) ? "pre-wrap" : "pre";
         // Layout retains the authored minimum box. Its text still observes the
         // line cap when that box is taller than the permitted growing content.
         var clip = lineLimit > 0 ? $"max-height:calc({lineLimit} * 1lh + {Number(BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips) + BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips))}px);" : "";
-        return bounds + geometry + clip + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" ? "normal" : "anywhere")};line-height:1.15;letter-spacing:0;text-align:{align};padding-left:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
-            FontStyle(item.FontFamily, item.FontSize, item.Bold, item.Italic, item.Underline, item.TextColor) +
+        var lineHeight = ReportFontCatalog.NativeLineHeight(item.FontFamily, item.FontSize, item.UseCrystalScreenMetrics);
+        return bounds + geometry + clip + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" ? "normal" : "anywhere")};line-height:{lineHeight};letter-spacing:0;text-align:{align};padding-left:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
+            FontStyle(item.FontFamily, item.FontSize, item.Bold, item.Italic, item.Underline, item.TextColor, item.UseCrystalScreenMetrics) +
             (item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual));
     }
 
@@ -260,10 +285,14 @@ public static class ReportObjectRenderer
                 // A native zero-width pen is a device hairline, not an invisible CSS border. Use one CSS pixel;
                 // exact printer/device hairlines remain device-dependent. Native coordinates locate the stroke center.
                 var pixels = twips == 0 ? 1d : twips / 15d;
+                if (item.UseCrystalScreenMetrics) pixels = Math.Ceiling(pixels);
                 var style = lineStyle switch { "Single" or "SingleLine" => "solid", "Double" or "DoubleLine" => "double",
                     "Dash" or "DashLine" => "dashed", "Dot" or "DotLine" => "dotted", _ => "none" };
                 border = $"{Number(pixels)}px {style} {Color(item.Visual.BorderColor, "#000000")}";
-                center = $" translateY(-{Number(pixels / 2)}px)";
+                // Section clipping must not discard half a horizontal rule placed on its top edge.
+                var inset = item.UseCrystalScreenMetrics && item.HeightTwips == 0
+                    ? Math.Min(pixels / 2, Math.Max(0, item.TopTwips / 15d)) : pixels / 2;
+                center = $" translateY(-{Number(inset)}px)";
             }
             return $"<span style=\"display:block;position:absolute;transform-origin:0 0;width:{Number(Math.Sqrt((double)item.WidthTwips * item.WidthTwips + (double)item.HeightTwips * item.HeightTwips) / 15)}px;transform:rotate({Number(Math.Atan2(item.HeightTwips, item.WidthTwips))}rad){center};border-top:{border}\"></span>";
         }
@@ -274,7 +303,7 @@ public static class ReportObjectRenderer
         {
             var html = new StringBuilder();
             foreach (var run in item.Visual.Runs)
-                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color)).Append("\">")
+                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics)).Append("\">")
                     .Append(Encode(string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolve(run.Binding))).Append("</span>");
             return DecorateNativeNumeric(item, html.ToString());
         }

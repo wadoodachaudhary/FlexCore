@@ -159,7 +159,7 @@ public sealed partial class ReportLayoutSession
         var keys = _rows.Select((data, index) => (Data: data, Index: index, Keys: sort.Select(s => s.Key(index)).ToArray())).ToArray();
         Array.Sort(keys, (left, right) =>
         {
-            for (var i = 0; i < sort.Length; i++) { var order = CrystalFormula.Compare(left.Keys[i], right.Keys[i]); if (order != 0) return sort[i].Descending ? -order : order; }
+            for (var i = 0; i < sort.Length; i++) { var order = CompareSortValues(left.Keys[i], right.Keys[i]); if (order != 0) return sort[i].Descending ? -order : order; }
             return left.Index.CompareTo(right.Index);
         });
         _rows = keys.Select(k => k.Data).ToArray(); ClearValues();
@@ -232,7 +232,8 @@ public sealed partial class ReportLayoutSession
             ResetPageNumberAfter = source.ResetPageNumberAfter,
             KeepTogether = source.KeepTogether, BackgroundColor = source.BackgroundColor, Elements = source.Elements
         };
-    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null)
+    // `only` evaluates that one conditional property and leaves the suppression state alone; `skip` leaves one property as the source has it.
+    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null, string? only = null, string? skip = null)
     {
         var section = CopySection(source);
         var states = pageOnly ? _suppression.GetValueOrDefault((source.Id, row)) :
@@ -245,6 +246,8 @@ public sealed partial class ReportLayoutSession
         {
             var condition = entry.Condition;
             if (endingOnly is { } ending && EndingProperty(condition.Key) != ending) continue;
+            if (only is not null && !condition.Key.Equals(only, StringComparison.OrdinalIgnoreCase)
+                || skip is not null && condition.Key.Equals(skip, StringComparison.OrdinalIgnoreCase)) continue;
             // Until the first physical replay records page formats, page-only conditions use the tentative page number.
             if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value)
                 || UsesPage(condition.Value) && (_state.PrintedVisibility.Count > 0 || _state.PrintedSections.Count > 0))) continue;
@@ -264,7 +267,7 @@ public sealed partial class ReportLayoutSession
                 default: _diagnostics.Add($"{section.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
         }
-        if (endingOnly != true)
+        if (endingOnly != true && only is null)
         {
             section.IsSuppressed = states.Area || states.Section;
             section.HideForDrillDown = states.AreaHidden || states.SectionHidden;
@@ -309,6 +312,8 @@ public sealed partial class ReportLayoutSession
                 case "toplinestyle": element.Visual.TopLine = FormulaLine(value); break;
                 case "bottomlinestyle": element.Visual.BottomLine = FormulaLine(value); break;
                 case "displaystring": element.Kind = "Text"; element.Text = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; element.Visual.Runs.Clear(); break;
+                case "ondemandcaption": element.Text = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; break;
+                case "subreportpreviewtabtext": element.SubreportTabText = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; break;
                 default: _diagnostics.Add($"{element.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
             if (fontCondition)
@@ -354,6 +359,7 @@ public sealed partial class ReportLayoutSession
 
     private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null)
     {
+        if (source.EvaluationOnly) return source;
         source = ApplyPrintedItems(source, physicalPage, repeated);
         var sectionOwner = source.Owner ?? this;
         var previousPage = sectionOwner._formulaPage; var previousCount = sectionOwner._formulaPages; var previousRepeat = sectionOwner._repeatedHeader;
@@ -376,15 +382,18 @@ public sealed partial class ReportLayoutSession
                     if (resized && _textMetrics is null) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
                     var richChanged = element.Visual.Runs.Count > 0 && owner.Conditions(owner._layout.ObjectConditions, element.Id, true).Any();
                     var template = item.TemplateHtml ?? item.Html;
+                    var duplicateValue = item.DuplicateValue;
                     var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
                         ? RestylePrintedRuns(template, element)
                         : richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
                             ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)) : template;
+                    if (SuppressesDuplicates(element) && owner.DependsOn(element.Binding, true) && !owner._physicalPageSchedule)
+                        (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
                     html = ResolvePageValues(html.Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                         .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                         .Replace(owner._pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
                         .Replace(owner._countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), page, count, repeated);
-                    items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement });
+                    items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement, DuplicateValue = duplicateValue });
                 }
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
             }
@@ -479,6 +488,23 @@ public sealed partial class ReportLayoutSession
         if (_executeSubreport is null)
         { _diagnostics.Add($"{element.Name}: an inline subreport data executor is required."); return null; }
         if (_depth >= 8 || ++_state.Instances > 10000) throw new InvalidDataException("Inline subreport instance/nesting limit exceeded.");
+        var run = ResolveSubreportRun(element, subreport, row);
+        if (run is null) return null;
+        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport, _state, _depth + 1, this, run.Selections)
+            { _link = new(this, element.SectionId, row, element.Name, subreport.Links, run.Values) };
+        if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
+            _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
+        foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);
+        return child;
+    }
+
+    private sealed record SubreportRun(DataTable Data, Dictionary<string, object> Parameters, List<(string Field, object? Value)> Selections, object?[] Values);
+
+    /// <summary>Binds the subreport's links for <paramref name="row"/> and reads its records (one query per distinct link values);
+    /// null when the host accepted the query's failure, which the object then prints.</summary>
+    private SubreportRun? ResolveSubreportRun(ReportDesignerElement element, ReportLayoutSubreport subreport, int row)
+    {
+        if (_executeSubreport is null) throw new InvalidOperationException($"{element.Name}: a subreport data executor is required.");
         var parameters = new Dictionary<string, object>(_parameters, StringComparer.OrdinalIgnoreCase);
         foreach (var parameter in subreport.Definition.Parameters)
             if (!parameters.ContainsKey(parameter.Name) && !string.IsNullOrEmpty(parameter.DefaultValue)) parameters[parameter.Name] = parameter.DefaultValue;
@@ -507,7 +533,7 @@ public sealed partial class ReportLayoutSession
             // A failure the run accepted is not sent again: page furniture prepared for every row, repeated
             // instances and drill views of the run print the same error.
             var failed = _state.FailedQueries.FirstOrDefault(q => SameSubreportQuery(q.Definition, q.Parameters, q.Filters, subreport.Definition, parameters, filters));
-            if (failed.Message is not null) return SubreportQueryFailed(element, failed.Message);
+            if (failed.Message is not null) { SubreportQueryFailed(element, failed.Message); return null; }
             var (query, bound) = SqlQuery(subreport.Definition, parameters);
             if (filters.Count > 0)
             {
@@ -540,7 +566,7 @@ public sealed partial class ReportLayoutSession
                 // the subreport object shows the reason. Every other failure, and every failure without the
                 // option, ends the run as before.
                 _state.FailedQueries.Add((subreport.Definition, parameters, filters, error.Message));
-                return SubreportQueryFailed(element, error.Message);
+                SubreportQueryFailed(element, error.Message); return null;
             }
             if (data.Rows.Count > 100000) throw new InvalidDataException("Subreport exceeds the 100,000-row limit.");
             _state.QueryRows += data.Rows.Count;
@@ -553,11 +579,23 @@ public sealed partial class ReportLayoutSession
                 if (matches.All(f => f.Match(candidate[f.Alias]))) filtered.ImportRow(candidate);
             _state.Queries.Add((subreport.Definition, parameters, filters, data, filtered));
         }
-        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1, this, selections)
-            { _link = new(this, element.SectionId, row, element.Name, subreport.Links, values) };
-        if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
-            _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
-        foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);
-        return child;
+        return new(filtered, parameters, selections, values);
+    }
+
+    /// <summary>Runs the on-demand subreport printed by the object <paramref name="elementId"/>, for the record of <paramref name="row"/>
+    /// named in its caption's payload, as a report of its own: its links bind as for an inline subreport, with this run's parameters.</summary>
+    public ReportLayoutSession CreateOnDemandSubreport(string elementId, int row)
+    {
+        var element = _layout.Document.Elements.FirstOrDefault(e => e.Id == elementId && e.Kind == "Subreport")
+            ?? throw new InvalidOperationException("The on-demand subreport does not belong to this report run.");
+        if (!_layout.OnDemandSubreports.TryGetValue(elementId, out var subreport))
+            throw new InvalidOperationException($"{element.Name}: the on-demand subreport definition is unavailable.");
+        if (_executeSubreport is null) throw new InvalidOperationException($"{element.Name}: a subreport data executor is required.");
+        if (row < 0 || row >= _rows.Length) throw new ArgumentOutOfRangeException(nameof(row));
+        var run = ResolveSubreportRun(element, subreport, row)
+            ?? throw new InvalidDataException(_subreportErrors.GetValueOrDefault(element.Id) ?? $"{element.Name}: the subreport query failed.");
+        return new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport,
+            new RuntimeState { PrintTime = _printTime, TolerateSubreportQueryError = _state.TolerateSubreportQueryError, FailedQueries = _state.FailedQueries },
+            0, null, run.Selections);
     }
 }

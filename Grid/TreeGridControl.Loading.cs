@@ -67,7 +67,14 @@ public partial class TreeGridControl<TValue> : IAsyncDisposable
         _disposed = true; _loadLifetime.Cancel(); _loadLifetime.Dispose();
         _selfRef?.Dispose(); _selfRef = null;
         if (_legacyScrollModule is not null)
-            try { await _legacyScrollModule.InvokeVoidAsync("disposeTreeGridLayout", _treeGridElement); await _legacyScrollModule.DisposeAsync(); } catch (JSDisconnectedException) { }
+            try
+            {
+                if (_legacyViewportObserved)
+                    await _legacyScrollModule.InvokeVoidAsync("unobserveLegacyScrollViewport", _scrollViewportElement);
+                await _legacyScrollModule.InvokeVoidAsync("disposeTreeGridLayout", _treeGridElement);
+                await _legacyScrollModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { }
         if (_gridJsModule is not null)
             try { await _gridJsModule.DisposeAsync(); } catch (JSDisconnectedException) { }
     }

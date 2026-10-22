@@ -3612,7 +3612,11 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     color: #000;
     font-weight: 700;
 }
-.fx-choose-columns-host ::deep .fx-choose-columns-dialog > .fx-dialog-body {
+.fx-choose-columns-host ::deep .fx-choose-columns-dialog > .fx-dialog-body,
+.fx-choose-columns-host ::deep .fx-dialog.fx-choose-columns-dialog > .fx-dialog-body {
+    display: block;
+    flex: 1 1 auto;
+    min-height: auto;
     padding: 0;
     overflow: auto;
 }

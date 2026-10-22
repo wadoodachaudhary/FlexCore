@@ -1118,6 +1118,14 @@ public partial class CrystalXmlReportLoader
                 ParameterType = MapParameterType(valueKind),
                 Required = !promptIsOptional && isInUse,
                 IsOptional = nameSaysOptional,
+                // Crystal permits an empty string independently of optional/null values.
+                // Older exports lack the native constraint marker; their unrestricted
+                // custom string prompts retain Crystal's empty-string behavior.
+                AllowEmptyString = valueKind == "StringParameter"
+                    && ((string?)p.Attribute("ValueType") is null or "Xsd:stringField" or "Xsd:memoField")
+                    && string.Equals((string?)p.Attribute("AllowCustomCurrentValues"), "True", StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrEmpty((string?)p.Attribute("EditMask"))
+                    && !string.Equals((string?)p.Attribute("FlexKitAllowEmptyString"), "False", StringComparison.OrdinalIgnoreCase),
                 AllowMultiple = string.Equals((string?)p.Attribute("EnableAllowMultipleValue"), "True", StringComparison.OrdinalIgnoreCase),
                 AllowRange = (string?)p.Attribute("DiscreteOrRangeKind") is "RangeValue" or "DiscreteAndRangeValue",
                 AllowCustomCurrentValues = string.Equals((string?)p.Attribute("AllowCustomCurrentValues"), "True", StringComparison.OrdinalIgnoreCase),

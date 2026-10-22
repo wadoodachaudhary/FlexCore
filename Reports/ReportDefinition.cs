@@ -382,6 +382,10 @@ public class ReportParameter
     /// matches all jobs). The dialog skips required-empty validation for these.</summary>
     public bool IsOptional { get; set; }
 
+    /// <summary>A free-text string prompt accepts an explicitly supplied empty string.
+    /// This does not make the parameter optional or allow a missing list selection.</summary>
+    public bool AllowEmptyString { get; set; }
+
     /// <summary>If true, parameter supports multiple comma-separated values.</summary>
     public bool AllowMultiple { get; set; }
 
