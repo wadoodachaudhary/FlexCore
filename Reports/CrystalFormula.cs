@@ -123,14 +123,50 @@ public sealed partial class CrystalFormula
         return new(name, text, formula, signature.Parameters.Select(p => new CrystalCustomFunctionParameter(p.Binding.Name, p.Binding.Type, p.Binding.IsArray, p.Binding.IsRange, p.Default is not null)).ToArray());
     }
 
-    public object? Evaluate(CrystalFormulaContext context)
+    public object? Evaluate(CrystalFormulaContext context) => Evaluate(context, recordSelection: false);
+
+    internal object? EvaluateRecordSelection(CrystalFormulaContext context) => Evaluate(context, recordSelection: true);
+
+    private object? Evaluate(CrystalFormulaContext context, bool recordSelection)
     {
         var frame = new Frame(context, _defaultValue, new Budget());
-        try { return _root.Get(frame); }
+        try { return recordSelection ? RecordPredicate(frame, _root) : _root.Get(frame); }
         catch (NullFormulaValue) { return null; }
         catch (DivideByZeroException) { throw new InvalidDataException("Division by zero."); }
         catch (OverflowException ex) { throw new InvalidDataException("Crystal formula numeric overflow: " + ex.Message, ex); }
         catch (InsufficientExecutionStackException) { throw new InvalidDataException("Formula nesting is too deep to evaluate."); }
+    }
+
+    // Database record-selection predicates retain SQL's unknown Boolean value:
+    // NULL OR true selects the record. Ordinary formulas still abort on null.
+    private static object? RecordPredicate(Frame frame, Node node)
+    {
+        System.Runtime.CompilerServices.RuntimeHelpers.EnsureSufficientExecutionStack();
+        frame.Tick();
+        if (node is Binary logical && logical.Steps.All(step => step.Op is "and" or "or"))
+        {
+            var value = RecordBoolean(frame, logical.First);
+            foreach (var step in logical.Steps)
+            {
+                frame.Tick();
+                if (step.Op == "and" && value == false || step.Op == "or" && value == true) continue;
+                var right = RecordBoolean(frame, step.Right);
+                value = step.Op == "and" ? value & right : value | right;
+            }
+            return value;
+        }
+        if (node is Unary { Op: "not" } unary) return !RecordBoolean(frame, unary.Value);
+        return node.Get(frame);
+    }
+
+    private static bool? RecordBoolean(Frame frame, Node node)
+    {
+        try
+        {
+            var value = RecordPredicate(frame, node);
+            return value is null or DBNull ? null : Boolean(value);
+        }
+        catch (NullFormulaValue) { return null; }
     }
 
     private object? Invoke(Frame caller, string name, object?[] arguments)
@@ -438,7 +474,9 @@ public sealed class CrystalFormulaContext
     public Func<string, int, object?> Relative { get; init; } = (field, offset) => throw new InvalidDataException("Relative record context is unavailable.");
     public IDictionary<string, object?> SharedVariables { get; init; } = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
     public IDictionary<string, object?> GlobalVariables { get; init; } = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-    public DateTime Now { get; init; } = DateTime.Now;
+    private DateTime? _now;
+    /// <summary>The report's clock; the wall clock unless the host set one. Read lazily: every evaluation builds a context, few need the time.</summary>
+    public DateTime Now { get => _now ??= DateTime.Now; init => _now = value; }
     public int RecordIndex { get; init; }
     public int RecordCount { get; init; }
     public object PageNumber { get; init; } = 1;

@@ -1307,6 +1307,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     private bool _headerPointerFocusPending;
+    // Column of the last header click or drag, until the next key, row/cell click or
+    // seed. While it is set and the grid has no cursor, focus does not plant one (the
+    // reveal would scroll back to column 0); the first navigation key seeds there.
+    private string? _headerSeedField;
     private EventCallback<MouseEventArgs>? _nonRenderingHeaderMouseDown;
     private EventCallback<MouseEventArgs> NonRenderingHeaderMouseDown =>
         _nonRenderingHeaderMouseDown ??= NonRenderingEventHandler.Create<MouseEventArgs>(HandleHeaderMouseDown);
@@ -1336,12 +1340,19 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             catch (JSException) { }
             catch (InvalidOperationException) { }
         }
+        if (_activeCell != null)
+            _headerSeedField = null;
         if (!pageEntry && (!SeedActiveCellOnHostFocus || _activeCell != null))
+            return;
+        // A header click left the grid without a cursor: a later focus-in (window
+        // re-activation, programmatic refocus) must not plant and reveal one either.
+        // The first navigation key seeds it on that header's column (HHM-1339).
+        if (!pageEntry && _headerSeedField != null)
             return;
 
         var firstRow = pageEntry
             ? GetKeyboardNavigationRowItems().FirstOrDefault()
-            : PagedData.FirstOrDefault();
+            : GetFirstKeyboardSeedRow();
         if (firstRow == null)
             return;
 
@@ -1351,6 +1362,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         await SelectProgrammaticCellAsync(firstRow, firstColumn.Field);
         RememberKeyboardNavigationSource(firstRow, ResolveRowIndex(firstRow, 0), ResolveVisibleColumnIndex(firstColumn.Field));
+        _headerSeedField = null;
         _pendingActiveCellScrollIntoView = true;
         await InvokeAsync(StateHasChanged);
     }
@@ -5508,7 +5520,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // A header click "selects" that column for type-search, whether or not
         // the click also sorts (owner directive 2026-08-01).
         if (!string.IsNullOrEmpty(col.Field))
+        {
             _typeSearchHeaderField = col.Field;
+            // Also with a cursor: the sort or the host's reload can still drop it.
+            _headerSeedField = col.Field;
+        }
 
         if (!AllowSorting || !col.AllowSorting || string.IsNullOrEmpty(col.Field))
             return;
@@ -5993,6 +6009,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         ClearTypeSearchBuffer();
         _typeSearchHeaderField = null; // a row click retargets type-search to the clicked cell
+        _headerSeedField = null;
         ClearKeyboardNavigationSource();
         if (mouseArgs?.ShiftKey != true)
             ClearKeyboardRangeSelectionAnchor();
@@ -6156,6 +6173,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 StateHasChanged();   // commit teardown must not wait for the click render
             }
 
+            _pendingActiveCellScrollIntoView = false;
             SetActiveCell(resolvedRowIndex, cellIndex);
             if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
                 _selectedItems.Clear();
@@ -7410,6 +7428,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleCellDblClick(TValue item, int rowIndex, GridColumn col, MouseEventArgs args)
     {
+        _pendingActiveCellScrollIntoView = false;
         // Not gated on IsCellSelectable: a double-click is not a selection, and the
         // consumer's OnRecordDoubleClick fires only on columns that do NOT open an
         // editor — the very cells a selection predicate blocks. Editing stays gated
@@ -7810,6 +7829,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task HandleCellClickCore(TValue item, int rowIndex, int cellIndex, MouseEventArgs args)
     {
+        _pendingActiveCellScrollIntoView = false;
         _cellClickHandledForPress = true;
         if (ConsumeKeyActivationClickSuppression())
             return;
@@ -7831,6 +7851,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         ClearTypeSearchBuffer();
         _typeSearchHeaderField = null; // a cell click retargets type-search to that column
+        _headerSeedField = null;
 
         if (ConsumeDragSelectClickSuppression())
         {
@@ -8256,16 +8277,59 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         if (rows.Count == 0)
             return false;
 
-        var rowIndex = _lastSelectedRowIndex ?? ResolveRowIndex(rows[0], 0);
+        int rowIndex;
+        if (_lastSelectedRowIndex is { } lastRowIndex)
+            rowIndex = lastRowIndex;
+        else if (GetFirstKeyboardSeedRow() is { } firstRow)
+            rowIndex = ResolveRowIndex(firstRow, 0);
+        else
+            return false;
         var item = GetItemAtResolvedRowIndex(rowIndex);
-        var cellIndex = VisibleColumns.ToList().FindIndex(c =>
-            IsKeyboardNavigationTargetColumn(c) && IsCellSelectable(item, c));
+        var columns = VisibleColumns.ToList();
+        var cellIndex = FindHeaderSeedCellIndex(columns, item);
+        if (cellIndex < 0)
+            cellIndex = columns.FindIndex(c =>
+                IsKeyboardNavigationTargetColumn(c) && IsCellSelectable(item, c));
         if (cellIndex < 0)
             return false;
         _activeCell = (rowIndex, cellIndex);
         _lastSelectedCell = _activeCell.Value;
+        _headerSeedField = null;
         return true;
     }
+
+    // After a header click the cursor starts on that column, or on the nearest one
+    // that can hold it on this row (a read-only column cannot), so the seed does not
+    // pull the viewport back to column 0 (HHM-1339).
+    private int FindHeaderSeedCellIndex(List<GridColumn> columns, TValue? item)
+    {
+        if (_headerSeedField == null)
+            return -1;
+        var origin = columns.FindIndex(c =>
+            string.Equals(c.Field, _headerSeedField, StringComparison.OrdinalIgnoreCase));
+        if (origin < 0)
+            return -1;
+
+        bool CanSeed(int index) =>
+            index >= 0 && index < columns.Count
+            && IsKeyboardNavigationTargetColumn(columns[index]) && IsCellSelectable(item, columns[index]);
+
+        for (var distance = 0; distance < columns.Count; distance++)
+        {
+            if (CanSeed(origin - distance))
+                return origin - distance;
+            if (distance > 0 && CanSeed(origin + distance))
+                return origin + distance;
+        }
+        return -1;
+    }
+
+    // The first row on screen. Grouping orders rows by group and hides those in
+    // collapsed groups, so PagedData's first item can be elsewhere or hidden.
+    private TValue? GetFirstKeyboardSeedRow() =>
+        _groupDescriptors.Count == 0
+            ? PagedData.FirstOrDefault()
+            : GetKeyboardNavigationRowItems().FirstOrDefault();
 
     private void SetActiveCell(int rowIndex, int cellIndex, bool preservePointerFill = false)
     {
@@ -11378,6 +11442,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
     }
 
+    private bool IsCursorSeedingNavigationKey(KeyboardEventArgs e) =>
+        TryGetHorizontalKeyboardNavigation(e, out _, out _)
+        || TryGetVerticalKeyboardNavigation(e, out _)
+        || TryGetScrollKeyboardNavigation(e, out _);
+
     private static bool TryGetVerticalKeyboardNavigation(KeyboardEventArgs e, out int rowDelta)
     {
         rowDelta = 0;
@@ -11624,6 +11693,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         var suppressEnterReopen = _suppressNextHostEnterEditOpen
             && (e.Key == "Enter" || e.Key == "NumpadEnter");
         _suppressNextHostEnterEditOpen = false;
+        // A key reaching the grid comes after any header press's own focus event, so
+        // a guard left by a press released outside the grid is stale.
+        _headerPointerFocusPending = false;
+        if (_activeCell.HasValue)
+            _headerSeedField = null;
         if (suppressEnterReopen)
             return;
 
@@ -11775,6 +11849,22 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await InvokeAsync(StateHasChanged);
                 return;
             }
+        }
+
+        if (_headerSeedField != null
+            && !IsItemsProviderLoading
+            && _batchEditItem == null
+            && !_isEditing
+            && !_activeCell.HasValue
+            && SeedActiveCellOnHostFocus
+            && !_hasLastKeyboardNavigationSource
+            && IsCursorSeedingNavigationKey(e)
+            && !TryResolveSelectedRowNavigationSource(false, out _, out _, out _))
+        {
+            // HHM-1339: a header press focuses the grid without a cursor; the first
+            // navigation key seeds it (on the header's column) and then moves from it.
+            // Not while a sort's provider reload is fetching: the rows are outgoing.
+            TrySeedKeyboardActiveCell();
         }
 
         if (_batchEditItem == null && await TryExtendSelectionWithShiftArrowAsync(e))
@@ -12437,6 +12527,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var anchorCellIndex = Math.Clamp(_keyboardRangeAnchorCellIndex, 0, columns.Count - 1);
 
+        var cellsBefore = SelectionSettingsRef?.Mode == SelectionMode.Cell ? _selectedCells.ToHashSet() : null;
         if (SelectionSettingsRef?.Mode == SelectionMode.Cell)
         {
             var startRow = Math.Min(anchorVisibleRowIndex, targetVisibleRowIndex);
@@ -12476,6 +12567,11 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _lastSelectedItem = targetItem;
         _lastSelectedRowIndex = targetResolvedRowIndex;
         _pendingActiveCellScrollIntoView = true;
+        // A changed cell range is reported once the active cell has moved. A single-cell
+        // type-ahead waiting for Enter keeps its buffer, so Enter still fills the band with
+        // the typed value.
+        if (cellsBefore != null && !cellsBefore.SetEquals(_selectedCells))
+            await NotifySelectionChangedAsync(GridSelectionChangeSource.Keyboard, keepTypeAhead: true);
 
         if (EventsRef?.CellSelected.HasDelegate == true)
         {
@@ -12929,6 +13025,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private void StartColumnDrag(string colField, DragEventArgs _)
     {
+        _headerSeedField = colField;
         _draggingColumnField = colField;
         _lastHeaderDragSourceField = colField;
         _lastHeaderDragStartedUtc = DateTime.UtcNow;
@@ -16208,6 +16305,20 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         return _selectedItems.LastOrDefault();
     }
 
+    /// <summary>The field of the one column that holds every selected cell; empty when no
+    /// cell is selected or the cells span several columns. Unlike
+    /// <see cref="GetCurrentColumnField"/> it does not follow the active cell, which
+    /// Shift+Left/Right moves while a single-column mass-edit band stays put.</summary>
+    public string GetSelectedCellsColumnField()
+    {
+        if (_selectedCells.Count == 0)
+            return string.Empty;
+        var cellIndex = _selectedCells.First().CellIndex;
+        if (_selectedCells.Any(cell => cell.CellIndex != cellIndex))
+            return string.Empty;
+        return VisibleColumns.ElementAtOrDefault(cellIndex)?.Field ?? string.Empty;
+    }
+
     public string GetCurrentColumnField()
     {
         var columns = VisibleColumns.ToList();
@@ -16382,14 +16493,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// intentionally suppressed). Call after every mutation of
     /// <c>_selectedItems</c>; the event is no-op when no consumer subscribes.
     /// </summary>
-    private async Task NotifySelectionChangedAsync(GridSelectionChangeSource source = GridSelectionChangeSource.Unknown)
+    private async Task NotifySelectionChangedAsync(GridSelectionChangeSource source = GridSelectionChangeSource.Unknown,
+        bool keepTypeAhead = false)
     {
         if (CellSelectablePredicate != null && SelectionSettingsRef?.Mode == SelectionMode.Cell)
             _selectedCells.RemoveWhere(c => !IsCellSelectable(c.RowIndex, c.CellIndex));
-        if (_selectedItems.Count <= 1)
+        if (!keepTypeAhead && _selectedItems.Count <= 1)
             ResetRowSelectionTypeAheadTarget();
 
-        if (_selectedItems.Count <= 1 && _typeAheadBuffer.Length > 0)
+        if (!keepTypeAhead && _selectedItems.Count <= 1 && _typeAheadBuffer.Length > 0)
         {
             _typeAheadBuffer = "";
             await NotifyTypeAheadChangedAsync();
@@ -16431,6 +16543,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         // keyboard has nowhere to move from.
         _activeCell = cell;
         _lastSelectedCell = cell;
+        // A programmatic selection (Find, restoring a row) brings the cell into view.
+        _pendingActiveCellScrollIntoView = true;
 
         await InvokeAsync(StateHasChanged);
         await NotifyGridStateChangedAsync(GridStateChangeKind.Selection);

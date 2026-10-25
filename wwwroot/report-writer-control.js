@@ -94,11 +94,23 @@ export function detachDrillHandler(root) {
     drillBindings.delete(host);
 }
 
+// scrollIntoView also scrolls hidden ancestors, moving the toolbar beneath host tabs.
+// Only the report's own viewport should move when navigating a group.
+function scrollReportAnchor(root, element) {
+    const pane = element.closest(".fx-rpt-viewer-panel, .fx-report-container");
+    if (!pane || (root && !root.contains(pane))) return;
+    const target = element.getBoundingClientRect();
+    const bounds = pane.getBoundingClientRect();
+    const scale = pane.offsetHeight > 0 ? bounds.height / pane.offsetHeight : 1;
+    pane.scrollTo({ top: pane.scrollTop + (target.top - bounds.top) / scale - pane.clientTop
+        - (pane.clientHeight - target.height / scale) / 2, behavior: "smooth" });
+}
+
 export function scrollToAnchor(root, anchorId) {
     waitForElement(root, anchorId, (el) => {
         if (!el) return;
 
-        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        scrollReportAnchor(root, el);
         const previousBackground = el.style.backgroundColor;
         el.style.transition = "background-color 0.4s ease";
         el.style.backgroundColor = "#ffeb3b";
@@ -116,7 +128,7 @@ export function highlightGroup(root, anchorId) {
         row.classList.add("fx-rpt-group-active");
         row.querySelectorAll(":scope > td")
             .forEach(td => td.classList.add("fx-rpt-group-active"));
-        row.scrollIntoView({ behavior: "smooth", block: "center" });
+        scrollReportAnchor(root, row);
     });
 }
 

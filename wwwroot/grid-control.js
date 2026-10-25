@@ -1489,6 +1489,12 @@ export function registerActiveCellScrollSync(gridRoot) {
             if (!el.classList || !el.classList.contains("fx-cell-active")) continue;
             if (el === lastActiveCell) return; // same cell re-styled, not a move
             lastActiveCell = el;
+            // A pointer press or click must not scroll its own cell into view; keyboard,
+            // type-search and programmatic moves still reveal before paint.
+            if (gridRoot.getAttribute("data-fx-active-cell-scroll") === "false"
+                || gridPaintArbiter(gridRoot).pointerDown) {
+                return;
+            }
             ensureActiveGridCellVisible(gridRoot);
             return;
         }
@@ -1497,7 +1503,7 @@ export function registerActiveCellScrollSync(gridRoot) {
     observer.observe(gridRoot, {
         subtree: true,
         attributes: true,
-        attributeFilter: ["class", "data-fx-row-reveal-index", "data-fx-row-reveal-token"],
+        attributeFilter: ["class", "data-fx-row-reveal-index", "data-fx-row-reveal-token", "data-fx-active-cell-scroll"],
         childList: true
     });
     revealRequestedRow();

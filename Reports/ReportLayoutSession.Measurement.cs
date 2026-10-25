@@ -1,7 +1,8 @@
 namespace Fx.ControlKit.Reports;
 
 public sealed record ReportTextLine(int Top, int Bottom, int Start = -1, int End = -1);
-public sealed record ReportTextMetrics(int Height, IReadOnlyList<ReportTextLine> Lines, double Width = -1, double HashWidth = -1);
+/// <summary>Text bounds from the browser, or from <see cref="CrystalDeviceText"/> when <paramref name="Native"/> is set.</summary>
+public sealed record ReportTextMetrics(int Height, IReadOnlyList<ReportTextLine> Lines, double Width = -1, double HashWidth = -1, bool Native = false);
 
 public sealed partial class ReportLayoutSession
 {
@@ -14,14 +15,26 @@ public sealed partial class ReportLayoutSession
     public async Task<ReportLayoutResult> PaginateAsync(
         Func<IReadOnlyList<ReportTextMeasurement>, CancellationToken, Task<IReadOnlyList<ReportTextMetrics>>> measure,
         CancellationToken cancellationToken = default)
+        => await MeasurePagesAsync(measure, cancellationToken, 0, retainMetrics: false);
+
+    private async Task<ReportLayoutResult> MeasurePagesAsync(
+        Func<IReadOnlyList<ReportTextMeasurement>, CancellationToken, Task<IReadOnlyList<ReportTextMetrics>>> measure,
+        CancellationToken cancellationToken, int pageLimit, bool retainMetrics)
     {
         ArgumentNullException.ThrowIfNull(measure);
         if (_textMetrics is not null) throw new InvalidOperationException("Concurrent pagination of a report session is not supported.");
-        _textMetrics = new(StringComparer.Ordinal);
+        _textMetrics = retainMetrics ? _progressiveMetrics ??= new(StringComparer.Ordinal) : new(StringComparer.Ordinal);
+        _paginationPageLimit = pageLimit;
         _paginationCancellationToken = cancellationToken;
         try
         {
-            foreach (var item in Measurements) _measurementRequests.TryAdd(MeasurementKey(item), item);
+            if (!retainMetrics)
+                foreach (var item in Measurements)
+                {
+                    var key = MeasurementKey(item);
+                    if (_nativeMetrics.TryGetValue(key, out var native)) _textMetrics.TryAdd(key, native);
+                    else _measurementRequests.TryAdd(key, item);
+                }
             for (var pass = 0; pass < 128; pass++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -55,7 +68,7 @@ public sealed partial class ReportLayoutSession
             }
             throw new InvalidDataException("Page-conditioned text did not converge within 128 measurement passes.");
         }
-        finally { _textMetrics = null; _measurementRequests.Clear(); _paginationCancellationToken = default; }
+        finally { _textMetrics = null; _measurementRequests.Clear(); _paginationCancellationToken = default; _paginationPageLimit = 0; }
     }
 
     // Every measured line comes back as about 45 bytes, and Blazor Server's default hub message limit
@@ -87,6 +100,12 @@ public sealed partial class ReportLayoutSession
             ReportObjectRenderer.TextLineLimit(item.Element), NeedsNumericMask(item.Element));
         var key = MeasurementKey(measurement);
         if (_textMetrics.TryGetValue(key, out var metric)) return metric;
+        // Crystal's printer-device line breaks are known without a browser round trip for native text in a measurable font.
+        if (!measurement.MeasureNumericWidth && CrystalDeviceText.Measure(item.Element, item.Html) is { } native)
+        {
+            _textMetrics[key] = native;
+            return native;
+        }
         _measurementRequests.TryAdd(key, measurement);
         return null;
     }

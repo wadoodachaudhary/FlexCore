@@ -2247,8 +2247,9 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
 .fx-grid ::deep .fx-cell .poindex-btn {
     width: 16px;
     min-width: 16px;
-    height: 12px;
-    margin: 0;
+    height: 14px;
+    min-height: 14px;
+    margin: -1px 0;
     padding: 0 2px;
     border: 1px solid transparent;
     border-radius: 2px;
@@ -2262,6 +2263,10 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     visibility: hidden;
     opacity: 0;
     pointer-events: none;
+}
+.fx-grid ::deep .fx-cell .fx-grid-popup-btn:last-child,
+.fx-grid ::deep .fx-cell .poindex-btn:last-child {
+    margin-right: -4px;
 }
 .fx-grid ::deep .fx-cell.fx-cell-active .fx-grid-popup-btn,
 .fx-grid ::deep .fx-cell.fx-cell-active .poindex-btn,
@@ -2575,14 +2580,14 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
        height is not definite for percentage-height children, so in flow the
        closed control collapsed to its text height and left a gap under it. */
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100% !important;
+    top: -1px;
+    left: -1px;
+    width: calc(100% + 2px);
+    height: calc(100% + 2px) !important;
     min-height: 0 !important;
     min-width: 0;
     max-width: calc(100% + 2px);
-    max-height: 100%;
+    max-height: calc(100% + 2px);
     font-family: inherit !important;
     font-size: inherit !important;
     font-style: inherit !important;
@@ -2727,6 +2732,8 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     width: 18px;
     min-width: 18px;
     max-width: 18px;
+    min-height: 14px;
+    margin: -1px -4px -1px 0;
     padding: 0;
 }
 
@@ -2861,10 +2868,13 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    border-top: 1px solid #dee2e6;
-    background: #f8f9fa;
-    font-size: calc(12px * var(--fx-zoom, 1));
+    gap: 6px;
+    min-height: calc(25px * var(--fx-zoom, 1));
+    padding: 3px 6px;
+    border-top: 1px solid #b0b8c4;
+    background: linear-gradient(180deg, #eef1f6 0%, #dfe4ec 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    font-size: calc(11px * var(--fx-zoom, 1));
     flex-shrink: 0;
 }
 .fx-grid-row-count {
@@ -2890,44 +2900,57 @@ tr.fx-row:has(.fx-dropdown-grid-popup),
     opacity: 0.62;
 }
 .fx-pager-info {
-    color: #6c757d;
+    color: #4b5563;
+    white-space: nowrap;
 }
 .fx-pager-nav {
     display: flex;
-    gap: 2px;
+    align-items: center;
+    gap: 3px;
 }
 .fx-pager-btn {
-    min-width: 32px;
-    height: 32px;
-    padding: 0 8px;
-    border: 1px solid #dee2e6;
-    border-radius: 4px;
-    background: #fff;
+    min-width: calc(22px * var(--fx-zoom, 1));
+    height: calc(20px * var(--fx-zoom, 1));
+    padding: 0 5px;
+    border: 1px solid #a8b1bd;
+    border-radius: 3px;
+    background: linear-gradient(180deg, #ffffff 0%, #f5f7fa 100%);
+    color: #1f2937;
     cursor: pointer;
-    font-size: calc(12px * var(--fx-zoom, 1));
-    display: flex;
+    font-size: calc(11px * var(--fx-zoom, 1));
+    font-weight: 500;
+    line-height: 1;
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.15s;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
+    transition: background-color 0.12s, border-color 0.12s;
 }
 .fx-pager-btn:hover:not(:disabled) {
-    background: #e9ecef;
-    border-color: #adb5bd;
+    background: #e6ebf2;
+    border-color: #7c8798;
+    color: #000;
 }
 .fx-pager-btn:disabled {
-    opacity: 0.5;
+    background: #eef0f4;
+    border-color: #c5ccd6;
+    color: #9aa2af;
+    opacity: 0.7;
+    box-shadow: none;
     cursor: default;
 }
 .fx-pager-active {
-    background: #0d6efd !important;
-    color: #fff !important;
-    border-color: #0d6efd !important;
+    background: linear-gradient(180deg, #d0d5dd 0%, #bfc6d1 100%) !important;
+    color: #000000 !important;
+    border-color: #6b7280 !important;
+    font-weight: 700 !important;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16) !important;
 }
 .fx-pager-size select {
-    padding: 4px 8px;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
-    font-size: calc(12px * var(--fx-zoom, 1));
+    padding: 2px 6px;
+    border: 1px solid #a8b1bd;
+    border-radius: 3px;
+    font-size: calc(11px * var(--fx-zoom, 1));
 }
 
 /* ── Filter Popup ─────────────────────────────────────────────────── */
@@ -4417,12 +4440,13 @@ tr.fx-row .fx-cell.fx-typeahead-preview-cell.fx-typeahead-preview-cell {
     align-items: center;
     justify-content: center;
     position: absolute;
-    top: 50%;
-    right: 1px;
-    transform: translateY(-50%);
+    top: 0;
+    right: 0;
+    bottom: 0;
     width: 16px;
     min-width: 16px;
-    height: 12px;
+    height: auto;
+    min-height: 14px;
     margin: 0;
     padding: 0 2px;
     border: 1px solid;

@@ -2,6 +2,7 @@ namespace Fx.ControlKit.Reports;
 
 public sealed partial class ReportLayoutSession
 {
+    // Retain the raw field value for duplicate suppression and native NULL decoration.
     // A wrapper distinguishes a captured NULL from a field that failed evaluation.
     private sealed record DuplicateFieldValue(object? Value);
     private static bool SuppressesDuplicates(ReportDesignerElement element) => element.Kind == "Field"
@@ -13,7 +14,8 @@ public sealed partial class ReportLayoutSession
         DuplicateFieldValue? value = null;
         var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString,
             element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat,
-            SuppressesDuplicates(element) ? raw => value = new(raw) : null));
+            SuppressesDuplicates(element) || element.Kind == "Field" && element.UseCrystalScreenMetrics
+                ? raw => value = new(raw) : null));
         return (html, html.Contains("[Formula error:", StringComparison.Ordinal) ? null : value);
     }
 

@@ -470,19 +470,21 @@ else
 
     private async Task SynchronizeClientBufferedDomValueAsync(bool requireCurrentValue = false)
     {
-        if (EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
+        if (_disposed || EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
             return;
 
         var module = await GetControlJsModuleAsync();
         if (module == null && requireCurrentValue)
             throw new InvalidOperationException("Unable to read the current textbox value.");
-        if (module == null)
+        if (module == null || _disposed)
             return;
 
         try
         {
             var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
-            var committedValue = value ?? string.Empty;
+            if (value is null)
+                return;
+            var committedValue = value;
             // Characters the host relayed before the browser listener attached are
             // not in the DOM yet (they are appended after enableClientBufferedTyping
             // returns): a commit key that arrives first must still carry them. The

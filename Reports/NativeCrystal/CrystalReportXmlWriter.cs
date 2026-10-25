@@ -168,6 +168,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "EnableSavePreviewPicture", "True");
         Attr(writer, "EnableSaveSummariesWithReport", LowerBool(core.EnableSaveSummariesWithReport));
         Attr(writer, "ShowAllHeadersOnDrillDown", LowerBool(core.ShowAllHeadersOnDrillDown));
+        Attr(writer, "ConvertDBNullToDefault", LowerBool(core.ConvertDatabaseNullToDefault));
         Attr(writer, "EnableUseDummyData", "false");
         Attr(writer, "initialDataContext", "");
         Attr(writer, "initialReportPartName", "");
@@ -222,11 +223,17 @@ internal static class CrystalReportXmlWriter
             {
                 SourceTable = link.FromField!.Table!.ObjectId,
                 DestinationTable = link.ToField!.Table!.ObjectId,
-                link.JoinType
+                link.JoinType,
+                link.Enforced
             }))
         {
             writer.WriteStartElement("TableLink");
             Attr(writer, "JoinType", LegacyJoin(group.Key.JoinType));
+            Attr(writer, "EnforceJoin", group.Key.Enforced switch
+            {
+                1 => "NotEnforced", 2 => "From", 4 => "To", 8 => "Both",
+                _ => "Unknown"
+            });
 
             writer.WriteStartElement("SourceFields");
             foreach (var link in group)
@@ -508,7 +515,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "ParameterFieldUsage", "NotInUse");
         Attr(writer, "ParameterType", "ReportParameter");
         Attr(writer, "ParameterValueKind", ParameterValueKind(parameter.ValueType));
-        Attr(writer, "PromptText", parameter.Name);
+        Attr(writer, "PromptText", string.IsNullOrWhiteSpace(parameter.PromptText) ? parameter.Name : parameter.PromptText);
         Attr(writer, "ReportName", parameterReportName);
         Attr(writer, "ValueType", CrystalValueTypeMapper.XmlValueType(parameter.ValueType));
 
@@ -811,7 +818,7 @@ internal static class CrystalReportXmlWriter
             writer.WriteStartElement("Text");
             writer.WriteString(reportObject.Text);
             writer.WriteEndElement();
-            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0) ||
+            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0 || run.FontConditionFormulas.Count > 0) ||
                 reportObject.TextRuns.Select(run => (run.FontFamily, run.Size, run.Bold, run.Italic, run.Underline, run.Color)).Distinct().Skip(1).Any())
             {
                 writer.WriteStartElement("FlexKitVisual");
@@ -826,6 +833,12 @@ internal static class CrystalReportXmlWriter
                     Attr(writer, "Underline", LowerBool(run.Underline));
                     Attr(writer, "Color", run.Color);
                     writer.WriteString(run.Text);
+                    if (run.FontConditionFormulas.Count > 0)
+                    {
+                        writer.WriteStartElement("FontColorConditionFormulas");
+                        foreach (var condition in run.FontConditionFormulas) Attr(writer, condition.Key, condition.Value);
+                        writer.WriteEndElement();
+                    }
                     writer.WriteEndElement();
                 }
                 writer.WriteEndElement();

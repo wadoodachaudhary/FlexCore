@@ -1199,11 +1199,20 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         await SelectNodeAsync(node, visibleIndex);
     }
 
+    private readonly HashSet<object> _collapsingNodes = new();
+    private readonly Dictionary<object, bool> _collapseOverride = new();
+
     private async Task SetNodeExpandedAsync(TreeNode<TValue> node, bool expanded)
     {
         if (node.Id is null || !node.HasChildren) return;
         var id = node.Id;
         _expansionIntent[id] = expanded;
+        if (_collapsingNodes.Contains(id))
+        {
+            _collapseOverride[id] = expanded;
+            node.IsExpanded = expanded && node.HasChildren;
+            return;
+        }
         if (IsLoading(node)) return;
         if (expanded && NeedsChildLoad(node))
         {
@@ -1212,11 +1221,38 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             expanded = _expansionIntent.GetValueOrDefault(id, true);
         }
         else if (node.IsExpanded == expanded) return;
+
+        // Keep the node and its RowDetailsTemplate mounted while Collapsed runs so
+        // detail editors can flush their live DOM drafts before unmounting.
+        if (!expanded && node.IsExpanded)
+        {
+            if (Collapsed.HasDelegate)
+            {
+                _collapsingNodes.Add(id);
+                _collapseOverride.Remove(id);
+                try
+                {
+                    await Collapsed.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
+                }
+                finally
+                {
+                    _collapsingNodes.Remove(id);
+                }
+                node = _flatNodes.FirstOrDefault(n => Equals(n.Id, id)) ?? node;
+                if (_collapseOverride.TryGetValue(id, out var overrideExpanded))
+                {
+                    _collapseOverride.Remove(id);
+                    expanded = overrideExpanded;
+                }
+            }
+            node.IsExpanded = expanded && node.HasChildren;
+            StateHasChanged();
+            return;
+        }
+
         node.IsExpanded = expanded && node.HasChildren;
         if (node.IsExpanded && Expanded.HasDelegate)
             await Expanded.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
-        else if (!node.IsExpanded && Collapsed.HasDelegate)
-            await Collapsed.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
         StateHasChanged();
     }
 

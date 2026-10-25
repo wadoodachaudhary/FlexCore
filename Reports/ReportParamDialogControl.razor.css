@@ -46,9 +46,11 @@
 }
 
 .fx-param-body {
+    --fx-param-arrow-width: max(40px, calc(40px * var(--fx-zoom, 1)));
     overflow-y: auto;
     flex: 1;
-    background: #fff;
+    background: #f0f0f0;
+    padding-top: 6px;
 }
 
 /* A prompt with a value list keeps Crystal's tall window, so the list opens below the combo instead of into a two-row gap. */
@@ -61,18 +63,55 @@
     display: contents;
 }
 
-/* At most 90% of the window and never over 1200px: past that the body scrolls (DialogMaxHeight in the .razor). */
+/* Dialog chrome styled like Formula Editor (#f0f0f0 background, crisp grey borders) so white controls stand out.
+   At most 90% of the window and never over 1200px: past that the body scrolls (DialogMaxHeight in the .razor). */
 .fx-param-dialog-host ::deep .fx-dialog {
+    --fx-dialog-bg: #f0f0f0;
     max-height: min(90vh, calc(1200px * var(--fx-zoom, 1)));
+    border: 1px solid #9f9f9f !important;
+    border-radius: 0 !important;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.24) !important;
+    background: #f0f0f0 !important;
+    font-family: Tahoma, "Segoe UI", Arial, sans-serif;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-header {
+    padding: 6px 12px;
+    border-bottom: 1px solid #c8c8c8 !important;
+    background: #f0f0f0 !important;
+    color: #000 !important;
 }
 
 .fx-param-dialog-host ::deep .fx-dialog-body {
-    padding: 4px 16px 6px;
+    padding: 4px 14px 6px;
+    background: #f0f0f0 !important;
 }
 
 .fx-param-dialog-host ::deep .fx-dialog-footer {
-    padding-top: 8px;
-    padding-bottom: 8px;
+    padding: 8px 14px;
+    border-top: none !important;
+    background: #f0f0f0 !important;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-footer .fx-btn {
+    min-width: 72px;
+    height: 24px;
+    padding: 0 12px;
+    border: 1px solid #9a9a9a;
+    border-radius: 0;
+    background: #ffffff;
+    color: #000;
+    font: calc(11px * var(--fx-zoom, 1)) Tahoma, "Segoe UI", sans-serif;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-footer .fx-btn:hover:not(:disabled) {
+    background: #e5f1fb;
+    border-color: #0078d4;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog-footer .fx-btn.fx-button-primary {
+    border-color: #006fbb;
+    box-shadow: inset 0 0 0 1px #006fbb;
 }
 
 /* Title bar: "Enter Parameter Values" small and grey at the left, the report's name centred.
@@ -94,15 +133,15 @@
     font-size: calc(11px * var(--fx-zoom, 1));
     font-weight: 400;
     color: inherit;
-    opacity: 0.55;
+    opacity: 0.6;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .fx-param-heading-title {
-    font-size: calc(15px * var(--fx-zoom, 1));
-    font-weight: 600;
+    font-size: calc(14px * var(--fx-zoom, 1));
+    font-weight: 700;
     color: inherit;
     text-align: center;
     overflow: hidden;
@@ -110,51 +149,103 @@
     white-space: nowrap;
 }
 
-/* Each parameter occupies a panel matching Crystal's "Enter Parameter Values" dialog. */
-.fx-param-panel {
-    border-bottom: 1px solid #d4d4d4;
-    padding: 6px 0;
-    margin-bottom: 4px;
+/* Each parameter occupies a #dcdcdc grey section (matching Formula Editor) with no rectangular border so white controls stand out. */
+.fx-param-body ::deep .fx-param-panel {
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #dcdcdc !important;
+    box-shadow: none !important;
+    margin-bottom: 10px;
+    overflow: visible;
+}
+
+.fx-param-body ::deep .fx-param-panel > .fx-panel-body {
+    overflow: visible;
+}
+
+.fx-param-panel-body {
+    min-width: 0;
+    padding: 6px 10px 10px;
+    background: #dcdcdc;
+}
+
+.fx-param-panel-body ::deep .fx-param-scalar {
+    width: min(100%, calc(320px * var(--fx-zoom, 1)));
+}
+
+/* In a mixed Crystal prompt, scalar roots share the Available pane's width.
+   Restrict this to panel children: dropdowns forward CssClass to their inner
+   button too, which must keep its own 100% width inside the sized host.
+   Inline widths remain the defaults for dialogs without a dual-list prompt. */
+.fx-param-body:has(.fx-param-dual-group) ::deep .fx-param-panel-body > .fx-param-single-input {
+    width: min(100%, calc((100% - var(--fx-param-arrow-width) - 20px) / 2)) !important;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
 .fx-param-panel-header {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    margin-bottom: 4px;
+    gap: 12px;
+    padding: 6px 10px 2px;
+    background: #dcdcdc;
+    border: 0;
+    box-shadow: none;
 }
 
 .fx-param-prompt-text {
-    font-size: calc(13px * var(--fx-zoom, 1));
-    color: #222;
-    font-weight: 500;
+    font-size: calc(11.5px * var(--fx-zoom, 1));
+    color: #000;
+    font-weight: 700;
+    overflow-wrap: anywhere;
 }
 
 .fx-param-secondary-label {
-    font-size: calc(12px * var(--fx-zoom, 1));
-    color: #555;
+    font-size: calc(11.5px * var(--fx-zoom, 1));
+    color: #333;
     font-style: normal;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+    text-align: right;
 }
 
-.fx-param-panel-body input[type="text"],
-.fx-param-panel-body input[type="number"],
-.fx-param-panel-body input[type="date"],
-.fx-param-panel-body select {
-    width: 100%;
-    padding: 5px 8px;
-    border: 1px solid #b0b4ba;
-    border-radius: 2px;
-    font-size: calc(13px * var(--fx-zoom, 1));
-    font-family: inherit;
+/* White editing surfaces sit on #dcdcdc grey without rectangular borders, matching Formula Editor. */
+.fx-param-panel-body ::deep :is(
+    input:not([type="radio"]):not([type="checkbox"]),
+    select:not(.fx-pager-size),
+    textarea,
+    .fx-numeric,
+    .fx-textbox-classic,
+    .fx-dropdown,
+    .fx-datepicker-input-group,
+    .fx-dual-grid
+) {
+    border: 0 !important;
+    border-radius: 0 !important;
+    outline: none !important;
+    box-shadow: none !important;
+}
+
+.fx-param-panel-body ::deep :is(
+    input:not([type="radio"]):not([type="checkbox"]):not(.fx-dropdown-input):not(.fx-datepicker-input),
+    select:not(.fx-pager-size),
+    textarea,
+    .fx-numeric,
+    .fx-textbox-classic,
+    .fx-dropdown,
+    .fx-datepicker-input-group,
+    .fx-dual-grid
+):not(:disabled) {
     background: #fff;
-    box-sizing: border-box;
 }
 
-.fx-param-panel-body input:focus,
-.fx-param-panel-body select:focus {
-    outline: none;
-    border-color: #0078d4;
-    box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.2);
+.fx-param-panel-body ::deep :is(.fx-numeric, input.fx-textbox-classic, input.fx-param-single-input, input.fx-param-value-input) {
+    height: 24px;
+    padding: 2px 6px;
+    box-sizing: border-box;
+    font-size: calc(12px * var(--fx-zoom, 1));
+    color: #000;
 }
 
 /* Crystal default-values dropdown (e.g. "Show PO Items?" Yes/No) shows the
@@ -170,41 +261,84 @@
     margin: 2px 0 2px 2px;
 }
 
-/* AllowCustomCurrentValues — "Enter a Value:" inline-add row that sits
-   below the dual-list-box. The label + input + > button line up
-   horizontally so the layout reads like Crystal's native dialog.
-   margin-top is deliberately roomy: without it the row hugs the
-   dual-list and visually appears to overlap the Selected pane. */
+/* The two panes and custom entry share columns, so the input ends exactly
+   at the Available pane's edge. The arrow column scales with text zoom. */
+.fx-param-dual-group {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--fx-param-arrow-width) minmax(0, 1fr);
+    column-gap: 10px;
+    align-items: start;
+}
+
+.fx-param-dual-group ::deep .fx-param-dual-list {
+    display: contents;
+}
+
+.fx-param-dual-group ::deep .fx-dual-pane {
+    min-width: 0;
+}
+
+.fx-param-dual-group ::deep .fx-dual-buttons {
+    align-self: stretch;
+}
+
 .fx-param-custom-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 10px;
+    display: contents;
 }
 
 .fx-param-custom-row .fx-param-value-label {
-    margin: 0;
-    flex: 0 0 auto;
+    grid-column: 1;
+    grid-row: 2;
+    margin: 10px 0 2px;
 }
 
-.fx-param-custom-row .fx-param-value-input {
-    flex: 1;
+.fx-param-custom-row ::deep .fx-param-value-input {
+    grid-column: 1;
+    grid-row: 3;
+    min-width: 0;
+    box-sizing: border-box;
 }
 
-.fx-param-custom-add {
-    flex: 0 0 32px;
-    padding: 4px 0;
-    border: 1px solid #b0b4ba;
+.fx-param-custom-row ::deep .fx-param-custom-add {
+    grid-column: 2;
+    grid-row: 3;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 38px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid #9a9a9a;
     border-radius: 2px;
-    background: #f5f5f5;
-    font-size: calc(13px * var(--fx-zoom, 1));
-    font-family: inherit;
+    background: linear-gradient(180deg, #ffffff 0%, #f3f5f8 100%);
+    color: #1f3a52;
     cursor: pointer;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
 }
 
-.fx-param-custom-add:hover {
-    background: #e0e0e0;
-    border-color: #888;
+.fx-param-custom-row ::deep .fx-param-custom-add:hover {
+    background: #dcebfa;
+    border-color: #3b78b5;
+    color: #084270;
+}
+
+@media (max-width: 600px) {
+    .fx-param-dialog-host ::deep .fx-dialog-body { padding-inline: 8px; }
+    .fx-param-heading { display: block; padding-left: 0; }
+    .fx-param-heading-label { display: none; }
+    .fx-param-heading-title { display: block; }
+    .fx-param-dual-group { display: block; }
+    .fx-param-dual-group ::deep .fx-param-dual-list { display: flex; }
+    .fx-param-body:has(.fx-param-dual-group) ::deep .fx-param-panel-body > .fx-param-single-input { width: 100% !important; }
+    .fx-param-custom-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        column-gap: 10px;
+    }
+    .fx-param-custom-row .fx-param-value-label { grid-row: 1; }
+    .fx-param-custom-row ::deep .fx-param-value-input,
+    .fx-param-custom-row ::deep .fx-param-custom-add { grid-row: 2; }
 }
 
 .fx-param-error {

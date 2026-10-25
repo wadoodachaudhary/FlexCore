@@ -11,19 +11,23 @@ public static class ReportFontCatalog
     public const string CalibriNotice = "Font compatibility: Calibri uses the bundled Carlito font when Calibri is not installed in the browser.";
 
     internal static string NativeLineHeight(string family, decimal points, bool native)
+        => NativeLineHeightPixels(family, points, native) is { } pixels ? ReportObjectRenderer.Number(pixels) + "px" : "1.15";
+
+    internal static double? NativeLineHeightPixels(string family, decimal points, bool native)
     {
-        // Crystal's Arial paragraph leading is 11.4pt for a 10pt font.
+        // Crystal's Arial paragraph leading is 11.4pt for a 10pt font,
+        // truncated to whole 600-dpi printer units (10.2pt at 9pt).
         // Keep that authored-size leading separate from the rounded screen em;
         // multiplying the 13px screen font by 1.15 makes growing rows too short.
         if (native && family.Equals("Arial", StringComparison.OrdinalIgnoreCase))
-            return ReportObjectRenderer.Number((double)Math.Clamp(points, 1, 300) * 96 / 72 * 1.14) + "px";
+            return (double)(Math.Floor(Math.Clamp(points, 1, 300) * 1.14m * 600 / 72) * 96 / 600);
         // Calibri/Carlito: 1950 ascent + 550 descent, on a 2048-unit em.
         // The paragraph is laid out at the authored point size, before the
         // screen em is rounded. A generic 1.15 clips leading on wrapped lines.
         return native && (family.Equals("Calibri", StringComparison.OrdinalIgnoreCase)
                 || family.Equals(CalibriFamily, StringComparison.OrdinalIgnoreCase))
-            ? ReportObjectRenderer.Number((double)Math.Clamp(points, 1, 300) * 96 / 72 * 2500 / 2048) + "px"
-            : "1.15";
+            ? (double)Math.Clamp(points, 1, 300) * 96 / 72 * 2500 / 2048
+            : null;
     }
 
     private static string BuildStyles()

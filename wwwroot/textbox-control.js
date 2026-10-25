@@ -310,7 +310,7 @@ export async function applyTextContextCommand(element, command) {
         return { Value: "", ValueChanged: false };
     }
 
-    const before = getTextValue(element);
+    const before = getTextValue(element) ?? "";
     try {
         element.focus({ preventScroll: true });
     } catch {
@@ -343,7 +343,7 @@ export async function applyTextContextCommand(element, command) {
             break;
     }
 
-    const after = getTextValue(element);
+    const after = getTextValue(element) ?? "";
     return {
         Value: after,
         ValueChanged: before !== after
@@ -351,7 +351,7 @@ export async function applyTextContextCommand(element, command) {
 }
 
 export function getTextValue(element) {
-    return typeof element.value === "string" ? element.value : "";
+    return typeof element?.value === "string" ? element.value : null;
 }
 
 // Characters the user typed before this input had focus (a cell editor's mount

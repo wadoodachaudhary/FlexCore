@@ -77,7 +77,7 @@ public sealed partial class CrystalFormula
         }
         selections = result;
         residuals = remaining;
-        return result.Count > 0;
+        return result.Count > 0 || remaining.Count > 0;
     }
 
     internal bool TryGetNullOrEmptyStringReplacement(out string field, out string replacement)

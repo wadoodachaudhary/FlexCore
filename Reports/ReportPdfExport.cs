@@ -20,8 +20,31 @@ internal static class ReportPdfExport
         // Reference regular 8/10pt -> 7.15/8.95pt; bold 10/14pt -> 8.75/12.25pt.
         // This PDF-only compatibility policy never changes screen or page geometry.
         private bool LegacyArial => Native && Family.Equals("Arial", StringComparison.OrdinalIgnoreCase);
-        public double Em => LegacyArial ? Math.Round(Size * (Bold ? .875 : .895) * 20, MidpointRounding.AwayFromZero) / 20 : Size;
-        public double Leading(double lineHeight) => LegacyArial ? Size * 1.14 : Size * lineHeight;
+        public double Em
+        {
+            get
+            {
+                var scale = LegacyArial ? (Bold ? .875 : .895) : 1d;
+                if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri" or "carlito" or "tahoma")
+                {
+                    // Crystal's PDF realization uses the cell height for these
+                    // faces: convert it to em using the face's ascent/descent.
+                    var font = NativePdfFont.Resolve(Family, Bold, Italic);
+                    scale = 1000 / (font.Ascent - font.Descent);
+                }
+                return scale == 1 ? Size : Math.Round(Size * scale * 20, MidpointRounding.AwayFromZero) / 20;
+            }
+        }
+        public double Leading(double lineHeight)
+        {
+            if (LegacyArial) return Size * 1.14;
+            if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri")
+            {
+                var font = NativePdfFont.Resolve(Family, Bold, Italic);
+                return Size * (font.Ascent - font.Descent) / 1000;
+            }
+            return Size * lineHeight;
+        }
     }
     private sealed record Run(string Text, Ink Ink);
     private sealed record TextLine(IReadOnlyList<Run> Runs, double Width, double Height, bool ParagraphEnd);
@@ -78,6 +101,8 @@ internal static class ReportPdfExport
 
     private static void Object(NativePdfPage page, ReportPageObject item, double bandX, double bandY)
     {
+        if (item.Element.Kind == "Field" && item.UnmaskedNumericContent is { } number)
+            item = item with { FormattedContent = number, TextLines = null };
         var element = item.Element;
         var x = bandX + element.LeftTwips / 20d;
         var y = bandY + element.TopTwips / 20d;
@@ -128,8 +153,8 @@ internal static class ReportPdfExport
             var wrap = ReportObjectRenderer.WrapText(element);
             Text(page, Runs(item.FormattedContent, InkFor(element)), x + left + indent, y + top,
                 Math.Max(0, width - left - right - indent), Math.Max(0, height - top - bottom), Align(element), wrap,
-                element.CanGrow && element.Kind == "Field" ? element.MaxNumberOfLines : 0,
-                measuredLines: item.TextLines);
+                ReportObjectRenderer.TextLineLimit(element),
+                measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element));
         }
         page.Restore();
     }
@@ -237,19 +262,24 @@ internal static class ReportPdfExport
 
     private static Ink Apply(Ink ink, IReadOnlyDictionary<string, string> css)
     {
-        if (css.TryGetValue("font-family", out var family)) ink = ink with { Family = family.Split(',')[0].Trim(' ', '\'', '"') };
-        if (css.TryGetValue("font-size", out var size)) ink = ink with { Size = Length(size, 0, ink.Size) };
+        bool Specified(string property, out string value)
+        {
+            value = css.GetValueOrDefault(property, "").Trim();
+            return value.Length > 0 && !value.Equals("inherit", StringComparison.OrdinalIgnoreCase);
+        }
+        if (Specified("font-family", out var family)) ink = ink with { Family = family.Split(',')[0].Trim(' ', '\'', '"') };
+        if (Specified("font-size", out var size)) ink = ink with { Size = Length(size, 0, ink.Size) };
         // Native rich runs carry their authored size separately from the rounded
         // browser px size; use it for PDF realization and paragraph leading.
-        if (ink.Native && css.TryGetValue("--fx-report-font-points", out var authored)) ink = ink with { Size = Length(authored) };
-        if (css.TryGetValue("font-weight", out var weight)) ink = ink with { Bold = weight is "bold" or "bolder" || double.TryParse(weight, out var number) && number >= 600 };
-        if (css.TryGetValue("font-style", out var italic)) ink = ink with { Italic = italic == "italic" || italic == "oblique" };
-        if (css.TryGetValue("text-decoration", out var decoration)) ink = ink with { Underline = decoration.Contains("underline", StringComparison.Ordinal) };
-        if (css.TryGetValue("color", out var color) && !color.Equals("currentColor", StringComparison.OrdinalIgnoreCase)) ink = ink with { Color = Color(color) };
+        if (ink.Native && Specified("--fx-report-font-points", out var authored)) ink = ink with { Size = Length(authored) };
+        if (Specified("font-weight", out var weight)) ink = ink with { Bold = weight is "bold" or "bolder" || double.TryParse(weight, out var number) && number >= 600 };
+        if (Specified("font-style", out var italic)) ink = ink with { Italic = italic == "italic" || italic == "oblique" };
+        if (Specified("text-decoration", out var decoration)) ink = ink with { Underline = decoration.Contains("underline", StringComparison.Ordinal) };
+        if (Specified("color", out var color) && !color.Equals("currentColor", StringComparison.OrdinalIgnoreCase)) ink = ink with { Color = Color(color) };
         return ink;
     }
 
-    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15)
+    private static IReadOnlyList<TextLine> Lines(IReadOnlyList<Run> runs, double width, bool wrap, double lineHeight = 1.15, bool breakLongWords = true)
     {
         var lines = new List<TextLine>();
         var current = new List<Run>();
@@ -294,7 +324,7 @@ internal static class ReportPdfExport
                 }
                 var measured = Measure(value, run.Ink);
                 if (wrap && width > 0 && used > 0 && used + measured > width + .01) Finish();
-                if (wrap && width > 0 && measured > width + .01)
+                if (wrap && breakLongWords && width > 0 && measured > width + .01)
                 {
                     foreach (var rune in value.EnumerateRunes())
                     {
@@ -346,10 +376,10 @@ internal static class ReportPdfExport
     private static double Measure(string text, Ink ink) => NativePdfPage.MeasureText(text, ink.Em, ink.Family, ink.Bold, ink.Italic, ink.Native);
 
     private static double Text(NativePdfPage page, IReadOnlyList<Run> runs, double x, double y, double width, double height,
-        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null)
+        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true)
     {
         if (width <= 0 || height <= 0) return 0;
-        var lines = wrap ? MeasuredLines(runs, measuredLines, lineHeight, maxLines) ?? Lines(runs, width, true, lineHeight)
+        var lines = wrap ? MeasuredLines(runs, measuredLines, lineHeight, maxLines) ?? Lines(runs, width, true, lineHeight, breakLongWords)
             : Lines(runs, width, false, lineHeight);
         page.Save(); page.Clip(x, y, width, height);
         var at = y;

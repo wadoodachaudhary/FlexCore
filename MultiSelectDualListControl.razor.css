@@ -16,12 +16,22 @@
 
 /* Each pane is a one-column grid: compact rows, the header carries the search and sort. */
 .fx-dual-pane ::deep .fx-dual-grid {
-    border: 1px solid #ced4da;
-    border-radius: 4px;
+    --fx-grid-active-cell-border: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
     background: #fff;
     font-size: calc(12px * var(--fx-zoom, 1));
 }
-.fx-dual-pane ::deep .fx-dual-grid .fx-grid-table td,
+.fx-dual-pane ::deep .fx-dual-grid .fx-header-cell {
+    border: 0;
+    box-shadow: none;
+}
+.fx-dual-pane ::deep .fx-dual-grid .fx-grid-table td {
+    padding-top: 2px;
+    padding-bottom: 2px;
+    line-height: 1.2;
+}
 .fx-dual-pane ::deep .fx-dual-grid .fx-grid-table th {
     padding-top: 1px;
     padding-bottom: 1px;
@@ -30,7 +40,7 @@
 .fx-dual-meta {
     font-size: calc(11px * var(--fx-zoom, 1));
     line-height: 1.3;
-    color: #6c757d;
+    color: #4b5563;
     margin-top: 2px;
     text-align: right;
 }
@@ -55,29 +65,44 @@
     flex-direction: column;
     justify-content: center;
     align-items: stretch;
-    gap: 4px;
+    gap: 5px;
     padding-top: 18px; /* align with the grid body after the header line */
 }
 
-.fx-dual-btn {
-    min-width: 40px;
-    padding: 4px 8px;
-    border: 1px solid #ced4da;
-    border-radius: 4px;
-    background: #f8f9fa;
+.fx-dual-buttons ::deep .fx-dual-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 38px;
+    height: 24px;
+    padding: 0 6px;
+    border: 1px solid #9a9a9a;
+    border-radius: 2px;
+    background: linear-gradient(180deg, #ffffff 0%, #f3f5f8 100%);
+    color: #1f3a52;
     cursor: pointer;
-    font-family: monospace;
-    font-size: calc(14px * var(--fx-zoom, 1));
-    font-weight: 600;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.05);
 }
-.fx-dual-btn:hover:not(:disabled) {
-    background: #e9ecef;
-    border-color: #adb5bd;
+.fx-dual-buttons ::deep .fx-dual-btn:hover:not(:disabled) {
+    background: #dcebfa;
+    border-color: #3b78b5;
+    color: #084270;
 }
-.fx-dual-btn:active:not(:disabled) {
-    background: #dee2e6;
+.fx-dual-buttons ::deep .fx-dual-btn:active:not(:disabled) {
+    background: #cbe0f5;
+    border-color: #2b6299;
 }
-.fx-dual-btn:disabled {
-    opacity: 0.45;
+.fx-dual-buttons ::deep .fx-dual-btn:disabled {
+    background: #f0f2f5;
+    border-color: #c5cad3;
+    color: #9aa2af;
+    opacity: 0.65;
+    box-shadow: none;
     cursor: not-allowed;
+}
+
+@media (max-width: 600px) {
+    .fx-dual-list { flex-direction: column; }
+    .fx-dual-pane { min-width: 0; }
+    .fx-dual-buttons { flex-direction: row; justify-content: center; padding-top: 0; }
 }

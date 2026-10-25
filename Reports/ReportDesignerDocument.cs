@@ -386,7 +386,9 @@ public sealed class ReportDesignerPage
 
 public sealed class ReportDesignerSection
 {
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    private string? _id;
+    /// <summary>A fresh id unless one is assigned; generated on first read, so copies that take the source's id pay for none.</summary>
+    public string Id { get => _id ??= Guid.NewGuid().ToString("N"); set => _id = value; }
     public string SourceKey { get; set; } = "";
     public string Name { get; set; } = "Section";
     public string Kind { get; set; } = "Detail";
@@ -411,7 +413,12 @@ public sealed class ReportDesignerSection
 
 public sealed class ReportDesignerElement
 {
-    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public ReportDesignerElement() : this(new ReportObjectVisual(), new ReportDesignerHighlightRule()) { }
+    // Clones bring their own visual and rule; the default constructor would otherwise build two that are thrown away.
+    private ReportDesignerElement(ReportObjectVisual visual, ReportDesignerHighlightRule highlightRule) { Visual = visual; HighlightRule = highlightRule; }
+    private string? _id;
+    /// <summary>A fresh id unless one is assigned; generated on first read, so copies that take the source's id pay for none.</summary>
+    public string Id { get => _id ??= Guid.NewGuid().ToString("N"); set => _id = value; }
     public string SourceKey { get; set; } = "";
     public string SectionId { get; set; } = "";
     public string Name { get; set; } = "Object";
@@ -449,8 +456,8 @@ public sealed class ReportDesignerElement
     public bool LockFormat { get; set; }
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
-    public ReportDesignerHighlightRule HighlightRule { get; set; } = new();
-    public ReportObjectVisual Visual { get; set; } = new();
+    public ReportDesignerHighlightRule HighlightRule { get; set; }
+    public ReportObjectVisual Visual { get; set; }
     public ReportAnalysisDefinition? Analysis { get; set; }
 
     public string DisplayText
@@ -469,9 +476,8 @@ public sealed class ReportDesignerElement
 
     public ReportDesignerElement CloneFor(string sectionId, string name)
     {
-        return new ReportDesignerElement
+        return new ReportDesignerElement(Visual.Clone(), HighlightRule.Clone())
         {
-            Id = Guid.NewGuid().ToString("N"),
             SourceKey = SourceKey,
             SectionId = sectionId,
             Name = name,
@@ -505,9 +511,7 @@ public sealed class ReportDesignerElement
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
-            Visual = Visual.Clone(),
-            Analysis = Analysis?.Clone(),
-            HighlightRule = HighlightRule.Clone()
+            Analysis = Analysis?.Clone()
         };
     }
 }
@@ -1431,8 +1435,16 @@ public static partial class ReportDesignerXmlSerializer
             return new ReportDesignerField();
 
         var cleaned = fieldName.Trim().Trim('{', '}');
-        if (cleaned.StartsWith("@", StringComparison.Ordinal))
+        var formulaReference = cleaned.StartsWith("@", StringComparison.Ordinal);
+        if (formulaReference)
             cleaned = cleaned[1..];
+
+        // "{@ItemNumber}" names the formula, never a database column that happens to share its name:
+        // the Job Budget Report sorts on val({EstimatedItems.ItemNumber}), and the text column would sort "0002" before "001".
+        if (formulaReference && document.Fields.FirstOrDefault(candidate => candidate.IsFormula
+                && (string.Equals(candidate.Name.TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(candidate.Formula.Trim('{', '}').TrimStart('@'), cleaned, StringComparison.OrdinalIgnoreCase))) is { } formula)
+            return formula;
 
         return document.Fields.FirstOrDefault(candidate =>
                    string.Equals(candidate.DisplayName, cleaned, StringComparison.OrdinalIgnoreCase) ||

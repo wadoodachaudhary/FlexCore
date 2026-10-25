@@ -1,0 +1,30 @@
+/* Placed beside the point; the translate pulls the tip back inside the viewport when it would overflow. */
+.fx-infotip {
+    position: fixed;
+    left: var(--fx-infotip-x, 0px);
+    top: var(--fx-infotip-y, 0px);
+    transform: translate(
+        min(0px, calc(100vw - 100% - var(--fx-infotip-x, 0px) - 4px)),
+        min(0px, calc(100vh - 100% - var(--fx-infotip-y, 0px) - 4px)));
+    /* Above page content, below modal overlays (DialogControl's is 1000). */
+    z-index: var(--fx-infotip-z-index, 950);
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 4px 6px;
+    background: #ffffe1;
+    color: #000000;
+    border: 1px solid #000000;
+    font-size: var(--fx-font-size, calc(11px * var(--fx-zoom, 1)));
+    line-height: 1.35;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+.fx-infotip-icon {
+    flex: none;
+}
+
+.fx-infotip-content {
+    min-width: 0;
+}

@@ -5,7 +5,7 @@ using System.Text;
 
 namespace Fx.ControlKit.Grid;
 
-/// <summary>Portable metrics and Unicode mapping for the unchanged bundled OFL TrueType fonts.</summary>
+/// <summary>Metrics and Unicode mapping for bundled OFL fonts and explicitly supported installed TrueType faces.</summary>
 internal sealed class NativePdfFont
 {
     private static readonly ConcurrentDictionary<string, Lazy<NativePdfFont>> Fonts = new(StringComparer.Ordinal);
@@ -27,12 +27,14 @@ internal sealed class NativePdfFont
     public static NativePdfFont Resolve(string family, bool bold = false, bool italic = false)
     {
         var normalized = (family ?? "").Trim().Trim('\'', '"').ToLowerInvariant();
+        if (normalized == "tahoma") return InstalledTahoma(bold, italic);
         var font = normalized switch
         {
             "arial" or "helvetica" or "liberation sans" or "liberationsans" or "sans-serif" => "LiberationSans",
             "times new roman" or "times" or "times-roman" or "liberation serif" or "liberationserif" or "serif" => "LiberationSerif",
             "courier new" or "courier" or "liberation mono" or "liberationmono" or "monospace" => "LiberationMono",
-            _ => throw new NotSupportedException($"Native PDF does not have an embedded font for '{family}'. Use Arial, Times New Roman, Courier New, or their Liberation equivalents.")
+            "calibri" or "fx report calibri" or "carlito" => "Carlito",
+            _ => throw new NotSupportedException($"Native PDF does not have an embedded font for '{family}'. Use Arial, Times New Roman, Courier New, Calibri, or their Liberation/Carlito equivalents.")
         };
         var style = bold ? italic ? "BoldItalic" : "Bold" : italic ? "Italic" : "Regular";
         var file = font + "-" + style + ".ttf";
@@ -59,13 +61,45 @@ internal sealed class NativePdfFont
     public double Kerning(char left, char right) => Scale(_kerning.GetValueOrDefault(((uint)Glyph(left) << 16) | Glyph(right)));
 
     private NativePdfFont(string file)
+        : this(file, EmbeddedBytes(file)) { }
+
+    private static byte[] EmbeddedBytes(string file)
     {
         using var resource = typeof(NativePdfFont).Assembly.GetManifestResourceStream("Fx.PdfFonts." + file)
             ?? throw new InvalidOperationException("Missing embedded PDF font: " + file);
         if (resource.Length is < 12 or > 8 * 1024 * 1024) throw InvalidFont();
         using var data = new MemoryStream();
         resource.CopyTo(data);
-        Data = data.ToArray();
+        return data.ToArray();
+    }
+
+    // Tahoma is not redistributable with the library. Only known OS font locations
+    // are searched; report text cannot supply a path or trigger a network request.
+    private static NativePdfFont InstalledTahoma(bool bold, bool italic)
+    {
+        if (italic) throw new NotSupportedException("Native PDF requires an actual italic Tahoma face; synthetic italics are not supported.");
+        var windows = bold ? "tahomabd.ttf" : "tahoma.ttf";
+        var mac = bold ? "Tahoma Bold.ttf" : "Tahoma.ttf";
+        var roots = OperatingSystem.IsWindows()
+            ? new[] { Environment.GetFolderPath(Environment.SpecialFolder.Fonts),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "Windows", "Fonts") }
+            : OperatingSystem.IsMacOS()
+                ? new[] { "/System/Library/Fonts/Supplemental", "/Library/Fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Fonts") }
+                : new[] { "/usr/share/fonts/truetype/msttcorefonts", "/usr/local/share/fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/share/fonts") };
+        var path = roots.Where(root => !string.IsNullOrWhiteSpace(root)).Select(root => Path.Combine(root, OperatingSystem.IsMacOS() ? mac : windows)).FirstOrDefault(File.Exists);
+        if (path is null) throw new NotSupportedException($"Native PDF requires an installed, licensed Tahoma{(bold ? " Bold" : "")} TrueType font. No substitute was used.");
+        return Fonts.GetOrAdd(path, static key => new Lazy<NativePdfFont>(() =>
+        {
+            using var stream = File.OpenRead(key);
+            if (stream.Length is < 12 or > 8 * 1024 * 1024) throw InvalidFont();
+            using var bytes = new MemoryStream(); stream.CopyTo(bytes);
+            return new NativePdfFont(Path.GetFileName(key), bytes.ToArray());
+        })).Value;
+    }
+
+    private NativePdfFont(string file, byte[] bytes)
+    {
+        Data = bytes;
         if (U32(0) != 0x00010000) throw InvalidFont();
         var tableCount = U16(4);
         if (tableCount is 0 or > 128) throw InvalidFont();
@@ -80,6 +114,11 @@ internal sealed class NativePdfFont
             if (!_tables.TryAdd(name, (offset, length))) throw InvalidFont();
         }
         var head = Table("head", 54);
+        // Full-font embedding respects restricted-license and bitmap-only flags;
+        // fonts which prohibit subsetting are safe because no glyphs are removed.
+        var permissions = Table("OS/2", 10);
+        if ((U16(permissions + 8) & 0x0202) != 0)
+            throw new NotSupportedException($"The font '{file}' does not permit outline embedding in PDF.");
         UnitsPerEm = U16(head + 18);
         if (UnitsPerEm is < 16 or > 16384) throw InvalidFont();
         BoundingBox = [Scale(I16(head + 36)), Scale(I16(head + 38)), Scale(I16(head + 40)), Scale(I16(head + 42))];

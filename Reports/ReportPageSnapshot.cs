@@ -15,4 +15,7 @@ public sealed record ReportPageObject(ReportDesignerElement Element, string Form
     /// <summary>UTF-16 line ranges from completed browser measurement. PDF export retains these
     /// breaks when realizing native fonts at the smaller legacy PDF size.</summary>
     public IReadOnlyList<ReportTextLine>? TextLines { get; init; }
+    /// <summary>The formatted numeric value before viewer overflow masking. Crystal PDF
+    /// export paints/clips numbers with its own font metrics instead of exporting screen hashes.</summary>
+    public string? UnmaskedNumericContent { get; init; }
 }

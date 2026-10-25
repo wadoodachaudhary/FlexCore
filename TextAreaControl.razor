@@ -242,14 +242,31 @@ else
     public ValueTask FocusAsync() => _inputElement.FocusAsync();
 
     /// <summary>Read the current browser draft before a host command, without waiting for blur.</summary>
-    public async Task FlushClientBufferedValueAsync()
+    public Task FlushClientBufferedValueAsync() => FlushClientBufferedValueAsync(requireCurrentValue: false);
+
+    /// <summary>Require a successful browser read before a save; false retains best-effort blur behavior.</summary>
+    public async Task FlushClientBufferedValueAsync(bool requireCurrentValue)
     {
-        if (!IsDomOwned) return;
-        // Without the browser module the editor never took the text over: Value is already current.
+        if (_disposed && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current multiline text value.");
+        if (_disposed || !IsDomOwned) return;
         var module = await GetControlJsModuleAsync();
-        if (module is null) return;
-        var value = await module.InvokeAsync<string>("getTextValue", _inputElement);
-        await PublishBrowserValueAsync(value);
+        if ((module is null || _disposed) && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current multiline text value.");
+        if (module is null || _disposed) return;
+        try
+        {
+            var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
+            if (value is null && requireCurrentValue)
+                throw new InvalidOperationException("Unable to read the current multiline text value.");
+            if (value is null) return;
+            await PublishBrowserValueAsync(value);
+        }
+        catch when (!requireCurrentValue && _disposed)
+        {
+            // The editor unmounted while the flush was in flight. Any other failed read
+            // still surfaces, so a save never treats a lost browser draft as clean.
+        }
     }
 
     /// <summary>Replace the selection (or insert at the caret) with the complete text.
@@ -558,8 +575,11 @@ else
         }
     }
 
+    private bool _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         if (_clientBufferAttached && _controlJsModule != null)
         {
             try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }

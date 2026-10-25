@@ -27,6 +27,7 @@ public class ReportTab
 
     /// <summary>Rendered HTML pages for this tab.</summary>
     public List<string> Pages { get; set; } = new();
+    public bool IsPaginationComplete { get; set; } = true;
     public List<ReportPageSnapshot> PageSnapshots { get; set; } = [];
     public ReportTextSearch? Search { get; set; }
     public int SearchMatchIndex { get; set; } = -1;

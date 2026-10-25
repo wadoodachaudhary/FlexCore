@@ -61,7 +61,7 @@
                      EnableHeaderContextMenu="false"
                      EnableTypeSearch="true"
                      TypeSearchDelaySeconds="@TypeSearchDelaySeconds"
-                     AllowPaging="@(BatchSize > 0)"
+                     AllowPaging="@(BatchSize > 0 && _availableRows.Count > BatchSize)"
                      PageSize="@(BatchSize > 0 ? BatchSize : 50)"
                      PageSizes="@_pageSizes"
                      ShowSelectionInfoBar="false"
@@ -84,22 +84,22 @@
     </div>
 
     <div class="fx-dual-buttons">
-        <button type="button" class="fx-dual-btn"
-                title="Move selected"
-                disabled="@(_availableRows.Count == 0)"
-                @onclick="MoveSelectedRight">&gt;</button>
-        <button type="button" class="fx-dual-btn"
-                title="@MoveAllTitle"
-                disabled="@(_availableRows.Count == 0)"
-                @onclick="MoveAllRight">&gt;&gt;</button>
-        <button type="button" class="fx-dual-btn"
-                title="Remove selected"
-                disabled="@(_selectedRows.Count == 0)"
-                @onclick="MoveSelectedLeft">&lt;</button>
-        <button type="button" class="fx-dual-btn"
-                title="Remove all"
-                disabled="@(_selectedRows.Count == 0)"
-                @onclick="MoveAllLeft">&lt;&lt;</button>
+        <ButtonControl CssClass="fx-dual-btn" BareStyle="true" Title="Move selected"
+                       Disabled="@(_availableRows.Count == 0)" OnClick="MoveSelectedRight">
+            <SvgIconControl Name="chevron-right" Size="14px" StrokeWidth="2.2" />
+        </ButtonControl>
+        <ButtonControl CssClass="fx-dual-btn" BareStyle="true" Title="@MoveAllTitle"
+                       Disabled="@(_availableRows.Count == 0)" OnClick="MoveAllRight">
+            <SvgIconControl Name="chevrons-right" Size="14px" StrokeWidth="2.2" />
+        </ButtonControl>
+        <ButtonControl CssClass="fx-dual-btn" BareStyle="true" Title="Remove selected"
+                       Disabled="@(_selectedRows.Count == 0)" OnClick="MoveSelectedLeft">
+            <SvgIconControl Name="chevron-left" Size="14px" StrokeWidth="2.2" />
+        </ButtonControl>
+        <ButtonControl CssClass="fx-dual-btn" BareStyle="true" Title="Remove all"
+                       Disabled="@(_selectedRows.Count == 0)" OnClick="MoveAllLeft">
+            <SvgIconControl Name="chevrons-left" Size="14px" StrokeWidth="2.2" />
+        </ButtonControl>
     </div>
 
     <div class="fx-dual-pane">

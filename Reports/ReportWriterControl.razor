@@ -55,7 +55,7 @@
        page area only (dashboards, modal previews, embedded thumbnails). *@
     <div class="fx-rpt-viewer-container" @ref="_reportRootElement">
 
-        @if (IsLoading)
+        @if (IsLoading && PageCount == 0)
         {
             <div class="fx-rpt-loading-overlay">
                 <div class="fx-rpt-loading-spinner">⏳ Loading Report...</div>
@@ -68,10 +68,10 @@
             <div class="fx-rpt-nav">
                 <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnFirstPage" Title="First page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏮</span></ToolbarButtonControl>
                 <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnPreviousPage" Title="Previous page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">◀</span></ToolbarButtonControl>
-                <NumericTextBoxControl TValue="int" Value="CurrentPage" ValueChanged="OnPageChanged" Min="1" Max="@Math.Max(1, PageCount)" Width="65px" />
-                <span>of @PageCount</span>
-                <ToolbarButtonControl Disabled="@(CurrentPage >= PageCount)" OnClick="OnNextPage" Title="Next page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▶</span></ToolbarButtonControl>
-                <ToolbarButtonControl Disabled="@(CurrentPage >= PageCount)" OnClick="OnLastPage" Title="Last page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏭</span></ToolbarButtonControl>
+                <NumericTextBoxControl TValue="int" Value="CurrentPage" ValueChanged="OnPageChanged" Min="1" Max="@(IsPageCountFinal ? Math.Max(1, PageCount) : 10000)" Width="65px" />
+                <span>of @(IsPageCountFinal ? PageCount.ToString() : PageCount + "+")</span>
+                <ToolbarButtonControl Disabled="@(IsLoading || IsPageCountFinal && CurrentPage >= PageCount)" OnClick="OnNextPage" Title="Next page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▶</span></ToolbarButtonControl>
+                <ToolbarButtonControl Disabled="@(IsLoading || IsPageCountFinal && CurrentPage >= PageCount)" OnClick="OnLastPage" Title="Last page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏭</span></ToolbarButtonControl>
             </div>
 
             <ToolbarSeparatorControl />
@@ -175,7 +175,7 @@
         @* ── Status Bar ──────────────────────────────────────── *@
         <StatusBarControl CssClass="fx-rpt-status-bar">
             <span>@StatusMessage</span>
-            <span>@(ReportLoaded ? $"Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
+            <span>@(ReportLoaded ? $"\u00a0Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
         </StatusBarControl>
     </div>
 
@@ -240,6 +240,7 @@ else
     public string? ErrorMessage { get; private set; }
     public ReportOrientation Orientation => ActiveTab?.Orientation ?? ReportOrientation.Portrait;
     public int PageCount => ActiveTab?.Pages.Count ?? 0;
+    public bool IsPageCountFinal => ActiveTab?.IsPaginationComplete ?? true;
 
     /// <summary>Currently displayed page (1-based) in the ACTIVE tab. Adjust via <see cref="GoToPage"/>.</summary>
     public int CurrentPage => ActiveTab?.CurrentPage ?? 1;
@@ -316,7 +317,7 @@ else
     private ElementReference _reportRootElement;
     private bool _jsClickHandlerRegistered;
     private static string ReportJsModulePath =>
-        $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/report-writer-control.js";
+        FxJsAsset.Versioned($"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/report-writer-control.js");
 
     // ════════════════════════════════════════════════════════════════════
     //  CHROME STATE — toolbar / status bar / group tree / param dialog
@@ -432,6 +433,7 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        CancelNativeLoad();
         _conversionWorkspace.Dispose();
         _designerPreview?.Dispose();
         _designerPreview = null;
@@ -692,18 +694,30 @@ else
     }
 
     private int _nativeNavigationVersion;
+    private CancellationTokenSource? _nativeLoad;
 
-    private async Task<ReportLayoutResult> PaginateNativeSession(ReportLayoutSession session)
+    private void CancelNativeLoad()
+    {
+        _nativeNavigationVersion++;
+        _nativeLoad?.Cancel();
+        _nativeLoad?.Dispose();
+        _nativeLoad = null;
+    }
+
+    private async Task<ReportLayoutResult> PaginateNativeSession(ReportLayoutSession session, int? throughPage = null, CancellationToken token = default)
     {
         try
         {
             await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/report-layout.js"));
             if (module is null) throw new InvalidOperationException("Browser report measurement module is unavailable.");
-            return await session.PaginateAsync(async (batch, cancellationToken) =>
-                await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch));
+            async Task<IReadOnlyList<ReportTextMetrics>> Measure(IReadOnlyList<ReportTextMeasurement> batch, CancellationToken cancellationToken)
+                => await module.InvokeAsync<ReportTextMetrics[]>("measureTextLayout", cancellationToken, (object)batch);
+            return throughPage.HasValue ? await session.PaginateThroughAsync(throughPage.Value, Measure, token)
+                : await session.PaginateAsync(Measure, token);
         }
         catch (Exception error) when (error is JSException or InvalidOperationException)
         {
+            token.ThrowIfCancellationRequested();
             Logger.LogWarning(error, "Browser report text measurement unavailable");
             return session.Paginate();
         }
@@ -1141,7 +1155,10 @@ else
     public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null,
         IReadOnlyDictionary<string, object>? formulaParameterValues = null)
     {
-        _nativeNavigationVersion++;
+        CancelNativeLoad();
+        _nativeLoad = new();
+        var token = _nativeLoad.Token;
+        var version = _nativeNavigationVersion;
         IsLoading = true;
         ErrorMessage = null;
         ClearPdfPreview();
@@ -1152,7 +1169,12 @@ else
         try
         {
             // Build parameter object for SQL query
-            var sqlParams = new Dictionary<string, object>();
+            // Parameter names are case-insensitive throughout the report contract. Normalize
+            // caller lookup before applying authored defaults, and avoid forwarding the same
+            // logical key twice when its incoming spelling differs from the definition.
+            if (parameterValues != null)
+                parameterValues = new Dictionary<string, object>(parameterValues, StringComparer.OrdinalIgnoreCase);
+            var sqlParams = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
             foreach (var paramDef in definition.Parameters)
             {
                 if (parameterValues?.TryGetValue(paramDef.Name, out var val) == true)
@@ -1184,7 +1206,8 @@ else
             LogQuery("Main report", definition.Sql, sqlParams);
 
             // Execute SQL
-            var dt = ExecuteReportData(definition, sqlParams.Count > 0 ? sqlParams : null);
+            var dt = await ExecuteReportDataAsync(definition, sqlParams.Count > 0 ? sqlParams : null, token);
+            token.ThrowIfCancellationRequested();
             GuardRowLimit(dt);
             Logger.LogInformation("Main report returned {Rows} rows", dt.Rows.Count);
 
@@ -1205,11 +1228,13 @@ else
                 }, tolerateSubreportQueryError: Options.TolerateSubreportQueryError);
                 Logger.LogInformation("Native report prepared: {Title} ({Rows} source rows, {SubreportQueries} subreport queries, {ElapsedMs} ms)",
                     definition.Title, dt.Rows.Count, childQueries, started.ElapsedMilliseconds);
-                var result = await PaginateNativeSession(session);
+                var result = await PaginateNativeSession(session, 1, token);
+                token.ThrowIfCancellationRequested();
                 Logger.LogInformation("Native report paginated: {Title} ({Pages} pages, {Diagnostics} diagnostics, {ElapsedMs} ms total)",
                     definition.Title, result.Snapshots.Count, result.Diagnostics.Count, started.ElapsedMilliseconds);
                 Tabs.Add(new ReportTab { Title = "Main Report", Pages = result.Pages, PageSnapshots = result.Snapshots, Orientation = definition.Orientation, PositionedPage = layout.Document.Page,
                     CreateDataExport = session.CreateDataExport, NativeSession = session, Tree = result.Tree,
+                    IsPaginationComplete = result.IsComplete,
                     RuntimeDiagnostics = definition.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList() });
                 _lastParameters = CopyParameterValues(sqlParams);
                 _lastFormulaParameters = formulaParams;
@@ -1259,6 +1284,7 @@ else
 
             OnRenderComplete?.Invoke();
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Failed to render SQL report: {Title}", definition.Title);
@@ -1266,8 +1292,11 @@ else
         }
         finally
         {
-            IsLoading = false;
-            await InvokeAsync(StateHasChanged);
+            if (version == _nativeNavigationVersion)
+            {
+                IsLoading = false;
+                await InvokeAsync(StateHasChanged);
+            }
         }
     }
 
@@ -1334,12 +1363,16 @@ else
     /// <summary>Triggers the browser print dialog for the rendered report.</summary>
     public async Task Print()
     {
+        if (!await EnsureNativePagesAsync(0)) return;
+        await InvokeAsync(StateHasChanged);
         await JSRuntime.InvokeVoidAsync("window.print");
     }
 
     /// <summary>Clears the current report.</summary>
     public void Clear()
     {
+        CancelNativeLoad();
+        IsLoading = false;
         ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
@@ -1369,8 +1402,8 @@ else
     /// <summary>
     /// Load and render a report by path (.rpt or .xml). Prompts the
     /// user for any required parameters not supplied via
-    /// <paramref name="seedParameters"/>. Auto-injects
-    /// <c>DivisionID</c> from the session context.
+    /// <paramref name="seedParameters"/>. Configured session parameters provide
+    /// fallback defaults without hiding required authored prompts.
     /// </summary>
     public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
     {
@@ -1415,12 +1448,6 @@ else
                         }
                         _seedParameters[kv.Key] = kv.Value;
                     }
-            if (!_seedParameters.ContainsKey("DivisionID"))
-            {
-                var divId = SessionState.Get("DivisionID");
-                if (divId != null) _seedParameters["DivisionID"] = divId.ToString() ?? "";
-            }
-
             if (!file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase)
                 && !file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
             {
@@ -1440,7 +1467,7 @@ else
                     : XmlLoader.Load(xmlPath);
                 var typedParams = _seedParameters
                     .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase))
-                    .ToDictionary(p => p.Key, p => (object)p.Value);
+                    .ToDictionary(p => p.Key, p => (object)p.Value, StringComparer.OrdinalIgnoreCase);
                 // "Multi:<name>" seeds — the host's answer to VB6's repeated
                 // c.ParameterValue calls (ONE multi-value parameter, many
                 // values). The value is a \u0002-separated list; it enters
@@ -1458,6 +1485,9 @@ else
                         typedParams[multiName] = multiValues;
                 }
 
+                // Configured session keys are supplied context, not editable report defaults.
+                // Resolve them afresh before prompting so saved RPT values cannot select another scope.
+                AutoInjectSessionParameters(typedParams, definition.Sql);
                 var missingRequired = definition.Parameters
                     .Where(p => (p.Required || PromptOptionalParameters)
                         && !typedParams.ContainsKey(p.Name))
@@ -1470,10 +1500,14 @@ else
                     await InvokeAsync(StateHasChanged);
 
                     var title = Path.GetFileNameWithoutExtension(xmlPath);
+                    var contextValues = new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase);
+                    AutoInjectSessionParameters(contextValues, definition.Sql, definition.Parameters);
                     var promptContext = new ReportPickListContext(Path.GetFileNameWithoutExtension(file),
-                        definition.Parameters.ToArray(), new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase));
-                    var initialValues = _lastPromptedValues ?? (_seedDefaults.Count > 0
-                        ? _seedDefaults.ToDictionary(kv => kv.Key, kv => (object)kv.Value, StringComparer.OrdinalIgnoreCase) : null);
+                        definition.Parameters.ToArray(), contextValues);
+                    var initialValues = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var kv in _seedDefaults) initialValues[kv.Key] = kv.Value;
+                    if (_lastPromptedValues != null)
+                        foreach (var kv in _lastPromptedValues) initialValues[kv.Key] = kv.Value;
                     var userValues = await _paramDialog.PromptAsync(title, missingRequired, initialValues, promptContext);
                     if (userValues == null)
                     {
@@ -1487,6 +1521,10 @@ else
                     StatusMessage = $"Loading report: {xmlPath}";
                     await InvokeAsync(StateHasChanged);
                 }
+
+                // Headless/session-only parameters retain their existing SQL fallback. Never
+                // replace an explicit seed or a value accepted from the interactive prompt.
+                AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters);
 
                 // Snapshot pre-rewrite values for the "Parameters" re-prompt.
                 _lastPromptedValues = new Dictionary<string, object>(typedParams, StringComparer.OrdinalIgnoreCase);
@@ -1534,7 +1572,7 @@ else
                 SetXmlSource(xmlPath);
                 await ShowSqlReport(definition, typedParams, formulaValues);
                 ReportLoaded = string.IsNullOrEmpty(ErrorMessage);
-                StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (XML)" : ErrorMessage!;
+                StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (RDL)" : ErrorMessage!;
             }
             else
             {
@@ -1571,9 +1609,12 @@ else
     // Page navigation — drives the toolbar's first/prev/page#/next/last.
     private void OnFirstPage() => JumpTo(1);
     private void OnPreviousPage() => JumpTo(CurrentPage - 1);
-    private void OnNextPage() => JumpTo(CurrentPage + 1);
-    private void OnLastPage() => JumpTo(PageCount);
-    private void OnPageChanged(int target) => JumpTo(target);
+    private Task OnNextPage() => OnPageChanged(CurrentPage + 1);
+    private async Task OnLastPage() { if (await EnsureNativePagesAsync(0)) JumpTo(PageCount); }
+    private async Task OnPageChanged(int target)
+    {
+        if (await EnsureNativePagesAsync(target)) JumpTo(target);
+    }
     private void JumpTo(int target)
     {
         var clamped = Math.Max(1, Math.Min(target, PageCount));
@@ -1619,6 +1660,7 @@ else
 
     private async Task ChromeOnExport(string format)
     {
+        if (!await EnsureNativePagesAsync(0)) return;
         if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
         StatusMessage = $"Exporting as {format}...";
         await InvokeAsync(StateHasChanged);
@@ -1665,8 +1707,6 @@ else
         // the user's last selections (we cached them in _lastPromptedValues).
         _seedParameters.Clear();
         _seedDefaults.Clear();
-        var divId = SessionState.Get("DivisionID");
-        if (divId != null) _seedParameters["DivisionID"] = divId.ToString() ?? "";
         await ShowReportAsync(ReportFilePath, null);
     }
 
@@ -1702,6 +1742,7 @@ else
     }
     private async Task ChromeOnSearch()
     {
+        if (!await EnsureNativePagesAsync(0)) return;
         if (ActiveTab is not { } tab) return;
         if (string.IsNullOrWhiteSpace(SearchText)) { ClearSearch(); return; }
         if (tab.Search?.Query == SearchText.Trim()) { await MoveSearchAsync(1); return; }
@@ -1757,6 +1798,12 @@ else
 
     private async Task OnGroupNodeClicked(FxGroupNode node)
     {
+        if (!IsPageCountFinal && node.PageIndex <= 0)
+        {
+            var anchor = node.AnchorId;
+            if (!await EnsureNativePagesAsync(0)) return;
+            node = FlattenGroups(GroupTree).FirstOrDefault(group => group.AnchorId == anchor) ?? node;
+        }
         if (EffectiveTreeMode == TreeNavigationMode.DrillDown && ActiveTab?.NativeSession is not null)
         {
             await OpenNativeDrillDown(node);
@@ -2000,8 +2047,12 @@ else
     }
 
     private void LogQuery(string operation, string sql, IDictionary<string, object> parameters)
-        => Logger.LogInformation("{Operation} query {QueryId}; parameters: {Parameters}", operation,
+    {
+        Logger.LogInformation("{Operation} query {QueryId}; parameters: {Parameters}", operation,
             ReportValueFormatting.QueryId(sql), string.Join(", ", parameters.Select(pair => $"{pair.Key} ({pair.Value?.GetType().Name ?? "null"})")));
+        // The statement itself, for comparing the shape with what the original report engine sends (enable Debug for Fx.ControlKit.Reports).
+        Logger.LogDebug("{Operation} query {QueryId} SQL: {Sql}", operation, ReportValueFormatting.QueryId(sql), sql);
+    }
 
     // ═══════════════════════════════════════════════════════════════════
     // Column-width strategy
@@ -3185,15 +3236,26 @@ else
     /// writers add organization-wide default parameters (UserId, TenantId, ...)
     /// without any report-specific code in the writer.
     /// </summary>
-    private void AutoInjectSessionParameters(Dictionary<string, object> sqlParams, string sql)
+    private void AutoInjectSessionParameters(Dictionary<string, object> sqlParams, string sql,
+        IEnumerable<ReportParameter>? authoredParameters = null)
     {
         foreach (var name in Options.SessionAutoInjectParameters)
         {
             if (string.IsNullOrWhiteSpace(name)) continue;
-            if (sqlParams.ContainsKey(name)) continue;
+            if (sqlParams.Keys.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
             if (!sql.Contains("@" + name, StringComparison.OrdinalIgnoreCase)) continue;
             var value = ResolveSessionParameter(name);
-            if (value != null) sqlParams[name] = value;
+            if (value != null)
+            {
+                sqlParams[name] = value;
+                continue;
+            }
+            var authored = authoredParameters?.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (authored is not null && (authored.HasAuthoredDefaultValue || !string.IsNullOrEmpty(authored.DefaultValue)))
+            {
+                sqlParams[name] = authored.DefaultValue;
+                continue;
+            }
         }
     }
 
@@ -3212,6 +3274,8 @@ else
     private System.Data.DataTable ExecuteReportData(ReportDefinition definition, IDictionary<string, object>? parameters)
     {
         if (parameters is not null) parameters = ReportRangeParameters.BindSql(new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase));
+        // A selection with reserved bindings (guards, literals) needs a dictionary even when the report has no prompts.
+        if (definition.PositionedSqlSelection is not null) parameters ??= new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         var execution = definition.PrepareSqlExecution(parameters);
         if (execution.Sql != definition.Sql)
             LogQuery("Prepared report execution", execution.Sql, parameters ?? new Dictionary<string, object>());
@@ -3275,7 +3339,7 @@ else
 
     private RenderFragment RenderReportContent() => __builder =>
     {
-        @if (IsLoading && !ShowChrome)
+        @if (IsLoading && !ShowChrome && PageCount == 0)
         {
             <div class="fx-report-loading">Loading report...</div>
         }

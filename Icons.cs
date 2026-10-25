@@ -7,6 +7,7 @@ public static class FlexIcons
     {
         ["add"]="M12 5v14M5 12h14", ["close"]="m6 6 12 12M18 6 6 18", ["check"]="m4 12 5 5L20 6",
         ["chevron-left"]="m15 5-7 7 7 7", ["chevron-right"]="m9 5 7 7-7 7", ["chevron-up"]="m5 15 7-7 7 7", ["chevron-down"]="m5 9 7 7 7-7",
+        ["chevrons-left"]="m11 5-7 7 7 7m7-14-7 7 7 7", ["chevrons-right"]="m6 5 7 7-7 7m6-14 7 7-7 7",
         ["search"]="M21 21l-6-6M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0",
         ["calendar"]="M4 5h16v16H4ZM8 2v6M16 2v6M4 10h16", ["clock"]="M12 7v5l3 2M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0",
         ["save"]="M4 3h13l4 4v14H3V3ZM7 3v6h10V3M7 21v-8h10v8",

@@ -42,10 +42,21 @@ public sealed partial class ReportLayoutSession
 
     private static bool VisibilityProperty(string property) => property.ToLowerInvariant() is "enablesuppress" or "enablehidefordrilldown";
     private static bool EndingProperty(string property) => property.ToLowerInvariant() is "enablenewpageafter" or "enableresetpagenumberafter";
-    private bool HasScheduledSection(string section) => new[] { _layout.AreaConditions, _layout.SectionConditions }
-        .SelectMany(table => table.GetValueOrDefault(section) ?? []).Any(c => NeedsPrintState(c.Value) || _physicalPageSchedule && UsesPage(c.Value));
-    private bool MutableCondition(Dictionary<string, Dictionary<string, CrystalFormula>> table, string section, string property) =>
-        (table.GetValueOrDefault(section) ?? []).Any(c => c.Key.Equals(property, StringComparison.OrdinalIgnoreCase) && (NeedsPrintState(c.Value) || _physicalPageSchedule && UsesPage(c.Value)));
+    private bool HasScheduledSection(string section) => HasScheduledCondition(_layout.AreaConditions, section) || HasScheduledCondition(_layout.SectionConditions, section);
+    private bool HasScheduledCondition(Dictionary<string, Dictionary<string, CrystalFormula>> table, string section)
+    {
+        if (!table.TryGetValue(section, out var conditions)) return false;
+        foreach (var condition in conditions.Values)
+            if (NeedsPrintState(condition) || _physicalPageSchedule && UsesPage(condition)) return true;
+        return false;
+    }
+    private bool MutableCondition(Dictionary<string, Dictionary<string, CrystalFormula>> table, string section, string property)
+    {
+        if (!table.TryGetValue(section, out var conditions)) return false;
+        foreach (var condition in conditions)
+            if (condition.Key.Equals(property, StringComparison.OrdinalIgnoreCase) && (NeedsPrintState(condition.Value) || _physicalPageSchedule && UsesPage(condition.Value))) return true;
+        return false;
+    }
     private bool HasPrintFields(string section) => _layout.Document.Sections.First(s => s.Id == section).Elements
         .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "")).Any(NeedsPrintState);
     private bool HasVisibilityEvent(string section) => HasScheduledSection(section) || _physicalPageSchedule && (HasPrintFields(section)
@@ -357,7 +368,11 @@ public sealed partial class ReportLayoutSession
         }
     }
 
-    private VariableSnapshot CaptureVariables() => new(new(_globals, StringComparer.OrdinalIgnoreCase), new(_state.Shared, StringComparer.OrdinalIgnoreCase));
+    private VariableSnapshot? _emptyVariables;
+    // Snapshots are only read back (RestoreVariables copies out of them), so one empty snapshot serves every row of a report without variables.
+    private VariableSnapshot CaptureVariables() => _globals.Count == 0 && _state.Shared.Count == 0
+        ? _emptyVariables ??= new(new(StringComparer.OrdinalIgnoreCase), new(StringComparer.OrdinalIgnoreCase))
+        : new(new(_globals, StringComparer.OrdinalIgnoreCase), new(_state.Shared, StringComparer.OrdinalIgnoreCase));
     private void RestoreVariables(VariableSnapshot snapshot)
     {
         _globals.Clear(); foreach (var value in snapshot.Globals) _globals.Add(value.Key, value.Value);

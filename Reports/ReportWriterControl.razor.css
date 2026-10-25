@@ -438,6 +438,11 @@
 
 .fx-rpt-toolbar-label { font-size: calc(11px * var(--fx-zoom, 1)); }
 
+.fx-rpt-viewer-container > ::deep .fx-toolbar,
+.fx-rpt-viewer-container > ::deep .fx-rpt-status-bar {
+    flex-shrink: 0;
+}
+
 .fx-rpt-nav { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--fx-zoom, 1)); }
 .fx-rpt-nav input {
     width: 60px;
@@ -478,6 +483,7 @@
 
 .fx-rpt-content-area {
     flex: 1;
+    min-height: 0;
     display: flex;
     overflow: hidden;
     border: 1px solid #dee2e6;

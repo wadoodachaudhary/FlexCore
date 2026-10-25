@@ -10,9 +10,13 @@
                 {
                     <span id="@anchor" class="fx-rpt-native-anchor" style="position:absolute;inset:0;pointer-events:none;"></span>
                 }
+                @{ ReportPageObject? previous = null; }
                 @foreach (var item in band.Objects)
                 {
-                    <div data-object="@item.Element.Name" style="@ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips)">
+                    var overprint = ReportObjectRenderer.IsDuplicateNativeTextPaint(previous, item, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips);
+                    previous = item;
+                    <div data-object="@item.Element.Name" data-fx-native-overprint="@(overprint ? "true" : null)" aria-hidden="@(overprint ? "true" : null)"
+                         style="@(ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips) + (overprint ? "visibility:hidden;" : ""))">
                         @if (item.Table is not null)
                         {
                             <ReportTableFragmentControl Fragment="item.Table" Title="item.Element.Name" />

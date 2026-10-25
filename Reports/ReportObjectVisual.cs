@@ -15,7 +15,13 @@ public sealed class ReportTextRun
     public bool Italic { get; set; }
     public bool Underline { get; set; }
     public string Color { get; set; } = "#000000";
-    public ReportTextRun Clone() => (ReportTextRun)MemberwiseClone();
+    public Dictionary<string, string> FontConditionFormulas { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public ReportTextRun Clone()
+    {
+        var clone = (ReportTextRun)MemberwiseClone();
+        clone.FontConditionFormulas = new(FontConditionFormulas, StringComparer.OrdinalIgnoreCase);
+        return clone;
+    }
 }
 
 /// <summary>Portable, inert content; no HTML, remote URLs, or executable SVG is accepted.</summary>
@@ -33,12 +39,17 @@ public sealed class ReportObjectVisual
     /// <summary>Native stroke width in twips; zero is a hairline, null preserves legacy renderer defaults.</summary>
     public int? LineWidthTwips { get; set; }
     public bool CloseAtPageBreak { get; set; } = true;
-    public ReportObjectVisual Clone() => new()
+    public ReportObjectVisual Clone()
     {
-        ImageDataUrl = ImageDataUrl, VectorImage = VectorImage?.Clone(), ImageFit = ImageFit, Runs = Runs.Select(run => run.Clone()).ToList(),
-        BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine,
-        CloseAtPageBreak = CloseAtPageBreak, LineWidthTwips = LineWidthTwips
-    };
+        var runs = new List<ReportTextRun>(Runs.Count);
+        foreach (var run in Runs) runs.Add(run.Clone());
+        return new()
+        {
+            ImageDataUrl = ImageDataUrl, VectorImage = VectorImage?.Clone(), ImageFit = ImageFit, Runs = runs,
+            BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine,
+            CloseAtPageBreak = CloseAtPageBreak, LineWidthTwips = LineWidthTwips
+        };
+    }
 
     public static string EmbedImage(ReadOnlySpan<byte> bytes)
     {
@@ -94,10 +105,12 @@ public sealed class ReportObjectVisual
         };
         foreach (var run in visual?.Elements("Run") ?? []) result.Runs.Add(new ReportTextRun
         {
-            Text = run.Value, Binding = (string?)run.Attribute("Binding") ?? "",
+            Text = string.Concat(run.Nodes().OfType<XText>().Select(text => text.Value)), Binding = (string?)run.Attribute("Binding") ?? "",
             FontFamily = (string?)run.Attribute("Font") ?? "Arial", FontSize = (decimal?)run.Attribute("Size") ?? 10,
             Bold = (bool?)run.Attribute("Bold") ?? false, Italic = (bool?)run.Attribute("Italic") ?? false,
-            Underline = (bool?)run.Attribute("Underline") ?? false, Color = (string?)run.Attribute("Color") ?? "#000000"
+            Underline = (bool?)run.Attribute("Underline") ?? false, Color = (string?)run.Attribute("Color") ?? "#000000",
+            FontConditionFormulas = run.Element("FontColorConditionFormulas")?.Attributes()
+                .ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase)
         });
         // Crystal's SDK export keeps a text object's embedded fields as "{Table.Field}" / "{@Formula}" tokens inside <Text>, in the
         // object's one font; the native converter writes them as runs. Without runs the tokens would print as text.
@@ -138,7 +151,9 @@ public sealed class ReportObjectVisual
                 visual.Runs.Select(run => new XElement("Run", new XAttribute("Binding", run.Binding),
                     new XAttribute("Font", run.FontFamily), new XAttribute("Size", run.FontSize),
                     new XAttribute("Bold", run.Bold), new XAttribute("Italic", run.Italic),
-                    new XAttribute("Underline", run.Underline), new XAttribute("Color", run.Color), run.Text))));
+                    new XAttribute("Underline", run.Underline), new XAttribute("Color", run.Color), run.Text,
+                    run.FontConditionFormulas.Count == 0 ? null : new XElement("FontColorConditionFormulas",
+                        run.FontConditionFormulas.Select(c => new XAttribute(c.Key, c.Value)))))));
         var border = element.Element("Border");
         if (border is null) { border = new XElement("Border"); element.Add(border); }
         border.SetAttributeValue("TopLineStyle", visual.TopLine);
@@ -184,6 +199,14 @@ public static class ReportObjectRenderer
     internal static int TextLineLimit(ReportDesignerElement item)
     {
         if (item.MaxNumberOfLines < 0) throw new InvalidDataException("Maximum field line count cannot be negative.");
+        if (ClipNativeLongWords(item))
+        {
+            var leading = ReportFontCatalog.NativeLineHeightPixels(item.FontFamily, item.FontSize, true)
+                ?? Math.Round((double)Math.Clamp(item.FontSize, 1, 300) * 600 / 72, MidpointRounding.AwayFromZero) * 96 / 600 * 1.15;
+            var innerHeight = item.HeightTwips / 15d - BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips)
+                - BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips);
+            return Math.Max(1, (int)Math.Floor((innerHeight + .001) / leading));
+        }
         return item.CanGrow && item.Kind == "Field" ? item.MaxNumberOfLines : 0;
     }
 
@@ -192,6 +215,9 @@ public static class ReportObjectRenderer
     internal static bool WrapText(ReportDesignerElement item) => !(item.Kind == "Field"
         && (item.NativeNumericFormat is not null || item.NativeNumberFormat is not null
             || !item.CanGrow && (item.NativeDateTimeFormat is not null || item.HeightTwips < item.FontSize * 20m * 1.15m * 2)));
+
+    internal static bool ClipNativeLongWords(ReportDesignerElement item) => item.UseCrystalScreenMetrics
+        && item.Kind == "Field" && !item.CanGrow && WrapText(item);
 
     public static string Encode(string? value) => WebUtility.HtmlEncode(value ?? "");
     public static string Number(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
@@ -228,11 +254,31 @@ public static class ReportObjectRenderer
         var whiteSpace = WrapText(item) ? "pre-wrap" : "pre";
         // Layout retains the authored minimum box. Its text still observes the
         // line cap when that box is taller than the permitted growing content.
-        var clip = lineLimit > 0 ? $"max-height:calc({lineLimit} * 1lh + {Number(BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips) + BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips))}px);" : "";
+        var clip = lineLimit > 0 && !ClipNativeLongWords(item) ? $"max-height:calc({lineLimit} * 1lh + {Number(BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips) + BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips))}px);" : "";
         var lineHeight = ReportFontCatalog.NativeLineHeight(item.FontFamily, item.FontSize, item.UseCrystalScreenMetrics);
-        return bounds + geometry + clip + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" ? "normal" : "anywhere")};line-height:{lineHeight};letter-spacing:0;text-align:{align};padding-left:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
+        return bounds + geometry + clip + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" || ClipNativeLongWords(item) ? "normal" : "anywhere")};line-height:{lineHeight};letter-spacing:0;text-align:{align};padding-left:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
             FontStyle(item.FontFamily, item.FontSize, item.Bold, item.Italic, item.Underline, item.TextColor, item.UseCrystalScreenMetrics) +
             (item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual));
+    }
+
+    internal static bool IsDuplicateNativeTextPaint(ReportPageObject? previous, ReportPageObject current, int originLeft, int originTop)
+    {
+        static bool PlainNativeText(ReportPageObject item) => item.Analysis is null && item.Table is null
+            && item.Element.UseCrystalScreenMetrics && !item.Element.CanGrow
+            && item.Element.Kind is "Text" or "Field" or "FieldHeading"
+            && Color(item.Element.BackgroundColor) == "transparent"
+            && new[] { item.Element.Visual.TopLine, item.Element.Visual.BottomLine, item.Element.Visual.LeftLine, item.Element.Visual.RightLine }
+                .All(line => BorderPixels(line, item.Element.Visual.LineWidthTwips) == 0);
+        if (previous is null || current.FormattedContent.Length == 0 || !PlainNativeText(previous) || !PlainNativeText(current)
+            || previous.FormattedContent != current.FormattedContent
+            || previous.UnmaskedNumericContent != current.UnmaskedNumericContent) return false;
+        // Native device coordinates round to a screen pixel. Repainting identical
+        // glyphs there adds no ink in GDI, but HTML antialiasing makes them heavier.
+        // Only adjacent, undecorated, identical paint is coalesced; snapshots retain both fields.
+        static double Pixel(int value, int origin) => Math.Round(((double)value + origin) / 15, MidpointRounding.AwayFromZero);
+        return Pixel(previous.Element.LeftTwips, originLeft) == Pixel(current.Element.LeftTwips, originLeft)
+            && Pixel(previous.Element.TopTwips, originTop) == Pixel(current.Element.TopTwips, originTop)
+            && Style(previous.Element, false) == Style(current.Element, false);
     }
 
     // Paint native numeric borders outside the authored text box without
@@ -245,14 +291,17 @@ public static class ReportObjectRenderer
     private static string BorderStyle(ReportObjectVisual visual) =>
         $"border-top:{Border(visual.TopLine, visual.BorderColor, visual.LineWidthTwips)};border-bottom:{Border(visual.BottomLine, visual.BorderColor, visual.LineWidthTwips)};border-left:{Border(visual.LeftLine, visual.BorderColor, visual.LineWidthTwips)};border-right:{Border(visual.RightLine, visual.BorderColor, visual.LineWidthTwips)};";
 
-    private static string DecorateNativeNumeric(ReportDesignerElement item, string content)
+    private static string DecorateNativeField(ReportDesignerElement item, string content)
     {
+        // Keep the authored border/box intact while clipping to complete memo lines.
+        if (ClipNativeLongWords(item))
+            return $"<span data-fx-native-memo=\"true\" style=\"display:block;max-height:calc({TextLineLimit(item)} * 1lh);overflow:hidden\">{content}</span>";
         if (!NativeNumericOutsideBorder(item)) return content;
         return "<span data-fx-native-field-text=\"true\" style=\"display:block;width:100%;height:100%;overflow:hidden;\">" + content + "</span>"
             + $"<span data-fx-native-field-border=\"true\" aria-hidden=\"true\" style=\"position:absolute;pointer-events:none;left:-{Number(BorderPixels(item.Visual.LeftLine, item.Visual.LineWidthTwips))}px;top:-{Number(BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips))}px;width:100%;height:100%;box-sizing:content-box;{BorderStyle(item.Visual)}\"></span>";
     }
 
-    private static double BorderPixels(string style, int? widthTwips) => style switch
+    internal static double BorderPixels(string style, int? widthTwips) => style switch
     {
         "Double" => Math.Max(3, (widthTwips ?? 15) / 5d),
         "Single" or "Dash" or "Dot" => Math.Max(1, (widthTwips ?? 15) / 15d),
@@ -304,9 +353,23 @@ public static class ReportObjectRenderer
             var html = new StringBuilder();
             foreach (var run in item.Visual.Runs)
                 html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics)).Append("\">")
-                    .Append(Encode(string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolve(run.Binding))).Append("</span>");
-            return DecorateNativeNumeric(item, html.ToString());
+                    .Append(EncodeText(item, string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolve(run.Binding))).Append("</span>");
+            return DecorateNativeField(item, html.ToString());
         }
-        return DecorateNativeNumeric(item, Encode(item.Kind == "Field" ? resolve(item.Binding) : item.Text));
+        return DecorateNativeField(item, EncodeText(item, item.Kind == "Field" ? resolve(item.Binding) : item.Text));
+    }
+
+    private static string EncodeText(ReportDesignerElement item, string? value)
+    {
+        if (string.IsNullOrEmpty(value) || !ClipNativeLongWords(item)) return Encode(value);
+        // Fixed Crystal memo fields wrap at whitespace and clip oversized tokens.
+        // CSS alone also breaks XML/URLs at punctuation, unlike the native viewer.
+        var html = new StringBuilder();
+        foreach (System.Text.RegularExpressions.Match token in System.Text.RegularExpressions.Regex.Matches(value, @"\s+|\S+"))
+        {
+            if (char.IsWhiteSpace(token.Value[0])) html.Append(Encode(token.Value));
+            else html.Append("<span style=\"white-space:nowrap\">").Append(Encode(token.Value)).Append("</span>");
+        }
+        return html.ToString();
     }
 }

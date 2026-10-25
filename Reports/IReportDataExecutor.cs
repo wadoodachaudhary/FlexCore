@@ -32,3 +32,10 @@ public interface IReportDefinitionDataExecutor : IReportDataExecutor
 {
     DataTable Execute(ReportDefinition definition, IDictionary<string, object>? parameters);
 }
+
+/// <summary>Optional non-blocking, cancellable query execution. Sorting and report summaries still
+/// consume a complete record snapshot, unlike an unordered grid row window.</summary>
+public interface IAsyncReportDataExecutor : IReportDataExecutor
+{
+    Task<DataTable> ExecuteAsync(string sql, IDictionary<string, object>? parameters, CancellationToken cancellationToken);
+}

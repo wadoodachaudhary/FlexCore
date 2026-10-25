@@ -42,9 +42,12 @@ public sealed partial class ReportLayoutSession
     private bool _repeatedHeader;
     private readonly Dictionary<(string Id, int Row), (bool Area, bool Section, bool AreaHidden, bool SectionHidden)> _suppression = new();
 
+    private Func<string, CrystalValueType?>? _referenceTypeDelegate;
+    private Func<string, int>? _groupingLevelDelegate;
+    private Func<string, object?>? _documentPropertyDelegate;
     private CrystalFormulaContext Context(int row, object? page = null, object? count = null, string? currentField = null) => new()
     {
-        Resolve = reference => Value(reference, row), ReferenceType = ReferenceType,
+        Resolve = reference => Value(reference, row), ReferenceType = _referenceTypeDelegate ??= ReferenceType,
         Aggregate = (op, field, group) => IsParameter(field)
             ? throw new NotSupportedException($"{op} ({field}): a parameter is summarized as an array or range value, not through the record summary context.")
             : Summary(new(SummaryOperation(op), field, group), row),
@@ -56,9 +59,9 @@ public sealed partial class ReportLayoutSession
         RecordIndex = row, RecordCount = _rows.Length, PageNumber = page ?? _formulaPage ?? 1, TotalPageCount = count ?? _formulaPages ?? 1,
         InRepeatedGroupHeader = _repeatedHeader, GroupNumber = () => GroupNumber(row),
         DrillDownGroupLevel = _drillDownGroupLevel,
-        GroupingLevel = field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
+        GroupingLevel = _groupingLevelDelegate ??= field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
         HierarchicalChildren = level => HierarchicalChildren(level, row),
-        DocumentProperty = name => name switch
+        DocumentProperty = _documentPropertyDelegate ??= name => name switch
         {
             "reporttitle" => ReportTitle, "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
             _ => throw new NotSupportedException($"Document property '{name}' is not available to this report run.")
@@ -138,7 +141,7 @@ public sealed partial class ReportLayoutSession
         if (_layout.RecordSelection is { } selection)
         {
             RequireReadTime(selection, "Record selection");
-            _rows = _rows.Where((_, index) => CrystalFormula.Boolean(selection.Evaluate(Context(index)))).ToArray();
+            _rows = _rows.Where((_, index) => CrystalFormula.Boolean(selection.EvaluateRecordSelection(Context(index)))).ToArray();
             ClearValues();
         }
         if (_linkSelections.Count > 0)
@@ -207,10 +210,25 @@ public sealed partial class ReportLayoutSession
     }
 
     private bool UsesPage(CrystalFormula formula) => formula.UsesPageContext || formula.References.Any(r => DependsOn(r, true));
+    private static readonly KeyValuePair<string, CrystalFormula>[] NoConditions = [];
+    // The layout's conditional formulas do not change while the session lives; each (table, id, page dependence) list is built once.
+    private readonly Dictionary<(Dictionary<string, Dictionary<string, CrystalFormula>> Table, string Id, bool PageOnly), KeyValuePair<string, CrystalFormula>[]> _conditionLists = new();
+    private KeyValuePair<string, CrystalFormula>[] ConditionList(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id, bool pageOnly)
+    {
+        if (!table.TryGetValue(id, out var conditions) || conditions.Count == 0) return NoConditions;
+        var key = (table, id, pageOnly);
+        if (!_conditionLists.TryGetValue(key, out var list))
+            _conditionLists[key] = list = conditions.Where(c => UsesPage(c.Value) == pageOnly).ToArray();
+        return list;
+    }
     private IEnumerable<KeyValuePair<string, CrystalFormula>> Conditions(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id, bool pageOnly) =>
-        (table.GetValueOrDefault(id) ?? []).Where(c => UsesPage(c.Value) == pageOnly);
-    private bool PageSuppresses(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id) =>
-        Conditions(table, id, true).Any(c => c.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase));
+        ConditionList(table, id, pageOnly);
+    private bool PageSuppresses(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id)
+    {
+        foreach (var condition in ConditionList(table, id, true))
+            if (condition.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
     private object? ConditionValue(CrystalFormula formula, int row, bool pageOnly, string? currentField = null)
     {
         if (formula.EvaluationTime is { } requested && requested < RequiredTime(formula))
@@ -233,8 +251,17 @@ public sealed partial class ReportLayoutSession
             KeepTogether = source.KeepTogether, BackgroundColor = source.BackgroundColor, Elements = source.Elements
         };
     // `only` evaluates that one conditional property and leaves the suppression state alone; `skip` leaves one property as the source has it.
-    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null, string? only = null, string? skip = null)
+    // `allowShared` lets a page-only evaluation hand back the source itself when the copy would equal it field for field
+    // (no page-dependent conditions, and the stored suppression states already applied); the caller must not mutate it.
+    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null, string? only = null, string? skip = null,
+        bool allowShared = false)
     {
+        if (allowShared && pageOnly && endingOnly is null && only is null && skip is null
+            && ConditionList(_layout.AreaConditions, source.Id, true).Length == 0 && ConditionList(_layout.SectionConditions, source.Id, true).Length == 0)
+        {
+            var stored = _suppression.GetValueOrDefault((source.Id, row));
+            if (source.IsSuppressed == (stored.Area || stored.Section) && source.HideForDrillDown == (stored.AreaHidden || stored.SectionHidden)) return source;
+        }
         var section = CopySection(source);
         var states = pageOnly ? _suppression.GetValueOrDefault((source.Id, row)) :
             (Area: !PageSuppresses(_layout.AreaConditions, source.Id) && !MutableCondition(_layout.AreaConditions, source.Id, "EnableSuppress") && _layout.Areas.GetValueOrDefault(source.Id)?.Suppressed == true,
@@ -278,6 +305,9 @@ public sealed partial class ReportLayoutSession
 
     private ReportDesignerElement ApplyObjectConditions(ReportDesignerElement source, int row, bool pageOnly = false)
     {
+        // Without page-dependent conditions a page-only evaluation copies the object unchanged (no indent, no highlight
+        // rule): the source itself serves, and nothing downstream mutates an item's element in place (each site clones first).
+        if (pageOnly && ConditionList(_layout.ObjectConditions, source.Id, true).Length == 0) return source;
         var element = source.CloneFor(source.SectionId, source.Name);
         element.Id = source.Id; element.SourceKey = source.SourceKey;
         element.LeftTwips = source.LeftTwips + (pageOnly ? 0 : HierarchicalIndent(source.SectionId, row)); element.TopTwips = source.TopTwips;
@@ -285,6 +315,18 @@ public sealed partial class ReportLayoutSession
         foreach (var condition in Conditions(_layout.ObjectConditions, source.Id, pageOnly))
         {
             if (_physicalPageSchedule && !_replayingPrint && NeedsPrintState(condition.Value)) continue;
+            if (condition.Key.StartsWith("TextRun:", StringComparison.Ordinal))
+            {
+                var parts = condition.Key.Split(':', 3);
+                var index = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                // DisplayString can replace the complete rich text object.
+                if (index < element.Visual.Runs.Count)
+                {
+                    var run = element.Visual.Runs[index];
+                    ApplyTextRunCondition(run, parts[2], ConditionValue(condition.Value, row, pageOnly, run.Binding), element.Name);
+                }
+                continue;
+            }
             var value = ConditionValue(condition.Value, row, pageOnly, source.Binding);
             var fontCondition = condition.Key.ToLowerInvariant() is "color" or "fontcolor" or "bold" or "enablebold" or "italic" or "enableitalic" or "underline" or "enableunderline" or "size" or "fontsize" or "name" or "fontname" or "style";
             switch (condition.Key.ToLowerInvariant())
@@ -363,36 +405,43 @@ public sealed partial class ReportLayoutSession
         source = ApplyPrintedItems(source, physicalPage, repeated);
         var sectionOwner = source.Owner ?? this;
         var previousPage = sectionOwner._formulaPage; var previousCount = sectionOwner._formulaPages; var previousRepeat = sectionOwner._repeatedHeader;
+        // Box the page numbers once per band, not once per object.
+        object pageBox = page, countBox = count, objectPageBox = objectPage is { } explicitPage ? explicitPage : pageBox;
+        var pageText = page.ToString(CultureInfo.InvariantCulture);
+        var countText = count.ToString(CultureInfo.InvariantCulture);
         try
         {
-            sectionOwner._formulaPage = page; sectionOwner._formulaPages = count; sectionOwner._repeatedHeader = repeated;
-            var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true);
+            sectionOwner._formulaPage = pageBox; sectionOwner._formulaPages = countBox; sectionOwner._repeatedHeader = repeated;
             var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
-            if (_state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format)) format.Apply(section);
-            var items = new List<Item>();
+            var hasFormat = _state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format);
+            var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true, allowShared: !hasFormat);
+            if (hasFormat) format!.Apply(section);
+            var items = new List<Item>(source.Items.Count);
             foreach (var item in source.Items)
             {
                 var owner = item.Owner ?? this;
                 var oldPage = owner._formulaPage; var oldCount = owner._formulaPages; var oldRepeat = owner._repeatedHeader;
                 try
                 {
-                    owner._formulaPage = objectPage ?? page; owner._formulaPages = count; owner._repeatedHeader = repeated;
+                    owner._formulaPage = objectPageBox; owner._formulaPages = countBox; owner._repeatedHeader = repeated;
                     var element = owner.ApplyObjectConditions(item.Element, item.Row, true);
                     var resized = element.CanGrow != item.Element.CanGrow || element.FontSize != item.Element.FontSize || element.FontFamily != item.Element.FontFamily;
                     if (resized && _textMetrics is null) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
-                    var richChanged = element.Visual.Runs.Count > 0 && owner.Conditions(owner._layout.ObjectConditions, element.Id, true).Any();
+                    var richChanged = element.Visual.Runs.Count > 0 && owner.ConditionList(owner._layout.ObjectConditions, element.Id, true).Length > 0;
+                    var replacesText = owner.ConditionList(owner._layout.ObjectConditions, element.Id, true)
+                        .Any(c => c.Key.Equals("DisplayString", StringComparison.OrdinalIgnoreCase));
                     var template = item.TemplateHtml ?? item.Html;
                     var duplicateValue = item.DuplicateValue;
                     var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
                         ? RestylePrintedRuns(template, element)
-                        : richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
+                        : replacesText || richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
                             ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)) : template;
                     if (SuppressesDuplicates(element) && owner.DependsOn(element.Binding, true) && !owner._physicalPageSchedule)
                         (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
-                    html = ResolvePageValues(html.Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(owner._pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(owner._countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), page, count, repeated);
+                    html = html.Replace(_pageToken, pageText, StringComparison.Ordinal).Replace(_countToken, countText, StringComparison.Ordinal);
+                    if (!ReferenceEquals(owner, this))
+                        html = html.Replace(owner._pageToken, pageText, StringComparison.Ordinal).Replace(owner._countToken, countText, StringComparison.Ordinal);
+                    html = ResolvePageValues(html, page, count, repeated);
                     items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement, DuplicateValue = duplicateValue });
                 }
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
@@ -402,6 +451,26 @@ public sealed partial class ReportLayoutSession
         }
         finally { sectionOwner._formulaPage = previousPage; sectionOwner._formulaPages = previousCount; sectionOwner._repeatedHeader = previousRepeat; }
     }
+    private void ApplyTextRunCondition(ReportTextRun run, string property, object? value, string objectName)
+    {
+        switch (property.ToLowerInvariant())
+        {
+            case "color": case "fontcolor": run.Color = FormulaColor(value); break;
+            case "bold": case "enablebold": run.Bold = CrystalFormula.Boolean(value); break;
+            case "italic": case "enableitalic": run.Italic = CrystalFormula.Boolean(value); break;
+            case "underline": case "enableunderline": run.Underline = CrystalFormula.Boolean(value); break;
+            case "size": case "fontsize": run.FontSize = Math.Clamp(CrystalFormula.Number(value), 1, 300); break;
+            case "name": case "fontname": run.FontFamily = value?.ToString() ?? "Arial"; break;
+            case "style":
+                var style = value is string text ? text : (int)CrystalFormula.Number(value) switch
+                { 0 => "Regular", 1 => "Bold", 2 => "Italic", 3 => "BoldItalic", _ => throw new NotSupportedException("Unknown conditional font style.") };
+                run.Bold = style.Contains("bold", StringComparison.OrdinalIgnoreCase);
+                run.Italic = style.Contains("italic", StringComparison.OrdinalIgnoreCase);
+                break;
+            default: _diagnostics.Add($"{objectName}: text-run conditional property '{property}' is not implemented."); break;
+        }
+    }
+
     private static string FormulaColor(object? value)
     {
         if (value is string color) return ReportObjectRenderer.Color(color, "#000000");

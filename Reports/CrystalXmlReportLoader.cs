@@ -546,7 +546,7 @@ public partial class CrystalXmlReportLoader
     /// subquery instead of a real table (e.g. PO Integration Status Report v1).
     /// </summary>
     private sealed record TableInfo(string Alias, string Name, string? CommandSql = null, string? QualifiedName = null);
-    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination);
+    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination, string? EnforceJoin = null);
     /// <summary>
     /// One field rendered in a Crystal Detail section.
     /// <c>Name</c> is the FieldObject's <c>Name="..."</c> attribute (e.g. "Item1") — used to
@@ -938,7 +938,7 @@ public partial class CrystalXmlReportLoader
             var sourceFields = ParseFieldRefs(link.Element("SourceFields"));
             var destFields = ParseFieldRefs(link.Element("DestinationFields"));
             if (sourceFields.Count > 0 && destFields.Count > 0)
-                links.Add(new TableLinkInfo(joinType, sourceFields, destFields));
+                links.Add(new TableLinkInfo(joinType, sourceFields, destFields, (string?)link.Attribute("EnforceJoin")));
         }
         return links;
     }
@@ -1054,12 +1054,18 @@ public partial class CrystalXmlReportLoader
                     Value: (string?)d.Attribute("Value") ?? ""))
                 .ToList() ?? new List<ReportParameterChoice>();
 
-            // Pre-populate the parameter dialog from either the most-recent current value
-            // (<ParameterCurrentValue Value="…">) or the first default value. Crystal stores
-            // the last user-entered value here; VB6 showed it as the pre-filled suggestion.
-            var defaultVal = (string?)p.Element("ParameterCurrentValues")?.Element("ParameterCurrentValue")?.Attribute("Value")
-                           ?? defaultValues.FirstOrDefault()?.Value
-                           ?? "";
+            var allowMultiple = string.Equals((string?)p.Attribute("EnableAllowMultipleValue"), "True", StringComparison.OrdinalIgnoreCase);
+            var allowRange = (string?)p.Attribute("DiscreteOrRangeKind") is "RangeValue" or "DiscreteAndRangeValue";
+            // An explicit current value, including an empty string, wins. Scalar prompts
+            // then use Crystal's authored initial value before a default-list choice.
+            // Initial multi/range values are not scalar defaults: their selected state is
+            // restored separately by the dialog and must not replace an empty selection.
+            var authoredDefaultVal = (string?)p.Element("ParameterCurrentValues")?.Element("ParameterCurrentValue")?.Attribute("Value")
+                           ?? (!allowMultiple && !allowRange
+                               ? (string?)p.Element("ParameterInitialValues")?.Element("ParameterInitialValue")?.Attribute("Value")
+                               : null)
+                           ?? defaultValues.FirstOrDefault()?.Value;
+            var defaultVal = authoredDefaultVal ?? "";
 
             // Optional <PickListSql>…</PickListSql> child — host-specific
             // annotation, NOT a native Crystal export element. When present,
@@ -1126,10 +1132,11 @@ public partial class CrystalXmlReportLoader
                     && string.Equals((string?)p.Attribute("AllowCustomCurrentValues"), "True", StringComparison.OrdinalIgnoreCase)
                     && string.IsNullOrEmpty((string?)p.Attribute("EditMask"))
                     && !string.Equals((string?)p.Attribute("FlexKitAllowEmptyString"), "False", StringComparison.OrdinalIgnoreCase),
-                AllowMultiple = string.Equals((string?)p.Attribute("EnableAllowMultipleValue"), "True", StringComparison.OrdinalIgnoreCase),
-                AllowRange = (string?)p.Attribute("DiscreteOrRangeKind") is "RangeValue" or "DiscreteAndRangeValue",
+                AllowMultiple = allowMultiple,
+                AllowRange = allowRange,
                 AllowCustomCurrentValues = string.Equals((string?)p.Attribute("AllowCustomCurrentValues"), "True", StringComparison.OrdinalIgnoreCase),
                 DefaultValue = defaultVal,
+                HasAuthoredDefaultValue = authoredDefaultVal != null,
                 DefaultValues = defaultValues,
                 PickListSql = pickListSql,
                 PickListIsAuthored = pickListIsAuthored,
@@ -3349,7 +3356,7 @@ public partial class CrystalXmlReportLoader
                 yield return new TableLinkInfo(link.JoinType switch
                 {
                     "LeftOuter" => "RightOuter", "RightOuter" => "LeftOuter", _ => link.JoinType
-                }, link.Destination, link.Source);
+                }, link.Destination, link.Source, link.EnforceJoin);
         }
     }
 

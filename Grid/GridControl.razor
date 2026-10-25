@@ -19,6 +19,7 @@
      data-fx-allow-selection="@(AllowSelection ? "true" : "false")"
      data-fx-selection-mode="@(SelectionSettingsRef?.Mode == SelectionMode.Cell ? "cell" : "row")"
      data-fx-active-cell="@(ShowActiveCell ? null : "hidden")"
+     data-fx-active-cell-scroll="@(_pendingActiveCellScrollIntoView ? "true" : "false")"
      data-fx-pointer-paint-ack="@_pointerPaintAcknowledgedGeneration"
      data-fx-custom-keyboard-shortcuts="@CustomKeyboardShortcutDomValue"
      data-fx-column-virtualization="@ColumnVirtualizationDomState"

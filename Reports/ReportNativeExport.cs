@@ -24,6 +24,7 @@ public static class ReportNativeExport
 
     public static async Task<GridExportResult> ExportAsync(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
     {
+        RequireComplete(tab);
         if (format != ReportNativeExportFormat.Html || tab.PageSnapshots.Count == 0) return Export(tab, format, fileName);
         var pages = await RenderPagesAsync(tab.PageSnapshots);
         return Export(new ReportTab { Title = tab.Title, Pages = pages, PositionedPage = tab.PositionedPage, Orientation = tab.Orientation }, format, fileName);
@@ -47,6 +48,7 @@ public static class ReportNativeExport
 
     public static GridExportResult Export(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
     {
+        RequireComplete(tab);
         if (format == ReportNativeExportFormat.Html && tab.PageSnapshots.Any(page => page.Bands.Any(band => band.Objects.Any(item => item.Analysis is not null || item.Table is not null))))
             throw new InvalidOperationException("Use ExportAsync for reports containing chart or cross-tab components.");
         var name = Path.GetFileNameWithoutExtension(fileName ?? tab.Title);
@@ -105,6 +107,11 @@ public static class ReportNativeExport
         var fields = columns.Select(column => new ReportColumn { Field = column.Field, HeaderText = column.HeaderText,
             Format = column.Format, Hidden = column.Hidden, Width = column.Width, IsSubreportObject = column.IsSubreportObject }).ToList();
         return () => TabularSnapshot(title, snapshot, fields);
+    }
+
+    private static void RequireComplete(ReportTab tab)
+    {
+        if (!tab.IsPaginationComplete) throw new InvalidOperationException("Complete report pagination before exporting; the loaded pages are only a preview.");
     }
 
     private static string SafeText(string value)

@@ -6,9 +6,6 @@
 
      - left:  the prompt text (e.g. "Enter Job:")
      - right: a secondary label with the parameter's display name
-       (an Available/Selected pair has no heading row: the prompt text sits on the
-       Available header line after its search icon, and the display name on the
-       Selected header line only when it differs from the prompt)
      - body:  one of:
         * dual-list-box   (AllowMultiple=True with default-values or pick-list)
         * combo dropdown  (AllowMultiple=False with 2+ default values)
@@ -43,7 +40,7 @@
 @if (_visible)
 {
   <div class="fx-param-dialog-host">
-    <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" OnClose="Cancel">
+    <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" CssClass="fx-param-dialog" OnClose="Cancel" OnEnter="Accept">
         <HeaderContent>
             @if (string.IsNullOrWhiteSpace(_title))
             {
@@ -69,14 +66,14 @@
                     var promptText = PromptText(p);
                     var secondaryLabel = SecondaryLabel(p);
                     var isDualList = IsDualList(p);
-                    <div class="fx-param-panel @(isDualList ? "fx-param-panel-list" : null)">
-                        @if (!isDualList)
-                        {
+                    <PanelControl Bordered="false" CssClass="@($"fx-param-panel{(isDualList ? " fx-param-panel-list" : "")}")" Grow="0 0 auto" role="group" aria-label="@secondaryLabel">
+                        <Header>
                             <div class="fx-param-panel-header">
                                 <span class="fx-param-prompt-text">@promptText</span>
                                 <span class="fx-param-secondary-label">@secondaryLabel</span>
                             </div>
-                        }
+                        </Header>
+                        <ChildContent>
                         <div class="fx-param-panel-body">
                             @if (p.AllowRange)
                             {
@@ -112,17 +109,15 @@
                                    default), keeps every value listed under Available and
                                    adds only the batch on screen with >>, so the same clicks
                                    submit the same values in both applications. < and <<
-                                   take values out of Selected. The prompt names the lists
-                                   on their header line; the lists share the dialog's height
+                                   take values out of Selected. The lists share the dialog's height
                                    so every prompt shows without scrolling. *@
-                                <MultiSelectDualListControl TItem="ListItem"
+                                <div class="fx-param-dual-group">
+                                <MultiSelectDualListControl TItem="ListItem" CssClass="fx-param-dual-list"
                                                             Items="@GetMultiAvailable(p.Name)"
                                                             SelectedItems="@GetMultiSelected(p.Name)"
                                                             SelectedItemsChanged="@(items => SetMultiSelected(p.Name, items))"
                                                             LeftHeader="Available Values:"
                                                             RightHeader="Selected Values:"
-                                                            LeftCaption="@promptText"
-                                                            RightCaption="@(string.Equals(secondaryLabel.Trim(), promptText.Trim(), StringComparison.OrdinalIgnoreCase) ? null : secondaryLabel)"
                                                             KeySelector="@(i => i.Key)"
                                                             LabelSelector="@(i => i.Label)"
                                                             VisibleRows="7"
@@ -132,24 +127,25 @@
 
                                 @if (HasCustomEntryRow(p))
                                 {
-                                    @* "Enter a Value" custom-entry row — mirrors
-                                       the Crystal dialog's inline text input +
-                                       > button for adding ad-hoc values to the
-                                       Selected pane. *@
-                                    <div class="fx-param-custom-row">
+                                    @* Crystal places the label above an input matching the
+                                       Available pane; the add button shares the arrow column. *@
+                                    <div class="fx-param-custom-row" data-fx-enter-owner>
                                         <label class="fx-param-value-label">Enter a Value:</label>
-                                        <TextBoxControl CssClass="fx-param-value-input" Value="@_customDrafts.GetValueOrDefault(p.Name)"
+                                        <TextBoxControl CssClass="fx-param-value-input" Width="100%" aria-label="@($"Enter a value for {secondaryLabel}")" Value="@_customDrafts.GetValueOrDefault(p.Name)"
                                                         ValueChanged="value => _customDrafts[p.Name] = value ?? string.Empty" UpdateOnInput="true"
                                                         OnKeyDown="e => OnCustomKeyDown(e, p.Name)" />
-                                        <ButtonControl Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">&gt;</ButtonControl>
+                                        <ButtonControl CssClass="fx-param-custom-add" BareStyle="true" Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">
+                                            <SvgIconControl Name="chevron-right" Size="14px" StrokeWidth="2.2" />
+                                        </ButtonControl>
                                     </div>
                                 }
+                                </div>
                             }
                             else if (hasDefaults && defaults.Count >= 2)
                             {
                                 @* Crystal default-values dropdown — shows description,
                                    sets value behind it. Same as before. *@
-                                <DropDownListControl TValue="string" TItem="ListItem"
+                                <DropDownListControl TValue="string" TItem="ListItem" CssClass="fx-param-single-input"
                                     DataSource="@defaults.Select(choice => new ListItem(choice.Value, ChoiceLabel(p, choice)))"
                                     ValueFieldName="Key" TextFieldName="Label" Value="@_values.GetValueOrDefault(p.Name)"
                                     ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name"
@@ -157,12 +153,12 @@
                                 @if (p.AllowCustomCurrentValues)
                                 {
                                     <label class="fx-param-value-label">Enter a Value:</label>
-                                    <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
+                                    <TextBoxControl CssClass="fx-param-single-input" Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
                                 }
                             }
                             else if (isDependent || (pickList != null && pickList.Count > 0))
                             {
-                                <DropDownListControl TValue="string" TItem="PickListItem" DataSource="@_singlePickLists.GetValueOrDefault(p.Name)"
+                                <DropDownListControl TValue="string" TItem="PickListItem" CssClass="fx-param-single-input" DataSource="@_singlePickLists.GetValueOrDefault(p.Name)"
                                     ValueFieldName="Value" TextFieldName="Display" Value="@PickListValue(p)"
                                     ValueChanged="value => SetPickListValue(p.Name, value)" AllowFiltering="true" AriaLabel="@p.Name"
                                     Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight"
@@ -170,22 +166,22 @@
                             }
                             else if (p.ParameterType == ReportParameterType.Integer || p.ParameterType == ReportParameterType.Decimal)
                             {
-                                <NumericTextBoxControl TValue="decimal?" Value="@ParseNumberValue(_values.GetValueOrDefault(p.Name))"
+                                <NumericTextBoxControl TValue="decimal?" CssClass="fx-param-single-input" Format="0.############################" Value="@ParseNumberValue(_values.GetValueOrDefault(p.Name))"
                                     ValueChanged="value => SetValue(p.Name, value?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty)" />
                             }
                             else if (p.ParameterType == ReportParameterType.Date)
                             {
-                                <DatePickerControl Value="@ParseDateValue(_values.GetValueOrDefault(p.Name))"
+                                <DatePickerControl CssClass="fx-param-scalar fx-param-single-input" AriaLabel="@p.Name" Value="@ParseDateValue(_values.GetValueOrDefault(p.Name))"
                                                    ValueChanged="@(v => SetValue(p.Name, v.HasValue ? v.Value.ToString("yyyy-MM-dd") : ""))" />
                             }
                             else if (p.ParameterType == ReportParameterType.Boolean)
                             {
-                                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "True", "False" })"
+                                <DropDownListControl TValue="string" TItem="string" CssClass="fx-param-single-input" DataSource="@(new[] { "True", "False" })"
                                     Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
                             }
                             else
                             {
-                                <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
+                                <TextBoxControl CssClass="fx-param-single-input" Width="@ScalarWidth" aria-label="@p.Name" Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
                             }
                             @if (isDependent)
                             {
@@ -200,7 +196,8 @@
                                 }
                             }
                         </div>
-                    </div>
+                        </ChildContent>
+                    </PanelControl>
                 }
                 @if (!string.IsNullOrEmpty(_error))
                 {
@@ -285,7 +282,13 @@
     private bool _disposed;
     private bool ChoicesUnavailable => _lookupActive || _dependencySetupFailed || _listErrors.Count > 0;
 
-    private static string PromptText(ReportParameter p) => !string.IsNullOrEmpty(p.Prompt) ? p.Prompt : p.Name;
+    private static string PromptText(ReportParameter p)
+    {
+        var prompt = string.IsNullOrWhiteSpace(p.Prompt) ? SecondaryLabel(p) : p.Prompt;
+        return prompt.Equals(p.Name, StringComparison.OrdinalIgnoreCase)
+            || prompt.Equals(SecondaryLabel(p), StringComparison.OrdinalIgnoreCase)
+                ? $"Enter {prompt}:" : prompt;
+    }
 
     private static string SecondaryLabel(ReportParameter p) => !string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name;
 
@@ -304,15 +307,16 @@
     // padding; a list panel's padding, rule, margin and count line; one other prompt; an "Enter a Value:" row.
     // Rounded up, so fractional pixels never leave a 1-4px scrollbar on a dialog that fits.
     private const int DialogChromeHeight = 106;
-    private const int ListPanelHeight = 34;
-    private const int OtherPromptHeight = 66;
-    private const int CustomEntryRowHeight = 42;
+    private const int ListPanelHeight = 70;
+    private const int OtherPromptHeight = 82;
+    private const int CustomEntryRowHeight = 58;
 
     /// <summary>The dialog's height limit (also set in the .razor.css): 90% of the window, and never over 1200px.</summary>
     private const string DialogMaxHeight = "min(90vh, calc(1200px * var(--fx-zoom, 1)))";
     // Crystal's "Enter Parameter Values" gives a value list a wide combo whose list drops well below it, in a window that
     // stays tall whatever it holds; the body reserves that room (fx-param-body-lists) so the list is not clamped to a short dialog.
     private const string PickListWidth = "min(100%, calc(440px * var(--fx-zoom, 1)))";
+    private const string ScalarWidth = "min(100%, calc(320px * var(--fx-zoom, 1)))";
     private const int PickListPanelHeight = 320;
     private string BodyCssClass => _singlePickLists.Count > 0 || _parameters.Any(p => !p.AllowMultiple && !p.AllowRange && p.DefaultValues.Count >= 2)
         ? "fx-param-body fx-param-body-lists" : "fx-param-body";
@@ -804,7 +808,8 @@
 
     private Task OnCustomKeyDown(KeyboardEventArgs e, string name)
     {
-        return e.Key == "Enter" ? AddCustomValue(name) : Task.CompletedTask;
+        return e.Key is "Enter" or "NumpadEnter" && !e.Repeat && !e.CtrlKey && !e.AltKey && !e.MetaKey && !e.ShiftKey
+            ? AddCustomValue(name) : Task.CompletedTask;
     }
 
     private Task SetValue(string name, string value)

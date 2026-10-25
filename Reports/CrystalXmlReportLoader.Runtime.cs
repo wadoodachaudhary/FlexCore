@@ -100,10 +100,11 @@ public partial class CrystalXmlReportLoader
         var links = ParseTableLinks(report);
         var usedTables = layout.Bindings.Keys.Select(ParseCrystalFieldRef).Where(field => field.HasValue)
             .Select(field => field!.Value.Table).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        // The designer can retain unused, disconnected tables. They are not query
-        // inputs. Keep every authored join endpoint, including bridge/filter tables.
+        // Unknown/legacy enforcement retains authored joins. A known non-enforced
+        // unused leaf is not a Crystal query input, even if its join could multiply rows.
         if (usedTables.Count > 0)
         {
+            PruneUnusedJoinLeaves(tables, links, usedTables);
             usedTables.UnionWith(links.SelectMany(link => link.Source.Concat(link.Destination)).Select(field => field.Table));
             tables.RemoveAll(table => !usedTables.Contains(table.Alias));
         }
@@ -115,6 +116,29 @@ public partial class CrystalXmlReportLoader
             : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
         if (definition.PositionedIntegerSelection is { } integers)
             definition.PositionedIntegerSelection = integers.WithTemplate(definition.Sql);
+    }
+
+    private static void PruneUnusedJoinLeaves(List<TableInfo> tables, List<TableLinkInfo> links, HashSet<string> usedTables)
+    {
+        bool removed;
+        do
+        {
+            removed = false;
+            foreach (var table in tables.Where(t => !usedTables.Contains(t.Alias)).ToArray())
+            {
+                var incident = links.Where(l => l.Source.Concat(l.Destination)
+                    .Any(f => f.Table.Equals(table.Alias, StringComparison.OrdinalIgnoreCase))).ToArray();
+                if (incident.Length == 0 || incident.Any(l => l.EnforceJoin != "NotEnforced")) continue;
+                var neighbors = incident.SelectMany(l => l.Source.Concat(l.Destination)).Select(f => f.Table)
+                    .Where(alias => !alias.Equals(table.Alias, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                // Keep bridge tables and cycles; removing either could change a required relationship.
+                if (neighbors != 1) continue;
+                tables.Remove(table);
+                foreach (var link in incident) links.Remove(link);
+                removed = true;
+            }
+        } while (removed);
     }
 
     /// <summary>The authored ShowAllHeadersOnDrillDown option. XML without it takes Crystal's default for a new report (false):
@@ -134,7 +158,11 @@ public partial class CrystalXmlReportLoader
 
     private static ReportPositionedLayout BuildPositionedLayout(ReportDesignerDocument document, XElement report, List<string> diagnostics)
     {
-        var layout = new ReportPositionedLayout { Document = document, ShowAllHeadersOnDrillDown = DrillHeaderOption(report) };
+        var layout = new ReportPositionedLayout
+        {
+            Document = document, ShowAllHeadersOnDrillDown = DrillHeaderOption(report),
+            ConvertDatabaseNullToDefault = Flag(report.Element("ReportOptions"), "ConvertDBNullToDefault")
+        };
         var functions = CompileCustomFunctions(report, diagnostics);
         foreach (var field in document.Fields.Where(f => f.IsFormula))
         {
@@ -204,7 +232,15 @@ public partial class CrystalXmlReportLoader
                     var containers = ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
                         ? objectXml.Descendants()
                         : objectXml.Elements().Concat(objectXml.Elements().Where(e => e.Name.LocalName is "ObjectFormat" or "Border" or "Font").Descendants());
-                    layout.ObjectConditions[element.Id] = ReadConditions(containers.Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")), diagnostics, functions);
+                    var conditions = ReadConditions(containers.Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")
+                        && !e.Ancestors("Run").Any()), diagnostics, functions);
+                    // Run formulas participate in the same dependency/page scheduling as object
+                    // formulas, but must never change the surrounding literal text.
+                    foreach (var (run, index) in element.Visual.Runs.Select((run, index) => (run, index)))
+                        foreach (var condition in ReadConditions([new XElement("FontColorConditionFormulas",
+                            run.FontConditionFormulas.Select(c => new XAttribute(c.Key, c.Value)))], diagnostics, functions))
+                            conditions[$"TextRun:{index}:{condition.Key}"] = condition.Value;
+                    layout.ObjectConditions[element.Id] = conditions;
                 }
         }
         var references = document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))

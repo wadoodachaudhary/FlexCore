@@ -16,8 +16,7 @@
 }
 
 .fx-treeview:focus {
-    outline: 1px dotted #000;
-    outline-offset: -2px;
+    outline: none;
 }
 
 .fx-treeview-node {

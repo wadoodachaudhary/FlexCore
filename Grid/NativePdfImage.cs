@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Fx.ControlKit.Grid;
 
-/// <summary>Bounded decoding of embedded PNG/JPEG assets, without filesystem or network image loaders.</summary>
+/// <summary>Bounded decoding of embedded PNG/JPEG/BMP assets, without filesystem or network image loaders.</summary>
 internal sealed record NativePdfImage(int Width, int Height, byte[] Data, string ColorSpace, byte[]? Alpha = null, bool Jpeg = false)
 {
     public static NativePdfImage Read(byte[] data)
@@ -12,7 +12,55 @@ internal sealed record NativePdfImage(int Width, int Height, byte[] Data, string
         if (data.Length > 5 * 1024 * 1024) throw new InvalidDataException("PDF images must be 5 MB or smaller.");
         if (data.AsSpan().StartsWith(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 })) return Png(data);
         if (data.AsSpan().StartsWith(new byte[] { 255, 216, 255 })) return ReadJpeg(data);
-        throw new NotSupportedException("Native PDF images support PNG and JPEG. Convert this embedded image to PNG before exporting.");
+        if (data.AsSpan().StartsWith("BM"u8)) return Bitmap(data);
+        throw new NotSupportedException("Native PDF images support PNG, JPEG and uncompressed BMP.");
+    }
+
+    private static NativePdfImage Bitmap(byte[] data)
+    {
+        if (data.Length < 54) throw new InvalidDataException("Truncated BMP header.");
+        uint U32(int at) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(at));
+        int I32(int at) => BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(at));
+        ushort U16(int at) => BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(at));
+        if (U32(2) != data.Length) throw new InvalidDataException("Invalid BMP file size.");
+        if (U32(14) != 40 || U32(30) != 0)
+            throw new NotSupportedException("Native PDF requires an uncompressed BITMAPINFOHEADER BMP.");
+        var width = I32(18);
+        var signedHeight = I32(22);
+        var height = Math.Abs((long)signedHeight);
+        if (height > int.MaxValue) throw new InvalidDataException("Invalid BMP height.");
+        ValidateSize(width, (int)height);
+        if (U16(26) != 1) throw new InvalidDataException("Invalid BMP planes.");
+        var depth = U16(28);
+        if (depth is not (1 or 4 or 8 or 24 or 32)) throw new NotSupportedException("Unsupported BMP color depth for native PDF.");
+        var colors = U32(46);
+        if (depth <= 8 && colors == 0) colors = (uint)(1 << depth);
+        if (depth <= 8 ? colors > 1 << depth : colors != 0) throw new InvalidDataException("Invalid BMP palette size.");
+        var offset = (long)U32(10);
+        var stride = ((long)width * depth + 31) / 32 * 4;
+        var pixelBytes = stride * height;
+        if (offset < 54 + colors * 4L || offset + pixelBytes > data.Length
+            || U32(34) != 0 && U32(34) != pixelBytes)
+            throw new InvalidDataException("Invalid BMP pixel length or offset.");
+        var rgb = new byte[checked(width * (int)height * 3)];
+        for (var y = 0; y < height; y++)
+        {
+            var row = (int)(offset + (signedHeight < 0 ? y : height - 1 - y) * stride);
+            for (var x = 0; x < width; x++)
+            {
+                var source = row + x * (depth / 8);
+                if (depth <= 8)
+                {
+                    var index = data[row + x * depth / 8] >> (8 - depth - x * depth % 8) & ((1 << depth) - 1);
+                    if (index >= colors) throw new InvalidDataException("BMP palette index is out of bounds.");
+                    source = 54 + index * 4;
+                }
+                var target = (y * width + x) * 3;
+                // BI_RGB uses BGR; the fourth byte in a 32-bit pixel/palette entry is reserved, not alpha.
+                rgb[target] = data[source + 2]; rgb[target + 1] = data[source + 1]; rgb[target + 2] = data[source];
+            }
+        }
+        return new(width, (int)height, rgb, "DeviceRGB");
     }
     private static NativePdfImage ReadJpeg(byte[] data)
     {

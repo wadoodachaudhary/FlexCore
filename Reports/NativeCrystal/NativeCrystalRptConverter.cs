@@ -131,6 +131,7 @@ public static class NativeCrystalRptConverter
             model.Core.EnableSaveDataWithReport = core.EnableSaveDataWithReport;
             model.Core.EnableSaveSummariesWithReport = core.EnableSaveSummariesWithReport;
             model.Core.ShowAllHeadersOnDrillDown = core.ShowAllHeadersOnDrillDown;
+            model.Core.ConvertDatabaseNullToDefault = core.ConvertDatabaseNullToDefault;
             model.Core.LeftMargin = core.LeftMargin;
             model.Core.RightMargin = core.RightMargin;
             model.Core.TopMargin = core.TopMargin;

@@ -1,0 +1,14 @@
+{
+  "family": "Carlito",
+  "license": "SIL-OFL-1.1",
+  "licenseFile": "../../Reports/Fonts/OFL.txt",
+  "licenseSha256": "58402f82a7c332a700294988fe7554fbb0a63a8d27ccc1ee3bbc640311990a00",
+  "source": "../../Reports/Fonts/SOURCE.txt",
+  "conversion": "fontTools 4.65.0 WOFF2 decompression; glyphs, metrics and names unchanged",
+  "files": [
+    { "file": "Carlito-Regular.ttf", "bytes": 628032, "sha256": "d9ca56d2cc0ec5bbc6bc540b58909b5174e7bf6044278bad1cc317d850f4c95c" },
+    { "file": "Carlito-Bold.ttf", "bytes": 682468, "sha256": "9af48b3a15caaa0c561b803645986ae51ae3849b43ea9f327b902d4443d1e464" },
+    { "file": "Carlito-Italic.ttf", "bytes": 615236, "sha256": "55c9146d7c27d9e1bed26cdb67b79802ef3d63a20fde1e0c02c582252b69b491" },
+    { "file": "Carlito-BoldItalic.ttf", "bytes": 808508, "sha256": "49ff634af414eb086d0a9824ebb60aa3310b1495f4609a57eefba115569a8eab" }
+  ]
+}

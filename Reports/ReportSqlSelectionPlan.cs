@@ -7,6 +7,8 @@ internal sealed class ReportSqlSelectionPlan
     internal List<string> Dates { get; } = [];
     internal List<string> Integers { get; } = [];
     internal List<StringBinding> Strings { get; } = [];
+    /// <summary>String literals of the record selection that the SQL compares (Crystal writes them into its query); bound under reserved names.</summary>
+    internal List<(string Name, string Value)> Literals { get; } = [];
     internal HashSet<string> DeclaredNames { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     internal sealed class StringBinding(string name, string guard, string? constantName, string? constantValue, bool allowMultiple)
@@ -27,6 +29,7 @@ internal sealed class ReportSqlSelectionPlan
         copy.Dates.AddRange(Dates);
         copy.Integers.AddRange(Integers);
         copy.Strings.AddRange(Strings.Select(binding => binding.Clone()));
+        copy.Literals.AddRange(Literals);
         copy.DeclaredNames.UnionWith(DeclaredNames);
         return copy;
     }
@@ -139,20 +142,49 @@ internal sealed class ReportSqlSelectionPlan
         {
             var values = binding.SqlNames.Select(name => Value(name) is string value ? value
                 : throw new InvalidDataException($"Positioned SQL selection '{binding.Name}' requires non-null string bindings; expand lists before execution.")).ToArray();
-            // SQL's default collation is not trusted. Printable ASCII is narrowed
-            // using an explicit CI collation; every uncertain list value admits
-            // all rows through this guard for the unchanged Crystal AST to decide.
-            generated[binding.Guard] = values.Any(value => value.Any(character => character is < ' ' or > '~'));
+            // The SQL predicate already retains every non-ASCII/control-character
+            // database value. An uncertain selection must not also admit unrelated
+            // ASCII rows unless the runtime's ordinal comparison could match one.
+            generated[binding.Guard] = values.Any(RequiresAsciiFallback);
             if (binding.ConstantName is not null) generated[binding.ConstantName] = binding.ConstantValue!;
+        }
+        foreach (var (name, value) in Literals) generated[name] = value;
+        if (parameters is null)
+        {
+            if (generated.Count == 0) return;
+            throw new InvalidDataException("Positioned SQL reserved bindings require a parameter dictionary.");
         }
         foreach (var pair in generated)
         {
-            var aliases = parameters!.Keys.Where(key => key.Equals(pair.Key, StringComparison.OrdinalIgnoreCase)).ToArray();
+            var aliases = parameters.Keys.Where(key => key.Equals(pair.Key, StringComparison.OrdinalIgnoreCase)).ToArray();
             if (aliases.Length > 1) throw new InvalidDataException("Ambiguous reserved positioned SQL binding.");
             if (aliases.Length == 1) parameters[aliases[0]] = pair.Value;
             else parameters.Add(pair.Key, pair.Value);
         }
-        if (parameters!.Count > 2100) throw new InvalidDataException("Positioned report exceeds SQL Server's 2,100 parameter limit.");
+        if (parameters.Count > 2100) throw new InvalidDataException("Positioned report exceeds SQL Server's 2,100 parameter limit.");
+    }
+
+    private static bool RequiresAsciiFallback(string value)
+    {
+        var uncertain = false;
+        Span<char> source = stackalloc char[1];
+        Span<char> candidate = stackalloc char[1];
+        foreach (var character in value)
+        {
+            if (character is >= ' ' and <= '~') continue;
+            uncertain = true;
+            source[0] = character;
+            var matches = false;
+            for (var ascii = ' '; ascii <= '~'; ascii++)
+            {
+                candidate[0] = ascii;
+                if (!MemoryExtensions.Equals(source, candidate, StringComparison.OrdinalIgnoreCase)) continue;
+                matches = true;
+                break;
+            }
+            if (!matches) return false;
+        }
+        return uncertain;
     }
 
     private static bool LocalDate(object value) => value is DateTime date && date.Kind == DateTimeKind.Unspecified && date.TimeOfDay == TimeSpan.Zero;

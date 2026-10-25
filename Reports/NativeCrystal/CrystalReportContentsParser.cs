@@ -89,6 +89,8 @@ internal static partial class CrystalReportContentsParser
             ApplyPageContentSize(core, 12240, 15840);
         }
 
+        core.ConvertDatabaseNullToDefault = ReadDatabaseNullOption(reader.Fork());
+
         if (database is not null)
         {
             TryParseDataDefinition(
@@ -105,6 +107,26 @@ internal static partial class CrystalReportContentsParser
         }
 
         return new CrystalReportContents(core, dataDefinition);
+    }
+
+    private static bool ReadDatabaseNullOption(TslvArchiveReader reader)
+    {
+        // Legacy ReportOptions (352) follows the report areas, before end-of-definition (103).
+        while (reader.BytesLeftInRecord > 0)
+        {
+            var record = reader.LoadAnyRecord();
+            if (record.Type is 103 or 101) return false;
+            if (record.Type == 352)
+            {
+                if (record.Schema > 1792)
+                    throw new InvalidDataException($"Report options use unsupported TSLV schema {record.Schema}.");
+                _ = reader.LoadBoolean();
+                _ = reader.LoadEnum(); // ConvertDateTimeType precedes ConvertDatabaseNullToDefault.
+                return reader.LoadBoolean();
+            }
+            reader.SkipRestOfRecord();
+        }
+        return false;
     }
 
     private static void TryParseDataDefinition(
@@ -182,6 +204,8 @@ internal static partial class CrystalReportContentsParser
                 ResolveConditions(obj.Format.ConditionReferences, obj.Format.ConditionFormulas);
                 ResolveConditions(obj.FontConditionReferences, obj.FontConditionFormulas);
                 ResolveConditions(obj.Border.ConditionReferences, obj.Border.ConditionFormulas);
+                foreach (var run in obj.TextRuns)
+                    ResolveConditions(run.FontConditionReferences, run.FontConditionFormulas);
             }
             void ResolveConditions(List<(string Property, string Name, int Type, int Index)> references, Dictionary<string, string> formulas)
             {
@@ -2312,19 +2336,22 @@ internal static partial class CrystalReportContentsParser
         }
 
         reader.SkipRestOfRecord();
-        var style = ReadFontColourProperties(reader, reportObject);
+        var references = new List<(string Property, string Name, int Type, int Index)>();
+        var style = ReadFontColourProperties(reader, reportObject, references);
         _ = reader.LoadNextRecord(195, 1792, 193);
         reader.SkipRestOfRecord();
-        CaptureTextRun(reportObject, text, "", style.Font, style.Color);
+        CaptureTextRun(reportObject, text, "", style.Font, style.Color).FontConditionReferences.AddRange(references);
         return text;
     }
 
-    private static void CaptureTextRun(CrystalReportObjectModel item, string text, string binding, CrystalFontModel? font = null, CrystalColorModel? color = null)
+    private static CrystalTextRunModel CaptureTextRun(CrystalReportObjectModel item, string text, string binding, CrystalFontModel? font = null, CrystalColorModel? color = null)
     {
         font ??= item.Font;
         color ??= item.Color;
-        item.TextRuns.Add(new(text.Replace('\u00a0', ' '), binding, font.FontFamily, font.Size,
-            font.Bold, font.Italic, font.Underline, $"#{color.R:x2}{color.G:x2}{color.B:x2}"));
+        var run = new CrystalTextRunModel(text.Replace('\u00a0', ' '), binding, font.FontFamily, font.Size,
+            font.Bold, font.Italic, font.Underline, $"#{color.R:x2}{color.G:x2}{color.B:x2}");
+        item.TextRuns.Add(run);
+        return run;
     }
 
     private static string ReadFieldElement(
@@ -2347,15 +2374,17 @@ internal static partial class CrystalReportContentsParser
         text = ReadSpecialFieldIdentity(reader, fieldReferences) ?? text;
 
         reader.SkipRestOfRecord();
-        var style = ReadFontColourProperties(reader, reportObject);
+        var references = new List<(string Property, string Name, int Type, int Index)>();
+        var style = ReadFontColourProperties(reader, reportObject, references);
         SkipUntilRecord(reader, 197);
-        CaptureTextRun(reportObject, "", text, style.Font, style.Color);
+        CaptureTextRun(reportObject, "", text, style.Font, style.Color).FontConditionReferences.AddRange(references);
         return text;
     }
 
     private static (CrystalFontModel Font, CrystalColorModel Color) ReadFontColourProperties(
         TslvArchiveReader reader,
-        CrystalReportObjectModel reportObject)
+        CrystalReportObjectModel reportObject,
+        List<(string Property, string Name, int Type, int Index)>? runReferences = null)
     {
         if (reader.BytesLeftInRecord <= 0)
         {
@@ -2383,7 +2412,7 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.CurrentRecord?.Type == 257)
         {
-            var references = reportObject.HasFont ? [] : reportObject.FontConditionReferences;
+            var references = runReferences ?? reportObject.FontConditionReferences;
             ReadConditionReferences(reader, references, ["Color", "Size", "Strikeout", "Underline", "Style", "Name"]);
             reader.SkipRestOfRecord();
         }

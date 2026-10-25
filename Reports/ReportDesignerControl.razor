@@ -10,7 +10,154 @@
 
 <ReportFontStyles />
 
-<div class="fx-rd">
+<div class="@(Shell == ReportDesignerShell.Studio ? "fx-rd fx-rd-studio" : "fx-rd")">
+@if (Shell == ReportDesignerShell.Studio)
+{
+    @* Studio shell: Looker Studio's frame over the same document, commands, experts and canvas as the classic shell. *@
+    <div class="fx-rd-studio-bar">
+        <TextBoxControl CssClass="fx-rd-studio-title" aria-label="Report title" @bind-Value="_document.Title" @bind-Value:after="MarkDirtyAsync" MaxLength="160" />
+        <span class="fx-rd-studio-state @(_document.IsDirty ? "dirty" : "")" role="status">@StatusText</span>
+        <span class="fx-rd-studio-spacer"></span>
+        @StudioBarContent
+    </div>
+    <div class="fx-rd-studio-tools" role="toolbar" aria-label="Report tools">
+        @StudioToolButton("undo")
+        @StudioToolButton("redo")
+        <span class="fx-rd-studio-divider"></span>
+        @StudioToolbarContent
+        <MenuDropDownControl Label="Add a chart" CssClass="fx-rd-studio-menu">
+            <MenuActionControl Text="Table" OnClick="@(() => ExecuteToolbarCommandAsync("table"))" />
+            <MenuActionControl Text="Cross-tab" OnClick="@(() => ExecuteToolbarCommandAsync("crosstab"))" />
+            <MenuActionControl Text="Chart" OnClick="@(() => ExecuteToolbarCommandAsync("chart"))" />
+            <MenuActionControl Text="Summary" OnClick="@(() => ExecuteToolbarCommandAsync("summary"))" />
+            <MenuActionControl Text="Running total" OnClick="@(() => ExecuteToolbarCommandAsync("runningTotal"))" />
+        </MenuDropDownControl>
+        <MenuDropDownControl Label="Add a control" CssClass="fx-rd-studio-menu">
+            <MenuActionControl Text="Parameter" OnClick="@(() => ExecuteToolbarCommandAsync("parameter"))" />
+            <MenuActionControl Text="Record selection" OnClick="@(() => ExecuteToolbarCommandAsync("record"))" />
+            <MenuActionControl Text="Group" OnClick="@(() => ExecuteToolbarCommandAsync("group"))" />
+            <MenuActionControl Text="Group sort" OnClick="@(() => ExecuteToolbarCommandAsync("groupsort"))" />
+            <MenuActionControl Text="Record sort" OnClick="@(() => ExecuteToolbarCommandAsync("sort"))" />
+        </MenuDropDownControl>
+        <MenuDropDownControl Label="Insert" CssClass="fx-rd-studio-menu">
+            <MenuActionControl Text="Text" OnClick="@(() => ExecuteToolbarCommandAsync("text"))" />
+            <MenuActionControl Text="Selected field" Disabled="@(!CanInsertField)" OnClick="@(() => ExecuteToolbarCommandAsync("field"))" />
+            <MenuActionControl Text="Line" OnClick="@(() => ExecuteToolbarCommandAsync("line"))" />
+            <MenuActionControl Text="Box" OnClick="@(() => ExecuteToolbarCommandAsync("box"))" />
+            <MenuActionControl Text="Picture" OnClick="@(() => ExecuteToolbarCommandAsync("image"))" />
+            <MenuActionControl Text="Subreport" OnClick="@(() => ExecuteToolbarCommandAsync("subreport"))" />
+            <MenuActionControl Text="Rich text" Disabled="@(_selectedElement is null)" OnClick="@(() => ExecuteToolbarCommandAsync("richText"))" />
+        </MenuDropDownControl>
+        <MenuDropDownControl Label="Theme and layout" CssClass="fx-rd-studio-menu">
+            <MenuActionControl Text="Page setup" OnClick="@(() => ExecuteToolbarCommandAsync("page"))" />
+            <MenuActionControl Text="Sections" OnClick="@(() => ExecuteToolbarCommandAsync("section"))" />
+            <MenuActionControl Text="Highlighting" OnClick="@(() => ExecuteToolbarCommandAsync("highlightExpert"))" />
+            <MenuActionControl Text="Format" Disabled="@(_selectedElement is null)" OnClick="@(() => ExecuteToolbarCommandAsync("format"))" />
+            <MenuActionControl Text="Formulas" OnClick="@(() => ExecuteToolbarCommandAsync("formula"))" />
+            <MenuActionControl Text="Database" OnClick="@(() => ExecuteToolbarCommandAsync("database"))" />
+            <MenuActionControl Text="Links" OnClick="@(() => ExecuteToolbarCommandAsync("visualLinking"))" />
+        </MenuDropDownControl>
+        <span class="fx-rd-studio-spacer"></span>
+        <ToolbarButtonControl CssClass="fx-rd-studio-text-btn" Label="Design" Selected="@IsDesignDocumentActive" OnClick="@(() => ExecuteToolbarCommandAsync("design"))" />
+        <ToolbarButtonControl CssClass="fx-rd-studio-text-btn" Label="Code" Selected="@IsCodeDocumentActive" OnClick="@(() => ExecuteToolbarCommandAsync("code"))" />
+    </div>
+    <div class="fx-rd-studio-shell @(_studioOutlineCollapsed ? "outline-collapsed" : "")">
+        <aside class="fx-rd-studio-outline" aria-label="Report outline">
+            <div class="fx-rd-studio-panel-header">
+                @if (!_studioOutlineCollapsed) { <span>Report</span> }
+                <ToolbarButtonControl CssClass="fx-rd-studio-collapse" Title="@(_studioOutlineCollapsed ? "Show the report outline" : "Hide the report outline")" Label="@(_studioOutlineCollapsed ? "\u203A" : "\u2039")" OnClick="() => _studioOutlineCollapsed = !_studioOutlineCollapsed" />
+            </div>
+            @if (!_studioOutlineCollapsed)
+            {
+                <TreeViewControl Nodes="@_reportExplorerNodes" SelectedNode="@_selectedExplorerNode" SelectedNodeChanged="OnExplorerSelectedNodeChanged"
+                                 OnNodeClick="OnExplorerNodeClickAsync" ShowIcons="true" CssClass="fx-rd-studio-tree" AriaLabel="Report outline" FocusOnSelection="false" />
+            }
+        </aside>
+        <main class="fx-rd-studio-stage">
+            @if (StudioViewMode && StudioViewContent is not null)
+            {
+                <div class="fx-rd-studio-view">@StudioViewContent</div>
+            }
+            else if (IsCodeDocumentActive)
+            {
+                <XmlViewerControl Xml="@CurrentXml" Title="RDL" OutlineTitle="Report RDL" CssClass="fx-rd-xml-viewer" Style="flex:1;min-height:0;" AutoExpandDepth="2" />
+            }
+            else
+            {
+                <ReportDesignerCanvasControl Document="@_document"
+                                             SelectedSection="@_selectedSection"
+                                             SelectedElement="@_selectedElement"
+                                             SelectedElementIds="@_selectedElementIds"
+                                             SectionSelected="SelectSection"
+                                             ElementSelected="SelectElement"
+                                             SectionResized="OnSectionResizedAsync" ElementChanged="OnCanvasElementsChangedAsync" CommandRequested="ExecuteToolbarCommandAsync" />
+            }
+        </main>
+        <aside class="fx-rd-studio-panels">
+            <section class="fx-rd-studio-properties" aria-label="Properties">
+                <div class="fx-rd-studio-panel-header">
+                    <span>@StudioSelectionTitle</span>
+                    @if (_selectedElement is not null)
+                    {
+                        <ToolbarButtonControl CssClass="fx-rd-studio-text-btn" Label="Delete" Title="Delete the selected object" OnClick="RemoveSelected" />
+                    }
+                </div>
+                <TabStripControl Items="@StudioPropertyTabs" SelectedIndex="@_studioPropertyTab" SelectedIndexChanged="index => _studioPropertyTab = index" CssClass="fx-rd-studio-tabs" />
+                <div class="fx-rd-studio-panel-body">
+                    @if (_studioPropertyTab == 0)
+                    {
+                        <ReportDesignerPropertiesControl Document="@_document" SelectedSection="@_selectedSection" SelectedElement="@_selectedElement" Changed="MarkDirtyAsync" />
+                    }
+                    else
+                    {
+                        <div class="fx-rd-studio-style">
+                            <label class="fx-rd-studio-field-row"><span>Font</span>
+                                <DropDownListControl TValue="string" TItem="string" DataSource="@FontFamilies" Value="@SelectedFontFamily" ValueChanged="OnFontFamilyChanged" Enabled="@(_selectedElement is not null)" Width="100%" AriaLabel="Font name" />
+                            </label>
+                            <label class="fx-rd-studio-field-row"><span>Size</span>
+                                <DropDownListControl TValue="decimal" TItem="decimal" DataSource="@FontSizes" Value="@SelectedFontSize" ValueChanged="OnFontSizeChanged" Enabled="@(_selectedElement is not null)" Width="100%" AriaLabel="Font size" />
+                            </label>
+                            <div class="fx-rd-studio-style-row" aria-label="Text style">@StudioToolButton("bold")@StudioToolButton("italic")@StudioToolButton("underline")@StudioToolButton("fontGrow")@StudioToolButton("fontShrink")</div>
+                            <div class="fx-rd-studio-style-row" aria-label="Alignment">@StudioToolButton("align-left")@StudioToolButton("align-center")@StudioToolButton("align-right")@StudioToolButton("align-justified")</div>
+                            <div class="fx-rd-studio-style-row" aria-label="Colour and borders">@StudioToolButton("fontcolor")@StudioToolButton("fill")@StudioToolButton("borders")@StudioToolButton("textFormat")</div>
+                            <div class="fx-rd-studio-style-row" aria-label="Number format">@StudioToolButton("currency")@StudioToolButton("thousands")@StudioToolButton("percent")@StudioToolButton("decimalIncrease")@StudioToolButton("decimalDecrease")</div>
+                            <div class="fx-rd-studio-style-row" aria-label="Object options">@StudioToolButton("suppress")@StudioToolButton("lockFormat")@StudioToolButton("lockSize")@StudioToolButton("formatPainter")</div>
+                        </div>
+                    }
+                </div>
+            </section>
+            <section class="fx-rd-studio-data" aria-label="Data">
+                <div class="fx-rd-studio-panel-header"><span>Data</span></div>
+                <div class="fx-rd-studio-search">
+                    <TextBoxControl aria-label="Search fields" @bind-Value="_studioFieldSearch" UpdateOnInput="true" Placeholder="Search fields" />
+                </div>
+                <div class="fx-rd-studio-fields">
+                    <TreeViewControl Nodes="@_fieldExplorerNodes" FilterText="@_studioFieldSearch" SelectedNode="@_selectedExplorerNode" SelectedNodeChanged="OnExplorerSelectedNodeChanged"
+                                     OnNodeClick="OnExplorerNodeClickAsync" OnNodeDoubleClick="OnStudioFieldDoubleClickAsync" ShowIcons="false" CssClass="fx-rd-studio-tree"
+                                     AriaLabel="Data fields" FocusOnSelection="false">
+                        <NodeTemplate Context="node">
+                            @if (node.Tag is ReportDesignerField field)
+                            {
+                                <span class="fx-rd-studio-field"><span class="@StudioFieldChipCss(field)" aria-hidden="true">@StudioFieldChipText(field)</span><span class="fx-rd-studio-field-name">@node.Text</span></span>
+                            }
+                            else
+                            {
+                                <span class="fx-rd-studio-node">@node.Text</span>
+                            }
+                        </NodeTemplate>
+                    </TreeViewControl>
+                </div>
+                <div class="fx-rd-studio-panel-footer">
+                    <ButtonControl CssClass="fx-rd-studio-link-btn" Disabled="@(!CanInsertField)" OnClick="AddFieldElement">Insert field</ButtonControl>
+                    <ButtonControl CssClass="fx-rd-studio-link-btn" OnClick="@(() => ExecuteToolbarCommandAsync("formula"))">Add a field</ButtonControl>
+                    <ButtonControl CssClass="fx-rd-studio-link-btn" OnClick="@(() => ExecuteToolbarCommandAsync("parameter"))">Add a parameter</ButtonControl>
+                </div>
+            </section>
+        </aside>
+    </div>
+}
+else
+{
     <ToolbarControl CssClass="fx-rd-toolbar crystal">
         @foreach (var toolbarRow in DesignerToolbarRows)
         {
@@ -141,6 +288,7 @@
             </ExplorerControl>
         </aside>
     </div>
+}
 
     <ReportCreationWizardControl Visible="@_showNewReportWizard"
                                  VisibleChanged="OnNewReportWizardVisibleChanged"
@@ -178,6 +326,43 @@
     [Parameter] public EventCallback<ReportDesignerDocument> PreviewRequested { get; set; }
     [Parameter] public IReadOnlyList<ReportDesignerDataTable>? AvailableDataSources { get; set; }
     [Parameter] public bool AllowFileOpen { get; set; } = true;
+    /// <summary>Classic shows the Crystal toolbar and explorer dock; Studio frames the same document, commands and canvas the way
+    /// Looker Studio does: a title bar, insert menus, a report outline, and Properties (Setup/Style) and Data panels.</summary>
+    [Parameter] public ReportDesignerShell Shell { get; set; } = ReportDesignerShell.Classic;
+    /// <summary>Studio shell: the host's actions after the title (view/edit, save, more).</summary>
+    [Parameter] public RenderFragment? StudioBarContent { get; set; }
+    /// <summary>Studio shell: the host's first toolbar buttons ("Add data").</summary>
+    [Parameter] public RenderFragment? StudioToolbarContent { get; set; }
+    /// <summary>Studio shell: when true the stage shows <see cref="StudioViewContent"/> (the host's viewer) instead of the canvas.</summary>
+    [Parameter] public bool StudioViewMode { get; set; }
+    [Parameter] public RenderFragment? StudioViewContent { get; set; }
+    private bool _studioOutlineCollapsed;
+    private int _studioPropertyTab;
+    private string _studioFieldSearch = "";
+    private static readonly List<TabStripItem> StudioPropertyTabs = [new() { Text = "Setup" }, new() { Text = "Style" }];
+    private string StudioSelectionTitle => _selectedElement is not null ? _selectedElement.Name : _selectedSection is not null ? _selectedSection.Name : "Report";
+    private ReportDesignerToolbarItem? StudioItem(string command) => DesignerToolbarRows.SelectMany(row => row.Items).FirstOrDefault(item => item.Command == command);
+    // The Studio shell draws a classic toolbar button where it needs one, so icons, enabled state and the pressed look stay the same.
+    private RenderFragment<string> StudioToolButton => command => @<text>
+        @{ var item = StudioItem(command); }
+        @if (item is not null)
+        {
+            <span class="fx-rd-tool-host" title="@item.Tooltip" aria-label="@item.Tooltip">
+                <ToolbarButtonControl CssClass="@ToolbarButtonCss(item)" Title="@item.Tooltip" Disabled="@IsToolbarItemDisabled(item)" OnClick="@(() => ExecuteToolbarCommandAsync(item.Command))">
+                    <span class="@ToolbarIconCss(item)" aria-hidden="true"></span>
+                </ToolbarButtonControl>
+            </span>
+        }
+    </text>;
+    private static bool StudioIsMetric(ReportDesignerField field) => !field.IsFormula && (field.Type.Contains("Number", StringComparison.OrdinalIgnoreCase)
+        || field.Type.Contains("Currency", StringComparison.OrdinalIgnoreCase) || field.Type.Contains("Int", StringComparison.OrdinalIgnoreCase)
+        || field.Type.Contains("Decimal", StringComparison.OrdinalIgnoreCase) || field.Type.Contains("Double", StringComparison.OrdinalIgnoreCase)
+        || field.Type.Contains("Numeric", StringComparison.OrdinalIgnoreCase) || field.Type.Contains("Money", StringComparison.OrdinalIgnoreCase));
+    private static string StudioFieldChipCss(ReportDesignerField field) => "fx-rd-studio-chip " + (StudioIsMetric(field) ? "met" : "dim");
+    private static string StudioFieldChipText(ReportDesignerField field) => field.IsFormula ? "fx" : StudioIsMetric(field) ? "123"
+        : field.Type.Contains("Date", StringComparison.OrdinalIgnoreCase) || field.Type.Contains("Time", StringComparison.OrdinalIgnoreCase) ? "DATE"
+        : field.Type.Contains("Bool", StringComparison.OrdinalIgnoreCase) ? "T/F" : "ABC";
+    private Task OnStudioFieldDoubleClickAsync(TreeNode node) => node.Tag is ReportDesignerField field ? AddFieldElement(field) : Task.CompletedTask;
     [Parameter] public long MaxXmlBytes { get; set; } = 20 * 1024 * 1024;
     [Parameter] public long MaxRptBytes { get; set; } = 64L * 1024 * 1024;
 
@@ -3169,11 +3354,13 @@
 
     private IEnumerable<IGrouping<string, ReportDesignerField>> GetDatabaseFieldGroups()
     {
+        // A field with no table is a custom-SQL result column; Crystal lists a SQL command's columns under "Command".
         return _document.Fields
-            .Where(field => !field.IsFormula && !string.IsNullOrWhiteSpace(field.Table))
-            .GroupBy(field => field.Table)
+            .Where(field => !field.IsFormula)
+            .GroupBy(field => string.IsNullOrWhiteSpace(field.Table) ? CommandTableName : field.Table)
             .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase);
     }
+    private const string CommandTableName = "Command";
 
     private IReadOnlyList<ReportDesignerDataTable> GetWizardDataSources()
     {

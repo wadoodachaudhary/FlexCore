@@ -80,13 +80,12 @@
 
     @if ((_isOpen || Editable) && Enabled)
     {
-        @* Hosted, non-editable: the options are focused programmatically, so a press
-           on the panel (its scrollbar) must not move focus to the nearest focusable
-           ancestor — that is outside the cell host, and the focus-leave watcher would
-           close the list and commit the highlighted option. A form list and the
-           editable input keep their own contracts. *@
+        @* A press on the panel (its scrollbar) must not move focus: the browser would
+           hand it to the nearest focusable ancestor (a cell host, a tree, a dialog),
+           and the focus-leave watcher would close the list and commit the highlighted
+           option. Clicks on the options still select. *@
         @* title="": a popup opened inside a grid cell must not show the row's tooltip (GridControl.RowTooltipSelector). *@
-        <div @key="@(Editable ? 0 : _openGeneration)" @ref="_panelRef" class="fx-dropdown-panel @(Editable ? "fx-dropdown-buffered-panel" : null) @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@(Editable && !_isOpen ? null : PanelStyle)" role="listbox" id="@_listId" title="" tabindex="@(Editable ? -1 : (int?)null)" @onmousedown:preventDefault="@(Editable || CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        <div @key="@(Editable ? 0 : _openGeneration)" @ref="_panelRef" class="fx-dropdown-panel @(Editable ? "fx-dropdown-buffered-panel" : null) @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@(Editable && !_isOpen ? null : PanelStyle)" role="listbox" id="@_listId" title="" tabindex="@(Editable ? -1 : (int?)null)" @onmousedown:preventDefault="true" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = Editable ? _clientItems : DataSource.ToList();

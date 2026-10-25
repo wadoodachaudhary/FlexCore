@@ -4,8 +4,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    // Version 10 distinguishes an allowed empty string from a missing parameter value.
-    public const int Current = 10;
+    // Version 14 preserves authored parameter captions rather than replacing them with field names.
+    public const int Current = 14;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -83,6 +83,8 @@ public sealed class CrystalReportCore
     public bool EnableSaveSummariesWithReport { get; set; } = true;
 
     public bool ShowAllHeadersOnDrillDown { get; set; }
+
+    public bool ConvertDatabaseNullToDefault { get; set; }
 
     public int LeftMargin { get; set; } = 360;
 
@@ -671,7 +673,11 @@ public sealed class CrystalBorderModel
     public CrystalColorModel BorderColor { get; set; } = CrystalColorModel.Black();
 }
 
-public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color);
+public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color)
+{
+    internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
+    public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
+}
 
 public sealed class CrystalFontModel
 {

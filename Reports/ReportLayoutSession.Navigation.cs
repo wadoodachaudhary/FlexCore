@@ -57,7 +57,8 @@ public sealed partial class ReportLayoutSession
 
         var selected = _rows.Skip(group.Start).Take(group.End - group.Start).ToArray();
         var table = selected[0].Table.Clone();
-        foreach (var row in selected) CopyNavigationRow(table, row);
+        var arrayColumns = ArrayColumns(table);
+        foreach (var row in selected) CopyNavigationRow(table, row, arrayColumns);
         // Crystal formats a drill view from the main run's first-pass totals: a report, parent-group or
         // percentage summary printed inside the drilled group is not recomputed over the group's records.
         var summaryRows = (_summaryRows ?? _rows, Enumerable.Range(group.Start, group.End - group.Start).Select(SummaryRowIndex).ToArray());
@@ -107,24 +108,31 @@ public sealed partial class ReportLayoutSession
         => (parameters ?? new Dictionary<string, object>()).ToDictionary(pair => pair.Key,
             pair => CopyNavigationParameterValue(pair.Value), StringComparer.OrdinalIgnoreCase);
 
-    private static void CopyNavigationRow(DataTable destination, DataRow source)
+    private static void CopyNavigationRow(DataTable destination, DataRow source, DataColumn[] arrayColumns)
     {
         // ImportRow preserves the schema's expressions, read-only columns and nulls.
         destination.ImportRow(source);
+        if (arrayColumns.Length == 0) return;
         var copy = destination.Rows[^1];
-        foreach (DataColumn column in destination.Columns)
+        foreach (var column in arrayColumns)
         {
-            if (column.Expression.Length > 0 || copy[column] is not Array value) continue;
+            if (copy[column] is not Array value) continue;
             var readOnly = column.ReadOnly;
             try { column.ReadOnly = false; copy[column] = CopyNavigationValue(value); }
             finally { column.ReadOnly = readOnly; }
         }
     }
 
+    // Only a column whose type can hold an array (object, Array, array and interface types) needs its cells inspected.
+    private static DataColumn[] ArrayColumns(DataTable table) => table.Columns.Cast<DataColumn>()
+        .Where(column => column.Expression.Length == 0 && !column.DataType.IsValueType && column.DataType != typeof(string) && (!column.DataType.IsSealed || column.DataType.IsArray))
+        .ToArray();
+
     private static DataTable CaptureNavigationData(DataTable source)
     {
         var copy = source.Clone();
-        foreach (DataRow row in source.Rows) CopyNavigationRow(copy, row);
+        var arrayColumns = ArrayColumns(copy);
+        foreach (DataRow row in source.Rows) CopyNavigationRow(copy, row, arrayColumns);
         return copy;
     }
 

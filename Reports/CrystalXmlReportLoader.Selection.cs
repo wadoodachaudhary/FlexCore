@@ -55,7 +55,7 @@ public partial class CrystalXmlReportLoader
             var argument = "@" + exposed[0].Name;
             if (fieldType.BaseType == CrystalBaseType.Number && IntegralSelectionField(fieldTypeName!))
             {
-                var binding = IntegralSelectionBinding(column, exposed[0].Name, fieldTypeName!, matchedFields[0]);
+                var binding = IntegralSelectionBinding(column, exposed[0].Name, fieldTypeName!, matchedFields[0], layout.ConvertDatabaseNullToDefault);
                 clauses.Add(binding.GuardedClause);
                 integerBindings.Add(binding);
             }
@@ -68,17 +68,17 @@ public partial class CrystalXmlReportLoader
                 // either non-ASCII operand deliberately passes through for runtime filtering.
                 // Convert before COLLATE so a varchar code-page change cannot erase that guard.
                 // This bounds returned ASCII identifiers; no index/performance claim is made.
-                var textColumn = $"CONVERT(nvarchar(max), {column})";
-                var textArgument = $"CONVERT(nvarchar(max), {argument})";
-                clauses.Add($"({textColumn} COLLATE Latin1_General_100_CI_AS = {textArgument} COLLATE Latin1_General_100_CI_AS"
+                var textType = SelectionTextType(matchedFields[0]);
+                var textColumn = $"CONVERT({textType}, {column})";
+                var textArgument = $"CONVERT({textType}, {argument})";
+                clauses.Add(IncludeNullCandidate($"({textColumn} COLLATE Latin1_General_100_CI_AS = {textArgument} COLLATE Latin1_General_100_CI_AS"
                     + $" OR {textColumn} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%'"
-                    + $" OR {textArgument} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%')");
+                    + $" OR {textArgument} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%')", column, layout.ConvertDatabaseNullToDefault));
             }
             else return ""; // Dates/date coercion, floating-point, currency and unknown types are not proven here.
         }
-        // A direct equality with a null operand is not true in Crystal's default
-        // null mode; numeric SQL fallback may admit it but runtime still rejects it.
-        // AST directives changing null mode were rejected above.
+        // The full predicate resolves the report's NULL defaults after SQL has
+        // admitted nullable candidates. AST directives changing null mode are rejected above.
         layout.SqlStringParameters = stringParameters.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (integerBindings.Count > 0)
             definition.PositionedIntegerSelection = new(integerBindings.Distinct().ToArray(), "");
@@ -88,7 +88,7 @@ public partial class CrystalXmlReportLoader
     // Both the strict scalar path and the complete mixed date/string/list path
     // use the same conservative integer guard and execution-local eligibility.
     private static ReportSqlIntegerSelectionPlan.Binding IntegralSelectionBinding(
-        string column, string parameterName, string fieldTypeName, XElement field)
+        string column, string parameterName, string fieldTypeName, XElement field, bool convertNulls = false)
     {
         // Preview seeds can be culture-sensitive strings. Only nonnegative
         // ASCII integer text is narrowed here; uncertain values pass through to
@@ -99,10 +99,41 @@ public partial class CrystalXmlReportLoader
         var guarded = $"({numericText} COLLATE Latin1_General_100_BIN2 LIKE N'%[^0-9]%' OR {integer} IS NULL OR {column} = {integer})";
         var range = IntegralSelectionRange(fieldTypeName, field)
             ?? throw new InvalidDataException("Integral selector range was not proven.");
-        return new(parameterName, guarded, $"{column} = {argument}", range.Minimum, range.Maximum);
+        return new(parameterName, IncludeNullCandidate(guarded, column, convertNulls),
+            IncludeNullCandidate($"{column} = {argument}", column, convertNulls), range.Minimum, range.Maximum);
     }
 
+    // SQL NULL is not equal to a Crystal type default. Keep it for the full runtime predicate.
+    private static string IncludeNullCandidate(string clause, string column, bool convertNulls)
+        => convertNulls ? $"({clause} OR {column} IS NULL)" : clause;
+
     private static bool SqlSelectionIdentifier(string value) => Regex.IsMatch(value, @"\A[A-Za-z_][A-Za-z0-9_]*\z");
+
+    /// <summary>
+    /// The Unicode type the guarded selection compares in. nvarchar(max) made every comparison a LOB operation and
+    /// collapsed the optimizer's estimates to one row (the guards then ran inside nested loops: Global Option Costs
+    /// spent 2.5 of its 4.1 query seconds there); nvarchar(4000) keeps the code-page guard with the same result for
+    /// every column that fits, and a wider column keeps max.
+    /// </summary>
+    internal static string SelectionTextType(System.Xml.Linq.XElement? field)
+    {
+        var bounded = false;
+        foreach (var name in new[] { "Length", "NumberOfBytes" })
+        {
+            if (field?.Attribute(name) is not { } attribute) continue;
+            if (!int.TryParse(attribute.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var size)
+                || size <= 0 || size > 4000)
+                return "nvarchar(max)";
+            bounded = true;
+        }
+        return bounded ? "nvarchar(4000)" : "nvarchar(max)";
+    }
+
+    // Saved report widths can lag a widened database column. Preserve oversized
+    // candidates for runtime evaluation rather than comparing truncated text.
+    private static string SelectionLengthEscape(System.Xml.Linq.XElement? field, string column)
+        => SelectionTextType(field) == "nvarchar(4000)"
+            ? $"DATALENGTH(CONVERT(nvarchar(max), {column})) > 8000 OR " : "";
 
     private static bool IntegralSelectionField(string name)
         => IntegralSelectionType(name) is "long" or "short" or "byte" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s";

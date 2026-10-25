@@ -371,6 +371,10 @@ public class ReportParameter
     /// <summary>Default value.</summary>
     public string DefaultValue { get; set; } = "";
 
+    /// <summary>The report supplies a current, initial, or default value, including an explicit
+    /// empty string. Distinguishes an authored blank from an absent default for session fallbacks.</summary>
+    public bool HasAuthoredDefaultValue { get; set; }
+
     /// <summary>Data type.</summary>
     public ReportParameterType ParameterType { get; set; } = ReportParameterType.String;
 
