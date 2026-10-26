@@ -167,8 +167,11 @@
                 </div>
             }
 
-            <div @key="ActiveTab" class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
-                @RenderReportContent()
+            <div class="fx-rpt-workspace" data-tab-orientation="@TabsOrientation">
+                @RenderReportTabs()
+                <div @key="ActiveTab" class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
+                    @RenderReportContent()
+                </div>
             </div>
         </div>
 
@@ -188,10 +191,17 @@ else
     @* Bare renderer — same content as the chrome-wrapped panel but without
        toolbar/tree/status. Hosts that want to embed the report inside their
        own UI (dashboards, modal previews) set ShowChrome=false. *@
-    <div class="fx-report-container" @ref="_reportRootElement">
-        @RenderReportContent()
+    <div class="fx-report-container fx-rpt-workspace" data-tab-orientation="@TabsOrientation" @ref="_reportRootElement">
+        @RenderReportTabs()
+        <div class="fx-rpt-viewer-panel">
+            @RenderReportContent()
+        </div>
     </div>
 }
+
+<ContextMenuControl @bind-Visible="_tabOrientationMenuVisible" X="_tabOrientationMenuX" Y="_tabOrientationMenuY">
+    <TabAppearanceMenuItemsControl Orientation="TabsOrientation" OrientationChanged="ChangeTabOrientationAsync" Theme="TabsTheme" ThemeChanged="ChangeTabThemeAsync" />
+</ContextMenuControl>
 
 @code {
     // ════════════════════════════════════════════════════════════════════
@@ -208,6 +218,41 @@ else
     /// previews, etc.) — only the page area is shown.
     /// </summary>
     [Parameter] public bool ShowChrome { get; set; } = true;
+    [Parameter] public TabOrientation TabsOrientation { get; set; } = TabOrientation.Vertical;
+    [Parameter] public TabTheme TabsTheme { get; set; } = TabTheme.WindowsClassic;
+
+    private async Task ChangeTabThemeAsync(TabTheme theme)
+    {
+        TabsTheme = theme;
+        _tabOrientationMenuVisible = false;
+        try { await ViewerSettings.SetTabThemeAsync(theme); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save report tab theme");
+            StatusMessage = "Tab theme changed, but the preference could not be saved.";
+        }
+    }
+
+    private bool _tabOrientationMenuVisible;
+    private double _tabOrientationMenuX, _tabOrientationMenuY;
+    private void OpenTabOrientationMenu(MouseEventArgs e)
+    {
+        _tabOrientationMenuX = e.ClientX;
+        _tabOrientationMenuY = e.ClientY;
+        _tabOrientationMenuVisible = true;
+    }
+
+    private async Task ChangeTabOrientationAsync(TabOrientation orientation)
+    {
+        TabsOrientation = orientation;
+        _tabOrientationMenuVisible = false;
+        try { await ViewerSettings.SetTabOrientationAsync(orientation); }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to save report tab orientation");
+            StatusMessage = "Tab orientation changed, but the preference could not be saved.";
+        }
+    }
 
     /// <summary>Use Crystal object geometry in the unified load, parameter, and refresh workflow.</summary>
     [Parameter] public bool UsePositionedLayout { get; set; }
@@ -392,6 +437,10 @@ else
                 try
                 {
                     ZoomLevel = await ViewerSettings.GetZoomLevelAsync();
+                    if (await ViewerSettings.GetTabOrientationAsync() is { } orientation && Enum.IsDefined(orientation))
+                        TabsOrientation = orientation;
+                    if (await ViewerSettings.GetTabThemeAsync() is { } theme && Enum.IsDefined(theme))
+                        TabsTheme = theme;
                 }
                 catch (Exception ex)
                 {
@@ -767,6 +816,13 @@ else
                 OnRenderComplete?.Invoke();
             }
         }
+    }
+
+    private Task OnNativeObjectDrill(string groupId)
+    {
+        // Resolve against the active run, never a label or a stale page's group instance.
+        var node = ActiveTab?.NativeSession?.FindDrillDownTarget(groupId);
+        return node is null ? Task.CompletedTask : OpenNativeDrillDown(node);
     }
 
     private async Task OpenNativeDrillDown(FxGroupNode node)
@@ -1487,7 +1543,7 @@ else
 
                 // Configured session keys are supplied context, not editable report defaults.
                 // Resolve them afresh before prompting so saved RPT values cannot select another scope.
-                AutoInjectSessionParameters(typedParams, definition.Sql);
+                AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters, authoredDefaults: false);
                 var missingRequired = definition.Parameters
                     .Where(p => (p.Required || PromptOptionalParameters)
                         && !typedParams.ContainsKey(p.Name))
@@ -3231,26 +3287,31 @@ else
 
     /// <summary>
     /// Applies the configured <see cref="ReportOptions.SessionAutoInjectParameters"/> to a
-    /// SQL parameter bag: for each configured name, if the SQL references <c>@Name</c>
-    /// and the caller didn't supply a value, pull it from session state. Lets report
+    /// SQL parameter bag: for each configured name the report declares (or its SQL references
+    /// as <c>@Name</c>) that the caller didn't supply, pull it from session state. Lets report
     /// writers add organization-wide default parameters (UserId, TenantId, ...)
     /// without any report-specific code in the writer.
     /// </summary>
     private void AutoInjectSessionParameters(Dictionary<string, object> sqlParams, string sql,
-        IEnumerable<ReportParameter>? authoredParameters = null)
+        IEnumerable<ReportParameter>? authoredParameters = null, bool authoredDefaults = true)
     {
         foreach (var name in Options.SessionAutoInjectParameters)
         {
             if (string.IsNullOrWhiteSpace(name)) continue;
             if (sqlParams.Keys.Contains(name, StringComparer.OrdinalIgnoreCase)) continue;
-            if (!sql.Contains("@" + name, StringComparison.OrdinalIgnoreCase)) continue;
+            var authored = authoredParameters?.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            // A declared parameter takes the session value even when its record selection
+            // stays in the runtime formula and the SQL never names it.
+            if (authored is null && !sql.Contains("@" + name, StringComparison.OrdinalIgnoreCase)) continue;
             var value = ResolveSessionParameter(name);
             if (value != null)
             {
-                sqlParams[name] = value;
+                sqlParams[name] = authored?.AllowMultiple == true
+                    ? new[] { Convert.ToString(value, CultureInfo.InvariantCulture) ?? "" }
+                    : value;
                 continue;
             }
-            var authored = authoredParameters?.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (!authoredDefaults) continue;
             if (authored is not null && (authored.HasAuthoredDefaultValue || !string.IsNullOrEmpty(authored.DefaultValue)))
             {
                 sqlParams[name] = authored.DefaultValue;
@@ -3337,6 +3398,18 @@ else
     //  fragment can call itself.)
     // ═══════════════════════════════════════════════════════════════
 
+    private RenderFragment RenderReportTabs() => __builder =>
+    {
+        @if (Tabs.Count > 1 && ActiveTab?.Pages.Count > 0 && string.IsNullOrEmpty(ErrorMessage) && string.IsNullOrEmpty(PdfDataUrl))
+        {
+            <TabStripControl Items="@Tabs.Select((tab, index) => new TabStripItem(tab.Title, closable: index > 0)).ToList()"
+                EnableOverflowNavigation="true" CssClass="fx-report-tabs" AriaLabel="Report tabs"
+                Orientation="TabsOrientation" OnOrientationMenuRequested="OpenTabOrientationMenu"
+                Theme="TabsTheme"
+                SelectedIndex="ActiveTabIndex" SelectedIndexChanged="SwitchTab" OnTabClose="CloseTab" />
+        }
+    };
+
     private RenderFragment RenderReportContent() => __builder =>
     {
         @if (IsLoading && !ShowChrome && PageCount == 0)
@@ -3377,11 +3450,6 @@ else
                   </AccordionItemControl>
                 </AccordionControl>
             }
-            @if (Tabs.Count > 1)
-            {
-                <TabStripControl Items="@Tabs.Select((tab, index) => new TabStripItem(tab.Title, closable: index > 0)).ToList()"
-                    SelectedIndex="ActiveTabIndex" SelectedIndexChanged="SwitchTab" OnTabClose="CloseTab" />
-            }
             <div class="fx-report-pages">
                 <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
                     @if (ActiveTab.Search is { } search)
@@ -3390,7 +3458,8 @@ else
                     }
                     else if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
                     {
-                        <ReportPageControl Page="@ActiveTab.PageSnapshots[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.PageSnapshots.Count) - 1]" />
+                        <ReportPageControl Page="@ActiveTab.PageSnapshots[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.PageSnapshots.Count) - 1]"
+                            OnDrillDown="@(NativeDrillDownUnavailable is null ? EventCallback.Factory.Create<string>(this, OnNativeObjectDrill) : default)" />
                     }
                     else
                     {

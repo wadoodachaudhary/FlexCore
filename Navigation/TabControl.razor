@@ -17,18 +17,10 @@
 *@
 
 <CascadingValue Value="this" IsFixed="true">
-    <div class="fx-tabs @CssClass">
-        <div class="fx-tab-headers">
-            @for (var i = 0; i < _items.Count; i++)
-            {
-                var idx = i;
-                <button class="fx-tab-button @(idx == SelectedIndex ? "active" : "")"
-                        type="button"
-                        @onclick="() => SelectTab(idx)">
-                    @_items[idx].HeaderText
-                </button>
-            }
-        </div>
+    <div class="fx-tabs @CssClass" data-tab-orientation="@Orientation">
+        <TabStripControl Items="@_items.Select(item => new TabStripItem(item.HeaderText)).ToList()"
+                         SelectedIndex="SelectedIndex" SelectedIndexChanged="SelectTab" CssClass="fx-tab-headers"
+                         Orientation="Orientation" OrientationChanged="ChangeOrientation" Theme="Theme" ThemeChanged="ChangeTheme" EnableOverflowNavigation="true" />
         <div class="fx-tab-content">
             @if (SelectedIndex >= 0 && SelectedIndex < _items.Count)
             {
@@ -46,6 +38,22 @@
     [Parameter] public EventCallback<int> SelectedIndexChanged { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public TabOrientation Orientation { get; set; } = TabOrientation.HybridVertical;
+    [Parameter] public EventCallback<TabOrientation> OrientationChanged { get; set; }
+    [Parameter] public TabTheme Theme { get; set; } = TabTheme.WindowsClassic;
+    [Parameter] public EventCallback<TabTheme> ThemeChanged { get; set; }
+
+    private async Task ChangeTheme(TabTheme value)
+    {
+        Theme = value;
+        await ThemeChanged.InvokeAsync(value);
+    }
+
+    private async Task ChangeOrientation(TabOrientation value)
+    {
+        Orientation = value;
+        await OrientationChanged.InvokeAsync(value);
+    }
 
     internal void Register(TabItem item)
     {

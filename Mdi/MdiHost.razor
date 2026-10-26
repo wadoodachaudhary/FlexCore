@@ -1,6 +1,8 @@
 @namespace Fx.ControlKit.Mdi
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Web
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 
 @*
    Fx.ControlKit.Mdi.MdiHost — tab-strip MDI shell that hosts a list of
@@ -64,10 +66,12 @@
         + (split ? " fx-mdi-tabs-split" : "");
 }
 
-<div class="fx-mdi">
+<div class="fx-mdi" data-tab-orientation="@TabsOrientation">
     @* dragenter is cancelled too: a drop zone that appears under a still pointer gets only a dragenter
        before the release, and an uncancelled one refuses the drop. *@
     <div class="@stripClass"
+         @ref="_tabViewport" data-tab-orientation="@TabsOrientation" data-tab-theme="@TabsTheme" style="@TabAppearance.Style(TabsTheme)"
+         @oncontextmenu="OpenOrientationMenu" @oncontextmenu:preventDefault="true"
          @ondragenter="OnStripDragEnter"
          @ondragenter:preventDefault="true"
          @ondragleave="OnStripDragLeave"
@@ -114,8 +118,8 @@
                  @ondragend="OnTabDragEnd"
                  @onclick="() => OnTabClick(win.Id)"
                  @oncontextmenu="(MouseEventArgs e) => OpenTabSystemMenuAsync(e, win)"
-                 @oncontextmenu:preventDefault="@ShowTabSystemMenu"
-                 @oncontextmenu:stopPropagation="@ShowTabSystemMenu"
+                 @oncontextmenu:preventDefault="true"
+                 @oncontextmenu:stopPropagation="true"
                  title="@win.Title">
                 @if (!string.IsNullOrEmpty(win.IconUrl))
                 {
@@ -176,17 +180,9 @@
     </div>
     @if (ShowTabSystemMenu && _tabSystemMenuVisible && TabSystemMenuWindow is { } menuWindow)
     {
-        <div class="fx-mdi-system-menu-backdrop"
-             @onclick="CloseTabSystemMenu"
-             @onclick:stopPropagation="true"
-             @oncontextmenu="CloseTabSystemMenu"
-             @oncontextmenu:preventDefault="true"
-             @oncontextmenu:stopPropagation="true"></div>
-        <div class="fx-mdi-system-menu"
-             style="@TabSystemMenuStyle"
-             role="menu"
-             @onclick:stopPropagation="true"
-             @oncontextmenu:stopPropagation="true">
+        <ContextMenuControl Visible="_tabSystemMenuVisible" VisibleChanged="visible => { if (!visible) CloseTabSystemMenu(); }"
+                            X="_tabSystemMenuX" Y="_tabSystemMenuY" MinWidth="190" ZIndex="1002" CssClass="fx-mdi-system-menu">
+          <div class="fx-mdi-system-menu-content">
             <button type="button" role="menuitem" @onclick="() => RestoreTabFromSystemMenuAsync(menuWindow.Id)">Restore</button>
             <button type="button" role="menuitem" disabled>Move</button>
             <button type="button" role="menuitem" disabled>Size</button>
@@ -200,7 +196,10 @@
                 </span>
                 <span>Alt+F4</span>
             </button>
-        </div>
+            <ContextMenuSeparatorControl />
+            <TabAppearanceMenuItemsControl Orientation="TabsOrientation" OrientationChanged="ChangeTabOrientation" Theme="TabsTheme" ThemeChanged="ChangeTabTheme" />
+          </div>
+        </ContextMenuControl>
     }
     <div class="@(split ? (SplitMode == MdiSplitMode.Stacked ? "fx-mdi-panes fx-mdi-split fx-mdi-split-stacked" : "fx-mdi-panes fx-mdi-split fx-mdi-split-side") : "fx-mdi-panes")"
          @attributes="PanesDragAttributes">
@@ -254,6 +253,9 @@
         }
     </div>
 </div>
+<ContextMenuControl @bind-Visible="_orientationMenuVisible" X="_orientationMenuX" Y="_orientationMenuY">
+    <TabAppearanceMenuItemsControl Orientation="TabsOrientation" OrientationChanged="ChangeTabOrientation" Theme="TabsTheme" ThemeChanged="ChangeTabTheme" />
+</ContextMenuControl>
 
 @code {
     /// <summary>Open windows, in left-to-right tab order. Consumer-owned —
@@ -291,6 +293,55 @@
     /// no active window, the host shows what it shows without a split.
     /// </summary>
     [Parameter] public MdiSplitMode SplitMode { get; set; }
+    [Parameter] public TabOrientation TabsOrientation { get; set; } = TabOrientation.HybridVertical;
+    [Parameter] public EventCallback<TabOrientation> TabsOrientationChanged { get; set; }
+    [Parameter] public TabTheme TabsTheme { get; set; } = TabTheme.WindowsClassic;
+    [Parameter] public EventCallback<TabTheme> TabsThemeChanged { get; set; }
+
+    private async Task ChangeTabTheme(TabTheme value)
+    {
+        TabsTheme = value;
+        _orientationMenuVisible = _tabSystemMenuVisible = false;
+        _revealActiveTab = true;
+        await TabsThemeChanged.InvokeAsync(value);
+    }
+
+    private ElementReference _tabViewport;
+    private BrowserInterop? _tabBrowser;
+    private bool _tabObserverAttached, _orientationMenuVisible, _revealActiveTab;
+    private double _orientationMenuX, _orientationMenuY;
+
+    private void OpenOrientationMenu(MouseEventArgs e)
+    {
+        _orientationMenuX = e.ClientX; _orientationMenuY = e.ClientY; _orientationMenuVisible = true;
+    }
+
+    private async Task ChangeTabOrientation(TabOrientation value)
+    {
+        TabsOrientation = value;
+        _orientationMenuVisible = _tabSystemMenuVisible = false;
+        _revealActiveTab = true;
+        await TabsOrientationChanged.InvokeAsync(value);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        _tabBrowser ??= new(JS);
+        try
+        {
+            if (!_tabObserverAttached) _tabObserverAttached = await _tabBrowser.InvokeAsync<bool>("tabStripObserve", _tabViewport);
+            if (_revealActiveTab && _tabObserverAttached) await _tabBrowser.InvokeAsync<object?>("tabStripReveal", _tabViewport);
+        }
+        catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
+        _revealActiveTab = false;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_tabBrowser is null) return;
+        await _tabBrowser.InvokeAsync<object?>("dispose", _tabViewport);
+        await _tabBrowser.DisposeAsync();
+    }
 
     /// <summary>When true, right-clicking a tab or clicking its icon opens the
     /// legacy MDI system menu (Restore, Move, Size, Minimize, Maximize, Close).</summary>
@@ -350,8 +401,18 @@
         return false;
     }
 
+    // The activation a reveal was last requested for; a parent re-render with the same
+    // activation (FMain's refresh timer) must not pull a scrolled tab strip back.
+    private (string? Active, int Count, TabOrientation Orientation)? _revealedFor;
+
     protected override void OnParametersSet()
     {
+        var revealFor = (ActiveWindowId, Windows.Count, TabsOrientation);
+        if (_revealedFor != revealFor)
+        {
+            _revealedFor = revealFor;
+            _revealActiveTab = true;
+        }
         _skipRender = false;
         var open = new HashSet<string>(Windows.Select(w => w.Id), StringComparer.Ordinal);
         // The dragged tab's window closed during the drag: its dragend never arrives, so end the drag here.
@@ -438,9 +499,6 @@
         => string.IsNullOrWhiteSpace(_tabSystemMenuWindowId)
             ? null
             : Windows.FirstOrDefault(w => string.Equals(w.Id, _tabSystemMenuWindowId, StringComparison.Ordinal));
-
-    private string TabSystemMenuStyle
-        => $"left:{_tabSystemMenuX:0.##}px;top:{_tabSystemMenuY:0.##}px";
 
     private void OnTabDragStart(string id, DragEventArgs e)
     {
@@ -628,7 +686,10 @@
     private async Task OpenTabSystemMenuAsync(MouseEventArgs e, MdiWindow window)
     {
         if (!ShowTabSystemMenu)
+        {
+            OpenOrientationMenu(e);
             return;
+        }
 
         _tabSystemMenuVisible = true;
         _tabSystemMenuWindowId = window.Id;

@@ -18,48 +18,176 @@
 }
 
 .fx-mdi-tabs {
+    position: relative;
     display: flex;
     flex-wrap: nowrap;
+    align-items: stretch;
     overflow-x: auto;
-    background: #e8e8e8;
-    border-bottom: 1px solid #b3b3b3;
-    padding: 2px 4px 0 4px;
-    gap: 2px;
+    background: var(--fx-tab-bg, #e4e4e4);
+    border-bottom: 1px solid var(--fx-tab-border, #7a7a7a);
+    padding: 3px 4px 0 4px;
+    gap: 0;
     flex-shrink: 0;
 }
 
+.fx-mdi-tabs[data-tab-orientation="HybridVertical"] {
+    flex-wrap: wrap;
+    max-height: min(30vh, 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    align-content: flex-start;
+    box-sizing: border-box;
+    padding-bottom: 0;
+    gap: 0;
+}
+
+.fx-mdi[data-tab-orientation="Vertical"] {
+    flex-direction: row;
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] {
+    flex: 0 0 min(220px, 35%);
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+    box-sizing: border-box;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    border-bottom: 0;
+    border-left: 1px solid #aaa;
+    border-right: 4px solid #747474;
+    padding: 11px 8px 13px;
+    gap: 0;
+    isolation: isolate;
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab-title {
+    flex: 1;
+    max-width: none;
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab-close {
+    flex-shrink: 0;
+}
+
+.fx-mdi-tabs[data-tab-theme] {
+    background: var(--fx-tab-bg);
+    border-color: var(--fx-tab-border);
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"][data-tab-theme] {
+    background: color-mix(in srgb, var(--fx-tab-bg, #e4e4e4) 87%, #000);
+    border-left-color: #aaa;
+    border-right-color: #747474;
+}
+
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab {
+    background: var(--fx-tab-item-bg);
+    color: var(--fx-tab-color);
+    border-color: var(--fx-tab-border);
+    border-radius: var(--fx-tab-radius) var(--fx-tab-radius) 0 0;
+    box-shadow: var(--fx-tab-shadow);
+}
+
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab.active {
+    background: var(--fx-tab-active-bg);
+    color: var(--fx-tab-active-color);
+    border-color: var(--fx-tab-border);
+    border-bottom-color: var(--fx-tab-active-border-color, var(--fx-tab-active-bg));
+}
+
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab-close { color: inherit; }
+.fx-mdi-tabs[data-tab-theme="WindowsClassic"] .fx-mdi-tab.active {
+    border-color: var(--fx-tab-border, #7a7a7a);
+    border-bottom-color: var(--fx-tab-active-border-color, #f5f5f5);
+    box-shadow: inset 1px 1px 0 #ffffff, inset -1px 0 0 #909090;
+}
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab:hover:not(.active) { background: var(--fx-tab-hover-bg); }
+.fx-mdi-tabs[data-tab-theme="ColorfulCards"] .fx-mdi-tab:not(.active):nth-child(5n+1) { background: #ffe9a3; }
+.fx-mdi-tabs[data-tab-theme="ColorfulCards"] .fx-mdi-tab:not(.active):nth-child(5n+2) { background: #d0e8f5; }
+.fx-mdi-tabs[data-tab-theme="ColorfulCards"] .fx-mdi-tab:not(.active):nth-child(5n+3) { background: #d3e6c8; }
+.fx-mdi-tabs[data-tab-theme="ColorfulCards"] .fx-mdi-tab:not(.active):nth-child(5n+4) { background: #fff; }
+.fx-mdi-tabs[data-tab-theme="ColorfulCards"] .fx-mdi-tab:not(.active):nth-child(5n) { background: #b8e0e0; }
+
 .fx-mdi-tab {
     position: relative; /* anchors the drag drop zones and the insertion bar */
+    z-index: 1;
+    flex: 0 0 auto;
+    min-width: 0;
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 4px 8px 4px 10px;
-    background: #d4d4d4;
-    border: 1px solid #b3b3b3;
-    border-bottom: none;
-    border-top-left-radius: 4px;
-    border-top-right-radius: 4px;
+    margin-top: 2px;
+    padding: 3px 8px 3px 10px;
+    background: var(--fx-tab-item-bg, #d4d4d4);
+    border: 1px solid var(--fx-tab-border, #7a7a7a);
+    border-radius: var(--fx-tab-radius, 3px) var(--fx-tab-radius, 3px) 0 0;
+    box-shadow: var(--fx-tab-shadow, inset 1px 1px 0 #efefef, inset -1px 0 0 #a0a0a0);
+    font-family: Tahoma, "MS Sans Serif", "Segoe UI", Arial, sans-serif;
     font-size: calc(12px * var(--fx-zoom, 1));
-    color: #333;
+    font-weight: 400;
+    color: var(--fx-tab-color, #222);
     cursor: pointer;
     user-select: none;
-    max-width: 220px;
-    white-space: nowrap;
+    width: max-content;
+    max-width: min(220px, 100%);
+    min-height: calc(26px * var(--fx-zoom, 1));
+    height: auto;
     transition: background 0.1s;
 }
 
+.fx-mdi-tab + .fx-mdi-tab {
+    margin-left: -1px;
+}
+
 .fx-mdi-tab:hover {
-    background: #e0e0e0;
+    background: #dfdfdf;
 }
 
 .fx-mdi-tab.active {
-    background: #ffffff;
-    color: #000;
-    font-weight: 500;
-    border-bottom: 1px solid #ffffff; /* "lift" into the pane */
-    margin-bottom: -1px;
+    margin-top: 0;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    min-height: calc(28px * var(--fx-zoom, 1));
+    background: var(--fx-tab-active-bg, #f5f5f5);
+    color: var(--fx-tab-active-color, #000);
+    font-weight: 400;
+    border-color: var(--fx-tab-border, #7a7a7a);
+    border-bottom-color: var(--fx-tab-active-border-color, #f5f5f5);
     position: relative;
-    z-index: 1;
+    z-index: 2;
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab {
+    width: calc(100% - 4px);
+    max-width: calc(100% - 4px);
+    height: calc(52px * var(--fx-zoom, 1));
+    padding: calc(12px * var(--fx-zoom, 1)) 10px calc(10px * var(--fx-zoom, 1));
+    margin-top: 0;
+    margin-left: 4px;
+    margin-right: 0;
+    border-radius: 7px;
+    box-shadow: 0 -2px 4px #0003, inset 0 1px #ffffff80;
+}
+
+/* Overlap only the card edges, leaving both lines and the close button exposed. */
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab + .fx-mdi-tab {
+    margin-top: calc(-12px * var(--fx-zoom, 1));
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab.active {
+    z-index: 3;
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    border-color: var(--fx-tab-border, #7a7a7a);
+    box-shadow: 0 2px 6px #0005, inset 0 1px #ffffff80;
+}
+
+.fx-mdi-tabs[data-tab-orientation="Vertical"] .fx-mdi-tab-title {
+    line-height: 1.1;
 }
 
 .fx-mdi-tab.fx-mdi-tab-dragging {
@@ -69,8 +197,6 @@
 
 /* Dragging a tab: each other tab's left half means "before it", its right half "after it"
    (the grid's column-header zones); the zones exist only while a tab is dragged. */
-/* The zones reach over the tab's border, half the 2px gap to each neighbour and the strip's top
-   padding, so the point under the bar belongs to the tab beside it. */
 .fx-mdi-tab-drop-zone {
     position: absolute;
     top: -3px;
@@ -81,25 +207,25 @@
 }
 
 .fx-mdi-tab-drop-zone-left {
-    left: -2px;
+    left: -1px;
 }
 
 .fx-mdi-tab-drop-zone-right {
-    right: -2px;
+    right: -1px;
 }
 
 .fx-mdi-tabs.fx-mdi-tabs-drag-active .fx-mdi-tab-drop-zone {
     display: block;
 }
 
-/* The space between Home and the first tab (its margin and the gap) counts as Home: "first". */
+/* The edge right of Home counts as Home: "first". */
 .fx-mdi-tabs.fx-mdi-tabs-drag-active .fx-mdi-tab-home::after {
     content: "";
     position: absolute;
     top: -3px;
     bottom: 0;
     left: 100%;
-    width: 8px;
+    width: 2px;
 }
 
 /* Blank strip after the last tab while a tab is dragged: "to the end". */
@@ -109,8 +235,13 @@
     align-self: stretch;
 }
 
+.fx-mdi-tab.fx-mdi-tab-drop-before,
+.fx-mdi-tab.fx-mdi-tab-drop-after {
+    z-index: 4;
+}
+
 /* The insertion bar between two tabs, drawn as the grid draws its column-move bar
-   (3px, --fx-grid-reorder-pipe-color), over the 2px gap between tabs. */
+   (3px, --fx-grid-reorder-pipe-color), over the shared edge between tabs. */
 .fx-mdi-tab.fx-mdi-tab-drop-before::before,
 .fx-mdi-tab.fx-mdi-tab-drop-after::after {
     content: "";
@@ -125,11 +256,11 @@
 }
 
 .fx-mdi-tab.fx-mdi-tab-drop-before::before {
-    left: -3px;
+    left: -2px;
 }
 
 .fx-mdi-tab.fx-mdi-tab-drop-after::after {
-    right: -3px;
+    right: -2px;
 }
 
 /* Split view: the tabs carry the strips over the panes, blue on the active window's tab and grey
@@ -174,31 +305,26 @@
 }
 
 .fx-mdi-tab-title {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 180px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
 }
 
-.fx-mdi-system-menu-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 1001;
-    background: transparent;
-}
-
-.fx-mdi-system-menu {
-    position: fixed;
-    z-index: 1002;
+.fx-mdi-system-menu-content {
     min-width: 164px;
     padding: 2px 0;
-    border: 1px solid #9a9a9a;
     background: #f0f0f0;
-    box-shadow: 2px 2px 4px rgba(0, 0, 0, .22);
     color: #000;
     font: calc(12px * var(--fx-zoom, 1)) "Segoe UI", Tahoma, Arial, sans-serif;
 }
 
-.fx-mdi-system-menu button {
+.fx-mdi-system-menu-content button {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -216,17 +342,17 @@
     cursor: default;
 }
 
-.fx-mdi-system-menu button:hover:not(:disabled),
-.fx-mdi-system-menu button:focus-visible:not(:disabled) {
+.fx-mdi-system-menu-content button:hover:not(:disabled),
+.fx-mdi-system-menu-content button:focus-visible:not(:disabled) {
     background: #e5f1fb;
     outline: none;
 }
 
-.fx-mdi-system-menu button:disabled {
+.fx-mdi-system-menu-content button:disabled {
     color: #8a8a8a;
 }
 
-.fx-mdi-system-menu button.fx-mdi-system-menu-close {
+.fx-mdi-system-menu-content button.fx-mdi-system-menu-close {
     align-items: center;
     font-weight: 700;
     padding-left: 8px;
@@ -271,6 +397,7 @@
     justify-content: center;
     width: 16px;
     height: 16px;
+    flex-shrink: 0;
     padding: 0;
     border: none;
     background: transparent;
@@ -287,26 +414,19 @@
 }
 
 .fx-mdi-tab.active .fx-mdi-tab-close {
-    color: #555;
+    color: inherit;
 }
 
-/* Permanent leftmost home tab. No close button, slightly tighter padding,
-   and a small right margin so it visually separates from the dynamic tabs. */
+/* Permanent leftmost home tab — joined seamlessly with the dynamic tabs. */
 .fx-mdi-tab-home {
-    padding: 4px 10px;
-    margin-right: 6px;
-    background: #d8e4f0;
-    border-color: #98b8d8;
-    font-weight: 500;
-}
-
-.fx-mdi-tab-home:hover {
-    background: #e6effa;
+    padding: 3px 10px;
+    margin-right: 0;
+    font-weight: 400;
 }
 
 .fx-mdi-tab-home.active {
-    background: #ffffff;
-    border-color: #b3b3b3;
+    padding: 4px 10px;
+    font-weight: 400;
 }
 
 .fx-mdi-panes {

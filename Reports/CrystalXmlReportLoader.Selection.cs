@@ -14,6 +14,7 @@ public partial class CrystalXmlReportLoader
         var layout = definition.PositionedLayout!;
         var parameters = definition.Parameters;
         definition.PositionedIntegerSelection = null;
+        definition.PositionedTextSelection = null;
         layout.SqlStringParameters = [];
         if (layout.RecordSelection is null || !layout.RecordSelection.TryGetParameterEqualities(out var equalities)) return "";
         var definitions = report.Element("DataDefinition")?.Element("ParameterFieldDefinitions")?.Elements("ParameterFieldDefinition").ToArray() ?? [];
@@ -21,6 +22,7 @@ public partial class CrystalXmlReportLoader
         var clauses = new List<string>();
         var stringParameters = new List<string>();
         var integerBindings = new List<ReportSqlIntegerSelectionPlan.Binding>();
+        var textBindings = new List<ReportSqlTextSelectionPlan.Binding>();
         foreach (var (fieldReference, parameterReference) in equalities)
         {
             if (ParseCrystalFieldRef(fieldReference) is not { } field || !parameterReference.EndsWith('}')) return "";
@@ -71,9 +73,14 @@ public partial class CrystalXmlReportLoader
                 var textType = SelectionTextType(matchedFields[0]);
                 var textColumn = $"CONVERT({textType}, {column})";
                 var textArgument = $"CONVERT({textType}, {argument})";
-                clauses.Add(IncludeNullCandidate($"({textColumn} COLLATE Latin1_General_100_CI_AS = {textArgument} COLLATE Latin1_General_100_CI_AS"
+                var guarded = IncludeNullCandidate($"({textColumn} COLLATE Latin1_General_100_CI_AS = {textArgument} COLLATE Latin1_General_100_CI_AS"
                     + $" OR {textColumn} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%'"
-                    + $" OR {textArgument} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%')", column, layout.ConvertDatabaseNullToDefault));
+                    + $" OR {textArgument} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%')", column, layout.ConvertDatabaseNullToDefault);
+                clauses.Add(guarded);
+                // Printable-ASCII values compare the column directly at execution (ReportSqlTextSelectionPlan), in the column's own
+                // collation, as the original engine's query does; only a bounded character column is compared that way.
+                if (DirectTextComparable(matchedFields[0]))
+                    textBindings.Add(new([exposed[0].Name], guarded, IncludeNullCandidate($"{column} = {argument}", column, layout.ConvertDatabaseNullToDefault)));
             }
             else return ""; // Dates/date coercion, floating-point, currency and unknown types are not proven here.
         }
@@ -82,6 +89,7 @@ public partial class CrystalXmlReportLoader
         layout.SqlStringParameters = stringParameters.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (integerBindings.Count > 0)
             definition.PositionedIntegerSelection = new(integerBindings.Distinct().ToArray(), "");
+        if (textBindings.Count > 0) definition.PositionedTextSelection = new(textBindings, "");
         return string.Join(" AND ", clauses.Distinct(StringComparer.Ordinal));
     }
 
@@ -134,6 +142,21 @@ public partial class CrystalXmlReportLoader
     private static string SelectionLengthEscape(System.Xml.Linq.XElement? field, string column)
         => SelectionTextType(field) == "nvarchar(4000)"
             ? $"DATALENGTH(CONVERT(nvarchar(max), {column})) > 8000 OR " : "";
+
+    /// <summary>
+    /// Whether a text selector may compare the column directly at execution. Only a bounded character width can be trusted to
+    /// be a character column: the converter declares uniqueidentifier columns as 74-byte strings and memo, xml and text columns
+    /// as unbounded ones, and a direct comparison against those converts the parameter to the column's type instead. Anything
+    /// else keeps the CONVERT guard, which compares as text whatever the column is.
+    /// </summary>
+    internal static bool DirectTextComparable(System.Xml.Linq.XElement? field)
+    {
+        if (SelectionTextType(field) != "nvarchar(4000)") return false;
+        foreach (var name in new[] { "Length", "NumberOfBytes" })
+            if (int.TryParse((string?)field?.Attribute(name), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var size) && size == 74)
+                return false;
+        return true;
+    }
 
     private static bool IntegralSelectionField(string name)
         => IntegralSelectionType(name) is "long" or "short" or "byte" or "int8s" or "int8u" or "int16s" or "int16u" or "int32s" or "int32u" or "int64s";

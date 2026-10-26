@@ -21,6 +21,7 @@ public partial class CrystalXmlReportLoader
         plan.DeclaredNames.UnionWith(definition.Parameters.Select(parameter => parameter.Name));
         var clauses = new List<string>();
         var integers = new List<ReportSqlIntegerSelectionPlan.Binding>();
+        var texts = new List<ReportSqlTextSelectionPlan.Binding>();
 
         (string Sql, CrystalBaseType Type, string TypeName, XElement Metadata)? Field(string reference)
         {
@@ -105,8 +106,13 @@ public partial class CrystalXmlReportLoader
             var constant = replacement is null ? null : ReportSqlSelectionPlan.ReservedPrefix + "Value" + index;
             if (constant is not null)
                 text = $"(CASE WHEN {textField.Sql} IS NULL OR {text} COLLATE Latin1_General_100_BIN2 = N'' THEN @{constant} ELSE {text} END)";
-            clauses.Add(IncludeNullCandidate($"({SelectionLengthEscape(textField.Metadata, textField.Sql)}@{guard} = 1 OR {text} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {text} COLLATE Latin1_General_100_CI_AS = @{name})",
-                textField.Sql, layout.ConvertDatabaseNullToDefault));
+            var guarded = IncludeNullCandidate($"({SelectionLengthEscape(textField.Metadata, textField.Sql)}@{guard} = 1 OR {text} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {text} COLLATE Latin1_General_100_CI_AS = @{name})",
+                textField.Sql, layout.ConvertDatabaseNullToDefault);
+            clauses.Add(guarded);
+            // Printable-ASCII values compare the whole column directly at execution (no conversion, no truncation, an index can serve it)
+            // when the column is a bounded character column; the null-or-empty replacement compares a CASE expression and stays guarded.
+            if (constant is null && DirectTextComparable(textField.Metadata))
+                texts.Add(new([name], guarded, IncludeNullCandidate($"{textField.Sql} = @{name}", textField.Sql, layout.ConvertDatabaseNullToDefault)));
             plan.Strings.Add(new(name, guard, constant, replacement, exposed[0].AllowMultiple));
         }
         // Crystal writes the record selection's typed literal equalities into its
@@ -123,8 +129,11 @@ public partial class CrystalXmlReportLoader
                 var column = $"CONVERT({SelectionTextType(field.Metadata)}, {field.Sql})";
                 var literal = ReportSqlSelectionPlan.ReservedPrefix + "Literal" + plan.Literals.Count;
                 plan.Literals.Add((literal, text));
-                clauses.Add(IncludeNullCandidate($"({SelectionLengthEscape(field.Metadata, field.Sql)}{column} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {column} COLLATE Latin1_General_100_CI_AS = @{literal})",
-                    field.Sql, layout.ConvertDatabaseNullToDefault));
+                var guarded = IncludeNullCandidate($"({SelectionLengthEscape(field.Metadata, field.Sql)}{column} COLLATE Latin1_General_100_BIN2 LIKE N'%[^ -~]%' OR {column} COLLATE Latin1_General_100_CI_AS = @{literal})",
+                    field.Sql, layout.ConvertDatabaseNullToDefault);
+                clauses.Add(guarded);
+                if (DirectTextComparable(field.Metadata))
+                    texts.Add(new([literal], guarded, IncludeNullCandidate($"{field.Sql} = @{literal}", field.Sql, layout.ConvertDatabaseNullToDefault)));
             }
             else if (residual.Literal is bool flag)
                 clauses.Add(IncludeNullCandidate($"{field.Sql} = {(flag ? 1 : 0)}", field.Sql, layout.ConvertDatabaseNullToDefault));
@@ -133,8 +142,37 @@ public partial class CrystalXmlReportLoader
         }
         // Inline literals need no plan; a plan exists only when execution must bind prompt values or reserved names.
         if (plan.Dates.Count + plan.Integers.Count + plan.Strings.Count + plan.Literals.Count > 0) definition.PositionedSqlSelection = plan;
+        if (texts.Count > 0) definition.PositionedTextSelection = new(texts, "");
         if (integers.Count > 0)
             definition.PositionedIntegerSelection = new(integers.Distinct().ToArray(), "");
         return string.Join(" AND ", clauses.Distinct(StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// The server-side ordering the original engine asks for: the leading group and record-sort keys that are plain database
+    /// fields, stopping at the first key the engine computes itself (a formula, a summary, a specified order). The layout sorts
+    /// the rows again, so the clause only decides the order of rows with equal keys, which is what it does for Crystal too.
+    /// </summary>
+    private static string PositionedOrderBySql(XElement report, ReportDefinition definition)
+    {
+        var layout = definition.PositionedLayout!;
+        var tables = report.Element("Database")?.Element("Tables")?.Elements("Table").ToArray() ?? [];
+        var parts = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var keys = layout.Document.Groups.Select(group => (Reference: group.Condition, Direction: group.SortDirection))
+            .Concat(layout.Document.Sorts.Where(sort => sort.SortType == "RecordSortField").Select(sort => (Reference: sort.Field.Reference, Direction: sort.Direction)));
+        foreach (var (reference, direction) in keys)
+        {
+            var descending = direction.StartsWith("Descending", StringComparison.OrdinalIgnoreCase);
+            if (!descending && !direction.StartsWith("Ascending", StringComparison.OrdinalIgnoreCase)) break;
+            if (ParseCrystalFieldRef(reference) is not { } field || !SqlSelectionIdentifier(field.Table) || !SqlSelectionIdentifier(field.Field)) break;
+            var matchedTables = tables.Where(table => string.Equals((string?)table.Attribute("Alias") ?? (string?)table.Attribute("Name"), field.Table, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (matchedTables.Length != 1 || matchedTables[0].Element("Command") is not null) break;
+            var columns = matchedTables[0].Element("Fields")?.Elements("Field").Where(column => string.Equals((string?)column.Attribute("Name"), field.Field, StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+            if (columns.Length != 1) break;
+            var column = $"[{(string?)matchedTables[0].Attribute("Alias") ?? (string?)matchedTables[0].Attribute("Name")}].[{(string?)columns[0].Attribute("Name")}]";
+            if (seen.Add(column)) parts.Add(column + (descending ? " DESC" : ""));
+        }
+        return parts.Count == 0 ? "" : " ORDER BY " + string.Join(", ", parts);
     }
 }

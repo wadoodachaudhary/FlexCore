@@ -1,0 +1,33 @@
+@namespace Fx.ControlKit
+
+<ContextMenuSectionControl Text="Tab orientation" />
+@foreach (var choice in Choices)
+{
+    <ContextMenuItemControl Text="@choice.Label" Icon="@(Orientation == choice.Value ? "\u2713" : " ")"
+                            OnClick="() => OrientationChanged.InvokeAsync(choice.Value)" />
+}
+<ContextMenuSeparatorControl />
+<ContextMenuSectionControl Text="Tab theme" />
+@foreach (var choice in Themes)
+{
+    <ContextMenuItemControl Text="@choice.Label" Icon="@(Theme == choice.Value ? "\u2713" : " ")"
+                            OnClick="() => ThemeChanged.InvokeAsync(choice.Value)" />
+}
+
+@code {
+    [Parameter] public TabOrientation Orientation { get; set; } = TabOrientation.HybridVertical;
+    [Parameter] public EventCallback<TabOrientation> OrientationChanged { get; set; }
+    [Parameter] public TabTheme Theme { get; set; } = TabTheme.WindowsClassic;
+    [Parameter] public EventCallback<TabTheme> ThemeChanged { get; set; }
+    private static readonly (TabTheme Value, string Label)[] Themes =
+    [
+        (TabTheme.WindowsClassic, "VB6 / Windows"), (TabTheme.FolderTabs, "Folder Tabs"),
+        (TabTheme.ColorfulCards, "Colorful Cards"), (TabTheme.Minimal, "Minimal"), (TabTheme.Dark, "Dark")
+    ];
+    private static readonly (TabOrientation Value, string Label)[] Choices =
+    [
+        (TabOrientation.Horizontal, "Horizontal"),
+        (TabOrientation.HybridVertical, "Hybrid Vertical"),
+        (TabOrientation.Vertical, "Vertical")
+    ];
+}

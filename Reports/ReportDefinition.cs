@@ -9,6 +9,7 @@ public class ReportDefinition
 {
     internal ReportSqlSelectionPlan? PositionedSqlSelection { get; set; }
     internal ReportSqlIntegerSelectionPlan? PositionedIntegerSelection { get; set; }
+    internal ReportSqlTextSelectionPlan? PositionedTextSelection { get; set; }
     private string? _preparedSql;
     private string? _preparedSqlTemplate;
     public ReportPositionedLayout? PositionedLayout { get; set; }
@@ -67,7 +68,8 @@ public class ReportDefinition
         var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
         var copy = (ReportDefinition)MemberwiseClone();
         copy.PositionedSqlSelection = PositionedSqlSelection?.Clone();
-        copy.Sql = PositionedIntegerSelection?.Prepare(template, parameters) ?? template;
+        var sql = PositionedTextSelection?.Prepare(template, template, parameters) ?? template;
+        copy.Sql = PositionedIntegerSelection?.Prepare(sql, template, parameters) ?? sql;
         copy._preparedSqlTemplate = template;
         copy._preparedSql = copy.Sql;
         return copy;
@@ -77,6 +79,8 @@ public class ReportDefinition
     // specialization plan. Caller-supplied SQL is not parsed or rewritten.
     internal ReportSqlIntegerSelectionPlan? CopyIntegerSelectionForSql(string sql)
         => PositionedIntegerSelection is { } plan && Sql == plan.TemplateSql ? plan.WithTemplate(sql) : null;
+    internal ReportSqlTextSelectionPlan? CopyTextSelectionForSql(string sql)
+        => PositionedTextSelection is { } plan && Sql == plan.TemplateSql ? plan.WithTemplate(sql) : null;
 
     // The public list rewriter can also receive an execution copy. Restore
     // only that copy's still-unchanged generated template before rewriting so
@@ -85,6 +89,15 @@ public class ReportDefinition
     {
         var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
         if (PositionedIntegerSelection is not { } plan || template != plan.TemplateSql) return null;
+        Sql = template;
+        _preparedSql = _preparedSqlTemplate = null;
+        return plan;
+    }
+
+    internal ReportSqlTextSelectionPlan? RestoreTextSelectionForRewrite()
+    {
+        var template = _preparedSql is not null && Sql == _preparedSql ? _preparedSqlTemplate! : Sql;
+        if (PositionedTextSelection is not { } plan || template != plan.TemplateSql) return null;
         Sql = template;
         _preparedSql = _preparedSqlTemplate = null;
         return plan;

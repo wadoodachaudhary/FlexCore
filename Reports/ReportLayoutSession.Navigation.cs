@@ -136,20 +136,24 @@ public sealed partial class ReportLayoutSession
         return copy;
     }
 
-    private (List<FxGroupNode> Tree, Dictionary<Placement, List<string>> Anchors) BuildNativeNavigation(List<Page> pages)
+    internal FxGroupNode? FindDrillDownTarget(string groupId)
+        => _navigationGroups.Keys.FirstOrDefault(node => node.AnchorId == groupId);
+
+    private (List<FxGroupNode> Tree, Dictionary<Placement, List<string>> Anchors, Dictionary<Placement, ReportDrillTarget> Targets) BuildNativeNavigation(List<Page> pages)
     {
         _navigationGroups.Clear();
         var anchors = new Dictionary<Placement, List<string>>();
-        if (_rows.Length == 0 || _layout.Document.Groups.Count == 0) return ([], anchors);
+        var targets = new Dictionary<Placement, ReportDrillTarget>();
+        if (_rows.Length == 0 || _layout.Document.Groups.Count == 0) return ([], anchors, targets);
         if (_layout.Document.Groups.Any(g => g.IsHierarchical))
         {
             _diagnostics.Add("Native group-tree navigation for hierarchical groups is not supported.");
-            return ([], anchors);
+            return ([], anchors, targets);
         }
         var placements = pages.SelectMany((page, index) => page.Placements.Select(placement => (Placement: placement, Page: index + 1)))
             .Where(item => ReferenceEquals(item.Placement.Band.Owner, this) && item.Placement.Band.Row >= 0
                 && !item.Placement.Band.Suppressed && !item.Placement.Band.Blank && item.Placement.Height > 0
-                && item.Placement.Band.Section.Kind is "GroupHeader" or "Detail" or "GroupFooter").ToArray();
+                && item.Placement.Band.Section.Kind is "GroupHeader" or "Detail" or "GroupFooter" or "PageHeader").ToArray();
         var byRow = new List<(Placement Placement, int Page)>?[_rows.Length];
         foreach (var item in placements)
             (byRow[item.Placement.Band.Row] ??= []).Add(item);
@@ -168,8 +172,8 @@ public sealed partial class ReportLayoutSession
                     .OrderBy(item => item.Page).ThenBy(item => item.Placement.Top).ToArray();
                 var target = candidates.FirstOrDefault(item => item.Placement.Band.Section.Kind == "GroupHeader"
                     && !item.Placement.Band.RepeatedHeader
-                    && ReportDesignerEditing.GetGroupNumber(_layout.Document, item.Placement.Band.Section) == level + 1);
-                if (target.Placement is null) target = candidates.FirstOrDefault();
+                    && DrillSectionDepth(item.Placement.Band.Section) == level + 1);
+                if (target.Placement is null) target = candidates.FirstOrDefault(item => item.Placement.Band.Section.Kind != "PageHeader");
                 // The id names the group's whole span of records, so part of a group never shares the group's id (and its drill tab).
                 var id = $"fx-native-group-{_navigationRoot}-{level}-{_navigationRows[_rows[first]]}-{_navigationRows[_rows[last - 1]]}";
                 object? name;
@@ -191,6 +195,14 @@ public sealed partial class ReportLayoutSession
                     PageIndex = target.Page, AnchorId = id, Expanded = false, Children = Level(level + 1, first, last)
                 };
                 _navigationGroups.Add(node, new(level, first, last));
+                foreach (var candidate in candidates)
+                {
+                    var section = candidate.Placement.Band.Section;
+                    var ownsBand = section.Kind is "GroupHeader" or "GroupFooter"
+                        ? DrillSectionDepth(section) == level + 1
+                        : level == _layout.Document.Groups.Count - 1;
+                    if (ownsBand) targets[candidate.Placement] = new(id, node.Label);
+                }
                 if (target.Placement is not null)
                 {
                     if (!anchors.TryGetValue(target.Placement, out var ids)) anchors.Add(target.Placement, ids = []);
@@ -201,7 +213,7 @@ public sealed partial class ReportLayoutSession
             }
             return nodes;
         }
-        return (Level(rootLevel, 0, _rows.Length), anchors);
+        return (Level(rootLevel, 0, _rows.Length), anchors, targets);
     }
 
     private string? OmittedDrillStateReason(int groupLevel) => _layout.ShowAllHeadersOnDrillDown == false && _layout.Document.Sections

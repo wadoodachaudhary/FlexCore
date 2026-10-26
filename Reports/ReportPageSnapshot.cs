@@ -8,7 +8,10 @@ public sealed record ReportPageBand(string Name, int TopTwips, int HeightTwips, 
     public int WidthTwips { get; init; }
     /// <summary>Native group targets attached to this band's physical page, independent of printed page-number resets.</summary>
     public IReadOnlyList<string> NavigationAnchors { get; init; } = [];
+    /// <summary>The owning group instance, shared by its printed headings, values and totals.</summary>
+    public ReportDrillTarget? DrillTarget { get; init; }
 }
+public sealed record ReportDrillTarget(string GroupId, string Label);
 public sealed record ReportPageObject(ReportDesignerElement Element, string FormattedContent, ReportAnalysisSnapshot? Analysis)
 {
     public ReportTableFragment? Table { get; init; }

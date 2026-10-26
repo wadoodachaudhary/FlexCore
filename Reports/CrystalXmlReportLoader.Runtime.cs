@@ -65,9 +65,10 @@ public partial class CrystalXmlReportLoader
                     AddProjection(definition.PositionedLayout, link.MainField);
                     AddProjection(childDefinition.PositionedLayout!, link.ChildField);
                 }
-                RefreshSql(childDefinition, child);
+                RefreshSql(childDefinition, child, orderRows: false);
             }
-            RefreshSql(definition, report);
+            // Only the main query is ordered: a subreport's query runs inside a derived table, where ORDER BY is not allowed.
+            RefreshSql(definition, report, orderRows: depth == 0);
             return definition;
         }
         finally { ancestry.Remove(identity); }
@@ -81,7 +82,7 @@ public partial class CrystalXmlReportLoader
         return name.StartsWith("{?", StringComparison.Ordinal) && name.EndsWith('}') ? name[2..^1].Trim() : name;
     }
 
-    private void RefreshSql(ReportDefinition definition, XElement report)
+    private void RefreshSql(ReportDefinition definition, XElement report, bool orderRows)
     {
         report = new XElement(report);
         report.Elements("SubReports").Remove();
@@ -113,9 +114,10 @@ public partial class CrystalXmlReportLoader
         // session separately preserves parameterized subreport field-link filters.
         // Do not fall back to the broader legacy regex formula-to-SQL translator.
         definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), orderRows ? PositionedOrderBySql(report, definition) : "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
         if (definition.PositionedIntegerSelection is { } integers)
             definition.PositionedIntegerSelection = integers.WithTemplate(definition.Sql);
+        if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
     }
 
     private static void PruneUnusedJoinLeaves(List<TableInfo> tables, List<TableLinkInfo> links, HashSet<string> usedTables)

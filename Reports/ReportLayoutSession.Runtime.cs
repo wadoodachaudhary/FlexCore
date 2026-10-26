@@ -505,7 +505,7 @@ public sealed partial class ReportLayoutSession
         if (lists.Count == 0) return (query, scalars);
         var copy = new ReportDefinition { Sql = query.Sql, Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters.ToList(),
             FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout, PositionedSqlSelection = query.PositionedSqlSelection?.Clone(),
-            PositionedIntegerSelection = query.CopyIntegerSelectionForSql(query.Sql) };
+            PositionedIntegerSelection = query.CopyIntegerSelectionForSql(query.Sql), PositionedTextSelection = query.CopyTextSelectionForSql(query.Sql) };
         return (copy, MultiValueParameterRewriter.Apply(copy, lists, scalars));
     }
     // Equality under CrystalFormula.Compare; same-kind text, number and date values use a set instead of a scan.
@@ -626,7 +626,8 @@ public sealed partial class ReportLayoutSession
                 var wrappedSql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates);
                 query = new ReportDefinition { Sql = wrappedSql,
                     Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout,
-                    PositionedSqlSelection = query.PositionedSqlSelection?.Clone(), PositionedIntegerSelection = query.CopyIntegerSelectionForSql(wrappedSql) };
+                    PositionedSqlSelection = query.PositionedSqlSelection?.Clone(), PositionedIntegerSelection = query.CopyIntegerSelectionForSql(wrappedSql),
+                    PositionedTextSelection = query.CopyTextSelectionForSql(wrappedSql) };
             }
             try { data = _executeSubreport(query, bound); }
             catch (Exception error) when (error is not OperationCanceledException && _state.TolerateSubreportQueryError?.Invoke(error) == true)

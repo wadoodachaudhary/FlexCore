@@ -12,9 +12,12 @@ internal sealed class ReportSqlIntegerSelectionPlan(
 
     internal ReportSqlIntegerSelectionPlan WithTemplate(string sql) => new(bindings, sql);
 
-    internal string Prepare(string sql, IDictionary<string, object>? parameters)
+    internal string Prepare(string sql, IDictionary<string, object>? parameters) => Prepare(sql, sql, parameters);
+
+    /// <summary><paramref name="template"/> is the generated SQL the plan belongs to; <paramref name="sql"/> may already carry another execution-local rewrite of it.</summary>
+    internal string Prepare(string sql, string template, IDictionary<string, object>? parameters)
     {
-        if (sql != TemplateSql || parameters is null) return sql;
+        if (template != TemplateSql || parameters is null) return sql;
         foreach (var binding in bindings)
         {
             // SQL sanitization must not turn a second caller key into this name.

@@ -1017,7 +1017,8 @@ public sealed partial class ReportLayoutSession
                         .Append(content).Append("</div>");
                 }
                 pageBands.Add(new(placement.Band.Section.Name, placement.Top, placement.Height, placement.Band.Section.BackgroundColor, objects)
-                    { LeftTwips = placement.Left, WidthTwips = placement.Width, NavigationAnchors = anchors });
+                    { LeftTwips = placement.Left, WidthTwips = placement.Width, NavigationAnchors = anchors,
+                        DrillTarget = navigation.Targets.GetValueOrDefault(placement) });
                 html.Append("</section>");
             }
             snapshots.Add(new(_layout.Document.Title, index + 1, new ReportDesignerPage

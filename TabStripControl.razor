@@ -1,30 +1,50 @@
 @namespace Fx.ControlKit
+@implements IAsyncDisposable
+@inject IJSRuntime JS
 
-@*
-    TabStripControl — header-only tab strip (no content panes).
-    Use when tabs control external content or routing, unlike TabControl
-    which manages its own content panes.
-*@
-
-<div class="fx-tabstrip @CssClass">
-    @for (var i = 0; i < Items.Count; i++)
+<div class="fx-tabstrip @(EnableOverflowNavigation ? "fx-tabstrip-navigable" : "") @(ShowSeparators ? "fx-tabstrip-separated" : "") @CssClass" @ref="_host"
+     data-tab-orientation="@Orientation" data-tab-theme="@Theme" style="@TabAppearance.Style(Theme)" @oncontextmenu="OpenOrientationMenu" @oncontextmenu:preventDefault="ShowOrientationMenu" @oncontextmenu:stopPropagation="ShowOrientationMenu">
+    <div class="fx-tabstrip-viewport" role="tablist" aria-label="@AriaLabel" aria-orientation="@(Orientation == TabOrientation.Vertical ? "vertical" : "horizontal")">
+        @for (var i = 0; i < Items.Count; i++)
+        {
+            var idx = i;
+            var item = Items[idx];
+            <div class="fx-tabstrip-tab @(idx == SelectedIndex ? "fx-tabstrip-tab-active" : "") @(item.Disabled ? "fx-tabstrip-tab-disabled" : "")"
+                 role="tab" aria-selected="@(idx == SelectedIndex ? "true" : "false")" aria-disabled="@(item.Disabled ? "true" : "false")"
+                 tabindex="@(idx == SelectedIndex && !item.Disabled ? 0 : -1)" title="@item.Text" @ref="_tabElements[idx]"
+                 @onclick="() => SelectTab(idx)" @onkeydown="e => TabKeyDown(e, idx)" @onkeydown:stopPropagation="true">
+                @if (!string.IsNullOrEmpty(item.IconCss))
+                {
+                    <span class="fx-tabstrip-icon @item.IconCss"></span>
+                }
+                <span class="fx-tabstrip-text">@item.Text</span>
+                @if (item.Closable)
+                {
+                    <ButtonControl BareStyle="true" CssClass="fx-tabstrip-close" Title="@($"Close {item.Text}")" aria-label="@($"Close {item.Text}")"
+                                   Disabled="item.Disabled" TabIndex="-1" OnClick="() => CloseTab(idx)" StopPropagation="true">
+                        <SvgIconControl Name="close" Size="12px" />
+                    </ButtonControl>
+                }
+            </div>
+        }
+    </div>
+    @if (EnableOverflowNavigation && _overflow)
     {
-        var idx = i;
-        var item = Items[idx];
-        <div class="fx-tabstrip-tab @(idx == SelectedIndex ? "fx-tabstrip-tab-active" : "") @(item.Disabled ? "fx-tabstrip-tab-disabled" : "")"
-             @onclick="() => SelectTab(idx)">
-            @if (!string.IsNullOrEmpty(item.IconCss))
-            {
-                <span class="fx-tabstrip-icon @item.IconCss"></span>
-            }
-            <span class="fx-tabstrip-text">@item.Text</span>
-            @if (item.Closable)
-            {
-                <span class="fx-tabstrip-close" @onclick="() => CloseTab(idx)" @onclick:stopPropagation="true">&times;</span>
-            }
+        <div class="fx-tabstrip-navigation" aria-label="Tab navigation">
+            <ButtonControl BareStyle="true" CssClass="fx-tabstrip-scroll" Title="@PreviousTitle" aria-label="@PreviousTitle"
+                           Disabled="@(!_canScrollLeft)" OnClick="() => ScrollTabs(-1)">
+                <SvgIconControl Name="@(Orientation == TabOrientation.Horizontal ? "chevron-left" : "chevron-up")" Size="14px" />
+            </ButtonControl>
+            <ButtonControl BareStyle="true" CssClass="fx-tabstrip-scroll" Title="@NextTitle" aria-label="@NextTitle"
+                           Disabled="@(!_canScrollRight)" OnClick="() => ScrollTabs(1)">
+                <SvgIconControl Name="@(Orientation == TabOrientation.Horizontal ? "chevron-right" : "chevron-down")" Size="14px" />
+            </ButtonControl>
         </div>
     }
 </div>
+<ContextMenuControl @bind-Visible="_menuVisible" X="_menuX" Y="_menuY">
+    <TabAppearanceMenuItemsControl Orientation="Orientation" OrientationChanged="ChangeOrientation" Theme="Theme" ThemeChanged="ChangeTheme" />
+</ContextMenuControl>
 
 @code {
     [Parameter] public List<TabStripItem> Items { get; set; } = new();
@@ -32,18 +52,144 @@
     [Parameter] public EventCallback<int> SelectedIndexChanged { get; set; }
     [Parameter] public EventCallback<int> OnTabClose { get; set; }
     [Parameter] public string? CssClass { get; set; }
+    [Parameter] public string AriaLabel { get; set; } = "Tabs";
+    [Parameter] public bool EnableOverflowNavigation { get; set; }
+    [Parameter] public bool ShowSeparators { get; set; }
+    [Parameter] public TabOrientation Orientation { get; set; } = TabOrientation.HybridVertical;
+    [Parameter] public EventCallback<TabOrientation> OrientationChanged { get; set; }
+    [Parameter] public TabTheme Theme { get; set; } = TabTheme.WindowsClassic;
+    [Parameter] public EventCallback<TabTheme> ThemeChanged { get; set; }
+    [Parameter] public bool ShowOrientationMenu { get; set; } = true;
+    [Parameter] public EventCallback<MouseEventArgs> OnOrientationMenuRequested { get; set; }
+
+    private bool _menuVisible;
+    private double _menuX, _menuY;
+    private string PreviousTitle => Orientation == TabOrientation.Horizontal ? "Scroll tabs left" : "Scroll tabs up";
+    private string NextTitle => Orientation == TabOrientation.Horizontal ? "Scroll tabs right" : "Scroll tabs down";
+
+    private async Task OpenOrientationMenu(MouseEventArgs e)
+    {
+        if (!ShowOrientationMenu) return;
+        if (OnOrientationMenuRequested.HasDelegate) { await OnOrientationMenuRequested.InvokeAsync(e); return; }
+        _menuX = e.ClientX; _menuY = e.ClientY; _menuVisible = true;
+    }
+
+    private async Task ChangeOrientation(TabOrientation value)
+    {
+        Orientation = value;
+        _menuVisible = false;
+        _reveal = true;
+        await OrientationChanged.InvokeAsync(value);
+    }
+
+    private async Task ChangeTheme(TabTheme value)
+    {
+        Theme = value;
+        _menuVisible = false;
+        _reveal = true;
+        await ThemeChanged.InvokeAsync(value);
+    }
+
+    private ElementReference _host;
+    private ElementReference[] _tabElements = [];
+    private BrowserInterop? _browser;
+    private DotNetObjectReference<TabStripControl>? _self;
+    private bool _attached, _observesNavigation, _disposed, _overflow, _canScrollLeft, _canScrollRight, _reveal, _focus;
+
+    private (int Selected, int Count, TabOrientation Orientation)? _revealedFor;
+
+    protected override void OnParametersSet()
+    {
+        // Parent-driven activation also reveals an already-selected tab scrolled out of view.
+        // A parent re-render with the same activation leaves a scrolled strip where the user put it.
+        var revealFor = (SelectedIndex, Items.Count, Orientation);
+        if (_revealedFor != revealFor)
+        {
+            _revealedFor = revealFor;
+            _reveal = true;
+        }
+        // Existing DOM nodes keep their captured references when siblings are added or removed.
+        if (_tabElements.Length != Items.Count) Array.Resize(ref _tabElements, Items.Count);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_disposed) return;
+        var reveal = _reveal;
+        _reveal = false;
+        try
+        {
+            _browser ??= new(JS);
+            if (!_attached || _observesNavigation != EnableOverflowNavigation)
+            {
+                _self ??= DotNetObjectReference.Create(this);
+                _attached = await _browser.InvokeAsync<bool>("tabStripObserve", _host, null, EnableOverflowNavigation ? _self : null);
+                _observesNavigation = EnableOverflowNavigation;
+            }
+            if (reveal && _attached) await _browser.InvokeAsync<object?>("tabStripReveal", _host);
+        }
+        catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException)
+        {
+            // Native horizontal scrolling and keyboard selection remain usable without measurement.
+        }
+        if (_focus && !_disposed && SelectedIndex >= 0 && SelectedIndex < _tabElements.Length)
+        {
+            _focus = false;
+            try { await _tabElements[SelectedIndex].FocusAsync(preventScroll: _attached); }
+            catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
+        }
+    }
+
+    [JSInvokable]
+    public Task SetTabScrollState(bool overflow, bool left, bool right)
+    {
+        if (_disposed || (_overflow == overflow && _canScrollLeft == left && _canScrollRight == right)) return Task.CompletedTask;
+        _overflow = overflow;
+        _canScrollLeft = left;
+        _canScrollRight = right;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ScrollTabs(int direction)
+    {
+        if (_browser is null || !_attached) return;
+        try { await _browser.InvokeAsync<object?>("tabStripScroll", _host, direction); }
+        catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
+    }
 
     private async Task SelectTab(int idx)
     {
         if (idx < 0 || idx >= Items.Count || Items[idx].Disabled) return;
         SelectedIndex = idx;
-        if (SelectedIndexChanged.HasDelegate)
-            await SelectedIndexChanged.InvokeAsync(idx);
+        _reveal = true;
+        if (SelectedIndexChanged.HasDelegate) await SelectedIndexChanged.InvokeAsync(idx);
+    }
+
+    private async Task TabKeyDown(KeyboardEventArgs e, int idx)
+    {
+        if (e.Key == "Delete") { await CloseTab(idx); return; }
+        var step = e.Key is "ArrowLeft" or "ArrowUp" or "End" ? -1 : 1;
+        var target = e.Key switch { "Home" => 0, "End" => Items.Count - 1, "ArrowLeft" or "ArrowRight" or "ArrowUp" or "ArrowDown" => idx + step, "Enter" or " " => idx, _ => -1 };
+        while (target >= 0 && target < Items.Count && Items[target].Disabled) target += step;
+        if (target < 0 || target >= Items.Count) return;
+        _focus = true;
+        await SelectTab(target);
     }
 
     private async Task CloseTab(int idx)
     {
-        if (OnTabClose.HasDelegate)
-            await OnTabClose.InvokeAsync(idx);
+        if (idx < 0 || idx >= Items.Count || Items[idx].Disabled || !Items[idx].Closable) return;
+        if (OnTabClose.HasDelegate) await OnTabClose.InvokeAsync(idx);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        if (_browser is not null)
+        {
+            await _browser.InvokeAsync<object?>("dispose", _host);
+            await _browser.DisposeAsync();
+        }
+        _self?.Dispose();
     }
 }

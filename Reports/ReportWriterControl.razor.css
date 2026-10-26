@@ -554,13 +554,31 @@
 .fx-rpt-tree-mode-radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .fx-rpt-tree-mode-radio input[type=radio] { margin: 0; cursor: pointer; }
 
-/* flex-direction:column so the inner .fx-report-tab-bar (drill-down
-   tabs) stacks ABOVE .fx-report-pages instead of squeezing both into
-   side-by-side vertical pillars. align-items:center keeps the page
-   horizontally centered as before. */
+.fx-rpt-workspace {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fx-rpt-workspace[data-tab-orientation="Vertical"] {
+    flex-direction: row;
+}
+
+.fx-rpt-workspace > ::deep .fx-tabstrip {
+    flex-shrink: 0;
+}
+
+.fx-rpt-workspace[data-tab-orientation="Vertical"] > ::deep .fx-tabstrip {
+    flex: 0 0 min(220px, 35%);
+}
+
 .fx-rpt-viewer-panel {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     overflow: auto;
     background: #e0e0e0;
     display: flex;
@@ -638,6 +656,8 @@
 .fx-report-page.positioned { padding:0; width:max-content; min-height:0; }
 .fx-report-positioned-print { display:none; }
 @media print {
+    .fx-rpt-workspace { display: block; overflow: visible; }
+    .fx-rpt-workspace > ::deep .fx-tabstrip { display: none; }
     .fx-report-page.positioned { display:none; }
     .fx-report-positioned-print { display:block; }
     .fx-report-positioned-print ::deep article { page:fx-positioned; }

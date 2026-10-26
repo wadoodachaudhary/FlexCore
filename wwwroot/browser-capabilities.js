@@ -1,8 +1,81 @@
 // DOM capabilities shared by FlexCore controls. Imported only when requested.
 const bindings = new WeakMap();
 const stop = element => { bindings.get(element)?.(); bindings.delete(element); };
+const tabViewport = element => element.querySelector('.fx-tabstrip-viewport') || element;
+const revealTab = element => {
+    const view = tabViewport(element);
+    const tab = view.querySelector('[role=tab][aria-selected=true], .fx-mdi-tab.active, .fx-tab-button.active');
+    if (!tab) return;
+    // Offset coordinates stay in layout pixels, including inside a zoomed report viewer.
+    const left = tab.offsetLeft, right = left + tab.offsetWidth;
+    if (left < view.scrollLeft) view.scrollLeft = left;
+    else if (right > view.scrollLeft + view.clientWidth) view.scrollLeft = right - view.clientWidth;
+    const top = tab.offsetTop, bottom = top + tab.offsetHeight;
+    if (top < view.scrollTop) view.scrollTop = top;
+    else if (bottom > view.scrollTop + view.clientHeight) view.scrollTop = bottom - view.clientHeight;
+};
+const tabLabelMeasurements = new WeakMap();
+const fitTabLabels = element => {
+    for (const label of element.querySelectorAll('.fx-tabstrip-text, .fx-mdi-tab-title')) {
+        const style = getComputedStyle(label.parentElement), base = parseFloat(style.fontSize);
+        const key = [label.textContent, label.clientWidth, base, style.fontWeight].join('/');
+        if (!label.clientWidth || tabLabelMeasurements.get(label) === key) continue;
+        // The two-line CSS clamp supplies the ellipsis after the maximum 30% reduction.
+        for (const scale of [1, .9, .8, .7]) {
+            label.style.fontSize = (base * scale) + 'px';
+            if (label.scrollHeight <= label.clientHeight + 1) break;
+        }
+        tabLabelMeasurements.set(label, [label.textContent, label.clientWidth, base, style.fontWeight].join('/'));
+    }
+};
 export async function invoke(action, element, data, callback) {
     if (action === 'dispose') { stop(element); return; }
+    if (action === 'tabStripReveal') { fitTabLabels(element); revealTab(element); bindings.get(element)?.update?.(); return; }
+    if (action === 'tabStripScroll') {
+        const view = tabViewport(element);
+        if (element.dataset.tabOrientation === 'Horizontal') view.scrollLeft += data * Math.max(24, view.clientWidth * 0.75);
+        else view.scrollTop += data * Math.max(24, view.clientHeight * 0.75);
+        return;
+    }
+    if (action === 'tabStripObserve') {
+        stop(element);
+        const view = tabViewport(element);
+        if (!view) return false;
+        let previous = '';
+        const update = () => {
+            if (!callback) return;
+            const horizontal = element.dataset.tabOrientation === 'Horizontal';
+            const style = getComputedStyle(element);
+            // Exclude our own navigation buttons when deciding whether they are still needed.
+            const availableHeight = element.dataset.tabOrientation === 'Vertical'
+                ? element.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
+                : view.clientHeight;
+            const overflow = horizontal ? view.scrollWidth > element.clientWidth + 1 : view.scrollHeight > availableHeight + 1;
+            const offset = horizontal ? view.scrollLeft : view.scrollTop;
+            const length = horizontal ? view.scrollWidth - view.clientWidth : view.scrollHeight - view.clientHeight;
+            const left = overflow && offset > 1;
+            const right = overflow && offset < length - 1;
+            const state = `${overflow}/${left}/${right}`;
+            if (state === previous) return;
+            previous = state;
+            callback.invokeMethodAsync('SetTabScrollState', overflow, left, right).catch(() => {});
+        };
+        const resize = new ResizeObserver(() => { fitTabLabels(element); revealTab(element); update(); });
+        resize.observe(element); resize.observe(view);
+        // Labels, close buttons and item removal can change the content width without resizing the viewport.
+        const mutation = new MutationObserver(() => { fitTabLabels(element); update(); });
+        mutation.observe(view, { childList: true, subtree: true, characterData: true });
+        const key = e => {
+            if (e.target.getAttribute('role') === 'tab' && ['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End',' '].includes(e.key)) e.preventDefault();
+        };
+        view.addEventListener('scroll', update); view.addEventListener('keydown', key);
+        if (callback) element.setAttribute('data-fx-overflow-ready', '');
+        const cleanup = () => { resize.disconnect(); mutation.disconnect(); view.removeEventListener('scroll', update); view.removeEventListener('keydown', key); element.removeAttribute('data-fx-overflow-ready'); };
+        cleanup.update = update;
+        bindings.set(element, cleanup);
+        fitTabLabels(element); revealTab(element); update();
+        return true;
+    }
     if (action === 'treeKeyboard') {
         stop(element);
         const key = e => {

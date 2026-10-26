@@ -1,32 +1,32 @@
 .fx-tabs {
-    width: 100%;
-}
-
-.fx-tab-headers {
     display: flex;
-    gap: 6px;
-    border-bottom: 1px solid #d7dbe0;
-    padding-bottom: 6px;
+    flex-direction: column;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
 }
 
-.fx-tab-button {
-    border: none;
-    background: #f0f2f5;
-    padding: 8px 14px;
-    border-radius: 6px 6px 0 0;
-    cursor: pointer;
+.fx-tabs[data-tab-orientation="Vertical"] {
+    flex-direction: row;
+    height: 100%;
 }
 
-.fx-tab-button.active {
-    background: #ffffff;
-    border: 1px solid #d7dbe0;
-    border-bottom-color: #ffffff;
-    font-weight: 600;
+.fx-tabs[data-tab-orientation="Vertical"] > ::deep .fx-tabstrip {
+    flex: 0 0 min(220px, 35%);
 }
 
 .fx-tab-content {
-    border: 1px solid #d7dbe0;
-    border-top: none;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    border: 1px solid #b3b3b3;
+    border-top: 0;
     padding: 12px;
     background: #ffffff;
+}
+
+.fx-tabs[data-tab-orientation="Vertical"] > .fx-tab-content {
+    border-top: 1px solid #b3b3b3;
+    border-left: 0;
 }

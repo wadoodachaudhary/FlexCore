@@ -12,7 +12,7 @@ internal sealed class BrowserInterop(IJSRuntime runtime) : IAsyncDisposable
         // The path follows the assembly (FlexKit or FlexCore) — a literal 404s in the
         // other library, and the failure is silent.
         _module ??= await runtime.InvokeAsync<IJSObjectReference>(
-            "import", $"./_content/{typeof(BrowserInterop).Assembly.GetName().Name}/browser-capabilities.js");
+            "import", FxJsAsset.Versioned($"./_content/{typeof(BrowserInterop).Assembly.GetName().Name}/browser-capabilities.js"));
         try { return await _module.InvokeAsync<T>("invoke", action, element, data, callback); }
         catch (Exception error) when (action == "dispose" && error is JSException or JSDisconnectedException or TaskCanceledException)
         {

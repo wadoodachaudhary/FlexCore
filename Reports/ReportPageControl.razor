@@ -15,7 +15,13 @@
                 {
                     var overprint = ReportObjectRenderer.IsDuplicateNativeTextPaint(previous, item, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips);
                     previous = item;
+                    var target = !overprint && OnDrillDown.HasDelegate && item.FormattedContent.Length > 0
+                        && item.Element.Kind is "Text" or "Field" or "FieldHeading" ? band.DrillTarget : null;
                     <div data-object="@item.Element.Name" data-fx-native-overprint="@(overprint ? "true" : null)" aria-hidden="@(overprint ? "true" : null)"
+                         class="@(target is null ? null : "fx-report-drill-object")" data-drill-group="@target?.GroupId"
+                         role="@(target is null ? null : "link")" tabindex="@(target is null ? (int?)null : 0)"
+                         title="@(target is null ? null : $"Drill down: {target.Label}")"
+                         @onclick="ClickHandler(target)" @onkeydown="KeyHandler(target)"
                          style="@(ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips) + (overprint ? "visibility:hidden;" : ""))">
                         @if (item.Table is not null)
                         {
@@ -39,5 +45,13 @@
 @code {
     [Parameter, EditorRequired] public ReportPageSnapshot Page { get; set; } = default!;
     [Parameter] public bool IncludeNavigationAnchors { get; set; } = true;
+    [Parameter] public EventCallback<string> OnDrillDown { get; set; }
+    private Task DrillDown(ReportDrillTarget? target) => target is null ? Task.CompletedTask : OnDrillDown.InvokeAsync(target.GroupId);
+    private EventCallback<Microsoft.AspNetCore.Components.Web.MouseEventArgs> ClickHandler(ReportDrillTarget? target)
+        => target is null ? default : EventCallback.Factory.Create<Microsoft.AspNetCore.Components.Web.MouseEventArgs>(this, () => DrillDown(target));
+    private EventCallback<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs> KeyHandler(ReportDrillTarget? target)
+        => target is null ? default : EventCallback.Factory.Create<Microsoft.AspNetCore.Components.Web.KeyboardEventArgs>(this, e => DrillKeyDown(e, target));
+    private Task DrillKeyDown(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e, ReportDrillTarget? target)
+        => e.Key == "Enter" ? DrillDown(target) : Task.CompletedTask;
     private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);
 }

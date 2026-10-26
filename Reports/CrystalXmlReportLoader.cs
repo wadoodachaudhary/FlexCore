@@ -259,7 +259,8 @@ public partial class CrystalXmlReportLoader
             definition.PositionedLayout = BuildPositionedLayout(positionedDesign, report, definition.RuntimeDiagnostics);
             var projections = definition.PositionedLayout.Projections;
             definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
             if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
                 throw new NotSupportedException("Positioned rendering needs field projections from the report model; custom SQL reports currently use the tabular viewer.");
             return definition;

@@ -66,8 +66,12 @@ public static class MultiValueParameterRewriter
     {
         if (definition == null) throw new ArgumentNullException(nameof(definition));
         selections ??= new Dictionary<string, IReadOnlyList<string>>();
-        definition.PositionedSqlSelection?.ConfigureLists(selections, extraSqlParameters);
+        // The original engine's query carries no empty-string member of a multi-value string prompt: the blank choice
+        // stays in the prompt's list and in the runtime formula, and only the server query leaves it out.
+        var sqlSelections = selections.ToDictionary(pair => pair.Key, pair => SqlValues(definition, pair.Key, pair.Value));
+        definition.PositionedSqlSelection?.ConfigureLists(sqlSelections, extraSqlParameters);
         var integerSelection = definition.RestoreIntegerSelectionForRewrite();
+        var textSelection = definition.RestoreTextSelectionForRewrite();
 
         var sqlParams = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
         if (extraSqlParameters != null)
@@ -75,7 +79,7 @@ public static class MultiValueParameterRewriter
             foreach (var kv in extraSqlParameters) sqlParams[kv.Key] = kv.Value;
         }
 
-        foreach (var kv in selections)
+        foreach (var kv in sqlSelections)
         {
             var name = kv.Key;
             var values = kv.Value ?? Array.Empty<string>();
@@ -128,6 +132,7 @@ public static class MultiValueParameterRewriter
 
             if (!string.IsNullOrEmpty(definition.Sql))
                 definition.Sql = pattern.Replace(definition.Sql, replacement);
+            textSelection = textSelection?.Expand(name, values.Count);
 
             if (!string.IsNullOrEmpty(definition.TreeSql))
                 definition.TreeSql = pattern.Replace(definition.TreeSql, replacement);
@@ -162,7 +167,20 @@ public static class MultiValueParameterRewriter
         // A trusted list expansion changes the generated template, not the
         // integral clauses. Never revive a plan for caller-replaced SQL.
         definition.PositionedIntegerSelection = integerSelection?.WithTemplate(definition.Sql);
+        definition.PositionedTextSelection = textSelection?.WithTemplate(definition.Sql);
         return sqlParams;
+    }
+
+    /// <summary>The members of a selection that the server query receives: a multi-value string prompt drops its empty-string members.</summary>
+    private static IReadOnlyList<string> SqlValues(ReportDefinition definition, string name, IReadOnlyList<string>? values)
+    {
+        values ??= [];
+        // Only a positioned query re-evaluates the complete list in its runtime formula; a tabular query is filtered by its SQL alone.
+        if (values.Count < 2 || definition.PositionedLayout is null) return values;
+        var type = definition.Parameters.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))?.ParameterType;
+        if (type is not (null or ReportParameterType.String)) return values;
+        var kept = values.Where(value => value.Length > 0).ToArray();
+        return kept.Length == 0 || kept.Length == values.Count ? values : kept;
     }
 
     /// <summary>The SQL value for one prompt choice: numbers, dates and booleans by the prompt's declared
