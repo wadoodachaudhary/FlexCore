@@ -41,6 +41,15 @@ public sealed partial class ReportLayoutSession
     private object? _formulaPages;
     private bool _repeatedHeader;
     private readonly Dictionary<(string Id, int Row), (bool Area, bool Section, bool AreaHidden, bool SectionHidden)> _suppression = new();
+    private readonly Dictionary<(string Element, int Row), VariableSnapshot> _onDemandVariables = new();
+
+    private void CaptureOnDemandVariables(Band band)
+    {
+        VariableSnapshot? snapshot = null;
+        foreach (var item in band.Items)
+            if (_layout.OnDemandSubreports.ContainsKey(item.Element.Id))
+                _onDemandVariables[(item.Element.Id, item.Row)] = snapshot ??= CaptureVariables();
+    }
 
     private Func<string, CrystalValueType?>? _referenceTypeDelegate;
     private Func<string, int>? _groupingLevelDelegate;
@@ -435,7 +444,7 @@ public sealed partial class ReportLayoutSession
                     var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
                         ? RestylePrintedRuns(template, element)
                         : replacesText || richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
-                            ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)) : template;
+                            ? owner.CaptureFieldContent(element, item.Row).Html : template;
                     if (SuppressesDuplicates(element) && owner.DependsOn(element.Binding, true) && !owner._physicalPageSchedule)
                         (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
                     html = html.Replace(_pageToken, pageText, StringComparison.Ordinal).Replace(_countToken, countText, StringComparison.Ordinal);
@@ -662,10 +671,26 @@ public sealed partial class ReportLayoutSession
             throw new InvalidOperationException($"{element.Name}: the on-demand subreport definition is unavailable.");
         if (_executeSubreport is null) throw new InvalidOperationException($"{element.Name}: a subreport data executor is required.");
         if (row < 0 || row >= _rows.Length) throw new ArgumentOutOfRangeException(nameof(row));
-        var run = ResolveSubreportRun(element, subreport, row)
-            ?? throw new InvalidDataException(_subreportErrors.GetValueOrDefault(element.Id) ?? $"{element.Name}: the subreport query failed.");
-        return new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport,
-            new RuntimeState { PrintTime = _printTime, TolerateSubreportQueryError = _state.TolerateSubreportQueryError, FailedQueries = _state.FailedQueries },
-            0, null, run.Selections);
+        var saved = CaptureVariables();
+        var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
+        try
+        {
+            // Use the clicked occurrence, not the final row's variables. A child owns its copy so
+            // opening it cannot overwrite another drill tab or the parent report's print state.
+            RestoreVariables(_onDemandVariables.GetValueOrDefault((elementId, row)) ?? _rowAfter.GetValueOrDefault(row) ?? saved);
+            _bandFormulaCache.Clear();
+            var run = ResolveSubreportRun(element, subreport, row)
+                ?? throw new InvalidDataException(_subreportErrors.GetValueOrDefault(element.Id) ?? $"{element.Name}: the subreport query failed.");
+            var state = new RuntimeState { PrintTime = _printTime, TolerateSubreportQueryError = _state.TolerateSubreportQueryError, FailedQueries = _state.FailedQueries };
+            foreach (var value in _state.Shared) state.Shared.Add(value.Key, value.Value);
+            return new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport,
+                state, 0, null, run.Selections);
+        }
+        finally
+        {
+            RestoreVariables(saved);
+            _bandFormulaCache.Clear();
+            foreach (var value in cache) _bandFormulaCache.Add(value.Key, value.Value);
+        }
     }
 }

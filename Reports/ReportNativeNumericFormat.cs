@@ -50,8 +50,9 @@ public sealed record ReportNativeNumericFormat(
     private int EffectiveNegativeType => !SystemDefaultFormatting ? NegativeType
         : CultureInfo.CurrentCulture.NumberFormat.NumberNegativePattern switch { 0 => 3, 3 or 4 => 2, _ => 1 };
 
-    // Crystal measures the reserved sign slots as well as the visible digits. Centered
-    // fields reserve both slots; left/right alignment ignores the opposite outer slot.
+    // System-default numbers retain reserved sign slots in Default alignment even though
+    // they paint right-aligned. Custom numeric formats resolve Default as Right. Explicit
+    // Left/Right alignment excludes the opposite outer slot; centered fields retain both.
     internal string OverflowProbe(string formatted, string alignment)
     {
         if (formatted.Length == 0 || ValueType is 1 or 3 or 5 || EffectiveNegativeType == 0) return formatted;
@@ -71,7 +72,8 @@ public sealed record ReportNativeNumericFormat(
         if (trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) trailing = "";
         switch (alignment.ToLowerInvariant())
         {
-            case "right": case "default": leading = ""; break;
+            case "right": leading = ""; break;
+            case "default": case "": if (!SystemDefaultFormatting) leading = ""; break;
             case "center": case "horizontalcenter": break;
             default: trailing = ""; break;
         }

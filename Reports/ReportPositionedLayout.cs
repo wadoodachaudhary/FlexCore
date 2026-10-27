@@ -518,7 +518,9 @@ public sealed partial class ReportLayoutSession
             }
             items.Add(new(element, html, measure, child, childOffset, this, row, Analysis: analysis, DuplicateValue: duplicateValue));
         }
-        return new(section, items, row, repeats.ToList(), Owner: this);
+        var band = new Band(section, items, row, repeats.ToList(), Owner: this);
+        CaptureOnDemandVariables(band);
+        return band;
     }
 
     private static bool IsBlank(Band band) => band.Items.All(item => item.Element.IsSuppressed || item.Child is null && item.Element.Kind is not ("Line" or "Box" or "Picture") &&

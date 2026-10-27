@@ -57,6 +57,13 @@ public partial class CrystalXmlReportLoader
                     return new ReportLayoutParameterLink(LinkParameterName((string?)link.Attribute("LinkedParameterName")),
                         (string?)link.Attribute("MainReportFieldName") ?? "", childReference);
                 }).ToList();
+                // Embedded Crystal subreports omit print settings and use their containing report's paper.
+                // Work on a copy: converted XML and explicitly authored child settings remain unchanged.
+                if (child.Element("PrintOptions") is null && report.Element("PrintOptions") is { } printOptions)
+                {
+                    child = new XElement(child);
+                    child.Add(new XElement(printOptions));
+                }
                 var childDefinition = LoadPositionedSource(child, childPath, ancestry, depth + 1);
                 // An on-demand subreport prints its caption and runs only when the reader opens it, never inline.
                 (onDemand ? definition.PositionedLayout!.OnDemandSubreports : definition.PositionedLayout!.Subreports)[element.Id] = new(childDefinition, links);

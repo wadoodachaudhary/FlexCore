@@ -11,6 +11,9 @@ public sealed partial class ReportLayoutSession
 
     private (string Html, DuplicateFieldValue? Value) CaptureFieldContent(ReportDesignerElement element, int row)
     {
+        // Physical-page replay must retain the same live link as the initial layout pass.
+        if (element.Kind == "Subreport" && _layout.OnDemandSubreports.ContainsKey(element.Id))
+            return (OnDemandCaptionHtml(element, row), null);
         DuplicateFieldValue? value = null;
         var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString,
             element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat,

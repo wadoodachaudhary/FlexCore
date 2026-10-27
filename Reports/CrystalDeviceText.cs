@@ -47,7 +47,11 @@ internal static class CrystalDeviceText
         // GDI paints an extent of E pixels on columns 0..E-1; Crystal keeps a word whose last column is the
         // box's right edge, so the limit is the device width plus one (2101 fits a 5040-twip, 2100-pixel box).
         var limit = (long)Math.Floor(available * (double)DeviceDpi / 1440) + 1;
-        var lines = Break(runs, limit);
+        // A fixed literal caption with room for only one line clips horizontally.
+        // Rich text/memos and taller boxes keep their authored wrapping behavior.
+        var singleLineCaption = !element.CanGrow && element.Kind is "Text" or "FieldHeading"
+            && element.Visual.Runs.Count == 0 && element.HeightTwips <= Math.Ceiling(leading);
+        var lines = Break(runs, singleLineCaption ? long.MaxValue : limit);
         if (lines is null) return null;
         var cap = ReportObjectRenderer.TextLineLimit(element);
         var visible = cap > 0 ? Math.Min(lines.Count, cap) : lines.Count;

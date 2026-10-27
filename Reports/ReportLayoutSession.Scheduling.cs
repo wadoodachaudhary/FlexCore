@@ -215,7 +215,12 @@ public sealed partial class ReportLayoutSession
                     {
                         if (band.EvaluationOnly) return;
                         var key = Key(band); var owner = key.Owner;
-                        if (!owner.HasScheduledSection(band.Section.Id) || !endings.Add(key)) return;
+                        if (!endings.Add(key)) return;
+                        if (!owner.HasScheduledSection(band.Section.Id))
+                        {
+                            owner.CaptureOnDemandVariables(band);
+                            return;
+                        }
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var cache)) foreach (var value in cache) owner._bandFormulaCache.Add(value.Key, value.Value);
@@ -228,6 +233,7 @@ public sealed partial class ReportLayoutSession
                             // Ending formulas observe field assignments made in this section, on its final physical page.
                             formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(formatted, band.Row, endingOnly: true), band.Row, true, endingOnly: true);
                             formats[key] = PrintSectionFormat.Read(formatted); caches[key] = new(owner._bandFormulaCache);
+                            owner.CaptureOnDemandVariables(band);
                         }
                         finally { owner._replayingPrint = false; }
                     }

@@ -30,17 +30,12 @@ internal static partial class CrystalReportContentsParser
                 var subtype = reader.LoadEnum();
                 definition.ChartType = (nativeType, subtype) switch
                 {
-                    // Crystal chart groups: 0 bar (0/3 side-by-side, 1/4 stacked, 2/5 percent; 3–5 are the 3-D styles),
-                    // 1 line, 2 area, 3 pie, 4 doughnut. Other subtypes of those groups use the same flat adapter.
-                    (0, 1 or 4 or 7 or 10) => ChartType.StackedBar,
-                    (0, 2 or 5 or 8 or 11) => ChartType.StackedBar100,
-                    (0, 6 or 9) => ChartType.HorizontalBar,
-                    (0, _) => ChartType.Bar,
-                    (1, _) => ChartType.Line,
-                    (2, 1 or 4 or 7) => ChartType.StackedArea,
-                    (2, _) => ChartType.Area,
-                    (3, _) => ChartType.Pie,
-                    (4, _) => ChartType.Donut,
+                    (0, 0 or 3) => ChartType.Bar,
+                    (0, 1 or 4) => ChartType.StackedBar,
+                    (0, 2 or 5) => ChartType.StackedBar100,
+                    (1, 10 or 13) => ChartType.Line,
+                    (3, 30 or 31) => ChartType.Pie,
+                    (4, 40) => ChartType.Donut,
                     _ => throw new NotSupportedException($"Native chart type {nativeType}, subtype {subtype} has no exact report adapter.")
                 };
                 definition.Title = reader.LoadString() ?? "";
@@ -132,8 +127,9 @@ internal static partial class CrystalReportContentsParser
         definition.ColumnFields = definition.ColumnFields.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (objectType == 180)
         {
-            // A chart of summaries with no group (expectedGroups 0) plots one category per measure.
-            var summaryChart = groups.Count == 0 && expectedGroups == 0 && definition.Measures.Count > 0 && bindingFound;
+            // A chart of summaries with no group (expectedGroups 0) plots one category per measure. An each-record
+            // chart has no group either, but plots one point per record.
+            var summaryChart = !definition.EachRecord && groups.Count == 0 && expectedGroups == 0 && definition.Measures.Count > 0 && bindingFound;
             if (summaryChart) definition.SummariesAsCategories = true;
             if (!styleFound || !bindingFound || groups.Count > 2 || !definition.EachRecord && groups.Count == 0 && !summaryChart
                 || expectedMeasures >= 0 && expectedMeasures != definition.Measures.Count
