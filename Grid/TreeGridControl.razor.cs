@@ -645,16 +645,23 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task HandleLegacyThumbMouseDown(MouseEventArgs e)
     {
         if (e.Button != 0 || !_legacyScrollable) return;
-        var m = await ReadLegacyMetricsAsync();
-        if (m is null) return;
-        _legacyDragStartClientY = e.ClientY;
-        _legacyDragStartScrollTop = m.Value.Top;
+        // Armed before the metrics read: a release that reaches the server while the read
+        // is in flight (a quick click on the thumb) clears the armed state, and nothing
+        // re-arms it afterwards. Arming after the read left the veil up with no button
+        // held — the next pointer move dragged the list and the next click fed the veil.
         _legacyThumbDragging = true;
+        _legacyDragStartClientY = e.ClientY;
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) { _legacyThumbDragging = false; return; }
+        _legacyDragStartScrollTop = m.Value.Top;
     }
 
     private async Task HandleLegacyThumbDragMove(MouseEventArgs e)
     {
         if (!_legacyThumbDragging) return;
+        // A move with the primary button up is not a drag: the release happened where no
+        // handler of ours could see it (before the veil existed, or outside the page).
+        if ((e.Buttons & 1) == 0) { _legacyThumbDragging = false; return; }
         var m = await ReadLegacyMetricsAsync();
         if (m is null) return;
 

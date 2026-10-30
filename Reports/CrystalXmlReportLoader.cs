@@ -259,7 +259,8 @@ public partial class CrystalXmlReportLoader
             definition.PositionedLayout = BuildPositionedLayout(positionedDesign, report, definition.RuntimeDiagnostics);
             var projections = definition.PositionedLayout.Projections;
             definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+                : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
+                    useDistinct: Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords"));
             if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
             if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
                 throw new NotSupportedException("Positioned rendering needs field projections from the report model; custom SQL reports currently use the tabular viewer.");
@@ -417,7 +418,20 @@ public partial class CrystalXmlReportLoader
         //     ORDER BY to visible groups — only those made it into SELECT).
         //   • on drill-down tabs of drill-down-style reports (prevents LEFT JOIN row
         //     explosion; ORDER BY can reference ALL groups since they're all in SELECT).
-        var useDistinct = detailSuppressedAtTopLevel || mergeSummaryWithDetail;
+        var summaryDistinct = detailSuppressedAtTopLevel || mergeSummaryWithDetail;
+        var authoredDistinct = Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords");
+        var useDistinct = summaryDistinct || authoredDistinct;
+        if (authoredDistinct && !summaryDistinct)
+        {
+            // Record sort fields are query inputs even when they are not visible columns.
+            foreach (var sort in sortFields.Where(sort => sort.SortType == "RecordSortField"))
+            {
+                var projection = sort.FormulaName is { } formula
+                    ? formulaFields.TryGetValue(formula, out var expression) ? $"({expression}) AS [{FormulaGroupAlias(formula)}]" : null
+                    : $"{sort.Table}_{sort.Field}";
+                if (projection is not null && !selectFields.Contains(projection, StringComparer.OrdinalIgnoreCase)) selectFields.Add(projection);
+            }
+        }
         // ORDER BY columns must appear in the SELECT list under DISTINCT.
         List<GroupInfo> effectiveGroups;
         if (detailSuppressedAtTopLevel)
@@ -425,7 +439,7 @@ public partial class CrystalXmlReportLoader
         else
             effectiveGroups = groups;
         var orderByClause = BuildOrderByClause(
-            useDistinct ? sortFields.Where(s => s.SortType != "RecordSortField").ToList() : sortFields,
+            summaryDistinct ? sortFields.Where(s => s.SortType != "RecordSortField").ToList() : sortFields,
             effectiveGroups, formulaFields);
         AddTabularLayout(definition, report, selectFields, columns, parameters, useDistinct,
             ShouldUseFlexKitCustomSql(flexKitCustomSql, drillPath, fieldFilters));

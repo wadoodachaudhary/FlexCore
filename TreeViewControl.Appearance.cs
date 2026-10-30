@@ -30,7 +30,7 @@ public partial class TreeViewControl
     /// <summary>Text typed in the built-in search box (two-way bindable).</summary>
     [Parameter] public string? SearchText { get; set; }
     [Parameter] public EventCallback<string?> SearchTextChanged { get; set; }
-    /// <summary>Shown when a filter matches nothing.</summary>
+    /// <summary>Shown under the search box when the filter matches nothing (only with <c>ShowSearchBox</c>).</summary>
     [Parameter] public string EmptyFilterText { get; set; } = "No matches";
 
     private bool IsOutline => DisplayMode == TreeViewDisplayMode.Outline;

@@ -12,7 +12,7 @@
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
          @onmousedown="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleOverlayPress) : default)"
-         @onmousemove="HandleOverlayMouseMove"
+         @onmousemove="@(PointerGestureActive ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleOverlayMouseMove) : default)"
          @onmouseup="e => HandleOverlayMouseUp(e, true)"
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
@@ -271,12 +271,16 @@
     private string DialogJsModulePath =>
         FxJsAsset.Versioned($"./_content/{GetType().Assembly.GetName().Name}/dialog-control.js");
 
+    // A press on the title bar or a handle, a drag, a resize: only then does the overlay
+    // follow the pointer (its mousemove binding), and only then does it capture it.
+    private bool PointerGestureActive => _press != null || _isDragging || _isResizing;
+
     private string OverlayCssClass
     {
         get
         {
             var cls = "fx-dialog-overlay";
-            if (_isResizing || _press != null || _isDragging)
+            if (PointerGestureActive)
                 cls += " fx-dialog-overlay-resizing";
             if (_isDragging)
                 cls += " fx-dialog-overlay-dragging";
@@ -545,7 +549,13 @@
             return;
 
         var kind = press.Kind;
-        var measured = box is { Length: 10 } && box[0] > 0 && box[1] > 0;
+        var measured = box is { Length: >= 10 } && box[0] > 0 && box[1] > 0;
+        // The overlay tracks moves only once the gesture has begun; the measurement brings the
+        // pointer's latest point from the press phase (dialog-control.js), so the gesture starts
+        // where the pointer is now. A release seen before the measurement already holds its point.
+        if (press.PendingX is null && box is { Length: >= 13 } && box[10] > 0
+            && (box[11] != press.X || box[12] != press.Y))
+            (press.PendingX, press.PendingY) = (box[11], box[12]);
         _gestureOffsetBeforeX = _dialogOffsetX;
         _gestureOffsetBeforeY = _dialogOffsetY;
         if (measured)

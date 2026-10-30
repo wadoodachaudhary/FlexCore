@@ -240,7 +240,7 @@ public sealed partial class ReportLayoutSession
         {
             try { value = AnalyticalPeriod(value, kind); }
             catch (Exception error) when (error is InvalidDataException or NotSupportedException)
-            { _diagnostics.Add($"{reference}: {error.Message}"); }
+            { throw new InvalidDataException($"{reference}: {error.Message}", error); }
         }
         return value ?? DBNull.Value;
     }
@@ -499,19 +499,13 @@ public sealed partial class ReportLayoutSession
                     var scopeStart = definition.GroupScope.Length == 0 ? -1 : indexes.FirstOrDefault(-1);
                     if (!_analysisSnapshots.TryGetValue((original.Id, scopeStart), out analysis))
                     {
-                        var working = definition;
-                        if (element.Kind == "CrossTab" && definition.RowFields.Count == 0 && definition.ColumnFields.Count > 0)
-                        {
-                            working = definition.Clone();
-                            working.RowFields = ["__fx_crosstab_row"];
-                        }
-                        var data = indexes.Select(index => working.References.ToDictionary(reference => reference,
-                            reference => reference == "__fx_crosstab_row" ? "" : AxisValue(working, reference, index), StringComparer.OrdinalIgnoreCase)).ToList();
-                        analysis = new(working.Clone(), data);
+                        var data = indexes.Select(index => definition.References.ToDictionary(reference => reference,
+                            reference => AxisValue(definition, reference, index), StringComparer.OrdinalIgnoreCase)).ToList();
+                        analysis = new(definition.Clone(), data);
                         if (element.Kind is "CrossTab" or "Table") analysis = analysis with { Table = ReportTabularData.Create(element, analysis) };
                         _analysisSnapshots[(original.Id, scopeStart)] = analysis;
                     }
-                    html = element.Kind == "Chart" ? ReportAnalysisGraphic.ChartMarkup(element, analysis) : "";
+                    html = "[Analytical report item: use the component viewer or asynchronous HTML export]";
                 }
                 catch (Exception error) when (error is InvalidDataException or NotSupportedException or FormatException)
                 { _diagnostics.Add(element.Name + ": " + error.Message); html = ReportObjectRenderer.Encode("[" + element.Name + ": " + error.Message + "]"); }
@@ -1425,12 +1419,8 @@ public sealed partial class ReportLayoutSession
                             element.LeftTwips = item.Element.LeftTwips; element.TopTwips = regionCursor;
                             element.WidthTwips = fragment.Columns.Sum(column => column.WidthTwips);
                             element.HeightTwips = fragment.HeightTwips; element.CanGrow = false;
-                            var regionId = item.Element.Id + "-" + item.Row;
-                            var markup = ReportAnalysisGraphic.TableMarkup(fragment with { RegionId = regionId }, item.Element.Name);
-                            // ForPage prefers TemplateHtml. The pre-expand pass stored an empty template
-                            // because the cross-tab body is produced here, not in CreateBand.
-                            var rowItem = item with { Element = element, Analysis = null, Table = fragment with { RegionId = regionId }, Measurement = -1,
-                                Html = markup, TemplateHtml = markup };
+                            var rowItem = item with { Element = element, Analysis = null, Table = fragment with { RegionId = item.Element.Id + "-" + item.Row }, Measurement = -1,
+                                Html = ReportObjectRenderer.Encode(string.Join(" ", fragment.Cells)) };
                             items.Add(rowItem);
                             if (fragment.ContinuationHeaders.Count > 0)
                             {
@@ -1440,9 +1430,7 @@ public sealed partial class ReportLayoutSession
                                     headerElement.Id = element.Id + "-nested-header-" + index;
                                     headerElement.LeftTwips = element.LeftTwips;
                                     headerElement.TopTwips = index * fragment.HeightTwips;
-                                    var headerFragment = header with { RegionId = rowItem.Table!.RegionId };
-                                    var headerMarkup = ReportAnalysisGraphic.TableMarkup(headerFragment, item.Element.Name);
-                                    return rowItem with { Element = headerElement, Table = headerFragment, Html = headerMarkup, TemplateHtml = headerMarkup };
+                                    return rowItem with { Element = headerElement, Table = header with { RegionId = rowItem.Table!.RegionId } };
                                 }).ToList();
                                 var nestedSection = new ReportDesignerSection { Id = source.Section.Id, Name = item.Element.Name + " nested headers",
                                     Kind = source.Section.Kind, HeightTwips = nestedHeaders.Count * fragment.HeightTwips };

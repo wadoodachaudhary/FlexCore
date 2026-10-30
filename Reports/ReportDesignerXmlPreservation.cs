@@ -405,12 +405,17 @@ public static partial class ReportDesignerXmlSerializer
 
     // Native drill-down follows the main report's ShowAllHeadersOnDrillDown option. A source written before converters recorded it
     // (or by the designer before it wrote it) gains Crystal's default for a new report; an authored value is kept. A converter's
-    // subreport definition carries the version stamp but no ReportOptions: the option belongs to the main report, so it is left alone.
+    // subreport definition carries the version stamp and either no ReportOptions or, from version 16, ReportOptions holding only
+    // its own select-distinct flag: the drill option belongs to the main report, so a subreport is left alone.
     private static void ApplyDrillHeaderOption(XElement root)
     {
         if (root.Element("ReportOptions") is { } options)
         {
-            if (options.Attribute(DrillHeaderAttribute) is null) options.SetAttributeValue(DrillHeaderAttribute, "false");
+            // From the drill-option version on, the converter always writes it on the main report, so a stamped definition without it is a subreport.
+            var version = int.TryParse((string?)root.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute), NumberStyles.Integer,
+                CultureInfo.InvariantCulture, out var stored) ? stored : 0;
+            if (options.Attribute(DrillHeaderAttribute) is null && version < NativeCrystal.CrystalReportXmlVersion.DrillHeaderOption)
+                options.SetAttributeValue(DrillHeaderAttribute, "false");
             return;
         }
         if (root.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null) return;

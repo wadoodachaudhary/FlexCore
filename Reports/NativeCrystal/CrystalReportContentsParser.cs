@@ -89,7 +89,7 @@ internal static partial class CrystalReportContentsParser
             ApplyPageContentSize(core, 12240, 15840);
         }
 
-        core.ConvertDatabaseNullToDefault = ReadDatabaseNullOption(reader.Fork());
+        ReadDatabaseOptions(reader.Fork(), core);
 
         if (database is not null)
         {
@@ -109,24 +109,31 @@ internal static partial class CrystalReportContentsParser
         return new CrystalReportContents(core, dataDefinition);
     }
 
-    private static bool ReadDatabaseNullOption(TslvArchiveReader reader)
+    private static void ReadDatabaseOptions(TslvArchiveReader reader, CrystalReportCore core)
     {
         // Legacy ReportOptions (352) follows the report areas, before end-of-definition (103).
         while (reader.BytesLeftInRecord > 0)
         {
             var record = reader.LoadAnyRecord();
-            if (record.Type is 103 or 101) return false;
+            if (record.Type is 103 or 101) return;
             if (record.Type == 352)
             {
                 if (record.Schema > 1792)
                     throw new InvalidDataException($"Report options use unsupported TSLV schema {record.Schema}.");
                 _ = reader.LoadBoolean();
                 _ = reader.LoadEnum(); // ConvertDateTimeType precedes ConvertDatabaseNullToDefault.
-                return reader.LoadBoolean();
+                core.ConvertDatabaseNullToDefault = reader.LoadBoolean();
+                if (reader.BytesLeftInRecord == 0) return;
+                _ = reader.LoadBoolean();
+                _ = reader.LoadBoolean();
+                _ = reader.LoadUInt16(); // Legacy zoom mode is a 16-bit value.
+                // Case-sensitive, debug, group tree, Cartesian joins and async query precede distinct.
+                for (var index = 0; index < 5; index++) _ = reader.LoadBoolean();
+                core.EnableSelectDistinctRecords = reader.LoadBoolean();
+                return;
             }
             reader.SkipRestOfRecord();
         }
-        return false;
     }
 
     private static void TryParseDataDefinition(
@@ -194,7 +201,14 @@ internal static partial class CrystalReportContentsParser
             ResolveNumericFormats(database, dataDefinition);
             foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects)
             {
-                try { reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition); }
+                try
+                {
+                    reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition);
+                    var area = dataDefinition.ReportDefinition.Areas.FirstOrDefault(area => area.Sections.Any(section => section.ReportObjects.Contains(reportObject)));
+                    if (reportObject.Kind == "CrossTab" && area is { Kind: "GroupHeader" or "GroupFooter", GroupIndex: > 0 }
+                        && area.GroupIndex <= dataDefinition.Groups.Count)
+                        reportObject.Analysis.GroupScope = dataDefinition.Groups[area.GroupIndex - 1].ConditionField;
+                }
                 catch (Exception error) when (error is InvalidDataException or EndOfStreamException or OverflowException or ArgumentException or NotSupportedException)
                 { reportObject.AnalysisDiagnostic = error.Message; }
             }

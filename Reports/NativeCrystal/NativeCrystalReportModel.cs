@@ -4,8 +4,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    // Version 14 preserves authored parameter captions rather than replacing them with field names.
-    public const int Current = 14;
+    // Version 16 preserves the authored Select Distinct Records option.
+    public const int Current = 16;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -85,6 +85,8 @@ public sealed class CrystalReportCore
     public bool ShowAllHeadersOnDrillDown { get; set; }
 
     public bool ConvertDatabaseNullToDefault { get; set; }
+
+    public bool EnableSelectDistinctRecords { get; set; }
 
     public int LeftMargin { get; set; } = 360;
 

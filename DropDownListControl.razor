@@ -110,7 +110,7 @@
                             @onkeydown="e => HandleOptionKeyDown(e, val, item)"
                             @onkeydown:preventDefault="true"
                             @onkeydown:stopPropagation="true"
-                            @onmouseover="() => SetHighlightedIndex(optionIndex)"
+                            @onmouseover="@(_hoverFallback ? EventCallback.Factory.Create<MouseEventArgs>(this, () => OnListHovered(optionIndex)) : default)"
                             @onclick="() => SelectItemAsync(val, item)">
                         @if (ItemTemplate != null) { @ItemTemplate(item) } else { @txt }
                     </button>
@@ -576,6 +576,11 @@
     // highlight move. Focus is never pulled back.
     private DotNetObjectReference<DropDownListControl<TValue, TItem>>? _selfRef;
     private bool _focusLeaveWatched;
+    // A hosted list's pointer watcher (page lists end theirs with the opening watcher).
+    private bool _listHoverWatched;
+    // The browser module could not be loaded or could not prepare the list: the options
+    // report the pointer themselves, as every list did before the browser took it over.
+    private bool _hoverFallback;
 
     [JSInvokable]
     public async Task OnListFocusLeftAsync()
@@ -1250,6 +1255,7 @@
                 if (!_isOpen || generation != _openGeneration) return;
                 if (module == null)
                 {
+                    _hoverFallback = !Editable;
                     await RevealPanelAsync();
                     return;
                 }
@@ -1265,7 +1271,16 @@
                         _hostRef, panelRef, Editable, _selfRef);
                 }
                 else
+                {
                     geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, PanelMaxHeight, 8);
+                    // Hosted lists skip prepareDropdown, which watches a page list's pointer.
+                    if (!Editable)
+                    {
+                        _selfRef ??= DotNetObjectReference.Create(this);
+                        _listHoverWatched = true;
+                        await module.InvokeVoidAsync("watchListHover", _hostRef, panelRef, _selfRef);
+                    }
+                }
                 if (!_isOpen || generation != _openGeneration) return;
                 if (geometry is null)
                 {
@@ -1306,6 +1321,7 @@
             {
                 if (!_isOpen || generation != _openGeneration) return;
                 if (CellHost is null) _focusLeaveWatched = false;   // the watcher may not be registered
+                _hoverFallback = !Editable;
                 ResetDropdownGeometry();
                 await RevealPanelAsync();
                 return;
@@ -1411,6 +1427,11 @@
 
         try
         {
+            // The hover watcher listens on the document, so it is released first: a cell host's
+            // list can leave the DOM in the render batch that follows the first call, and a later
+            // call would reach the browser with no element to release it by.
+            if (_listHoverWatched)
+                await _dropdownJsModule.InvokeVoidAsync("unwatchListHover", _hostRef);
             if (_openingObserverRegistered || _clientDropdownRegistered)
                 await _dropdownJsModule.InvokeVoidAsync("unwatchDropdownOpening", _hostRef);
             if (_focusLeaveWatched)
@@ -1469,9 +1490,20 @@
     // :hover approximation can't do the "stays" part — when nothing is hovered the
     // stored highlight (seeded on the first/selected item) pops back, which reads
     // as "it auto-selected the top item".
-    private void SetHighlightedIndex(int index)
+    //
+    // The pointer's part is painted by the browser (dropdown-list-control.js
+    // watchListHover: data-fx-hover on the row, kept when the pointer leaves). The
+    // row index arrives here when the pointer rests, and always ahead of a key, a
+    // press or a focus change on the same connection — so Enter, Tab, the arrows
+    // and a focus leave act on the row the user sees. Nothing is rendered for it:
+    // a hover was one round trip plus a render of every option, which on a slow
+    // link showed the highlight walking the pointer's path row by row.
+    [JSInvokable]
+    public void OnListHovered(int index)
     {
-        if (_highlightedIndex == index)
+        if (!_isOpen || Editable || index < 0)
+            return;
+        if (DataSource is null || index >= DataSource.Count())
             return;
 
         _highlightedIndex = index;

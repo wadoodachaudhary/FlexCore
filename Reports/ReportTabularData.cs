@@ -33,10 +33,11 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
                     Format(row.GetValueOrDefault(c.Field), c.Format)).ToArray())).ToArray(), 0);
             return result.WithCells(element, snapshot, cell => snapshot.Rows.Skip(cell.Row).Take(cell.RowSpan).ToArray());
         }
-        var rows = snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)).ToList();
-        var columns = rows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => row.GetValueOrDefault(field)))).Distinct().Take(257).Count();
+        var grouping = new ReportAnalysisGrouping(definition, snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)));
+        var rows = grouping.Rows;
+        var columns = rows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => grouping.Value(row, field)))).Distinct().Take(257).Count();
         if (columns > 256) throw new InvalidDataException("Cross-tab exceeds 256 column groups.");
-        var groups = rows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.RowFields.Select(field => row.GetValueOrDefault(field)))).Distinct().Count();
+        var groups = rows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.RowFields.Select(field => grouping.Value(row, field)))).Distinct().Count();
         if ((long)Math.Max(1, groups) * (columns + 1) * definition.Measures.Count > 2000000)
             throw new InvalidDataException("Cross-tab exceeds two million cells.");
         var measures = new List<PivotValueConfig>();
@@ -47,13 +48,14 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
             if (measure.Aggregate == ReportAggregateType.Count)
                 foreach (var row in rows) row[field] = row.GetValueOrDefault(measure.Field) is null or DBNull ? 0 : 1;
             measures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
-                ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median
+                ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median or ReportAggregateType.Min or ReportAggregateType.Max
                     ? values => ReportValueFormatting.ExtendedAggregate(values, measure.Aggregate) : null,
                 Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
                     ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
         }
 #pragma warning disable BL0005
         var pivot = new PivotControl<Dictionary<string, object>> { DataSource = rows, RowFields = definition.RowFields,
+            GroupValueSelector = grouping.Value,
             ColumnFields = definition.ColumnFields, ValueFields = measures, ShowGrandTotals = definition.ShowTotals,
             ShowSubTotals = definition.ShowTotals, Interactive = false, AllowSorting = false,
             SortDescriptors = definition.DescendingFields.Select(field => new PivotSortDescriptor(field, SortDirection.Descending)).ToArray() };

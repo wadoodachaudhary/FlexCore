@@ -17,7 +17,7 @@ using Fx.ControlKit.Notifications;
 |---|---|
 | **Ultra-fast virtualization** | Tens of thousands of rows at 60 FPS, without DOM bloat or leaked handlers. Excel-like keyboard navigation, instant sort and filter. |
 | **Zero JavaScript dependencies** | Pure C# and SVG. Nothing to `npm install`, nothing to bundle, no fragile interop serialization slowing your circuit. |
-| **Excel-grade grid** | Frozen columns, hierarchical tree grids, column reordering, aggregate footers, inline / dialog / batch editing, native ClosedXML export. |
+| **Excel-grade grid** | Frozen columns, hierarchical tree grids, column reordering, aggregate footers, inline / dialog / batch editing, native Excel export. |
 | **Legacy migration** | Built for VB6, WinForms, ActiveX-grid and Crystal Reports modernizations — desktop paradigms reproduced rather than approximated. |
 | **Adaptive layout & MDI** | IDE-style collapsible panels, splitters, tab strips and multi-document window management for power-user apps. |
 | **Pluggable & host-agnostic** | Every external dependency is a clean C# interface — wire your own EF Core, Dapper, SQL Server, session context or reporting back end. |
@@ -26,15 +26,15 @@ using Fx.ControlKit.Notifications;
 
 - **GridControl** — virtualized data grid with sorting, filtering, grouping, drag-reorder, header context menu, dialog / batch / inline editing, metadata-generated columns, banded headers, cumulative left/right frozen columns, choose-columns dialog, and aggregate footers
 - **TreeGridControl** — hierarchical version of the grid
-- **EditorControl** — optional formatting/search toolbar, literal find/replace, opt-in undo/redo, read-only mode and formatted block snapshots. See [editor parity progress and bench](docs/editor-parity-progress.md).
-- **PDF Viewer and Spreadsheet** — occurrence search and bookmark navigation; visible frozen panes and persistent worksheet filters. See [document parity progress and benches](docs/pdf-spreadsheet-parity-progress.md) for APIs, verification and remaining gaps.
+- **EditorControl** — optional formatting/search toolbar, literal find/replace, opt-in undo/redo, read-only mode and formatted block snapshots.
+- **PDF Viewer and Spreadsheet** — occurrence search and bookmark navigation; visible frozen panes and persistent worksheet filters.
 - **ReportWriterControl** — adaptive paginated report renderer fed by a small `ReportDefinition` (loaded from Crystal XML, plain SQL, or any other source you wire)
 - **DialogControl, NotificationService, RibbonControl, ToolbarControl, ButtonControl, DropDownListControl, MultiSelectDualListControl, ChartControl, DiagramControl, EditorPanelControl, OutlineControl, ProgressBarControl, PropertyGridControl, TabsControl** — the rest of the kit
 - **App-agnostic by design** — every external dependency (DB, session, picklist source, report exporter) is exposed as an interface; host apps wire their own adapters in `Program.cs`
 
 ## Dedicated counterparts
 
-Forms and validation, Calendar/TimePicker, AutoComplete, Stepper, RadioGroup, ToggleButton, ColorPalette, gauges, StockChart, DockManager, AppBar/GridLayout, icons, AIPrompt, Gantt and PDF Viewer are available in FlexCore. See the [API guide and implemented scope](docs/dedicated-controls.md) and the showcase at `/demo/counterparts`. These additions reuse the existing controls; the guide also records remaining feature limits.
+Forms and validation, Calendar/TimePicker, AutoComplete, Stepper, RadioGroup, ToggleButton, ColorPalette, gauges, StockChart, DockManager, AppBar/GridLayout, icons, AIPrompt, Gantt and PDF Viewer are available in FlexCore. The showcase at `/demo/counterparts` demonstrates them. These additions reuse the existing controls.
 
 ## Targets
 
@@ -336,7 +336,7 @@ DOM order. A host-supplied `RowTemplate` owns the semantics of the cells it
 renders. `CustomKeyboardShortcuts` maps normalized gestures such as `Ctrl+Home`
 to `GridKeyboardCommand` values.
 
-Local exports already support real XLSX (via ClosedXML), CSV/TSV, HTML/XLS,
+Local exports already support real XLSX (FlexCore's own writer), CSV/TSV, HTML/XLS,
 JSON, and PDF. They preserve visible column order, widths, formatting, and
 aggregate output. The provider APIs below extend this to the complete remote
 query instead of only the loaded window.
@@ -429,9 +429,7 @@ CSV, TSV, HTML, XLS, JSON, and PDF keep the established display/evaluated value.
 
 ## Verified parity fixes in existing controls
 
-See [the audit follow-up](docs/parity-audit-follow-up.md) for verified findings,
-existing implementations, and remaining limits. No new production UI components
-were introduced for this work.
+No new production UI components were introduced for this work.
 
 `BarcodeControl.Type` selects a real symbology (default `Code128`), and
 `QrCodeControl.ErrorCorrection` selects QR correction strength. Both controls
@@ -479,13 +477,11 @@ that label, and `AriaDescribedBy` can refer to a short caller-supplied descripti
 Run [the component regression checks](tests/FlexCore.RegressionTests/README.md)
 with `dotnet run --project tests/FlexCore.RegressionTests/FlexCore.RegressionTests.csproj`.
 
-## Live program preview
+## Migration tooling
 
-`ProgramPreviewWindow`, `ProgramPreviewPair`, and `ProgramPreviewGroup` run programs on the server and show them in the browser. A pane is a GUI window, a console, or a web app. Each pane has a frame and a title bar; `Chrome` can be the default card, a classic Windows frame, a Qt Fusion frame, a browser window, or none. Clicks and keystrokes in a GUI preview are delivered to that process. A web pane starts a server and waits until its URL responds, or shows an address that is already hosted. The page iframes it and can open the same URL in a separate tab. `ConverterShell` can show a pair as a Run / Preview mode when the host passes `EnableRunPreview`, the launch commands, and `OwnerKey` for the signed-in user.
-
-The host registers `AddFlexCoreProgramPreview` and, for image delivery outside the circuit, maps `ProgramPreviewHttp.DefaultRoutePrefix`. A launched web app also needs the `{prefix}/{sessionId}/app` proxy route. GUI sessions need Xvfb, xdotool, and ffmpeg (or xwd) on the server. When those tools are missing, the preview stays on the page and names the packages to install. Console and web programs can be relayed without a virtual display.
-
-See [live program preview](docs/program-preview.md) for the API, the Linux packages, macOS containers, and Azure App Service.
+The converter shell, live program preview, translated-artifact viewers and the Crystal samples pack are in
+[FlexCore.Migration](FlexCore.Migration/README.md), a separate project in this repository. They are not part of
+the FlexCore package.
 
 ## License
 
@@ -493,8 +489,8 @@ MIT — see [LICENSE](LICENSE).
 
 ### Independent control benches
 
-The 32 remaining dedicated control types now have independent pages in FlexKitTester under `/flexcore-controls`, including Spreadsheet, Scheduler, Map, Upload, inputs, overlays, layout and chat. See [the control/bench guide](docs/remaining-controls.md) for APIs, dependencies, validation and remaining feature-level parity differences.
+The 32 remaining dedicated control types now have independent pages in FlexKitTester under `/flexcore-controls`, including Spreadsheet, Scheduler, Map, Upload, inputs, overlays, layout and chat.
 
 ### TreeView and TreeGrid parity work
 
-See [tree parity progress](docs/tree-parity-progress.md) for APIs, behavior, limitations, and validation. Independent FlexKitTester benches are available at `/flexcore-controls/tree-view`, `/flexcore-controls/tree-grid`, and `/flexcore-controls/tree-grid-operations`. The operations bench covers inline/dialog/batch editing, hierarchy checkboxes, reparenting and left/right frozen columns.
+Independent FlexKitTester benches are available at `/flexcore-controls/tree-view`, `/flexcore-controls/tree-grid`, and `/flexcore-controls/tree-grid-operations`. The operations bench covers inline/dialog/batch editing, hierarchy checkboxes, reparenting and left/right frozen columns.

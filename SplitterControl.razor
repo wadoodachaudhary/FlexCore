@@ -200,12 +200,48 @@
                 : $"{_runtimePrimarySize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px";
 
             // ShrinkPrimaryToContent turns the size into a ceiling rather than a fixed basis,
-            // so the pane hugs its content when the content is the narrower of the two.
+            // so the pane hugs its content when the content is the narrower of the two. It keeps
+            // that ceiling alone: a percentage term in max-height is void in a container of
+            // indefinite height, and would take the basis cap with it.
             if (ShrinkPrimaryToContent)
                 return $"flex:0 1 auto;max-{axis}:{basis};min-{axis}:0";
 
-            return $"flex:0 0 {basis};min-{axis}:0";
+            var ceiling = LiveCeiling();
+            return ceiling is null
+                ? $"flex:0 0 {basis};min-{axis}:0"
+                : $"flex:0 0 {basis};min-{axis}:0;max-{axis}:{ceiling}";
         }
+    }
+
+    /// <summary>
+    /// The bounds the browser applies on its own, so a container that shrinks under a wide
+    /// primary pane (the window narrowed, a panel collapsed) never pushes the bar and the
+    /// far pane out of view before the next render re-clamps the size — VB6's Form_Resize
+    /// moved the Slider at once. Only the constraints CSS can express without a measurement:
+    /// a MaxPrimary as given, and the far pane's floor less the bar. The primary pane's own
+    /// minimum still wins over both, as it does in ClampSize and the drag preview.
+    /// </summary>
+    private string? LiveCeiling()
+    {
+        var parts = new List<string>();
+        if (CssLength(MaxPrimary) is { } max) parts.Add(max);
+        if (CssLength(MinSecondary) is { } floor) parts.Add($"calc(100% - {floor} - var(--fx-splitter-size,6px))");
+        var ceiling = parts.Count switch { 0 => null, 1 => parts[0], _ => $"min({string.Join(",", parts)})" };
+        var minimum = CssLength(MinPrimary)
+            ?? (Proportional || MinPrimarySize <= 0 ? null : $"{MinPrimarySize.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)}px");
+        return ceiling is null || minimum is null ? ceiling : $"max({minimum},{ceiling})";
+    }
+
+    private static string? CssLength(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var text = raw.Trim();
+        var percent = text.EndsWith("%", StringComparison.Ordinal);
+        var number = text.TrimEnd('%').Replace("px", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (!double.TryParse(number, System.Globalization.NumberStyles.Float,
+                             System.Globalization.CultureInfo.InvariantCulture, out var value) || value < 0)
+            return null;
+        return value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture) + (percent ? "%" : "px");
     }
 
     private string SecondaryPaneStyle

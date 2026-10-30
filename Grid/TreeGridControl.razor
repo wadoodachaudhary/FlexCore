@@ -595,6 +595,7 @@
     {
         <div class="fx-legacy-vscroll@(_legacyScrollable ? "" : " fx-legacy-vscroll-empty")"
              @onmouseenter="LegacyBarEnterCallback"
+             @onmouseup="EndLegacyThumbDrag"
              @oncontextmenu="HandleLegacyScrollBarContextMenu"
              @oncontextmenu:preventDefault="true"
              @oncontextmenu:stopPropagation="true">
@@ -605,13 +606,16 @@
                 <div class="fx-legacy-vscroll-thumb"
                      style="top:@(_legacyThumbTopPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;height:@(_legacyThumbHeightPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;"
                      @onmousedown="HandleLegacyThumbMouseDown"
-                     @onmousedown:stopPropagation="true"></div>
+                     @onmousedown:stopPropagation="true"
+                     @onmouseup="EndLegacyThumbDrag"></div>
             </div>
             <button type="button" class="fx-legacy-vscroll-btn fx-legacy-vscroll-down" tabindex="-1"
                     @onclick="@(() => ScrollByLineAsync(1))">▼</button>
         </div>
 
-        @* Keeps the drag alive when the pointer leaves the 16px bar. *@
+        @* Keeps the drag alive when the pointer leaves the 16px bar. A press released
+           before the veil existed (a quick click on the thumb) is caught by the thumb's
+           and the bar's own mouseup, and a move with no button held ends it as well. *@
         @if (_legacyThumbDragging)
         {
             <div class="fx-legacy-vscroll-dragveil"

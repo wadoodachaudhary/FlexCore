@@ -122,7 +122,10 @@ export function prepareDropdown(host, panel, editable, dotNetRef) {
             panel.scrollTop = Math.max(0, Math.min(top, panel.scrollHeight - panel.clientHeight));
         if (!editable) option.focus({ preventScroll: true });
     }
-    if (!editable) watchFocusLeave(host, dotNetRef);
+    if (!editable) {
+        watchFocusLeave(host, dotNetRef);
+        watchListHover(host, panel, dotNetRef);
+    }
     panel.style.removeProperty("opacity");
     panel.style.removeProperty("pointer-events");
     host.querySelector(".fx-dropdown-backdrop")?.style.removeProperty("visibility");
@@ -184,6 +187,81 @@ export function unwatchDropdownOpening(host) {
     }
     openingWatchers.delete(host);
     unwatchFocusLeave(host);
+    unwatchListHover(host);
+}
+
+// Hover on a non-editable list stays in the browser. The pointer paints the single
+// moving highlight (data-fx-hover on the row, data-fx-hover-active on the panel; both
+// outlive the pointer leaving the panel, as the VB6 combo keeps its hot row). Nothing
+// crosses the circuit while the pointer moves: the row index reaches the control only
+// ahead of a key, a press or a focus change — on the same connection, before that
+// event — so the control commits the row the user sees. A render that moves the
+// keyboard highlight (.highlighted) takes over from the pointer's row. Before this,
+// every row the pointer crossed was a round trip and a render of the whole list; on a
+// slow link the highlight walked the pointer's path row by row.
+const hoverWatchers = new WeakMap();   // host -> dispose
+export function watchListHover(host, panel, dotNetRef) {
+    if (!host || !dotNetRef || !panel?.isConnected || !host.contains(panel)) return;
+    hoverWatchers.get(host)?.();
+    const doc = host.ownerDocument;
+    let hovered = null, reported = -1, pending = -1, lastPointer = null, disposed = false, keyboard = false;
+    const rowIndex = option => Array.prototype.indexOf.call(panel.querySelectorAll(".fx-dropdown-option"), option);
+    const paint = option => {
+        if (hovered === option) return;
+        hovered?.removeAttribute("data-fx-hover");
+        hovered = option;
+        if (option) { option.setAttribute("data-fx-hover", ""); panel.setAttribute("data-fx-hover-active", ""); }
+        else panel.removeAttribute("data-fx-hover-active");
+    };
+    const flush = () => {
+        if (pending < 0 || pending === reported) { pending = -1; return; }
+        reported = pending; pending = -1;
+        if (!disposed && panel.isConnected) dotNetRef.invokeMethodAsync("OnListHovered", reported).catch(() => { });
+    };
+    // A key can reach the control through its cell host (the tree or grid root holds the
+    // focus), so the flush listens on the document, in the capture phase — ahead of Blazor's
+    // own dispatch of the same event.
+    const onKey = () => { keyboard = true; flush(); };
+    const onMove = event => {
+        if (lastPointer?.x === event.clientX && lastPointer?.y === event.clientY) return;
+        lastPointer = { x: event.clientX, y: event.clientY };
+        const option = event.target.closest?.(".fx-dropdown-option");
+        if (!option || !panel.contains(option) || option === hovered) return;
+        paint(option);
+        pending = rowIndex(option);
+    };
+    const dispose = () => {
+        if (disposed) return;
+        disposed = true;
+        observer.disconnect();
+        panel.removeEventListener("mousemove", onMove);
+        doc.removeEventListener("keydown", onKey, true);
+        doc.removeEventListener("mousedown", flush, true);
+        doc.removeEventListener("pointerdown", flush, true);
+        host.removeEventListener("focusout", flush, true);
+        if (hoverWatchers.get(host) === dispose) hoverWatchers.delete(host);
+    };
+    const observer = new MutationObserver(records => {
+        if (!panel.isConnected) { dispose(); return; }
+        const landed = records.find(r => r.type === "attributes" && r.target !== panel && r.target.classList?.contains("highlighted"))?.target;
+        if (!landed) return;
+        // The control painted its highlight. After a key it takes over from the pointer's
+        // row; otherwise it has caught up with an earlier report, and a pointer that has
+        // moved on since keeps its row (the next report follows). A row the pointer reached
+        // but no longer shows is dropped with its paint, so a later key cannot commit it.
+        reported = rowIndex(landed);
+        if (keyboard || !hovered || landed === hovered) { keyboard = false; pending = -1; paint(null); }
+    });
+    panel.addEventListener("mousemove", onMove);
+    doc.addEventListener("keydown", onKey, true);
+    doc.addEventListener("mousedown", flush, true);
+    doc.addEventListener("pointerdown", flush, true);
+    host.addEventListener("focusout", flush, true);
+    observer.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ["class"] });
+    hoverWatchers.set(host, dispose);
+}
+export function unwatchListHover(host) {
+    hoverWatchers.get(host)?.();
 }
 
 const editableDropdowns = new WeakMap();

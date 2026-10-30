@@ -265,16 +265,19 @@
 
 /* Split view: the tabs carry the strips over the panes, blue on the active window's tab and grey
    on the partner's, which sits between an active and a hidden tab. */
-.fx-mdi-tab.fx-mdi-tab-split-partner {
+.fx-mdi-tab.fx-mdi-tab-split-partner,
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab.fx-mdi-tab-split-partner {
     background: #e6e6e6;
     box-shadow: inset 0 3px 0 #c8c8c8;
 }
 
-.fx-mdi-tab.fx-mdi-tab-split-partner:hover {
+.fx-mdi-tab.fx-mdi-tab-split-partner:hover,
+.fx-mdi-tabs[data-tab-theme] .fx-mdi-tab.fx-mdi-tab-split-partner:hover:not(.active) {
     background: #eeeeee;
 }
 
-.fx-mdi-tabs.fx-mdi-tabs-split .fx-mdi-tab.active {
+.fx-mdi-tabs.fx-mdi-tabs-split .fx-mdi-tab.active,
+.fx-mdi-tabs.fx-mdi-tabs-split[data-tab-theme] .fx-mdi-tab.active {
     box-shadow: inset 0 3px 0 #3c7fb1;
 }
 
@@ -316,79 +319,25 @@
     line-height: 1.25;
 }
 
-.fx-mdi-system-menu-content {
-    min-width: 164px;
-    padding: 2px 0;
-    background: #f0f0f0;
-    color: #000;
-    font: calc(12px * var(--fx-zoom, 1)) "Segoe UI", Tahoma, Arial, sans-serif;
-}
-
-.fx-mdi-system-menu-content button {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 24px;
-    box-sizing: border-box;
-    width: 100%;
-    min-height: 24px;
-    padding: 3px 24px 3px 28px;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    line-height: 16px;
-    text-align: left;
-    cursor: default;
-}
-
-.fx-mdi-system-menu-content button:hover:not(:disabled),
-.fx-mdi-system-menu-content button:focus-visible:not(:disabled) {
-    background: #e5f1fb;
-    outline: none;
-}
-
-.fx-mdi-system-menu-content button:disabled {
-    color: #8a8a8a;
-}
-
-.fx-mdi-system-menu-content button.fx-mdi-system-menu-close {
-    align-items: center;
-    font-weight: 700;
-    padding-left: 8px;
-    padding-right: 18px;
-}
-
-.fx-mdi-system-menu-close-label {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    line-height: 16px;
-}
-
-.fx-mdi-system-menu-close > span:last-child {
-    display: inline-flex;
-    align-items: center;
-    font-weight: 700;
-    line-height: 16px;
-}
-
-.fx-mdi-system-menu-close-icon {
+.fx-mdi-tab-pin {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 12px;
-    height: 14px;
-    font-size: calc(14px * var(--fx-zoom, 1));
-    font-weight: 700;
-    line-height: 1;
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.78;
+    border-radius: 2px;
+    cursor: pointer;
 }
 
-.fx-mdi-system-menu-separator {
-    display: block;
-    height: 1px;
-    margin: 3px 8px;
-    background: #b8b8b8;
+.fx-mdi-tab-pin:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.08);
 }
 
 .fx-mdi-tab-close {

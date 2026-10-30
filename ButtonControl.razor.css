@@ -90,25 +90,34 @@
     box-shadow: var(--fx-dialog-shadow, 2px 2px 6px rgba(0, 0, 0, 0.3));
 }
 
-/* Standard Contextual Variants */
+/* Standard Contextual Variants. Each sets its own hover border and pressed face: the
+   base hover rule's border-color falls back to the text colour when
+   --fx-btn-hover-border-color is unset, and the variant hover would otherwise
+   outrank the base :active rule. */
 .fx-button.btn-primary { background: #0d6efd; color: #fff; border-color: #0d6efd; }
-.fx-button.btn-primary:hover:not(:disabled) { background: #0b5ed7; }
+.fx-button.btn-primary:hover:not(:disabled) { background: #0b5ed7; border-color: #0a58ca; }
+.fx-button.btn-primary:active:not(:disabled) { background: #0a58ca; border-color: #0a53be; }
 
 .fx-button.btn-secondary { background: #6c757d; color: #fff; border-color: #6c757d; }
-.fx-button.btn-secondary:hover:not(:disabled) { background: #5c636a; }
+.fx-button.btn-secondary:hover:not(:disabled) { background: #5c636a; border-color: #565e64; }
+.fx-button.btn-secondary:active:not(:disabled) { background: #565e64; border-color: #51585e; }
 
 .fx-button.btn-success { background: #198754; color: #fff; border-color: #198754; }
-.fx-button.btn-success:hover:not(:disabled) { background: #157347; }
+.fx-button.btn-success:hover:not(:disabled) { background: #157347; border-color: #146c43; }
+.fx-button.btn-success:active:not(:disabled) { background: #146c43; border-color: #13653f; }
 
 .fx-button.btn-warning { background: #ffc107; color: #000; border-color: #ffc107; }
-.fx-button.btn-warning:hover:not(:disabled) { background: #ffca2c; }
+.fx-button.btn-warning:hover:not(:disabled) { background: #ffca2c; border-color: #ffc720; }
+.fx-button.btn-warning:active:not(:disabled) { background: #ffcd39; border-color: #ffc720; }
 
 .fx-button.btn-danger { background: #dc3545; color: #fff; border-color: #dc3545; }
-.fx-button.btn-danger:hover:not(:disabled) { background: #bb2d3b; }
+.fx-button.btn-danger:hover:not(:disabled) { background: #bb2d3b; border-color: #b02a37; }
+.fx-button.btn-danger:active:not(:disabled) { background: #b02a37; border-color: #a52834; }
 
 /* Outline Variants */
 .fx-button.btn-outline-primary { background: transparent; color: #0d6efd; border-color: #0d6efd; }
-.fx-button.btn-outline-primary:hover:not(:disabled) { background: #0d6efd; color: #fff; }
+.fx-button.btn-outline-primary:hover:not(:disabled) { background: #0d6efd; color: #fff; border-color: #0d6efd; }
+.fx-button.btn-outline-primary:active:not(:disabled) { background: #0a58ca; color: #fff; border-color: #0a53be; }
 
 /* Sizes */
 .fx-button.btn-sm { padding: 2px 8px; font-size: calc(11px * var(--fx-zoom, 1)); }

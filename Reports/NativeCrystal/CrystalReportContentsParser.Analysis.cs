@@ -17,6 +17,8 @@ internal static partial class CrystalReportContentsParser
         var expectedMeasures = -1;
         var expectedGroups = -1;
         var complete = false;
+        CrystalGroupModel? pendingGroup = null;
+        ReportAnalysisGroup? analyticalGroup = null;
         reader.SkipRestOfRecord();
         for (var records = 0; records < 100000 && reader.BytesLeftInRecord > 0; records++)
         {
@@ -52,11 +54,9 @@ internal static partial class CrystalReportContentsParser
                 }
                 if (reader.BytesLeftInRecord > 0)
                     for (var flags = Count(reader.LoadUInt16(), 64); flags > 0; flags--)
-                        if (reader.LoadInt32() != 0) definition.BindingNotes.Add("A per-measure chart transformation is drawn from the summarized values.");
-                // The flag selects Crystal's alternate (often cross-tab) evaluator. The category and summary
-                // records that follow are still the values this adapter plots.
+                        if (reader.LoadInt32() != 0) throw new NotSupportedException("Native per-measure chart transformations require an explicit adapter.");
                 if (reader.BytesLeftInRecord > 0 && reader.LoadBoolean())
-                    definition.BindingNotes.Add("The chart's alternate evaluation is drawn from its category and summary fields.");
+                    throw new NotSupportedException("Native alternate chart evaluation requires an explicit adapter.");
                 if (reader.BytesLeftInRecord > 0) definition.CategoryField = ReadFieldReference(reader, fields, data);
                 bindingFound = true;
             }
@@ -80,21 +80,35 @@ internal static partial class CrystalReportContentsParser
                 var field = ReadFieldReference(reader, fields, data);
                 var grouping = reader.LoadEnum();
                 var direction = reader.LoadEnum();
+                pendingGroup = new() { ConditionField = field, Condition = grouping, Direction = direction };
+                var hasRanges = objectType == 185 && ReadGroupOptions(reader, pendingGroup, data, fields);
+                analyticalGroup = null;
                 if (!string.IsNullOrWhiteSpace(field))
                 {
-                    // Same condition numbers as report groups: 0 every value, 1–7 date periods, 8–11 time-of-day.
-                    // Direction 0/1 sort, 2 keeps original order, 3 is specified order (named groups stay in record order here).
-                    if (grouping is < 0 or > 11 || direction is < 0 or > 3)
-                        throw new NotSupportedException("Native date/custom/original-order analytical grouping requires an explicit grouping adapter.");
-                    if (grouping != 0) definition.GroupKinds[field] = grouping;
+                    if (grouping != 0 || direction is < 0 or > 3 || objectType == 180 && direction > 1)
+                        throw new NotSupportedException("Native analytical date/Top N grouping is not supported.");
+                    if (pendingGroup.TopNCount > 0 || pendingGroup.TopNPercentage > 0 || pendingGroup.ParentIdField.Length > 0)
+                        throw new NotSupportedException("Native analytical Top N/hierarchical grouping is not supported.");
                     if (direction == 1) definition.DescendingFields.Add(field);
-                    if (direction is 2 or 3) definition.OriginalOrderFields.Add(field);
+                    if (objectType == 185 && (direction >= 2 || hasRanges))
+                    {
+                        analyticalGroup = new() { Field = field, OriginalOrder = direction == 2,
+                            OthersName = pendingGroup.SpecifiedOthersName };
+                        definition.Groups.Add(analyticalGroup);
+                    }
                     if (objectType == 180) groups.Add(field);
                     else if (containers.Contains(207)) definition.ColumnFields.Add(field);
                     else if (containers.Contains(211)) definition.RowFields.Add(field);
-                    else definition.BindingNotes.Add("Axis field '" + field + "' was outside a row or column group.");
                 }
             }
+            else if (record.Type == 231 && analyticalGroup is not null)
+            {
+                analyticalGroup.UnspecifiedValues = reader.LoadEnum();
+                if (analyticalGroup.UnspecifiedValues is < 0 or > 2)
+                    throw new NotSupportedException("Unknown analytical unspecified-values policy.");
+            }
+            else if (record.Type == 233 && analyticalGroup is not null)
+                analyticalGroup.SpecifiedGroups.Add(new() { Name = reader.LoadString() ?? "", Expression = reader.LoadString() ?? "" });
             else if (record.Type is 159 or 161 && objectType == 185 && containers.Contains(216))
             {
                 var probe = reader.Fork();
@@ -105,45 +119,36 @@ internal static partial class CrystalReportContentsParser
                 AddSummary(ReadFieldReference(probe, fields, data));
                 bindingFound = true;
             }
-            else if (record.Type is 290 or 292 or 382)
+            else if (record.Type == 382)
             {
-                if (record.Type == 290 && objectType == 180) definition.LinkedToCrossTab = true;
-                definition.BindingNotes.Add(record.Type switch
-                {
-                    290 => "This chart is linked to a cross-tab.",
-                    292 => "OLAP bindings are not evaluated; row, column and summary fields that were read are drawn.",
-                    _ => "Calculated-member bindings are not evaluated; the stored summaries are drawn."
-                });
+                // Newer writers emit this collection even when no calculated members exist.
+                var count = reader.BytesLeftInRecord == 0 ? 0 : Count(reader.LoadInt32(), 10000);
+                if (count != 0) throw new NotSupportedException($"The cross-tab contains {count} calculated member(s); their grid formulas are retained but not evaluated.");
             }
+            else if (record.Type is 290 or 292)
+                throw new NotSupportedException("Linked-chart, OLAP or calculated-member bindings are retained but not evaluated.");
             else if (record.Type == 319 && reader.LoadUInt16() != 0)
                 throw new NotSupportedException("Native analytical sort rules require an explicit sort adapter.");
             reader.SkipRestOfRecord();
             if (containers.TryPeek(out var end) && end == record.Type) containers.Pop();
         }
         if (!complete) throw new InvalidDataException("Native analytical binding records ended before the object terminator.");
-        if (objectType == 180 && definition.LinkedToCrossTab && definition.Measures.Count == 0 && styleFound)
-            return definition;
         definition.RowFields = definition.RowFields.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         definition.ColumnFields = definition.ColumnFields.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (objectType == 180)
         {
-            // A chart of summaries with no group (expectedGroups 0) plots one category per measure. An each-record
-            // chart has no group either, but plots one point per record.
-            var summaryChart = !definition.EachRecord && groups.Count == 0 && expectedGroups == 0 && definition.Measures.Count > 0 && bindingFound;
-            if (summaryChart) definition.SummariesAsCategories = true;
-            if (!styleFound || !bindingFound || groups.Count > 2 || !definition.EachRecord && groups.Count == 0 && !summaryChart
+            if (!styleFound || !bindingFound || groups.Count > 2 || !definition.EachRecord && groups.Count == 0
                 || expectedMeasures >= 0 && expectedMeasures != definition.Measures.Count
                 || expectedGroups >= 0 && expectedGroups != groups.Count)
                 throw new InvalidDataException("Incomplete native chart data/style binding records.");
             if (groups.Count > 0) definition.CategoryField = groups[0];
-            definition.SortCategories = !definition.EachRecord && !definition.OriginalOrderFields.Contains(groups.Count > 0 ? groups[0] : "", StringComparer.OrdinalIgnoreCase);
+            definition.SortCategories = !definition.EachRecord;
             definition.SeriesField = groups.Count > 1 ? groups[1] : "";
         }
         if (!bindingFound)
             throw new NotSupportedException("No supported native analytical measure-binding records were found.");
         if (definition.Validate(objectType == 180 ? "Chart" : "CrossTab") is { } error)
-            throw new NotSupportedException("Native analytical bindings: " + error
-                + (definition.BindingNotes.Count == 0 ? "" : " " + string.Join(" ", definition.BindingNotes.Distinct(StringComparer.Ordinal))));
+            throw new NotSupportedException("Native analytical bindings: " + error);
         return definition;
 
         void AddSummary(string reference)
@@ -165,7 +170,8 @@ internal static partial class CrystalReportContentsParser
             };
             if (objectType == 185 && definition.Measures.Any(m => m.Field == summary.SummarizedField && m.Aggregate == operation && m.Caption == summary.Name)) return;
             definition.Measures.Add(new() { Field = summary.SummarizedField, Caption = summary.Name,
-                Aggregate = operation, Format = operation is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0" : "N2" });
+                Aggregate = operation, Format = operation is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0"
+                    : summary.ValueType switch { 9 => "d", 10 => "t", 15 => "g", 11 or 12 or 13 => "", _ => "N2" } });
         }
         static int Count(int value, int limit) => value >= 0 && value <= limit ? value
             : throw new InvalidDataException("Native analytical record count exceeds its supported bound.");

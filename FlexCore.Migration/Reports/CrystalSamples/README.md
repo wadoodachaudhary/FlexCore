@@ -4,7 +4,7 @@
 
 ## How a consumer finds it
 
-The file lives at `Reports/CrystalSamples/CrystalSamples.db` in this repository. The FlexCore project copies that same relative path into the build output and packs it as NuGet content (`contentFiles`) with `PackageCopyToOutput`, so a referenced app receives the file next to its own output.
+The file lives at `FlexCore.Migration/Reports/CrystalSamples/CrystalSamples.db` in this repository. `FlexCore.Migration.csproj` copies it to `Reports/CrystalSamples/CrystalSamples.db` under the build output, so a host with a ProjectReference to FlexCore.Migration gets the file next to its own output. It is never packed: FlexCore.Migration is not packable, and the FlexCore package carries neither this file nor `CrystalSampleDatabase`.
 
 ```csharp
 using Fx.ControlKit.Reports;

@@ -8,11 +8,19 @@
             disabled="@Disabled"
             title="@Title"
             @onclick="HandleClick">
-        @if (!string.IsNullOrWhiteSpace(Icon))
+        @if (IconContent is not null)
         {
-            <span class="fx-context-menu-item-icon">@Icon</span>
+            <span class="fx-context-menu-item-icon" aria-hidden="true">@IconContent</span>
+        }
+        else if (!string.IsNullOrEmpty(Icon))
+        {
+            <span class="fx-context-menu-item-icon" aria-hidden="true">@Icon</span>
         }
         <span class="fx-context-menu-item-text">@Text</span>
+        @if (!string.IsNullOrWhiteSpace(Shortcut))
+        {
+            <span class="fx-context-menu-item-shortcut">@Shortcut</span>
+        }
         @if (HasSubmenu)
         {
             <span class="fx-context-menu-item-arrow" aria-hidden="true">&#9654;</span>
@@ -31,6 +39,8 @@
 
     [Parameter] public string Text { get; set; } = string.Empty;
     [Parameter] public string? Icon { get; set; }
+    [Parameter] public RenderFragment? IconContent { get; set; }
+    [Parameter] public string? Shortcut { get; set; }
     [Parameter] public string? Title { get; set; }
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public bool CloseOnClick { get; set; } = true;

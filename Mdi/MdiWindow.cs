@@ -66,6 +66,11 @@ public sealed class MdiWindow
     /// tab). Legacy MDI child forms carry a 16px form icon next to the caption.</summary>
     public string? IconUrl { get; }
 
+    /// <summary>True when the user has pinned this tab in the tab strip. Pinned tabs stay grouped
+    /// on the left and are skipped by bulk close commands (Close Other Tabs, Close All Tabs,
+    /// Close Unmodified Tabs, Close Tabs to the Left/Right).</summary>
+    public bool IsPinned { get; set; }
+
     public MdiWindow(
         string id,
         string route,

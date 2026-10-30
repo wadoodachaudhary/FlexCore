@@ -247,6 +247,30 @@ const DIALOG_CLOSED_LIST_TRIGGER = "button[aria-haspopup='listbox']:not([aria-ex
 // alignX, alignY, offsetX, offsetY]. Limits are the CSS ones in px (0 = none); align is how the overlay
 // places the box on that axis (0 start, 0.5 centre, 1 end); offset is where the box is painted
 // relative to that placement, whatever rule put it there.
+// A press on the title bar or a resize handle asks the control to measure the box before the
+// gesture begins; the overlay binds mousemove only once it has. The pointer in between is
+// tracked here, never sent: the measurement carries its latest point, so the gesture starts
+// where the pointer is (or where it was released — a flick ends before the measurement returns).
+const pressPointer = { x: null, y: null };
+function trackPressPointer(e) {
+    pressPointer.x = e.clientX;
+    pressPointer.y = e.clientY;
+}
+function endPressPointer(e) {
+    trackPressPointer(e);
+    document.removeEventListener("mousemove", trackPressPointer, true);
+    document.removeEventListener("mouseup", endPressPointer, true);
+}
+if (typeof document !== "undefined") {
+    document.addEventListener("mousedown", e => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target?.closest(".fx-dialog-header, .fx-dialog-resize-handle")) return;
+        trackPressPointer(e);
+        document.addEventListener("mousemove", trackPressPointer, { capture: true, passive: true });
+        document.addEventListener("mouseup", endPressPointer, true);
+    }, true);
+}
+
 export function measureDialogBox(dialog) {
     if (!dialog) return null;
     const rect = dialog.getBoundingClientRect();
@@ -259,7 +283,8 @@ export function measureDialogBox(dialog) {
     const relative = style.position === "relative";
     return [rect.width, rect.height, px(style.minWidth), px(style.minHeight), px(style.maxWidth), px(style.maxHeight),
         align(overlay?.justifyContent || ""), align(self || ""),
-        (shift ? shift.m41 : 0) + (relative ? px(style.left) : 0), (shift ? shift.m42 : 0) + (relative ? px(style.top) : 0)];
+        (shift ? shift.m41 : 0) + (relative ? px(style.left) : 0), (shift ? shift.m42 : 0) + (relative ? px(style.top) : 0),
+        pressPointer.x === null ? 0 : 1, pressPointer.x ?? 0, pressPointer.y ?? 0];
 }
 
 // "control": the default button fires after the focused control handles Enter.

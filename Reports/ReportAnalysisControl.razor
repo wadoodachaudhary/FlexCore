@@ -21,6 +21,7 @@ else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0)
 {
     <PivotControl TValue="Dictionary<string, object>" DataSource="_pivotRows" RowFields="Snapshot.Definition.RowFields"
         ColumnFields="Snapshot.Definition.ColumnFields" ValueFields="_pivotMeasures" FieldLabels="_labels"
+        GroupValueSelector="_grouping.Value"
         ShowGrandTotals="Snapshot.Definition.ShowTotals" ShowSubTotals="Snapshot.Definition.ShowTotals"
         SortDescriptors="@(Snapshot.Definition.DescendingFields.Select(field => new PivotSortDescriptor(field, SortDirection.Descending)).ToArray())"
         Interactive="false" AllowSorting="false" Height="@($"{Math.Max(1, Element.HeightTwips / 15)}px")" />
@@ -44,6 +45,7 @@ else if (Element.Kind is "Table" or "CrossTab")
     private List<PivotValueConfig> _pivotMeasures = [];
     private Dictionary<string, string> _labels = [];
     private IReadOnlyList<ReportTableFragment> _tablePreview = [];
+    private ReportAnalysisGrouping _grouping = new(new(), []);
 
     protected override void OnParametersSet()
     {
@@ -65,7 +67,8 @@ else if (Element.Kind is "Table" or "CrossTab")
             }
             else
             {
-                _pivotRows = Snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)).ToList();
+                _grouping = new(definition, Snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)));
+                _pivotRows = _grouping.Rows;
                 _pivotMeasures = []; _labels = [];
                 for (var index = 0; index < definition.Measures.Count; index++)
                 {
@@ -75,13 +78,13 @@ else if (Element.Kind is "Table" or "CrossTab")
                     if (measure.Aggregate == ReportAggregateType.Count)
                         foreach (var row in _pivotRows) row[field] = Value(row, measure.Field) is null or DBNull ? 0 : 1;
                     _pivotMeasures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
-                        ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median
+                        ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median or ReportAggregateType.Min or ReportAggregateType.Max
                             ? values => ReportValueFormatting.ExtendedAggregate(values, measure.Aggregate) : null,
                         Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
                             ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
                     _labels[field] = measure.Caption.Length == 0 ? measure.Field : measure.Caption;
                 }
-                var columnKeys = _pivotRows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => Value(row, field)))).Distinct().Take(257).Count();
+                var columnKeys = _pivotRows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => _grouping.Value(row, field)))).Distinct().Take(257).Count();
                 if (columnKeys > 256) throw new InvalidDataException("Cross-tab exceeds 256 column groups.");
             }
         }

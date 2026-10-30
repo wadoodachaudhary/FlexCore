@@ -91,7 +91,7 @@
                  contenteditable="false"
                  role="menu"
                  @onkeydown="OnPanelKeyDown"
-                 @onmousemove="OnPanelMouseMove"
+                 @onmousemove="@(_keyboardNavigationActive ? EventCallback.Factory.Create<MouseEventArgs>(this, OnPanelMouseMove) : default)"
                  @onkeydown:preventDefault="true"
                  @onkeydown:stopPropagation="true">
                 @ChildContent

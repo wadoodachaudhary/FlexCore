@@ -39,6 +39,8 @@ public partial class PivotControl<TValue>
 
     /// <summary>Optional field labels: key = field name, value = display label.</summary>
     [Parameter] public Dictionary<string, string>? FieldLabels { get; set; }
+    /// <summary>Optional axis grouping projection. It does not replace fields used by summary calculations.</summary>
+    [Parameter] public Func<TValue, string, object?>? GroupValueSelector { get; set; }
 
     private string ResolvedStyle => Style;
 
@@ -437,13 +439,13 @@ public partial class PivotControl<TValue>
                 rowspan: 2, cssClass: "fx-pivot-hdr-row", sortField: _effectiveRowFields[i], isSortable: AllowSorting));
 
         var groups = _valueColumns.Where(c => !c.IsTotal)
-            .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
+            .GroupBy(c => c.Key.IdentityPart(0))
             .ToList();
 
         foreach (var group in groups)
         {
             var items = group.ToList();
-            topLevel.Add(new HeaderCell(group.Key, colspan: items.Count, cssClass: "fx-pivot-hdr-colgroup"));
+            topLevel.Add(new HeaderCell(group.Key.ToString() ?? "", colspan: items.Count, cssClass: "fx-pivot-hdr-colgroup"));
             foreach (var item in items)
             {
                 var leafLabel = item.Key.Parts.Count > 1
@@ -513,22 +515,22 @@ public partial class PivotControl<TValue>
 
         // Group by first column field
         var topGroups = _valueColumns.Where(c => !c.IsTotal)
-            .GroupBy(c => c.Key.Parts.Count > 0 ? c.Key.Parts[0] : "")
+            .GroupBy(c => c.Key.IdentityPart(0))
             .ToList();
 
         foreach (var tg in topGroups)
         {
             var topItems = tg.ToList();
-            top.Add(new HeaderCell(tg.Key, colspan: topItems.Count, cssClass: "fx-pivot-hdr-colgroup"));
+            top.Add(new HeaderCell(tg.Key.ToString() ?? "", colspan: topItems.Count, cssClass: "fx-pivot-hdr-colgroup"));
 
             var midGroups = topItems
-                .GroupBy(c => c.Key.Parts.Count > 1 ? c.Key.Parts[1] : "")
+                .GroupBy(c => c.Key.IdentityPart(1))
                 .ToList();
 
             foreach (var mg in midGroups)
             {
                 var midItems = mg.ToList();
-                mid.Add(new HeaderCell(mg.Key, colspan: midItems.Count, cssClass: "fx-pivot-hdr-colgroup2"));
+                mid.Add(new HeaderCell(mg.Key.ToString() ?? "", colspan: midItems.Count, cssClass: "fx-pivot-hdr-colgroup2"));
                 foreach (var item in midItems)
                     bot.Add(new HeaderCell(item.ValueConfig.ShortLabel,
                         cssClass: "fx-pivot-hdr-value", sortField: item.Field, isSortable: AllowSorting));
@@ -555,7 +557,7 @@ public partial class PivotControl<TValue>
     private void BuildGroupedRows(List<TValue> allRows, List<IGrouping<PivotKey, TValue>> rowGroups)
     {
         var firstFieldGroups = rowGroups
-            .GroupBy(rg => rg.Key.Parts.Count > 0 ? rg.Key.Parts[0] : "")
+            .GroupBy(rg => rg.Key.IdentityPart(0))
             .ToList();
 
         foreach (var group in firstFieldGroups)
@@ -571,7 +573,7 @@ public partial class PivotControl<TValue>
                 if (isFirstInGroup)
                 {
                     var span = ShowSubTotals ? groupRows.Count + 1 : groupRows.Count;
-                    cells.Add(new PivotDisplayCell(group.Key, cssClass: "fx-pivot-cell-rowgroup", rowspan: span));
+                    cells.Add(new PivotDisplayCell(group.Key.ToString() ?? "", cssClass: "fx-pivot-cell-rowgroup", rowspan: span));
                     isFirstInGroup = false;
                 }
                 else
@@ -847,7 +849,7 @@ public partial class PivotControl<TValue>
 
     private PivotKey BuildKey(TValue item, IReadOnlyList<string> fields)
     {
-        var values = fields.Select(f => GetValue(item!, f)).ToArray();
+        var values = fields.Select(f => GroupValueSelector is null ? GetValue(item!, f) : GroupValueSelector(item, f)).ToArray();
         var parts = values.Select(value => Convert.ToString(value, CultureInfo.CurrentCulture) ?? "").ToArray();
         return new PivotKey(string.Join(" / ", parts), parts, values);
     }
@@ -978,15 +980,16 @@ public partial class PivotControl<TValue>
         public PivotKey(string display, IReadOnlyList<string> parts, IReadOnlyList<object?>? rawParts = null)
         { Display = display; Parts = parts; RawParts = rawParts ?? parts.Cast<object?>().ToArray(); }
         public IReadOnlyList<object?> RawParts { get; }
+        public object IdentityPart(int index) => index >= Parts.Count ? "" : RawParts[index] is PivotGroupValue group ? group : Parts[index];
         public static readonly PivotKey Empty = new("", Array.Empty<string>());
         public string Display { get; }
         public IReadOnlyList<string> Parts { get; }
         public override bool Equals(object? obj) =>
-            obj is PivotKey other && Parts.SequenceEqual(other.Parts, StringComparer.Ordinal);
+            obj is PivotKey other && Parts.Count == other.Parts.Count && Enumerable.Range(0, Parts.Count).All(i => Equals(IdentityPart(i), other.IdentityPart(i)));
         public override int GetHashCode()
         {
             var hash = new HashCode();
-            foreach (var p in Parts) hash.Add(p, StringComparer.Ordinal);
+            for (var i = 0; i < Parts.Count; i++) hash.Add(IdentityPart(i));
             return hash.ToHashCode();
         }
     }

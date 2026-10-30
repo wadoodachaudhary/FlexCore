@@ -60,6 +60,9 @@ internal static class CrystalReportXmlWriter
         Attr(writer, CrystalReportXmlVersion.Attribute, CrystalReportXmlVersion.Current);
         WriteSummaryInfo(writer, report.SummaryInformation);
         WriteConversionDiagnostics(writer, report);
+        writer.WriteStartElement("ReportOptions");
+        Attr(writer, "EnableSelectDistinctRecords", LowerBool(report.Core.EnableSelectDistinctRecords));
+        writer.WriteEndElement();
         WriteDatabase(writer, report.Database);
         WriteDataDefinition(writer, report.DataDefinition, report.Name);
         WriteCustomFunctions(writer, report.DataDefinition);
@@ -169,6 +172,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "EnableSaveSummariesWithReport", LowerBool(core.EnableSaveSummariesWithReport));
         Attr(writer, "ShowAllHeadersOnDrillDown", LowerBool(core.ShowAllHeadersOnDrillDown));
         Attr(writer, "ConvertDBNullToDefault", LowerBool(core.ConvertDatabaseNullToDefault));
+        Attr(writer, "EnableSelectDistinctRecords", LowerBool(core.EnableSelectDistinctRecords));
         Attr(writer, "EnableUseDummyData", "false");
         Attr(writer, "initialDataContext", "");
         Attr(writer, "initialReportPartName", "");

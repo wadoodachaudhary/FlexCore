@@ -7,15 +7,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Fx.ControlKit.Charts;
 
 /// <summary>
-/// SVG markup produced by <see cref="ChartControl"/>. Report pagination is synchronous and cannot
-/// host a component, so it renders that same control here. There is no second chart geometry.
+/// SVG markup produced by <see cref="ChartControl"/>, for callers that need chart HTML as a string and cannot
+/// host a component. Each call renders on its own renderer, which is disposed before it returns, so nothing is
+/// shared between callers. There is no second chart geometry.
 /// </summary>
 public static class ChartSvg
 {
-    private static readonly object Gate = new();
-    private static ServiceProvider? _services;
-    private static HtmlRenderer? _renderer;
-
     public static string Markup(ChartType type, IReadOnlyList<ChartSeries> series, string? title = null, bool showLegend = true, string? width = "100%", string? height = "300px")
     {
         var parameters = new Dictionary<string, object?>
@@ -28,23 +25,12 @@ public static class ChartSvg
             ["Height"] = height,
             ["Animate"] = false
         };
-        lock (Gate)
+        using var services = new ServiceCollection().AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance).BuildServiceProvider();
+        using var renderer = new HtmlRenderer(services, NullLoggerFactory.Instance);
+        return renderer.Dispatcher.InvokeAsync(async () =>
         {
-            var renderer = Renderer();
-            return renderer.Dispatcher.InvokeAsync(async () =>
-            {
-                var root = await renderer.RenderComponentAsync<ChartControl>(ParameterView.FromDictionary(parameters!));
-                return root.ToHtmlString();
-            }).GetAwaiter().GetResult();
-        }
-    }
-
-    private static HtmlRenderer Renderer()
-    {
-        if (_renderer is not null) return _renderer;
-        var services = new ServiceCollection();
-        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
-        _services = services.BuildServiceProvider();
-        return _renderer = new HtmlRenderer(_services, NullLoggerFactory.Instance);
+            var root = await renderer.RenderComponentAsync<ChartControl>(ParameterView.FromDictionary(parameters));
+            return root.ToHtmlString();
+        }).GetAwaiter().GetResult();
     }
 }

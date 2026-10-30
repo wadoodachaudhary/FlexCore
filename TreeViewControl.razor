@@ -23,7 +23,7 @@
         @foreach(var info in _visible){@NodeRow(info)}
     }
 </div>
-@if(!string.IsNullOrWhiteSpace(ActiveFilter) && _visible.Count == 0){<div class="fx-treeview-empty" role="status">@EmptyFilterText</div>}
+@if(ShowSearchBox && !string.IsNullOrWhiteSpace(ActiveFilter) && _visible.Count == 0){<div class="fx-treeview-empty" role="status">@EmptyFilterText</div>}
 @if(_error is not null){<AlertControl Text="@_error" />}
 
 @code {

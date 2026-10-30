@@ -106,7 +106,7 @@
                 ? (_dropAfter ? "fx-mdi-tab-drop-after" : "fx-mdi-tab-drop-before")
                 : "";
             <div @key="win.Id"
-                 class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "") @(IsSplitPartner(win.Id) ? "fx-mdi-tab-split-partner" : "") @(isDragging ? "fx-mdi-tab-dragging" : "") @dropMark"
+                 class="fx-mdi-tab @(string.Equals(win.Id, ActiveWindowId, StringComparison.Ordinal) ? "active" : "") @(win.IsPinned ? "fx-mdi-tab-pinned" : "") @(IsSplitPartner(win.Id) ? "fx-mdi-tab-split-partner" : "") @(isDragging ? "fx-mdi-tab-dragging" : "") @dropMark"
                  draggable="true"
                  @ondragstart="(DragEventArgs e) => OnTabDragStart(win.Id, e)"
                  @ondragover="(DragEventArgs e) => OnTabDragOver(win.Id, null, e)"
@@ -159,6 +159,19 @@
                       @ondrop="(DragEventArgs e) => OnTabDropAsync(win.Id, true, e)"
                       @ondrop:preventDefault="true"
                       @ondrop:stopPropagation="true"></span>
+                @if (win.IsPinned)
+                {
+                    <button class="fx-mdi-tab-pin"
+                            type="button"
+                            title="Unpin Tab"
+                            aria-label="Unpin Tab"
+                            @onclick:stopPropagation="true"
+                            @onclick="() => TogglePinTabAsync(win)">
+                        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false">
+                            <path d="M9.5 1.5L14.5 6.5L13 8L10.5 6.5L7 10L8 12.5L6.5 14L3.5 11L1 13.5L2.5 10.5L2 9.5L4.5 10.5L8 7L6.5 4.5L8 3L9.5 1.5Z" fill="currentColor" />
+                        </svg>
+                    </button>
+                }
                 <button class="fx-mdi-tab-close"
                         type="button"
                         title="Close"
@@ -181,24 +194,61 @@
     @if (ShowTabSystemMenu && _tabSystemMenuVisible && TabSystemMenuWindow is { } menuWindow)
     {
         <ContextMenuControl Visible="_tabSystemMenuVisible" VisibleChanged="visible => { if (!visible) CloseTabSystemMenu(); }"
-                            X="_tabSystemMenuX" Y="_tabSystemMenuY" MinWidth="190" ZIndex="1002" CssClass="fx-mdi-system-menu">
-          <div class="fx-mdi-system-menu-content">
-            <button type="button" role="menuitem" @onclick="() => RestoreTabFromSystemMenuAsync(menuWindow.Id)">Restore</button>
-            <button type="button" role="menuitem" disabled>Move</button>
-            <button type="button" role="menuitem" disabled>Size</button>
-            <button type="button" role="menuitem" @onclick="MinimizeTabFromSystemMenuAsync">Minimize</button>
-            <button type="button" role="menuitem" disabled>Maximize</button>
-            <span class="fx-mdi-system-menu-separator"></span>
-            <button type="button" role="menuitem" class="fx-mdi-system-menu-close" @onclick="() => CloseTabFromSystemMenuAsync(menuWindow.Id)">
-                <span class="fx-mdi-system-menu-close-label">
-                    <span class="fx-mdi-system-menu-close-icon" aria-hidden="true">×</span>
-                    <span>Close</span>
-                </span>
-                <span>Alt+F4</span>
-            </button>
+                            X="_tabSystemMenuX" Y="_tabSystemMenuY" MinWidth="210" ZIndex="1002" CssClass="fx-mdi-system-menu">
+            <ContextMenuItemControl Text="Close" Icon=" " Shortcut="&#8984;W"
+                                    OnClick="() => CloseTabFromSystemMenuAsync(menuWindow.Id)" />
+            <ContextMenuItemControl Text="Close Other Tabs" Icon=" "
+                                    Disabled="@(!CanCloseOtherTabs(menuWindow.Id))"
+                                    OnClick="() => CloseOtherTabsAsync(menuWindow.Id)" />
+            <ContextMenuItemControl Text="Close All Tabs" Icon=" "
+                                    Disabled="@(!CanCloseAllTabs())"
+                                    OnClick="CloseAllTabsAsync" />
+            <ContextMenuItemControl Text="Close Unmodified Tabs" Icon=" "
+                                    Disabled="@(!CanCloseUnmodifiedTabs())"
+                                    OnClick="CloseUnmodifiedTabsAsync" />
+            <ContextMenuItemControl Text="Close Tabs to the Left" Icon=" "
+                                    Disabled="@(!CanCloseTabsToLeft(menuWindow.Id))"
+                                    OnClick="() => CloseTabsToLeftAsync(menuWindow.Id)" />
+            <ContextMenuItemControl Text="Close Tabs to the Right" Icon=" "
+                                    Disabled="@(!CanCloseTabsToRight(menuWindow.Id))"
+                                    OnClick="() => CloseTabsToRightAsync(menuWindow.Id)" />
+            <ContextMenuSeparatorControl />
+            <ContextMenuItemControl Text="Split Right"
+                                    Disabled="@(!CanSplitAndMove(menuWindow.Id))"
+                                    OnClick="() => SplitTabAsync(menuWindow.Id, MdiSplitMode.SideBySide, moveToSecondPane: false)">
+                <IconContent>
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                        <line x1="8" y1="2.5" x2="8" y2="13.5" />
+                    </svg>
+                </IconContent>
+            </ContextMenuItemControl>
+            <ContextMenuItemControl Text="Split and Move Right" Icon=" "
+                                    Disabled="@(!CanSplitAndMove(menuWindow.Id))"
+                                    OnClick="() => SplitTabAsync(menuWindow.Id, MdiSplitMode.SideBySide, moveToSecondPane: true)" />
+            <ContextMenuItemControl Text="Split Down"
+                                    Disabled="@(!CanSplitAndMove(menuWindow.Id))"
+                                    OnClick="() => SplitTabAsync(menuWindow.Id, MdiSplitMode.Stacked, moveToSecondPane: false)">
+                <IconContent>
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true">
+                        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+                        <line x1="1.5" y1="8" x2="14.5" y2="8" />
+                    </svg>
+                </IconContent>
+            </ContextMenuItemControl>
+            <ContextMenuItemControl Text="Split and Move Down" Icon=" "
+                                    Disabled="@(!CanSplitAndMove(menuWindow.Id))"
+                                    OnClick="() => SplitTabAsync(menuWindow.Id, MdiSplitMode.Stacked, moveToSecondPane: true)" />
+            @if (IsWindowInSplit(menuWindow.Id))
+            {
+                <ContextMenuItemControl Text="Unsplit" Icon=" "
+                                        OnClick="UnsplitTabsAsync" />
+            }
+            <ContextMenuSeparatorControl />
+            <ContextMenuItemControl Text="@(menuWindow.IsPinned ? "Unpin Tab" : "Pin Tab")" Icon=" "
+                                    OnClick="() => TogglePinTabAsync(menuWindow)" />
             <ContextMenuSeparatorControl />
             <TabAppearanceMenuItemsControl Orientation="TabsOrientation" OrientationChanged="ChangeTabOrientation" Theme="TabsTheme" ThemeChanged="ChangeTabTheme" />
-          </div>
         </ContextMenuControl>
     }
     <div class="@(split ? (SplitMode == MdiSplitMode.Stacked ? "fx-mdi-panes fx-mdi-split fx-mdi-split-stacked" : "fx-mdi-panes fx-mdi-split fx-mdi-split-side") : "fx-mdi-panes")"
@@ -293,6 +343,8 @@
     /// no active window, the host shows what it shows without a split.
     /// </summary>
     [Parameter] public MdiSplitMode SplitMode { get; set; }
+    [Parameter] public EventCallback<MdiSplitMode> SplitModeChanged { get; set; }
+    [Parameter] public Func<MdiWindow, bool>? IsWindowModified { get; set; }
     [Parameter] public TabOrientation TabsOrientation { get; set; } = TabOrientation.HybridVertical;
     [Parameter] public EventCallback<TabOrientation> TabsOrientationChanged { get; set; }
     [Parameter] public TabTheme TabsTheme { get; set; } = TabTheme.WindowsClassic;
@@ -343,9 +395,9 @@
         await _tabBrowser.DisposeAsync();
     }
 
-    /// <summary>When true, right-clicking a tab or clicking its icon opens the
-    /// legacy MDI system menu (Restore, Move, Size, Minimize, Maximize, Close).</summary>
-    [Parameter] public bool ShowTabSystemMenu { get; set; }
+    /// <summary>When true (default), right-clicking a tab or clicking its icon opens the
+    /// tab context menu (Close, Close Other/All/Unmodified/Left/Right, Split Right/Down, Pin Tab).</summary>
+    [Parameter] public bool ShowTabSystemMenu { get; set; } = true;
 
     /// <summary>Raised when a hosted window's component throws (caught by the pane's
     /// error boundary, so the circuit stays alive). The consumer can use this to clear
@@ -388,6 +440,8 @@
     // most recently active windows, newest first.
     private string? _splitFirstId;
     private string? _splitSecondId;
+    private bool _tabScopedSplit;
+    private MdiSplitMode _lastSplitMode;
     private readonly List<string> _recentWindowIds = new();
 
     // Set by a drag handler that changed nothing on screen, so the render after the event is skipped
@@ -414,6 +468,11 @@
             _revealActiveTab = true;
         }
         _skipRender = false;
+        if (SplitMode != _lastSplitMode)
+        {
+            _lastSplitMode = SplitMode;
+            _tabScopedSplit = false;
+        }
         var open = new HashSet<string>(Windows.Select(w => w.Id), StringComparer.Ordinal);
         // The dragged tab's window closed during the drag: its dragend never arrives, so end the drag here.
         if (_draggedTabId != null && !open.Contains(_draggedTabId)) EndDrag();
@@ -427,12 +486,29 @@
         }
         if (_splitFirstId != null && !open.Contains(_splitFirstId)) _splitFirstId = null;
         if (_splitSecondId != null && !open.Contains(_splitSecondId)) _splitSecondId = null;
+        if (_tabScopedSplit && (_splitFirstId == null || _splitSecondId == null))
+        {
+            _tabScopedSplit = false;
+            _splitFirstId = _splitSecondId = null;
+            _lastSplitMode = MdiSplitMode.None;
+            SplitMode = MdiSplitMode.None;
+            if (SplitModeChanged.HasDelegate)
+                _ = SplitModeChanged.InvokeAsync(MdiSplitMode.None);
+            return;
+        }
         if (SplitMode == MdiSplitMode.None)
         {
+            _tabScopedSplit = false;
             _splitFirstId = _splitSecondId = null;
             return;
         }
         if (active == null) return;   // home view: keep the panes for when a window is active again
+        if (_tabScopedSplit)
+        {
+            // Tab-specific split: only the two split tabs show in split view; any newly opened
+            // or other tab opens and displays as a single window.
+            return;
+        }
 
         if (!string.Equals(active, _splitFirstId, StringComparison.Ordinal)
             && !string.Equals(active, _splitSecondId, StringComparison.Ordinal))
@@ -639,7 +715,15 @@
             var item = list[from];
             list.RemoveAt(from);
             var to = IndexOfWindow(targetId);
-            list.Insert(after ? to + 1 : to, item);
+            var insertAt = after ? to + 1 : to;
+            var pinnedCount = list.Count(w => w.IsPinned);
+            if (pinnedCount > 0)
+            {
+                insertAt = item.IsPinned
+                    ? Math.Min(insertAt, pinnedCount)
+                    : Math.Max(insertAt, pinnedCount);
+            }
+            list.Insert(insertAt, item);
         }
 
         if (OnTabReorder.HasDelegate)
@@ -683,21 +767,20 @@
             await OnHomeRequested.InvokeAsync();
     }
 
-    private async Task OpenTabSystemMenuAsync(MouseEventArgs e, MdiWindow window)
+    private Task OpenTabSystemMenuAsync(MouseEventArgs e, MdiWindow window)
     {
         if (!ShowTabSystemMenu)
         {
             OpenOrientationMenu(e);
-            return;
+            return Task.CompletedTask;
         }
 
+        _orientationMenuVisible = false;
         _tabSystemMenuVisible = true;
         _tabSystemMenuWindowId = window.Id;
         _tabSystemMenuX = e.ClientX;
         _tabSystemMenuY = e.ClientY;
-
-        if (!string.Equals(window.Id, ActiveWindowId, StringComparison.Ordinal) && OnActivate.HasDelegate)
-            await OnActivate.InvokeAsync(window.Id);
+        return Task.CompletedTask;
     }
 
     private Task CloseTabSystemMenu()
@@ -706,25 +789,239 @@
         return Task.CompletedTask;
     }
 
-    private async Task RestoreTabFromSystemMenuAsync(string id)
+    private static readonly string[] ConventionalDirtyMembers =
+    [
+        "HasUnsavedChanges", "mDirty", "Dirty", "_dirty", "_isDirty",
+        "IsDirty", "HasChanges", "HasPendingChanges", "IsModified", "Modified"
+    ];
+
+    private bool CheckWindowModified(MdiWindow window)
     {
-        _tabSystemMenuVisible = false;
-        if (!string.Equals(id, ActiveWindowId, StringComparison.Ordinal) && OnActivate.HasDelegate)
-            await OnActivate.InvokeAsync(id);
+        if (IsWindowModified != null)
+            return IsWindowModified(window);
+
+        var instance = window.ComponentInstance;
+        if (instance == null) return false;
+        var type = instance.GetType();
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.IgnoreCase;
+        foreach (var name in ConventionalDirtyMembers)
+        {
+            var prop = type.GetProperty(name, flags);
+            if (prop != null && prop.GetIndexParameters().Length == 0)
+            {
+                try
+                {
+                    if (prop.GetValue(instance) is bool b) return b;
+                }
+                catch { }
+            }
+            var field = type.GetField(name, flags);
+            if (field != null)
+            {
+                try
+                {
+                    if (field.GetValue(instance) is bool b) return b;
+                }
+                catch { }
+            }
+        }
+        return false;
     }
 
-    private async Task MinimizeTabFromSystemMenuAsync()
+    private bool CanCloseOtherTabs(string keepId) =>
+        Windows.Any(w => !string.Equals(w.Id, keepId, StringComparison.Ordinal) && !w.IsPinned);
+
+    private bool CanCloseAllTabs() =>
+        Windows.Any(w => !w.IsPinned);
+
+    private bool CanCloseUnmodifiedTabs() =>
+        Windows.Any(w => !w.IsPinned && !CheckWindowModified(w));
+
+    private bool CanCloseTabsToLeft(string targetId)
     {
-        _tabSystemMenuVisible = false;
-        if (OnHomeRequested.HasDelegate)
-            await OnHomeRequested.InvokeAsync();
+        var idx = IndexOfWindow(targetId);
+        return idx > 0 && Windows.Take(idx).Any(w => !w.IsPinned);
     }
+
+    private bool CanCloseTabsToRight(string targetId)
+    {
+        var idx = IndexOfWindow(targetId);
+        return idx >= 0 && idx + 1 < Windows.Count && Windows.Skip(idx + 1).Any(w => !w.IsPinned);
+    }
+
+    private bool CanSplitAndMove(string id) =>
+        Windows.Count >= 2 && IndexOfWindow(id) >= 0;
+
+    private bool IsWindowInSplit(string id) =>
+        SplitMode != MdiSplitMode.None
+        && (!_tabScopedSplit
+            || string.Equals(id, _splitFirstId, StringComparison.Ordinal)
+            || string.Equals(id, _splitSecondId, StringComparison.Ordinal));
 
     private async Task CloseTabFromSystemMenuAsync(string id)
     {
         _tabSystemMenuVisible = false;
+        var win = Windows.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.Ordinal));
+        var wasPinned = win?.IsPinned == true;
+        if (win != null) win.IsPinned = false;
         if (OnCloseRequested.HasDelegate)
             await OnCloseRequested.InvokeAsync(id);
+        // A refused close (the page's save prompt cancelled) keeps the tab, and with it the pin.
+        if (wasPinned && Windows.Any(w => ReferenceEquals(w, win)))
+            win!.IsPinned = true;
+    }
+
+    private async Task CloseOtherTabsAsync(string keepId)
+    {
+        _tabSystemMenuVisible = false;
+        var idsToClose = Windows
+            .Where(w => !string.Equals(w.Id, keepId, StringComparison.Ordinal) && !w.IsPinned)
+            .Select(w => w.Id)
+            .ToList();
+        if (idsToClose.Count == 0) return;
+        if (!string.Equals(ActiveWindowId, keepId, StringComparison.Ordinal) && OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(keepId);
+        await CloseTabsByIdsAsync(idsToClose);
+    }
+
+    private async Task CloseAllTabsAsync()
+    {
+        _tabSystemMenuVisible = false;
+        var idsToClose = Windows.Where(w => !w.IsPinned).Select(w => w.Id).ToList();
+        await CloseTabsByIdsAsync(idsToClose);
+    }
+
+    private async Task CloseUnmodifiedTabsAsync()
+    {
+        _tabSystemMenuVisible = false;
+        var idsToClose = Windows
+            .Where(w => !w.IsPinned && !CheckWindowModified(w))
+            .Select(w => w.Id)
+            .ToList();
+        await CloseTabsByIdsAsync(idsToClose);
+    }
+
+    private async Task CloseTabsToLeftAsync(string targetId)
+    {
+        _tabSystemMenuVisible = false;
+        var idx = IndexOfWindow(targetId);
+        if (idx <= 0) return;
+        var idsToClose = Windows.Take(idx).Where(w => !w.IsPinned).Select(w => w.Id).ToList();
+        await CloseTabsByIdsAsync(idsToClose);
+    }
+
+    private async Task CloseTabsToRightAsync(string targetId)
+    {
+        _tabSystemMenuVisible = false;
+        var idx = IndexOfWindow(targetId);
+        if (idx < 0 || idx + 1 >= Windows.Count) return;
+        var idsToClose = Windows.Skip(idx + 1).Where(w => !w.IsPinned).Select(w => w.Id).ToList();
+        await CloseTabsByIdsAsync(idsToClose);
+    }
+
+    private async Task CloseTabsByIdsAsync(IReadOnlyList<string> idsToClose)
+    {
+        if (!OnCloseRequested.HasDelegate || idsToClose.Count == 0) return;
+        foreach (var id in idsToClose)
+        {
+            if (IndexOfWindow(id) < 0) continue;
+            await OnCloseRequested.InvokeAsync(id);
+            if (IndexOfWindow(id) >= 0) break;
+        }
+    }
+
+    private async Task SplitTabAsync(string id, MdiSplitMode mode, bool moveToSecondPane)
+    {
+        _tabSystemMenuVisible = false;
+        if (IndexOfWindow(id) < 0) return;
+
+        var partnerId = _recentWindowIds.FirstOrDefault(other =>
+                !string.Equals(other, id, StringComparison.Ordinal) && IndexOfWindow(other) >= 0)
+            ?? NeighbourOf(id);
+
+        if (moveToSecondPane && partnerId != null)
+        {
+            _splitFirstId = partnerId;
+            _splitSecondId = id;
+            if (Windows is IList<MdiWindow> { IsReadOnly: false } list)
+            {
+                var from = IndexOfWindow(id);
+                var partnerIdx = IndexOfWindow(partnerId);
+                if (from >= 0 && partnerIdx >= 0 && from < partnerIdx && list[from].IsPinned == list[partnerIdx].IsPinned)
+                {
+                    var item = list[from];
+                    list.RemoveAt(from);
+                    var to = IndexOfWindow(partnerId);
+                    list.Insert(to + 1, item);
+                    if (OnTabReorder.HasDelegate)
+                        await OnTabReorder.InvokeAsync((id, partnerId));
+                }
+            }
+        }
+        else
+        {
+            _splitFirstId = id;
+            _splitSecondId = partnerId;
+        }
+
+        _tabScopedSplit = true;
+        _lastSplitMode = mode;
+        SplitMode = mode;
+        if (SplitModeChanged.HasDelegate)
+            await SplitModeChanged.InvokeAsync(mode);
+
+        _tabScopedSplit = true;
+        _lastSplitMode = mode;
+        if (moveToSecondPane && partnerId != null)
+        {
+            _splitFirstId = partnerId;
+            _splitSecondId = id;
+        }
+        else
+        {
+            _splitFirstId = id;
+            _splitSecondId = partnerId;
+        }
+
+        if (!string.Equals(ActiveWindowId, id, StringComparison.Ordinal) && OnActivate.HasDelegate)
+            await OnActivate.InvokeAsync(id);
+    }
+
+    private async Task UnsplitTabsAsync()
+    {
+        _tabSystemMenuVisible = false;
+        _tabScopedSplit = false;
+        _splitFirstId = _splitSecondId = null;
+        _lastSplitMode = MdiSplitMode.None;
+        SplitMode = MdiSplitMode.None;
+        if (SplitModeChanged.HasDelegate)
+            await SplitModeChanged.InvokeAsync(MdiSplitMode.None);
+    }
+
+    private async Task TogglePinTabAsync(MdiWindow window)
+    {
+        _tabSystemMenuVisible = false;
+        var from = IndexOfWindow(window.Id);
+        if (from < 0) return;
+
+        window.IsPinned = !window.IsPinned;
+        if (Windows is IList<MdiWindow> { IsReadOnly: false } list)
+        {
+            var item = list[from];
+            list.RemoveAt(from);
+            var pinnedCount = list.Count(w => w.IsPinned);
+            list.Insert(pinnedCount, item);
+            var newIdx = IndexOfWindow(window.Id);
+            if (newIdx != from && OnTabReorder.HasDelegate)
+            {
+                var neighbour = newIdx > 0 ? list[newIdx - 1].Id : (list.Count > 1 ? list[1].Id : window.Id);
+                await OnTabReorder.InvokeAsync((window.Id, neighbour));
+            }
+        }
     }
 
     // Each pane needs its OWN title-setter that mutates ONLY that window's

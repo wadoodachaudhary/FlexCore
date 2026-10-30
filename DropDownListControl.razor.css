@@ -241,9 +241,12 @@
 }
 
 /* VB6 combo look: ONE moving highlight. `.highlighted` is driven from C#
-   (_highlightedIndex) by BOTH the mouse (@onmouseover) and the arrow keys, and
-   deliberately persists on the last-hovered option when the pointer leaves the
-   panel. `.selected` stays uncolored (aria/commit semantics only) and there is
+   (_highlightedIndex) by the arrow keys and the opening; the pointer's row is
+   painted by the browser (`data-fx-hover`, dropdown-list-control.js
+   watchListHover) and deliberately persists on the last-hovered option when the
+   pointer leaves the panel. While a pointer row is active (`data-fx-hover-active`
+   on the panel) the C# highlight yields to it; a keyboard render takes over
+   again. `.selected` stays uncolored (aria/commit semantics only) and there is
    no CSS :hover color — a second color source is what produced the old
    "double selection" and "auto-selects the top item" illusions. */
 .fx-dropdown-option.selected {
@@ -253,6 +256,26 @@
 
 .fx-dropdown-option.highlighted {
     background: #316ac5;
+    color: #fff;
+}
+
+.fx-dropdown-panel[data-fx-hover-active] .fx-dropdown-option.highlighted {
+    background: #fff;
+    color: #000;
+}
+
+.fx-dropdown-panel[data-fx-hover-active] .fx-dropdown-option[data-fx-hover] {
+    background: #316ac5;
+    color: #fff;
+}
+
+.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-panel[data-fx-hover-active] .fx-dropdown-option.highlighted {
+    background: #0a64c8;
+    color: #fff;
+}
+
+.fx-dropdown-host.fx-dropdown-legacy-blue .fx-dropdown-panel[data-fx-hover-active] .fx-dropdown-option[data-fx-hover] {
+    background: #004a9f;
     color: #fff;
 }
 
