@@ -21,7 +21,7 @@
                       Height="400px" />
 *@
 
-<div class="fx-chart @CssClass" style="@RootStyle">
+<div class="fx-chart @CssClass" style="@RootStyle" @onmouseleave="TipLeave">
     @if (!string.IsNullOrEmpty(Title))
     {
         <div class="fx-chart-title">@Title</div>
@@ -189,6 +189,24 @@
                     break;
             }
 
+            @if (ShowTooltips && _tip is { } tip)
+            {
+                <div class="fx-chart-tooltip @(_tipLeft ? "fx-tip-left" : "") @(_tipUp ? "fx-tip-up" : "")" style="left:@(F0(_tipX))px;top:@(F0(_tipY))px" role="status">
+                    @if (TooltipTemplate is not null)
+                    {
+                        @TooltipTemplate(tip)
+                    }
+                    else
+                    {
+                        <div class="fx-chart-tooltip-title"><span class="fx-chart-tooltip-swatch" style="background:@tip.Color"></span>@tip.Title</div>
+                        @foreach (var row in TooltipRows(tip))
+                        {
+                            <div class="fx-chart-tooltip-row">@if (row.Name.Length > 0) { <span>@row.Name</span> }<b>@row.Value</b></div>
+                        }
+                    }
+                </div>
+            }
+
             @if (ShowLegend && _effectiveSeries.Count > 1)
             {
                 <div class="fx-chart-legend">
@@ -309,6 +327,21 @@
     /// <summary>KPI trend indicator (e.g. "+12%", "-5%", "up", "down").</summary>
     [Parameter] public string? KpiTrend { get; set; }
 
+    // Tooltips (2026-10-31): a card follows the pointer over bars, slices, points, cells and flows; no script, Blazor events only.
+    /// <summary>Shows a card when the pointer is over a shape. Off, the shapes keep their native &lt;title&gt; text instead.</summary>
+    [Parameter] public bool ShowTooltips { get; set; } = true;
+    /// <summary>.NET numeric format for the numbers in the default card. Unset: whole numbers print as N0, the rest as N2.</summary>
+    [Parameter] public string? TooltipValueFormat { get; set; }
+    /// <summary>Text pattern for the card body, replacing the default rows: {series} {label} {category} {title} {value} {value2}…{value5}
+    /// {percent} {open} {high} {low} {close} {min} {max} {size}; a format after a colon applies to numbers ({value:N0}); \n starts a row.</summary>
+    [Parameter] public string? TooltipFormat { get; set; }
+    /// <summary>Code-side text for the card body, lines separated by \n; return null to fall back to TooltipFormat or the default rows.</summary>
+    [Parameter] public Func<ChartTooltipContext, string?>? TooltipFormatter { get; set; }
+    /// <summary>Replaces the whole card content.</summary>
+    [Parameter] public RenderFragment<ChartTooltipContext>? TooltipTemplate { get; set; }
+    /// <summary>Raised with the context when the pointer enters a shape and with null when it leaves the shape or the chart.</summary>
+    [Parameter] public EventCallback<ChartTooltipContext?> PointHover { get; set; }
+
     #endregion
 
     #region State
@@ -385,6 +418,82 @@
         if (_maxValue <= 0) _maxValue = 1;
     }
 
+    #endregion
+
+    #region Tooltips (2026-10-31)
+    private ChartTooltipContext? _tip;
+    private double _tipX, _tipY;
+    private bool _tipLeft, _tipUp;
+
+    /// <summary>The pointer entered a shape: keep the pointer position, note which part of the drawing the shape is in so the card
+    /// opens towards the middle, and tell the host. One round trip per shape, none per pixel.</summary>
+    private async Task TipEnter(MouseEventArgs e, ChartTooltipContext ctx, double sx, double sy, double vbW, double vbH)
+    {
+        if (!ShowTooltips) return;
+        _tip = ctx; _tipX = e.ClientX; _tipY = e.ClientY;
+        _tipLeft = sx > vbW * 0.55; _tipUp = sy > vbH * 0.6;
+        if (PointHover.HasDelegate) await PointHover.InvokeAsync(ctx);
+    }
+
+    private async Task TipLeave()
+    {
+        if (_tip is null) return;
+        _tip = null;
+        if (PointHover.HasDelegate) await PointHover.InvokeAsync(null);
+    }
+
+    /// <summary>Builds the context for a shape; without explicit fields the card shows the value, with the share when one is given,
+    /// named after the series when several are drawn.</summary>
+    private ChartTooltipContext MakeCtx(int si, int pi, string color, string title, double value, double? pct = null, ChartTooltipField[]? fields = null, string? label = null)
+    {
+        var series = si >= 0 && si < _effectiveSeries.Count ? _effectiveSeries[si] : new ChartSeries();
+        var point = pi >= 0 && pi < series.DataPoints.Count ? series.DataPoints[pi] : new ChartDataPoint(label ?? title, value);
+        var rows = fields ?? (pct is { } share
+            ? new[] { new ChartTooltipField("Value", Fmt(value)), new ChartTooltipField("Share", share.ToString("0.#", CultureInfo.CurrentCulture) + "%") }
+            : new[] { new ChartTooltipField(_effectiveSeries.Count > 1 && !string.IsNullOrEmpty(series.Name) ? series.Name : "Value", Fmt(value)) });
+        return new ChartTooltipContext
+        {
+            Type = Type, Series = series, SeriesIndex = si, Point = point, PointIndex = pi,
+            Title = title, Label = label ?? title, Value = value, Color = color, Percentage = pct, Fields = rows
+        };
+    }
+
+    /// <summary>Numbers in the card: TooltipValueFormat, else N0 for whole numbers and N2 for the rest.</summary>
+    private string Fmt(double v, string? format = null) =>
+        v.ToString(format ?? TooltipValueFormat ?? (Math.Abs(v - Math.Round(v)) < 1e-9 && Math.Abs(v) < 1e15 ? "N0" : "N2"), CultureInfo.CurrentCulture);
+
+    private ChartTooltipField Fld(string name, double v) => new(name, Fmt(v));
+
+    /// <summary>The rows of the default card: the formatter's text, else the format pattern, else the context's own fields.</summary>
+    private IReadOnlyList<ChartTooltipField> TooltipRows(ChartTooltipContext ctx)
+    {
+        var text = TooltipFormatter?.Invoke(ctx) ?? (TooltipFormat is null ? null : ApplyTooltipFormat(TooltipFormat, ctx));
+        if (text is null) return ctx.Fields;
+        return text.Split('\n').Select(l => new ChartTooltipField("", l.TrimEnd('\r'))).ToList();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TooltipPlaceholder =
+        new(@"\{(\w+)(?::([^}]+))?\}", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private string ApplyTooltipFormat(string pattern, ChartTooltipContext ctx) => TooltipPlaceholder.Replace(pattern, m =>
+    {
+        var key = m.Groups[1].Value.ToLowerInvariant();
+        var format = m.Groups[2].Success ? m.Groups[2].Value : null;
+        var point = ctx.Point;
+        double? number = key switch
+        {
+            "value" => ctx.Value,
+            "value2" or "size" or "high" or "max" or "target" => point.Value2,
+            "value3" or "low" => point.Value3,
+            "value4" or "close" => point.Value4,
+            "value5" => point.Value5,
+            "open" or "min" or "actual" => point.Value,
+            "percent" => ctx.Percentage,
+            _ => null,
+        };
+        if (number is { } n) return key == "percent" && format is null ? n.ToString("0.#", CultureInfo.CurrentCulture) + "%" : Fmt(n, format);
+        return key switch { "series" => ctx.SeriesName ?? "", "label" => ctx.Label, "category" => point.Category ?? "", "title" => ctx.Title, _ => m.Value };
+    });
     #endregion
 
     #region Helpers
@@ -573,9 +682,11 @@
                         }
                         double barH = (val / (rangeMax - rangeMin)) * plotH;
                         double barY = padT + plotH - cumY - barH;
-                        <rect x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
-                              fill="@GetSeriesColor(si)" rx="2">
-                            <title>@series[si].Name: @F1(val)</title>
+                        var sIdx = si; var pIdx = i;
+                        <rect class="fx-pt" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                              fill="@GetSeriesColor(si)" rx="2"
+                              @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH)" @onmouseout="TipLeave">
+                            @if (!ShowTooltips) { <title>@series[si].Name: @F1(val)</title> }
                         </rect>
                         cumY += barH;
                     }
@@ -592,9 +703,11 @@
                         double barH = Math.Abs(valueY - zeroY);
                         double barY = Math.Min(valueY, zeroY);
                         double barX = groupX + si * subBarW;
-                        <rect x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
-                              fill="@GetSeriesColor(si)" rx="2">
-                            <title>@series[si].Name: @F1(val)</title>
+                        var sIdx = si; var pIdx = i;
+                        <rect class="fx-pt" x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
+                              fill="@GetSeriesColor(si)" rx="2"
+                              @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), barX + subBarW * 0.45, barY, svgW, svgH)" @onmouseout="TipLeave">
+                            @if (!ShowTooltips) { <title>@series[si].Name: @F1(val)</title> }
                         </rect>
                     }
                 }
@@ -608,9 +721,11 @@
                     string color = i < series[0].DataPoints.Count && !string.IsNullOrEmpty(series[0].DataPoints[i].Color)
                         ? series[0].DataPoints[i].Color!
                         : GetSeriesColor(0);
-                    <rect x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
-                          fill="@color" rx="2">
-                        <title>@labels[i]: @F1(val)</title>
+                    var pIdx = i;
+                    <rect class="fx-pt" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                          fill="@color" rx="2"
+                          @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH)" @onmouseout="TipLeave">
+                        @if (!ShowTooltips) { <title>@labels[i]: @F1(val)</title> }
                     </rect>
                 }
 
@@ -727,18 +842,22 @@
                         var y = padT + plotH - (pts[index].Value - rangeMin) / (rangeMax - rangeMin) * plotH;
                         path.Append(move ? "M" : " L").Append(F(x)).Append(',').Append(F(y));
                         move = false;
-                        <circle cx="@F(x)" cy="@F(y)" r="3" fill="@GetSeriesColor(si)"><title>@pts[index].Label: @F1(pts[index].Value)</title></circle>
+                        var sIdxG = si; var pIdxG = index;
+                        <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="3" fill="@GetSeriesColor(si)" stroke="transparent" stroke-width="10"
+                                @onmouseover="e => TipEnter(e, MakeCtx(sIdxG, pIdxG, GetSeriesColor(sIdxG), pts[pIdxG].Label, pts[pIdxG].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                            @if (!ShowTooltips) { <title>@pts[index].Label: @F1(pts[index].Value)</title> }
+                        </circle>
                     }
                     <path d="@path.ToString()" fill="none" stroke="@GetSeriesColor(si)" stroke-width="2" />
                     continue;
                 }
 
-                var pointCoords = new List<(double x, double y)>();
+                var pointCoords = new List<(double x, double y, int i)>();
                 for (int i = 0; i < pts.Count; i++)
                 {
                     double x = padL + (maxPoints > 1 ? (double)i / (maxPoints - 1) * plotW : plotW / 2);
                     double y = padT + plotH - (pts[i].Value - rangeMin) / (rangeMax - rangeMin) * plotH;
-                    pointCoords.Add((x, y));
+                    pointCoords.Add((x, y, i));
                 }
 
                 string pathData;
@@ -785,10 +904,12 @@
 
                 <path d="@pathData" fill="none" stroke="@color" stroke-width="2" />
 
-                @foreach (var (x, y) in pointCoords)
+                var sIdx = si;
+                @foreach (var (x, y, pi) in pointCoords)
                 {
-                    <circle cx="@F(x)" cy="@F(y)" r="3" fill="@color">
-                        <title>@F1(rangeMax - (y - padT) / plotH * (rangeMax - rangeMin))</title>
+                    <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="3" fill="@color" stroke="transparent" stroke-width="10"
+                            @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pi, color, pts[pi].Label, pts[pi].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                        @if (!ShowTooltips) { <title>@pts[pi].Label: @F1(pts[pi].Value)</title> }
                     </circle>
                 }
             }
@@ -896,8 +1017,12 @@
                 string color = GetPointColor(pts[i], 0, i);
                 double pct = (Math.Abs(pts[i].Value) / total) * 100;
 
-                <path d="@path" fill="@color" stroke="white" stroke-width="1.5">
-                    <title>@pts[i].Label: @F1(pts[i].Value) (@F1(pct)%)</title>
+                var pIdx = i;
+                double midAngle = (startAngle + endAngle) / 2;
+                double tipX = cx + radius * 0.6 * Math.Cos(midAngle), tipY = cy + radius * 0.6 * Math.Sin(midAngle);
+                <path class="fx-pt" d="@path" fill="@color" stroke="white" stroke-width="1.5"
+                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value, pct), tipX, tipY, size, size)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[i].Label: @F1(pts[i].Value) (@F1(pct)%)</title> }
                 </path>
 
                 startAngle = endAngle;
@@ -1000,16 +1125,22 @@
             @for (int si = 0; si < series.Count; si++)
             {
                 string color = GetSeriesColor(si);
-                foreach (var pt in series[si].DataPoints)
+                for (int pi = 0; pi < series[si].DataPoints.Count; pi++)
                 {
+                    var pt = series[si].DataPoints[pi];
+                    var sIdx = si; var pIdx = pi;
                     double.TryParse(pt.Label, NumberStyles.Any, CultureInfo.InvariantCulture, out var xVal);
                     double px = padL + (xVal - xMin) / (xMax - xMin) * plotW;
                     double py = padT + plotH - (pt.Value - yMin) / (yMax - yMin) * plotH;
                     double r = Type == ChartType.Bubble && pt.Value2.HasValue
                         ? 4 + (pt.Value2.Value / bubbleMax) * 20
                         : 5;
-                    <circle cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color">
-                        <title>(@F1(xVal), @F1(pt.Value))</title>
+                    var scatterFields = Type == ChartType.Bubble && pt.Value2.HasValue
+                        ? new[] { Fld("X", xVal), Fld("Y", pt.Value), Fld("Size", pt.Value2.Value) }
+                        : new[] { Fld("X", xVal), Fld("Y", pt.Value) };
+                    <circle class="fx-pt" cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color"
+                            @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, color, string.IsNullOrEmpty(series[sIdx].Name) ? pt.Label : series[sIdx].Name, pt.Value, null, scatterFields, pt.Label), px, py, svgW, svgH)" @onmouseout="TipLeave">
+                        @if (!ShowTooltips) { <title>(@F1(xVal), @F1(pt.Value))</title> }
                     </circle>
                 }
             }
@@ -1075,6 +1206,19 @@
                 string color = GetSeriesColor(si);
                 <polygon points="@string.Join(" ", polyPts)" fill="@color" fill-opacity="0.2"
                          stroke="@color" stroke-width="2" />
+                @if (ShowTooltips)
+                {
+                    var sIdx = si;
+                    for (int i = 0; i < n && i < s.DataPoints.Count; i++)
+                    {
+                        var pIdx = i;
+                        double angle = -Math.PI / 2 + 2 * Math.PI * i / n;
+                        double r = (s.DataPoints[i].Value / maxVal) * radius;
+                        double vx = cx + r * Math.Cos(angle), vy = cy + r * Math.Sin(angle);
+                        <circle class="fx-pt" cx="@F(vx)" cy="@F(vy)" r="3" fill="@color" stroke="transparent" stroke-width="10"
+                                @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, color, labels[pIdx], s.DataPoints[pIdx].Value), vx, vy, size, size)" @onmouseout="TipLeave" />
+                    }
+                }
             }
         </svg>
     };
@@ -1180,9 +1324,12 @@
                 string color = val >= 0 ? "#16a34a" : "#dc2626";
                 if (!string.IsNullOrEmpty(pts[i].Color)) color = pts[i].Color!;
 
-                <rect x="@F(x)" y="@F(y1)" width="@F(barW - gap)" height="@F(barH)"
-                      fill="@color" rx="2">
-                    <title>@pts[i].Label: @(val >= 0 ? "+" : "")@F1(val)</title>
+                var pIdx = i;
+                var waterfallFields = new[] { new ChartTooltipField("Change", (val >= 0 ? "+" : "") + Fmt(val)), Fld("Running total", cumulative[i + 1]) };
+                <rect class="fx-pt" x="@F(x)" y="@F(y1)" width="@F(barW - gap)" height="@F(barH)"
+                      fill="@color" rx="2"
+                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, val, null, waterfallFields), x + (barW - gap) / 2, y1, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[i].Label: @(val >= 0 ? "+" : "")@F1(val)</title> }
                 </rect>
 
                 @if (i < n - 1)
@@ -1240,9 +1387,11 @@
                     int b2 = (int)(255 - norm * 40);
                     string color = $"rgb({r2},{g2},{b2})";
 
-                    <rect x="@F(padL + c * cellW)" y="@F(padT + r * cellH)"
-                          width="@F(cellW - 1)" height="@F(cellH - 1)" fill="@color" rx="2">
-                        <title>@categories[r] / @labels[c]: @F1(val)</title>
+                    var rIdx = r; var cIdx = c;
+                    <rect class="fx-pt" x="@F(padL + c * cellW)" y="@F(padT + r * cellH)"
+                          width="@F(cellW - 1)" height="@F(cellH - 1)" fill="@color" rx="2"
+                          @onmouseover='e => TipEnter(e, MakeCtx(rIdx, cIdx, color, $"{categories[rIdx]} / {labels[cIdx]}", val, null, null, labels[cIdx]), padL + (cIdx + 0.5) * cellW, padT + rIdx * cellH, svgW, svgH)' @onmouseout="TipLeave">
+                        @if (!ShowTooltips) { <title>@categories[r] / @labels[c]: @F1(val)</title> }
                     </rect>
                 }
             }
@@ -1300,9 +1449,12 @@
                 double h = rowH * 0.6;
                 string color = GetPointColor(pts[i], 0, i);
 
-                <rect x="@F(x1)" y="@F(y)" width="@F(Math.Max(x2 - x1, 2))" height="@F(h)"
-                      fill="@color" rx="3">
-                    <title>@pts[i].Label: @F0(start) - @F0(end)</title>
+                var pIdx = i;
+                var ganttFields = new[] { new ChartTooltipField("Start", F0(start)), new ChartTooltipField("End", F0(end)) };
+                <rect class="fx-pt" x="@F(x1)" y="@F(y)" width="@F(Math.Max(x2 - x1, 2))" height="@F(h)"
+                      fill="@color" rx="3"
+                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, start, null, ganttFields), (x1 + x2) / 2, y, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[i].Label: @F0(start) - @F0(end)</title> }
                 </rect>
 
                 @SvgText(F(padL - 6), F(y + h / 2 + 4), Truncate(pts[i].Label, 12),
@@ -1373,10 +1525,13 @@
                       stroke="#374151" stroke-width="1" />
                 <line x1="@F(bx - halfW * 0.5)" y1="@F(yHigh)" x2="@F(bx + halfW * 0.5)" y2="@F(yHigh)"
                       stroke="#374151" stroke-width="1" />
-                <rect x="@F(bx - halfW)" y="@F(yQ3)" width="@F(halfW * 2)"
+                var pIdx = i;
+                var boxFields = new[] { Fld("Max", high), Fld("Q3", q3), Fld("Median", median), Fld("Q1", q1), Fld("Min", low) };
+                <rect class="fx-pt" x="@F(bx - halfW)" y="@F(yQ3)" width="@F(halfW * 2)"
                       height="@F(Math.Max(yQ1 - yQ3, 1))" fill="@GetSeriesColor(0)" fill-opacity="0.3"
-                      stroke="@GetSeriesColor(0)" stroke-width="1.5" rx="2">
-                    <title>@p.Label: Q1=@F1(q1) Med=@F1(median) Q3=@F1(q3)</title>
+                      stroke="@GetSeriesColor(0)" stroke-width="1.5" rx="2"
+                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), p.Label, median, null, boxFields), bx, yQ3, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@p.Label: Q1=@F1(q1) Med=@F1(median) Q3=@F1(q3)</title> }
                 </rect>
                 <line x1="@F(bx - halfW)" y1="@F(yMed)" x2="@F(bx + halfW)" y2="@F(yMed)"
                       stroke="@GetSeriesColor(0)" stroke-width="2" />
@@ -1432,8 +1587,10 @@
 
                 <line x1="@F(padL)" y1="@F(y)" x2="@F(x)" y2="@F(y)"
                       stroke="#e5e7eb" stroke-width="1" />
-                <circle cx="@F(x)" cy="@F(y)" r="5" fill="@color">
-                    <title>@pts[i].Label: @F1(pts[i].Value)</title>
+                var pIdx = i;
+                <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="5" fill="@color" stroke="transparent" stroke-width="8"
+                        @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[i].Label: @F1(pts[i].Value)</title> }
                 </circle>
                 @SvgText(F(padL - 6), F(y + 4), Truncate(pts[i].Label, 12),
                     anchor: "end", fontSize: "10", fill: "#374151")
@@ -1487,9 +1644,12 @@
                 double x = padL + i * barW;
                 double y = padT + plotH - barH;
 
-                <rect x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(barH, 0))"
-                      fill="@GetSeriesColor(0)" stroke="white" stroke-width="0.5">
-                    <title>@pts[i].Label: @F1(val)</title>
+                var pIdx = i;
+                var binFields = new[] { Fld("Count", val) };
+                <rect class="fx-pt" x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(barH, 0))"
+                      fill="@GetSeriesColor(0)" stroke="white" stroke-width="0.5"
+                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), pts[pIdx].Label, val, null, binFields), x + barW / 2, y, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[i].Label: @F1(val)</title> }
                 </rect>
 
                 @if (i % Math.Max(1, n / 8) == 0)
@@ -1517,6 +1677,7 @@
         int n = pts.Count;
         double maxVal = pts.Max(p => Math.Abs(p.Value));
         if (maxVal <= 0) maxVal = 1;
+        double tipTotal = pts.Sum(p => Math.Abs(p.Value));
 
         bool isPyramid = Type == ChartType.Pyramid;
         double segH = plotH / n;
@@ -1545,9 +1706,11 @@
                 double x3 = fcx + botW / 2;
                 double x4 = fcx - botW / 2;
 
-                <polygon points="@F(x1),@F(y) @F(x2),@F(y) @F(x3),@F(y + segH) @F(x4),@F(y + segH)"
-                         fill="@color" stroke="white" stroke-width="1.5">
-                    <title>@pts[idx].Label: @F1(pts[idx].Value)</title>
+                double share = tipTotal > 0 ? val / tipTotal * 100 : 0;
+                <polygon class="fx-pt" points="@F(x1),@F(y) @F(x2),@F(y) @F(x3),@F(y + segH) @F(x4),@F(y + segH)"
+                         fill="@color" stroke="white" stroke-width="1.5"
+                         @onmouseover="e => TipEnter(e, MakeCtx(0, idx, color, pts[idx].Label, pts[idx].Value, share), fcx, y + segH / 2, svgW, svgH)" @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pts[idx].Label: @F1(pts[idx].Value)</title> }
                 </polygon>
 
                 @SvgText(F(fcx), F(y + segH / 2 + 4), pts[idx].Label,
@@ -1613,7 +1776,7 @@
                     <!-- Real Body -->
                     <rect x="@F(cx - candleW / 2)" y="@F(bodyTop)" width="@F(candleW)" height="@F(bodyHeight)"
                           fill="@(isBullish ? "#22c55e" : "#ef4444")" stroke="@candleColor" stroke-width="1" rx="1">
-                        <title>@p.Label&#10;Open: @p.Open&#10;High: @p.High&#10;Low: @p.Low&#10;Close: @p.Close</title>
+                        @if (!ShowTooltips) { <title>@p.Label&#10;Open: @p.Open&#10;High: @p.High&#10;Low: @p.Low&#10;Close: @p.Close</title> }
                     </rect>
                 }
                 else if (Type == ChartType.Ohlc)
@@ -1630,6 +1793,15 @@
                     <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="#2563eb" stroke-width="2.5" />
                 }
 
+                @if (ShowTooltips)
+                {
+                    var pIdx = i;
+                    var priceFields = Type == ChartType.HighLow
+                        ? new[] { Fld("High", p.High), Fld("Low", p.Low) }
+                        : new[] { Fld("Open", p.Open), Fld("High", p.High), Fld("Low", p.Low), Fld("Close", p.Close) };
+                    <rect class="fx-pt-hit" x="@F(cx - slotW * 0.4)" y="@F(yHigh)" width="@F(slotW * 0.8)" height="@F(Math.Max(yLow - yHigh, 4))" fill="transparent"
+                          @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, candleColor, p.Label, p.Close, null, priceFields), cx, yHigh, svgW, svgH)" @onmouseout="TipLeave" />
+                }
                 @SvgText(F(cx), F(padT + plotH + 16), Truncate(p.Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
             }
         </svg>
@@ -1667,8 +1839,11 @@
 
                 <!-- Actual Value Bar (Dark) -->
                 double actualW = (p.Actual / maxVal) * plotW;
-                <rect x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="#1e293b" rx="1">
-                    <title>@p.Label: Actual=@p.Actual, Target=@p.Target</title>
+                var pIdx = i;
+                var bulletFields = new[] { Fld("Actual", p.Actual), Fld("Target", p.Target) };
+                <rect class="fx-pt" x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="#1e293b" rx="1"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#1e293b", p.Label, p.Actual, null, bulletFields), padL + actualW / 2, y, svgW, svgH)' @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@p.Label: Actual=@p.Actual, Target=@p.Target</title> }
                 </rect>
 
                 <!-- Target Line (Red) -->
@@ -1726,9 +1901,12 @@
                 double yBot = padT + plotH - (plotH * (valMin - minVal) / range);
                 double barH = Math.Max(3, yBot - yTop);
 
-                <rect x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
-                      fill="#3b82f6" opacity="0.85" rx="3">
-                    <title>@p.Label: @valMin - @valMax</title>
+                var pIdx = i;
+                var rangeFields = new[] { Fld("Min", valMin), Fld("Max", valMax) };
+                <rect class="fx-pt" x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
+                      fill="#3b82f6" opacity="0.85" rx="3"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#3b82f6", p.Label, valMax, null, rangeFields), cx, yTop, svgW, svgH)' @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@p.Label: @valMin - @valMax</title> }
                 </rect>
 
                 @SvgText(F(cx), F(padT + plotH + 16), Truncate(p.Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
@@ -1764,8 +1942,10 @@
         <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
              style="height:@(Height ?? "340px");" xmlns="http://www.w3.org/2000/svg">
 
-            @foreach (var pt in pts)
+            @for (int pi = 0; pi < pts.Count; pi++)
             {
+                var pt = pts[pi];
+                var pIdx = pi;
                 double flowH = Math.Max(8, (pt.Value / totalFlow) * (plotH * 0.8));
                 double x1 = padL + nodeW;
                 double x2 = padL + plotW - nodeW;
@@ -1777,8 +1957,9 @@
 
                 <!-- Smooth Flow Ribbon -->
                 <path d="M @F(x1) @F(y1) C @F(cp1X) @F(y1), @F(cp2X) @F(y2), @F(x2) @F(y2) L @F(x2) @F(y2 + flowH) C @F(cp2X) @F(y2 + flowH), @F(cp1X) @F(y1 + flowH), @F(x1) @F(y1 + flowH) Z"
-                      fill="#60a5fa" fill-opacity="0.45" stroke="#3b82f6" stroke-width="0.5">
-                    <title>@pt.Source → @pt.Destination: @pt.Value</title>
+                      fill="#60a5fa" fill-opacity="0.45" stroke="#3b82f6" stroke-width="0.5" class="fx-pt"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#60a5fa", $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH)' @onmouseout="TipLeave">
+                    @if (!ShowTooltips) { <title>@pt.Source → @pt.Destination: @pt.Value</title> }
                 </path>
 
                 <!-- Source Node -->
