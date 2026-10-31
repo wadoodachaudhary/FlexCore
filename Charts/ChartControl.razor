@@ -300,6 +300,12 @@
     /// <summary>Custom color palette for series.</summary>
     [Parameter] public string[]? ColorPalette { get; set; }
 
+    // Rise and fall colours (2026-10-31): the candlestick, OHLC and waterfall green and red, settable so a themed page can match them.
+    /// <summary>Rising candles and OHLC bars, and positive Waterfall steps. Unset: green (candle body #22c55e, outline and steps #16a34a).</summary>
+    [Parameter] public string? UpColor { get; set; }
+    /// <summary>Falling candles and OHLC bars, and negative Waterfall steps. Unset: red (candle body #ef4444, outline and steps #dc2626).</summary>
+    [Parameter] public string? DownColor { get; set; }
+
     /// <summary>Donut inner radius as proportion of outer radius (0-1).</summary>
     [Parameter] public double? InnerRadius { get; set; }
 
@@ -513,6 +519,35 @@
         if (!string.IsNullOrEmpty(point.Color)) return point.Color!;
         if (_effectiveSeries.Count > 1) return GetSeriesColor(seriesIndex);
         return EffectivePalette[pointIndex % EffectivePalette.Length];
+    }
+
+    // Themed colours (2026-10-31): Range, HighLow, Sankey, Bullet, the Pareto line and the Heatmap ramp drew fixed colours and ignored
+    // ColorPalette. They keep those colours by default and take the caller's colours when given, so a themed page themes them too.
+
+    /// <summary>ColorPalette[index] when the palette has that entry, otherwise the type's own fixed colour. No cycling: a secondary role
+    /// (a target line, a Pareto line) never falls onto the same colour as the primary one.</summary>
+    private string PaletteOr(int index, string fallback) =>
+        ColorPalette is not null && index < ColorPalette.Length && !string.IsNullOrEmpty(ColorPalette[index]) ? ColorPalette[index] : fallback;
+
+    /// <summary>A single-series type's main colour: the first series' Color, then ColorPalette[0], then the fallback.</summary>
+    private string ThemedSeriesColor(string fallback) =>
+        _effectiveSeries.Count > 0 && !string.IsNullOrEmpty(_effectiveSeries[0].Color) ? _effectiveSeries[0].Color! : PaletteOr(0, fallback);
+
+    /// <summary>The point's Color when set, otherwise <see cref="ThemedSeriesColor"/>.</summary>
+    private string ThemedPointColor(ChartDataPoint point, string fallback) =>
+        !string.IsNullOrEmpty(point.Color) ? point.Color! : ThemedSeriesColor(fallback);
+
+    /// <summary>UpColor or DownColor for a rise (true) or fall, or the type's own colour when that parameter is unset or empty.</summary>
+    private string DirectionColor(bool rising, string upFallback, string downFallback) =>
+        rising ? (string.IsNullOrEmpty(UpColor) ? upFallback : UpColor) : (string.IsNullOrEmpty(DownColor) ? downFallback : DownColor);
+
+    /// <summary>"#rgb" or "#rrggbb" as bytes; null for anything else (a named colour, rgb(), a variable).</summary>
+    private static (int R, int G, int B)? ParseHex(string? color)
+    {
+        if (string.IsNullOrEmpty(color) || color[0] != '#') return null;
+        var hex = color.Length == 4 ? string.Concat(color[1], color[1], color[2], color[2], color[3], color[3]) : color.Length == 7 ? color[1..] : null;
+        return hex is not null && int.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var v)
+            ? ((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF) : null;
     }
 
     private static string F(double v) => v.ToString("F2", CultureInfo.InvariantCulture);
@@ -749,7 +784,7 @@
                     points.Add($"{F(px)},{F(py)}");
                 }
                 <polyline points="@string.Join(" ", points)" fill="none"
-                          stroke="#dc2626" stroke-width="2" />
+                          stroke="@PaletteOr(1, "#dc2626")" stroke-width="2" />
             }
 
             @if (isCombo && series.Count > 1)
@@ -1321,7 +1356,7 @@
                 double barH = Math.Max(y2 - y1, 1);
                 double x = padL + i * barW + gap / 2;
 
-                string color = val >= 0 ? "#16a34a" : "#dc2626";
+                string color = DirectionColor(val >= 0, "#16a34a", "#dc2626");
                 if (!string.IsNullOrEmpty(pts[i].Color)) color = pts[i].Color!;
 
                 var pIdx = i;
@@ -1370,6 +1405,10 @@
         double maxVal = _effectiveSeries.SelectMany(s => s.DataPoints.Select(p => p.Value)).Max();
         if (Math.Abs(maxVal - minVal) < 0.001) { minVal = 0; maxVal = 1; }
 
+        // Each row is a series, so series colours do not apply. A hex ColorPalette[0] sets the ramp: from a 10% tint of it at the lowest
+        // value to the colour itself at the highest. Unset (or not hex): the built-in ramp from (235,245,255) to (35,45,215).
+        var rampTop = ParseHex(PaletteOr(0, ""));
+
         <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
              style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
 
@@ -1382,9 +1421,20 @@
                 {
                     double val = _effectiveSeries[r].DataPoints[c].Value;
                     double norm = (val - minVal) / (maxVal - minVal);
-                    int r2 = (int)(235 - norm * 200);
-                    int g2 = (int)(245 - norm * 200);
-                    int b2 = (int)(255 - norm * 40);
+                    int r2, g2, b2;
+                    if (rampTop is var (tr, tg, tb))
+                    {
+                        double t = 0.1 + 0.9 * norm;
+                        r2 = (int)Math.Round(255 + (tr - 255) * t);
+                        g2 = (int)Math.Round(255 + (tg - 255) * t);
+                        b2 = (int)Math.Round(255 + (tb - 255) * t);
+                    }
+                    else
+                    {
+                        r2 = (int)(235 - norm * 200);
+                        g2 = (int)(245 - norm * 200);
+                        b2 = (int)(255 - norm * 40);
+                    }
                     string color = $"rgb({r2},{g2},{b2})";
 
                     var rIdx = r; var cIdx = c;
@@ -1764,7 +1814,8 @@
                 double yClose = padT + plotH - (plotH * (p.Close - minVal) / range);
 
                 bool isBullish = p.Close >= p.Open;
-                string candleColor = isBullish ? "#16a34a" : "#dc2626";
+                string candleColor = DirectionColor(isBullish, "#16a34a", "#dc2626");
+                string bodyColor = DirectionColor(isBullish, "#22c55e", "#ef4444");
 
                 if (Type == ChartType.Candlestick)
                 {
@@ -1775,7 +1826,7 @@
                     <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="@candleColor" stroke-width="1.5" />
                     <!-- Real Body -->
                     <rect x="@F(cx - candleW / 2)" y="@F(bodyTop)" width="@F(candleW)" height="@F(bodyHeight)"
-                          fill="@(isBullish ? "#22c55e" : "#ef4444")" stroke="@candleColor" stroke-width="1" rx="1">
+                          fill="@bodyColor" stroke="@candleColor" stroke-width="1" rx="1">
                         @if (!ShowTooltips) { <title>@p.Label&#10;Open: @p.Open&#10;High: @p.High&#10;Low: @p.Low&#10;Close: @p.Close</title> }
                     </rect>
                 }
@@ -1790,7 +1841,8 @@
                 }
                 else // HighLow
                 {
-                    <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="#2563eb" stroke-width="2.5" />
+                    candleColor = ThemedPointColor(p, "#2563eb");
+                    <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="@candleColor" stroke-width="2.5" />
                 }
 
                 @if (ShowTooltips)
@@ -1837,18 +1889,19 @@
                 <rect x="@F(padL)" y="@F(y)" width="@F(plotW * 0.85)" height="@F(h)" fill="#e2e8f0" rx="2" />
                 <rect x="@F(padL)" y="@F(y)" width="@F(plotW * 0.60)" height="@F(h)" fill="#cbd5e1" rx="2" />
 
-                <!-- Actual Value Bar (Dark) -->
+                <!-- Actual Value Bar (dark slate unless coloured) -->
                 double actualW = (p.Actual / maxVal) * plotW;
                 var pIdx = i;
                 var bulletFields = new[] { Fld("Actual", p.Actual), Fld("Target", p.Target) };
-                <rect class="fx-pt" x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="#1e293b" rx="1"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#1e293b", p.Label, p.Actual, null, bulletFields), padL + actualW / 2, y, svgW, svgH)' @onmouseout="TipLeave">
+                var actualColor = ThemedPointColor(p, "#1e293b");
+                <rect class="fx-pt" x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="@actualColor" rx="1"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, actualColor, p.Label, p.Actual, null, bulletFields), padL + actualW / 2, y, svgW, svgH)' @onmouseout="TipLeave">
                     @if (!ShowTooltips) { <title>@p.Label: Actual=@p.Actual, Target=@p.Target</title> }
                 </rect>
 
-                <!-- Target Line (Red) -->
+                <!-- Target Line (red unless ColorPalette has an entry 1) -->
                 double targetX = padL + (p.Target / maxVal) * plotW;
-                <line x1="@F(targetX)" y1="@F(y + 2)" x2="@F(targetX)" y2="@F(y + h - 2)" stroke="#dc2626" stroke-width="3" />
+                <line x1="@F(targetX)" y1="@F(y + 2)" x2="@F(targetX)" y2="@F(y + h - 2)" stroke="@PaletteOr(1, "#dc2626")" stroke-width="3" />
 
                 <!-- Label -->
                 @SvgText(F(padL - 10), F(y + h / 2 + 4), p.Label, anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
@@ -1903,9 +1956,10 @@
 
                 var pIdx = i;
                 var rangeFields = new[] { Fld("Min", valMin), Fld("Max", valMax) };
+                var rangeColor = ThemedPointColor(p, "#3b82f6");
                 <rect class="fx-pt" x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
-                      fill="#3b82f6" opacity="0.85" rx="3"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#3b82f6", p.Label, valMax, null, rangeFields), cx, yTop, svgW, svgH)' @onmouseout="TipLeave">
+                      fill="@rangeColor" opacity="0.85" rx="3"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, rangeColor, p.Label, valMax, null, rangeFields), cx, yTop, svgW, svgH)' @onmouseout="TipLeave">
                     @if (!ShowTooltips) { <title>@p.Label: @valMin - @valMax</title> }
                 </rect>
 
@@ -1939,6 +1993,11 @@
         double tgtY = padT;
         double nodeW = 16;
 
+        // source nodes: the series Color or ColorPalette[0]; target nodes: ColorPalette[1]; each falls back to its fixed blue
+        var srcColor = ThemedSeriesColor("#2563eb");
+        var tgtColor = PaletteOr(1, "#0284c7");
+        bool themed = ColorPalette is { Length: > 0 } || (_effectiveSeries.Count > 0 && !string.IsNullOrEmpty(_effectiveSeries[0].Color));
+
         <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
              style="height:@(Height ?? "340px");" xmlns="http://www.w3.org/2000/svg">
 
@@ -1955,19 +2014,23 @@
                 double cp1X = x1 + (x2 - x1) * 0.5;
                 double cp2X = x2 - (x2 - x1) * 0.5;
 
+                // a point's Color paints its ribbon; otherwise a themed chart's ribbons take the source colour, an unthemed one the light blue
+                var flowFill = !string.IsNullOrEmpty(pt.Color) ? pt.Color! : themed ? srcColor : "#60a5fa";
+                var flowStroke = !string.IsNullOrEmpty(pt.Color) ? pt.Color! : themed ? srcColor : "#3b82f6";
+
                 <!-- Smooth Flow Ribbon -->
                 <path d="M @F(x1) @F(y1) C @F(cp1X) @F(y1), @F(cp2X) @F(y2), @F(x2) @F(y2) L @F(x2) @F(y2 + flowH) C @F(cp2X) @F(y2 + flowH), @F(cp1X) @F(y1 + flowH), @F(x1) @F(y1 + flowH) Z"
-                      fill="#60a5fa" fill-opacity="0.45" stroke="#3b82f6" stroke-width="0.5" class="fx-pt"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, "#60a5fa", $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH)' @onmouseout="TipLeave">
+                      fill="@flowFill" fill-opacity="0.45" stroke="@flowStroke" stroke-width="0.5" class="fx-pt"
+                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, flowFill, $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH)' @onmouseout="TipLeave">
                     @if (!ShowTooltips) { <title>@pt.Source → @pt.Destination: @pt.Value</title> }
                 </path>
 
                 <!-- Source Node -->
-                <rect x="@F(padL)" y="@F(srcY)" width="@F(nodeW)" height="@F(flowH)" fill="#2563eb" rx="2" />
+                <rect x="@F(padL)" y="@F(srcY)" width="@F(nodeW)" height="@F(flowH)" fill="@srcColor" rx="2" />
                 @SvgText(F(padL - 8), F(srcY + flowH / 2 + 4), pt.Source, anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
 
                 <!-- Target Node -->
-                <rect x="@F(padL + plotW - nodeW)" y="@F(tgtY)" width="@F(nodeW)" height="@F(flowH)" fill="#0284c7" rx="2" />
+                <rect x="@F(padL + plotW - nodeW)" y="@F(tgtY)" width="@F(nodeW)" height="@F(flowH)" fill="@tgtColor" rx="2" />
                 @SvgText(F(padL + plotW + 8), F(tgtY + flowH / 2 + 4), pt.Destination, anchor: "start", fontSize: "11", fill: "#1e293b", fontWeight: "600")
 
                 srcY += flowH + 10;

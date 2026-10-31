@@ -13,11 +13,11 @@
     @if(_points.Length==0){<div role="status">No financial data.</div>}
     else
     {
-        <ChartControl Type="@Type" Series="@VisibleSeries" Height="@Height" ValueFormat="@ValueFormat" />
+        <ChartControl Type="@Type" Series="@VisibleSeries" Height="@Height" ValueFormat="@ValueFormat" ColorPalette="@ColorPalette" UpColor="@UpColor" DownColor="@DownColor" />
         @if(ShowNavigator)
         {
             <div class="fx-stock-navigator" aria-label="Financial navigator">
-                <ChartControl Type="ChartType.Line" Series="@NavigatorSeries" Height="90px" ShowAxisLabels="false" ShowValues="false" />
+                <ChartControl Type="ChartType.Line" Series="@NavigatorSeries" Height="90px" ShowAxisLabels="false" ShowValues="false" ColorPalette="@ColorPalette" />
                 <label>Start <SliderControl Min="0" Max="@(_points.Length-1)" Value="@StartIndex" ValueChanged="i=>SetStartAsync(_points[(int)i].DateValue)" ShowValue="false" Disabled="@(!Enabled)" aria-label="Navigator start" /></label>
                 <label>End <SliderControl Min="0" Max="@(_points.Length-1)" Value="@EndIndex" ValueChanged="i=>SetEndAsync(_points[(int)i].DateValue)" ShowValue="false" Disabled="@(!Enabled)" aria-label="Navigator end" /></label>
             </div>
@@ -33,6 +33,10 @@
     [Parameter] public string Height {get;set;}="340px";
     [Parameter] public string ValueFormat {get;set;}="N2";
     [Parameter] public bool ShowNavigator {get;set;}=true;
+    // Colours (2026-10-31), handed to the inner charts: the palette to both (the navigator's line takes entry 0), rise and fall to the price chart.
+    [Parameter] public string[]? ColorPalette {get;set;}
+    [Parameter] public string? UpColor {get;set;}
+    [Parameter] public string? DownColor {get;set;}
     private ChartDataPoint[] _points=[];
     private DateTime? _start,_end,_lastStart,_lastEnd;
     private bool _initialized;
