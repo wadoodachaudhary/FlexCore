@@ -55,7 +55,7 @@ internal sealed class ReportAnalysisGrouping
             {
                 var raw = row.GetValueOrDefault(group.Field);
                 var value = raw is null or DBNull ? "" : raw;
-                var label = Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
+                var label = value is DateTime date ? date.ToString("d", CultureInfo.CurrentCulture) : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
                 if (group.OriginalOrder)
                 {
                     if (!original.TryGetValue(value, out var order)) original[value] = order = original.Count;
@@ -77,5 +77,6 @@ internal sealed class ReportAnalysisGrouping
         }
     }
 
-    internal object? Value(Dictionary<string, object> row, string field) => _keys[row].TryGetValue(field, out var key) ? key : row.GetValueOrDefault(field);
+    internal object? Value(Dictionary<string, object> row, string field) => _keys[row].TryGetValue(field, out var key) ? key : row.GetValueOrDefault(field) is DateTime date
+            ? new PivotGroupValue(date, date.ToString("d", CultureInfo.CurrentCulture), 0, date) : row.GetValueOrDefault(field);
 }

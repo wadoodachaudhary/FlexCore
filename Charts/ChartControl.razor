@@ -22,7 +22,28 @@
 *@
 
 <div class="fx-chart @CssClass" style="@RootStyle" @onmouseleave="TipLeave">
-    @if (!string.IsNullOrEmpty(Title))
+    @if (CategoryLegend)
+    {
+        var drawing = PrintedCategoryBarChart.Draw(Type, _effectiveSeries, Title ?? "",
+            PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
+            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels);
+        <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
+    }
+    else if (ThreeDimensional)
+    {
+        var drawing = PrintedBarChart3D.Draw(Type, _effectiveSeries, Title ?? "",
+            PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
+            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels);
+        <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
+    }
+    else if (PrintWidthPoints > 0 && PrintHeightPoints > 0 && Type is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble)
+    {
+        var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, ShowLegend, EffectivePalette, PrintReportGroupChart, XAxis);
+        <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
+    }
+    else
+    {
+    @if (!string.IsNullOrEmpty(Title) && !UsePrintBarLayout)
     {
         <div class="fx-chart-title">@Title</div>
     }
@@ -222,6 +243,7 @@
             }
         }
     }
+    }
 </div>
 
 @code {
@@ -279,6 +301,11 @@
     /// <summary>Chart visualization type.</summary>
     [Parameter] public ChartType Type { get; set; } = ChartType.Bar;
 
+    /// <summary>Draw grouped, stacked or percentage bars with perspective faces.</summary>
+    [Parameter] public bool ThreeDimensional { get; set; }
+    /// <summary>Use the classic printed bar scene and category-key legend.</summary>
+    [Parameter] public bool CategoryLegend { get; set; }
+
     /// <summary>Multi-series data for new SVG chart modes.</summary>
     [Parameter] public List<ChartSeries>? Series { get; set; }
 
@@ -298,6 +325,12 @@
     [Parameter] public bool Animate { get; set; } = false;
 
     /// <summary>Custom color palette for series.</summary>
+    [Parameter] public bool ColorBarsByCategory { get; set; }
+    [Parameter] public bool PrintReportGroupChart { get; set; }
+    [Parameter] public double PrintWidthPoints { get; set; }
+    [Parameter] public double PrintHeightPoints { get; set; }
+    private bool UsePrintBarLayout => Type == ChartType.Bar && PrintWidthPoints > 0 && PrintHeightPoints > 0;
+
     [Parameter] public string[]? ColorPalette { get; set; }
 
     // Rise and fall colours (2026-10-31): the candlestick, OHLC and waterfall green and red, settable so a themed page can match them.
@@ -386,9 +419,22 @@
 
     protected override void OnParametersSet()
     {
+        if (CategoryLegend && (ThreeDimensional || !PrintedCategoryBarChart.Supports(Type)))
+            throw new NotSupportedException("Category legends require a flat bar chart.");
+        if (ThreeDimensional && !PrintedBarChart3D.Supports(Type))
+            throw new NotSupportedException("3D rendering is available for bar charts.");
         if (UseLegacyMode)
         {
             ResolveLegacyData();
+            if (ThreeDimensional || CategoryLegend)
+            {
+                if (Bars is { Count: > 0 })
+                    _effectiveSeries = [new("Value", Type, Bars.Select(bar => new ChartDataPoint(bar.Label, bar.Value, bar.Color ?? BarColor)))];
+                else
+                    _effectiveSeries = Enumerable.Range(0, ValueFields?.Count ?? 0).Select(index => new ChartSeries(
+                        index < (ValueLabels?.Count ?? 0) ? ValueLabels![index] : ValueFields![index], Type,
+                        _resolvedRows.Select(row => new ChartDataPoint(row.Label, row.Values[index])))).ToList();
+            }
         }
         else
         {
@@ -615,7 +661,7 @@
     /// </summary>
     private static MarkupString SvgText(string x, string y, string content,
         string? anchor = null, string? fontSize = null, string? fill = null,
-        string? fontWeight = null, string? transform = null)
+        string? fontWeight = null, string? transform = null, string? fontStyle = null)
     {
         var sb = new System.Text.StringBuilder();
         sb.Append("<text");
@@ -624,6 +670,7 @@
         if (fontSize != null) sb.Append($" font-size=\"{fontSize}\"");
         if (fill != null) sb.Append($" fill=\"{fill}\"");
         if (fontWeight != null) sb.Append($" font-weight=\"{fontWeight}\"");
+        if (fontStyle != null) sb.Append($" font-style=\"{fontStyle}\"");
         if (transform != null) sb.Append($" transform=\"{transform}\"");
         sb.Append('>');
         sb.Append(System.Net.WebUtility.HtmlEncode(content));
@@ -642,8 +689,10 @@
 
     private RenderFragment RenderBarChart() => __builder =>
     {
-        const double svgW = 600, svgH = 300;
-        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        var print = UsePrintBarLayout;
+        double svgW = print ? PrintWidthPoints : 600, svgH = print ? PrintHeightPoints : 300;
+        double padL = print ? svgW * .063 : 60, padR = print ? svgW * .027 : 20;
+        double padT = print ? svgH * .13 : 20, padB = print ? svgH * .22 : 40;
         double plotW = svgW - padL - padR;
         double plotH = svgH - padT - padB;
 
@@ -678,20 +727,36 @@
         var minVal = isStacked ? 0 : Math.Min(0, series.SelectMany(s => s.DataPoints.Where(p => !p.IsEmpty).Select(p => p.Value)).DefaultIfEmpty(0).Min());
         var (rangeMin, rangeMax) = GetNiceRange(minVal, maxVal);
 
+        int tickCount = Math.Max(2, YAxis?.TickCount ?? 5);
+        if (print && YAxis?.Min == null && YAxis?.Max == null)
+        {
+            (rangeMin, rangeMax, tickCount) = BarPrintScale.Range(minVal, maxVal);
+        }
         double barGroupWidth = plotW / n;
         double barGap = barGroupWidth * 0.2;
         double usableWidth = barGroupWidth - barGap;
+        var categoryCaptions = labels.Select(label => print ? label : Truncate(label, 10)).ToArray();
+        var visibleLabels = ChartAxisLabelLayout.Select(categoryCaptions,
+            index => padL + (index+.5)*barGroupWidth, print ? 6.5 : 10, bold: print, italic: print, axis: XAxis);
 
         <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
-             style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
+             width="100%" style="height:@(Height ?? "300px");" xmlns="http://www.w3.org/2000/svg">
 
-            @{ var ticks = GetTicks(rangeMin, rangeMax, YAxis?.TickCount ?? 5); }
+            @if (print)
+            {
+                @SvgText(F(svgW / 2), F(padT * .72), Title ?? "", anchor: "middle", fontSize: "10", fontWeight: "bold")
+                <rect x="@F(padL)" y="@F(padT)" width="@F(plotW)" height="@F(plotH)" fill="none" stroke="black" stroke-width=".75" />
+            }
+            @{ var ticks = GetTicks(rangeMin, rangeMax, tickCount); }
             @foreach (var tick in ticks)
             {
                 double y = padT + plotH - (tick - rangeMin) / (rangeMax - rangeMin) * plotH;
+                @if (YAxis?.ShowGridLines != false)
+                {
                 <line x1="@F(padL)" y1="@F(y)" x2="@F(svgW - padR)" y2="@F(y)"
-                      stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,2" />
-                @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
+                      stroke="@(print ? "black" : "#e5e7eb")" stroke-width="@(print ? ".75" : "1")" stroke-dasharray="@(print ? null : "4,2")" />
+                }
+                @SvgText(F(padL - (print ? 3 : 8)), F(y + (print ? 2 : 4)), F0(tick), anchor: "end", fontSize: print ? "6.5" : "10", fill: print ? "black" : "#6b7280", fontWeight: print ? "bold" : null)
             }
 
             <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
@@ -755,18 +820,19 @@
                     double barY = Math.Min(valueY, zeroY);
                     string color = i < series[0].DataPoints.Count && !string.IsNullOrEmpty(series[0].DataPoints[i].Color)
                         ? series[0].DataPoints[i].Color!
-                        : GetSeriesColor(0);
+                        : ColorBarsByCategory ? GetPointColor(series[0].DataPoints[i], 0, i) : GetSeriesColor(0);
                     var pIdx = i;
                     <rect class="fx-pt" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
-                          fill="@color" rx="2"
+                          fill="@color" rx="@(print ? 0 : 2)"
                           @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH)" @onmouseout="TipLeave">
                         @if (!ShowTooltips) { <title>@labels[i]: @F1(val)</title> }
                     </rect>
                 }
 
+                if (ShowAxisLabels && visibleLabels.Contains(i))
                 {
                     double labelX = groupX + usableWidth / 2;
-                    @SvgText(F(labelX), F(padT + plotH + 16), Truncate(labels[i], 10), anchor: "middle", fontSize: "10", fill: "#6b7280")
+                    @SvgText(F(labelX), F(padT + plotH + (print ? 10 : 16)), categoryCaptions[i], anchor: "middle", fontSize: print ? "6.5" : "10", fill: print ? "black" : "#6b7280", fontWeight: print ? "bold" : null, fontStyle: print ? "italic" : null)
                 }
             }
 
@@ -949,14 +1015,14 @@
                 }
             }
 
-            @if (series[0].DataPoints.Count > 0)
+            @if (ShowAxisLabels && series[0].DataPoints.Count > 0)
             {
-                var pts = series[0].DataPoints;
-                int labelStep = Math.Max(1, pts.Count / 10);
-                for (int i = 0; i < pts.Count; i += labelStep)
+                var captions = series[0].DataPoints.Select(point => Truncate(point.Label, 8)).ToArray();
+                double LabelX(int index) => padL + (maxPoints > 1 ? (double)index/(maxPoints-1)*plotW : plotW/2);
+                var visibleLabels = ChartAxisLabelLayout.Select(captions, LabelX, 10, axis: XAxis);
+                foreach (var index in visibleLabels.Order())
                 {
-                    double x = padL + (maxPoints > 1 ? (double)i / (maxPoints - 1) * plotW : plotW / 2);
-                    @SvgText(F(x), F(padT + plotH + 16), Truncate(pts[i].Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
+                    @SvgText(F(LabelX(index)), F(padT + plotH + 16), captions[index], anchor: "middle", fontSize: "10", fill: "#6b7280")
                 }
             }
 
@@ -1121,7 +1187,8 @@
         var series = _effectiveSeries;
         if (series.Count == 0) return;
 
-        var allPoints = series.SelectMany(s => s.DataPoints).ToList();
+        var allPoints = series.SelectMany(s => s.DataPoints).Where(p => !p.IsEmpty).ToList();
+        if (allPoints.Count == 0) return;
         double xMin = 0, xMax = 1, yMin = 0, yMax = 1;
 
         var xValues = allPoints.Select(p =>
@@ -1168,7 +1235,7 @@
                     double px = padL + (xVal - xMin) / (xMax - xMin) * plotW;
                     double py = padT + plotH - (pt.Value - yMin) / (yMax - yMin) * plotH;
                     double r = Type == ChartType.Bubble && pt.Value2.HasValue
-                        ? 4 + (pt.Value2.Value / bubbleMax) * 20
+                        ? 4 + (Math.Max(0, pt.Value2.Value) / Math.Max(double.Epsilon, bubbleMax)) * 20
                         : 5;
                     var scatterFields = Type == ChartType.Bubble && pt.Value2.HasValue
                         ? new[] { Fld("X", xVal), Fld("Y", pt.Value), Fld("Size", pt.Value2.Value) }
@@ -1791,6 +1858,8 @@
         int n = pts.Count;
         double slotW = plotW / n;
         double candleW = Math.Min(24, slotW * 0.65);
+        var captions = pts.Select(point => point.Label).ToArray();
+        var visibleLabels = ChartAxisLabelLayout.Select(captions, index => padL+(index+.5)*slotW, 10, axis: XAxis);
 
         <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
              style="height:@(Height ?? "320px");" xmlns="http://www.w3.org/2000/svg">
@@ -1854,7 +1923,10 @@
                     <rect class="fx-pt-hit" x="@F(cx - slotW * 0.4)" y="@F(yHigh)" width="@F(slotW * 0.8)" height="@F(Math.Max(yLow - yHigh, 4))" fill="transparent"
                           @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, candleColor, p.Label, p.Close, null, priceFields), cx, yHigh, svgW, svgH)" @onmouseout="TipLeave" />
                 }
-                @SvgText(F(cx), F(padT + plotH + 16), Truncate(p.Label, 8), anchor: "middle", fontSize: "10", fill: "#6b7280")
+                @if (ShowAxisLabels && visibleLabels.Contains(i))
+                {
+                    @SvgText(F(cx), F(padT + plotH + 16), captions[i], anchor: "middle", fontSize: "10", fill: "#6b7280")
+                }
             }
         </svg>
     };

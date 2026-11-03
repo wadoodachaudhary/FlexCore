@@ -173,6 +173,8 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "ShowAllHeadersOnDrillDown", LowerBool(core.ShowAllHeadersOnDrillDown));
         Attr(writer, "ConvertDBNullToDefault", LowerBool(core.ConvertDatabaseNullToDefault));
         Attr(writer, "EnableSelectDistinctRecords", LowerBool(core.EnableSelectDistinctRecords));
+        if (core.FixedPrintDate is { } date)
+            Attr(writer, "FixedPrintDate", date.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
         Attr(writer, "EnableUseDummyData", "false");
         Attr(writer, "initialDataContext", "");
         Attr(writer, "initialReportPartName", "");
@@ -586,6 +588,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "Operation", SummaryOperationName(summary.Operation));
         Attr(writer, "OperationParameter", summary.OperationParameter);
         Attr(writer, "SummarizedField", summary.SummarizedField);
+        if (summary.WeightField.Length > 0) Attr(writer, "WeightField", summary.WeightField);
         Attr(writer, "ValueType", CrystalValueTypeMapper.XmlValueType(summary.ValueType));
         if (summary.AcrossHierarchy) Attr(writer, "HierarchicalSummaryType", "AcrossHierarchy");
         writer.WriteEndElement();
@@ -713,18 +716,14 @@ internal static class CrystalReportXmlWriter
             }
 
             writer.WriteEndElement();
-            writer.WriteStartElement("BackgroundColor");
-            Attr(writer, "Name", "ffffffff");
-            Attr(writer, "A", "0");
-            Attr(writer, "R", "255");
-            Attr(writer, "G", "255");
-            Attr(writer, "B", "255");
-            writer.WriteEndElement();
+            WriteColor(writer, "BackgroundColor", section.Format.BackgroundColor);
             writer.WriteEndElement();
             writer.WriteStartElement("ReportObjects");
             foreach (var reportObject in section.ReportObjects)
             {
-                WriteReportObject(writer, reportObject);
+                var endSection = (reportObject.Width == 0 || reportObject.Kind == "Box") && reportObject.LineEndSection >= 0
+                    ? reportDefinition.Areas.OrderBy(AreaOrder).SelectMany(a => a.Sections).ElementAtOrDefault(reportObject.LineEndSection) : null;
+                WriteReportObject(writer, reportObject, endSection == section ? null : endSection);
             }
 
             writer.WriteEndElement();
@@ -761,7 +760,7 @@ internal static class CrystalReportXmlWriter
         writer.WriteEndElement();
     }
 
-    private static void WriteReportObject(XmlWriter writer, CrystalReportObjectModel reportObject)
+    private static void WriteReportObject(XmlWriter writer, CrystalReportObjectModel reportObject, CrystalReportSectionModel? endSection)
     {
         writer.WriteStartElement(reportObject.ElementName);
         Attr(writer, "Name", reportObject.Name);
@@ -796,6 +795,8 @@ internal static class CrystalReportXmlWriter
         else if (reportObject.ElementName == "TextObject")
         {
             Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
+            Attr(writer, "SuppressIfDuplicate", LowerBool(reportObject.SuppressIfDuplicate));
+            Attr(writer, "SuppressEmbeddedFieldBlankLines", LowerBool(reportObject.SuppressEmbeddedFieldBlankLines));
         }
         else if (reportObject.ElementName == "FieldObject")
         {
@@ -803,9 +804,19 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
             Attr(writer, "SuppressIfDuplicate", LowerBool(reportObject.SuppressIfDuplicate));
         }
+        else if (reportObject.Kind == "Box" && endSection is not null)
+        {
+            Attr(writer, "LineEndSection", endSection.Name);
+            Attr(writer, "LineEndTop", reportObject.LineEndTop);
+        }
         else if (reportObject.ElementName == "LineObject" && reportObject.Border.LineWidth is { } thickness)
         {
             Attr(writer, "LineThickness", thickness);
+            if (endSection is not null)
+            {
+                Attr(writer, "LineEndSection", endSection.Name);
+                Attr(writer, "LineEndTop", reportObject.LineEndTop);
+            }
         }
         else if (reportObject.ElementName == "SubreportObject")
         {
@@ -1005,7 +1016,7 @@ internal static class CrystalReportXmlWriter
         return joinType switch
         {
             1 => "Equal",
-            2 => "LeftOuter",
+            2 or 64 => "LeftOuter",
             3 => "RightOuter",
             4 => "FullOuter",
             5 => "Cross",

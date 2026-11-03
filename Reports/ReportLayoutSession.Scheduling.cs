@@ -41,7 +41,7 @@ public sealed partial class ReportLayoutSession
     private bool NeedsPrintState(CrystalFormula formula) => formula.UsesPersistentVariables || formula.References.Any(NeedsPrintState);
 
     private static bool VisibilityProperty(string property) => property.ToLowerInvariant() is "enablesuppress" or "enablehidefordrilldown";
-    private static bool EndingProperty(string property) => property.ToLowerInvariant() is "enablenewpageafter" or "enableresetpagenumberafter";
+    private static bool EndingProperty(string property) => property.ToLowerInvariant() is "enablenewpageafter" or "enableresetpagenumberafter" or "backgroundcolor";
     private bool HasScheduledSection(string section) => HasScheduledCondition(_layout.AreaConditions, section) || HasScheduledCondition(_layout.SectionConditions, section);
     private bool HasScheduledCondition(Dictionary<string, Dictionary<string, CrystalFormula>> table, string section)
     {
@@ -324,6 +324,12 @@ public sealed partial class ReportLayoutSession
                         var bandKey = new PrintBandKey(owner, item.Element.SectionId, item.Row, occurrence);
                         var key = new PrintItemKey(bandKey, item.Element.Id);
                         if (printed.ContainsKey(key)) return;
+                        if (item.AccumulatorDelta.HasValue)
+                        {
+                            owner.ApplyAccumulator(item);
+                            printed.Add(key, item);
+                            return;
+                        }
                         // Cross-tab and table fragments are laid out from their analysis snapshot; they carry no formulas to replay.
                         if (owner._layout.Document.Elements.FirstOrDefault(e => e.Id == item.Element.Id) is not { } original) return;
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
@@ -491,7 +497,8 @@ public sealed partial class ReportLayoutSession
             var formula = _layout.Formulas[reference];
             // EvaluateAfter is a scheduling edge, even when it occurs after an assignment in the expression.
             foreach (var dependency in formula.EvaluateAfter) _ = Value(dependency, row);
-            result = formula.Evaluate(Context(row));
+            // A named formula with no expression supplies a null to its callers.
+            result = formula.IsEmpty ? null : formula.Evaluate(Context(row));
             if (values is not null) values[reference] = result;
             else if (!pageDependent) _bandFormulaCache[key] = result;
             return result;

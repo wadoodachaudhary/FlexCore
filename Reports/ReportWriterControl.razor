@@ -1679,13 +1679,12 @@ else
 
     private async Task ChromeOnPrint() => await Print();
 
-    // Print / Save as PDF stays the main Export action: the native PDF embeds Arial, Times and
-    // Courier only, so a report printed in any other family (Webdings, Tahoma, Calibri) cannot
-    // be written by it.
+    // The normal PDF action retains legacy font sizing; Designer sizing is an explicit export.
     private IList<SplitButtonItem> ExportItems =>
     [
         new("Print / Save as PDF", "bi bi-printer", "Print"),
         new("PDF report (.pdf)", "bi bi-filetype-pdf", "Pdf"),
+        new("PDF report (Designer fonts)", "bi bi-filetype-pdf", "PdfDesigner"),
         new("HTML report", "bi bi-filetype-html", "Html"),
         new("Excel data (.xlsx)", "bi bi-file-earmark-spreadsheet", "Xlsx", ActiveTab?.CreateDataExport is null),
         new("CSV data", "bi bi-filetype-csv", "Csv", ActiveTab?.CreateDataExport is null)
@@ -1723,8 +1722,11 @@ else
         try
         {
             if (ActiveTab is null) throw new InvalidOperationException("No report is loaded.");
-            if (!Enum.TryParse<ReportNativeExportFormat>(format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
-            var result = await ReportNativeExport.ExportAsync(ActiveTab, nativeFormat, string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath));
+            var pdfFontMode = format == "PdfDesigner" ? ReportPdfFontMode.Designer : ReportPdfFontMode.LegacyVb;
+            if (!Enum.TryParse<ReportNativeExportFormat>(format == "PdfDesigner" ? "Pdf" : format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
+            var fileName = string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath);
+            if (pdfFontMode == ReportPdfFontMode.Designer) fileName += " - Designer";
+            var result = await ReportNativeExport.ExportAsync(ActiveTab, nativeFormat, pdfFontMode, fileName);
             await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/browser-capabilities.js");
             if (module is null) throw new InvalidOperationException("Browser download is unavailable.");
             using var stream = new MemoryStream(result.Bytes, writable: false);

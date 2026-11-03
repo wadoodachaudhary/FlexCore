@@ -1,18 +1,18 @@
 @namespace Fx.ControlKit.Reports
 
 <table class="fx-report-table-fragment fx-pivot-table" data-region="@Fragment.RegionId" data-pane="@Fragment.Pane" data-row="@Fragment.Row" data-line="@Fragment.Line"
-    aria-label="@Title" style="@($"border-collapse:collapse;table-layout:fixed;width:{Px(Fragment.Columns.Sum(c => c.WidthTwips))}px;height:{Px(Fragment.HeightTwips)}px;font:inherit;line-height:1.4;margin:0;")">
+    aria-label="@Title" style="@($"border-collapse:collapse;table-layout:fixed;min-width:0;width:{Px(Fragment.Columns.Sum(c => c.WidthTwips))}px;height:{Px(Fragment.HeightTwips)}px;font:inherit;line-height:1.4;margin:0;")">
     <colgroup>
         @foreach (var column in Fragment.Columns) { <col style="@($"width:{ReportObjectRenderer.Number(column.WidthTwips * 100d / Fragment.Columns.Sum(c => c.WidthTwips))}%;")" /> }
     </colgroup>
     <tbody>
-        <tr style="@($"height:{Px(Math.Max(1, Fragment.HeightTwips - 30))}px;")">
+        <tr style="@($"height:{Px(Math.Max(1, Fragment.HeightTwips - (Fragment.NativeCrossTab is null ? 30 : 0)))}px;")">
             @if (Fragment.LayoutCells is { } layout)
             {
                 @foreach (var cell in layout)
                 {
                     <td colspan="@cell.ColumnSpan" data-cell-row="@cell.SourceRow" data-cell-column="@cell.SourceColumn"
-                        style="@(CellStyle + (cell.First ? "" : "border-top:0;") + (cell.Last ? "" : "border-bottom:0;") + (cell.Nested is null ? "" : "padding:0;"))">
+                        style="@(StyleFor(cell.Column) + (cell.First ? "" : "border-top:0;") + (cell.Last ? "" : "border-bottom:0;") + (cell.Nested is null ? "" : "padding:0;"))">
                         @if (cell.Nested is { } nested)
                         {
                             <ReportTableFragmentControl Fragment="@(nested with { RegionId = Fragment.RegionId + $"/r{cell.SourceRow}c{cell.SourceColumn}", HeightTwips = Math.Max(1, Fragment.HeightTwips - 30) })" Title="Title" />
@@ -28,9 +28,9 @@
                 var cell = index < Fragment.Cells.Count ? Fragment.Cells[index] : "";
                 @if (Fragment.IsHeader || Fragment.Columns[index].IsRowHeader)
                 {
-                    <th scope="@(Fragment.IsHeader ? "col" : "row")" style="@CellStyle">@cell</th>
+                    <th scope="@(Fragment.IsHeader ? "col" : "row")" style="@StyleFor(index)">@VisibleText(cell, index)</th>
                 }
-                else { <td style="@CellStyle">@cell</td> }
+                else { <td style="@StyleFor(index)">@VisibleText(cell, index)</td> }
             }
             }
         </tr>
@@ -40,6 +40,45 @@
 @code {
     [Parameter, EditorRequired] public ReportTableFragment Fragment { get; set; } = default!;
     [Parameter] public string Title { get; set; } = "";
+    private string VisibleText(string text, int index)
+    {
+        if (Fragment.NativeCrossTab is not { Templates.Count: > 0 } native || Fragment.IsHeader || !Fragment.Columns[index].IsRowHeader) return text;
+        var style = Fragment.CellStyles?.ElementAtOrDefault(index) ?? native.RowStyle;
+        return ReportNativeCrossTabText.Clip(text, style, (style?.ClipWidthTwips is > 0 ? style.ClipWidthTwips : Fragment.Columns[index].WidthTwips) - 2 * native.PaddingX);
+    }
+    private string StyleFor(int index)
+    {
+        if (Fragment.NativeCrossTab is not { } native) return CellStyle;
+        var rowHeader = Fragment.Columns[index].IsRowHeader;
+        var lineCount = native.StackFormats.Length > 0 && index < Fragment.Cells.Count ? Fragment.Cells[index].Replace("\r\n", "\n").Split('\n').Length : 1;
+        if (Fragment.Row == -2) lineCount = Math.Max(1, Fragment.LayoutCells?.FirstOrDefault(c => c.Column == index)?.Text.Split('\n').Length ?? 1);
+        var style = Fragment.CellStyles?.ElementAtOrDefault(index) ?? native.StyleFor(Fragment.IsHeader, rowHeader, Fragment.IsTotal, Fragment.Columns[index].IsGrandTotal);
+        var nativeLeading = native.Templates.Count > 0 && native.ParentHeaderHeight == 0 && style is not null
+            ? "vertical-align:top;line-height:" + ReportObjectRenderer.Number(ReportNativeCrossTabText.LineHeight(style)) + "pt;" : "";
+        return NativeCellStyle(index) + (style?.Css ?? $"font-weight:{(!Fragment.IsHeader && !rowHeader && native.ValueBold ? "bold" : "normal")};text-align:{(!Fragment.IsHeader && !rowHeader ? "right" : "left")};")
+            + (Fragment.IsHeader && rowHeader ? "background:transparent;" : "")
+            + $"line-height:{Px(Math.Max(1, (Fragment.HeightTwips - 2 * native.PaddingY) / lineCount - 15))}px;padding:{Px(native.PaddingY)}px {Px(native.PaddingX)}px;" + nativeLeading;
+    }
+    private string NativeCellStyle(int index)
+    {
+        if (Fragment.NativeCrossTab?.Appearance is not { } a) return CellStyle;
+        var rowHeader = Fragment.Columns[index].IsRowHeader;
+        var labelCount = Fragment.Columns.TakeWhile(column => column.IsRowHeader).Count();
+        var native = Fragment.NativeCrossTab;
+        var edges = a.Edges(Fragment.IsHeader, rowHeader, index == Fragment.Columns.Count - 1, Fragment.Row == 0,
+            Fragment.IsGrandTotalRow, Fragment.Columns[index].IsGrandTotal, native.RowTotalsBefore, native.ColumnTotalsBefore,
+            Fragment.IsLastRow, index == 0, index == labelCount - 1, index == labelCount);
+        string Border(string side, int line)
+        {
+            var stroke = line < 0 ? (-1d, "#000000") : a.Stroke(line);
+            var style = a.LineStyle(line) switch { "Double" => "double", "Dash" => "dashed", "Dot" => "dotted", _ => "solid" };
+            return $"border-{side}:" + (stroke.Item1 < 0 ? "0;" : $"{ReportObjectRenderer.Number(stroke.Item1 == 0 ? .25 : stroke.Item1)}pt {style} {stroke.Item2};");
+        }
+        return "box-sizing:border-box;border:0;white-space:pre;overflow:hidden;vertical-align:middle;"
+            + $"background:{a.Background(Fragment.IsHeader, rowHeader)};"
+            + (Fragment.IsTotal && rowHeader ? $"font-size:{ReportObjectRenderer.Number((double)a.RowTotalFontSize)}pt;" : Fragment.IsHeader && Fragment.Columns[index].IsGrandTotal ? $"font-size:{ReportObjectRenderer.Number((double)a.ColumnTotalFontSize)}pt;" : "")
+            + Border("top", edges.Top) + Border("left", edges.Left) + Border("right", edges.Right) + Border("bottom", edges.Bottom);
+    }
     private string CellStyle => "box-sizing:border-box;border:1px solid #cbd5cb;padding:2px 3px;white-space:pre;overflow:hidden;text-align:left;vertical-align:middle;"
         + (Fragment.IsHeader ? "background:#e8efed;font-weight:600;" : Fragment.IsTotal ? "background:#f1f4f3;font-weight:600;" : "background:white;font-weight:normal;");
     private static string Px(int twips) => ReportObjectRenderer.Number(twips / 15d);

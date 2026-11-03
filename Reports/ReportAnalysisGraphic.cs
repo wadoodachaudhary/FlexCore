@@ -7,6 +7,8 @@ namespace Fx.ControlKit.Reports;
 /// <summary>Chart series for <see cref="ReportAnalysisControl"/>: categories, series partitions and aggregated measure values.</summary>
 internal static class ReportAnalysisGraphic
 {
+    internal static readonly string[] CrystalBarPalette = ["#3a6598", "#efa252", "#009470", "#dd581f", "#a22d62", "#fece60"];
+
     internal static List<ChartSeries> Series(ReportAnalysisSnapshot snapshot)
     {
         var definition = snapshot.Definition;
@@ -16,10 +18,7 @@ internal static class ReportAnalysisGraphic
             var points = new List<ChartDataPoint>();
             foreach (var measure in definition.Measures)
             {
-                var table = new DataTable(); table.Columns.Add("value", typeof(object));
-                foreach (var row in snapshot.Rows) table.Rows.Add(Value(row, measure.Field) ?? DBNull.Value);
-                var formatted = ReportValueFormatting.Aggregate(table.Rows.Cast<DataRow>(),
-                    new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
+                var formatted = Aggregate(snapshot.Rows, measure);
                 var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
                 if (!decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
                 {
@@ -41,7 +40,8 @@ internal static class ReportAnalysisGraphic
             {
                 var points = snapshot.Rows.Select((row, index) =>
                 {
-                    var label = definition.CategoryField.Length == 0 ? (index + 1).ToString(CultureInfo.CurrentCulture) : Label(definition, definition.CategoryField, Value(row, definition.CategoryField));
+                    var label = definition.CategoryField.Length == 0 ? (index + 1).ToString(CultureInfo.CurrentCulture)
+                        : CategoryCaption(definition, Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), Value(row, definition.CategoryField));
                     var value = Value(row, measure.Field);
                     var valid = decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture), NumberStyles.Float, CultureInfo.InvariantCulture, out var number);
                     if (valid) ValidateChartValue(number, definition.ChartType);
@@ -49,15 +49,15 @@ internal static class ReportAnalysisGraphic
                 }).ToList();
                 series.Add(new(measure.Caption.Length == 0 ? measure.Field : measure.Caption, definition.ChartType, points));
             }
-            return series;
+            return CoordinateSeries(definition, series);
         }
-        var categories = snapshot.Rows.Select(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField))).Distinct(StringComparer.Ordinal).ToArray();
+        var categoryValues = snapshot.Rows.GroupBy(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => Value(group.First(), definition.CategoryField), StringComparer.Ordinal);
+        var categories = categoryValues.Keys.ToArray();
         var descending = definition.DescendingFields.Contains(definition.CategoryField, StringComparer.OrdinalIgnoreCase);
         if (definition.SortCategories || descending)
         {
-            var values = snapshot.Rows.GroupBy(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal)
-                .ToDictionary(group => group.Key, group => Value(group.First(), definition.CategoryField));
-            Array.Sort(categories, (a, b) => descending ? CompareCategory(values[b], values[a]) : CompareCategory(values[a], values[b]));
+            Array.Sort(categories, (a, b) => descending ? CompareCategory(categoryValues[b], categoryValues[a]) : CompareCategory(categoryValues[a], categoryValues[b]));
         }
         if (categories.Length > 5000) throw new InvalidDataException("Chart exceeds 5,000 categories.");
         IEnumerable<IGrouping<string, Dictionary<string, object>>> partitions = snapshot.Rows.GroupBy(row => Label(definition, definition.SeriesField, Value(row, definition.SeriesField)));
@@ -72,27 +72,75 @@ internal static class ReportAnalysisGraphic
         foreach (var partition in partitions)
         foreach (var measure in definition.Measures)
         {
-            var table = new DataTable(); table.Columns.Add("value", typeof(object));
             var points = new List<ChartDataPoint>();
             var categoryRows = partition.ToLookup(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal);
             foreach (var category in categories)
             {
-                table.Clear();
-                foreach (var row in categoryRows[category]) table.Rows.Add(Value(row, measure.Field) ?? DBNull.Value);
-                var formatted = ReportValueFormatting.Aggregate(table.Rows.Cast<DataRow>(),
-                    new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
+                var formatted = Aggregate(categoryRows[category], measure);
                 if (decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
                 {
                     ValidateChartValue(number, definition.ChartType);
-                    points.Add(new(category, (double)number));
+                    points.Add(new(CategoryCaption(definition, category, categoryValues[category]), (double)number));
                 }
-                else if (definition.ChartType is not (ChartType.Pie or ChartType.Donut)) points.Add(new(category, 0) { IsEmpty = true });
+                else if (definition.ChartType is not (ChartType.Pie or ChartType.Donut))
+                    points.Add(new(CategoryCaption(definition, category, categoryValues[category]), 0) { IsEmpty = true });
             }
             var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
-            series.Add(new(partition.Key.Length == 0 ? caption : partition.Key + " / " + caption, definition.ChartType, points));
+            if (definition.ChartType is ChartType.Gauge or ChartType.Line or ChartType.Area && string.IsNullOrWhiteSpace(measure.Caption))
+            {
+                var field = measure.Field.Trim('{', '}').Split('.').Last();
+                caption = (measure.Aggregate == ReportAggregateType.Average ? "Avg" : measure.Aggregate.ToString()) + " of " + field;
+            }
+            series.Add(new(partition.Key.Length == 0 ? caption : definition.Measures.Count == 1 ? partition.Key : partition.Key + " / " + caption, definition.ChartType, points));
             if (series.Count > 64) throw new InvalidDataException("Chart exceeds 64 series.");
         }
-        return series;
+        return CoordinateSeries(definition, series);
+    }
+
+    private static string Aggregate(IEnumerable<Dictionary<string, object>> rows, ReportAnalysisMeasure measure)
+    {
+        if (measure.DoNotSummarize)
+        {
+            decimal? value = null;
+            foreach (var row in rows)
+            {
+                var candidate = Value(row, measure.Field);
+                if (candidate is null or DBNull) continue;
+                if (!decimal.TryParse(Convert.ToString(candidate, CultureInfo.CurrentCulture),
+                    NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
+                    throw new InvalidDataException("An unsummarized chart formula must supply a numeric value.");
+                if (value is not null && value != number)
+                    throw new InvalidDataException("An unsummarized chart formula must be constant within each category.");
+                value = number;
+            }
+            return value?.ToString("G29", CultureInfo.CurrentCulture) ?? "";
+        }
+        var table = new DataTable(); table.Columns.Add("value", typeof(object));
+        foreach (var row in rows) table.Rows.Add(Value(row, measure.Field) ?? DBNull.Value);
+        return ReportValueFormatting.Aggregate(table.Rows.Cast<DataRow>(),
+            new() { Field = "value", AggregateType = measure.Aggregate, Format = "G29" });
+    }
+
+    private static List<ChartSeries> CoordinateSeries(ReportAnalysisDefinition definition, List<ChartSeries> series)
+    {
+        if (definition.ChartType is not (ChartType.Scatter or ChartType.Bubble)) return series;
+        var result = new List<ChartSeries>();
+        foreach (var measures in series.Chunk(definition.Measures.Count))
+        {
+            for (var i = 0; i < measures[0].DataPoints.Count; i++)
+            {
+                if (measures.Any(measure => measure.DataPoints[i].IsEmpty)) continue;
+                var x = measures[0].DataPoints[i];
+                var name = x.Label;
+                if (decimal.TryParse(name, NumberStyles.Number, CultureInfo.CurrentCulture, out var category))
+                    name = category.ToString("F2", CultureInfo.CurrentCulture);
+                if (definition.SeriesField.Length > 0) name = measures[0].Name + " / " + name;
+                var point = new ChartDataPoint(x.Value.ToString("R", CultureInfo.InvariantCulture), measures[1].DataPoints[i].Value)
+                    { Value2 = measures.Length == 3 ? measures[2].DataPoints[i].Value : null };
+                result.Add(new(name, definition.ChartType, [point]));
+            }
+        }
+        return result;
     }
 
     private static void ValidateChartValue(decimal value, ChartType type)
@@ -116,9 +164,14 @@ internal static class ReportAnalysisGraphic
     }
 
     private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
-    private static string Label(object? value) => value is null or DBNull ? "" : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
+    private static string Label(object? value) => value is DateTime date ? date.ToString("d", CultureInfo.CurrentCulture)
+        : value is null or DBNull ? "" : Convert.ToString(value, CultureInfo.CurrentCulture) ?? "";
     /// <summary>An axis grouped by a Crystal date period (GroupKinds 1-7) holds period starts, labelled as short dates.</summary>
     private static string Label(ReportAnalysisDefinition definition, string field, object? value) =>
         value is DateTime date && definition.GroupKinds.TryGetValue(field, out var kind) && kind is >= 1 and <= 7
-            ? date.ToString("d", CultureInfo.CurrentCulture) : Label(value);
+            ? date.ToString(kind == 4 ? "M/yyyy" : "d", CultureInfo.CurrentCulture) : Label(value);
+    // Caption formatting must never merge distinct category keys or change their aggregate values.
+    private static string CategoryCaption(ReportAnalysisDefinition definition, string key, object? value) =>
+        definition.CategoryFormat is { Length: > 0 } format && value is IFormattable formatted
+            ? formatted.ToString(format, CultureInfo.CurrentCulture) ?? "" : key;
 }

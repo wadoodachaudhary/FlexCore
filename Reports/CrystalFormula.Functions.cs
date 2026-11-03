@@ -9,12 +9,12 @@ public sealed partial class CrystalFormula
     private static readonly HashSet<string> AggregateNames = new("sum average avg count distinctcount minimum maximum".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> StringFunctions = new(("totext cstr left right mid trim ltrim rtrim trimleft trimright uppercase lowercase ucase lcase replace chr chrw space replicate replicatestring " +
         "propercase strreverse join monthname weekdayname barcodec39 barcodec39ascii groupname picture towords").Split(' '), StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> BooleanFunctions = new(("isnull hasvalue isnumber isnumeric isdate isdatetime istime onfirstrecord onlastrecord cbool previousisnull nextisnull " +
+    private static readonly HashSet<string> BooleanFunctions = new(("isnull hasvalue isnumber isnumeric numerictext isdate isdatetime istime onfirstrecord onlastrecord cbool previousisnull nextisnull " +
         "haslowerbound hasupperbound includeslowerbound includesupperbound").Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> NumberFunctions = new(("len length instr instrrev asc ascw val tonumber cdbl ccur cint round roundup truncate int fix abs sgn ceiling floor remainder mod " +
         "year month day hour minute second dayofweek weekday datediff datepart count distinctcount ubound sqr exp log pi rnd atn sin cos tan rgb color groupinglevel counthierarchicalchildren").Split(' '), StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Functions = new(("sum average avg count distinctcount minimum maximum iif switch choose isnull hasvalue previous next onfirstrecord onlastrecord " +
-        "totext cstr tonumber cdbl ccur cint cbool val isnumber isnumeric todate cdate date datetime cdatetime datetimevalue datevalue time timevalue ctime dateserial timeserial " +
+    private static readonly HashSet<string> Functions = new(("weightedaverage sum average avg count distinctcount minimum maximum iif switch choose isnull hasvalue previous next onfirstrecord onlastrecord " +
+        "totext cstr tonumber cdbl ccur cint cbool val isnumber isnumeric numerictext todate cdate date datetime cdatetime datetimevalue datevalue time timevalue ctime dateserial timeserial " +
         "dateadd datediff datepart year month day hour minute second dayofweek weekday monthname weekdayname isdate isdatetime istime " +
         "haslowerbound hasupperbound includeslowerbound includesupperbound getlowerbound getupperbound " +
         "left right mid len length trim ltrim rtrim trimleft trimright uppercase lowercase ucase lcase propercase replace instr instrrev strreverse chr chrw asc ascw space replicate replicatestring picture towords " +
@@ -23,7 +23,7 @@ public sealed partial class CrystalFormula
         "previousvalue nextvalue previousisnull nextisnull").Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> ZeroArgumentFunctions = new("pi rnd".Split(' '), StringComparer.OrdinalIgnoreCase);
     private static readonly HashSet<string> Constants = new(("true false yes no null currentdate currentdatetime currenttime today now timer printdate printtime datadate datatime " +
-        "pagenumber totalpagecount pagenofm recordnumber onfirstrecord onlastrecord drilldowngrouplevel inrepeatedgroupheader currentfieldvalue groupnumber " +
+        "pagenumber totalpagecount pagenofm recordnumber onfirstrecord onlastrecord drilldowngrouplevel inrepeatedgroupheader currentfieldvalue defaultattribute groupnumber " +
         "filename fileauthor filecreationdate modificationdate modificationtime reporttitle reportcomments recordselection groupselection " +
         "crnoline crsingleline crdoubleline crdashedline crdottedline crdefaulthoraligned crleftaligned crcenteredhorizontally crrightaligned crjustified " +
         "whileprintingrecords whilereadingrecords beforereadingrecords defaultvaluesfornulls exceptionsfornulls " +
@@ -33,12 +33,13 @@ public sealed partial class CrystalFormula
         "weektodatefromsun monthtodate yeartodate last7days last4weekstosun lastfullweek lastfullmonth alldatestotoday alldatestoyesterday alldatesfromtoday " +
         "alldatesfromtomorrow aged0to30days aged31to60days aged61to90days over90days next30days next31to60days next61to90days next91to365days " +
         "calendar1stqtr calendar2ndqtr calendar3rdqtr calendar4thqtr calendar1sthalf calendar2ndhalf lastyearmtd lastyearytd").Split(' '), StringComparer.OrdinalIgnoreCase);
-    private static bool KnownSymbol(string name) => Constants.Contains(name) || ZeroArgumentFunctions.Contains(name);
+    private static bool KnownSymbol(string name) => Constants.Contains(name) || ZeroArgumentFunctions.Contains(name) || GridSymbols.Contains(name);
     private static bool IsAggregate(Call call) => AggregateNames.Contains(call.Name) && call.Args.Length >= 1 && call.Args[0] is Reference reference && !reference.Name.StartsWith("{?", StringComparison.Ordinal);
     private static object? FunctionDefault(string name) => StringFunctions.Contains(name) ? "" : BooleanFunctions.Contains(name) ? false : NumberFunctions.Contains(name) ? 0m : null;
 
     private static object? SymbolValue(Frame f, string name) => name.ToLowerInvariant() switch
     {
+        var grid when GridSymbols.Contains(grid) => GridSymbol(f, grid),
         "true" or "yes" => true, "false" or "no" => false, "null" => null,
         "currentdate" or "today" or "printdate" or "datadate" => f.Context.Now.Date, "currentdatetime" or "now" => f.Context.Now,
         "currenttime" or "printtime" or "datatime" => f.Context.Now.TimeOfDay, "timer" => (decimal)f.Context.Now.TimeOfDay.TotalSeconds,
@@ -52,6 +53,7 @@ public sealed partial class CrystalFormula
         "onlastrecord" => f.Context.RecordIndex == f.Context.RecordCount - 1,
         "drilldowngrouplevel" => f.Context.DrillDownGroupLevel, "inrepeatedgroupheader" => f.Context.InRepeatedGroupHeader,
         "currentfieldvalue" => f.Context.CurrentFieldValue(), "groupnumber" => f.Context.GroupNumber(),
+        "defaultattribute" => f.Context.DefaultAttribute(),
         "whileprintingrecords" or "whilereadingrecords" or "beforereadingrecords" => null,
         "defaultvaluesfornulls" => f.DefaultNulls = true, "exceptionsfornulls" => f.DefaultNulls = false,
         "crred" or "red" => 255m, "crgreen" or "green" => 32768m, "crblue" or "blue" => 16711680m, "crblack" or "black" => 0m, "crwhite" or "white" => 16777215m,
@@ -106,6 +108,7 @@ public sealed partial class CrystalFormula
         int Int(int i) => checked((int)Number(Arg(i)));
         string Str(int i) => Text(Arg(i));
         bool Has(int i) => i < args.Length;
+        if (GridFunctions.Contains(name)) return InvokeGrid(f, name, Enumerable.Range(0, args.Length).Select(Arg).ToArray());
         if (name == "iif") { var test = Boolean(Arg(0)); var yes = Arg(1); var no = Arg(2); return test ? yes : no; }
         if (name == "switch")
         {
@@ -141,13 +144,21 @@ public sealed partial class CrystalFormula
             if (args.Length != 1 || args[0] is not Reference field) throw new NotSupportedException("GroupingLevel requires a field reference.");
             return (decimal)f.Context.GroupingLevel(field.Name);
         }
+        if (name == "weightedaverage")
+        {
+            if (args.Length is not (2 or 3) || args.Any(arg => arg is not Reference))
+                throw new InvalidDataException("WeightedAverage requires value and weight fields, and an optional group field.");
+            if (f.Context.WeightedAverage is not { } average)
+                throw new NotSupportedException("WeightedAverage requires a report summary context.");
+            return average(((Reference)args[0]).Name, ((Reference)args[1]).Name, args.Length == 3 ? ((Reference)args[2]).Name : "");
+        }
         // GroupName ({field}) or GroupName ({field}, "weekly"): the condition picks the group among those on the same field.
         if (name == "groupname")
         {
             if (args.Length is < 1 or > 2) throw new InvalidDataException("GroupName requires a field and an optional group condition.");
             var condition = args.Length == 2 ? Str(1) : null;
             if (f.Context.GroupName is { } groupName)
-                return args[0] is Reference group ? Text(HostValue(groupName(group.Name, condition))) : throw new NotSupportedException("GroupName requires a field reference.");
+                return args[0] is Reference group ? HostValue(groupName(group.Name, condition)) is { } nameValue ? Text(nameValue) : null : throw new NotSupportedException("GroupName requires a field reference.");
             return condition is null ? Text(Arg(0))
                 : throw new NotSupportedException($"GroupName with the group condition \"{condition}\" requires the report's groups, which this context does not provide.");
         }
@@ -160,7 +171,7 @@ public sealed partial class CrystalFormula
                 "totext" or "cstr" => ToText(Arg(0), args.Skip(1).Select(n => f.NonNull(n.Get(f))).ToArray(), Arg(0) is DateTime ? KindOf(f, args[0]) : DateKind.Unknown),
                 "tonumber" or "cdbl" or "ccur" => Number(Arg(0)), "cint" => decimal.Round(Number(Arg(0)), 0, MidpointRounding.AwayFromZero), "cbool" => Boolean(Arg(0)),
                 "val" => decimal.TryParse(Regex.Match(Str(0).TrimStart(), @"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)).Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var val) ? val : 0m,
-                "isnumber" or "isnumeric" => decimal.TryParse(Str(0), NumberStyles.Number, CultureInfo.CurrentCulture, out _),
+                "isnumber" or "isnumeric" or "numerictext" => decimal.TryParse(Str(0), NumberStyles.Number, CultureInfo.CurrentCulture, out _),
                 "isdate" or "isdatetime" => Arg(0) is DateTime || DateTime.TryParse(Str(0), CultureInfo.CurrentCulture, DateTimeStyles.None, out _),
                 "istime" => Arg(0) is TimeSpan or DateTime || DateTime.TryParse(Str(0), CultureInfo.CurrentCulture, DateTimeStyles.None, out _) || TimeSpan.TryParse(Str(0), CultureInfo.CurrentCulture, out _),
                 "date" or "datevalue" => args.Length switch { 1 => Date(Arg(0)).Date, 3 => CalendarDate(Int(0), Int(1), Int(2)), _ => throw new InvalidDataException($"{call.Name} requires 1 or 3 arguments.") },
@@ -625,7 +636,15 @@ public sealed partial class CrystalFormula
         if (value is TimeSpan time)
             return args.Length > 0 && args[0] is string timeFormat ? DateTime.MinValue.Add(time).ToString(timeFormat, CultureInfo.CurrentCulture) : DateTime.MinValue.Add(time).ToLongTimeString();
         if (args.Length > 0 && args[0] is string format)
-            return value is IFormattable formattable ? formattable.ToString(format, CultureInfo.CurrentCulture) : Text(value);
+        {
+            // Crystal reserves a space for each unused leading # in fixed decimal masks.
+            var dot = format.IndexOf('.');
+            if (value is IFormattable numeric && value is not DateTime && dot > 0 && dot < format.Length - 1
+                && format.Take(dot).All(c => c == '#') && format.Skip(dot + 1).All(c => c == '0'))
+                return numeric.ToString(format, CultureInfo.CurrentCulture).PadLeft(format.Length);
+            return value is decimal zero && zero == 0 && format.Length > 0 && format.All(ch => ch == '#') ? "0"
+                : value is IFormattable formattable ? formattable.ToString(format, CultureInfo.CurrentCulture) : Text(value);
+        }
         if (value is DateTime date)
             return kind == DateKind.Date || kind != DateKind.DateTime && date.TimeOfDay == TimeSpan.Zero ? date.ToShortDateString() : date.ToShortDateString() + " " + date.ToLongTimeString();
         if (value is null) return "";

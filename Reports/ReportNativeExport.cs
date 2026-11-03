@@ -11,6 +11,13 @@ namespace Fx.ControlKit.Reports;
 
 public enum ReportNativeExportFormat { Html, Csv, Xlsx, Pdf }
 
+/// <summary>Native PDF font realization. Neither mode changes completed report pagination.</summary>
+public enum ReportPdfFontMode
+{
+    LegacyVb = 0,
+    Designer = 1
+}
+
 /// <summary>Native report-page PDF/HTML and typed data exports. Never invokes a browser printer or Crystal engine.</summary>
 public static class ReportNativeExport
 {
@@ -22,10 +29,13 @@ public static class ReportNativeExport
         return reader.ReadToEnd();
     })));
 
-    public static async Task<GridExportResult> ExportAsync(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
+    public static Task<GridExportResult> ExportAsync(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
+        => ExportAsync(tab, format, ReportPdfFontMode.LegacyVb, fileName);
+
+    public static async Task<GridExportResult> ExportAsync(ReportTab tab, ReportNativeExportFormat format, ReportPdfFontMode pdfFontMode, string? fileName = null)
     {
         RequireComplete(tab);
-        if (format != ReportNativeExportFormat.Html || tab.PageSnapshots.Count == 0) return Export(tab, format, fileName);
+        if (format != ReportNativeExportFormat.Html || tab.PageSnapshots.Count == 0) return Export(tab, format, pdfFontMode, fileName);
         var pages = await RenderPagesAsync(tab.PageSnapshots);
         return Export(new ReportTab { Title = tab.Title, Pages = pages, PositionedPage = tab.PositionedPage, Orientation = tab.Orientation }, format, fileName);
     }
@@ -47,6 +57,9 @@ public static class ReportNativeExport
     }
 
     public static GridExportResult Export(ReportTab tab, ReportNativeExportFormat format, string? fileName = null)
+        => Export(tab, format, ReportPdfFontMode.LegacyVb, fileName);
+
+    public static GridExportResult Export(ReportTab tab, ReportNativeExportFormat format, ReportPdfFontMode pdfFontMode, string? fileName = null)
     {
         RequireComplete(tab);
         if (format == ReportNativeExportFormat.Html && tab.PageSnapshots.Any(page => page.Bands.Any(band => band.Objects.Any(item => item.Analysis is not null || item.Table is not null))))
@@ -55,7 +68,7 @@ public static class ReportNativeExport
         name = string.Concat(name.Select(c => char.IsLetterOrDigit(c) || c is '-' or '_' or ' ' ? c : '_')).Trim();
         if (name.Length == 0) name = "Report";
         if (format == ReportNativeExportFormat.Pdf)
-            return new(ReportPdfExport.Export(tab), name + ".pdf", "application/pdf");
+            return new(ReportPdfExport.Export(tab, pdfFontMode), name + ".pdf", "application/pdf");
         if (format == ReportNativeExportFormat.Html)
         {
             if (tab.Pages.Count == 0) throw new InvalidOperationException("There are no rendered report pages to export.");

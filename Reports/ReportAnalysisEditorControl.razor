@@ -33,13 +33,18 @@
         }
         else if (Element.Kind == "Chart")
         {
-            <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.StackedBar, ChartType.StackedBar100, ChartType.Line, ChartType.Pie, ChartType.Donut })"
+            <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.StackedBar, ChartType.StackedBar100, ChartType.Line, ChartType.Area, ChartType.Pie, ChartType.Donut, ChartType.Radar, ChartType.Funnel, ChartType.Gauge, ChartType.Scatter, ChartType.Bubble })"
                 @bind-Value="analysis.ChartType" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Chart type" /></label>
             <label>Category<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                 @bind-Value="analysis.CategoryField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Category field" /></label>
+            <label>Category format<TextBoxControl @bind-Value="analysis.CategoryFormat" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
             <label>Series<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                 @bind-Value="analysis.SeriesField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Series field" /></label>
             <CheckBoxControl Label="Legend" @bind-Checked="analysis.ShowLegend" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
+            <CheckBoxControl Label="Category legend" @bind-Checked="analysis.ChartCategoryLegend" @bind-Checked:after="ChangedAsync"
+                Disabled="@(ReadOnly || analysis.ChartThreeDimensional || !PrintedCategoryBarChart.Supports(analysis.ChartType))" />
+            <CheckBoxControl Label="3D bars" @bind-Checked="analysis.ChartThreeDimensional" @bind-Checked:after="ChangedAsync"
+                Disabled="@(ReadOnly || !PrintedBarChart3D.Supports(analysis.ChartType))" />
             <CheckBoxControl Label="One point per record" @bind-Checked="analysis.EachRecord" @bind-Checked:after="ChangedAsync" Disabled="ReadOnly" />
             <CheckBoxControl Label="Sort categories" @bind-Checked="analysis.SortCategories" @bind-Checked:after="ChangedAsync" Disabled="@(ReadOnly || analysis.EachRecord)" />
             <CheckBoxControl Label="Descending categories" Checked="@analysis.DescendingFields.Contains(analysis.CategoryField)" CheckedChanged="value => SetDescendingAsync(analysis.CategoryField, value)" Disabled="@(ReadOnly || analysis.EachRecord)" />
@@ -60,7 +65,12 @@
                 <label>Field<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                     @bind-Value="measure.Field" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Measure field" /></label>
                 <label>Aggregate<DropDownListControl TValue="ReportAggregateType" TItem="ReportAggregateType" DataSource="Operations"
-                    @bind-Value="measure.Aggregate" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Aggregate" /></label>
+                    @bind-Value="measure.Aggregate" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly && !measure.DoNotSummarize)" AriaLabel="Aggregate" /></label>
+                @if (Element.Kind == "Chart")
+                {
+                    <CheckBoxControl Label="Don't summarize" @bind-Checked="measure.DoNotSummarize" @bind-Checked:after="ChangedAsync"
+                        Disabled="@(ReadOnly || analysis.EachRecord)" />
+                }
                 <label>Caption<TextBoxControl @bind-Value="measure.Caption" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
                 <label>Format<TextBoxControl @bind-Value="measure.Format" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
                 <ButtonControl IconCss="bi bi-trash" Title="Remove measure" OnClick="async () => { analysis.Measures.RemoveAt(index); await ChangedAsync(); }" Disabled="ReadOnly" />
@@ -94,7 +104,18 @@
     private IEnumerable<Choice> FieldChoices => Fields.Select(item => new Choice(item.Reference, item.DisplayName)).Prepend(new("", "(None)"));
     private IEnumerable<Choice> ScopeChoices => Groups.Select(group => new Choice(group.Condition, group.Name)).Prepend(new("", "Report"));
     private static readonly ReportAggregateType[] Operations = [ReportAggregateType.Sum, ReportAggregateType.Count, ReportAggregateType.Average, ReportAggregateType.Min, ReportAggregateType.Max, ReportAggregateType.DistinctCount, ReportAggregateType.Median];
-    private Task ChangedAsync() => Changed.InvokeAsync();
+    private Task ChangedAsync()
+    {
+        if (Element.Analysis is { ChartThreeDimensional: true } analysis
+            && (Element.Kind != "Chart" || !PrintedBarChart3D.Supports(analysis.ChartType)))
+            analysis.ChartThreeDimensional = false;
+        if (Element.Analysis is { ChartCategoryLegend: true } categories
+            && (Element.Kind != "Chart" || categories.ChartThreeDimensional || !PrintedCategoryBarChart.Supports(categories.ChartType)))
+            categories.ChartCategoryLegend = false;
+        if (Element.Analysis is { } values && (Element.Kind != "Chart" || values.EachRecord))
+            foreach (var measure in values.Measures) measure.DoNotSummarize = false;
+        return Changed.InvokeAsync();
+    }
     private async Task SetDescendingAsync(string field, bool descending)
     {
         if (ReadOnly || Element.Analysis is not { } analysis || field.Length == 0) return;

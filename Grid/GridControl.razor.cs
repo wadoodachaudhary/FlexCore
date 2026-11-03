@@ -16421,6 +16421,37 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await SelectAndRevealRowCoreAsync(rows[rowIndex], rowIndex, clearExistingSelection);
     }
 
+    /// <summary>
+    /// True when the last scroll sync put <paramref name="displayRowIndex"/> wholly
+    /// on screen and the current row window covers every visible row, so a reveal
+    /// can leave the window where it is.
+    /// </summary>
+    /// <remarks>
+    /// The rows sit below the sticky header inside the scrollport, so the rows on
+    /// screen span scrollTop to scrollTop + clientHeight - header. The browser's reveal
+    /// (<c>scrollSelectedGridRowToTop</c>, only if needed) leaves a row in place only
+    /// when it lies wholly between the header and the bottom edge; any other row is
+    /// scrolled to the top, and a kept window would end above the new screen.
+    /// </remarks>
+    private bool RowWindowCoversVisibleRow(int displayRowIndex, int rowCount, int maxStart)
+    {
+        if (_lastWindowClientHeight <= 0 || _winStart < 0 || _winStart > maxStart)
+            return false;
+
+        const double edge = 0.5;   // the browser's edge tolerance
+        var rowH = _rowHeightPx <= 0 ? 16 : _rowHeightPx;
+        var rowsTop = _lastWindowScrollTop;
+        var rowsBottom = _lastWindowScrollTop + Math.Max(0, _lastWindowClientHeight - Math.Max(0, _measuredHeaderPx));
+        var firstWhole = Math.Max(0, (int)Math.Ceiling((rowsTop - edge) / rowH));
+        var lastWholeExclusive = Math.Min(rowCount, (int)Math.Floor((rowsBottom + edge) / rowH));
+        var firstVisible = Math.Max(0, (int)Math.Floor(rowsTop / rowH));
+        var lastVisibleExclusive = Math.Min(rowCount, (int)Math.Ceiling(rowsBottom / rowH));
+        return displayRowIndex >= firstWhole
+            && displayRowIndex < lastWholeExclusive
+            && _winStart <= firstVisible
+            && _winStart + _winCount >= lastVisibleExclusive;
+    }
+
     private async Task SelectAndRevealRowCoreAsync(
         TValue item,
         int displayRowIndex,
@@ -16442,8 +16473,13 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
             // Include the target plus the normal lead-in buffer before moving
             // the scrollbar. Otherwise a far-away selected row has no DOM row
-            // for the scroll reader to retain on its next render pass.
-            _winStart = Math.Clamp(displayRowIndex - EffectiveWindowOverscanRows, 0, maxStart);
+            // for the scroll reader to retain on its next render pass. A row
+            // already on screen keeps the window: the browser does not scroll
+            // then, and a window started at the row less the overscan would
+            // leave the screen's upper rows unrendered when more rows than the
+            // overscan are visible above it.
+            if (!RowWindowCoversVisibleRow(displayRowIndex, rows.Count, maxStart))
+                _winStart = Math.Clamp(displayRowIndex - EffectiveWindowOverscanRows, 0, maxStart);
             _lastWindowListSignature = ComputeWindowListSignature(rows);
             ClearPreserveRowWindowOnNextListChange();
             _pendingWindowScrollReset = false;

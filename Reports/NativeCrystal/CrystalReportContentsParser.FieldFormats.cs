@@ -3,7 +3,7 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 internal static partial class CrystalReportContentsParser
 {
     // FieldProperties follows the font. Preserve authored formats, including their original archive.
-    private static void ReadNativeFieldFormats(TslvArchiveReader reader, CrystalReportObjectModel reportObject)
+    private static void ReadNativeFieldFormats(TslvArchiveReader reader, CrystalReportObjectModel reportObject, int endType = 160)
     {
         var start = -1;
         var end = -1;
@@ -103,7 +103,7 @@ internal static partial class CrystalReportContentsParser
             }
             reader.SkipRestOfRecord();
             if (record.Type == 235) end = reader.Position;
-            if (record.Type == 160) break;
+            if (record.Type == endType) break;
         }
         reportObject.SuppressIfDuplicate = suppressDuplicates;
         for (var i = 0; i < reportObject.NativeNumericCandidates.Count; i++)

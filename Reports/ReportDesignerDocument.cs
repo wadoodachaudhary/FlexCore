@@ -422,6 +422,8 @@ public sealed class ReportDesignerElement
     public string SourceKey { get; set; } = "";
     public string SectionId { get; set; } = "";
     public string Name { get; set; } = "Object";
+    public string LineEndSection { get; set; } = "";
+    public int LineEndTop { get; set; }
     public string Kind { get; set; } = "Text";
     public string Text { get; set; } = "";
     public string Binding { get; set; } = "";
@@ -447,6 +449,8 @@ public sealed class ReportDesignerElement
     public int MaxNumberOfLines { get; set; }
     /// <summary>Hide consecutive equal field values in printed sections, preserving their space and underlying data.</summary>
     public bool SuppressIfDuplicate { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool SuppressEmbeddedFieldBlankLines { get; set; }
     public string FormatString { get; set; } = "";
     public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
     public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
@@ -479,6 +483,7 @@ public sealed class ReportDesignerElement
         return new ReportDesignerElement(Visual.Clone(), HighlightRule.Clone())
         {
             SourceKey = SourceKey,
+            LineEndSection = LineEndSection, LineEndTop = LineEndTop,
             SectionId = sectionId,
             Name = name,
             Kind = Kind,
@@ -503,6 +508,7 @@ public sealed class ReportDesignerElement
             CanGrow = CanGrow,
             MaxNumberOfLines = MaxNumberOfLines,
             SuppressIfDuplicate = SuppressIfDuplicate,
+            SuppressEmbeddedFieldBlankLines = SuppressEmbeddedFieldBlankLines,
             FormatString = FormatString,
             NativeDateTimeFormat = NativeDateTimeFormat,
             NativeNumberFormat = NativeNumberFormat,
@@ -901,6 +907,8 @@ public static partial class ReportDesignerXmlSerializer
             objectElement.SetAttributeValue("MaxNumberOfLines", element.MaxNumberOfLines);
         if (objectElement.Name.LocalName == "FieldObject")
             objectElement.SetAttributeValue("SuppressIfDuplicate", element.SuppressIfDuplicate);
+        if (objectElement.Name.LocalName is "TextObject" or "FieldHeadingObject")
+            objectElement.SetAttributeValue("SuppressEmbeddedFieldBlankLines", element.SuppressEmbeddedFieldBlankLines);
 
         var kind = element.Kind.Trim();
         if (string.Equals(kind, "Text", StringComparison.OrdinalIgnoreCase))
@@ -1136,6 +1144,8 @@ public static partial class ReportDesignerXmlSerializer
                 LeftTwips = ParseInt(Attribute(objectElement, "Left")),
                 TopTwips = ParseInt(Attribute(objectElement, "Top")),
                 WidthTwips = ParseInt(Attribute(objectElement, "Width"), 1440),
+                LineEndSection = Attribute(objectElement, "LineEndSection") ?? "",
+                LineEndTop = ParseInt(Attribute(objectElement, "LineEndTop")),
                 HeightTwips = ParseInt(Attribute(objectElement, "Height"), 240),
                 FontFamily = Attribute(font, "FontFamily") ?? Attribute(font, "Name") ?? "Arial",
                 FontSize = ParseDecimal(Attribute(font, "SizeinPoints") ?? Attribute(font, "Size"), 10m),
@@ -1149,6 +1159,7 @@ public static partial class ReportDesignerXmlSerializer
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
                 MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
                 SuppressIfDuplicate = ParseBool(Attribute(objectElement, "SuppressIfDuplicate")),
+                SuppressEmbeddedFieldBlankLines = ParseBool(Attribute(objectElement, "SuppressEmbeddedFieldBlankLines")),
                 FormatString = Attribute(objectFormat, "FlexKitFormatString") ?? "",
                 NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(objectElement),
                 NativeNumberFormat = ReportNativeNumberFormat.Read(objectElement),

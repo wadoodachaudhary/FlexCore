@@ -13,7 +13,6 @@ public sealed record ReportNativeNumericFormat(
     string NativeArchive = "", int ValueType = 6)
 {
     internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric formatting is not implemented"
-        : SystemDefaultFormatting && (ValueType == 7 || CurrencySymbolType != 0) ? "system-default currency formatting is not implemented"
         : AccountingFormat ? "accounting numeric layout is not implemented"
         : OneCurrencySymbolPerPage && CurrencySymbolType != 0 ? "one-currency-symbol-per-page layout is not implemented"
         : SuppressIfNoHorizontalPages ? "horizontal-page numeric suppression is not implemented"
@@ -33,6 +32,12 @@ public sealed record ReportNativeNumericFormat(
             // currency precision for ordinary fractional numbers, and zero decimals for integer fields.
             // It retains authored zero suppression, leading-zero, reverse-sign and prefix/suffix preferences.
             var system = CultureInfo.CurrentCulture.NumberFormat;
+            if (CurrencySymbolType == 2)
+            {
+                var amount = Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+                if (SuppressIfZero && amount == 0) return "";
+                return Prefix + (ReverseSign ? -amount : amount).ToString("C", system) + Suffix;
+            }
             var digits = ValueType is >= 0 and <= 5 ? 0 : system.CurrencyDecimalDigits;
             var authoredRoundingDigits = Math.Max(0, 11 - Math.Max(1, RoundingType));
             var effective = this with { SystemDefaultFormatting = false, DecimalPlaces = digits,
@@ -78,6 +83,19 @@ public sealed record ReportNativeNumericFormat(
             default: trailing = ""; break;
         }
         return leading + formatted + trailing;
+    }
+
+    // Positive left-aligned numbers keep the blank sign position that negative values occupy.
+    // Reuse the overflow reservation so measuring and painting apply the same authored sign rules.
+    internal string LeadingSignSlot(string formatted, string alignment)
+    {
+        if (formatted.Length == 0 || !alignment.Equals("left", StringComparison.OrdinalIgnoreCase)) return "";
+        if (formatted.StartsWith("[Formula error", StringComparison.Ordinal)
+            || formatted.StartsWith("[Invalid summary]", StringComparison.Ordinal)
+            || formatted.StartsWith("[Unsupported", StringComparison.Ordinal)
+            || formatted.All(character => character == '#')) return "";
+        var probe = OverflowProbe(formatted, alignment);
+        return probe.EndsWith(formatted, StringComparison.Ordinal) ? probe[..(probe.Length - formatted.Length)] : "";
     }
 
     private string FormatCore(object value, int[] groupSizes)

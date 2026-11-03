@@ -296,6 +296,19 @@ public static class ReportObjectRenderer
         // Keep the authored border/box intact while clipping to complete memo lines.
         if (ClipNativeLongWords(item))
             return $"<span data-fx-native-memo=\"true\" style=\"display:block;max-height:calc({TextLineLimit(item)} * 1lh);overflow:hidden\">{content}</span>";
+        if (item.UseCrystalScreenMetrics && item.FormatString.Length == 0 && item.NativeNumericFormat is { } numeric)
+        {
+            var text = WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(content, "<[^>]+>", ""));
+            var slot = numeric.LeadingSignSlot(text, item.HorizontalAlignment);
+            if (slot.Length > 0)
+            {
+                var advance = 0d;
+                try { advance = Fx.ControlKit.Grid.NativePdfPage.MeasureText(slot, 1, item.FontFamily, item.Bold, item.Italic); }
+                catch (NotSupportedException) { /* The browser retains its normal layout for fonts without portable metrics. */ }
+                if (advance > 0)
+                    content = $"<span data-fx-native-sign-inset=\"true\" style=\"display:block;box-sizing:border-box;width:100%;height:100%;padding-left:{Number(advance)}em\">{content}</span>";
+            }
+        }
         if (!NativeNumericOutsideBorder(item)) return content;
         return "<span data-fx-native-field-text=\"true\" style=\"display:block;width:100%;height:100%;overflow:hidden;\">" + content + "</span>"
             + $"<span data-fx-native-field-border=\"true\" aria-hidden=\"true\" style=\"position:absolute;pointer-events:none;left:-{Number(BorderPixels(item.Visual.LeftLine, item.Visual.LineWidthTwips))}px;top:-{Number(BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips))}px;width:100%;height:100%;box-sizing:content-box;{BorderStyle(item.Visual)}\"></span>";
@@ -351,10 +364,33 @@ public static class ReportObjectRenderer
         if (item.Visual.Runs.Count > 0)
         {
             var html = new StringBuilder();
-            foreach (var run in item.Visual.Runs)
-                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics)).Append("\">")
-                    .Append(EncodeText(item, string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolve(run.Binding))).Append("</span>");
+            var resolved = item.Visual.Runs.Select(run => (Run: run, Value: string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolve(run.Binding) ?? "")).ToArray();
+            if (item.SuppressEmbeddedFieldBlankLines)
+            {
+                var lines = new List<List<(ReportTextRun Run, string Value)>> { new() };
+                foreach (var value in resolved)
+                {
+                    var parts = value.Value.ReplaceLineEndings("\n").Split('\n');
+                    for (var index = 0; index < parts.Length; index++)
+                    {
+                        if (index > 0) lines.Add([]);
+                        lines[^1].Add((value.Run, parts[index]));
+                    }
+                }
+                var visible = lines.Where((line, index) => index == lines.Count - 1 || !line.Any(part => part.Run.Binding.Length > 0)
+                    || line.Any(part => part.Run.Binding.Length > 0 && !string.IsNullOrWhiteSpace(part.Value))).ToArray();
+                for (var index = 0; index < visible.Length; index++)
+                {
+                    if (index > 0) html.Append("\n");
+                    foreach (var part in visible[index]) Append(part.Run, part.Value);
+                }
+            }
+            else foreach (var value in resolved) Append(value.Run, value.Value);
             return DecorateNativeField(item, html.ToString());
+
+            void Append(ReportTextRun run, string value) =>
+                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics)).Append("\">")
+                    .Append(EncodeText(item, value)).Append("</span>");
         }
         return DecorateNativeField(item, EncodeText(item, item.Kind == "Field" ? resolve(item.Binding) : item.Text));
     }

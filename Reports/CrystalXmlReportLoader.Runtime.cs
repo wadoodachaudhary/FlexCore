@@ -166,12 +166,22 @@ public partial class CrystalXmlReportLoader
         return version < Fx.ControlKit.Reports.NativeCrystal.CrystalReportXmlVersion.DrillHeaderOption ? null : false;
     }
 
+    private static DateTime? FixedPrintDate(XElement report)
+    {
+        var saved = (string?)report.Element("ReportOptions")?.Attribute("FixedPrintDate");
+        if (saved is null) return null;
+        if (DateTime.TryParseExact(saved, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var date)) return date;
+        throw new InvalidDataException("The report's fixed print date must use yyyy-MM-dd.");
+    }
+
     private static ReportPositionedLayout BuildPositionedLayout(ReportDesignerDocument document, XElement report, List<string> diagnostics)
     {
         var layout = new ReportPositionedLayout
         {
             Document = document, ShowAllHeadersOnDrillDown = DrillHeaderOption(report),
-            ConvertDatabaseNullToDefault = Flag(report.Element("ReportOptions"), "ConvertDBNullToDefault")
+            ConvertDatabaseNullToDefault = Flag(report.Element("ReportOptions"), "ConvertDBNullToDefault"),
+            FixedPrintDate = FixedPrintDate(report)
         };
         var functions = CompileCustomFunctions(report, diagnostics);
         foreach (var field in document.Fields.Where(f => f.IsFormula))
@@ -195,7 +205,7 @@ public partial class CrystalXmlReportLoader
             var refs = Regex.Matches(name, @"\{[^}]+\}");
             var group = refs.Count > 1 ? refs[1].Value : "";
             layout.Summaries[name] = new((string?)summary.Attribute("Operation") ?? "Sum", (string?)summary.Attribute("SummarizedField") ?? "", group)
-            { AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
+            { WeightField = (string?)summary.Attribute("WeightField") ?? "", AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
         }
         ReadGroupRuntime(document, layout, data, functions, diagnostics, kinds, legacy);
         foreach (var running in data?.Descendants("RunningTotalFieldDefinition") ?? [])
@@ -256,7 +266,7 @@ public partial class CrystalXmlReportLoader
         var references = document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))
             .Concat(document.Elements.SelectMany(e => e.Analysis?.References ?? []))
             .Concat(document.Groups.SelectMany(g => new[] { g.Condition, g.ParentIdField, g.InstanceIdField })).Concat(document.Sorts.Select(s => s.Field.Reference))
-            .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).Select(s => s.Field))
+            .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).SelectMany(s => new[] { s.Field, s.WeightField }).Where(field => field.Length > 0))
             .Concat(layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation, t.Reset }).SelectMany(c => (c.Formula?.References ?? []).Prepend(c.Field)))
             .Concat(layout.RecordSelection?.References ?? []).Concat(layout.GroupSelection?.References ?? [])
             .Concat(layout.GroupOptions.Values.SelectMany(o => o.SpecifiedGroups).SelectMany(g => g.Selection.References))

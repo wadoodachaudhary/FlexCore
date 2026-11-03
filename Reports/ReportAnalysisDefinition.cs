@@ -10,6 +10,9 @@ public sealed class ReportAnalysisMeasure
     public string Caption { get; set; } = "";
     public ReportAggregateType Aggregate { get; set; } = ReportAggregateType.Sum;
     public string Format { get; set; } = "N2";
+    /// <summary>Use the formula value once per category instead of aggregating repeated copies.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DoNotSummarize { get; set; }
     public ReportAnalysisMeasure Clone() => (ReportAnalysisMeasure)MemberwiseClone();
 }
 
@@ -25,9 +28,21 @@ public sealed class ReportTableColumn
 /// <summary>Bound analytical report item. References use the report's Crystal field syntax.</summary>
 public sealed partial class ReportAnalysisDefinition
 {
+    public string AccumulatorVariable { get; set; } = "";
+    public int AccumulatorCount { get; set; }
+    public bool AccumulatorWithTies { get; set; }
     public string Title { get; set; } = "";
     public ChartType ChartType { get; set; } = ChartType.Bar;
+    /// <summary>Render bar, stacked bar and percentage bar charts with perspective faces.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ChartThreeDimensional { get; set; }
+    /// <summary>Use the classic flat-bar presentation with a category legend.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool ChartCategoryLegend { get; set; }
     public string CategoryField { get; set; } = "";
+    /// <summary>Optional numeric category caption format, independent of the plotted values.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? CategoryFormat { get; set; }
     public string SeriesField { get; set; } = "";
     public string GroupScope { get; set; } = "";
     public List<string> RowFields { get; set; } = [];
@@ -36,6 +51,7 @@ public sealed partial class ReportAnalysisDefinition
     public bool ShowLegend { get; set; } = true;
     public bool ShowTotals { get; set; } = true;
     public bool EachRecord { get; set; }
+    public bool ReportGroupChart { get; set; }
     /// <summary>No category group: each measure is one bar or pie slice, aggregated over the chart's rows.</summary>
     public bool SummariesAsCategories { get; set; }
     public bool SortCategories { get; set; }
@@ -49,10 +65,14 @@ public sealed partial class ReportAnalysisDefinition
     public List<ReportMatrixCell> Cells { get; set; } = [];
     public List<ReportTableColumn> TableColumns { get; set; } = [];
     public bool RepeatHeaders { get; set; } = true;
+    public ReportNativeCrossTabLayout? NativeCrossTab { get; set; }
+    public List<ReportCalculatedMember> CalculatedMembers { get; set; } = [];
     public int RowHeaderWidthTwips { get; set; } = 1800;
     public int ValueColumnWidthTwips { get; set; } = 1200;
     public int RowHeightTwips { get; set; } = 360;
     private IEnumerable<string> LocalReferences => RowFields.Concat(ColumnFields).Concat(Measures.Select(m => m.Field))
+        .Concat(CalculatedMembers.SelectMany(member => member.Formulas).SelectMany(formula => formula.Compile().References))
+        .Concat(NativeCrossTab?.Templates.SelectMany(template => template.Style.Conditions).SelectMany(condition => condition.Formula.Compile().References) ?? [])
         .Concat(Groups.SelectMany(group => group.SpecifiedGroups).SelectMany(group => CrystalFormula.Compile(group.Expression).References))
         .Concat(TableColumns.Select(column => column.Field))
         .Append(CategoryField).Append(SeriesField).Append(GroupScope).Where(reference => !string.IsNullOrWhiteSpace(reference)).Distinct(StringComparer.OrdinalIgnoreCase);
@@ -66,6 +86,52 @@ public sealed partial class ReportAnalysisDefinition
 
     private string? ValidateNode(string kind)
     {
+        if (ChartCategoryLegend && (kind != "Chart" || ChartThreeDimensional || !PrintedCategoryBarChart.Supports(ChartType)))
+            return "Category legends require a flat bar chart.";
+        if (ChartThreeDimensional && (kind != "Chart" || !PrintedBarChart3D.Supports(ChartType)))
+            return "3D rendering is available for bar charts.";
+        if (NativeCrossTab is { } native && (native.Templates.Count > 16384 || native.Templates.Any(template =>
+            template.Axis is not (207 or 211 or 216) || template.RowLevel < 0 || template.RowLevel > RowFields.Count
+            || template.ColumnLevel < 0 || template.ColumnLevel > ColumnFields.Count || template.Summary < 0 || template.Summary >= Measures.Count
+            || template.Width is <= 0 or > 100000 || template.Height is <= 0 or > 100000
+            || template.CellWidth is < 0 or > 100000 || template.CellHeight is < 0 or > 100000
+            || template.PaddingX is < 0 or > 10000 || template.PaddingY is < 0 or > 10000 || template.Style.Conditions.Count > 64)))
+            return "Native cross-tab cell templates exceed their supported bounds.";
+        if (AccumulatorVariable.Length > 0 && (kind != "CrossTab" || RowFields.Count != 1 || ColumnFields.Count != 0
+            || Measures.Count != 1 || Measures[0].Aggregate != ReportAggregateType.Sum || AccumulatorCount <= 0))
+            return "A ranked accumulator requires one row group, one sum and a positive group count.";
+        if (CalculatedMembers.Count > 0)
+        {
+            if (kind != "CrossTab" || RowFields.Count == 0 || ColumnFields.Count == 0 || Measures.Count == 0 || Cells.Count > 0)
+                return "Calculated members require row and column groups, summaries and unmerged grid cells.";
+            if (CalculatedMembers.Count > 128 || CalculatedMembers.Any(member => member.GroupLevel < 1
+                || member.GroupLevel > (member.IsRow ? RowFields.Count : ColumnFields.Count) || member.Values.Count != Measures.Count))
+                return "Calculated-member group levels or summary formulas are unavailable.";
+            foreach (var expression in CalculatedMembers.SelectMany(member => member.Formulas))
+            {
+                try
+                {
+                    var formula = expression.Compile();
+                    if (formula.UnknownSymbols.Count > 0 || formula.UsesPageContext || formula.UsesRecordContext || formula.UsesPersistentVariables || formula.UsesAggregates
+                        || formula.References.Any(reference => !reference.StartsWith("{?", StringComparison.Ordinal)))
+                        return "Calculated-member formulas require grid values, not record, page or persistent-variable context.";
+                }
+                catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+                { return "Invalid calculated-member formula: " + error.Message; }
+            }
+        }
+        foreach (var condition in NativeCrossTab?.Templates.SelectMany(template => template.Style.Conditions) ?? [])
+        {
+            try
+            {
+                var formula = condition.Formula.Compile();
+                if (!ReportCrossTabFormatting.IsSupported(condition.Property) || formula.UnknownSymbols.Count > 0 || formula.UsesPageContext
+                    || formula.UsesRecordSequenceContext || !formula.HasSelfContainedVariables() || formula.UsesAggregates)
+                    return "Unsupported cross-tab conditional property or evaluation context: " + condition.Property;
+            }
+            catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+            { return "Invalid cross-tab formatting condition: " + error.Message; }
+        }
         if (Groups.Count > 6 || Groups.Select(group => group.Field).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Groups.Count)
             return "Cross-tab grouping rules must be unique per axis field.";
         foreach (var group in Groups)
@@ -78,7 +144,7 @@ public sealed partial class ReportAnalysisDefinition
                 try
                 {
                     var formula = CrystalFormula.Compile(specified.Expression);
-                    if (formula.IsEmpty || formula.UnknownSymbols.Count > 0 || formula.UsesPageContext || formula.UsesRecordContext
+                    if (formula.IsEmpty || formula.UnknownSymbols.Count > 0 || formula.UsesPageContext || formula.UsesRecordContext || formula.UsesGridContext
                         || formula.UsesAggregates || formula.UsesPersistentVariables || formula.RequiresPrintPass)
                         return "Cross-tab specified groups require record-time selection formulas.";
                 }
@@ -98,19 +164,23 @@ public sealed partial class ReportAnalysisDefinition
             return "Table dimensions are outside the supported bounds.";
         if (kind == "Table") return TableColumns.Count is < 1 or > 64 || TableColumns.Any(c => string.IsNullOrWhiteSpace(c.Field) || c.WidthTwips is < 360 or > 100000)
             ? "Choose 1 to 64 table columns with fields and widths of at least 360 twips." : null;
+        if (Measures.Any(m => m.DoNotSummarize) && (kind != "Chart" || EachRecord)) return "Unsummarized values require an aggregated chart category.";
+        if (CategoryFormat?.Length > 128) return "The chart category format is too long.";
         if (Measures.Count == 0 || Measures.Any(m => string.IsNullOrWhiteSpace(m.Field))) return "Choose at least one measure field.";
         if (Measures.Any(m => m.Aggregate is not (ReportAggregateType.Sum or ReportAggregateType.Count or ReportAggregateType.Average or ReportAggregateType.Min or ReportAggregateType.Max or ReportAggregateType.DistinctCount or ReportAggregateType.Median)))
             return "This item supports Sum, Count, DistinctCount, Average, Median, Min and Max. Percentage summaries need a denominator.";
         if (kind == "Chart" && !EachRecord && !SummariesAsCategories && string.IsNullOrWhiteSpace(CategoryField)) return "Choose a category field.";
         if (GroupKinds.Values.Any(groupKind => groupKind is < 0 or > 11)) return "Analytical group periods must be a Crystal date or time condition.";
-        if (kind == "CrossTab" && GroupKinds.Values.Any(groupKind => groupKind != 0)) return "Date and time period grouping is available for charts only.";
         if (GroupKinds.Any(pair => pair.Value != 0 && Measures.Any(measure => measure.Field.Equals(pair.Key, StringComparison.OrdinalIgnoreCase))))
             return "A field grouped by a date or time period cannot also be summarized.";
         if (kind == "Chart" && SummariesAsCategories && (EachRecord || CategoryField.Length > 0 || SeriesField.Length > 0)) return "A summary chart draws its measures without a category, series or each-record field.";
-        if (kind == "Chart" && ChartType is not (ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100 or ChartType.Line or ChartType.Pie or ChartType.Donut)) return "This report adapter supports bar, stacked/percent bar, line, pie and donut charts.";
+        if (kind == "Chart" && ChartType is not (ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100 or ChartType.Line or ChartType.Pie or ChartType.Donut or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble)) return "Unsupported report chart type.";
+        if (kind == "Chart" && ChartType is ChartType.Scatter or ChartType.Bubble
+            && (SummariesAsCategories || Measures.Count != (ChartType == ChartType.Bubble ? 3 : 2)))
+            return "Choose X and Y measures for a scatter plot, plus a size measure for a bubble plot.";
         if (kind == "Chart" && ChartType is ChartType.Pie or ChartType.Donut && !SummariesAsCategories && (Measures.Count != 1 || SeriesField.Length > 0)) return "Pie charts require one measure and no series field.";
         if (kind == "Chart" && EachRecord && SeriesField.Length > 0) return "Each-record charts cannot also aggregate a series grouping.";
-        if (kind == "CrossTab" && (RowFields.Count == 0 || RowFields.Any(string.IsNullOrWhiteSpace) || ColumnFields.Any(string.IsNullOrWhiteSpace))) return "Choose the cross-tab row fields.";
+        if (kind == "CrossTab" && ((RowFields.Count == 0 && NativeCrossTab is not { ColumnSumFormat.Length: > 0 }) || RowFields.Any(string.IsNullOrWhiteSpace) || ColumnFields.Any(string.IsNullOrWhiteSpace))) return "Choose the cross-tab row fields.";
         if (kind == "CrossTab" && (RowFields.Count > 3 || ColumnFields.Count > 3)) return "The current pivot adapter supports up to three row and column levels.";
         return null;
     }
@@ -122,13 +192,15 @@ public sealed partial class ReportAnalysisDefinition
     }
     private ReportAnalysisDefinition CloneNode() => new()
     {
-        Title = Title, ChartType = ChartType, CategoryField = CategoryField, SeriesField = SeriesField, GroupScope = GroupScope,
+        AccumulatorVariable = AccumulatorVariable, AccumulatorCount = AccumulatorCount, AccumulatorWithTies = AccumulatorWithTies,
+        Title = Title, ChartType = ChartType, ChartThreeDimensional = ChartThreeDimensional, ChartCategoryLegend = ChartCategoryLegend, CategoryField = CategoryField, CategoryFormat = CategoryFormat, SeriesField = SeriesField, GroupScope = GroupScope,
         RowFields = [.. RowFields], ColumnFields = [.. ColumnFields], Measures = Measures.Select(m => m.Clone()).ToList(), ShowLegend = ShowLegend, ShowTotals = ShowTotals,
-        EachRecord = EachRecord, SummariesAsCategories = SummariesAsCategories, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], OriginalOrderFields = [.. OriginalOrderFields],
+        EachRecord = EachRecord, ReportGroupChart = ReportGroupChart, SummariesAsCategories = SummariesAsCategories, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], OriginalOrderFields = [.. OriginalOrderFields],
         GroupKinds = new Dictionary<string, int>(GroupKinds, StringComparer.OrdinalIgnoreCase),
         Groups = Groups.Select(group => group.Clone()).ToList(),
         Cells = Cells.Select(cell => cell.Copy(cell.Region?.CloneNode())).ToList(),
         TableColumns = TableColumns.Select(column => column.Clone()).ToList(), RepeatHeaders = RepeatHeaders,
+        NativeCrossTab = NativeCrossTab, CalculatedMembers = CalculatedMembers.Select(member => member with { Values = member.Values.ToArray() }).ToList(),
         RowHeaderWidthTwips = RowHeaderWidthTwips, ValueColumnWidthTwips = ValueColumnWidthTwips, RowHeightTwips = RowHeightTwips
     };
 
@@ -138,15 +210,19 @@ public sealed partial class ReportAnalysisDefinition
         return ToXmlNode();
     }
     private XElement ToXmlNode() => new("FlexKitAnalysis", new XAttribute("Title", Title), new XAttribute("ChartType", ChartType),
-        new XAttribute("CategoryField", CategoryField), new XAttribute("SeriesField", SeriesField), new XAttribute("GroupScope", GroupScope),
+        ChartThreeDimensional ? new XAttribute("ChartThreeDimensional", true) : null,
+        ChartCategoryLegend ? new XAttribute("ChartCategoryLegend", true) : null,
+        AccumulatorVariable.Length == 0 ? null : new XElement("RankedAccumulator", new XAttribute("Variable", AccumulatorVariable), new XAttribute("Count", AccumulatorCount), new XAttribute("WithTies", AccumulatorWithTies)),
+        new XAttribute("CategoryField", CategoryField), string.IsNullOrEmpty(CategoryFormat) ? null : new XAttribute("CategoryFormat", CategoryFormat), new XAttribute("SeriesField", SeriesField), new XAttribute("GroupScope", GroupScope),
         new XAttribute("ShowLegend", ShowLegend), new XAttribute("ShowTotals", ShowTotals),
-        new XAttribute("EachRecord", EachRecord), SummariesAsCategories ? new XAttribute("SummariesAsCategories", true) : null, new XAttribute("SortCategories", SortCategories), new XElement("DescendingFields", DescendingFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
+        new XAttribute("EachRecord", EachRecord), ReportGroupChart ? new XAttribute("ReportGroupChart", true) : null, SummariesAsCategories ? new XAttribute("SummariesAsCategories", true) : null, new XAttribute("SortCategories", SortCategories), new XElement("DescendingFields", DescendingFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         OriginalOrderFields.Count == 0 ? null : new XElement("OriginalOrderFields", OriginalOrderFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         GroupKinds.Count == 0 ? null : new XElement("GroupKinds", GroupKinds.Select(pair => new XElement("Field", new XAttribute("Binding", pair.Key), new XAttribute("Kind", pair.Value)))),
         new XElement("Cells", Cells.Select(cell => new XElement("Cell", new XAttribute("Row", cell.Row), new XAttribute("Column", cell.Column),
             new XAttribute("RowSpan", cell.RowSpan), new XAttribute("ColumnSpan", cell.ColumnSpan), new XAttribute("RegionKind", cell.RegionKind),
             cell.Text is null ? null : new XElement("Text", cell.Text), cell.Region?.ToXmlNode()))),
         new XElement("Groups", Groups.Select(group => group.ToXml())),
+        NativeCrossTab?.ToXml(), CalculatedMembers.Count == 0 ? null : new XElement("CalculatedMembers", CalculatedMembers.Select(member => member.ToXml())),
         new XAttribute("RepeatHeaders", RepeatHeaders), new XAttribute("RowHeaderWidthTwips", RowHeaderWidthTwips),
         new XAttribute("ValueColumnWidthTwips", ValueColumnWidthTwips), new XAttribute("RowHeightTwips", RowHeightTwips),
         new XElement("TableColumns", TableColumns.Select(column => new XElement("Column", new XAttribute("Field", column.Field),
@@ -154,7 +230,7 @@ public sealed partial class ReportAnalysisDefinition
         new XElement("Rows", RowFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         new XElement("Columns", ColumnFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         new XElement("Measures", Measures.Select(m => new XElement("Measure", new XAttribute("Field", m.Field), new XAttribute("Caption", m.Caption),
-            new XAttribute("Aggregate", m.Aggregate), new XAttribute("Format", m.Format)))));
+            new XAttribute("Aggregate", m.Aggregate), new XAttribute("Format", m.Format), m.DoNotSummarize ? new XAttribute("DoNotSummarize", true) : null))));
 
     internal static ReportAnalysisDefinition? Read(XElement source)
     {
@@ -165,10 +241,16 @@ public sealed partial class ReportAnalysisDefinition
         {
             Title = (string?)xml.Attribute("Title") ?? "",
             ChartType = Enum.TryParse<ChartType>((string?)xml.Attribute("ChartType"), out var chart) ? chart : (ChartType)(-1),
-            CategoryField = (string?)xml.Attribute("CategoryField") ?? "", SeriesField = (string?)xml.Attribute("SeriesField") ?? "",
+            ChartThreeDimensional = (bool?)xml.Attribute("ChartThreeDimensional") ?? false,
+            ChartCategoryLegend = (bool?)xml.Attribute("ChartCategoryLegend") ?? false,
+            AccumulatorVariable = (string?)xml.Element("RankedAccumulator")?.Attribute("Variable") ?? "",
+            AccumulatorCount = (int?)xml.Element("RankedAccumulator")?.Attribute("Count") ?? 0,
+            AccumulatorWithTies = (bool?)xml.Element("RankedAccumulator")?.Attribute("WithTies") ?? false,
+            CategoryField = (string?)xml.Attribute("CategoryField") ?? "", CategoryFormat = (string?)xml.Attribute("CategoryFormat"), SeriesField = (string?)xml.Attribute("SeriesField") ?? "",
             GroupScope = (string?)xml.Attribute("GroupScope") ?? "",
             ShowLegend = !bool.TryParse((string?)xml.Attribute("ShowLegend"), out var legend) || legend,
             ShowTotals = !bool.TryParse((string?)xml.Attribute("ShowTotals"), out var totals) || totals,
+            ReportGroupChart = (bool?)xml.Attribute("ReportGroupChart") ?? false,
             EachRecord = bool.TryParse((string?)xml.Attribute("EachRecord"), out var eachRecord) && eachRecord,
             SummariesAsCategories = bool.TryParse((string?)xml.Attribute("SummariesAsCategories"), out var summariesAsCategories) && summariesAsCategories,
             SortCategories = bool.TryParse((string?)xml.Attribute("SortCategories"), out var sortCategories) && sortCategories,
@@ -185,6 +267,8 @@ public sealed partial class ReportAnalysisDefinition
                 Text = (string?)cell.Element("Text"), RegionKind = (string?)cell.Attribute("RegionKind") ?? "Table", Region = Read(cell)
             }).ToList() ?? [],
             RepeatHeaders = !bool.TryParse((string?)xml.Attribute("RepeatHeaders"), out var repeat) || repeat,
+            NativeCrossTab = ReportNativeCrossTabLayout.Read(xml.Element("NativeCrossTab")),
+            CalculatedMembers = xml.Element("CalculatedMembers")?.Elements("Member").Select(ReportCalculatedMember.Read).ToList() ?? [],
             RowHeaderWidthTwips = (int?)xml.Attribute("RowHeaderWidthTwips") ?? 1800,
             ValueColumnWidthTwips = (int?)xml.Attribute("ValueColumnWidthTwips") ?? 1200,
             RowHeightTwips = (int?)xml.Attribute("RowHeightTwips") ?? 360,
@@ -199,7 +283,7 @@ public sealed partial class ReportAnalysisDefinition
             {
                 Field = (string?)m.Attribute("Field") ?? "", Caption = (string?)m.Attribute("Caption") ?? "",
                 Aggregate = Enum.TryParse<ReportAggregateType>((string?)m.Attribute("Aggregate"), out var operation) ? operation : (ReportAggregateType)(-1),
-                Format = (string?)m.Attribute("Format") ?? "N2"
+                Format = (string?)m.Attribute("Format") ?? "N2", DoNotSummarize = (bool?)m.Attribute("DoNotSummarize") ?? false
             }).ToList() ?? []
         };
     }
@@ -208,4 +292,5 @@ public sealed partial class ReportAnalysisDefinition
 public sealed record ReportAnalysisSnapshot(ReportAnalysisDefinition Definition, IReadOnlyList<Dictionary<string, object>> Rows)
 {
     public ReportTabularData? Table { get; init; }
+    public DateTime PrintTime { get; init; } = DateTime.Now;
 }

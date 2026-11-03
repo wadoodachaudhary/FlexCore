@@ -60,6 +60,7 @@ public sealed partial class ReportLayoutSession
         Aggregate = (op, field, group) => IsParameter(field)
             ? throw new NotSupportedException($"{op} ({field}): a parameter is summarized as an array or range value, not through the record summary context.")
             : Summary(new(SummaryOperation(op), field, group), row),
+        WeightedAverage = (field, weight, group) => Summary(new("Weighted Average", field, group) { WeightField = weight }, row),
         ConditionalAggregate = (op, field, group, condition) => Summary(new(SummaryOperation(op), field, group) { GroupLevel = ConditionLevel(group, condition) }, row),
         GroupName = (field, condition) => GroupNameValue(condition is null ? GroupLevel(field) : ConditionLevel(field, condition), row),
         Relative = (field, offset) => row + offset >= 0 && row + offset < _rows.Length ? Value(field, row + offset) : null,

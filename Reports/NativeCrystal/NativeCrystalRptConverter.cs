@@ -132,6 +132,7 @@ public static class NativeCrystalRptConverter
             model.Core.ShowAllHeadersOnDrillDown = core.ShowAllHeadersOnDrillDown;
             model.Core.ConvertDatabaseNullToDefault = core.ConvertDatabaseNullToDefault;
             model.Core.EnableSelectDistinctRecords = core.EnableSelectDistinctRecords;
+            model.Core.FixedPrintDate = core.FixedPrintDate;
             model.Core.LeftMargin = core.LeftMargin;
             model.Core.RightMargin = core.RightMargin;
             model.Core.TopMargin = core.TopMargin;
@@ -218,6 +219,23 @@ public static class NativeCrystalRptConverter
             model.ConversionDiagnostics.Add(diagnostic);
             options.Progress?.Invoke($"[{diagnostic.Code}] {model.Name}/{function.Name}: {diagnostic.Message}");
         }
+        // Legacy chart streams store the actual orientation separately from the Bar family.
+        var charts = model.DataDefinition.ReportDefinition.Areas.SelectMany(a => a.Sections)
+            .SelectMany(s => s.ReportObjects).Where(o => o.Kind == "Chart").ToArray();
+        var drawings = streams.Where(s => s.FullPath == prefix + s.Name && s.Name.StartsWith("CHART ", StringComparison.Ordinal)).ToArray();
+        if (charts.Length == 1 && charts[0].Analysis is { ChartType: Charts.ChartType.Bar } chart && drawings.Length == 1
+            && drawings[0].Bytes.FirstOrDefault() == 0x78)
+        {
+            try
+            {
+                using var zip = new System.IO.Compression.ZLibStream(new MemoryStream(drawings[0].Bytes), System.IO.Compression.CompressionMode.Decompress);
+                var header = new byte[278];
+                if (zip.ReadAtLeast(header, header.Length, false) == header.Length && header.AsSpan().StartsWith("TIFFGRAPH"u8)
+                    && header.AsSpan(268).StartsWith(new byte[] { 0xd2, 7, 16, 0 }) && header.AsSpan(272).StartsWith("HBars\0"u8))
+                    chart.ChartType = Charts.ChartType.HorizontalBar;
+            }
+            catch (InvalidDataException) { /* Keep the declared Bar family for unreadable drawing data. */ }
+        }
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
@@ -237,8 +255,11 @@ public static class NativeCrystalRptConverter
             }
             if (obj.Analysis is not null)
             {
-                var defaults = new CrystalConversionDiagnostic("CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
-                    "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained.");
+                var defaults = new CrystalConversionDiagnostic(obj.Analysis.NativeCrossTab is { Templates.Count: > 0 }
+                    ? "CRYSTAL_ANALYSIS_NATIVE_LAYOUT" : "CRYSTAL_ANALYSIS_STYLE_DEFAULTS", model.Name, section.Name, obj.Name, obj.Kind,
+                    obj.Analysis.NativeCrossTab is not null
+                        ? "Native analytical bindings, cell templates, dimensions, padding, fonts, backgrounds, grid strokes, total placement, captions and supported cell conditions were imported. Original TSLV bytes are retained; whole-report visual parity requires comparison against Crystal output."
+                        : "Native analytical field bindings were imported. Legacy drawing styles, cell formatting and total visibility use editable FlexKit defaults; original TSLV bytes are retained.");
                 model.ConversionDiagnostics.Add(defaults);
                 options.Progress?.Invoke($"[{defaults.Code}] {model.Name}/{section.Name}/{obj.Name}: {defaults.Message}");
                 continue;

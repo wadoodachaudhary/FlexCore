@@ -925,6 +925,8 @@ public partial class PivotControl<TValue>
         return table;
     }
 
+    internal IReadOnlyList<string> ExportColumnPath(int valueColumn) => _valueColumns[valueColumn].Key.Parts;
+
     internal IReadOnlyList<TValue> ExportCellRows(int row, int column, int rowSpan, int columnSpan)
     {
         var result = new HashSet<TValue>();
@@ -937,6 +939,60 @@ public partial class PivotControl<TValue>
                     result.Add(item);
         }
         return DataSource.Where(result.Contains).ToArray();
+    }
+
+    internal object? ExportCellValue(int row, int column)
+    {
+        var valueColumn = _valueColumns[column - _effectiveRowFields.Count];
+        return Aggregate(ExportCellRows(row, column, 1, 1), valueColumn.ValueConfig);
+    }
+
+    // Structured axes keep typed group identities for grid formulas and nested subtotals.
+    internal IReadOnlyList<PivotExportAxis> ExportAxis(bool column, bool subtotals)
+    {
+        var fields = column ? _effectiveColumnFields : _effectiveRowFields;
+        var keys = GetFilteredData().Select(item => BuildKey(item, fields)).Distinct()
+            .OrderBy(key => key, Comparer<PivotKey>.Create((a, b) => CompareKeys(a, b, fields))).ToArray();
+        var result = new List<PivotExportAxis>();
+        void Visit(IEnumerable<PivotKey> source, int depth)
+        {
+            if (depth == fields.Count)
+            {
+                var key = source.First();
+                result.Add(new(key.RawParts.ToArray(), key.Parts.ToArray(), false));
+                return;
+            }
+            foreach (var group in source.GroupBy(key => key.IdentityPart(depth)))
+            {
+                Visit(group, depth + 1);
+                if (subtotals && depth + 1 < fields.Count)
+                {
+                    var key = group.First();
+                    result.Add(new(key.RawParts.Take(depth + 1).ToArray(), key.Parts.Take(depth + 1).ToArray(), true));
+                }
+            }
+        }
+        if (keys.Length > 0) Visit(keys, 0);
+        if (ShowGrandTotals) result.Add(new([], [], true));
+        return result;
+    }
+
+    internal object? ExportAxisValue(PivotExportAxis row, PivotExportAxis column, int summary)
+    {
+        if (summary < 0 || summary >= _effectiveValueFields.Count) throw new InvalidDataException("Pivot summary index is out of range.");
+        return Aggregate(ExportAxisRows(row, column), _effectiveValueFields[summary]);
+    }
+
+    internal IEnumerable<TValue> ExportAxisRows(PivotExportAxis row, PivotExportAxis column)
+    {
+        bool Matches(TValue item, IReadOnlyList<string> fields, PivotExportAxis axis)
+        {
+            if (axis.Path.Count == 0) return true;
+            var key = BuildKey(item, fields);
+            var prefix = new PivotKey("", axis.Labels, axis.Path);
+            return Enumerable.Range(0, axis.Path.Count).All(i => Equals(key.IdentityPart(i), prefix.IdentityPart(i)));
+        }
+        return GetFilteredData().Where(item => Matches(item, _effectiveRowFields, row) && Matches(item, _effectiveColumnFields, column));
     }
 
     private static IEnumerable<object?> FlattenPivotExportRow(
@@ -1038,6 +1094,8 @@ public partial class PivotControl<TValue>
         public string? SelectedValue { get; set; }
     }
 }
+
+internal sealed record PivotExportAxis(IReadOnlyList<object?> Path, IReadOnlyList<string> Labels, bool IsTotal);
 
 /// <summary>Configuration for a single value field in the pivot.</summary>
 public class PivotValueConfig

@@ -83,7 +83,7 @@ public sealed partial class ReportLayoutSession
     {
         if (level < 0 || level >= _layout.Document.Groups.Count) throw new InvalidDataException("GroupName requires a field the report groups on.");
         var options = Options(level);
-        object? Named(object? value) => value is DateTime date && (options?.ConditionKind ?? 0) < DateConditionNames.Length ? date.ToString("d", CultureInfo.CurrentCulture) : value;
+        object? Named(object? value) => value is string { Length: 0 } ? null : value is DateTime date && (options?.ConditionKind ?? 0) < DateConditionNames.Length ? date.ToString("d", CultureInfo.CurrentCulture) : value;
         var key = GroupKey(level, row);
         if (key is OthersKey others) return others.Name;
         if (options is { NameFormulaError.Length: > 0 })

@@ -8,6 +8,7 @@ namespace Fx.ControlKit.Grid;
 /// <summary>Metrics and Unicode mapping for bundled OFL fonts and explicitly supported installed TrueType faces.</summary>
 internal sealed class NativePdfFont
 {
+    private const string AuthoredPrefix = "Fx Authored: ";
     private static readonly ConcurrentDictionary<string, Lazy<NativePdfFont>> Fonts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (int Offset, int Length)> _tables = new(StringComparer.Ordinal);
     private readonly ushort[] _glyphs = new ushort[65536];
@@ -26,11 +27,17 @@ internal sealed class NativePdfFont
 
     public static NativePdfFont Resolve(string family, bool bold = false, bool italic = false)
     {
+        if (family?.StartsWith(AuthoredPrefix, StringComparison.Ordinal) == true)
+        {
+            var path = InstalledStandardFace(family[AuthoredPrefix.Length..], bold, italic)
+                ?? throw new NotSupportedException("The authored cross-tab font is no longer installed.");
+            return Fonts.GetOrAdd(path, static key => new Lazy<NativePdfFont>(() => new NativePdfFont(Path.GetFileName(key), File.ReadAllBytes(key)))).Value;
+        }
         var normalized = (family ?? "").Trim().Trim('\'', '"').ToLowerInvariant();
         if (normalized == "tahoma") return InstalledTahoma(bold, italic);
         var font = normalized switch
         {
-            "arial" or "helvetica" or "liberation sans" or "liberationsans" or "sans-serif" => "LiberationSans",
+            "arial" or "helvetica" or "ms shell dlg" or "liberation sans" or "liberationsans" or "sans-serif" => "LiberationSans",
             "times new roman" or "times" or "times-roman" or "liberation serif" or "liberationserif" or "serif" => "LiberationSerif",
             "courier new" or "courier" or "liberation mono" or "liberationmono" or "monospace" => "LiberationMono",
             "calibri" or "fx report calibri" or "carlito" => "Carlito",
@@ -39,6 +46,32 @@ internal sealed class NativePdfFont
         var style = bold ? italic ? "BoldItalic" : "Bold" : italic ? "Italic" : "Regular";
         var file = font + "-" + style + ".ttf";
         return Fonts.GetOrAdd(file, static key => new Lazy<NativePdfFont>(() => new NativePdfFont(key))).Value;
+    }
+
+    // Prefer an already installed licensed face for authored cross-tab cells. Never
+    // redistribute it, fetch it, or let report text choose an arbitrary file path.
+    internal static string AuthoredFamily(string family, bool bold, bool italic) =>
+        InstalledStandardFace(family, bold, italic) is null ? family : AuthoredPrefix + family;
+
+    private static string? InstalledStandardFace(string family, bool bold, bool italic)
+    {
+        var face = family.Trim().ToLowerInvariant() switch
+        {
+            "arial" => (Mac: "Arial", Windows: "arial"),
+            "times new roman" => (Mac: "Times New Roman", Windows: "times"),
+            "courier new" => (Mac: "Courier New", Windows: "cour"),
+            _ => (Mac: "", Windows: "")
+        };
+        if (face.Mac.Length == 0) return null;
+        var name = OperatingSystem.IsMacOS()
+            ? face.Mac + (bold ? italic ? " Bold Italic" : " Bold" : italic ? " Italic" : "") + ".ttf"
+            : face.Windows + (bold ? italic ? "bi" : "bd" : italic ? "i" : "") + ".ttf";
+        var roots = OperatingSystem.IsWindows()
+            ? new[] { Environment.GetFolderPath(Environment.SpecialFolder.Fonts), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "Windows", "Fonts") }
+            : OperatingSystem.IsMacOS()
+                ? new[] { "/System/Library/Fonts/Supplemental", "/Library/Fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Fonts") }
+                : new[] { "/usr/share/fonts/truetype/msttcorefonts", "/usr/local/share/fonts", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local/share/fonts") };
+        return roots.Where(root => !string.IsNullOrWhiteSpace(root)).Select(root => Path.Combine(root, name)).FirstOrDefault(File.Exists);
     }
 
     public ushort Glyph(char character)
@@ -50,6 +83,9 @@ internal sealed class NativePdfFont
             || character is >= '\u0590' and <= '\u1cff' or >= '\ufb1d' and <= '\ufdff' or >= '\ufe70' and <= '\ufeff')
             throw new NotSupportedException($"Native PDF does not support the bidirectional or complex-script shaping required by character U+{(int)character:X4}.");
         var glyph = _glyphs[character];
+        // Older faces have the same-width thin space but no narrow no-break-space entry.
+        // The PDF keeps U+202F in ToUnicode; non-breaking behavior belongs to text layout.
+        if (glyph == 0 && character == '\u202F') glyph = _glyphs['\u2009'];
         if (glyph == 0)
             throw new NotSupportedException($"The embedded PDF font {PostScriptName} does not contain character U+{(int)character:X4}.");
         return glyph;

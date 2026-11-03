@@ -26,9 +26,11 @@ public sealed partial class CrystalFormula
     public bool UsesSharedVariables { get; }
     public bool WritesPersistentVariables { get; }
     public bool UsesRecordContext { get; }
+    public bool UsesRecordSequenceContext { get; }
     public CrystalEvaluationTime? EvaluationTime { get; }
     public IReadOnlyList<string> EvaluateAfter { get; }
     public bool UsesPageContext { get; }
+    public bool UsesGridContext { get; }
     public bool UsesAggregates { get; }
     public IReadOnlyList<string> AggregateReferences { get; }
     public bool UsesEvaluationDirectives { get; }
@@ -58,9 +60,11 @@ public sealed partial class CrystalFormula
         });
         var symbols = nodes.OfType<Symbol>().Select(n => n.Name.ToLowerInvariant()).ToHashSet();
         var calls = nodes.OfType<Call>().ToArray();
+        UsesGridContext = symbols.Overlaps(GridSymbols) || calls.Any(call => GridFunctions.Contains(call.Name));
         UsesGroupNumber = symbols.Contains("groupnumber");
-        UsesRecordContext = symbols.Overlaps(["recordnumber", "onfirstrecord", "onlastrecord", "currentfieldvalue", "groupnumber"])
+        UsesRecordSequenceContext = symbols.Overlaps(["recordnumber", "onfirstrecord", "onlastrecord", "groupnumber"])
             || calls.Any(n => n.Name.ToLowerInvariant() is "previous" or "next" or "previousvalue" or "nextvalue" or "previousisnull" or "nextisnull" or "onfirstrecord" or "onlastrecord" or "counthierarchicalchildren" or "groupname");
+        UsesRecordContext = UsesRecordSequenceContext || symbols.Contains("currentfieldvalue");
         var times = nodes.OfType<Symbol>().Select(n => Enum.TryParse<CrystalEvaluationTime>(n.Name, true, out var time) ? (CrystalEvaluationTime?)time : null)
             .Where(t => t.HasValue).Distinct().ToArray();
         if (times.Length > 1) throw new InvalidDataException("A formula cannot specify conflicting evaluation times.");
@@ -77,6 +81,26 @@ public sealed partial class CrystalFormula
         UsesEvaluationDirectives = symbols.Overlaps(["whileprintingrecords", "whilereadingrecords", "beforereadingrecords"]) || after.Length > 0;
         UnknownSymbols = unknown;
         CustomFunctions = nodes.OfType<CustomCall>().Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    // Display formulas may use global declarations as temporaries when every read
+    // is preceded by an unconditional initializer in the same cell evaluation.
+    internal bool HasSelfContainedVariables()
+    {
+        if (!UsesPersistentVariables) return true;
+        if (UsesSharedVariables || _root is not Sequence sequence) return false;
+        var initialized = new HashSet<Binding>();
+        foreach (var statement in sequence.Nodes)
+        {
+            var declaration = statement as Variable;
+            foreach (var node in Walk(statement))
+            {
+                if (node is VarRef reference && reference.Binding.Persistent && !initialized.Contains(reference.Binding)) return false;
+                if (node is Assign or ElementAssign or Redim or ForLoop || node is Variable && node != declaration) return false;
+            }
+            if (declaration is { Value: not null }) initialized.Add(declaration.Binding);
+        }
+        return true;
     }
 
     /// <summary>Crystal syntax under each spelling report XML uses for it.</summary>
@@ -464,6 +488,8 @@ public sealed class CrystalRandom
 
 public sealed class CrystalFormulaContext
 {
+    public Func<string, string, string, object?>? WeightedAverage { get; init; }
+    public CrystalGridFormulaContext? Grid { get; init; }
     public Func<string, object?> Resolve { get; init; } = name => throw new InvalidDataException($"Unresolved field '{name}'.");
     public Func<string, string, string, object?> Aggregate { get; init; } = (op, field, group) => throw new InvalidDataException("Aggregate context is unavailable.");
     /// <summary>Crystal <c>Sum ({field}, {group field}, "condition")</c>: a summary for the group whose date, time or Boolean condition has that name.</summary>
@@ -485,6 +511,7 @@ public sealed class CrystalFormulaContext
     public bool InRepeatedGroupHeader { get; init; }
     public bool DefaultValuesForNulls { get; init; }
     public Func<object?> CurrentFieldValue { get; init; } = () => null;
+    public Func<object?> DefaultAttribute { get; init; } = () => throw new InvalidDataException("DefaultAttribute requires a formatting condition context.");
     /// <summary>Crystal <c>GroupNumber</c>: 1-based ordinal, in print order, of the innermost group instance holding the current record.</summary>
     public Func<int> GroupNumber { get; init; } = () => throw new InvalidDataException("Group number context is unavailable.");
     /// <summary>Crystal <c>GroupingLevel({field})</c>: 1-based level of the group whose condition field is the argument, 0 when none.</summary>

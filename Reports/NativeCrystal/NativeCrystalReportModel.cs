@@ -4,8 +4,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    // Version 16 preserves the authored Select Distinct Records option.
-    public const int Current = 16;
+    // Version 20 also retains the authored fixed print date and canonical rich-text line endings.
+    public const int Current = 20;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -87,6 +87,9 @@ public sealed class CrystalReportCore
     public bool ConvertDatabaseNullToDefault { get; set; }
 
     public bool EnableSelectDistinctRecords { get; set; }
+
+    /// <summary>The authored fixed report date, when enabled; null uses the run's clock.</summary>
+    public DateTime? FixedPrintDate { get; set; }
 
     public int LeftMargin { get; set; } = 360;
 
@@ -336,6 +339,8 @@ public sealed class CrystalGroupModel
 
     /// <summary>Date-period groups are named by the last date of the period instead of the first (showLastDateInPeriod).</summary>
     public bool ShowLastDateInPeriod { get; set; }
+    public bool SuppressSubtotal { get; set; }
+    public bool SuppressLabel { get; set; }
 
     /// <summary>Specified-order named groups (ValueRangeList), in print order: the group name and its Crystal selection expression.</summary>
     public List<(string Name, string Expression)> SpecifiedGroups { get; } = [];
@@ -440,6 +445,7 @@ public sealed class CrystalParameterPickListModel
 
 public sealed class CrystalSummaryFieldModel
 {
+    public string WeightField { get; set; } = "";
     public string Name { get; set; } = "";
 
     public int ValueType { get; set; }
@@ -536,6 +542,7 @@ public sealed class CrystalReportSectionModel
 
 public sealed class CrystalSectionFormatModel
 {
+    public CrystalColorModel BackgroundColor { get; set; } = CrystalColorModel.TransparentWhite();
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public bool EnableKeepTogether { get; set; } = true;
 
@@ -575,7 +582,10 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    public int LineEndSection { get; set; } = -1;
+    public int LineEndTop { get; set; }
     public bool SuppressIfDuplicate { get; set; }
+    public bool SuppressEmbeddedFieldBlankLines { get; set; }
     public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
     public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
     internal ReportNativeNumberFormat? NativeCurrencyFormat { get; set; }

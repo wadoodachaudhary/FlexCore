@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using Fx.ControlKit.Grid;
+using Fx.ControlKit.Charts;
 
 namespace Fx.ControlKit.Reports;
 
@@ -16,6 +17,9 @@ internal static class ReportPdfExport
     private sealed record Ink(string Family = "Arial", double Size = 10, bool Bold = false,
         bool Italic = false, bool Underline = false, string Color = "#000000", bool Native = false)
     {
+        public ReportPdfFontMode FontMode { get; init; }
+        public string ResolvedFamily => Native && FontMode == ReportPdfFontMode.Designer
+            ? NativePdfFont.AuthoredFamily(Family, Bold, Italic) : Family;
         // Older Crystal PDF exports realize Arial smaller than the authored em.
         // Reference regular 8/10pt -> 7.15/8.95pt; bold 10/14pt -> 8.75/12.25pt.
         // This PDF-only compatibility policy never changes screen or page geometry.
@@ -24,6 +28,7 @@ internal static class ReportPdfExport
         {
             get
             {
+                if (Native && FontMode == ReportPdfFontMode.Designer) return Size;
                 var scale = LegacyArial ? (Bold ? .875 : .895) : 1d;
                 if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri" or "carlito" or "tahoma")
                 {
@@ -49,15 +54,16 @@ internal static class ReportPdfExport
     private sealed record Run(string Text, Ink Ink);
     private sealed record TextLine(IReadOnlyList<Run> Runs, double Width, double Height, bool ParagraphEnd);
 
-    internal static byte[] Export(ReportTab tab)
+    internal static byte[] Export(ReportTab tab, ReportPdfFontMode fontMode = ReportPdfFontMode.LegacyVb)
     {
         ArgumentNullException.ThrowIfNull(tab);
+        if (!Enum.IsDefined(fontMode)) throw new ArgumentOutOfRangeException(nameof(fontMode));
         if (tab.PageSnapshots.Count == 0 && tab.Pages.Count == 0)
             throw new InvalidOperationException("There are no completed report pages to export.");
         var document = new NativePdfDocument();
         if (tab.PageSnapshots.Count > 0)
         {
-            foreach (var snapshot in tab.PageSnapshots) Positioned(document, snapshot);
+            foreach (var snapshot in tab.PageSnapshots) Positioned(document, snapshot, fontMode);
         }
         else
         {
@@ -66,7 +72,7 @@ internal static class ReportPdfExport
         return document.ToArray();
     }
 
-    private static void Positioned(NativePdfDocument document, ReportPageSnapshot snapshot)
+    private static void Positioned(NativePdfDocument document, ReportPageSnapshot snapshot, ReportPdfFontMode fontMode)
     {
         var size = snapshot.Size;
         var width = (size.MarginLeftTwips + size.ContentWidthTwips + size.MarginRightTwips) / 20d;
@@ -84,11 +90,13 @@ internal static class ReportPdfExport
             var h = band.HeightTwips / 20d;
             if (h <= 0 || w <= 0) continue;
             page.Save();
-            page.Clip(x, y, w, h);
+            var gridBand = band.Objects.Count > 0 && band.Objects.All(o => o.Table?.NativeCrossTab != null);
+            var bleed = gridBand ? .5 : 0;
+            page.Clip(x-bleed, y-bleed, w+2*bleed, h+2*bleed);
             Fill(page, x, y, w, h, band.Background);
             foreach (var item in band.Objects)
             {
-                try { Object(page, item, x, y); }
+                try { Object(page, item, x, y, fontMode); }
                 catch (Exception error) when (error is NotSupportedException or InvalidDataException)
                 {
                     throw new NotSupportedException($"PDF page {snapshot.Number}, object '{item.Element.Name}': {error.Message}", error);
@@ -99,7 +107,7 @@ internal static class ReportPdfExport
         page.Restore();
     }
 
-    private static void Object(NativePdfPage page, ReportPageObject item, double bandX, double bandY)
+    private static void Object(NativePdfPage page, ReportPageObject item, double bandX, double bandY, ReportPdfFontMode fontMode)
     {
         if (item.Element.Kind == "Field" && item.UnmaskedNumericContent is { } number)
             item = item with { FormattedContent = number, TextLines = null };
@@ -119,14 +127,25 @@ internal static class ReportPdfExport
         var visual = element.Visual;
         var outside = element.Kind == "Field" && !element.CanGrow &&
             (element.NativeNumberFormat is not null || element.NativeNumericFormat is not null);
-        Borders(page, x, y, width, height, visual, outside);
+        if (element.Kind != "Chart") Borders(page, x, y, width, height, visual, outside);
         if (element.Kind == "Box" || width <= 0 || height <= 0) return;
         page.Save();
-        page.Clip(x, y, width, height);
+        if (item.Table?.NativeCrossTab == null) page.Clip(x, y, width, height);
         if (item.Table is { } table)
-            Fragment(page, table, x, y, new(element.FontFamily, (double)element.FontSize, element.Bold, element.Italic, element.Underline, Color(element.TextColor)));
+            Fragment(page, table, x, y, new(element.FontFamily, (double)element.FontSize, element.Bold, element.Italic, element.Underline, Color(element.TextColor)) { FontMode = fontMode });
+        else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartCategoryLegend: true } categoryChart)
+            Vector(page, PrintedCategoryBarChart.Draw(categoryChart.Definition.ChartType, ReportAnalysisGraphic.Series(categoryChart),
+                categoryChart.Definition.Title, width, height, categoryChart.Definition.ShowLegend), x, y, width, height, "fill");
+        else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartThreeDimensional: true } perspective)
+            Vector(page, PrintedBarChart3D.Draw(perspective.Definition.ChartType, ReportAnalysisGraphic.Series(perspective),
+                perspective.Definition.Title, width, height, perspective.Definition.ShowLegend), x, y, width, height, "fill");
+        else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartType: ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100 } chart)
+            BarChart(page, chart, x, y, width, height, element.UseCrystalScreenMetrics);
+        else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartType: ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble } stage)
+            Vector(page, PrintedStageChart.Draw(stage.Definition.ChartType, ReportAnalysisGraphic.Series(stage), stage.Definition.Title,
+                width, height, stage.Definition.ShowLegend, ReportAnalysisGraphic.CrystalBarPalette, stage.Definition.ReportGroupChart), x, y, width, height, "fill");
         else if (item.Analysis is not null)
-            throw new NotSupportedException("This analytical object has no printable table fragments. Export HTML for this chart until native chart PDF support is available.");
+            throw new NotSupportedException("This analytical object has no printable table fragments. Export HTML for this analytical object.");
         else if (element.Kind == "Picture")
         {
             // The viewer sizes the image inside the authored border-box, so opaque
@@ -141,32 +160,133 @@ internal static class ReportPdfExport
             if (ReportObjectVisual.IsEmbeddedImage(visual.ImageDataUrl))
                 Picture(page, visual.ImageDataUrl, x, y, width, height, visual.ImageFit);
             else if (visual.VectorImage is { } vector) Vector(page, vector, x, y, width, height, visual.ImageFit);
-            else Text(page, Runs(item.FormattedContent, InkFor(element)), x, y, width, height, Align(element), false);
+            else Text(page, Runs(item.FormattedContent, InkFor(element, fontMode)), x, y, width, height, Align(element), false);
         }
         else
         {
             var left = outside ? 0 : BorderWidth(visual.LeftLine, visual.LineWidthTwips);
             var right = outside ? 0 : BorderWidth(visual.RightLine, visual.LineWidthTwips);
+            // Right-aligned numeric ink keeps two screen pixels (1.5pt) before the field's
+            // right edge, as Crystal prints it; right-aligned text runs to the edge.
+            if (element.UseCrystalScreenMetrics && element.NativeNumericFormat is not null
+                && element.HorizontalAlignment.Equals("Right", StringComparison.OrdinalIgnoreCase)) right += 1.5;
             var top = outside ? 0 : BorderWidth(visual.TopLine, visual.LineWidthTwips);
             var bottom = outside ? 0 : BorderWidth(visual.BottomLine, visual.LineWidthTwips);
+            var ink = InkFor(element, fontMode);
+            if (element.UseCrystalScreenMetrics && element.FormatString.Length == 0 && element.NativeNumericFormat is { } numeric)
+            {
+                var text = System.Net.WebUtility.HtmlDecode(Regex.Replace(item.FormattedContent, "<[^>]+>", ""));
+                var slot = numeric.LeadingSignSlot(text, element.HorizontalAlignment);
+                left += NativePdfPage.MeasureText(slot, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic);
+            }
             var indent = element.IndentTwips / 20d;
             var wrap = ReportObjectRenderer.WrapText(element);
-            Text(page, Runs(item.FormattedContent, InkFor(element)), x + left + indent, y + top,
+            Text(page, Runs(item.FormattedContent, InkFor(element, fontMode)), x + left + indent, y + top,
                 Math.Max(0, width - left - right - indent), Math.Max(0, height - top - bottom), Align(element), wrap,
                 ReportObjectRenderer.TextLineLimit(element),
                 measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element));
         }
         page.Restore();
+        // Opaque chart canvases must not cover their authored frame. Native graph frames surround the data rectangle.
+        if (element.Kind == "Chart")
+        {
+            if (element.UseCrystalScreenMetrics) NativeChartBorders(page, x, y, width, height, visual);
+            else Borders(page, x, y, width, height, visual, false);
+        }
     }
 
-    private static Ink InkFor(ReportDesignerElement element) => new(element.FontFamily, (double)element.FontSize,
-        element.Bold, element.Italic, element.Underline, Color(element.TextColor), element.UseCrystalScreenMetrics);
+    private static void BarChart(NativePdfPage page, ReportAnalysisSnapshot chart, double x, double y,
+        double width, double height, bool crystal)
+    {
+        var series = ReportAnalysisGraphic.Series(chart);
+        if (series.Count == 0 || series[0].DataPoints.Count == 0) return;
+        var labels = series[0].DataPoints;
+        var values = series.SelectMany(s => s.DataPoints).Where(p => !p.IsEmpty).Select(p => p.Value);
+        var minimum = Math.Min(0, values.DefaultIfEmpty().Min());
+        var maximum = chart.Definition.ChartType is ChartType.StackedBar or ChartType.StackedBar100
+            ? Enumerable.Range(0, labels.Count).Select(i => series.Sum(s => i < s.DataPoints.Count && !s.DataPoints[i].IsEmpty ? s.DataPoints[i].Value : 0)).DefaultIfEmpty().Max()
+            : values.DefaultIfEmpty().Max();
+        var (low, high, ticks) = BarPrintScale.Range(minimum, maximum > 0 ? maximum : 1);
+        var left = x + width * .063;
+        var right = x + width * (chart.Definition.ShowLegend ? .80 : .973);
+        var top = y + height * .13;
+        var bottom = y + height * .78;
+        var slot = (right - left) / labels.Count;
+        var visibleLabels = ChartAxisLabelLayout.Select(labels.Select(point => point.Label).ToArray(),
+            index => left+slot*(index+.5), 6.5, bold: true, italic: true);
+        double AxisY(double value) => bottom - (value - low) / (high - low) * (bottom - top);
+        void Label(string text, double anchor, double baseline, double size, double alignment, bool italic = false)
+        {
+            var length = NativePdfPage.MeasureText(text, size, "Arial", true, italic);
+            page.Text(text, anchor - length * alignment, baseline, size, "Arial", true, italic);
+        }
+
+        Label(chart.Definition.Title, x + width / 2, y + height * .095, 10, .5);
+        for (var i = 0; i < ticks; i++)
+        {
+            var tick = low + (high - low) * i / (ticks - 1);
+            var row = AxisY(tick);
+            page.Line(left, row, right, row, "#000000", .75);
+            Label(tick.ToString("G6", Invariant), left - 3, row + 2, 6.5, 1, true);
+        }
+        page.Rectangle(left, top, right - left, bottom - top, null, "#000000", .75);
+        var palette = ReportAnalysisGraphic.CrystalBarPalette;
+        var stacked = chart.Definition.ChartType is ChartType.StackedBar or ChartType.StackedBar100;
+        var barWidth = slot * .8 / (stacked ? 1 : series.Count);
+        for (var category = 0; category < labels.Count; category++)
+        {
+            var start = left + slot * (category + .1);
+            var cumulative = 0d;
+            for (var group = 0; group < series.Count; group++)
+            {
+                var data = series[group];
+                if (category >= data.DataPoints.Count || data.DataPoints[category].IsEmpty) continue;
+                var point = data.DataPoints[category];
+                var fill = point.Color ?? data.Color ?? palette[(crystal && series.Count == 1 ? category : group) % palette.Length];
+                var valueY = AxisY(point.Value + (stacked ? cumulative : 0));
+                var baseY = AxisY(stacked ? cumulative : 0);
+                page.Rectangle(start + (stacked ? 0 : group * barWidth), Math.Min(valueY, baseY), barWidth,
+                    Math.Abs(valueY - baseY), fill);
+                cumulative += point.Value;
+            }
+            if (visibleLabels.Contains(category))
+                Label(labels[category].Label, start + slot * .4, bottom + 10, 6.5, .5, true);
+        }
+        if (chart.Definition.ShowLegend && series.Count > 1)
+        {
+            var lx = right + 3;
+            var ly = (top + bottom) / 2 - series.Count * 4;
+            page.Rectangle(lx, ly-2, x+width-lx-1, series.Count*8+4, "#ffffff", "#000000", .6);
+            for (var i = 0; i < series.Count; i++)
+            {
+                page.Rectangle(lx+2, ly+i*8, 4, 4, series[i].Color ?? palette[i % palette.Length]);
+                var name = series[i].Name.Split(" / ")[0];
+                Label(name, lx+8, ly+i*8+4, 5, 0);
+            }
+        }
+    }
+
+    private static Ink InkFor(ReportDesignerElement element, ReportPdfFontMode fontMode) => new(element.FontFamily, (double)element.FontSize,
+        element.Bold, element.Italic, element.Underline, Color(element.TextColor), element.UseCrystalScreenMetrics) { FontMode = fontMode };
 
     private static string Align(ReportDesignerElement element) => element.HorizontalAlignment.ToLowerInvariant() switch
     {
         "right" => "right", "center" or "horizontalcenter" => "center", "justified" => "justify",
         "default" when element.NativeNumericFormat is not null || element.NativeNumberFormat is not null => "right", _ => "left"
     };
+
+    private static void NativeChartBorders(NativePdfPage page, double x, double y, double w, double h, ReportObjectVisual visual)
+    {
+        // Legacy graph frame coordinates are stroke centers one full border width outside the canvas.
+        var left = x - BorderWidth(visual.LeftLine, visual.LineWidthTwips);
+        var top = y - BorderWidth(visual.TopLine, visual.LineWidthTwips);
+        var right = x + w + BorderWidth(visual.RightLine, visual.LineWidthTwips);
+        var bottom = y + h + BorderWidth(visual.BottomLine, visual.LineWidthTwips);
+        Stroke(page, left, top, right, top, visual.TopLine, visual.BorderColor, visual.LineWidthTwips);
+        Stroke(page, left, bottom, right, bottom, visual.BottomLine, visual.BorderColor, visual.LineWidthTwips);
+        Stroke(page, left, top, left, bottom, visual.LeftLine, visual.BorderColor, visual.LineWidthTwips);
+        Stroke(page, right, top, right, bottom, visual.RightLine, visual.BorderColor, visual.LineWidthTwips);
+    }
 
     private static void Borders(NativePdfPage page, double x, double y, double w, double h, ReportObjectVisual visual, bool outside)
     {
@@ -296,7 +416,7 @@ internal static class ReportPdfExport
             var adjust = 0d;
             if (current.Count > 0 && current[^1].Ink == ink)
             {
-                if (ink.Native) adjust = NativePdfFont.Resolve(ink.Family, ink.Bold, ink.Italic).Kerning(current[^1].Text[^1], value[0]) * ink.Em / 1000;
+                if (ink.Native) adjust = NativePdfFont.Resolve(ink.ResolvedFamily, ink.Bold, ink.Italic).Kerning(current[^1].Text[^1], value[0]) * ink.Em / 1000;
                 current[^1] = current[^1] with { Text = current[^1].Text + value };
             }
             else current.Add(new(value, ink));
@@ -373,7 +493,7 @@ internal static class ReportPdfExport
         return lines;
     }
 
-    private static double Measure(string text, Ink ink) => NativePdfPage.MeasureText(text, ink.Em, ink.Family, ink.Bold, ink.Italic, ink.Native);
+    private static double Measure(string text, Ink ink) => NativePdfPage.MeasureText(text, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic, ink.Native);
 
     private static double Text(NativePdfPage page, IReadOnlyList<Run> runs, double x, double y, double width, double height,
         string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true)
@@ -388,8 +508,8 @@ internal static class ReportPdfExport
             if (at >= y + height) break;
             var offset = alignment == "right" ? width - line.Width : alignment == "center" ? (width - line.Width) / 2 : 0;
             var cursor = x + offset;
-            var ascent = line.Runs.Count == 0 ? line.Height / lineHeight * .9 : line.Runs.Max(r => NativePdfFont.Resolve(r.Ink.Family, r.Ink.Bold, r.Ink.Italic).Ascent * r.Ink.Em / 1000);
-            var descent = line.Runs.Count == 0 ? line.Height / lineHeight * .2 : line.Runs.Max(r => -NativePdfFont.Resolve(r.Ink.Family, r.Ink.Bold, r.Ink.Italic).Descent * r.Ink.Em / 1000);
+            var ascent = line.Runs.Count == 0 ? line.Height / lineHeight * .9 : line.Runs.Max(r => NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Ascent * r.Ink.Em / 1000);
+            var descent = line.Runs.Count == 0 ? line.Height / lineHeight * .2 : line.Runs.Max(r => -NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Descent * r.Ink.Em / 1000);
             var baseline = at + (line.Height - ascent - descent) / 2 + ascent;
             var spaces = line.Runs.Sum(run => run.Text.Count(c => c == ' '));
             var extra = alignment == "justify" && !line.ParagraphEnd && spaces > 0 ? Math.Max(0, width - line.Width) / spaces : 0;
@@ -397,12 +517,12 @@ internal static class ReportPdfExport
             {
                 if (extra == 0)
                 {
-                    page.Text(run.Text, cursor, baseline, run.Ink.Em, run.Ink.Family, run.Ink.Bold, run.Ink.Italic, run.Ink.Color, run.Ink.Underline, run.Ink.Native);
+                    page.Text(run.Text, cursor, baseline, run.Ink.Em, run.Ink.ResolvedFamily, run.Ink.Bold, run.Ink.Italic, run.Ink.Color, run.Ink.Underline, run.Ink.Native);
                     cursor += Measure(run.Text, run.Ink);
                 }
                 else foreach (Match token in Regex.Matches(run.Text, @"[^ ]+| +"))
                 {
-                    page.Text(token.Value, cursor, baseline, run.Ink.Em, run.Ink.Family, run.Ink.Bold, run.Ink.Italic, run.Ink.Color, run.Ink.Underline, run.Ink.Native);
+                    page.Text(token.Value, cursor, baseline, run.Ink.Em, run.Ink.ResolvedFamily, run.Ink.Bold, run.Ink.Italic, run.Ink.Color, run.Ink.Underline, run.Ink.Native);
                     cursor += Measure(token.Value, run.Ink) + extra * token.Value.Count(c => c == ' ');
                 }
             }
@@ -443,13 +563,85 @@ internal static class ReportPdfExport
         {
             var cx = x + widths.Take(cell.Column).Sum();
             var cw = widths.Skip(cell.Column).Take(cell.ColumnSpan).Sum();
-            var bold = table.IsHeader || table.IsTotal || table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Any(c => c.IsRowHeader);
-            Fill(page, cx, y, cw, h, table.IsHeader ? "#e8efed" : table.IsTotal ? "#f1f4f3" : "#ffffff");
-            page.Line(cx, y, cx, y + h, "#cbd5cb", .75); page.Line(cx + cw, y, cx + cw, y + h, "#cbd5cb", .75);
-            if (cell.First) page.Line(cx, y, cx + cw, y, "#cbd5cb", .75);
-            if (cell.Last) page.Line(cx, y + h, cx + cw, y + h, "#cbd5cb", .75);
+            var rowHeader = table.Columns.Skip(cell.Column).Take(cell.ColumnSpan).Any(c => c.IsRowHeader);
+            var native = table.NativeCrossTab;
+            var style = table.CellStyles?.ElementAtOrDefault(cell.Column) ?? native?.StyleFor(table.IsHeader, rowHeader, table.IsTotal, table.Columns[cell.Column].IsGrandTotal);
+            var bold = native is null ? table.IsHeader || table.IsTotal || rowHeader : !table.IsHeader && !rowHeader && native.ValueBold;
+            if (native?.Appearance is { } appearance)
+            {
+                var background = table.IsHeader && rowHeader ? "transparent" : style?.Background ?? appearance.Background(table.IsHeader, rowHeader);
+                if (background != "transparent") Fill(page, cx, y, cw, h, background);
+                var labelCount = table.Columns.TakeWhile(column => column.IsRowHeader).Count();
+                var edges = appearance.Edges(table.IsHeader, rowHeader, cell.Column == table.Columns.Count - 1, table.Row == 0,
+                    table.IsGrandTotalRow, table.Columns[cell.Column].IsGrandTotal, native.RowTotalsBefore, native.ColumnTotalsBefore,
+                    table.IsLastRow, cell.Column == 0, cell.Column + cell.ColumnSpan == labelCount, cell.Column == labelCount);
+                void Edge(int line, double x1, double y1, double x2, double y2)
+                {
+                    if (line < 0) return;
+                    var stroke = appearance.Stroke(line);
+                    if (stroke.Width < 0) return;
+                    var lineStyle = appearance.LineStyle(line);
+                    if (lineStyle == "Double") Stroke(page, x1, y1, x2, y2, lineStyle, stroke.Color, (int)Math.Round(stroke.Width * 20));
+                    else page.Line(x1, y1, x2, y2, stroke.Color, stroke.Width,
+                        lineStyle == "Dash" ? [3 * Math.Max(.25, stroke.Width), 2 * Math.Max(.25, stroke.Width)]
+                        : lineStyle == "Dot" ? [Math.Max(.25, stroke.Width), Math.Max(.25, stroke.Width)] : null);
+                }
+                var top = y;
+                var bottom = y + h;
+                var left = cx;
+                var right = cx + cw;
+                Edge(edges.Top, cx, top, cx + cw, top);
+                Edge(edges.Left, left, y, left, y + h);
+                Edge(edges.Right, right, y, right, y + h);
+                Edge(edges.Bottom, cx, bottom, cx + cw, bottom);
+            }
+            else
+            {
+                Fill(page, cx, y, cw, h, table.IsHeader ? "#e8efed" : table.IsTotal ? "#f1f4f3" : "#ffffff");
+                page.Line(cx, y, cx, y + h, "#cbd5cb", .75); page.Line(cx + cw, y, cx + cw, y + h, "#cbd5cb", .75);
+                if (cell.First) page.Line(cx, y, cx + cw, y, "#cbd5cb", .75);
+                if (cell.Last) page.Line(cx, y + h, cx + cw, y + h, "#cbd5cb", .75);
+            }
             if (cell.Nested is { } nested) Fragment(page, nested, cx, y, ink);
-            else Text(page, [new(cell.Text, ink with { Bold = bold })], cx + 2.25, y + Math.Max(1.5, (h - ink.Size * 1.4) / 2), Math.Max(0, cw - 4.5), Math.Max(0, h - 3), "left", false, lineHeight: 1.4);
+            else
+            {
+                var px = native?.PaddingX / 20d ?? 2.25;
+                var py = native?.PaddingY / 20d ?? Math.Max(1.5, (h - ink.Size * 1.4) / 2);
+                var cellSize = native?.Appearance is { } a
+                    ? table.IsTotal && rowHeader ? (double)a.RowTotalFontSize : table.IsHeader && table.Columns[cell.Column].IsGrandTotal ? (double)a.ColumnTotalFontSize : ink.Size : ink.Size;
+                var cellInk = style is null ? ink with { Bold = bold, Size = cellSize } : new Ink(NativePdfFont.AuthoredFamily(style.FontFamily, style.Bold, style.Italic), (double)style.FontSize,
+                    style.Bold, style.Italic, style.Underline, Color(style.Color)) { FontMode = ink.FontMode };
+                var text = cell.Text;
+                if (native is { StackFormats.Length: > 0 })
+                {
+                    var lines = text.ReplaceLineEndings("\n").Split('\n');
+                    var step = (h - 2 * py) / lines.Length;
+                    for (var line = 0; line < lines.Length; line++)
+                        Text(page, [new(lines[line], cellInk)], cx + px, y + py + line * step, Math.Max(0, cw - 2 * px),
+                            step, style?.Alignment ?? "left", false, lineHeight: Math.Min(1.4, step / cellInk.Em));
+                    continue;
+                }
+                if (native is { Templates.Count: > 0 } && style is not null)
+                {
+                    if (rowHeader && !table.IsHeader)
+                        text = ReportNativeCrossTabText.Clip(text, style, (style.ClipWidthTwips > 0 ? style.ClipWidthTwips : (int)Math.Round(cw * 20)) - 2 * native.PaddingX);
+                    var font = NativePdfFont.Resolve(cellInk.ResolvedFamily, cellInk.Bold, cellInk.Italic);
+                    var width = Measure(text, cellInk);
+                    var available = Math.Max(0, cw - 2 * px);
+                    var offset = style.Alignment == "right" ? available - width : style.Alignment == "center" ? (available - width) / 2 : 0;
+                    page.Save();
+                    page.Clip(cx + px + Math.Min(0, offset), y + py, Math.Max(available, width), Math.Max(h - 2 * py, (font.Ascent - font.Descent) * cellInk.Em / 1000));
+                    page.Text(text, cx + px + offset, y + py + font.Ascent * cellInk.Em / 1000, cellInk.Em, cellInk.ResolvedFamily,
+                        cellInk.Bold, cellInk.Italic, cellInk.Color, cellInk.Underline, cellInk.Native);
+                    page.Restore();
+                    continue;
+                }
+                if (native is not null && rowHeader && !table.IsHeader)
+                    text = ReportNativeCrossTabText.Clip(text, style, (int)Math.Round(cw * 20) - 2 * native.PaddingX);
+                Text(page, [new(text, cellInk)], cx + px, y + py, Math.Max(0, cw - 2 * px),
+                    Math.Max(0, h - 2 * py), style?.Alignment ?? (native is not null && !table.IsHeader && !rowHeader ? "right" : "left"), false,
+                    lineHeight: native is null ? 1.4 : Math.Min(1.4, (h - 2 * py) / cellInk.Em));
+            }
         }
     }
 

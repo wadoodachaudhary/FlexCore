@@ -36,9 +36,16 @@ internal static partial class CrystalReportContentsParser
         _ = reader.LoadBoolean();
         core.ReportName = reader.LoadString() ?? "";
         _ = reader.LoadEnum();
-        _ = reader.LoadInt32();
-        _ = reader.LoadInt32();
-        _ = reader.LoadBoolean();
+        var printDate = reader.LoadInt32();
+        _ = reader.LoadInt32(); // Saved time does not pin the run's time of day.
+        if (reader.LoadBoolean())
+        {
+            var date = CrystalReportParametersParser.CrystalDate(printDate);
+            if (!DateTime.TryParseExact(date, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out var fixedDate))
+                throw new InvalidDataException("The report enables a fixed print date but has no valid date.");
+            core.FixedPrintDate = fixedDate;
+        }
         var saveFlags = reader.LoadInt16();
         core.HasSavedData = reader.LoadBoolean();
         core.EnableSaveDataWithReport = (saveFlags & 2) != 0;
@@ -947,7 +954,7 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.BytesLeftInRecord > 0)
         {
-            _ = ReadFieldReference(reader, fieldReferences);
+            summary.WeightField = ReadFieldReference(reader, fieldReferences);
         }
 
         if (reader.BytesLeftInRecord > 0)
@@ -1505,9 +1512,9 @@ internal static partial class CrystalReportContentsParser
         SkipFieldReference(reader);
         _ = reader.LoadInt16();
         group.ShowLastDateInPeriod = reader.LoadBoolean();
-        _ = reader.LoadBoolean();
+        group.SuppressSubtotal = reader.LoadBoolean();
         var hasRanges = reader.LoadBoolean();
-        if (More()) _ = reader.LoadBoolean();
+        if (More()) group.SuppressLabel = reader.LoadBoolean();
         if (More()) _ = reader.LoadBoolean();
         CrystalFormulaFieldModel? nameFormula = null;
         if (More())
@@ -1838,7 +1845,7 @@ internal static partial class CrystalReportContentsParser
 
     private static bool IsReportObjectStart(int recordType)
     {
-        return recordType is 159 or 165 or 170 or 175;
+        return recordType is 159 or 165 or 170 or 172 or 175;
     }
 
     private static CrystalReportObjectModel? ReadReportObject(
@@ -1854,6 +1861,7 @@ internal static partial class CrystalReportContentsParser
                 159 => ReadFieldObject(reader, fieldReferences, dataDefinition),
                 165 => ReadTextObject(reader, fieldReferences, dataDefinition),
                 170 => ReadLineObject(reader),
+                172 => ReadBoxObject(reader),
                 175 => ReadPictureObject(reader),
                 _ => null
             };
@@ -1986,15 +1994,16 @@ internal static partial class CrystalReportContentsParser
     {
         var reportObject = ReadReportObjectBase(reader, "TextObject", "Text", 166);
 
-        if (reader.BytesLeftInRecord >= 16)
+        // Older text objects end after the paragraph count.
+        if (reader.BytesLeftInRecord >= 10)
         {
             _ = reader.LoadBoolean();
-            _ = reader.LoadBoolean();
-            _ = reader.LoadBoolean();
+            reportObject.SuppressIfDuplicate = reader.LoadBoolean();
+            reportObject.SuppressEmbeddedFieldBlankLines = reader.LoadBoolean();
             reportObject.MaxNumberOfLines = reader.LoadUInt16();
             var paragraphCount = reader.LoadUInt16();
-            _ = reader.LoadInt32();
-            var isHeading = reader.LoadBoolean();
+            if (reader.BytesLeftInRecord >= 4) _ = reader.LoadInt32();
+            var isHeading = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
             reader.SkipRestOfRecord();
 
             ReadCommonReportObjectRecords(reader, reportObject);
@@ -2035,9 +2044,10 @@ internal static partial class CrystalReportContentsParser
 
         if (reader.BytesLeftInRecord >= 8)
         {
-            _ = reader.LoadInt16();
+            reportObject.LineEndSection = reader.LoadInt16();
             endLeft = reader.LoadInt32Compressed();
             endTop = reader.LoadInt32Compressed();
+            reportObject.LineEndTop = endTop;
             _ = reader.LoadBoolean();
         }
 
@@ -2070,6 +2080,23 @@ internal static partial class CrystalReportContentsParser
         ReadCommonReportObjectRecords(reader, reportObject);
         SkipUntilRecord(reader, 171);
         return reportObject;
+    }
+
+    private static CrystalReportObjectModel ReadBoxObject(TslvArchiveReader reader)
+    {
+        _ = reader.LoadNextRecord(169, 1792, 173);
+        var box = ReadReportObjectBase(reader, "BoxObject", "Box", 173);
+        if (reader.BytesLeftInRecord >= 8)
+        {
+            box.LineEndSection = reader.LoadInt16();
+            _ = reader.LoadInt32Compressed();
+            box.LineEndTop = reader.LoadInt32Compressed();
+        }
+        reader.SkipRestOfRecord(); // End of the shared line/box geometry.
+        reader.SkipRestOfRecord(); // Position, format and border follow the box wrapper.
+        ReadCommonReportObjectRecords(reader, box);
+        SkipUntilRecord(reader, 173);
+        return box;
     }
 
     private static CrystalReportObjectModel ReadPictureObject(TslvArchiveReader reader)
@@ -2271,6 +2298,7 @@ internal static partial class CrystalReportContentsParser
         CrystalDataDefinitionModel dataDefinition,
         CrystalReportObjectModel reportObject)
     {
+        var firstRun = reportObject.TextRuns.Count;
         var text = new System.Text.StringBuilder();
         for (var i = 0; i < paragraphCount; i++)
         {
@@ -2283,7 +2311,30 @@ internal static partial class CrystalReportContentsParser
             text.Append(ReadTextParagraph(reader, fieldReferences, dataDefinition, reportObject));
         }
 
-        return text.ToString().Replace('\u00a0', ' ');
+        NormalizeTextRunLineEndings(reportObject.TextRuns, firstRun);
+        return text.ToString().Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace('\u00a0', ' ');
+    }
+
+    private static void NormalizeTextRunLineEndings(List<CrystalTextRunModel> runs, int firstRun)
+    {
+        var afterCarriageReturn = false;
+        for (var index = firstRun; index < runs.Count; index++)
+        {
+            var run = runs[index];
+            // An unresolved embedded field separates its neighboring literal characters.
+            if (run.Binding.Length > 0) afterCarriageReturn = false;
+            var normalized = new System.Text.StringBuilder(run.Text.Length);
+            foreach (var character in run.Text)
+            {
+                // A CRLF can straddle styled runs or the native paragraph boundary.
+                if (character == '\n' && afterCarriageReturn) { afterCarriageReturn = false; continue; }
+                normalized.Append(character == '\r' ? '\n' : character);
+                afterCarriageReturn = character == '\r';
+            }
+            if (run.Binding.Length > 0) afterCarriageReturn = false;
+            var value = normalized.ToString();
+            if (value != run.Text) runs[index] = run with { Text = value };
+        }
     }
 
     private static string ReadTextParagraph(
@@ -2416,7 +2467,8 @@ internal static partial class CrystalReportContentsParser
         var parsedColor = reportObject.Color;
         if (reader.BytesLeftInRecord >= 4)
         {
-            parsedColor = ReadCrystalColor(reader, nullColor: CrystalColorModel.Black());
+            // Opaque white is a valid font COLORREF (0xffffffff).
+            parsedColor = ReadCrystalColor(reader, nullColor: new CrystalColorModel { Name = "White", R = 255, G = 255, B = 255 });
         }
 
         while (reader.CurrentRecord is not null && reader.CurrentRecord.Type != 257)
@@ -2572,6 +2624,15 @@ internal static partial class CrystalReportContentsParser
                 states.Add(ReadFormatState(reader));
             }
 
+            // SectionProperties stores its static fill as three BGR bytes after the flags.
+            if (reader.BytesLeftInRecord >= 3)
+            {
+                var blue = reader.LoadUInt8();
+                var green = reader.LoadUInt8();
+                var red = reader.LoadUInt8();
+                if (red != 255 || green != 255 || blue != 255)
+                    format.BackgroundColor = new() { A = 255, R = red, G = green, B = blue, Name = $"ff{red:x2}{green:x2}{blue:x2}" };
+            }
             // After the area code (kind, header/footer, section flag) come SectionProperties' flags in their saved order: visible, not hidden,
             // new page before, new page after, keep together, suppress blank section, reset page number after, print at bottom of page, underlay.
             // An area keeps its own keep-together and print-at-bottom (FormattedArea); hiding and suppress-if-blank apply to sections only.

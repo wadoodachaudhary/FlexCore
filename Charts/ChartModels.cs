@@ -109,6 +109,10 @@ public class ChartAxis
     public string? Format { get; set; }
     public bool ShowGridLines { get; set; } = true;
     public int? TickCount { get; set; }
+    /// <summary>Omit category captions which would overlap; all data points remain plotted.</summary>
+    public bool AutoSkipLabels { get; set; } = true;
+    /// <summary>Minimum gap between visible category captions, in SVG units or print points.</summary>
+    public double MinimumLabelGap { get; set; } = 4;
 }
 
 public class ChartLegend
