@@ -87,6 +87,21 @@ public static class TslvStreamReader
             cursor.Position);
     }
 
+    internal static byte[] DecodeChartDrawing(byte[] bytes, byte[] contents)
+    {
+        if (bytes.AsSpan().StartsWith("TIFFGRAPH"u8)) return bytes;
+        if (bytes.Length > 8 * 1024 * 1024) throw new InvalidDataException("Chart drawing exceeds the input limit.");
+        if (bytes.Length >= 2 && bytes[0] == 0x78 && (bytes[0] * 256 + bytes[1]) % 31 == 0)
+        {
+            try { return Inflate(bytes); }
+            catch (InvalidDataException) { /* An encrypted drawing can start with the same bytes. */ }
+        }
+        var header = ReadHeader(contents, 1792);
+        if (!header.Encrypted || header.InitializationVector.Length != 16)
+            throw new InvalidDataException("Unknown chart stream encoding.");
+        return DecryptAndInflate(bytes, DefaultKey, header.InitializationVector);
+    }
+
     public static QeDecodedStream DecodeQueryEngineStream(byte[] bytes)
     {
         var header = QueryEngineStreamHeader.Read(bytes);

@@ -14,6 +14,7 @@ public sealed record ReportTableFragment(IReadOnlyList<ReportTabularColumn> Colu
     public IReadOnlyList<ReportTableCellFragment>? LayoutCells { get; init; }
     public IReadOnlyList<ReportTableFragment> ContinuationHeaders { get; init; } = [];
     public bool KeepWithNext { get; init; }
+    public IReadOnlyList<IReadOnlyList<string>>? StackFills { get; init; }
     public IReadOnlyList<ReportNativeCrossTabCellStyle?>? CellStyles { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool IsGrandTotalRow { get; init; }
@@ -28,6 +29,7 @@ public sealed record ReportTablePane(IReadOnlyList<ReportTableFragment> Headers,
 public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn> Columns, IReadOnlyList<ReportTabularRow> Rows, int RepeatedColumns)
 {
     public ReportNativeCrossTabLayout? NativeCrossTab { get; init; }
+    private IReadOnlyList<IReadOnlyList<IReadOnlyList<string>>>? StackBackgrounds { get; init; }
     private IReadOnlyList<string>? ParentHeadings { get; init; }
     private IReadOnlyList<IReadOnlyList<ReportNativeCrossTabCellStyle?>>? NativeCellStyles { get; init; }
     private IReadOnlyList<ReportNativeCrossTabCellStyle?>? NativeHeaderStyles { get; init; }
@@ -88,6 +90,8 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
         var groups = rows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.RowFields.Select(field => grouping.Value(row, field)))).Distinct().Count();
         if ((long)Math.Max(1, groups) * (columns + 1) * definition.Measures.Count > 2000000)
             throw new InvalidDataException("Cross-tab exceeds two million cells.");
+        if (definition.RowRanking is { } rank)
+            return RankedRows(definition, grouping, rank);
         var measures = new List<PivotValueConfig>();
         for (var index = 0; index < definition.Measures.Count; index++)
         {
@@ -95,8 +99,16 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
             var field = measure.Aggregate == ReportAggregateType.Count ? $"__fx_count_{index}" : measure.Field;
             if (measure.Aggregate == ReportAggregateType.Count)
                 foreach (var row in rows) row[field] = row.GetValueOrDefault(measure.Field) is null or DBNull ? 0 : 1;
+            if (measure.Aggregate == ReportAggregateType.WeightedAverage)
+            {
+                field = $"__fx_weighted_{index}";
+                foreach (var row in rows)
+                    row[field] = row.GetValueOrDefault(measure.Field) is { } value && value is not DBNull
+                        && row.GetValueOrDefault(measure.WeightField) is { } weight && weight is not DBNull
+                        ? (Convert.ToDecimal(value), Convert.ToDecimal(weight)) : DBNull.Value;
+            }
             measures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
-                ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median or ReportAggregateType.Min or ReportAggregateType.Max
+                ValueAggregator = measure.Aggregate == ReportAggregateType.WeightedAverage ? Weighted : measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median or ReportAggregateType.Min or ReportAggregateType.Max
                     ? values => ReportValueFormatting.ExtendedAggregate(values, measure.Aggregate) : null,
                 Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
                     ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
@@ -129,6 +141,34 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
                 i < definition.RowFields.Count ? definition.RowHeaderWidthTwips : definition.ValueColumnWidthTwips, i < definition.RowFields.Count, definition.ShowTotals && i == table.Columns.Count - 1)).ToArray(),
             table.Rows.Select(row => new ReportTabularRow(row.Values.Select((value, i) => appearance is not null && row.IsBold && i == 0 ? appearance.RowTotalCaption : Format(value, "")).ToArray(), row.IsBold)).ToArray(), definition.RowFields.Count) { NativeCrossTab = definition.NativeCrossTab };
         return matrix.WithCells(element, snapshot, cell => pivot.ExportCellRows(cell.Row, cell.Column, cell.RowSpan, cell.ColumnSpan)).WithoutSuppressedNativeTotals();
+    }
+
+    private static object Weighted(IEnumerable<object?> values)
+    {
+        decimal sum = 0, weight = 0;
+        foreach (var (v,w) in values.OfType<(decimal,decimal)>()) { sum += v*w; weight += w; }
+        return weight == 0 ? DBNull.Value : sum / weight;
+    }
+
+    private static ReportTabularData RankedRows(ReportAnalysisDefinition definition, ReportAnalysisGrouping grouping, ReportRowRanking rank)
+    {
+        var native = definition.NativeCrossTab!;
+        var captions = native.Appearance!;
+        var field = definition.RowFields.Single();
+        var measure = definition.Measures.Single();
+        var totals = grouping.Rows.GroupBy(row => grouping.Value(row, field))
+            .Select(group => (Key: group.Key, Amount: group.Sum(row => row[measure.Field] is null or DBNull
+                ? 0m : Convert.ToDecimal(row[measure.Field], CultureInfo.InvariantCulture))))
+            .ToArray();
+        var ordered = (rank.Bottom ? totals.OrderBy(pair => pair.Amount) : totals.OrderByDescending(pair => pair.Amount))
+            .ThenBy(pair => Format(pair.Key, ""), StringComparer.CurrentCulture).ToArray();
+        var count = Math.Min(rank.Count, ordered.Length);
+        var rows = ordered.TakeWhile((pair, index) => index < count || rank.WithTies && count > 0 && pair.Amount == ordered[count - 1].Amount)
+            .Select(pair => new ReportTabularRow([Format(pair.Key, ""), Format(pair.Amount, measure.Format)])).ToList();
+        if (definition.ShowTotals && !native.SuppressColumnGrandTotals)
+            rows.Add(new([captions.RowTotalCaption, Format(totals.Sum(pair => pair.Amount), measure.Format)], true));
+        return new([new("", definition.RowHeaderWidthTwips, true), new(captions.ColumnTotalCaption, definition.ValueColumnWidthTwips, false, true)],
+            rows, 1) { NativeCrossTab = native };
     }
 
     private ReportTabularData WithoutSuppressedNativeTotals()
@@ -186,6 +226,7 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
                         : !header && NativeRowHeights?.ElementAtOrDefault(row) is > 0 and var nativeHeight ? nativeHeight : lineHeight)
                     { NativeCrossTab = NativeCrossTab, IsGrandTotalRow = !header && (NativeGrandTotalRows?.ElementAtOrDefault(row) ?? total),
                         IsLastRow = !header && row == Rows.Count - 1,
+                        StackFills = !header && StackBackgrounds is not null ? indexes.Select(i => StackBackgrounds[row][i]).ToArray() : null,
                         CellStyles = (header ? NativeHeaderStyles : NativeCellStyles?.ElementAtOrDefault(row)) is { } styles
                         ? indexes.Select(i => styles.ElementAtOrDefault(i)).ToArray() : null }).ToArray();
             }

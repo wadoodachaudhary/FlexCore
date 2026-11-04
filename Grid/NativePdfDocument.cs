@@ -43,6 +43,13 @@ internal sealed class NativePdfDocument
         return image.Name;
     }
 
+    private readonly Dictionary<(string Start, string End), string> _gradients = [];
+    internal string Gradient(string start, string end)
+    {
+        if (!_gradients.TryGetValue((start, end), out var name)) _gradients[(start, end)] = name = "Sh" + (_gradients.Count + 1);
+        return name;
+    }
+
     internal string Opacity(double fill, double stroke)
     {
         var key = (fill, stroke);
@@ -86,12 +93,19 @@ internal sealed class NativePdfDocument
             var id = objects.Add($"<< /Type /ExtGState /ca {Number(alpha.Fill)} /CA {Number(alpha.Stroke)} >>");
             graphicsResources.Append('/').Append(name).Append(' ').Append(id).Append(" 0 R ");
         }
+        var shadingResources = new StringBuilder();
+        foreach (var (colors, name) in _gradients)
+        {
+            var id = objects.Add($"<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 0 1] /Function << /FunctionType 2 /Domain [0 1] /C0 [{Rgb(colors.Start)}] /C1 [{Rgb(colors.End)}] /N 1 >> /Extend [true true] >>");
+            shadingResources.Append('/').Append(name).Append(' ').Append(id).Append(" 0 R ");
+        }
+        static string Rgb(string color) => string.Join(' ', new[] { 1, 3, 5 }.Select(i => Number(Convert.ToByte(color.Substring(i, 2), 16) / 255d)));
         var pageIds = new List<int>();
         foreach (var page in _pages)
         {
             var content = "q\n1 0 0 -1 0 " + Number(page.Height) + " cm\n" + page.Content + "Q\n";
             var contentId = objects.Stream(Encoding.ASCII.GetBytes(content));
-            pageIds.Add(objects.Add($"<< /Type /Page /Parent {pagesId} 0 R /MediaBox [0 0 {Number(page.Width)} {Number(page.Height)}] /Resources << /Font << {fontResources} >> /XObject << {imageResources} >> /ExtGState << {graphicsResources} >> >> /Contents {contentId} 0 R >>"));
+            pageIds.Add(objects.Add($"<< /Type /Page /Parent {pagesId} 0 R /MediaBox [0 0 {Number(page.Width)} {Number(page.Height)}] /Resources << /Font << {fontResources} >> /XObject << {imageResources} >> /ExtGState << {graphicsResources} >> /Shading << {shadingResources} >> >> /Contents {contentId} 0 R >>"));
         }
         objects.Set(catalogId, $"<< /Type /Catalog /Pages {pagesId} 0 R >>");
         objects.Set(pagesId, $"<< /Type /Pages /Kids [{string.Join(' ', pageIds.Select(id => id + " 0 R"))}] /Count {pageIds.Count} >>");
@@ -193,6 +207,13 @@ internal sealed class NativePdfPage(NativePdfDocument document, double width, do
     public void Clip(double x, double y, double w, double h)
     { Size(w, h); _content.AppendLine($"{N(x)} {N(y)} {N(w)} {N(h)} re W n"); }
     public void Transform(double a, double b, double c, double d, double e, double f) => _content.AppendLine($"{N(a)} {N(b)} {N(c)} {N(d)} {N(e)} {N(f)} cm");
+    public void GradientRectangle(double x, double y, double w, double h, string start, string end)
+    {
+        if (w <= 0 || h <= 0) return;
+        Save(); Clip(x, y, w, h); Transform(w, 0, 0, h, x, y);
+        _content.Append('/').Append(document.Gradient(start, end)).AppendLine(" sh");
+        Restore();
+    }
     public void SetLineStyle(int cap, int join)
     {
         if (cap is < 0 or > 2 || join is < 0 or > 2) throw new InvalidDataException("Invalid PDF line cap or join style.");

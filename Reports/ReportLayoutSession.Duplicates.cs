@@ -18,7 +18,9 @@ public sealed partial class ReportLayoutSession
         var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString,
             element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat,
             SuppressesDuplicates(element) || element.Kind == "Field" && element.UseCrystalScreenMetrics
-                ? raw => value = new(raw) : null));
+                ? raw => value = new(raw) : null),
+            resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat,
+                element.NativeNumberFormat, element.NativeNumericFormat));
         return (html, html.Contains("[Formula error:", StringComparison.Ordinal) ? null : value);
     }
 

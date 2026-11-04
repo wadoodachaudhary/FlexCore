@@ -206,11 +206,12 @@ internal static partial class CrystalReportContentsParser
             ResolveDeferredSummaryReferences(dataDefinition);
             ResolveNativeFieldFormats(database, dataDefinition);
             ResolveNumericFormats(database, dataDefinition);
-            foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects)
+            // A chart can precede the cross-tab it references in drawing order.
+            foreach (var (reportObject, analysisReader) in fieldReferences.AnalyticalObjects.OrderBy(item => item.Item1.Kind == "Chart"))
             {
                 try
                 {
-                    reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition);
+                    reportObject.Analysis = ReadAnalysisBindings(analysisReader, fieldReferences, dataDefinition, reportObject);
                     var area = dataDefinition.ReportDefinition.Areas.FirstOrDefault(area => area.Sections.Any(section => section.ReportObjects.Contains(reportObject)));
                     if (reportObject.Kind == "CrossTab" && area is { Kind: "GroupHeader" or "GroupFooter", GroupIndex: > 0 }
                         && area.GroupIndex <= dataDefinition.Groups.Count)
@@ -2213,12 +2214,22 @@ internal static partial class CrystalReportContentsParser
             format.HorizontalAlignment = HorizontalAlignmentName(reader.BytesLeftInRecord > 0 ? reader.LoadEnum() : 0);
             if (reader.BytesLeftInRecord > 0)
             {
-                reader.SkipBytes(1);
+                _ = reader.LoadEnum();
             }
 
             format.EnableKeepTogether = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
             format.EnableCloseAtPageBreak = !(reader.BytesLeftInRecord >= 2 && reader.LoadBoolean());
             format.EnableCanGrow = reader.BytesLeftInRecord >= 2 && reader.LoadBoolean();
+            // The saved angle in degrees follows the legacy tooltip and hyperlink strings.
+            var tail = reader.Fork();
+            try
+            {
+                if (tail.BytesLeftInRecord > 0) _ = tail.LoadString();
+                if (tail.BytesLeftInRecord > 0) _ = tail.LoadString();
+                if (tail.BytesLeftInRecord >= 2) format.TextRotation = tail.LoadUInt16();
+            }
+            catch (Exception error) when (error is EndOfStreamException or InvalidDataException)
+            { /* Short legacy records retain their horizontal default. */ }
             reader.SkipRestOfRecord();
             // ReportObjectProperties.w: only the called formatting surface is migrated.
             ReadConditionReferences(reader, format.ConditionReferences, ["EnableSuppress", "HorizontalAlignment", "", "EnableKeepTogether", "EnableCloseAtPageBreak",
@@ -2441,8 +2452,13 @@ internal static partial class CrystalReportContentsParser
         reader.SkipRestOfRecord();
         var references = new List<(string Property, string Name, int Type, int Index)>();
         var style = ReadFontColourProperties(reader, reportObject, references);
-        SkipUntilRecord(reader, 197);
-        CaptureTextRun(reportObject, "", text, style.Font, style.Color).FontConditionReferences.AddRange(references);
+        // The embedded field's own format properties follow its font, as they do for a field object:
+        // a date printed inside a text object keeps its authored format ("Printed November 03, 2026").
+        var properties = new CrystalReportObjectModel { Name = reportObject.Name };
+        ReadNativeFieldFormats(reader, properties, endType: 197);
+        var run = CaptureTextRun(reportObject, "", text, style.Font, style.Color);
+        run.FontConditionReferences.AddRange(references);
+        run.NativeDateTimeFormat = properties.NativeDateTimeFormat;
         return text;
     }
 
@@ -2898,6 +2914,8 @@ internal static partial class CrystalReportContentsParser
             }
             case 5:
             {
+                // "No Printer": the designer laid the report out on the screen device.
+                core.NoPrinter = true;
                 NormalizeMargins(core, 360);
                 var hasSettings = reader.LoadBoolean();
                 reader.SkipRestOfRecord();

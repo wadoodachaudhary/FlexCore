@@ -6,7 +6,7 @@ internal static partial class CrystalReportContentsParser
 {
     // Read analytical bindings and the fixed-cell geometry of simple legacy cross-tabs.
     private static ReportAnalysisDefinition ReadAnalysisBindings(TslvArchiveReader reader,
-        FieldReferenceTable fields, CrystalDataDefinitionModel data)
+        FieldReferenceTable fields, CrystalDataDefinitionModel data, CrystalReportObjectModel owner)
     {
         var objectType = reader.CurrentRecord!.Type;
         var definition = new ReportAnalysisDefinition();
@@ -15,6 +15,10 @@ internal static partial class CrystalReportContentsParser
         var styleFound = false;
         bool? savedThreeDimensionalLegend = null;
         var categoryLegend = false;
+        ReportChartRightLegend? rightLegend = null;
+        bool? savedLegendEnabled = null;
+        bool isPerspectivePie = false;
+        var crossTabChart = false;
         var bindingFound = false;
         var expectedMeasures = -1;
         var expectedGroups = -1;
@@ -50,6 +54,16 @@ internal static partial class CrystalReportContentsParser
             _ = ReadReportObjectBase(probe, "", "", 186);
             drawGrid = probe.LoadBoolean();
             showCellMargins = probe.LoadBoolean();
+            // GridObject's stored ID connects CrossTabValueGridDefinition charts to this exact grid.
+            var identity = probe.Fork();
+            try
+            {
+                _ = ReadCrystalColor(identity, CrystalColorModel.TransparentWhite());
+                _ = identity.LoadInt32(); _ = identity.LoadInt32();
+                _ = identity.LoadInt32Compressed(); _ = identity.LoadInt32Compressed();
+                owner.GridLinkId = identity.LoadUInt8();
+            }
+            catch (Exception identityError) when (identityError is InvalidDataException or EndOfStreamException) { /* A grid without a link ID can still render on its own. */ }
             if (!showCellMargins) paddingX = paddingY = 0;
             probe.SkipRestOfRecord();
             suppressColumnTotals = probe.LoadBoolean();
@@ -143,22 +157,43 @@ internal static partial class CrystalReportContentsParser
                 };
                 definition.Title = reader.LoadString() ?? "";
                 definition.ChartThreeDimensional = nativeType == 0 && subtype is 3 or 4 or 5;
-                if (definition.ChartThreeDimensional || nativeType == 0 && subtype == 0)
+                isPerspectivePie = nativeType == 3 && subtype == 31;
+                if (definition.ChartThreeDimensional || nativeType is 0 or 2 or 3)
                 {
                     // The legacy graph style stores eight captions and eight font families before its legend flag.
                     // Probe independently so shorter style records retain their existing defaults.
                     var probe = reader.Fork();
                     try
                     {
-                        for (var caption = 0; caption < 7; caption++)
-                            if ((probe.LoadString()?.Length ?? 0) > 4096) throw new InvalidDataException("Invalid graph caption length.");
+                        var captions = Enumerable.Range(0,7).Select(_ => probe.LoadString() ?? "").ToArray();
+                        if (captions.Any(caption => caption.Length > 4096)) throw new InvalidDataException("Invalid graph caption length.");
                         for (var font = 0; font < 8; font++)
                             if ((probe.LoadString()?.Length ?? 0) > 256) throw new InvalidDataException("Invalid graph font-family length.");
                         var visible = probe.LoadUInt16();
                         var placement = probe.LoadEnum();
                         if (visible > 1 || placement is < 0 or > 3) throw new InvalidDataException("Unknown graph legend style.");
                         if (definition.ChartThreeDimensional) savedThreeDimensionalLegend = visible == 1;
-                        else categoryLegend = visible == 1 && placement == 3;
+                        else categoryLegend = nativeType == 0 && visible == 1 && placement == 3;
+                        savedLegendEnabled = visible == 1;
+                        if (nativeType is 0 or 2 && subtype is 0 or 1 or 20)
+                        {
+                            var vertical = probe.LoadBoolean(); _ = probe.LoadEnum(); // series orientation and bar size
+                            _ = probe.LoadEnum(); _ = probe.LoadEnum(); // marker size/shape
+                            var grids = Enumerable.Range(0,4).Select(_ => probe.LoadEnum()).ToArray();
+                            if (vertical && nativeType == 0 && visible == 1 && placement == 0)
+                                rightLegend = new(captions[4], captions[5], grids[0] != 0, grids[2] != 0);
+                            if (vertical && nativeType == 0 && subtype == 1 && visible == 0 && (captions[4].Length > 0 || captions[5].Length > 0))
+                                rightLegend = new(captions[4], captions[5], grids[0] != 0, grids[2] != 0);
+                            var bounds = Enumerable.Range(0,6).Select(_ => probe.LoadDouble()).ToArray();
+                            var formats = Enumerable.Range(0,3).Select(_ => probe.LoadEnum()).ToArray();
+                            var automatic = Enumerable.Range(0,3).Select(_ => probe.LoadEnum()).ToArray();
+                            _ = probe.LoadEnum(); _ = probe.LoadEnum(); _ = probe.LoadEnum();
+                            var divisions = probe.LoadInt32();
+                            if (subtype != 1 && automatic[0] == 0 && formats[0] is 3 or 4 && double.IsFinite(bounds[0]) && double.IsFinite(bounds[1])
+                                && bounds[1] > bounds[0] && divisions is >= 1 and < 60)
+                                definition.PrintAxis = new(bounds[0], bounds[1], divisions+1, formats[0]==3 ? "C0" : "C2",
+                                    captions[4],captions[5],grids[2]!=0);
+                        }
                     }
                     catch (Exception legendError) when (legendError is InvalidDataException or EndOfStreamException)
                     { /* Older graph records keep the editable default legend policy. */ }
@@ -178,7 +213,10 @@ internal static partial class CrystalReportContentsParser
                     for (var flags = Count(reader.LoadUInt16(), 128); flags > 0; flags--)
                         chartMeasureFlags.Add(reader.LoadInt32());
                 if (reader.BytesLeftInRecord > 0 && reader.LoadBoolean())
-                    throw new NotSupportedException("Native alternate chart evaluation requires an explicit adapter.");
+                {
+                    if (!definition.EachRecord && expectedGroups == 0 && expectedMeasures > 0) definition.SummariesAsCategories = true;
+                    else throw new NotSupportedException("Native alternate chart evaluation requires an explicit adapter.");
+                }
                 if (reader.BytesLeftInRecord > 0) definition.CategoryField = ReadFieldReference(reader, fields, data);
                 bindingFound = true;
             }
@@ -212,7 +250,7 @@ internal static partial class CrystalReportContentsParser
                     if ((grouping is < 0 or > 7) || direction is < 0 or > 3 || objectType == 180 && direction > 1)
                         throw new NotSupportedException("Native analytical date/Top N grouping is not supported.");
                     if (pendingGroup.TopNCount > 0 && objectType == 185 && ranked is null && containers.Contains(211)
-                        && direction == 1 && pendingGroup.DiscardOthers && !pendingGroup.TopNHasFormula && pendingGroup.TopNPercentage == 0
+                        && direction is 0 or 1 && pendingGroup.DiscardOthers && !pendingGroup.TopNHasFormula && pendingGroup.TopNPercentage == 0
                         && pendingGroup.ParentIdField.Length == 0)
                         ranked = pendingGroup;
                     else if (pendingGroup.TopNCount > 0 || pendingGroup.TopNPercentage > 0 || pendingGroup.ParentIdField.Length > 0)
@@ -275,8 +313,30 @@ internal static partial class CrystalReportContentsParser
                     reader.SkipRestOfRecord();
                 }
             }
-            else if (record.Type is 290 or 292)
-                throw new NotSupportedException("Linked-chart, OLAP or calculated-member bindings are retained but not evaluated.");
+            else if (record.Type == 290 && objectType == 180)
+            {
+                var id = reader.LoadUInt8();
+                var orientation = reader.LoadEnum();
+                var measure = reader.LoadUInt16();
+                var secondGrouping = reader.LoadBoolean();
+                var hasTarget = reader.BytesLeftInRecord == 0 || reader.LoadBoolean();
+                var grids = fields.AnalyticalObjects.Where(item => item.Item1.Kind == "CrossTab" && item.Item1.GridLinkId == id)
+                    .Select(item => item.Item1).Take(2).ToArray();
+                if (!hasTarget || grids.Length != 1 || grids[0].Analysis is not {} grid || orientation is not (0 or 1)
+                    || secondGrouping || measure >= grid.Measures.Count || grid.Groups.Count != 0 || grid.RowRanking is not null
+                    || grid.CalculatedMembers.Count != 0 || grid.GroupScope.Length != 0)
+                    throw new NotSupportedException("Cross-tab chart target, grouping or summary cannot be resolved.");
+                var axis = orientation == 0 ? grid.RowFields : grid.ColumnFields;
+                if (axis.Count == 0) throw new NotSupportedException("The chart's selected cross-tab axis has no group.");
+                var field = axis[0];
+                groups.Add(field);
+                if (grid.GroupKinds.TryGetValue(field, out var kind)) definition.GroupKinds[field] = kind;
+                if (grid.DescendingFields.Contains(field)) definition.DescendingFields.Add(field);
+                definition.Measures.Add(grid.Measures[measure].Clone());
+                bindingFound = crossTabChart = true;
+            }
+            else if (record.Type == 292)
+                throw new NotSupportedException("OLAP chart bindings are retained but not evaluated.");
             else if (record.Type == 319 && reader.LoadUInt16() != 0)
                 throw new NotSupportedException("Native analytical sort rules require an explicit sort adapter.");
             reader.SkipRestOfRecord();
@@ -287,7 +347,7 @@ internal static partial class CrystalReportContentsParser
         definition.ColumnFields = definition.ColumnFields.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         if (objectType == 180)
         {
-            if (!styleFound || !bindingFound || groups.Count > 2 || !definition.EachRecord && groups.Count == 0
+            if (!styleFound || !bindingFound || groups.Count > 2 || !definition.EachRecord && groups.Count == 0 && !definition.SummariesAsCategories
                 || expectedMeasures >= 0 && expectedMeasures != definition.Measures.Count
                 || expectedGroups >= 0 && expectedGroups != groups.Count)
                 throw new InvalidDataException("Incomplete native chart data/style binding records.");
@@ -298,7 +358,30 @@ internal static partial class CrystalReportContentsParser
                 && definition.ChartType is ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100
                     or ChartType.HorizontalBar or ChartType.Line or ChartType.Area)
                 definition.ShowLegend = false;
+            if (definition.PrintAxis is not null || definition.SummariesAsCategories)
+                definition.ShowLegend = savedLegendEnabled ?? definition.ShowLegend;
+            if (definition.SummariesAsCategories)
+            {
+                definition.PerspectivePie = isPerspectivePie;
+                foreach (var measure in definition.Measures)
+                    if (string.IsNullOrEmpty(measure.Caption))
+                        measure.Caption = measure.Aggregate + " of " + measure.Field.Trim('{','}');
+            }
             if (savedThreeDimensionalLegend is { } savedLegend) definition.ShowLegend = savedLegend;
+            // A one-series data chart can key each category (one swatch per bar).
+            // Report-group charts and charts with fixed scales have their own presentation rules.
+            if (rightLegend is not null && definition.ReportGroupChart && definition.ChartType == ChartType.StackedBar
+                && groups.Count == 1 && definition.Measures.Count == 1 && savedLegendEnabled == false)
+            {
+                definition.RightCategoryLegend = rightLegend;
+                definition.ChartCategoryLegend = true;
+            }
+            if (rightLegend is not null && groups.Count == 1 && definition.Measures.Count == 1
+                && !definition.ReportGroupChart && definition.PrintAxis is null && !definition.SummariesAsCategories)
+            {
+                definition.RightCategoryLegend = rightLegend with { RotateCategories = crossTabChart };
+                categoryLegend = true;
+            }
             if (categoryLegend)
             {
                 definition.ChartCategoryLegend = true;
@@ -483,6 +566,13 @@ internal static partial class CrystalReportContentsParser
                         showCellMargins ? item.Axis == 216 || !uniformPadding ? item.PaddingX : paddingX : 0,
                         showCellMargins ? item.Axis == 216 || !uniformPadding ? item.PaddingY : paddingY : 0, "",
                         CellStyle(cell, fill, item.Axis == 216 ? "right" : "left"), numeric, dateTime));
+                    if (stacked && numeric?.SymbolFormulaIndex is >= 0 and var symbol && symbol < data.FormulaFields.Count)
+                    {
+                        var formula = data.FormulaFields[symbol];
+                        var last = templates[^1];
+                        templates[^1] = last with { Style = last.Style with { Conditions = [..last.Style.Conditions,
+                            new("CurrencySymbol", new(formula.FormulaText, formula.Syntax == 1 ? "Basic" : "Crystal"))] }};
+                    }
                     if (item.Axis is 207 or 211) templates[^1] = templates[^1] with { CellWidth = geometry.Width, CellHeight = geometry.Height };
                 }
                 foreach (var total in totalStyles)
@@ -536,11 +626,18 @@ internal static partial class CrystalReportContentsParser
                 definition.RowHeightTwips = Math.Max(180, label.Height + 2 * paddingY);
             }
         }
-        if (ranked is not null)
+        if (ranked is not null && drawGrid && definition.NativeCrossTab?.Appearance is not null
+            && definition.RowFields.Count == 1 && definition.ColumnFields.Count == 0 && definition.Measures.Count == 1
+            && definition.Measures[0].Aggregate == ReportAggregateType.Sum && definition.Cells.Count == 0 && definition.CalculatedMembers.Count == 0
+            && nativeCells.All(cell => cell.Cell.Format.ConditionReferences.Count == 0))
+        {
+            definition.RowRanking = new(ranked.TopNCount, ranked.Direction == 0, ranked.WithTies);
+        }
+        else if (ranked is not null)
         {
             var assignments = nativeCells.Where(c => c.Axis == 216 && c.Column == 1 && c.Row == 0)
                 .SelectMany(c => c.Cell.Format.ConditionReferences).ToArray();
-            if (drawGrid || definition.RowFields.Count != 1 || definition.ColumnFields.Count != 0 ||
+            if (ranked.Direction != 1 || drawGrid || definition.RowFields.Count != 1 || definition.ColumnFields.Count != 0 ||
                 definition.Measures.Count != 1 || definition.Measures[0].Aggregate != ReportAggregateType.Sum ||
                 nativeCells.Any(c => !c.Cell.Format.EnableSuppress) || totalStyles.Values.Any(c => !c.Format.EnableSuppress) ||
                 assignments.Length != 1 || assignments[0].Property != "EnableKeepTogether" ||
@@ -643,12 +740,12 @@ internal static partial class CrystalReportContentsParser
             {
                 0 => ReportAggregateType.Sum, 1 => ReportAggregateType.Average, 4 => ReportAggregateType.Max,
                 5 => ReportAggregateType.Min, 6 => ReportAggregateType.Count,
-                9 => ReportAggregateType.DistinctCount, 13 => ReportAggregateType.Median,
+                9 => ReportAggregateType.DistinctCount, 12 when objectType == 185 && summary.WeightField.Length > 0 => ReportAggregateType.WeightedAverage, 13 => ReportAggregateType.Median,
                 _ => throw new NotSupportedException($"Native analytical aggregate {SummaryOperationName(summary.Operation)} is not supported.")
             };
             if (objectType == 185 && definition.Measures.Any(m => m.Field == summary.SummarizedField && m.Aggregate == operation && m.Caption == summary.Name)) return;
             definition.Measures.Add(new() { Field = summary.SummarizedField, Caption = summary.Name,
-                Aggregate = operation, Format = operation is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0"
+                Aggregate = operation, WeightField = operation == ReportAggregateType.WeightedAverage ? summary.WeightField : "", Format = operation is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0"
                     : summary.ValueType switch { 9 => "d", 10 => "t", 15 => "g", 11 or 12 or 13 => "", _ => "N2" } });
         }
         static int Count(int value, int limit) => value >= 0 && value <= limit ? value

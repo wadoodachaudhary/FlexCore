@@ -105,6 +105,22 @@ public static partial class ReportDesignerEditing
         page.ContentHeightTwips = height - page.MarginTopTwips - page.MarginBottomTwips;
     }
 
+    internal static (int Width, int Height) PhysicalPaperSize(ReportDesignerPage page)
+    {
+        var width = page.ContentWidthTwips + page.MarginLeftTwips + page.MarginRightTwips;
+        var height = page.ContentHeightTwips + page.MarginTopTwips + page.MarginBottomTwips;
+        if (page.PaperSize is not ("PaperLetter" or "PaperLegal" or "PaperA4" or "PaperA3" or "PaperTabloid"))
+            return (width, height);
+        var standard = new ReportDesignerPage { Orientation = page.Orientation };
+        SetPaperSize(standard, page.PaperSize);
+        var paperWidth = standard.ContentWidthTwips + standard.MarginLeftTwips + standard.MarginRightTwips;
+        var paperHeight = standard.ContentHeightTwips + standard.MarginTopTwips + standard.MarginBottomTwips;
+        // Printer-device printable areas and margins can sum a few twips past
+        // the named paper. Keep the authored content grid, not an oversized sheet.
+        return Math.Abs(width - paperWidth) <= 3 && Math.Abs(height - paperHeight) <= 3
+            ? (paperWidth, paperHeight) : (width, height);
+    }
+
     public static string? ValidatePage(ReportDesignerPage page) =>
         page.ContentWidthTwips <= 0 || page.ContentHeightTwips <= 0 ||
         new[] { page.MarginLeftTwips, page.MarginRightTwips, page.MarginTopTwips, page.MarginBottomTwips }.Any(value => value < 0)

@@ -29,8 +29,20 @@ public sealed record ReportNativeDateTimeFormat(bool SystemDefaultFormatting, in
         if (UnsupportedReason is { } reason) throw new NotSupportedException("Native date/time format: " + reason + ".");
         var date = Order == 3 ? "" : SystemDefaultFormatting || WindowsDateDefault != 2
             ? value.ToString(WindowsDateDefault == 0 ? "D" : "d", culture) : DateComponents!.Format(value, culture);
-        var time = Order == 2 ? "" : SystemDefaultFormatting ? value.ToString("T", culture) : TimeComponents!.Format(value);
+        var time = Order == 2 ? "" : SystemDefaultFormatting ? value.ToString(CompactLongTimePattern(culture.DateTimeFormat), culture) : TimeComponents!.Format(value);
         return Order switch { 0 => date + Separator + time, 1 => time + Separator + date, 2 => date, 3 => time, _ => throw new InvalidOperationException() };
+    }
+
+    // Crystal's default clock keeps the regional time pattern, but joins a trailing
+    // AM/PM designator to the time (e.g. h:mm:sstt). Custom field formats bypass this.
+    private static string CompactLongTimePattern(DateTimeFormatInfo format)
+    {
+        var pattern = format.LongTimePattern;
+        if (!pattern.EndsWith("tt", StringComparison.Ordinal)) return pattern;
+        var prefix = pattern.AsSpan(0, pattern.Length - 2);
+        var clock = prefix.TrimEnd();
+        return clock.Length == prefix.Length || clock.EndsWith("\\", StringComparison.Ordinal)
+            ? pattern : string.Concat(clock, "tt");
     }
 
     internal XElement ToXml() => new("FlexKitNativeDateTimeFormat",

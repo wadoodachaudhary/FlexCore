@@ -13,7 +13,7 @@ else if (Snapshot is null)
 }
 else if (Element.Kind == "Chart")
 {
-    <ChartControl Type="Snapshot.Definition.ChartType" ThreeDimensional="Snapshot.Definition.ChartThreeDimensional" CategoryLegend="Snapshot.Definition.ChartCategoryLegend" Title="@Snapshot.Definition.Title" Series="_series"
+    <ChartControl Type="Snapshot.Definition.ChartType" ReportPlot="Snapshot.Definition" ThreeDimensional="Snapshot.Definition.ChartThreeDimensional" CategoryLegend="Snapshot.Definition.ChartCategoryLegend" Title="@Snapshot.Definition.Title" Series="_series"
         Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false"
         ColorBarsByCategory="PrintBars" ColorPalette="@(PrintBars && !Snapshot.Definition.ChartThreeDimensional && !Snapshot.Definition.ChartCategoryLegend ? ReportAnalysisGraphic.CrystalBarPalette : null)"
         PrintReportGroupChart="Snapshot.Definition.ReportGroupChart" PrintWidthPoints="@(PrintBars ? Element.WidthTwips / 20d : 0)" PrintHeightPoints="@(PrintBars ? Element.HeightTwips / 20d : 0)"

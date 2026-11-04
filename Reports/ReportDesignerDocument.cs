@@ -382,6 +382,9 @@ public sealed class ReportDesignerPage
     public int MarginTopTwips { get; set; } = 720;
     public int MarginRightTwips { get; set; } = 720;
     public int MarginBottomTwips { get; set; } = 720;
+    /// <summary>Crystal "No Printer": the report's text objects and growing fields are laid out at 96-dpi screen metrics.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoPrinter { get; set; }
 }
 
 public sealed class ReportDesignerSection
@@ -443,9 +446,28 @@ public sealed class ReportDesignerElement
     public string TextColor { get; set; } = "#000000";
     public string BackgroundColor { get; set; } = "transparent";
     public string HorizontalAlignment { get; set; } = "Default";
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int TextRotation { get; set; }
+    internal bool HasRotatedText => TextRotation is 90 or 270 && Kind is "Text" or "Field" or "FieldHeading";
+
+    // The printed box stays on the page. Line layout uses its perpendicular dimension.
+    internal ReportDesignerElement TextLayoutFrame()
+    {
+        if (!HasRotatedText) return this;
+        var frame = (ReportDesignerElement)MemberwiseClone();
+        frame.TextRotation = 0;
+        (frame.WidthTwips, frame.HeightTwips) = (HeightTwips, WidthTwips);
+        frame.Visual = Visual.Clone();
+        var v = frame.Visual;
+        (v.LeftLine, v.TopLine, v.RightLine, v.BottomLine) = TextRotation == 90
+            ? (Visual.BottomLine, Visual.LeftLine, Visual.TopLine, Visual.RightLine)
+            : (Visual.TopLine, Visual.RightLine, Visual.BottomLine, Visual.LeftLine);
+        return frame;
+    }
     public bool IsSuppressed { get; set; }
     public bool CanGrow { get; set; }
     /// <summary>Authored maximum text lines when growing; zero means unlimited.</summary>
+    public bool InterpretHtml { get; set; }
     public int MaxNumberOfLines { get; set; }
     /// <summary>Hide consecutive equal field values in printed sections, preserving their space and underlying data.</summary>
     public bool SuppressIfDuplicate { get; set; }
@@ -457,6 +479,9 @@ public sealed class ReportDesignerElement
     public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
     /// <summary>Use integral 96-DPI em heights for converted Crystal screen layouts, without changing authored point sizes.</summary>
     public bool UseCrystalScreenMetrics { get; set; }
+    /// <summary>The report was authored with no printer: text objects and growing fields lay out at 96-dpi screen metrics.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool NoPrinterLayout { get; set; }
     public bool LockFormat { get; set; }
     public bool LockSizePosition { get; set; }
     public int IndentTwips { get; set; }
@@ -504,8 +529,10 @@ public sealed class ReportDesignerElement
             TextColor = TextColor,
             BackgroundColor = BackgroundColor,
             HorizontalAlignment = HorizontalAlignment,
+            TextRotation = TextRotation,
             IsSuppressed = IsSuppressed,
             CanGrow = CanGrow,
+            InterpretHtml = InterpretHtml,
             MaxNumberOfLines = MaxNumberOfLines,
             SuppressIfDuplicate = SuppressIfDuplicate,
             SuppressEmbeddedFieldBlankLines = SuppressEmbeddedFieldBlankLines,
@@ -514,6 +541,7 @@ public sealed class ReportDesignerElement
             NativeNumberFormat = NativeNumberFormat,
             NativeNumericFormat = NativeNumericFormat,
             UseCrystalScreenMetrics = UseCrystalScreenMetrics,
+            NoPrinterLayout = NoPrinterLayout,
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
@@ -761,6 +789,7 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("PageContentWidth", document.Page.ContentWidthTwips),
             new XAttribute("PaperOrientation", document.Page.Orientation),
             new XAttribute("PaperSize", document.Page.PaperSize),
+            document.Page.NoPrinter ? new XAttribute("FlexKitNoPrinter", "true") : null,
             new XElement("PageMargins",
                 new XAttribute("bottomMargin", document.Page.MarginBottomTwips),
                 new XAttribute("leftMargin", document.Page.MarginLeftTwips),
@@ -881,6 +910,7 @@ public static partial class ReportDesignerXmlSerializer
         printOptions.SetAttributeValue("PageContentWidth", page.ContentWidthTwips);
         printOptions.SetAttributeValue("PaperOrientation", page.Orientation);
         printOptions.SetAttributeValue("PaperSize", page.PaperSize);
+        printOptions.SetAttributeValue("FlexKitNoPrinter", page.NoPrinter ? "true" : null);
 
         var margins = Child(printOptions, "PageMargins") ?? EnsureChild(printOptions, "PageMargins");
         margins.SetAttributeValue("bottomMargin", page.MarginBottomTwips);
@@ -901,6 +931,7 @@ public static partial class ReportDesignerXmlSerializer
         objectElement.SetAttributeValue("Width", element.WidthTwips);
         objectElement.SetAttributeValue("Height", element.HeightTwips);
 
+        if (element.Kind == "Field") objectElement.SetAttributeValue("TextInterpretation", element.InterpretHtml ? "Html" : null);
         if (element.MaxNumberOfLines < 0)
             throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
         if (objectElement.Name.LocalName is "FieldObject" or "TextObject" or "FieldHeadingObject")
@@ -950,6 +981,7 @@ public static partial class ReportDesignerXmlSerializer
         objectFormat.SetAttributeValue("EnableCanGrow", Lower(element.CanGrow));
         objectFormat.SetAttributeValue("EnableCloseAtPageBreak", Lower(element.Visual.CloseAtPageBreak));
         objectFormat.SetAttributeValue("EnableSuppress", Lower(element.IsSuppressed));
+        objectFormat.SetAttributeValue("TextRotation", element.TextRotation == 0 ? null : element.TextRotation);
         objectFormat.SetAttributeValue("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment);
         objectFormat.SetAttributeValue("FlexKitFormatString", element.FormatString ?? "");
         objectFormat.SetAttributeValue("FlexKitCrystalScreenMetrics", Lower(element.UseCrystalScreenMetrics));
@@ -1070,6 +1102,7 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("EnableCloseAtPageBreak", "true"),
             new XAttribute("EnableKeepTogether", "true"),
             new XAttribute("EnableSuppress", Lower(element.IsSuppressed)),
+            element.TextRotation == 0 ? null : new XAttribute("TextRotation", element.TextRotation),
             new XAttribute("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment)));
         objectElement.Add(new XElement("ObjectFormatConditionFormulas"));
         return objectElement;
@@ -1155,8 +1188,10 @@ public static partial class ReportDesignerXmlSerializer
                 TextColor = ColorFromElement(Child(objectElement, "Color"), "#000000"),
                 BackgroundColor = ColorFromElement(Child(Child(objectElement, "Border"), "BackgroundColor"), "transparent"),
                 HorizontalAlignment = Attribute(objectFormat, "HorizontalAlignment") ?? "Default",
+                TextRotation = ParseInt(Attribute(objectFormat, "TextRotation")),
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
+                InterpretHtml = Attribute(objectElement, "TextInterpretation") == "Html",
                 MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
                 SuppressIfDuplicate = ParseBool(Attribute(objectElement, "SuppressIfDuplicate")),
                 SuppressEmbeddedFieldBlankLines = ParseBool(Attribute(objectElement, "SuppressEmbeddedFieldBlankLines")),
@@ -1166,6 +1201,7 @@ public static partial class ReportDesignerXmlSerializer
                 NativeNumericFormat = ReportNativeNumericFormat.Read(objectElement),
                 UseCrystalScreenMetrics = ParseBool(Attribute(objectFormat, "FlexKitCrystalScreenMetrics"),
                     document.SourceDocument?.Root?.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is not null),
+                NoPrinterLayout = document.Page.NoPrinter,
                 LockFormat = ParseBool(Attribute(objectFormat, "FlexKitLockFormat")),
                 LockSizePosition = ParseBool(Attribute(objectFormat, "FlexKitLockSizePosition")),
                 IndentTwips = ParseInt(Attribute(objectFormat, "FlexKitIndentTwips")),
@@ -1486,6 +1522,7 @@ public static partial class ReportDesignerXmlSerializer
         {
             Orientation = Attribute(printOptions, "PaperOrientation") ?? "Portrait",
             PaperSize = Attribute(printOptions, "PaperSize") ?? "PaperLetter",
+            NoPrinter = ParseBool(Attribute(printOptions, "FlexKitNoPrinter")),
             ContentWidthTwips = ParseInt(Attribute(printOptions, "PageContentWidth"), 11520),
             ContentHeightTwips = ParseInt(Attribute(printOptions, "PageContentHeight"), 15120),
             MarginLeftTwips = ParseInt(Attribute(margins, "leftMargin"), 720),

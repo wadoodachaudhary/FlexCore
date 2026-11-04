@@ -1,7 +1,8 @@
 @namespace Fx.ControlKit.Reports
 
+@{ var paper = ReportDesignerEditing.PhysicalPaperSize(Page.Size); }
 <article class="fx-report-positioned-page" aria-label="@Page.Title" data-page="@Page.Number"
-    style="@($"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:{Px(Page.Size.ContentWidthTwips + Page.Size.MarginLeftTwips + Page.Size.MarginRightTwips)}px;height:{Px(Page.Size.ContentHeightTwips + Page.Size.MarginTopTwips + Page.Size.MarginBottomTwips)}px;break-after:page;")">
+    style="@($"position:relative;box-sizing:content-box;overflow:hidden;background:white;color:black;letter-spacing:0;width:{Px(paper.Width)}px;height:{Px(paper.Height)}px;break-after:page;")">
     <div style="@($"position:absolute;left:{Px(Page.Size.MarginLeftTwips)}px;top:{Px(Page.Size.MarginTopTwips)}px;width:{Px(Page.Size.ContentWidthTwips)}px;height:{Px(Page.Size.ContentHeightTwips)}px;overflow:hidden;")">
         @foreach (var band in Page.Bands)
         {

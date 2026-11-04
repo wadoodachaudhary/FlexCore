@@ -32,14 +32,21 @@ internal static partial class CrystalReportContentsParser
         }
         reader.SkipRestOfRecord();
         var conditional = false;
+        var slot = 0; var symbolIndex = -1; var otherCondition = false;
         while (reader.BytesLeftInRecord > 0)
         {
-            var name = reader.LoadString(); _ = reader.LoadEnum(); var index = reader.LoadUInt16();
-            conditional |= !string.IsNullOrEmpty(name) || index != ushort.MaxValue;
+            var name = reader.LoadString(); var type = reader.LoadEnum(); var index = reader.LoadUInt16();
+            if (!string.IsNullOrEmpty(name) || index != ushort.MaxValue)
+            {
+                conditional = true;
+                if (slot == 11 && type == 1 && index != ushort.MaxValue) symbolIndex = index;
+                else otherCondition = true;
+            }
+            slot++;
         }
         return new(suppressZero, negative, thousands, leadingZero, decimals, rounding, currencyType, onePerPage,
             currencyPosition, thousandSymbol, decimalSymbol, currencySymbol, clipping, accounting, reverse, zeroValue,
-            noHorizontalPages, prefix, suffix, conditional, NativeArchive: Convert.ToBase64String(reader.CopyRange(start, reader.Position - start)));
+            noHorizontalPages, prefix, suffix, conditional, NativeArchive: Convert.ToBase64String(reader.CopyRange(start, reader.Position - start))) { SymbolFormulaIndex = otherCondition ? -1 : symbolIndex };
     }
 
     private static void ResolveNumericFormats(CrystalDatabaseModel database, CrystalDataDefinitionModel definition)

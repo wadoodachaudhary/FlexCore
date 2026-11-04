@@ -184,7 +184,7 @@ public sealed partial record ReportTabularData
             {
                 var value = Value(row.Index, column.Index, column.Summary);
                 var template = Template(216, row.Axis.Level, column.Axis.Level, column.Summary);
-                var text = value is null or DBNull ? "" : value is DateTime date && template?.DateTimeFormat is { } dateFormat
+                var text = value is null or DBNull or "" ? "" : value is DateTime date && template?.DateTimeFormat is { } dateFormat
                     ? dateFormat.Format(date, System.Globalization.CultureInfo.CurrentCulture)
                     : template?.NumericFormat is { } number ? number.Format(value) : Format(value, definition.Measures[column.Summary].Format);
                 styles.Add(Styled(template?.Style ?? native?.StyleFor(false, false, row.Axis.Level == 0, column.Axis.Level == 0),

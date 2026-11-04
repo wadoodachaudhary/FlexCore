@@ -6,7 +6,7 @@ internal static class ReportCrossTabFormatting
 {
     internal static bool IsSupported(string property) => property.ToLowerInvariant() is "color" or "fontcolor" or "backgroundcolor"
         or "bold" or "enablebold" or "italic" or "enableitalic" or "underline" or "enableunderline" or "size" or "fontsize"
-        or "name" or "fontname" or "style" or "horizontalalignment" or "enablesuppress" or "displaystring";
+        or "name" or "fontname" or "style" or "horizontalalignment" or "enablesuppress" or "displaystring" or "currencysymbol";
 
     internal static (ReportNativeCrossTabCellStyle Style, string? Display) Apply(ReportNativeCrossTabCellStyle original, string originalDisplay,
         Func<object?, CrystalFormulaContext> context)

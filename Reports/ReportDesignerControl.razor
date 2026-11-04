@@ -3041,6 +3041,7 @@ else
         target.TextColor = source.TextColor;
         target.BackgroundColor = source.BackgroundColor;
         target.HorizontalAlignment = source.HorizontalAlignment;
+        target.TextRotation = source.TextRotation;
         target.CanGrow = source.CanGrow;
         target.MaxNumberOfLines = source.MaxNumberOfLines;
         target.FormatString = source.FormatString;
@@ -3678,7 +3679,8 @@ else
             MarginLeftTwips = page.MarginLeftTwips,
             MarginTopTwips = page.MarginTopTwips,
             MarginRightTwips = page.MarginRightTwips,
-            MarginBottomTwips = page.MarginBottomTwips
+            MarginBottomTwips = page.MarginBottomTwips,
+            NoPrinter = page.NoPrinter
         };
     }
 

@@ -18,18 +18,31 @@ internal static class ReportPdfExport
         bool Italic = false, bool Underline = false, string Color = "#000000", bool Native = false)
     {
         public ReportPdfFontMode FontMode { get; init; }
+        /// <summary>The device whose metrics lay this text out (ReportObjectRenderer.TextDpi).</summary>
+        public int Dpi { get; init; } = CrystalDeviceText.DeviceDpi;
         public string ResolvedFamily => Native && FontMode == ReportPdfFontMode.Designer
             ? NativePdfFont.AuthoredFamily(Family, Bold, Italic) : Family;
         // Older Crystal PDF exports realize Arial smaller than the authored em.
         // Reference regular 8/10pt -> 7.15/8.95pt; bold 10/14pt -> 8.75/12.25pt.
         // This PDF-only compatibility policy never changes screen or page geometry.
         private bool LegacyArial => Native && Family.Equals("Arial", StringComparison.OrdinalIgnoreCase);
+        // The sizes Crystal's exports realize Arial at, measured from the reference reports (regular 7-12pt, bold
+        // 8-18pt, italic 8pt). They follow the face's 2048/2288 cell ratio only loosely: 9pt prints at 8.1, not
+        // 8.05, and bold below 16pt at seven eighths. Other sizes take the ratio of their nearest measured face.
+        private static readonly Dictionary<(int Points, bool Bold, bool Italic), double> LegacyArialSizes = new()
+        {
+            [(7, false, false)] = 6.25, [(8, false, false)] = 7.15, [(9, false, false)] = 8.1, [(10, false, false)] = 8.95, [(12, false, false)] = 10.75,
+            [(8, true, false)] = 6.95, [(9, true, false)] = 7.8, [(10, true, false)] = 8.75, [(11, true, false)] = 9.65, [(12, true, false)] = 10.5,
+            [(13, true, false)] = 11.4, [(14, true, false)] = 12.25, [(16, true, false)] = 14.3, [(17, true, false)] = 15.2, [(18, true, false)] = 16.1,
+            [(8, false, true)] = 7.2,
+        };
         public double Em
         {
             get
             {
                 if (Native && FontMode == ReportPdfFontMode.Designer) return Size;
-                var scale = LegacyArial ? (Bold ? .875 : .895) : 1d;
+                if (LegacyArial && Size == Math.Floor(Size) && LegacyArialSizes.TryGetValue(((int)Size, Bold, Italic), out var measured)) return measured;
+                var scale = LegacyArial ? (Bold && Size < 16 ? .875 : 2048 / 2288d) : 1d;
                 if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri" or "carlito" or "tahoma")
                 {
                     // Crystal's PDF realization uses the cell height for these
@@ -40,9 +53,15 @@ internal static class ReportPdfExport
                 return scale == 1 ? Size : Math.Round(Size * scale * 20, MidpointRounding.AwayFromZero) / 20;
             }
         }
+        /// <summary>
+        /// Where Crystal's export puts the baseline below a printer line's top: the face's VDMX ascent at the
+        /// authored size, in points (7.2 for 8pt Arial). Null for faces without printer metrics.
+        /// </summary>
+        public double? NativeAscent => LegacyArial ? ReportFontCatalog.NativeAscentPixels(Family, (decimal)Size, Bold, Italic, Dpi) * 72 / 96 : null;
         public double Leading(double lineHeight)
         {
-            if (LegacyArial) return Size * 1.14;
+            // The page's own line pitch (bold and italic faces lead taller than regular), in points.
+            if (LegacyArial) return ReportFontCatalog.NativeLineHeightPixels(Family, (decimal)Size, true, Bold, Italic, Dpi) is { } pixels ? pixels * 72 / 96 : Size * 1.14;
             if (Native && Family.Trim().Trim('\'', '"').ToLowerInvariant() is "calibri" or "fx report calibri")
             {
                 var font = NativePdfFont.Resolve(Family, Bold, Italic);
@@ -75,9 +94,8 @@ internal static class ReportPdfExport
     private static void Positioned(NativePdfDocument document, ReportPageSnapshot snapshot, ReportPdfFontMode fontMode)
     {
         var size = snapshot.Size;
-        var width = (size.MarginLeftTwips + size.ContentWidthTwips + size.MarginRightTwips) / 20d;
-        var height = (size.MarginTopTwips + size.ContentHeightTwips + size.MarginBottomTwips) / 20d;
-        var page = document.AddPage(width, height);
+        var paper = ReportDesignerEditing.PhysicalPaperSize(size);
+        var page = document.AddPage(paper.Width / 20d, paper.Height / 20d);
         var left = size.MarginLeftTwips / 20d;
         var top = size.MarginTopTwips / 20d;
         page.Save();
@@ -133,9 +151,11 @@ internal static class ReportPdfExport
         if (item.Table?.NativeCrossTab == null) page.Clip(x, y, width, height);
         if (item.Table is { } table)
             Fragment(page, table, x, y, new(element.FontFamily, (double)element.FontSize, element.Bold, element.Italic, element.Underline, Color(element.TextColor)) { FontMode = fontMode });
+        else if (element.Kind == "Chart" && item.Analysis is { } authored && PrintedSummaryPlot.Supports(authored.Definition))
+            Vector(page, PrintedSummaryPlot.Draw(authored.Definition, ReportAnalysisGraphic.Series(authored), width, height), x, y, width, height, "fill");
         else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartCategoryLegend: true } categoryChart)
             Vector(page, PrintedCategoryBarChart.Draw(categoryChart.Definition.ChartType, ReportAnalysisGraphic.Series(categoryChart),
-                categoryChart.Definition.Title, width, height, categoryChart.Definition.ShowLegend), x, y, width, height, "fill");
+                categoryChart.Definition.Title, width, height, categoryChart.Definition.ShowLegend, rightKey: categoryChart.Definition.RightCategoryLegend), x, y, width, height, "fill");
         else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartThreeDimensional: true } perspective)
             Vector(page, PrintedBarChart3D.Draw(perspective.Definition.ChartType, ReportAnalysisGraphic.Series(perspective),
                 perspective.Definition.Title, width, height, perspective.Definition.ShowLegend), x, y, width, height, "fill");
@@ -164,27 +184,49 @@ internal static class ReportPdfExport
         }
         else
         {
+            if (element.HasRotatedText)
+            {
+                if (element.TextRotation == 90) page.Transform(0, -1, 1, 0, x, y + height);
+                else page.Transform(0, 1, -1, 0, x + width, y);
+                x = y = 0;
+                (width, height) = (height, width);
+                element = element.TextLayoutFrame();
+                visual = element.Visual;
+            }
             var left = outside ? 0 : BorderWidth(visual.LeftLine, visual.LineWidthTwips);
             var right = outside ? 0 : BorderWidth(visual.RightLine, visual.LineWidthTwips);
-            // Right-aligned numeric ink keeps two screen pixels (1.5pt) before the field's
-            // right edge, as Crystal prints it; right-aligned text runs to the edge.
-            if (element.UseCrystalScreenMetrics && element.NativeNumericFormat is not null
-                && element.HorizontalAlignment.Equals("Right", StringComparison.OrdinalIgnoreCase)) right += 1.5;
             var top = outside ? 0 : BorderWidth(visual.TopLine, visual.LineWidthTwips);
             var bottom = outside ? 0 : BorderWidth(visual.BottomLine, visual.LineWidthTwips);
             var ink = InkFor(element, fontMode);
             if (element.UseCrystalScreenMetrics && element.FormatString.Length == 0 && element.NativeNumericFormat is { } numeric)
             {
+                // Crystal aligns the value with its blank sign positions ("$880.00 ", " 16 "): a trailing blank
+                // ends a right-aligned amount a space before the box edge, a leading one indents a left-aligned count.
                 var text = System.Net.WebUtility.HtmlDecode(Regex.Replace(item.FormattedContent, "<[^>]+>", ""));
-                var slot = numeric.LeadingSignSlot(text, element.HorizontalAlignment);
-                left += NativePdfPage.MeasureText(slot, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic);
+                var (leadingSlot, trailingSlot) = numeric.PaintedSignSlots(text, element.HorizontalAlignment);
+                if (leadingSlot.Length > 0) left += NativePdfPage.MeasureText(leadingSlot, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic);
+                if (trailingSlot.Length > 0) right += NativePdfPage.MeasureText(trailingSlot, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic);
             }
             var indent = element.IndentTwips / 20d;
             var wrap = ReportObjectRenderer.WrapText(element);
+            var textWidth = Math.Max(0, width - left - right - indent);
+            var nativeMemo = ReportObjectRenderer.ClipNativeLongWords(element) && Align(element) == "left" && ink.Em < ink.Size;
+            var nativeClipWidth = nativeMemo ? textWidth : 0;
+            // Fixed native memo clipping is decided at the authored font size.
+            // A smaller legacy PDF em must not reveal more of an oversized word.
+            if (nativeMemo)
+                textWidth *= ink.Em / ink.Size;
+            // Crystal's export carries a fixed one-line text object as its printer layout painted it: the glyphs
+            // that start inside the box at the authored size ("Item Notes: ... Smooth & Ch"). A field's whole value
+            // goes out behind the box's clip rectangle ("RL0008/003.1" in a 975-twip box shows "RL0008/003").
+            var clip = nativeMemo ? NativeClip.Break
+                : element.UseCrystalScreenMetrics && !wrap && ink.Em < ink.Size && element.Kind is "Text" or "FieldHeading"
+                    ? NativeClip.Paint
+                : NativeClip.None;
             Text(page, Runs(item.FormattedContent, InkFor(element, fontMode)), x + left + indent, y + top,
-                Math.Max(0, width - left - right - indent), Math.Max(0, height - top - bottom), Align(element), wrap,
+                textWidth, Math.Max(0, height - top - bottom), Align(element), wrap,
                 ReportObjectRenderer.TextLineLimit(element),
-                measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element));
+                measuredLines: item.TextLines, breakLongWords: !ReportObjectRenderer.ClipNativeLongWords(element), nativeClipWidth: nativeClipWidth, clip: clip);
         }
         page.Restore();
         // Opaque chart canvases must not cover their authored frame. Native graph frames surround the data rectangle.
@@ -267,7 +309,7 @@ internal static class ReportPdfExport
     }
 
     private static Ink InkFor(ReportDesignerElement element, ReportPdfFontMode fontMode) => new(element.FontFamily, (double)element.FontSize,
-        element.Bold, element.Italic, element.Underline, Color(element.TextColor), element.UseCrystalScreenMetrics) { FontMode = fontMode };
+        element.Bold, element.Italic, element.Underline, Color(element.TextColor), element.UseCrystalScreenMetrics) { FontMode = fontMode, Dpi = ReportObjectRenderer.TextDpi(element) };
 
     private static string Align(ReportDesignerElement element) => element.HorizontalAlignment.ToLowerInvariant() switch
     {
@@ -495,25 +537,54 @@ internal static class ReportPdfExport
 
     private static double Measure(string text, Ink ink) => NativePdfPage.MeasureText(text, ink.Em, ink.ResolvedFamily, ink.Bold, ink.Italic, ink.Native);
 
+    /// <summary>How a native object's characters are cut at its box: none (the clip rectangle alone), a memo's device line break, a text object's painted glyphs.</summary>
+    private enum NativeClip { None, Break, Paint }
+
     private static double Text(NativePdfPage page, IReadOnlyList<Run> runs, double x, double y, double width, double height,
-        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true)
+        string alignment, bool wrap, int maxLines = 0, double lineHeight = 1.15, IReadOnlyList<ReportTextLine>? measuredLines = null, bool breakLongWords = true, double nativeClipWidth = 0, NativeClip clip = NativeClip.None)
     {
+        if (clip == NativeClip.None && nativeClipWidth > 0) clip = NativeClip.Break;
         if (width <= 0 || height <= 0) return 0;
         var lines = wrap ? MeasuredLines(runs, measuredLines, lineHeight, maxLines) ?? Lines(runs, width, true, lineHeight, breakLongWords)
             : Lines(runs, width, false, lineHeight);
-        page.Save(); page.Clip(x, y, width, height);
+        // Crystal draws a fixed single-line field's value as one line: the paragraphs after its first line break are
+        // neither painted nor exported.
+        if (!wrap && lines.Count > 1 && runs.Count > 0 && runs[0].Ink.Native) lines = lines.Take(1).ToList();
+        page.Save(); page.Clip(x, y, nativeClipWidth > 0 ? nativeClipWidth : width, height);
         var at = y;
         foreach (var line in lines.Take(maxLines > 0 ? maxLines : int.MaxValue))
         {
             if (at >= y + height) break;
-            var offset = alignment == "right" ? width - line.Width : alignment == "center" ? (width - line.Width) / 2 : 0;
+            // Native text keeps the characters Crystal kept; the rest is aligned as if it were the whole line.
+            var runs2 = line.Runs;
+            if (clip is NativeClip.Break or NativeClip.Paint)
+            {
+                var remaining = clip == NativeClip.Break ? nativeClipWidth : width; var kept = new List<Run>();
+                foreach (var run in line.Runs)
+                {
+                    var prefix = clip == NativeClip.Break
+                        ? CrystalDeviceText.ClipDevicePrefix(run.Text, run.Ink.Family, run.Ink.Size, run.Ink.Bold, run.Ink.Italic, remaining, run.Ink.Dpi, out var advance)
+                        : CrystalDeviceText.PaintedDevicePrefix(run.Text, run.Ink.Family, run.Ink.Size, run.Ink.Bold, run.Ink.Italic, remaining, run.Ink.Dpi, out advance);
+                    if (prefix is null) { kept.Add(run); continue; }
+                    remaining = Math.Max(0, remaining - advance);
+                    if (prefix.Length > 0) kept.Add(run with { Text = prefix });
+                    if (prefix.Length != run.Text.Length) break;
+                }
+                runs2 = kept;
+            }
+            var lineWidth = clip == NativeClip.None ? line.Width : runs2.Sum(run => Measure(run.Text, run.Ink));
+            // A line wider than its box starts at the left edge and clips on the right whatever its alignment.
+            var offset = Math.Max(0, alignment == "right" ? width - lineWidth : alignment == "center" ? (width - lineWidth) / 2 : 0);
             var cursor = x + offset;
             var ascent = line.Runs.Count == 0 ? line.Height / lineHeight * .9 : line.Runs.Max(r => NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Ascent * r.Ink.Em / 1000);
             var descent = line.Runs.Count == 0 ? line.Height / lineHeight * .2 : line.Runs.Max(r => -NativePdfFont.Resolve(r.Ink.ResolvedFamily, r.Ink.Bold, r.Ink.Italic).Descent * r.Ink.Em / 1000);
-            var baseline = at + (line.Height - ascent - descent) / 2 + ascent;
+            // Crystal's export sets a printer line's baseline at the face's hinted ascent below the line's top; other
+            // faces centre the em box in the line.
+            var native = line.Runs.Select(r => r.Ink.NativeAscent).ToArray();
+            var baseline = native.Length > 0 && native.All(a => a is not null) ? at + native.Max()!.Value : at + (line.Height - ascent - descent) / 2 + ascent;
             var spaces = line.Runs.Sum(run => run.Text.Count(c => c == ' '));
             var extra = alignment == "justify" && !line.ParagraphEnd && spaces > 0 ? Math.Max(0, width - line.Width) / spaces : 0;
-            foreach (var run in line.Runs)
+            foreach (var run in runs2)
             {
                 if (extra == 0)
                 {
@@ -570,7 +641,7 @@ internal static class ReportPdfExport
             if (native?.Appearance is { } appearance)
             {
                 var background = table.IsHeader && rowHeader ? "transparent" : style?.Background ?? appearance.Background(table.IsHeader, rowHeader);
-                if (background != "transparent") Fill(page, cx, y, cw, h, background);
+                if (background != "transparent" && !(table.StackFills?.ElementAtOrDefault(cell.Column)?.Count > 0)) Fill(page, cx, y, cw, h, background);
                 var labelCount = table.Columns.TakeWhile(column => column.IsRowHeader).Count();
                 var edges = appearance.Edges(table.IsHeader, rowHeader, cell.Column == table.Columns.Count - 1, table.Row == 0,
                     table.IsGrandTotalRow, table.Columns[cell.Column].IsGrandTotal, native.RowTotalsBefore, native.ColumnTotalsBefore,
@@ -617,8 +688,12 @@ internal static class ReportPdfExport
                     var lines = text.ReplaceLineEndings("\n").Split('\n');
                     var step = (h - 2 * py) / lines.Length;
                     for (var line = 0; line < lines.Length; line++)
+                    {
+                        var fill = table.StackFills?.ElementAtOrDefault(cell.Column)?.ElementAtOrDefault(line);
+                        if (fill is not null and not "transparent") Fill(page,cx+px,y+py+line*step,Math.Max(0,cw-2*px),step,fill);
                         Text(page, [new(lines[line], cellInk)], cx + px, y + py + line * step, Math.Max(0, cw - 2 * px),
                             step, style?.Alignment ?? "left", false, lineHeight: Math.Min(1.4, step / cellInk.Em));
+                    }
                     continue;
                 }
                 if (native is { Templates.Count: > 0 } && style is not null)
@@ -678,7 +753,12 @@ internal static class ReportPdfExport
             }
             if (shape.Transform is { } matrix) page.Transform(matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]);
             var p = shape.Points; var fill = shape.Fill == "none" ? null : Color(shape.Fill); var stroke = shape.Stroke == "none" || shape.StrokeWidth == 0 ? null : Color(shape.Stroke);
-            if (shape.Kind == "Rectangle") page.Rectangle(p[0], p[1], p[2], p[3], fill, stroke, shape.StrokeWidth);
+            if (shape.GradientEnd is {} end)
+            {
+                page.GradientRectangle(p[0], p[1], p[2], p[3], shape.Fill, end);
+                if (stroke is not null) page.Rectangle(p[0], p[1], p[2], p[3], null, stroke, shape.StrokeWidth);
+            }
+            else if (shape.Kind == "Rectangle") page.Rectangle(p[0], p[1], p[2], p[3], fill, stroke, shape.StrokeWidth);
             else if (shape.Kind == "Ellipse") page.Ellipse(p[0], p[1], p[2], p[3], fill, stroke, shape.StrokeWidth);
             else if (shape.Text is { } text)
             {

@@ -524,6 +524,6 @@ public enum ReportColumnType { Text, Integer, Decimal, Currency, Date, DateTime,
 
 public enum ReportSortDirection { Ascending, Descending }
 
-public enum ReportAggregateType { Sum, Count, Average, Min, Max, Percent, DistinctCount, Median }
+public enum ReportAggregateType { Sum, Count, Average, Min, Max, Percent, DistinctCount, Median, WeightedAverage }
 
 public enum ReportParameterType { String, Integer, Decimal, Date, Boolean }

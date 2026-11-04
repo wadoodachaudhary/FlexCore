@@ -4,8 +4,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    // Version 20 also retains the authored fixed print date and canonical rich-text line endings.
-    public const int Current = 20;
+    // Reports authored with no printer are marked (FlexKitNoPrinter) and lay out at screen metrics.
+    public const int Current = 28;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -112,6 +112,9 @@ public sealed class CrystalReportCore
     public string PrinterDuplex { get; set; } = "Simplex";
 
     public string PrinterName { get; set; } = "";
+
+    /// <summary>The report was authored with "No Printer": Crystal lays its text out on the 96-dpi screen device.</summary>
+    public bool NoPrinter { get; set; }
 }
 
 public sealed class CrystalDatabaseModel
@@ -582,6 +585,7 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    internal int? GridLinkId { get; set; }
     public int LineEndSection { get; set; } = -1;
     public int LineEndTop { get; set; }
     public bool SuppressIfDuplicate { get; set; }
@@ -616,6 +620,7 @@ public sealed class CrystalReportObjectModel
     public int Height { get; set; }
 
     public int MaxNumberOfLines { get; set; }
+    public bool InterpretHtml { get; set; }
 
     public string Text { get; set; } = "";
 
@@ -650,6 +655,7 @@ public sealed class CrystalObjectFormatModel
     internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string CssClass { get; set; } = "";
+    public int TextRotation { get; set; }
 
     public bool EnableCanGrow { get; set; }
 
@@ -689,6 +695,8 @@ public sealed record CrystalTextRunModel(string Text, string Binding, string Fon
 {
     internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
     public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The date/time format authored on a field embedded in a text object, once resolved against the field's type.</summary>
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
 }
 
 public sealed class CrystalFontModel

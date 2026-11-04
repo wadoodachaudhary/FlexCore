@@ -191,6 +191,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "PaperSource", "Auto");
         Attr(writer, "PrinterDuplex", core.PrinterDuplex);
         Attr(writer, "PrinterName", "");
+        if (core.NoPrinter) Attr(writer, "FlexKitNoPrinter", "true");
 
         writer.WriteStartElement("PageMargins");
         Attr(writer, "bottomMargin", core.BottomMargin);
@@ -719,7 +720,13 @@ internal static class CrystalReportXmlWriter
             WriteColor(writer, "BackgroundColor", section.Format.BackgroundColor);
             writer.WriteEndElement();
             writer.WriteStartElement("ReportObjects");
-            foreach (var reportObject in section.ReportObjects)
+            // Crystal paints boxes and lines beneath the section contents. Keep source order within each layer.
+            foreach (var reportObject in section.ReportObjects.OrderBy(item => item.Kind switch
+            {
+                "Box" => 0,
+                "Line" => 1,
+                _ => 2
+            }))
             {
                 var endSection = (reportObject.Width == 0 || reportObject.Kind == "Box") && reportObject.LineEndSection >= 0
                     ? reportDefinition.Areas.OrderBy(AreaOrder).SelectMany(a => a.Sections).ElementAtOrDefault(reportObject.LineEndSection) : null;
@@ -801,6 +808,7 @@ internal static class CrystalReportXmlWriter
         else if (reportObject.ElementName == "FieldObject")
         {
             Attr(writer, "DataSource", reportObject.DataSource);
+            if (reportObject.InterpretHtml) Attr(writer, "TextInterpretation", "Html");
             Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
             Attr(writer, "SuppressIfDuplicate", LowerBool(reportObject.SuppressIfDuplicate));
         }
@@ -848,6 +856,7 @@ internal static class CrystalReportXmlWriter
                     Attr(writer, "Underline", LowerBool(run.Underline));
                     Attr(writer, "Color", run.Color);
                     writer.WriteString(run.Text);
+                    run.NativeDateTimeFormat?.ToXml().WriteTo(writer);
                     if (run.FontConditionFormulas.Count > 0)
                     {
                         writer.WriteStartElement("FontColorConditionFormulas");
@@ -915,6 +924,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "EnableKeepTogether", LowerBool(format.EnableKeepTogether));
         Attr(writer, "EnableSuppress", LowerBool(format.EnableSuppress));
         Attr(writer, "HorizontalAlignment", format.HorizontalAlignment);
+        if (format.TextRotation is 90 or 270) Attr(writer, "TextRotation", format.TextRotation);
         writer.WriteEndElement();
     }
 

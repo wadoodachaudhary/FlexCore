@@ -10,17 +10,25 @@ public static class ReportFontCatalog
     public const string CalibriFamily = "Fx Report Calibri";
     public const string CalibriNotice = "Font compatibility: Calibri uses the bundled Carlito font when Calibri is not installed in the browser.";
 
-    internal static string NativeLineHeight(string family, decimal points, bool native)
-        => NativeLineHeightPixels(family, points, native) is { } pixels ? ReportObjectRenderer.Number(pixels) + "px" : "1.15";
+    internal static string NativeLineHeight(string family, decimal points, bool native, bool bold = false, bool italic = false, int dpi = CrystalDeviceText.DeviceDpi)
+        => NativeLineHeightPixels(family, points, native, bold, italic, dpi) is { } pixels ? ReportObjectRenderer.Number(pixels) + "px" : "1.15";
 
-    internal static double? NativeLineHeightPixels(string family, decimal points, bool native)
+    internal static double? NativeLineHeightPixels(string family, decimal points, bool native, bool bold = false, bool italic = false, int dpi = CrystalDeviceText.DeviceDpi)
     {
-        // Crystal's Arial paragraph leading is 11.4pt for a 10pt font,
-        // truncated to whole 600-dpi printer units (10.2pt at 9pt).
-        // Keep that authored-size leading separate from the rounded screen em;
-        // multiplying the 13px screen font by 1.15 makes growing rows too short.
         if (native && family.Equals("Arial", StringComparison.OrdinalIgnoreCase))
-            return (double)(Math.Floor(Math.Clamp(points, 1, 300) * 1.14m * 600 / 72) * 96 / 600);
+        {
+            // Crystal's paragraph leading is the printer font's GDI line pitch: the face's hinted
+            // VDMX extent at the 600-dpi ppem plus the rounded line gap (95 device pixels for 10pt,
+            // 99 for bold 10pt, 78 for italic 8pt), carried back to CSS pixels. Keep that
+            // authored-size leading separate from the rounded screen em; multiplying the 13px
+            // screen font by 1.15 makes growing rows too short.
+            var size = Math.Clamp(points, 1, 300);
+            var ppem = (int)Math.Round(size * dpi / 72, MidpointRounding.AwayFromZero);
+            if (CrystalDeviceFont.Resolve(family, bold, italic)?.LinePitch(ppem) is { } pitch)
+                return pitch * 96d / dpi;
+            // Without the installed font: 11.4pt for a 10pt font, truncated to whole device units.
+            return (double)(Math.Floor(size * 1.14m * dpi / 72) * 96 / dpi);
+        }
         // Calibri/Carlito: 1950 ascent + 550 descent, on a 2048-unit em.
         // The paragraph is laid out at the authored point size, before the
         // screen em is rounded. A generic 1.15 clips leading on wrapped lines.
@@ -28,6 +36,18 @@ public static class ReportFontCatalog
                 || family.Equals(CalibriFamily, StringComparison.OrdinalIgnoreCase))
             ? (double)Math.Clamp(points, 1, 300) * 96 / 72 * 2500 / 2048
             : null;
+    }
+
+    /// <summary>
+    /// The printer font's GDI ascent (the hinted VDMX yMax at the 600-dpi ppem) in CSS pixels: where Crystal puts
+    /// a line's baseline below the line's top. Null for faces other than the installed Arial.
+    /// </summary>
+    internal static double? NativeAscentPixels(string family, decimal points, bool bold = false, bool italic = false, int dpi = CrystalDeviceText.DeviceDpi)
+    {
+        if (!family.Equals("Arial", StringComparison.OrdinalIgnoreCase)) return null;
+        var size = Math.Clamp(points, 1, 300);
+        var ppem = (int)Math.Round(size * dpi / 72, MidpointRounding.AwayFromZero);
+        return CrystalDeviceFont.Resolve(family, bold, italic)?.Ascent(ppem) * 96d / dpi;
     }
 
     private static string BuildStyles()

@@ -8,7 +8,7 @@ public sealed record ReportVectorText(string Value, string FontFamily, double Fo
     bool Underline = false, bool StrikeOut = false, string Anchor = "start", string Baseline = "alphabetic", double[]? Advances = null, double[]? VerticalAdvances = null);
 public sealed record ReportVectorPathCommand(string Kind, double[] Points);
 public sealed record ReportVectorShape(string Kind, double[] Points, string Fill, string Stroke, double StrokeWidth, bool Winding = false,
-    double[]? Clip = null, double[]? Transform = null, ReportVectorText? Text = null, double[][]? ClipPolygons = null, ReportVectorPathCommand[]? Commands = null);
+    double[]? Clip = null, double[]? Transform = null, ReportVectorText? Text = null, double[][]? ClipPolygons = null, ReportVectorPathCommand[]? Commands = null, string? GradientEnd = null);
 
 /// <summary>A bounded geometry/text vocabulary, never imported SVG, markup or external resources.</summary>
 public sealed class ReportVectorImage
@@ -37,6 +37,7 @@ public sealed class ReportVectorImage
                 || shape.Points.Any(n => !Number(n)) || (count += shape.Points.Length) > 200000
                 || shape.Kind is "Rectangle" or "Ellipse" && (shape.Points.Length != 4 || shape.Points[2] < 0 || shape.Points[3] < 0)
                 || shape.Kind == "Bezier" && (shape.Points.Length < 8 || (shape.Points.Length - 2) % 6 != 0)
+                || shape.GradientEnd is {} end && (shape.Kind != "Rectangle" || shape.Fill == "none" || end == "none" || !Color(end))
                 || !Color(shape.Fill) || !Color(shape.Stroke) || !Number(shape.StrokeWidth) || shape.StrokeWidth < 0
                 || shape.Clip is { } clip && (clip.Length != 4 || clip.Any(n => !Number(n)) || clip[2] < 0 || clip[3] < 0)
                 || shape.Transform is { } matrix && (matrix.Length != 6 || matrix.Any(n => !Number(n)) || Math.Abs(matrix[0] * matrix[3] - matrix[1] * matrix[2]) < 1e-12)
@@ -83,6 +84,7 @@ public sealed class ReportVectorImage
         return new("Vector", new XAttribute("Left", N(Left)), new XAttribute("Top", N(Top)), new XAttribute("Width", N(Width)), new XAttribute("Height", N(Height)),
             Shapes.Select(s => new XElement("Shape", new XAttribute("Kind", s.Kind), new XAttribute("Points", string.Join(" ", s.Points.Select(N))),
                 new XAttribute("Fill", s.Fill), new XAttribute("Stroke", s.Stroke), new XAttribute("StrokeWidth", N(s.StrokeWidth)), new XAttribute("Winding", s.Winding),
+                s.GradientEnd is null ? null : new XAttribute("GradientEnd", s.GradientEnd),
                 s.Clip is null ? null : new XAttribute("Clip", string.Join(" ", s.Clip.Select(N))),
                 s.Transform is null ? null : new XAttribute("Transform", string.Join(" ", s.Transform.Select(N))),
                 s.ClipPolygons?.Select(p => new XElement("ClipPolygon", new XAttribute("Points", string.Join(" ", p.Select(N))))),
@@ -137,7 +139,7 @@ public sealed class ReportVectorImage
                     (bool?)t.Attribute("Italic") ?? false, (bool?)t.Attribute("Underline") ?? false, (bool?)t.Attribute("StrikeOut") ?? false,
                     (string?)t.Attribute("Anchor") ?? "start", (string?)t.Attribute("Baseline") ?? "alphabetic", t.Attribute("Advances") is { } dx ? Numbers(dx.Value) : null,
                     t.Attribute("VerticalAdvances") is { } dy ? Numbers(dy.Value) : null),
-                polygons.ToArray(), commands.Count == 0 ? null : commands.ToArray()));
+                polygons.ToArray(), commands.Count == 0 ? null : commands.ToArray(), (string?)shape.Attribute("GradientEnd")));
             if (shape.Element("Text") is { } content && (count += TextValue(content).Length) > 200000)
                 throw new InvalidDataException("Vector text exceeds the limit.");
         }
@@ -175,7 +177,16 @@ public sealed class ReportVectorImage
                     (c.Kind switch { "Move" => "M", "Line" => "L", "Cubic" => "C", _ => "Z" }) + " " + string.Join(" ", c.Points.Select(N)))))),
                 _ => new XElement(ns + (shape.Kind == "Polygon" ? "polygon" : "polyline"), new XAttribute("points", string.Join(" ", p.Select(N))))
             };
-            node.Add(new XAttribute("fill", shape.Fill), new XAttribute("stroke", shape.Stroke), new XAttribute("stroke-width", N(shape.StrokeWidth)),
+            var fill = shape.Fill;
+            if (shape.GradientEnd is {} end)
+            {
+                var id = "gradient" + index.ToString(CultureInfo.InvariantCulture);
+                defs.Add(new XElement(ns + "linearGradient", new XAttribute("id", id), new XAttribute("x2", "0%"), new XAttribute("y2", "100%"),
+                    new XElement(ns + "stop", new XAttribute("offset", "0%"), new XAttribute("stop-color", fill)),
+                    new XElement(ns + "stop", new XAttribute("offset", "100%"), new XAttribute("stop-color", end))));
+                fill = $"url(#{id})";
+            }
+            node.Add(new XAttribute("fill", fill), new XAttribute("stroke", shape.Stroke), new XAttribute("stroke-width", N(shape.StrokeWidth)),
                 new XAttribute("fill-rule", shape.Winding ? "nonzero" : "evenodd"), new XAttribute("stroke-linejoin", "round"), new XAttribute("stroke-linecap", "round"));
             if (shape.Transform is { } transform) node.Add(new XAttribute("transform", "matrix(" + string.Join(" ", transform.Select(N)) + ")"));
             if (shape.Clip is { } clip)

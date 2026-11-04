@@ -22,11 +22,16 @@
 *@
 
 <div class="fx-chart @CssClass" style="@RootStyle" @onmouseleave="TipLeave">
-    @if (CategoryLegend)
+    @if (ReportPlot is not null && PrintedSummaryPlot.Supports(ReportPlot))
+    {
+        var drawing = PrintedSummaryPlot.Draw(ReportPlot, _effectiveSeries, PrintWidthPoints, PrintHeightPoints);
+        <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
+    }
+    else if (CategoryLegend)
     {
         var drawing = PrintedCategoryBarChart.Draw(Type, _effectiveSeries, Title ?? "",
             PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
-            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels);
+            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.RightCategoryLegend);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else if (ThreeDimensional)
@@ -302,6 +307,7 @@
     [Parameter] public ChartType Type { get; set; } = ChartType.Bar;
 
     /// <summary>Draw grouped, stacked or percentage bars with perspective faces.</summary>
+    [Parameter] public Fx.ControlKit.Reports.ReportAnalysisDefinition? ReportPlot { get; set; }
     [Parameter] public bool ThreeDimensional { get; set; }
     /// <summary>Use the classic printed bar scene and category-key legend.</summary>
     [Parameter] public bool CategoryLegend { get; set; }

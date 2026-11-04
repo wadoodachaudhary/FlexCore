@@ -31,6 +31,7 @@ internal static partial class CrystalReportContentsParser
                 // StringFieldProperties stores a UInt16 limit before text interpretation and spacing.
                 // Zero means unlimited. This is a display limit; never truncate the bound field value.
                 reportObject.MaxNumberOfLines = reader.LoadUInt16();
+                if (reader.BytesLeftInRecord >= 2) reportObject.InterpretHtml = reader.LoadEnum() == 2;
                 reader.SkipRestOfRecord();
             }
             else if (record.Type == 249)
@@ -133,32 +134,43 @@ internal static partial class CrystalReportContentsParser
     {
         foreach (var obj in definition.ReportDefinition.Areas.SelectMany(a => a.Sections).SelectMany(s => s.ReportObjects))
         {
-            var resolved = TryResolveFieldType(obj.DataSource, database, definition, out var type, out _);
-            if (!resolved && definition.RunningTotalFields.FirstOrDefault(f => f.FormulaName == obj.DataSource) is { } total)
-            { type = total.ValueType; resolved = true; }
-            if (!resolved && definition.SummaryFields.FirstOrDefault(f => SummaryFormulaName(f, definition) == obj.DataSource) is { } summary)
-            { type = summary.ValueType; resolved = true; }
-            if (!resolved && obj.DataSource.StartsWith("GroupName (") && obj.DataSource.EndsWith(')'))
-                resolved = TryResolveFieldType(obj.DataSource[11..^1], database, definition, out type, out _);
-            if (!resolved && obj.DataSource is "PageNumber" or "TotalPageCount") { type = 4; resolved = true; }
-            if (!resolved && obj.DataSource is "PrintDate" or "DataDate") { type = 9; resolved = true; }
+            var resolved = ResolveFieldType(obj.DataSource, database, definition, out var type);
             obj.NativeNumberFormat = resolved && type is >= 0 and <= 7
                 ? type == 7 ? obj.NativeCurrencyFormat : obj.NativeNumberFormat : null;
             obj.NativeCurrencyFormat = null;
+            // A field embedded in a text object carries its own authored date/time format.
+            foreach (var run in obj.TextRuns)
+                if (run.NativeDateTimeFormat is { } runFormat)
+                    run.NativeDateTimeFormat = ResolveDateTimeFormat(run.Binding, runFormat, database, definition);
             if (obj.NativeDateTimeFormat is not { } format) continue;
-            // PrintDate/PrintTime use only their component; other fields retain their resolved type.
-            if (obj.DataSource.Equals("PrintDate", StringComparison.OrdinalIgnoreCase))
-                obj.NativeDateTimeFormat = format = format with { Order = 2 };
-            else if (obj.DataSource.Equals("PrintTime", StringComparison.OrdinalIgnoreCase))
-                obj.NativeDateTimeFormat = format = format with { Order = 3 };
-            else if (!resolved || type is not (9 or 15))
-            {
-                obj.NativeDateTimeFormat = null;
-                continue;
-            }
-            if (type == 9) obj.NativeDateTimeFormat = format = format with { Order = 2 };
-            if (format.UnsupportedReason is { } reason)
+            obj.NativeDateTimeFormat = format = ResolveDateTimeFormat(obj.DataSource, format, database, definition, resolved, type);
+            if (format?.UnsupportedReason is { } reason)
                 definition.ParseWarnings.Add($"{obj.Name}: native date/time format retained but {reason}.");
         }
+    }
+
+    private static bool ResolveFieldType(string dataSource, CrystalDatabaseModel database, CrystalDataDefinitionModel definition, out int type)
+    {
+        var resolved = TryResolveFieldType(dataSource, database, definition, out type, out _);
+        if (!resolved && definition.RunningTotalFields.FirstOrDefault(f => f.FormulaName == dataSource) is { } total)
+        { type = total.ValueType; resolved = true; }
+        if (!resolved && definition.SummaryFields.FirstOrDefault(f => SummaryFormulaName(f, definition) == dataSource) is { } summary)
+        { type = summary.ValueType; resolved = true; }
+        if (!resolved && dataSource.StartsWith("GroupName (") && dataSource.EndsWith(')'))
+            resolved = TryResolveFieldType(dataSource[11..^1], database, definition, out type, out _);
+        if (!resolved && dataSource is "PageNumber" or "TotalPageCount") { type = 4; resolved = true; }
+        if (!resolved && dataSource is "PrintDate" or "DataDate") { type = 9; resolved = true; }
+        return resolved;
+    }
+
+    private static ReportNativeDateTimeFormat? ResolveDateTimeFormat(string dataSource, ReportNativeDateTimeFormat format,
+        CrystalDatabaseModel database, CrystalDataDefinitionModel definition, bool? resolved = null, int type = -1)
+    {
+        resolved ??= ResolveFieldType(dataSource, database, definition, out type);
+        // PrintDate/PrintTime use only their component; other fields retain their resolved type.
+        if (dataSource.Equals("PrintDate", StringComparison.OrdinalIgnoreCase)) return format with { Order = 2 };
+        if (dataSource.Equals("PrintTime", StringComparison.OrdinalIgnoreCase)) return format with { Order = 3 };
+        if (resolved != true || type is not (9 or 15)) return null;
+        return type == 9 ? format with { Order = 2 } : format;
     }
 }

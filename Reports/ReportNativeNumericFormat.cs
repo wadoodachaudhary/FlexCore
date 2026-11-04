@@ -12,6 +12,7 @@ public sealed record ReportNativeNumericFormat(
     bool HasConditionalFormatting = false, bool SystemDefaultFormatting = false, bool SuppressIfDuplicate = false,
     string NativeArchive = "", int ValueType = 6)
 {
+    internal int SymbolFormulaIndex { get; init; } = -1;
     internal string? UnsupportedReason => HasConditionalFormatting ? "conditional numeric formatting is not implemented"
         : AccountingFormat ? "accounting numeric layout is not implemented"
         : OneCurrencySymbolPerPage && CurrencySymbolType != 0 ? "one-currency-symbol-per-page layout is not implemented"
@@ -21,11 +22,16 @@ public sealed record ReportNativeNumericFormat(
         : CurrencySymbolType is not (0 or 2) ? "fixed-position currency symbols are not implemented"
         : CurrencyPosition is < 0 or > 3 ? "the saved currency position is unsupported"
         : string.IsNullOrEmpty(DecimalSymbol) ? "an empty decimal separator is unsupported"
-        : ZeroValue != "<Default Format>" ? "custom zero-value layout is not implemented" : null;
+        : null;
 
     internal string Format(object value)
     {
         if (UnsupportedReason is { } reason) throw new NotSupportedException("Native numeric format: " + reason + ".");
+        if (Convert.ToDecimal(value, CultureInfo.InvariantCulture) == 0)
+        {
+            if (SuppressIfZero) return "";
+            if (ZeroValue != "<Default Format>") return ZeroValue;
+        }
         if (SystemDefaultFormatting)
         {
             // Crystal SystemFieldProperties takes numeric separators/grouping/sign from the active culture,
@@ -75,27 +81,48 @@ public sealed record ReportNativeNumericFormat(
         };
         if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)) leading = "";
         if (trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) trailing = "";
-        switch (alignment.ToLowerInvariant())
-        {
-            case "right": leading = ""; break;
-            case "default": case "": if (!SystemDefaultFormatting) leading = ""; break;
-            case "center": case "horizontalcenter": break;
-            default: trailing = ""; break;
-        }
-        return leading + formatted + trailing;
+        var (keepLeading, keepTrailing) = OuterSignSlots(alignment);
+        return (keepLeading ? leading : "") + formatted + (keepTrailing ? trailing : "");
     }
 
-    // Positive left-aligned numbers keep the blank sign position that negative values occupy.
-    // Reuse the overflow reservation so measuring and painting apply the same authored sign rules.
-    internal string LeadingSignSlot(string formatted, string alignment)
+    // The outer sign slots an alignment keeps: a right-aligned value (and a custom format's Default) drops its
+    // leading slot, a left-aligned one its trailing slot. The fit test and the painted blanks share this rule,
+    // so a value that passes the fit test is painted whole.
+    private (bool Leading, bool Trailing) OuterSignSlots(string? alignment) => (alignment ?? "").ToLowerInvariant() switch
     {
-        if (formatted.Length == 0 || !alignment.Equals("left", StringComparison.OrdinalIgnoreCase)) return "";
-        if (formatted.StartsWith("[Formula error", StringComparison.Ordinal)
+        "right" => (false, true),
+        "default" or "" => (SystemDefaultFormatting, true),
+        "center" or "horizontalcenter" => (true, true),
+        _ => (true, false)
+    };
+
+    // Crystal paints a positive value with a blank in each sign position that its negative layout keeps at an end of
+    // the string, and aligns that padded string: "-X" and "(X)" start with a blank, "X-" and "(X)" end with one
+    // (" 330.00", " 16 "). A currency symbol next to the sign takes that end instead ("$(X)" paints "$880.00 ",
+    // "-$X" paints "$0.00"). A negative value carries its own sign and gets no blank. An outer blank the alignment
+    // hides (OuterSignSlots) is not painted.
+    internal (string Leading, string Trailing) PaintedSignSlots(string formatted, string? alignment)
+    {
+        if (formatted.Length == 0 || ValueType is 1 or 3 or 5 || EffectiveNegativeType == 0
+            || formatted.StartsWith("[Formula error", StringComparison.Ordinal)
             || formatted.StartsWith("[Invalid summary]", StringComparison.Ordinal)
             || formatted.StartsWith("[Unsupported", StringComparison.Ordinal)
-            || formatted.All(character => character == '#')) return "";
-        var probe = OverflowProbe(formatted, alignment);
-        return probe.EndsWith(formatted, StringComparison.Ordinal) ? probe[..(probe.Length - formatted.Length)] : "";
+            || formatted.All(character => character == '#')) return ("", "");
+        var core = formatted.AsSpan();
+        if (!core.StartsWith(Prefix, StringComparison.Ordinal) || !core.EndsWith(Suffix, StringComparison.Ordinal)
+            || core.Length < Prefix.Length + Suffix.Length) return ("", "");
+        core = core.Slice(Prefix.Length, core.Length - Prefix.Length - Suffix.Length);
+        var (leading, trailing) = EffectiveNegativeType switch { 1 => ("-", ""), 2 => ("", "-"), 3 => ("(", ")"), _ => ("", "") };
+        var currency = CurrencySymbolType == 0 ? "" : CurrencySymbol;
+        var currencyLeads = currency.Length > 0 && CurrencyPosition is 0 or 1;
+        var currencyTrails = currency.Length > 0 && CurrencyPosition is 2 or 3;
+        if (currencyLeads && core.StartsWith(currency, StringComparison.Ordinal)) core = core[currency.Length..];
+        if (currencyTrails && core.EndsWith(currency, StringComparison.Ordinal)) core = core[..^currency.Length];
+        if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)
+            || trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) return ("", "");
+        var (keepLeading, keepTrailing) = OuterSignSlots(alignment);
+        return (keepLeading && leading.Length > 0 && !currencyLeads ? " " : "",
+            keepTrailing && trailing.Length > 0 && !currencyTrails ? " " : "");
     }
 
     private string FormatCore(object value, int[] groupSizes)

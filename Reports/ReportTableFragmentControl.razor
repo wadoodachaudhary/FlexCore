@@ -30,6 +30,16 @@
                 {
                     <th scope="@(Fragment.IsHeader ? "col" : "row")" style="@StyleFor(index)">@VisibleText(cell, index)</th>
                 }
+                else if (Fragment.StackFills?.ElementAtOrDefault(index) is { Count: > 0 } fills)
+                {
+                    <td style="@(StyleFor(index)+"background:transparent;")">
+                        @{ var lines = cell.ReplaceLineEndings("\n").Split('\n'); }
+                        @for (var m=0;m<lines.Length;m++)
+                        {
+                            <div style="@($"background:{ReportObjectRenderer.Color(fills.ElementAtOrDefault(m))};")">@lines[m]</div>
+                        }
+                    </td>
+                }
                 else { <td style="@StyleFor(index)">@VisibleText(cell, index)</td> }
             }
             }

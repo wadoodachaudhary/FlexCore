@@ -10,8 +10,8 @@ namespace Fx.ControlKit.Reports;
 
 /// <summary>
 /// Crystal lays a printed or exported report out on the printer device: GDI measures each glyph as a whole
-/// 600-dpi pixel (the font's hinted hdmx width at that ppem, 83 for 10pt Arial) and wraps a line where the
-/// next word's extent would pass the object's right edge. A browser measures the same text with fractional,
+/// 600-dpi pixel (the font's hinted hdmx width at that ppem, 83 for 10pt Arial), Crystal applies the face's
+/// kerning pairs, and a line wraps where the next word's extent would pass the object's right edge. A browser measures the same text with fractional,
 /// unhinted advances, so lines that Crystal keeps ("...(Base House)", 2101 device pixels in a 2100-pixel box)
 /// wrap in HTML. This breaker reproduces Crystal's lines for native text whose font metrics are available and
 /// hands the layout the same line bounds and character offsets the browser would have returned.
@@ -28,7 +28,7 @@ internal static class CrystalDeviceText
         && element.UseCrystalScreenMetrics && element.Kind is "Text" or "Field" or "FieldHeading"
         && ReportObjectRenderer.WrapText(element) && !ReportObjectRenderer.ClipNativeLongWords(element)
         && !element.HorizontalAlignment.Equals("justified", StringComparison.OrdinalIgnoreCase)
-        && ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true) is not null;
+        && ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true, element.Bold, element.Italic, ReportObjectRenderer.TextDpi(element)) is not null;
 
     /// <summary>Measures the item's HTML with Crystal's device metrics, or null when a font or glyph is unavailable.</summary>
     internal static ReportTextMetrics? Measure(ReportDesignerElement element, string html)
@@ -40,17 +40,18 @@ internal static class CrystalDeviceText
         if (runs is null) return null;
         // Chrome keeps line boxes in 1/64 px; use the same quantized leading so a native box and a browser-measured
         // sibling of the same font agree to the twip (12.16 px for 8pt Arial is 12.15625 px in the browser).
-        var leading = Math.Floor(ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true)!.Value * 64) / 64 * 15;
+        var dpi = ReportObjectRenderer.TextDpi(element);
+        var leading = Math.Floor(ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true, element.Bold, element.Italic, dpi)!.Value * 64) / 64 * 15;
         var available = Math.Max(0, element.WidthTwips - element.IndentTwips
             - ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips) * 15
             - ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips) * 15);
-        // GDI paints an extent of E pixels on columns 0..E-1; Crystal keeps a word whose last column is the
-        // box's right edge, so the limit is the device width plus one (2101 fits a 5040-twip, 2100-pixel box).
-        var limit = (long)Math.Floor(available * (double)DeviceDpi / 1440) + 1;
-        // A fixed literal caption with room for only one line clips horizontally.
-        // Rich text/memos and taller boxes keep their authored wrapping behavior.
+        // A line fits while its kerned extent is within the box's device width, rounded as MulDiv rounds it
+        // (2100 pixels for 5040 twips, 1814 for 4353).
+        var limit = (long)Math.Round(available * (double)dpi / 1440, MidpointRounding.AwayFromZero);
+        // A fixed text object without room for a printer line clips horizontally, embedded fields included.
+        // Memos and taller boxes keep their authored wrapping behavior.
         var singleLineCaption = !element.CanGrow && element.Kind is "Text" or "FieldHeading"
-            && element.Visual.Runs.Count == 0 && element.HeightTwips <= Math.Ceiling(leading);
+            && !ReportObjectRenderer.NativeFixedTextWraps(element);
         var lines = Break(runs, singleLineCaption ? long.MaxValue : limit);
         if (lines is null) return null;
         var cap = ReportObjectRenderer.TextLineLimit(element);
@@ -117,7 +118,7 @@ internal static class CrystalDeviceText
                 {
                     var c = run.Text[index - at];
                     if (c is '\n' or '\r') continue;
-                    width += run.Font.LinearAdvance(c) * run.Ppem * 96d / DeviceDpi;
+                    width += run.Font.LinearAdvance(c) * run.Ppem * 96d / ReportObjectRenderer.TextDpi(element);
                 }
                 at += run.Text.Length;
             }
@@ -126,7 +127,7 @@ internal static class CrystalDeviceText
             var last = line.End - 1;
             while (last >= line.Start && text[last] is '\n' or '\r') last--;
             for (var index = last; index >= line.Start && text[index] == ' '; index--)
-                trailing += Font(runs, index)?.LinearAdvance(' ') * Ppem(runs, index) * 96d / DeviceDpi ?? 0;
+                trailing += Font(runs, index)?.LinearAdvance(' ') * Ppem(runs, index) * 96d / ReportObjectRenderer.TextDpi(element) ?? 0;
             widest = Math.Max(widest, width - trailing);
         }
         return widest;
@@ -169,7 +170,7 @@ internal static class CrystalDeviceText
         var available = Math.Max(0, element.WidthTwips - element.IndentTwips
             - ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips) * 15
             - ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips) * 15);
-        if (device > (long)Math.Floor(available * (double)DeviceDpi / 1440) + 1) return;
+        if (device > (long)Math.Round(available * (double)ReportObjectRenderer.TextDpi(element) / 1440, MidpointRounding.AwayFromZero)) return;
         WidenForOvershoot(element, html, [new ReportTextLine(0, 0, 0, line.Length)]);
     }
 
@@ -278,10 +279,94 @@ internal static class CrystalDeviceText
             if (!family.Equals(element.FontFamily, StringComparison.OrdinalIgnoreCase) || points != element.FontSize) return null;
             var font = ResolveFont(family, bold, italic);
             if (font is null) return null;
-            var ppem = (int)Math.Round((double)Math.Clamp(points, 1, 300) * DeviceDpi / 72, MidpointRounding.AwayFromZero);
+            var ppem = (int)Math.Round((double)Math.Clamp(points, 1, 300) * ReportObjectRenderer.TextDpi(element) / 72, MidpointRounding.AwayFromZero);
             runs.Add((text, font, ppem));
         }
         return runs;
+    }
+
+    // A subreport frame can be narrower than the field designed inside it. Match
+    // the screen device's integer advances when the last glyph reaches that edge;
+    // leave genuinely overlong strings clipped and leave the PDF font untouched.
+    internal static string PreviewInFixedFrame(ReportDesignerElement element, string html)
+    {
+        if (!Enabled || !element.UseCrystalScreenMetrics || element.Kind != "Field" || element.CanGrow
+            || ReportObjectRenderer.WrapText(element) || element.NativeNumericFormat is not null || element.NativeNumberFormat is not null
+            || element.HorizontalAlignment.ToLowerInvariant() is not ("left" or "default" or "")
+            || html.Length == 0 || html.Contains('<')) return html;
+        var text = WebUtility.HtmlDecode(html);
+        if (text.Length == 0 || text.Any(char.IsControl)) return html;
+        var font = ResolveFont(element.FontFamily, element.Bold, element.Italic);
+        if (font is null) return html;
+        var points = (double)element.FontSize;
+        var screenEm = (int)Math.Round(points * 96 / 72, MidpointRounding.AwayFromZero);
+        var dpi = ReportObjectRenderer.TextDpi(element);
+        var cssEm = Math.Round(points * dpi / 72, MidpointRounding.AwayFromZero) * 96 / dpi;
+        var available = (element.WidthTwips - element.IndentTwips) / 15d
+            - ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips)
+            - ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips);
+        double css = 0; long device = 0, last = 0;
+        foreach (var c in text)
+        {
+            last = font.DeviceAdvance(c, screenEm);
+            if (last <= 0) return html;
+            device += last; css += font.LinearAdvance(c) * cssEm;
+        }
+        if (available <= 1 || css <= available || device - last >= available) return html;
+        var scale = Math.Min(device, available - .25) / css;
+        return $"<span data-fx-native-frame-text=\"true\" style=\"display:inline-block;transform-origin:left;transform:scaleX({ReportObjectRenderer.Number(scale)})\">{html}</span>";
+    }
+
+    internal static string? ClipDevicePrefix(string text, string family, double points, bool bold, bool italic,
+        double availablePoints, int dpi, out double advancePoints)
+    {
+        advancePoints = 0;
+        var font = ResolveFont(family, bold, italic);
+        if (font is null) return null;
+        var ppem = (int)Math.Round(points * dpi / 72, MidpointRounding.AwayFromZero);
+        var limit = (long)Math.Floor(Math.Max(0, availablePoints) * dpi / 72);
+        long used = 0;
+        var end = 0;
+        foreach (var c in text)
+        {
+            if (char.IsSurrogate(c) || char.IsControl(c)) return null;
+            var width = font.DeviceAdvance(c, ppem);
+            if (width < 0) return null;
+            if (used + width > limit) break;
+            used += width; end++;
+        }
+        advancePoints = used * 72d / dpi;
+        return text[..end];
+    }
+
+    /// <summary>
+    /// The characters of a text object's line that Crystal paints: a glyph is painted, and so exported, when its
+    /// kerned device start lies inside the box, and the clip cuts the rest of it ("Item Notes: ... Smooth &amp; Ch"
+    /// keeps the h that begins 6 pixels before the edge; the ":" of an overlong right-aligned summary label begins
+    /// beyond it). Null when a glyph or the device font is unavailable.
+    /// </summary>
+    internal static string? PaintedDevicePrefix(string text, string family, double points, bool bold, bool italic,
+        double availablePoints, int dpi, out double advancePoints)
+    {
+        advancePoints = 0;
+        var font = ResolveFont(family, bold, italic);
+        if (font is null) return null;
+        var ppem = (int)Math.Round(points * dpi / 72, MidpointRounding.AwayFromZero);
+        var limit = (long)Math.Round(Math.Max(0, availablePoints) * dpi / 72, MidpointRounding.AwayFromZero);
+        long used = 0;
+        var end = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var c = text[index];
+            if (char.IsSurrogate(c) || char.IsControl(c)) return null;
+            var width = font.DeviceAdvance(c, ppem);
+            if (width < 0) return null;
+            var start = used + (index > 0 ? font.Kerning(text[index - 1], c, ppem) : 0);
+            if (start >= limit) break;
+            used = start + width; end = index + 1;
+        }
+        advancePoints = used * 72d / dpi;
+        return text[..end];
     }
 
     private static string? StyleValue(string style, string name)
@@ -302,6 +387,7 @@ internal static class CrystalDeviceText
         var text = string.Concat(runs.Select(r => r.Text)).Replace("\r\n", "\n").Replace('\r', '\n');
         if (text.Length != runs.Sum(r => r.Text.Length)) return null; // CR handling changed offsets; let the browser measure
         var advances = new long[text.Length];
+        var kerns = new long[text.Length]; // the pair adjustment between a character and the one before it, on one line
         var at = 0;
         foreach (var run in runs)
         {
@@ -314,6 +400,8 @@ internal static class CrystalDeviceText
                 var advance = run.Font.DeviceAdvance(c, run.Ppem);
                 if (advance < 0) return null;
                 advances[at + index] = advance;
+                // Crystal kerns within a run of one face; a pair never spans a line feed.
+                if (index > 0 && text[at + index - 1] != '\n') kerns[at + index] = run.Font.Kerning(text[at + index - 1], c, run.Ppem);
             }
             at += run.Text.Length;
         }
@@ -332,18 +420,20 @@ internal static class CrystalDeviceText
             var spaceStart = index2;
             while (index2 < text.Length && text[index2] is ' ' or '\t') index2++;
             var spaces = 0L;
-            for (var s = spaceStart; s < index2; s++) spaces += advances[s];
+            for (var s = spaceStart; s < index2; s++) spaces += advances[s] + (s > spaceStart ? kerns[s] : 0);
             if (index2 >= text.Length || text[index2] == '\n') { continue; }
             var wordStart = index2;
             while (index2 < text.Length && text[index2] is not (' ' or '\t' or '\n')) index2++;
             var word = 0L;
-            for (var w = wordStart; w < index2; w++) word += advances[w];
+            for (var w = wordStart; w < index2; w++) word += advances[w] + (w > wordStart ? kerns[w] : 0);
             if (word > limit) return null;
-            if (used > 0 && used + spaces + word > limit)
+            // The pairs that join the spaces and the word to what the line already holds apply only when they stay on it.
+            var join = (used > 0 ? kerns[spaceStart] : 0) + (spaceStart < wordStart ? kerns[wordStart] : 0);
+            if (used > 0 && used + join + spaces + word > limit)
             {
                 lines.Add(new(lineStart, wordStart)); lineStart = wordStart; used = word;
             }
-            else used += spaces + word;
+            else used += join + spaces + word;
         }
         if (lineStart < text.Length || lines.Count == 0) lines.Add(new(lineStart, text.Length));
         return lines;
@@ -364,6 +454,9 @@ internal sealed class CrystalDeviceFont
     private readonly Dictionary<int, ushort> _glyphs = new();
     private readonly ushort[] _advances = [];
     private readonly Dictionary<int, byte[]> _device = new();
+    private readonly Dictionary<int, (short YMax, short YMin)> _vdmx = new();
+    private readonly Dictionary<uint, short> _kern = new();
+    private readonly int _lineGap;
     private readonly NativePdfFont? _fallback;
     public int UnitsPerEm { get; } = 2048;
     public string Source { get; }
@@ -441,6 +534,7 @@ internal sealed class CrystalDeviceFont
         if (UnitsPerEm is < 16 or > 16384) throw new InvalidDataException("Invalid font units per em: " + path);
         var glyphCount = U16(Table("maxp", 6) + 4);
         var hhea = Table("hhea", 36);
+        _lineGap = (short)U16(hhea + 8);
         var metricCount = U16(hhea + 34);
         if (glyphCount == 0 || metricCount == 0 || metricCount > glyphCount) throw new InvalidDataException("Invalid font metric count: " + path);
         var hmtx = Table("hmtx", metricCount * 4);
@@ -448,6 +542,95 @@ internal sealed class CrystalDeviceFont
         for (var index = 0; index < glyphCount; index++) _advances[index] = U16(hmtx + Math.Min(index, metricCount - 1) * 4);
         LoadCmap();
         LoadDeviceMetrics(glyphCount);
+        LoadVerticalDeviceMetrics();
+        LoadKerning();
+    }
+
+    /// <summary>
+    /// The face's kerning adjustment between two characters in whole device pixels at the ppem (Arial's "To" at
+    /// 83 ppem is -9), as GDI reports its kerning pairs. Crystal applies them when it decides where a paragraph
+    /// wraps: a Job Budget description whose unkerned advances reach 2101 pixels stays on one 2100-pixel line when
+    /// its pairs take it to 2096, and an identical-width line without pairs wraps. It draws a line with the plain
+    /// advances, so a memo's character break stays unkerned while a painted prefix follows the kerned starts.
+    /// Zero without a pair, a glyph or a device table.
+    /// </summary>
+    public int Kerning(char left, char right, int ppem)
+    {
+        if (_fallback is not null || _kern.Count == 0
+            || !_glyphs.TryGetValue(left, out var first) || !_glyphs.TryGetValue(right, out var second)
+            || !_kern.TryGetValue((uint)first << 16 | second, out var value)) return 0;
+        return (int)Math.Round((double)value * ppem / UnitsPerEm, MidpointRounding.AwayFromZero);
+    }
+
+    private void LoadKerning()
+    {
+        if (!_tables.TryGetValue("kern", out var table) || table.Length < 8) return;
+        var end = table.Offset + table.Length;
+        // Windows fonts write version 0 with 16-bit subtable headers; Apple-built fonts write 1.0 with 32-bit ones.
+        var apple = U32(table.Offset) == 0x00010000;
+        var subtables = apple ? checked((int)U32(table.Offset + 4)) : U16(table.Offset + 2);
+        var at = table.Offset + (apple ? 8 : 4);
+        for (var index = 0; index < subtables && at + 8 <= end; index++)
+        {
+            var length = apple ? checked((int)U32(at)) : U16(at + 2);
+            var coverage = U16(at + 4);
+            var horizontal = apple ? (coverage & 0x8000) == 0 : (coverage & 1) != 0;
+            var crossStream = apple ? (coverage & 0x4000) != 0 : (coverage & 4) != 0;
+            var format = apple ? coverage & 0xFF : coverage >> 8;
+            var header = apple ? 8 : 6;
+            if (length < header) return;
+            if (format == 0 && horizontal && !crossStream && at + header + 8 <= end)
+            {
+                var pairs = U16(at + header);
+                var pair = at + header + 8;
+                for (var count = 0; count < pairs && pair + 6 <= Math.Min(end, at + length); count++, pair += 6)
+                    _kern[(uint)U16(pair) << 16 | U16(pair + 2)] = (short)U16(pair + 4);
+            }
+            at += length;
+        }
+    }
+
+    /// <summary>
+    /// GDI's line pitch for the face at the ppem (tmHeight + tmExternalLeading): the hinted VDMX extent plus the
+    /// rounded line gap. Arial's printer sizes give 95 device pixels for 10pt, 99 for bold 10pt and 78 for italic
+    /// 8pt. Null when the font carries no VDMX entry for the size or is a bundled fallback.
+    /// </summary>
+    public int? LinePitch(int ppem)
+    {
+        if (_fallback is not null || !_vdmx.TryGetValue(ppem, out var extent)) return null;
+        return extent.YMax - extent.YMin + (int)Math.Round((double)_lineGap * ppem / UnitsPerEm, MidpointRounding.AwayFromZero);
+    }
+
+    /// <summary>
+    /// GDI's ascent for the face at the ppem (tmAscent): the hinted VDMX yMax. Crystal's export puts every printer
+    /// line's baseline that far below the line's top (60 device pixels for 8pt Arial, 77 for bold 10pt). Null when
+    /// the font carries no VDMX entry for the size or is a bundled fallback.
+    /// </summary>
+    public int? Ascent(int ppem) => _fallback is null && _vdmx.TryGetValue(ppem, out var extent) ? extent.YMax : null;
+
+    private void LoadVerticalDeviceMetrics()
+    {
+        if (!_tables.TryGetValue("VDMX", out var table) || table.Length < 6) return;
+        var end = table.Offset + table.Length;
+        var ratioCount = U16(table.Offset + 4);
+        if (ratioCount == 0 || table.Offset + 6 + ratioCount * 6 > end) return;
+        // The 1:1 aspect group (or the any-aspect group) is the one GDI uses on a square-pixel device.
+        var group = 0;
+        for (var index = 0; index < ratioCount; index++)
+        {
+            var at = table.Offset + 6 + index * 4;
+            var xRatio = _data![at + 1]; var yStart = _data[at + 2]; var yEnd = _data[at + 3];
+            if (xRatio == 0 || xRatio == yStart && yStart == yEnd) { group = index; break; }
+        }
+        var vTable = table.Offset + U16(table.Offset + 6 + ratioCount * 4 + group * 2);
+        if (vTable + 4 > end) return;
+        var records = U16(vTable);
+        for (var index = 0; index < records; index++)
+        {
+            var at = vTable + 4 + index * 6;
+            if (at + 6 > end) return;
+            _vdmx[U16(at)] = ((short)U16(at + 2), (short)U16(at + 4));
+        }
     }
 
     /// <summary>The glyph's advance in whole device pixels at the ppem, as GDI reports it; -1 for an unsupported character.</summary>

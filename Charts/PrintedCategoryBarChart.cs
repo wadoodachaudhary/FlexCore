@@ -7,11 +7,13 @@ namespace Fx.ControlKit.Charts;
 internal static class PrintedCategoryBarChart
 {
     private static readonly string[] DefaultPalette = ["#0060ff", "#ff0000", "#ffff00", "#40ff00", "#00ffff", "#ff00ff"];
+    private static readonly string[] RightKeyPalette = [.. ReportAnalysisGraphic.CrystalBarPalette,
+        "#27758b", "#da7062", "#447711", "#c82759", "#5d079c", "#e3d63c"];
     internal static bool Supports(ChartType type) => type is ChartType.Bar or ChartType.GroupedBar or ChartType.StackedBar or ChartType.StackedBar100;
 
     internal static ReportVectorImage Draw(ChartType type, IReadOnlyList<ChartSeries> series, string title,
         double width, double height, bool legend, string[]? palette = null, ChartAxis? xAxis = null,
-        ChartAxis? yAxis = null, bool showAxisLabels = true)
+        ChartAxis? yAxis = null, bool showAxisLabels = true, ReportChartRightLegend? rightKey = null)
     {
         if (!Supports(type)) throw new NotSupportedException("This chart type has no classic category-bar adapter.");
         if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
@@ -20,8 +22,12 @@ internal static class PrintedCategoryBarChart
         var groups = series?.Where(group => group is not null).ToArray() ?? [];
         var count = groups.Select(group => group.DataPoints?.Count ?? 0).DefaultIfEmpty().Max();
         var colors = palette?.Select(PrintedBarChart3D.NormalizeColor).Where(color => color is not null).Select(color => color!).ToArray();
-        if (colors is not { Length: > 0 }) colors = DefaultPalette;
-        var font = Math.Min(width / 48, height / 31.69735);
+        var paint = rightKey?.Drawing;
+        if (colors is not { Length: > 0 } && paint?.Palette.Length > 0)
+            colors = paint.Palette.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (colors is not { Length: > 0 }) colors = rightKey is null ? DefaultPalette : RightKeyPalette;
+        var gradient = paint?.GradientTop is not null && paint.GradientBottom is not null && groups.Length == 1;
+        var font = gradient ? Math.Min(width / 44, height / 21.5) : Math.Min(width / 48, height / 31.69735);
         ChartDataPoint? Point(int group, int category) => groups[group].DataPoints is { } points && category < points.Count ? points[category] : null;
         static bool Present(ChartDataPoint? point) => point is { IsEmpty: false } && double.IsFinite(point.Value);
         var labels = Enumerable.Range(0, count).Select(category => groups.Select((_, group) => Point(group, category))
@@ -36,15 +42,15 @@ internal static class PrintedCategoryBarChart
             image.Shapes.Add(new("Rectangle", [x, y, w, h], fill, stroke, thickness));
         void Line(double x1, double y1, double x2, double y2, double stroke = .36) =>
             image.Shapes.Add(new("Polyline", [x1, y1, x2, y2], "none", "#000000", stroke));
-        void Text(string value, double x, double y, double size, string anchor = "start", double angle = 0)
+        void Text(string value, double x, double y, double size, string anchor = "start", double angle = 0, bool bold = false)
         {
             var radians = angle * Math.PI / 180;
             image.Shapes.Add(new("Text", [0, 0], "#000000", "none", 0,
                 Transform: [Math.Cos(radians), Math.Sin(radians), -Math.Sin(radians), Math.Cos(radians), x, y],
-                Text: new(value, "Arial", size, Anchor: anchor)));
+                Text: new(value, "Arial", size, bold ? 700 : 400, Anchor: anchor)));
         }
-        Box(0, 0, width, height, "#ffffff");
-        if (!string.IsNullOrEmpty(title)) Text(title, width / 2, height * .08, font * 1.6, "middle");
+        Box(0, 0, width, height, paint?.Background ?? "#ffffff");
+        if (!string.IsNullOrEmpty(title)) Text(title, width / 2, height * .08, font * (gradient ? 1.4 : rightKey is null ? 1.6 : 2), "middle", bold: rightKey is not null);
 
         var stacked = type is ChartType.StackedBar or ChartType.StackedBar100;
         var values = new double[groups.Length, count];
@@ -101,25 +107,47 @@ internal static class PrintedCategoryBarChart
             catch (FormatException error) { throw new InvalidDataException("Invalid chart axis number format.", error); }
         }
         var legendFont = font;
-        var legendHeight = legendFont * (entries.Count * 1.21333 + 1.126);
+        var rowSpacing = rightKey is null ? 1.21333 : 1.4;
+        var legendHeight = legendFont * (entries.Count * rowSpacing + 1.126);
         if (showLegend && legendHeight > height * .72) legendFont *= height * .72 / legendHeight;
         var legendWidth = showLegend ? Math.Max(legendFont * 7, entries.Max(entry => ChartAxisLabelLayout.MeasureWidth(entry.Label, legendFont)) + legendFont * 3.9085) : 0;
         if (legendWidth > width * .38) { legendFont *= width * .38 / legendWidth; legendWidth = width * .38; }
-        legendHeight = legendFont * (entries.Count * 1.21333 + 1.126);
+        legendHeight = legendFont * (entries.Count * rowSpacing + 1.126);
         var legendLeft = Math.Min(width * .753846, width * .996 - legendFont * .47347 - legendWidth);
         var left = width * .160661125;
         var right = showLegend ? Math.Min(width * .7495306, legendLeft - width * .004315) : width * .955;
         var top = height * .18085648; var bottom = height * .78056;
+        if (rightKey is not null)
+        {
+            legendLeft = width - font * .75 - legendWidth;
+            left = width * .10;
+            right = showLegend ? legendLeft - font : width - font;
+            top = height * .135;
+            bottom = height * .815;
+        }
+        if (paint?.Frame is { IsValid: true } frame)
+        {
+            left = frame.Left * width; top = frame.Top * height;
+            right = frame.Right * width; bottom = frame.Bottom * height;
+            if (showLegend)
+            {
+                legendLeft = right + font * .8;
+                var room = width - legendLeft - font * .2;
+                var scale = Math.Min(1, (bottom - top) / legendHeight);
+                if (room > 0) scale = Math.Min(scale, room / legendWidth);
+                legendFont *= scale; legendWidth *= scale; legendHeight *= scale;
+            }
+        }
         var slot = (right - left) / Math.Max(1, count);
         double Y(double value) => bottom - (Math.Clamp(value, low, high) - low) / (high - low) * (bottom - top);
         Box(left, top, right - left, bottom - top, "none", "#000000", .36);
-        if (xAxis?.ShowGridLines != false)
+        if (xAxis?.ShowGridLines ?? rightKey?.CategoryGrid ?? true)
             for (var category = 1; category < count; category++) Line(left + category * slot, top, left + category * slot, bottom);
         for (var tick = 0; tick < ticks; tick++)
         {
             var value = low + (high - low) * (tick / (ticks - 1d));
             var y = Y(value);
-            if (yAxis?.ShowGridLines != false && tick > 0 && tick < ticks - 1) Line(left, y, right, y);
+            if ((yAxis?.ShowGridLines ?? rightKey?.ValueGrid ?? true) && tick > 0 && tick < ticks - 1) Line(left, y, right, y);
             if (showAxisLabels) Text(Tick(value), left - font * .49, y + font * .352, font, "end");
         }
         Line(left, top, left, bottom, .6); Line(left, bottom, right, bottom, .6);
@@ -140,10 +168,44 @@ internal static class PrintedCategoryBarChart
                 if (Math.Max(baseline, end) < low || Math.Min(baseline, end) > high) continue;
                 var x = grouped ? left + category * slot + (slot - groupWidth) / 2 + group * (barWidth + gap)
                     : left + category * slot + slot * .095;
-                Box(x, Math.Min(Y(baseline), Y(end)), barWidth, Math.Abs(Y(end) - Y(baseline)), Color(group, category), "#000000");
+                var barTop = Math.Min(Y(baseline), Y(end));
+                var barHeight = Math.Abs(Y(end) - Y(baseline));
+                if (gradient)
+                    image.Shapes.Add(new("Rectangle", [x, barTop, barWidth, barHeight], paint!.GradientTop!, paint.Border ?? "none", .8,
+                        GradientEnd: paint.GradientBottom));
+                else Box(x, barTop, barWidth, barHeight, Color(group, category), rightKey is null ? "#000000" : "none");
             }
         }
-        if (showAxisLabels)
+        if (showAxisLabels && rightKey is not null)
+        {
+            double Center(int index) => left + (index + .5) * slot;
+            if (rightKey.RotateCategories)
+            {
+                double Position(int i) => Center(i) + font * .5;
+                var baseline = bottom + font * 1.3;
+                var rotated = labels.Select(label => new[] { label }).ToArray();
+                var labelAxis = xAxis ?? new ChartAxis { MinimumLabelGap = font * .15 };
+                foreach (int i in SelectLabels(rotated, Position, font, font * Math.Sqrt(2), baseline, width, height, labelAxis).Order())
+                    Text(labels[i], Position(i), baseline, font, "end", -45);
+            }
+            else
+            {
+                var stagger = labels.Any(label => ChartAxisLabelLayout.MeasureWidth(label, font) + 2 > slot);
+                var laneCount = stagger ? 2 : 1;
+                for (int lane = 0; lane < laneCount; lane++)
+                {
+                    int Category(int position) => lane + position * laneCount;
+                    var laneLabels = labels.Where((_, index) => index % laneCount == lane).ToArray();
+                    var visible = ChartAxisLabelLayout.Select(laneLabels, i => Center(Category(i)), font, axis: xAxis,
+                        minimumX: 0, maximumX: width);
+                    foreach (var i in visible.Order())
+                        Text(laneLabels[i], Center(Category(i)), bottom + font * (1.5 + lane * 1.4), font, "middle");
+                }
+            }
+            Text(xAxis?.Title ?? rightKey.CategoryTitle, (left + right) / 2, height - font * .5, font * 1.1, "middle", bold: !gradient);
+            Text(yAxis?.Title ?? rightKey.ValueTitle, font * 2, (top + bottom) / 2, font * 1.1, "middle", -90, bold: !gradient);
+        }
+        else if (showAxisLabels)
         {
             var labelLines = labels.Select(label => Wrap(label, slot * 1.2, font)).ToArray();
             var labelBaseline = bottom + font * 1.153;
@@ -158,14 +220,16 @@ internal static class PrintedCategoryBarChart
         }
         if (showLegend)
         {
-            var legendTop = Math.Max(font, Math.Min(height - legendHeight - font, height * .387783 - legendHeight / 2));
-            Box(legendLeft + legendFont * .47347, legendTop + legendFont * .3341, legendWidth, legendHeight, "#000000");
-            Box(legendLeft, legendTop, legendWidth, legendHeight, "#ffffff", "#000000");
+            var centerY = rightKey is null ? height * .387783 : (top + bottom) / 2;
+            var legendTop = Math.Max(font, Math.Min(height - legendHeight - font, centerY - legendHeight / 2));
+            if (rightKey is null)
+                Box(legendLeft + legendFont * .47347, legendTop + legendFont * .3341, legendWidth, legendHeight, "#000000");
+            Box(legendLeft, legendTop, legendWidth, legendHeight, "#ffffff", "#000000", rightKey is null ? .12 : .6);
             for (var index = 0; index < entries.Count; index++)
             {
-                var y = legendTop + legendFont * (.721 + index * 1.21333);
-                Box(legendLeft + legendFont * .8593, y, legendFont * .912, legendFont * .914, entries[index].Color, "#000000");
-                Text(entries[index].Label, legendLeft + legendFont * 2.3919, legendTop + legendFont * (1.5123 + index * 1.21333), legendFont);
+                var y = legendTop + legendFont * (.721 + index * rowSpacing);
+                Box(legendLeft + legendFont * .8593, y, legendFont * .912, legendFont * .914, entries[index].Color, rightKey is null ? "#000000" : "none");
+                Text(entries[index].Label, legendLeft + legendFont * 2.3919, legendTop + legendFont * (1.5123 + index * rowSpacing), legendFont);
             }
         }
         image.Validate();

@@ -1,4 +1,5 @@
 using System.Xml;
+using System.Buffers.Binary;
 using System.Runtime.Versioning;
 
 namespace Fx.ControlKit.Reports.NativeCrystal;
@@ -6,6 +7,73 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 [UnsupportedOSPlatform("browser")]
 public static class NativeCrystalRptConverter
 {
+    private static ReportPlotFrame? ReadPlotFrame(ReadOnlySpan<byte> drawing)
+    {
+        if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
+        for (var offset = 256; offset <= drawing.Length - 4;)
+        {
+            var tag = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(drawing[offset..]);
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(drawing[(offset + 2)..]);
+            offset += 4;
+            if (length > drawing.Length - offset) break;
+            var payload = drawing.Slice(offset, length);
+            offset += length;
+            // BoxInstRec / xyFrame, expressed in the chart's signed virtual coordinate space.
+            if (tag != 9006 || length != 12 || Short(payload, 2) != 2028) continue;
+            var frame = new ReportPlotFrame(.5 + Short(payload,4) / 32768d, .5 - Short(payload,6) / 32768d,
+                .5 + Short(payload,8) / 32768d, .5 - Short(payload,10) / 32768d);
+            return frame.IsValid ? frame : null;
+        }
+        return null;
+        static short Short(ReadOnlySpan<byte> p, int index) =>
+            System.Buffers.Binary.BinaryPrimitives.ReadInt16LittleEndian(p[index..]);
+    }
+
+    private static ReportBarDrawing? ReadBarDrawing(ReadOnlySpan<byte> drawing, bool singleSeries)
+    {
+        if (!drawing.StartsWith("TIFFGRAPH"u8)) return null;
+        var colors = new SortedDictionary<int, string>();
+        string background = "#ffffff";
+        string? top = null, bottom = null, border = null;
+        bool usesEffect = false;
+        for (var offset = 256; offset <= drawing.Length - 4;)
+        {
+            var tag = BinaryPrimitives.ReadUInt16LittleEndian(drawing[offset..]);
+            var length = BinaryPrimitives.ReadUInt16LittleEndian(drawing[(offset + 2)..]);
+            offset += 4;
+            if (length > drawing.Length - offset) return null;
+            var p = drawing.Slice(offset, length);
+            offset += length;
+            if (length < 4) continue;
+            var index = BinaryPrimitives.ReadInt16LittleEndian(p);
+            var destination = BinaryPrimitives.ReadUInt16LittleEndian(p[2..]);
+            if (tag == 9001 && length == 16)
+            {
+                if (destination == 2007 && index == 1) background = Color(p[10..]);
+                if (destination == 2132 && index is >= 0 and < 256)
+                {
+                    colors[index] = Color(p[10..]);
+                    if (index == 0) usesEffect = BinaryPrimitives.ReadUInt16LittleEndian(p[4..]) != 0;
+                }
+                if (destination == 2133 && index == 0) border = Color(p[10..]);
+            }
+            // Series zero, layer zero, centered linear wash in vertical direction.
+            if (tag == 10011 && length == 30 && destination == 2132 && index == 0
+                && BinaryPrimitives.ReadInt16LittleEndian(p[4..]) == 0 && BinaryPrimitives.ReadInt32LittleEndian(p[18..]) == 0
+                && BinaryPrimitives.ReadInt16LittleEndian(p[28..]) == 14)
+            {
+                var angle = BinaryPrimitives.ReadInt16LittleEndian(p[22..]);
+                if (angle is 90 or 270)
+                    (top, bottom) = angle == 90 ? (Color(p[6..]), Color(p[12..])) : (Color(p[12..]), Color(p[6..]));
+            }
+        }
+        if (singleSeries && (!usesEffect || top is null) || colors.Count == 0) return null;
+        var palette = colors.TakeWhile((entry, index) => entry.Key == index).Select(entry => entry.Value);
+        return new(singleSeries ? "" : string.Join(' ', palette), background, singleSeries ? top : null, singleSeries ? bottom : null,
+            singleSeries ? border : null, ReadPlotFrame(drawing));
+        static string Color(ReadOnlySpan<byte> rgb) => $"#{rgb[1]:x2}{rgb[3]:x2}{rgb[5]:x2}";
+    }
+
     public static CrystalReportModel ReadModel(string rptPath, CrystalRptConversionOptions? options = null)
     {
         return ReadModel(rptPath, options, CancellationToken.None);
@@ -144,6 +212,7 @@ public static class NativeCrystalRptConverter
             model.Core.PaperSource = core.PaperSource;
             model.Core.PrinterDuplex = core.PrinterDuplex;
             model.Core.PrinterName = core.PrinterName;
+            model.Core.NoPrinter = core.NoPrinter;
         }
 
         // Report summary info is metadata only: an unreadable stream leaves it blank and is reported.
@@ -223,6 +292,20 @@ public static class NativeCrystalRptConverter
         var charts = model.DataDefinition.ReportDefinition.Areas.SelectMany(a => a.Sections)
             .SelectMany(s => s.ReportObjects).Where(o => o.Kind == "Chart").ToArray();
         var drawings = streams.Where(s => s.FullPath == prefix + s.Name && s.Name.StartsWith("CHART ", StringComparison.Ordinal)).ToArray();
+        if (charts.Length == 1 && drawings.Length == 1 && contents is not null
+            && charts[0].Analysis is {} authored && (authored.PrintAxis is not null || authored.RightCategoryLegend is not null))
+        {
+            try
+            {
+                var drawing = TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes);
+                if (authored.PrintAxis is {} axis && ReadPlotFrame(drawing) is {} frame) authored.PrintAxis = axis with { Frame = frame };
+                if (authored.RightCategoryLegend is {} key && (key.RotateCategories || !authored.ShowLegend)
+                    && ReadBarDrawing(drawing, !authored.ShowLegend) is {} paint)
+                    authored.RightCategoryLegend = key with { Drawing = paint };
+            }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Chart frame was not imported: {ex.Message}"); }
+        }
         if (charts.Length == 1 && charts[0].Analysis is { ChartType: Charts.ChartType.Bar } chart && drawings.Length == 1
             && drawings[0].Bytes.FirstOrDefault() == 0x78)
         {
@@ -232,7 +315,14 @@ public static class NativeCrystalRptConverter
                 var header = new byte[278];
                 if (zip.ReadAtLeast(header, header.Length, false) == header.Length && header.AsSpan().StartsWith("TIFFGRAPH"u8)
                     && header.AsSpan(268).StartsWith(new byte[] { 0xd2, 7, 16, 0 }) && header.AsSpan(272).StartsWith("HBars\0"u8))
+                {
                     chart.ChartType = Charts.ChartType.HorizontalBar;
+                    if (chart.RightCategoryLegend is not null)
+                    {
+                        chart.ChartCategoryLegend = false;
+                        chart.RightCategoryLegend = null;
+                    }
+                }
             }
             catch (InvalidDataException) { /* Keep the declared Bar family for unreadable drawing data. */ }
         }

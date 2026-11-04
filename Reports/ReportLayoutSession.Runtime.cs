@@ -300,7 +300,7 @@ public sealed partial class ReportLayoutSession
                 case "enablesuppressifblank": section.SuppressIfBlank = CrystalFormula.Boolean(value); break;
                 case "enableprintatbottomofpage": section.PrintAtBottomOfPage = CrystalFormula.Boolean(value); break;
                 case "enableunderlayfollowingsections" or "enableunderlaysection": section.UnderlayFollowingSections = CrystalFormula.Boolean(value); break;
-                case "backgroundcolor": section.BackgroundColor = FormulaColor(value); break;
+                case "backgroundcolor": section.BackgroundColor = value is null or DBNull ? source.BackgroundColor : FormulaColor(value); break;
                 default: _diagnostics.Add($"{section.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
         }
@@ -355,6 +355,11 @@ public sealed partial class ReportLayoutSession
                     { 0 => "Regular", 1 => "Bold", 2 => "Italic", 3 => "BoldItalic", _ => throw new NotSupportedException("Unknown conditional font style.") };
                     element.Bold = style.Contains("bold", StringComparison.OrdinalIgnoreCase);
                     element.Italic = style.Contains("italic", StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "textrotation":
+                    var angle = CrystalFormula.Number(value);
+                    if (angle is 0 or 90 or 270) element.TextRotation = (int)angle;
+                    else _diagnostics.Add($"{element.Name}: unsupported text rotation '{angle}'.");
                     break;
                 case "horizontalalignment": element.HorizontalAlignment = value?.ToString() ?? "Left"; break;
                 case "bordercolor": element.Visual.BorderColor = FormulaColor(value); break;

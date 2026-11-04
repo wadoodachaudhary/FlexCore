@@ -95,7 +95,7 @@ public sealed partial class ReportLayoutSession
 
     private ReportTextMetrics? TextMetrics(Item item)
     {
-        if (_textMetrics is null || item.Element.Kind is not ("Text" or "Field" or "FieldHeading")) return null;
+        if (_textMetrics is null || item.Element.HasRotatedText || item.Element.Kind is not ("Text" or "Field" or "FieldHeading")) return null;
         var measurement = new ReportTextMeasurement(ReportObjectRenderer.Style(item.Element, false), item.Html,
             ReportObjectRenderer.TextLineLimit(item.Element), NeedsNumericMask(item.Element));
         var key = MeasurementKey(measurement);
@@ -123,7 +123,7 @@ public sealed partial class ReportLayoutSession
         var probe = item.Element.NativeNumericFormat!.OverflowProbe(text, item.Element.HorizontalAlignment);
         // Numeric fit belongs to the authored point/twip layout, before screen-font realization.
         // Rounding a 10pt screen font down to 13px must not make an overflowing value fit.
-        var fitElement = item.Element;
+        var fitElement = item.Element.TextLayoutFrame();
         if (fitElement.UseCrystalScreenMetrics)
         {
             fitElement = fitElement.CloneFor(fitElement.SectionId, fitElement.Name);
@@ -140,7 +140,7 @@ public sealed partial class ReportLayoutSession
                 _diagnostics.Add($"{item.Element.Name}: native numeric overflow masking requires browser font measurements.");
             return item.Html;
         }
-        var width = Math.Max(0, item.Element.WidthTwips - item.Element.IndentTwips);
+        var width = Math.Max(0, fitElement.WidthTwips - fitElement.IndentTwips);
         if (metrics.Width <= width) return item.Html;
         var count = Math.Clamp((int)Math.Floor(width / metrics.HashWidth), 0, 10000);
         // Replace only the display text. Formulas, totals and typed data exports keep the original value.
