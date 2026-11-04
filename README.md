@@ -487,6 +487,14 @@ The host registers `AddFlexCoreProgramPreview` and, for image delivery outside t
 
 See [live program preview](docs/program-preview.md) for the API, the Linux packages, macOS containers, and Azure App Service.
 
+## Legacy intake and Web Forms conversion
+
+`LegacyProjectIntake` unzips an uploaded project archive (zip-slip safe, with size limits) and inventories Web Forms, WinForms, WPF, MVC, and the other project kinds it can see. `WebFormsBlazorConverter` turns a Web Forms site into a Blazor app: pages and masters, the common server controls, EF6 to EF Core, and SQLite seeded from the project's CSV files, preconfigured data, or mock service when LocalDB is not available. Gaps are written out as TODO items.
+
+`LegacyAppLauncher` and `ConvertedAppLauncher` return `ProgramLaunch` values the preview host can show side by side. The legacy side is a web target. Mono `xsp4` does not render ASP.NET 4.7.2 plus EF6; point `RemoteUrl` at IIS Express on a Windows VM. The converted Blazor app is the process the host starts.
+
+See [legacy migration](docs/legacy-migration.md) for the API Mutarjim calls.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
