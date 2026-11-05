@@ -39,14 +39,14 @@
             }
 
             <div class="fx-shell-scroll">
-                @foreach (var section in SectionList)
+                @foreach (var navSection in SectionList)
                 {
-                    <div class="fx-shell-section" data-section="@section.Id">
-                        @if (!Collapsed && !string.IsNullOrWhiteSpace(section.Title))
+                    <div class="fx-shell-section" data-section="@navSection.Id">
+                        @if (!Collapsed && !string.IsNullOrWhiteSpace(navSection.Title))
                         {
-                            <div class="fx-shell-section-title">@section.Title</div>
+                            <div class="fx-shell-section-title">@navSection.Title</div>
                         }
-                        @foreach (var item in section.Items)
+                        @foreach (var item in navSection.Items)
                         {
                             <ShellNavRow Item="item" />
                         }
