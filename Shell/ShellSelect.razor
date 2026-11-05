@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit.Shell
+
+<select aria-label="@AriaLabel" value="@Value" @onchange="OnChange">@ChildContent</select>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private Task OnChange(ChangeEventArgs change) => ValueChanged.InvokeAsync(change.Value?.ToString());
+}

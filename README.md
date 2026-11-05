@@ -30,6 +30,7 @@ using Fx.ControlKit.Notifications;
 - **PDF Viewer and Spreadsheet** — occurrence search and bookmark navigation; visible frozen panes and persistent worksheet filters. See [document parity progress and benches](docs/pdf-spreadsheet-parity-progress.md) for APIs, verification and remaining gaps.
 - **ReportWriterControl** — adaptive paginated report renderer fed by a small `ReportDefinition` (loaded from Crystal XML, plain SQL, or any other source you wire)
 - **DialogControl, NotificationService, RibbonControl, ToolbarControl, ButtonControl, DropDownListControl, MultiSelectDualListControl, ChartControl, DiagramControl, EditorPanelControl, OutlineControl, ProgressBarControl, PropertyGridControl, TabsControl** — the rest of the kit
+- **App shell and code tools** — CodeConvert-style sidebar, tool catalog, and AI code tools (explain, generate, review, diagrams, a sandboxed runner). See [the API guide](docs/app-shell-and-code-tools.md).
 - **App-agnostic by design** — every external dependency (DB, session, picklist source, report exporter) is exposed as an interface; host apps wire their own adapters in `Program.cs`
 
 ## Dedicated counterparts

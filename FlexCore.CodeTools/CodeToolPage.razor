@@ -1,0 +1,205 @@
+@namespace Fx.ControlKit.CodeTools
+@using Fx.ControlKit.Llm.CodeTools
+@using Microsoft.AspNetCore.Components.Forms
+@inject IJSRuntime Js
+
+<section class="fx-code-tool @CssClass" aria-busy="@Busy.ToString().ToLowerInvariant()" aria-label="@Descriptor.Title">
+    @if (ShowHeader)
+    {
+        <header class="fx-code-tool-head">
+            <h1>@Descriptor.Title</h1>
+            <p>@Descriptor.Description</p>
+        </header>
+    }
+
+    <div class="fx-code-tool-panes">
+        <section class="fx-code-pane" aria-label="Input">
+            <div class="fx-code-fields">
+                @if (Descriptor.NeedsCode || Descriptor.Kind == CodeToolKind.DiagramGenerator)
+                {
+                    <label>Language
+                        <ShellSelect Value="@_language" ValueChanged="OnLanguage" AriaLabel="Language">
+                            @foreach (var language in CodeLanguages.All)
+                            {
+                                <option value="@language.Id">@language.Label</option>
+                            }
+                        </ShellSelect>
+                    </label>
+                }
+                @if (Descriptor.NeedsTargetLanguage)
+                {
+                    <label>Target language
+                        <ShellSelect Value="@_target" ValueChanged="OnTarget" AriaLabel="Target language">
+                            @foreach (var language in CodeLanguages.All)
+                            {
+                                <option value="@language.Id">@language.Label</option>
+                            }
+                        </ShellSelect>
+                    </label>
+                }
+                @if (Descriptor.Kind == CodeToolKind.DiagramGenerator)
+                {
+                    <label>Diagram
+                        <ShellSelect Value="@_diagram.ToString()" ValueChanged="OnDiagram" AriaLabel="Diagram kind">
+                            <option value="Class">Class</option>
+                            <option value="Sequence">Sequence</option>
+                            <option value="Flow">Flow</option>
+                        </ShellSelect>
+                    </label>
+                }
+            </div>
+            @if (Descriptor.NeedsFiles)
+            {
+                <div class="fx-code-files">
+                    @for (var index = 0; index < _files.Count; index++)
+                    {
+                        var slot = index;
+                        <div class="fx-code-file">
+                            <ShellTextBox AriaLabel="@("File " + (slot + 1) + " name")" Value="@_files[slot].Name" ValueChanged="name => SetFileName(slot, name)" />
+                            <ShellTextArea AriaLabel="@("File " + (slot + 1) + " contents")" Rows="6" Value="@_files[slot].Content" ValueChanged="content => SetFileContent(slot, content)" />
+                            <ShellButton OnClick="@(() => RemoveFile(slot))">Remove</ShellButton>
+                        </div>
+                    }
+                    <ShellButton CssClass="fx-code-secondary" OnClick="AddFile">Add file</ShellButton>
+                </div>
+            }
+            else if (Descriptor.AcceptsImage)
+            {
+                <label class="fx-code-stack">Mermaid
+                    <ShellTextArea Value="@_mermaid" ValueChanged="OnMermaid" Rows="10" AriaLabel="Mermaid diagram" Placeholder="classDiagram or a flowchart" />
+                </label>
+                <label class="fx-code-stack">Diagram image
+                    <InputFile OnChange="OnImageAsync" accept="image/png,image/jpeg,image/webp,image/gif" aria-label="Diagram image" />
+                </label>
+                @if (_image is not null)
+                {
+                    <p class="fx-code-note">Image attached (@_image.MimeType, @_image.Bytes.Length bytes).</p>
+                }
+            }
+            else if (!Descriptor.NeedsFiles)
+            {
+                <label class="fx-code-stack">@(Descriptor.NeedsCode ? "Code" : "Request")
+                    <ShellTextArea Value="@_code" ValueChanged="OnCode" Rows="14" AriaLabel="Code" Placeholder="Paste code here" />
+                </label>
+            }
+            @if (Descriptor.NeedsInstruction || Descriptor.Kind == CodeToolKind.Enhancer || Descriptor.Kind == CodeToolKind.Optimizer)
+            {
+                <label class="fx-code-stack">@(Descriptor.NeedsInstruction ? "Instruction" : "Focus (optional)")
+                    <ShellTextArea Value="@_instruction" ValueChanged="OnInstruction" Rows="3" AriaLabel="Instruction" />
+                </label>
+            }
+            <div class="fx-code-actions">
+                <ShellButton CssClass="fx-code-run" Disabled="Busy" OnClick="RunAsync">@(Busy ? "Working…" : "Run")</ShellButton>
+            </div>
+        </section>
+
+        <section class="fx-code-pane" aria-label="Result">
+            <div class="fx-code-toolbar">
+                <span>@ResultLabel</span>
+                <span class="fx-code-toolbar-actions">
+                    <ShellButton OnClick="CopyAsync">@_copyLabel</ShellButton>
+                    @if (!string.IsNullOrEmpty(DownloadText))
+                    {
+                        <a download="@DownloadName" href="@DownloadHref">Download</a>
+                    }
+                </span>
+            </div>
+            <div class="fx-code-result">
+                @if (ShowSetup)
+                {
+                    <div class="fx-code-setup" role="status">
+                        <h2>Model setup</h2>
+                        <p>@_setup</p>
+                    </div>
+                }
+                else if (_error is not null && _result is null)
+                {
+                    <p class="fx-code-note" role="alert">@_error</p>
+                }
+                else if (_result is null)
+                {
+                    <p class="fx-code-note">@(_stream.Length > 0 ? _stream.ToString() : "The result will appear here.")</p>
+                }
+                else
+                {
+                @if (_result.Status == CodeToolStatus.OfflineFallback && string.IsNullOrWhiteSpace(_result.Summary))
+                {
+                    <p class="fx-code-note">Drawn from the code structure. A model was not used.</p>
+                }
+                    @if (_result.Status is CodeToolStatus.Failed or CodeToolStatus.NeedsVision)
+                    {
+                        <p class="fx-code-note" role="alert">@(_result.Error ?? _result.Text)</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_result.Summary))
+                    {
+                        <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_result.Summary))</div>
+                    }
+                    @if (_result.Findings.Count > 0)
+                    {
+                        <ol class="fx-findings">
+                            @foreach (var finding in _result.Findings)
+                            {
+                                <li data-severity="@finding.Severity">
+                                    <span class="fx-severity">@finding.Severity</span>
+                                    @if (finding.Line is int line)
+                                    {
+                                        <span class="fx-line">Line @line</span>
+                                    }
+                                    <p>@finding.Message</p>
+                                    @if (!string.IsNullOrWhiteSpace(finding.Recommendation))
+                                    {
+                                        <p class="fx-rec">@finding.Recommendation</p>
+                                    }
+                                </li>
+                            }
+                        </ol>
+                    }
+                    @if (_result.Suggestions.Count > 0)
+                    {
+                        @foreach (var suggestion in _result.Suggestions)
+                        {
+                            <article class="fx-suggest">
+                                <h3>@suggestion.Title</h3>
+                                @if (!string.IsNullOrWhiteSpace(suggestion.Rationale))
+                                {
+                                    <p>@suggestion.Rationale</p>
+                                }
+                                <div class="fx-suggest-pair">
+                                    <pre aria-label="Before">@suggestion.Before</pre>
+                                    <pre aria-label="After">@suggestion.After</pre>
+                                </div>
+                            </article>
+                        }
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_result.Mermaid))
+                    {
+                        @if (MermaidDiagram.TryRenderSvg(_result.Mermaid, out var svg))
+                        {
+                            <div class="fx-diagram">@((MarkupString)svg)</div>
+                        }
+                        <details>
+                            <summary>Mermaid source</summary>
+                            <pre class="fx-code-tool-source">@_result.Mermaid</pre>
+                        </details>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_result.Code) && _result.Mermaid is null)
+                    {
+                        <pre class="fx-code-block" aria-label="Result code">@_result.Code</pre>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_result.Explanation) && Descriptor.Presentation == CodeToolPresentation.Optimized)
+                    {
+                        <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_result.Explanation))</div>
+                    }
+                    @if (Descriptor.Presentation is CodeToolPresentation.Markdown or CodeToolPresentation.Documentation && string.IsNullOrWhiteSpace(_result.Code))
+                    {
+                        <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_result.Text))</div>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(_result.Explanation) && Descriptor.Presentation == CodeToolPresentation.Code && _result.Code is not null)
+                    {
+                        <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_result.Explanation))</div>
+                    }
+                }
+            </div>
+        </section>
+    </div>
+</section>

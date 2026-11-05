@@ -1,0 +1,76 @@
+.fx-tool-menu h2 {
+    margin: 0 0 10px;
+    font-size: 16px;
+}
+
+.fx-tool-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+
+.fx-tool-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    text-align: left;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    padding: 10px 12px;
+    cursor: pointer;
+}
+
+.fx-tool-card:hover,
+.fx-tool-card[aria-current="page"] {
+    background: var(--fx-shell-active, #ececef);
+}
+
+.fx-tool-card:focus-visible {
+    outline: 2px solid var(--fx-shell-accent, #1f9d55);
+    outline-offset: 1px;
+}
+
+.fx-tool-icon {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    color: #fff;
+    flex: none;
+}
+
+.fx-tool-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding-top: 1px;
+}
+
+.fx-tool-title {
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+.fx-tool-description {
+    color: var(--fx-shell-muted, #6b6b6b);
+    font-size: 13px;
+    line-height: 1.35;
+}
+
+.fx-tool-menu[data-theme="dark"] {
+    --fx-shell-active: #243656;
+    --fx-shell-muted: #9eb0c9;
+    color: #e7eef8;
+}
+
+@media (max-width: 720px) {
+    .fx-tool-grid {
+        grid-template-columns: 1fr;
+    }
+}

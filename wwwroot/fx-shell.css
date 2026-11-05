@@ -1,0 +1,31 @@
+/*
+  Optional host stylesheet for the CodeConvert shell.
+  The components already fall back to these values. Override any variable
+  on :root or on .fx-app-shell. Set data-theme="dark" for the navy menu.
+
+  --fx-shell-accent
+  --fx-shell-accent-strong
+  --fx-shell-accent-soft
+  --fx-shell-canvas
+  --fx-shell-surface
+  --fx-shell-sidebar
+  --fx-shell-text
+  --fx-shell-muted
+  --fx-shell-border
+  --fx-shell-active
+  --fx-shell-hover
+  --fx-shell-banner
+  --fx-shell-banner-text
+  --fx-shell-card
+  --fx-shell-tile
+*/
+:root {
+    --fx-shell-accent: #1f9d55;
+    --fx-shell-accent-strong: #178a49;
+    --fx-shell-accent-soft: #e7f6ee;
+    --fx-shell-canvas: #f3efe6;
+    --fx-shell-surface: #ffffff;
+    --fx-shell-text: #1c1c1c;
+    --fx-shell-muted: #6b6b6b;
+    --fx-shell-border: #e6e1d8;
+}

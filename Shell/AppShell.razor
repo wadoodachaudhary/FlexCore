@@ -1,0 +1,104 @@
+@namespace Fx.ControlKit.Shell
+@inherits FlexControlBase
+
+<CascadingValue Value="this" IsFixed="false">
+<div @attributes="AdditionalAttributes"
+     class="@ResolvedCssClass"
+     style="@RootStyle"
+     id="@Id"
+     data-theme="@ThemeName"
+     data-collapsed="@Collapsed.ToString().ToLowerInvariant()"
+     data-active-item="@ActiveItemId">
+    <div class="fx-shell-frame">
+        <aside class="fx-shell-sidebar" aria-label="@SidebarAriaLabel">
+            <div class="fx-shell-sidebar-head">
+                <div class="fx-shell-brand">
+                    <span class="fx-shell-logo" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="M7 7h9l-2.4-2.4M17 17H8l2.4 2.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </span>
+                    @if (!Collapsed)
+                    {
+                        <span class="fx-shell-brand-name">@Brand</span>
+                    }
+                </div>
+                <button type="button" class="fx-shell-collapse" aria-label="@(Collapsed ? "Expand sidebar" : "Collapse sidebar")" aria-expanded="@((!Collapsed).ToString().ToLowerInvariant())" @onclick="ToggleCollapsedAsync">
+                    <ShellIconView Icon="ShellIcon.Collapse" />
+                </button>
+            </div>
+
+            @if (!Collapsed && (!string.IsNullOrEmpty(WorkspaceName) || !string.IsNullOrEmpty(WorkspaceLabel)))
+            {
+                <button type="button" class="fx-shell-workspace" @onclick="OnWorkspaceAsync">
+                    <span class="fx-shell-workspace-mark">@WorkspaceInitial</span>
+                    <span class="fx-shell-workspace-text">
+                        <span class="fx-shell-workspace-label">@WorkspaceLabel</span>
+                        <span class="fx-shell-workspace-name">@WorkspaceName</span>
+                    </span>
+                    <ShellIconView Icon="ShellIcon.Chevron" Size="16" />
+                </button>
+            }
+
+            <div class="fx-shell-scroll">
+                @foreach (var section in SectionList)
+                {
+                    <div class="fx-shell-section" data-section="@section.Id">
+                        @if (!Collapsed && !string.IsNullOrWhiteSpace(section.Title))
+                        {
+                            <div class="fx-shell-section-title">@section.Title</div>
+                        }
+                        @foreach (var item in section.Items)
+                        {
+                            <ShellNavRow Item="item" />
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="fx-shell-footer">
+                @if (!Collapsed && Plan is not null)
+                {
+                    <section class="fx-shell-plan">
+                        <h2>@Plan.Title</h2>
+                        @if (!string.IsNullOrWhiteSpace(Plan.Message))
+                        {
+                            <p>@Plan.Message</p>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(Plan.ActionLabel))
+                        {
+                            <button type="button" class="fx-shell-plan-action" @onclick="OnPlanAsync">@Plan.ActionLabel</button>
+                        }
+                    </section>
+                }
+                @if (FooterItems is { Count: > 0 })
+                {
+                    <div class="fx-shell-footer-nav">
+                        @foreach (var item in FooterItems)
+                        {
+                            <ShellNavRow Item="item" />
+                        }
+                    </div>
+                }
+                @if (Footer is not null)
+                {
+                    <div class="fx-shell-footer-extra">@Footer</div>
+                }
+            </div>
+        </aside>
+
+        <div class="fx-shell-main">
+            <div class="fx-shell-top">
+                <button type="button" class="fx-shell-menu" aria-label="Show navigation" @onclick="ToggleMobileAsync">
+                    <ShellIconView Icon="ShellIcon.Menu" />
+                </button>
+                @if (Banner is not null)
+                {
+                    <div class="fx-shell-banner">@Banner</div>
+                }
+            </div>
+            <div class="fx-shell-content">
+                @ChildContent
+            </div>
+        </div>
+    </div>
+</div>
+</CascadingValue>

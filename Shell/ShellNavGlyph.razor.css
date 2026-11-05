@@ -1,0 +1,13 @@
+.fx-shell-step-index {
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    border: 1px solid var(--fx-shell-border, #e6e1d8);
+    display: inline-grid;
+    place-items: center;
+    font-size: 11px;
+    font-weight: 700;
+    flex: none;
+    background: var(--fx-shell-surface, #fff);
+    color: var(--fx-shell-text, #1c1c1c);
+}
