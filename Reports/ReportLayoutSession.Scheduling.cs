@@ -40,6 +40,11 @@ public sealed partial class ReportLayoutSession
 
     private bool NeedsPrintState(CrystalFormula formula) => formula.UsesPersistentVariables || formula.References.Any(NeedsPrintState);
 
+    // An object's own binding that carries print state. A binding the schedule refused computes nothing and changes no
+    // variable, so a hidden or suppressed object skips it (NeedsPrintState would raise the refusal again); a printed
+    // object still shows its formula error.
+    private bool BindsPrintState(string reference) => !_schedulingErrors.ContainsKey(reference) && NeedsPrintState(reference);
+
     private static bool VisibilityProperty(string property) => property.ToLowerInvariant() is "enablesuppress" or "enablehidefordrilldown";
     private static bool EndingProperty(string property) => property.ToLowerInvariant() is "enablenewpageafter" or "enableresetpagenumberafter" or "backgroundcolor";
     private bool HasScheduledSection(string section) => HasScheduledCondition(_layout.AreaConditions, section) || HasScheduledCondition(_layout.SectionConditions, section);
@@ -58,7 +63,7 @@ public sealed partial class ReportLayoutSession
         return false;
     }
     private bool HasPrintFields(string section) => _layout.Document.Sections.First(s => s.Id == section).Elements
-        .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "")).Any(NeedsPrintState);
+        .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(e))).Any(BindsPrintState);
     private bool HasVisibilityEvent(string section) => HasScheduledSection(section) || _physicalPageSchedule && (HasPrintFields(section)
         || _layout.Document.Sections.First(s => s.Id == section).Elements.Any(e => _layout.Subreports.ContainsKey(e.Id)
             || (_layout.ObjectConditions.GetValueOrDefault(e.Id)?.Values.Any(NeedsPrintState) ?? false)));
@@ -66,7 +71,7 @@ public sealed partial class ReportLayoutSession
     private void PreparePhysicalPageSchedule()
     {
         var furniture = _layout.Document.Sections.Where(s => s.Kind is "PageHeader" or "PageFooter")
-            .SelectMany(s => s.Elements).SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding));
+            .SelectMany(s => s.Elements).SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(ValueBinding(e)));
         var needsReplay = _scheduledFormulas.Any(r => DependsOn(r, true) && NeedsPrintState(r))
             || furniture.Any(r => !_schedulingErrors.ContainsKey(r) && NeedsPrintState(r))
             || _layout.ObjectConditions.Values.Concat(_layout.SectionConditions.Values).Concat(_layout.AreaConditions.Values).SelectMany(c => c.Values).Any(NeedsPrintState);
@@ -90,7 +95,7 @@ public sealed partial class ReportLayoutSession
                 bool Reference(string reference) => visited.Add(reference) && layout.Formulas.TryGetValue(reference, out var f)
                     && (f.UsesPersistentVariables || f.References.Any(Reference));
                 var conditions = layout.SectionConditions.Values.Concat(layout.AreaConditions.Values).Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values);
-                return layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(e.HighlightRule.FieldName)).Any(Reference)
+                return layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(ValueBinding(e)).Append(e.HighlightRule.FieldName)).Any(Reference)
                     || conditions.Any(f => f.UsesPersistentVariables || f.References.Any(Reference));
             }
             bool PageLinks(ReportPositionedLayout layout)
@@ -278,10 +283,15 @@ public sealed partial class ReportLayoutSession
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var existing)) foreach (var value in existing) owner._bandFormulaCache.Add(value.Key, value.Value);
                         // Suppression removes presentation, not named formula-field assignments used by later sections.
+                        // A formula that fails here is diagnosed as Format diagnoses a printed one, and the replay goes on.
                         foreach (var reference in original.Elements.OrderBy(e => e.TopTwips)
-                            .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : ""))
-                            .Where(r => owner._layout.Formulas.ContainsKey(r) && (!band.EvaluationOnly || owner.NeedsPrintState(r))))
-                            _ = owner.Value(reference, band.Row);
+                            .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(e)))
+                            .Where(r => owner._layout.Formulas.ContainsKey(r) && !owner._schedulingErrors.ContainsKey(r) && (!band.EvaluationOnly || owner.NeedsPrintState(r))))
+                        {
+                            try { _ = owner.Value(reference, band.Row); }
+                            catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidCastException or OverflowException or DivideByZeroException or NotSupportedException or ArgumentException)
+                            { owner._diagnostics.Add($"{reference}: {ex.Message}"); }
+                        }
                         caches[key] = new(owner._bandFormulaCache);
                     }
                     if (!Section(placement.Band)) { HiddenValues(placement.Band); Finish(placement.Band); continue; }
@@ -344,7 +354,7 @@ public sealed partial class ReportLayoutSession
                             // Resolve field values before their formatting; both share the occurrence's formula cache.
                             // Format() turns a formula fault into a field diagnostic. This prefetch runs outside Format,
                             // so the same faults must not abort the physical replay (while-printing array formulas).
-                            foreach (var reference in original.Visual.Runs.Select(r => r.Binding).Prepend(original.Kind == "Field" ? original.Binding : "").Where(r => r.Length > 0))
+                            foreach (var reference in original.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(original)).Where(r => r.Length > 0))
                             {
                                 try { _ = owner.Value(reference, item.Row); }
                                 catch (Exception ex) when (ex is InvalidDataException or NotSupportedException or FormatException or InvalidCastException or OverflowException or DivideByZeroException or ArgumentException)
@@ -449,9 +459,10 @@ public sealed partial class ReportLayoutSession
 
     private void PrepareFormulaSchedule()
     {
-        // Schedule only reachable formulas. Unused library definitions must not change report state.
+        // Schedule only reachable formulas. Unused library definitions must not change report state. A label-only
+        // chart's category is scheduled as a field's binding is, so its stamp prints what a field would print.
         var roots = _layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding)
-                .Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))
+                .Prepend(ValueBinding(e)).Append(e.HighlightRule.FieldName))
             .Concat(_layout.Document.Groups.Select(g => g.Condition)).Concat(_layout.Document.Sorts.Select(s => s.Field.Reference))
             .Concat(_layout.Summaries.Values.Concat(_layout.RunningTotals.Values).Select(s => s.Field))
             .Concat(_layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation, t.Reset }).SelectMany(c => (c.Formula?.References ?? []).Prepend(c.Field)))

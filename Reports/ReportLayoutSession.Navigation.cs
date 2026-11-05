@@ -219,7 +219,7 @@ public sealed partial class ReportLayoutSession
     private string? OmittedDrillStateReason(int groupLevel) => _layout.ShowAllHeadersOnDrillDown == false && _layout.Document.Sections
         .Where(section => DrillSectionDepth(section) < groupLevel)
         .Any(section => section.Elements.Any(element => element.Kind == "Subreport")
-            || section.Elements.SelectMany(FieldBindings).Any(NeedsPrintState)
+            || section.Elements.SelectMany(FieldBindings).Any(BindsPrintState)
             || section.Elements.Any(element => _layout.ObjectConditions.GetValueOrDefault(element.Id)?.Values.Any(NeedsPrintState) ?? false)
             || (_layout.AreaConditions.GetValueOrDefault(section.Id)?.Values.Any(NeedsPrintState) ?? false)
             || (_layout.SectionConditions.GetValueOrDefault(section.Id)?.Values.Any(NeedsPrintState) ?? false))

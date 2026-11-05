@@ -218,6 +218,7 @@ internal static partial class CrystalReportContentsParser
                     else throw new NotSupportedException("Native alternate chart evaluation requires an explicit adapter.");
                 }
                 if (reader.BytesLeftInRecord > 0) definition.CategoryField = ReadFieldReference(reader, fields, data);
+                owner.ChartCategoryField = definition.CategoryField;
                 bindingFound = true;
             }
             else if (record.Type == 287 && objectType == 180)
@@ -352,6 +353,8 @@ internal static partial class CrystalReportContentsParser
                 || expectedGroups >= 0 && expectedGroups != groups.Count)
                 throw new InvalidDataException("Incomplete native chart data/style binding records.");
             if (groups.Count > 0) definition.CategoryField = groups[0];
+            // The label-only marker needs the category even when the bindings below are refused.
+            owner.ChartCategoryField = definition.CategoryField;
             definition.SortCategories = !definition.EachRecord;
             definition.SeriesField = groups.Count > 1 ? groups[1] : "";
             if (!definition.ChartThreeDimensional && definition.ReportGroupChart && groups.Count == 1 && definition.Measures.Count == 1

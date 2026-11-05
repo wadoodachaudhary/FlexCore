@@ -265,6 +265,7 @@ public partial class CrystalXmlReportLoader
         }
         var references = document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))
             .Concat(document.Elements.SelectMany(e => e.Analysis?.References ?? []))
+            .Concat(document.Elements.Select(e => e.ChartMarker?.Binding ?? ""))
             .Concat(document.Groups.SelectMany(g => new[] { g.Condition, g.ParentIdField, g.InstanceIdField })).Concat(document.Sorts.Select(s => s.Field.Reference))
             .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).SelectMany(s => new[] { s.Field, s.WeightField }).Where(field => field.Length > 0))
             .Concat(layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation, t.Reset }).SelectMany(c => (c.Formula?.References ?? []).Prepend(c.Field)))

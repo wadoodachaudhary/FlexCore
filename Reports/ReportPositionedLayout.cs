@@ -192,7 +192,7 @@ public sealed partial class ReportLayoutSession
         foreach (var section in layout.Document.Sections)
         foreach (var element in section.Elements)
         {
-            if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is { } kind && element.Analysis is null)
+            if (ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is { } kind && element.Analysis is null && element.ChartMarker is null)
                 _diagnostics.Add(ReportObjectCapabilities.Diagnostic(reportName, section.Name, element.Name, kind, true,
                     layout.Document.SourceObjects.GetValueOrDefault(element.SourceKey)));
             if (string.IsNullOrEmpty(element.FormatString) && element.NativeDateTimeFormat?.UnsupportedReason is { } reason)
@@ -505,7 +505,7 @@ public sealed partial class ReportLayoutSession
         if (!Visible(section))
         {
             // Suppression hides output; Crystal still evaluates the section's formula fields (variable assignments).
-            foreach (var reference in section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(NeedsPrintState)) _ = Format(reference, row, "");
+            foreach (var reference in section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(BindsPrintState)) _ = Format(reference, row, "");
             return new(section, [], row, repeats.ToList(), true, Owner: this);
         }
         var items = new List<Item>();
@@ -514,8 +514,8 @@ public sealed partial class ReportLayoutSession
             var element = ApplyObjectConditions(original, row);
             if (element.IsSuppressed)
             {
-                if (element.Kind is not "Subreport" && FieldBindings(element).Any(NeedsPrintState))
-                    items.Add(new(element, ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat),
+                if (element.Kind is not "Subreport" && FieldBindings(element).Any(BindsPrintState))
+                    items.Add(new(element, element.Kind == "Chart" && element.ChartMarker is { } stamp ? MarkerHtml(element, stamp, row) : ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat),
                         resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)), -1, Owner: this, Row: row));
                 continue;
             }
@@ -639,7 +639,16 @@ public sealed partial class ReportLayoutSession
         string.IsNullOrWhiteSpace(System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(item.Html, "<[^>]+>", ""))));
 
     private static IEnumerable<string> FieldBindings(ReportDesignerElement element) =>
-        element.Visual.Runs.Select(r => r.Binding).Prepend(element.Kind == "Field" ? element.Binding : "").Where(r => r.Length > 0);
+        element.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(element)).Where(r => r.Length > 0);
+
+    /// <summary>The value an object prints by itself: a field's binding, or the category a label-only chart stamps
+    /// (a cheque's VOID); "" for every other object. The schedule and the print-state replay read both alike.</summary>
+    private static string ValueBinding(ReportDesignerElement element) => element.Kind switch
+    {
+        "Field" => element.Binding,
+        "Chart" when element.ChartMarker is { } marker => marker.Binding,
+        _ => ""
+    };
 
     private void BuildBands()
     {
@@ -675,7 +684,7 @@ public sealed partial class ReportLayoutSession
             // zero-space events, not invented records or printed detail bands.
             foreach (var section in sections.Where(s => s.Kind == "Detail"))
             {
-                var fields = section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(NeedsPrintState).ToArray();
+                var fields = section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(BindsPrintState).ToArray();
                 if (fields.Length == 0) continue;
                 _bandFormulaCache.Clear();
                 foreach (var reference in fields) _ = Format(reference, -1, "");

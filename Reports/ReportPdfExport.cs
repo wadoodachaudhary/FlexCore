@@ -151,6 +151,8 @@ internal static class ReportPdfExport
         if (item.Table?.NativeCrossTab == null) page.Clip(x, y, width, height);
         if (item.Table is { } table)
             Fragment(page, table, x, y, new(element.FontFamily, (double)element.FontSize, element.Bold, element.Italic, element.Underline, Color(element.TextColor)) { FontMode = fontMode });
+        else if (element.Kind == "Chart" && element.ChartMarker is { } marker)
+            ChartMarker(page, marker, item.FormattedContent, element, x, y, fontMode);
         else if (element.Kind == "Chart" && item.Analysis is { } authored && PrintedSummaryPlot.Supports(authored.Definition))
             Vector(page, PrintedSummaryPlot.Draw(authored.Definition, ReportAnalysisGraphic.Series(authored), width, height), x, y, width, height, "fill");
         else if (element.Kind == "Chart" && item.Analysis is { Definition.ChartCategoryLegend: true } categoryChart)
@@ -306,6 +308,21 @@ internal static class ReportPdfExport
                 Label(name, lx+8, ly+i*8+4, 5, 0);
             }
         }
+    }
+
+    // Crystal prints a label-only chart (a cheque's VOID stamp) as one text run: the category value in the drawing's
+    // font, sized by the frame height, rotated about the midpoint of its baseline at the frame centre. Nothing else is
+    // drawn, and the run keeps its authored em (the legacy Arial export sizes apply to text objects, not chart labels).
+    private static void ChartMarker(NativePdfPage page, ReportChartMarker marker, string html, ReportDesignerElement element, double x, double y, ReportPdfFontMode fontMode)
+    {
+        var text = ReportChartMarker.RunText(System.Net.WebUtility.HtmlDecode(Regex.Replace(html, "<[^>]+>", "")));
+        if (text.Length == 0) return;
+        var family = new Ink(marker.Font, marker.EmPoints(element.HeightTwips), Native: true) { FontMode = fontMode }.ResolvedFamily;
+        var place = marker.Place(element.WidthTwips, element.HeightTwips, text, family);
+        if (place.Em <= 0) return;
+        var (sin, cos) = Math.SinCos(place.Radians);
+        page.Transform(cos, -sin, sin, cos, x + place.StartX, y + place.StartY);
+        page.Text(text, 0, 0, place.Em, family, color: marker.Color);
     }
 
     private static Ink InkFor(ReportDesignerElement element, ReportPdfFontMode fontMode) => new(element.FontFamily, (double)element.FontSize,

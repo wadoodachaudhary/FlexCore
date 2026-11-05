@@ -14,6 +14,9 @@ public sealed partial class ReportLayoutSession
         // Physical-page replay must retain the same live link as the initial layout pass.
         if (element.Kind == "Subreport" && _layout.OnDemandSubreports.ContainsKey(element.Id))
             return (OnDemandCaptionHtml(element, row), null);
+        // A label-only chart prints its category value for this record, rotated across its frame, as Crystal does.
+        if (element.Kind == "Chart" && element.ChartMarker is { } marker)
+            return (MarkerHtml(element, marker, row), null);
         DuplicateFieldValue? value = null;
         var html = ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString,
             element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat,
@@ -22,6 +25,21 @@ public sealed partial class ReportLayoutSession
             resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat,
                 element.NativeNumberFormat, element.NativeNumericFormat));
         return (html, html.Contains("[Formula error:", StringComparison.Ordinal) ? null : value);
+    }
+
+    // The run is placed by its own text, so a value that depends on the page is laid out on each page. A binding the
+    // page schedule refuses (a circular reference, print-state variables in a page formula) goes through Format, which
+    // prints the formula error and its diagnostic as it does for every other object.
+    private string MarkerHtml(ReportDesignerElement element, ReportChartMarker marker, int row)
+    {
+        try
+        {
+            if (_formulaPage is null && DependsOn(marker.Binding, true))
+                return DeferredPageMarkup(marker.Binding, row, value => marker.Html(element, value));
+        }
+        catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidCastException or OverflowException
+            or DivideByZeroException or NotSupportedException or ArgumentException) { }
+        return marker.Html(element, Format(marker.Binding, row, ""));
     }
 
     private sealed class DuplicateFields

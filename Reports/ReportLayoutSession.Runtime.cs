@@ -22,6 +22,8 @@ public sealed partial class ReportLayoutSession
         public bool HasPageConditions { get; set; }
         public bool HasGrowingText { get; set; }
         public Dictionary<string, Func<int, int, bool, string>> PageValues { get; } = new();
+        /// <summary>Page tokens that resolve to markup built from the page's value, not to encoded text.</summary>
+        public Dictionary<string, Func<int, int, bool, string>> PageMarkup { get; } = new();
         public bool PhysicalSchedule { get; set; }
         public List<ReportLayoutSession> Sessions { get; } = [];
         public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
@@ -208,12 +210,24 @@ public sealed partial class ReportLayoutSession
         };
         return token;
     }
+    // A page value whose markup depends on the value itself (a chart marker is placed by its text width): the token
+    // stands for the whole markup and resolves to the markup built from that page's value.
+    private string DeferredPageMarkup(string reference, int row, Func<string, string> markup)
+    {
+        var token = DeferredPageValue(reference, row, "", null, null, null);
+        var value = _state.PageValues[token];
+        _state.PageValues.Remove(token);
+        _state.PageMarkup[token] = (page, count, repeated) => markup(value(page, count, repeated));
+        return token;
+    }
     private string ResolvePageValues(string html, int page, int count, bool repeated = false)
     {
         // Every deferred token ends in "-formula". Ordinary object text cannot
         // contain one without that marker, so avoid scanning all row variants.
         // Possible tokens retain the existing ordered replacement semantics.
-        if (_state.PageValues.Count == 0 || !html.Contains("-formula", StringComparison.Ordinal)) return html;
+        if (_state.PageValues.Count == 0 && _state.PageMarkup.Count == 0 || !html.Contains("-formula", StringComparison.Ordinal)) return html;
+        foreach (var entry in _state.PageMarkup)
+            if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, entry.Value(page, count, repeated), StringComparison.Ordinal);
         foreach (var entry in _state.PageValues)
             if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, ReportObjectRenderer.Encode(entry.Value(page, count, repeated)), StringComparison.Ordinal);
         return html;

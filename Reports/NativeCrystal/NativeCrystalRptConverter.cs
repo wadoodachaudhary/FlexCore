@@ -5,7 +5,7 @@ using System.Runtime.Versioning;
 namespace Fx.ControlKit.Reports.NativeCrystal;
 
 [UnsupportedOSPlatform("browser")]
-public static class NativeCrystalRptConverter
+public static partial class NativeCrystalRptConverter
 {
     private static ReportPlotFrame? ReadPlotFrame(ReadOnlySpan<byte> drawing)
     {
@@ -326,6 +326,13 @@ public static class NativeCrystalRptConverter
             }
             catch (InvalidDataException) { /* Keep the declared Bar family for unreadable drawing data. */ }
         }
+        // A chart Crystal prints as nothing but its category label (a cheque's VOID stamp) keeps that label as a marker.
+        if (charts.Length == 1 && drawings.Length == 1 && contents is not null && charts[0] is { Analysis: null, ChartCategoryField.Length: > 0 } stamp)
+        {
+            try { stamp.ChartMarker = ReadChartMarker(TslvStreamReader.DecodeChartDrawing(drawings[0].Bytes, contents.Bytes), stamp.ChartCategoryField); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException)
+            { options.Progress?.Invoke($"Chart drawing was not imported: {ex.Message}"); }
+        }
         foreach (var area in model.DataDefinition.ReportDefinition.Areas)
         foreach (var section in area.Sections)
         foreach (var obj in section.ReportObjects.Where(obj => obj.UnsupportedSource is not null))
@@ -342,6 +349,14 @@ public static class NativeCrystalRptConverter
                     obj.Analysis = null;
                     obj.AnalysisDiagnostic = "The containing analytical group scope could not be resolved.";
                 }
+            }
+            if (obj.ChartMarker is { } marker)
+            {
+                var label = new CrystalConversionDiagnostic("CRYSTAL_CHART_MARKER", model.Name, section.Name, obj.Name, obj.Kind,
+                    $"The chart's saved drawing shows only its category label: it prints the value of {marker.Binding} in {marker.Font}, rotated {marker.Angle} degrees, across the frame. Original TSLV bytes are retained.");
+                model.ConversionDiagnostics.Add(label);
+                options.Progress?.Invoke($"[{label.Code}] {model.Name}/{section.Name}/{obj.Name}: {label.Message}");
+                continue;
             }
             if (obj.Analysis is not null)
             {

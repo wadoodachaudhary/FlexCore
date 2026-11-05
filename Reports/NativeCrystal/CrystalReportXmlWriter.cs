@@ -778,6 +778,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "Height", reportObject.Height);
 
         reportObject.Analysis?.ToXml().WriteTo(writer);
+        reportObject.ChartMarker?.ToXml().WriteTo(writer);
 
         if (reportObject.UnsupportedSource is { } source)
         {

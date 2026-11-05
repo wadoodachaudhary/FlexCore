@@ -5,7 +5,8 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 public static class CrystalReportXmlVersion
 {
     // Reports authored with no printer are marked (FlexKitNoPrinter) and lay out at screen metrics.
-    public const int Current = 28;
+    // A label-only chart (a cheque's VOID stamp) carries its FlexKitChartMarker.
+    public const int Current = 33;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -598,6 +599,9 @@ public sealed class CrystalReportObjectModel
     public ReportAnalysisDefinition? Analysis { get; set; }
     public string AnalysisDiagnostic { get; set; } = "";
     public CrystalUnsupportedObjectSource? UnsupportedSource { get; set; }
+    /// <summary>The chart's category field, kept when its bindings are refused, for a label-only chart.</summary>
+    internal string ChartCategoryField { get; set; } = "";
+    public ReportChartMarker? ChartMarker { get; set; }
 
     public int PictureStorageIndex { get; set; } = -1;
     public int PictureAspect { get; set; } = 1;

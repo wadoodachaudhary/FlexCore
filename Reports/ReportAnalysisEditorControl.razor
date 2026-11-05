@@ -132,6 +132,8 @@
     private async Task ConfigureAsync()
     {
         if (ReadOnly) return;
+        // Data bindings replace a label-only stamp, as the Chart Expert replaces Crystal's drawing.
+        Element.ChartMarker = null;
         Element.Analysis = new() { Title = Element.Name, Measures = [new()] };
         if (Element.Kind == "Table") { Element.Analysis.Measures.Clear(); Element.Analysis.TableColumns.Add(new()); }
         await ChangedAsync();

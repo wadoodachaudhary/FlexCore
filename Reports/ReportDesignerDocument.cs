@@ -488,6 +488,12 @@ public sealed class ReportDesignerElement
     public ReportDesignerHighlightRule HighlightRule { get; set; }
     public ReportObjectVisual Visual { get; set; }
     public ReportAnalysisDefinition? Analysis { get; set; }
+    /// <summary>A label-only chart's stamp (see <see cref="ReportChartMarker"/>); null for every other object. A chart
+    /// that has data bindings (<see cref="Analysis"/>) prints as that chart in the viewer and both exports, so it has no
+    /// stamp: Crystal's Chart Expert replaces the label-only drawing the same way.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public ReportChartMarker? ChartMarker { get => Analysis is null ? _chartMarker : null; set => _chartMarker = value; }
+    private ReportChartMarker? _chartMarker;
 
     public string DisplayText
     {
@@ -545,7 +551,8 @@ public sealed class ReportDesignerElement
             LockFormat = LockFormat,
             LockSizePosition = LockSizePosition,
             IndentTwips = IndentTwips,
-            Analysis = Analysis?.Clone()
+            Analysis = Analysis?.Clone(),
+            ChartMarker = ChartMarker
         };
     }
 }
@@ -923,6 +930,8 @@ public static partial class ReportDesignerXmlSerializer
     {
         objectElement.Element("FlexKitAnalysis")?.Remove();
         if (element.Analysis is not null) objectElement.Add(element.Analysis.ToXml());
+        objectElement.Element("FlexKitChartMarker")?.Remove();
+        if (element.ChartMarker is not null) objectElement.Add(element.ChartMarker.ToXml());
         ReportObjectVisual.Write(element.Visual, objectElement);
         objectElement.SetAttributeValue("Name", string.IsNullOrWhiteSpace(element.Name) ? element.Kind : element.Name);
         objectElement.SetAttributeValue("Kind", string.IsNullOrWhiteSpace(element.Kind) ? InferKindFromObjectElement(objectElement) : element.Kind);
@@ -1213,6 +1222,7 @@ public static partial class ReportDesignerXmlSerializer
 
             element.Visual = ReportObjectVisual.Read(objectElement);
             element.Analysis = ReportAnalysisDefinition.Read(objectElement);
+            element.ChartMarker = ReportChartMarker.Read(objectElement);
             document.SourceObjects[element.SourceKey] = objectElement;
             section.Elements.Add(element);
         }
