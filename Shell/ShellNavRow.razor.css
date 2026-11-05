@@ -1,0 +1,60 @@
+.fx-shell-link {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.fx-shell-link:hover:not(:disabled) {
+    background: var(--fx-shell-hover, #f4f4f5);
+}
+
+.fx-shell-link[aria-current="page"] {
+    background: var(--fx-shell-active, #ececef);
+    font-weight: 650;
+}
+
+.fx-shell-link:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.fx-shell-link:focus-visible {
+    outline: 2px solid var(--fx-shell-accent, #1f9d55);
+    outline-offset: 2px;
+}
+
+.fx-shell-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fx-shell-children {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 2px 0 6px 18px;
+}
+
+.fx-shell-step[data-step-state="active"] ::deep .fx-shell-step-index {
+    background: var(--fx-shell-accent, #1f9d55);
+    color: #fff;
+    border-color: transparent;
+}
+
+.fx-shell-step[data-step-state="done"] ::deep .fx-shell-step-index {
+    background: var(--fx-shell-accent-soft, #e7f6ee);
+    color: var(--fx-shell-accent-strong, #178a49);
+    border-color: transparent;
+}

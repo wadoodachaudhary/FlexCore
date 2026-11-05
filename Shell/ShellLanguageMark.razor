@@ -1,0 +1,15 @@
+@namespace Fx.ControlKit.Shell
+
+@if (Language is not null)
+{
+    <span class="fx-lang-mark @CssClass" style="--fx-lang-a: @Language.Primary; --fx-lang-b: @Language.Secondary" title="@Language.Label" aria-hidden="true">
+        <span>@Language.Abbreviation</span>
+    </span>
+}
+
+@code {
+    [Parameter] public string? LanguageId { get; set; }
+    [Parameter] public string? CssClass { get; set; }
+
+    private ShellLanguage? Language => ShellLanguages.Find(LanguageId);
+}

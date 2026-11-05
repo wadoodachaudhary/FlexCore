@@ -1,0 +1,47 @@
+@namespace Fx.ControlKit.Shell
+
+<section class="fx-tool-menu" data-theme="@ThemeName" aria-label="@Title">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <h2>@Title</h2>
+    }
+    <div class="fx-tool-grid">
+        @foreach (var card in CardList)
+        {
+            var id = card.Id;
+            var selected = string.Equals(id, ActiveId, StringComparison.Ordinal);
+            <button type="button"
+                    class="fx-tool-card"
+                    data-tool="@id"
+                    data-route="@card.Route"
+                    aria-current="@(selected ? "page" : null)"
+                    @onclick="() => SelectAsync(id)">
+                <span class="fx-tool-icon" style="background:@card.Color">
+                    <ShellIconView Icon="@card.Icon" Size="20" />
+                </span>
+                <span class="fx-tool-copy">
+                    <span class="fx-tool-title">@card.Title</span>
+                    <span class="fx-tool-description">@card.Description</span>
+                </span>
+            </button>
+        }
+    </div>
+</section>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public IReadOnlyList<ShellToolCard> Tools { get; set; } = ShellToolCatalog.Menu;
+    [Parameter] public string? ActiveId { get; set; }
+    [Parameter] public EventCallback<string> OnSelect { get; set; }
+    [Parameter] public ShellTheme? Theme { get; set; }
+
+    private IReadOnlyList<ShellToolCard> CardList => Tools ?? [];
+    private string? ThemeName => Theme switch
+    {
+        ShellTheme.Dark => "dark",
+        ShellTheme.Light => "light",
+        _ => null
+    };
+
+    public Task SelectAsync(string id) => OnSelect.InvokeAsync(id);
+}

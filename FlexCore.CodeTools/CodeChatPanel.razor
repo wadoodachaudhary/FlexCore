@@ -1,0 +1,86 @@
+@namespace Fx.ControlKit.CodeTools
+@using System.Text
+@using Fx.ControlKit.Llm.CodeTools
+
+<section class="fx-code-tool" aria-label="New Chat">
+    <header class="fx-code-tool-head">
+        <h1>New Chat</h1>
+        <p>Chat with AI to solve any coding problem. History stays in this session.</p>
+    </header>
+    @if (_setup is not null)
+    {
+        <div class="fx-code-setup" role="status">
+            <h2>Model setup</h2>
+            <p>@_setup</p>
+        </div>
+    }
+    <div class="fx-chat">
+        <div class="fx-chat-log" aria-live="polite">
+            @foreach (var turn in _turns)
+            {
+                <article class="fx-chat-turn" data-role="@turn.Role">
+                    <span class="fx-chat-role">@turn.Role</span>
+                    <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(turn.Text))</div>
+                </article>
+            }
+            @if (!string.IsNullOrEmpty(_partial))
+            {
+                <article class="fx-chat-turn" data-role="assistant">
+                    <span class="fx-chat-role">assistant</span>
+                    <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_partial))</div>
+                </article>
+            }
+        </div>
+        <div class="fx-chat-compose">
+            <ShellTextArea Value="@_draft" ValueChanged="OnDraft" AriaLabel="Message" Rows="3" Placeholder="Ask a coding question" />
+            <ShellButton CssClass="fx-chat-send" Disabled="_busy" OnClick="SendAsync">Send</ShellButton>
+        </div>
+    </div>
+</section>
+
+@code {
+    private readonly List<CodeChatTurn> _turns = [];
+    private ICodeChat? _chat;
+    private string _draft = "";
+    private string _partial = "";
+    private string? _setup;
+    private bool _busy;
+
+    [Parameter] public ICodeToolService? Service { get; set; }
+    [Parameter] public string? Model { get; set; }
+
+    protected override void OnParametersSet()
+    {
+        if (_chat is not null || Service is null) return;
+        var availability = Service.GetAvailability(Model);
+        _setup = availability.IsConfigured ? null : availability.Message;
+        _chat = Service.OpenChat(Model);
+    }
+
+    private void OnDraft(string? value) => _draft = value ?? "";
+
+    public async Task SendAsync()
+    {
+        var text = _draft.Trim();
+        if (text.Length == 0 || _chat is null || _busy) return;
+        _draft = "";
+        _busy = true;
+        _partial = "";
+        _turns.Add(new CodeChatTurn("user", text));
+        var assistant = new StringBuilder();
+        await foreach (var delta in _chat.SendStreamingAsync(text))
+        {
+            if (delta.TextDelta is { } piece)
+            {
+                assistant.Append(piece);
+                _partial = assistant.ToString();
+                StateHasChanged();
+            }
+            if (delta.Final is { } final && final.Status == CodeToolStatus.NotConfigured)
+                _setup = final.SetupMessage;
+        }
+        _partial = "";
+        if (assistant.Length > 0) _turns.Add(new CodeChatTurn("assistant", assistant.ToString()));
+        _busy = false;
+    }
+}

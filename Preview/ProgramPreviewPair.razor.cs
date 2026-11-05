@@ -3,8 +3,9 @@ using Microsoft.AspNetCore.Components;
 namespace Fx.ControlKit.Preview;
 
 /// <summary>
-/// Source and target programs side by side. Start, restart, and stop apply to both.
+/// Source and target programs. Start, restart, and stop apply to both.
 /// Each window still reports its own status and error output.
+/// Panes stack vertically unless <see cref="Orientation"/> is horizontal.
 /// </summary>
 public partial class ProgramPreviewPair
 {
@@ -29,7 +30,11 @@ public partial class ProgramPreviewPair
     [Parameter] public string? SourceIcon { get; set; }
     [Parameter] public string? TargetIcon { get; set; }
 
+    /// <summary>Vertical stacks the source pane above the target. Horizontal keeps the row.</summary>
+    [Parameter] public ProgramPreviewOrientation Orientation { get; set; } = ProgramPreviewOrientation.Vertical;
+
     private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
+    private string OrientationCss => Orientation == ProgramPreviewOrientation.Horizontal ? "horizontal" : "vertical";
 
     protected override string? BaseCssClass => "fx-preview-pair";
 

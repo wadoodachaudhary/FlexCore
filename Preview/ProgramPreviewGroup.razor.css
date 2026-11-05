@@ -92,7 +92,11 @@
 
 .fx-preview-group-panes {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 20px;
     align-items: start;
+}
+
+.fx-preview-group[data-orientation="horizontal"] .fx-preview-group-panes {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }

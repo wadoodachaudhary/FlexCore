@@ -60,13 +60,17 @@
 
 .fx-preview-pair-panes {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 28px;
     align-items: start;
 }
 
+.fx-preview-pair[data-orientation="horizontal"] .fx-preview-pair-panes {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
 @media (max-width: 860px) {
-    .fx-preview-pair-panes {
+    .fx-preview-pair[data-orientation="horizontal"] .fx-preview-pair-panes {
         grid-template-columns: minmax(0, 1fr);
     }
 }

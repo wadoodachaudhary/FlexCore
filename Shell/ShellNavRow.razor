@@ -1,0 +1,62 @@
+@namespace Fx.ControlKit.Shell
+
+@if (Shell is not null && Item is not null)
+{
+    var active = Shell.IsActive(Item);
+    var expanded = Shell.IsExpanded(Item);
+    var disabled = AppShell.IsItemDisabled(Item);
+    <div class="fx-shell-item" data-item-wrap="@Item.Id">
+        @if (!string.IsNullOrEmpty(Item.Href))
+        {
+            <a class="fx-shell-link @(Item.Step is null ? null : "fx-shell-step")"
+               href="@Item.Href"
+               data-item="@Item.Id"
+               data-step-state="@StateName"
+               aria-current="@(active ? "page" : null)"
+               title="@Item.Label">
+                <ShellNavGlyph Item="Item" />
+                @if (!Shell.Collapsed)
+                {
+                    <span class="fx-shell-label">@Item.Label</span>
+                }
+            </a>
+        }
+        else
+        {
+            <button type="button"
+                    class="fx-shell-link @(Item.Step is null ? null : "fx-shell-step")"
+                    data-item="@Item.Id"
+                    data-step-state="@StateName"
+                    aria-current="@(active ? "page" : null)"
+                    aria-expanded="@(Item.Children.Count > 0 ? expanded.ToString().ToLowerInvariant() : null)"
+                    aria-label="@Item.Label"
+                    disabled="@disabled"
+                    title="@Item.Label"
+                    @onclick="Select">
+                <ShellNavGlyph Item="Item" />
+                @if (!Shell.Collapsed)
+                {
+                    <span class="fx-shell-label">@Item.Label</span>
+                }
+            </button>
+        }
+        @if (!Shell.Collapsed && expanded)
+        {
+            <div class="fx-shell-children" data-parent="@Item.Id">
+                @foreach (var child in Item.Children)
+                {
+                    <ShellNavRow Item="child" />
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    [CascadingParameter] public AppShell? Shell { get; set; }
+    [Parameter, EditorRequired] public ShellNavItem Item { get; set; } = default!;
+
+    private string? StateName => Item.Step is null ? null : Item.Step.State.ToString().ToLowerInvariant();
+
+    private Task Select() => Shell is null ? Task.CompletedTask : Shell.SelectAsync(Item.Id);
+}

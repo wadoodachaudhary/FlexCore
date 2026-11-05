@@ -30,6 +30,7 @@ using Fx.ControlKit.Notifications;
 - **PDF Viewer and Spreadsheet** — occurrence search and bookmark navigation; visible frozen panes and persistent worksheet filters. See [document parity progress and benches](docs/pdf-spreadsheet-parity-progress.md) for APIs, verification and remaining gaps.
 - **ReportWriterControl** — adaptive paginated report renderer fed by a small `ReportDefinition` (loaded from Crystal XML, plain SQL, or any other source you wire)
 - **DialogControl, NotificationService, RibbonControl, ToolbarControl, ButtonControl, DropDownListControl, MultiSelectDualListControl, ChartControl, DiagramControl, EditorPanelControl, OutlineControl, ProgressBarControl, PropertyGridControl, TabsControl** — the rest of the kit
+- **App shell and code tools** — CodeConvert-style sidebar, tool catalog, and AI code tools (explain, generate, review, diagrams, a sandboxed runner). See [the API guide](docs/app-shell-and-code-tools.md).
 - **App-agnostic by design** — every external dependency (DB, session, picklist source, report exporter) is exposed as an interface; host apps wire their own adapters in `Program.cs`
 
 ## Dedicated counterparts
@@ -491,7 +492,7 @@ See [live program preview](docs/program-preview.md) for the API, the Linux packa
 
 `LegacyProjectIntake` unzips an uploaded project archive (zip-slip safe, with size limits) and inventories Web Forms, WinForms, WPF, MVC, and the other project kinds it can see. `WebFormsBlazorConverter` turns a Web Forms site into a Blazor app: pages and masters, the common server controls, EF6 to EF Core, and SQLite seeded from the project's CSV files, preconfigured data, or mock service when LocalDB is not available. Gaps are written out as TODO items.
 
-`LegacyAppLauncher` and `ConvertedAppLauncher` return `ProgramLaunch` values the preview host can show side by side. The legacy side is a web target. Mono `xsp4` does not render ASP.NET 4.7.2 plus EF6; point `RemoteUrl` at IIS Express on a Windows VM. The converted Blazor app is the process the host starts.
+`LegacyAppLauncher` and `ConvertedAppLauncher` return `ProgramLaunch` values the preview host stacks vertically, legacy above the converted app, unless the pair or group sets `Orientation` to horizontal. The legacy pane is a web target. Mono `xsp4` does not render ASP.NET 4.7.2 plus EF6; point `RemoteUrl` at IIS Express on a Windows VM. The converted Blazor app is the process the host starts.
 
 See [legacy migration](docs/legacy-migration.md) for the API Mutarjim calls.
 

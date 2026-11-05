@@ -24,7 +24,11 @@ public partial class ProgramPreviewGroup
     /// <summary>Frame used for panes that leave <see cref="ProgramPreviewPane.Chrome"/> null, and for the group itself.</summary>
     [Parameter] public ProgramPreviewChrome Chrome { get; set; } = ProgramPreviewChrome.Default;
 
+    /// <summary>Vertical stacks every pane. Horizontal keeps the wrapping row.</summary>
+    [Parameter] public ProgramPreviewOrientation Orientation { get; set; } = ProgramPreviewOrientation.Vertical;
+
     private string EffectiveOwner => string.IsNullOrWhiteSpace(OwnerKey) ? _generatedOwner : OwnerKey!;
+    private string OrientationCss => Orientation == ProgramPreviewOrientation.Horizontal ? "horizontal" : "vertical";
     private string ChromeCss => Chrome switch
     {
         ProgramPreviewChrome.Windows => "windows",

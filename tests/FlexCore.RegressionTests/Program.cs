@@ -336,6 +336,12 @@ Console.WriteLine($"Program preview checks: {checks - previewStart}");
 var migrationStart = checks;
 await LegacyMigrationChecks.Run(Check);
 Console.WriteLine($"Legacy migration checks: {checks - migrationStart}");
+var shellStart = checks;
+await renderer.Dispatcher.InvokeAsync(() => ShellChecks.Run(renderer, activation.All, Check));
+Console.WriteLine($"App shell checks: {checks - shellStart}");
+var sandboxStart = checks;
+await SnippetSandboxChecks.Run(Check);
+Console.WriteLine($"Snippet sandbox checks: {checks - sandboxStart}");
 Console.WriteLine($"All {checks} regression checks passed.");
 public class PivotRow { public string Region {get;set;}="";public int Number{get;set;}public int Year{get;set;}public int Month{get;set;}public decimal Amount{get;set;} }
 public enum Status { Open, Closed }

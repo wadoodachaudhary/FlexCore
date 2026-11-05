@@ -1,0 +1,12 @@
+@namespace Fx.ControlKit.Shell
+
+<input aria-label="@AriaLabel" value="@Value" placeholder="@Placeholder" @oninput="OnInput" />
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+
+    private Task OnInput(ChangeEventArgs change) => ValueChanged.InvokeAsync(change.Value?.ToString() ?? "");
+}

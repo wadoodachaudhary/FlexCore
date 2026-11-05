@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Fx.ControlKit.CodeTools</RootNamespace>
+    <AssemblyName>FlexCore.CodeTools</AssemblyName>
+    <PackageId>FlexCore.CodeTools</PackageId>
+    <Version>0.2.48</Version>
+    <Authors>FlexCore Contributors</Authors>
+    <Company>FlexCore Contributors</Company>
+    <Product>FlexCore.CodeTools</Product>
+    <Description>Blazor pages for FlexCore code tools: explainer, generator, assistant, enhancer, comments, documentation, tests, reviewer, optimizer, diagrams, diagram-to-code, chat, and a sandboxed runner. Sits on FlexCore.Llm and reuses the FlexCore converter shell and snippet sandbox.</Description>
+    <PackageTags>blazor;llm;codegen;mermaid;flexcore</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://flexcoreui.com</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/wadoodachaudhary/FlexCore.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <Copyright>Copyright (c) 2026 FlexCore Contributors</Copyright>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <SupportedPlatform Include="browser" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
+    <ProjectReference Include="..\FlexCore.csproj" />
+    <ProjectReference Include="..\FlexCore.Llm\FlexCore.Llm.csproj" />
+  </ItemGroup>
+</Project>

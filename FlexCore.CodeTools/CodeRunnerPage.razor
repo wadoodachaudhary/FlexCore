@@ -1,0 +1,115 @@
+@namespace Fx.ControlKit.CodeTools
+@using Fx.ControlKit.Llm.CodeTools
+@using Fx.ControlKit.Preview
+
+<section class="fx-code-tool" aria-label="Code Runner">
+    <header class="fx-code-tool-head">
+        <h1>Code Runner</h1>
+        <p>Run code in a sandbox, with one-click AI help.</p>
+    </header>
+    <div class="fx-code-tool-panes">
+        <section class="fx-code-pane" aria-label="Snippet">
+            <label>Language
+                <ShellSelect Value="@_language" ValueChanged="OnRunnerLanguage" AriaLabel="Language">
+                    <option value="csharp">C#</option>
+                    <option value="python">Python</option>
+                    <option value="javascript">JavaScript</option>
+                </ShellSelect>
+            </label>
+            <ShellTextArea Value="@_code" ValueChanged="OnRunnerCode" Rows="14" AriaLabel="Code" />
+            <div class="fx-code-actions">
+                <ShellButton CssClass="fx-code-run" Disabled="_busy" OnClick="RunAsync">@(_busy ? "Running…" : "Run")</ShellButton>
+            </div>
+        </section>
+        <section class="fx-code-pane" aria-label="Output">
+            @if (_result is null)
+            {
+                <p class="fx-code-note">Output appears here. The run uses a private temp directory, a scrubbed environment, and a time limit.</p>
+            }
+            else
+            {
+                <p class="fx-code-note" role="status">@_result.Message</p>
+                @if (_result.Limits.Count > 0)
+                {
+                    <p class="fx-code-note">Limits: @string.Join(", ", _result.Limits)</p>
+                }
+                <pre class="fx-runner-out" aria-label="Standard output">@_result.StandardOutput</pre>
+                @if (!string.IsNullOrEmpty(_result.StandardError))
+                {
+                    <pre class="fx-runner-out" aria-label="Standard error">@_result.StandardError</pre>
+                }
+                @if (_result.Status is SnippetRunStatus.Failed or SnippetRunStatus.TimedOut)
+                {
+                    <ShellButton CssClass="fx-runner-help" Disabled="@(_service is null)" OnClick="ExplainAsync">Explain this error</ShellButton>
+                }
+                @if (!string.IsNullOrWhiteSpace(_help))
+                {
+                    <div class="fx-md">@((MarkupString)MarkdownRender.ToHtml(_help))</div>
+                }
+            }
+        </section>
+    </div>
+</section>
+
+@code {
+    private string _language = "python";
+    private string _code = "print(1)\n";
+    private bool _busy;
+    private bool _started;
+    private SnippetRunResult? _result;
+    private string? _help;
+    private ICodeToolService? _service;
+
+    [Parameter] public ICodeToolService? Service { get; set; }
+    [Parameter] public string? Code { get; set; }
+    [Parameter] public string Language { get; set; } = "python";
+    [Parameter] public bool AutoRun { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _service = Service;
+        if (!string.IsNullOrWhiteSpace(Code)) _code = Code;
+        if (!string.IsNullOrWhiteSpace(Language)) _language = Language;
+        if (AutoRun && !_started)
+        {
+            _started = true;
+            await RunAsync();
+        }
+    }
+
+    private void OnRunnerLanguage(string? value)
+    {
+        if (!string.IsNullOrEmpty(value)) _language = value;
+    }
+
+    private void OnRunnerCode(string? value) => _code = value ?? "";
+
+    public async Task RunAsync()
+    {
+        _busy = true;
+        _help = null;
+        var timeout = _language == "csharp" ? TimeSpan.FromSeconds(45) : TimeSpan.FromSeconds(8);
+        _result = await SnippetSandbox.RunAsync(new SnippetRunRequest
+        {
+            Language = _language,
+            Code = _code,
+            Timeout = timeout
+        });
+        _busy = false;
+    }
+
+    private async Task ExplainAsync()
+    {
+        if (_service is null || _result is null) return;
+        var reply = await _service.RunAsync(new CodeToolRequest
+        {
+            Tool = CodeToolKind.Assistant,
+            Language = _language,
+            Code = _code,
+            Instruction = "The program failed. Explain the error and show a fixed version.\n\n" + _result.StandardError + "\n" + _result.Message
+        });
+        _help = reply.Status == CodeToolStatus.NotConfigured
+            ? reply.SetupMessage
+            : (reply.Explanation ?? reply.Text);
+    }
+}

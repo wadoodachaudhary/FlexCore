@@ -10,7 +10,7 @@ public enum ConverterShellMode
     FileBrowser,
 
     /// <summary>
-    /// Replaces the editors with a side-by-side live preview.
+    /// Replaces the editors with a live preview of the source and target programs.
     /// The host turns it on with EnableRunPreview or by setting this mode.
     /// </summary>
     RunPreview

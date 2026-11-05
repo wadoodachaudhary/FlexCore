@@ -1,0 +1,17 @@
+.fx-lang-mark {
+    display: inline-grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: linear-gradient(145deg, var(--fx-lang-a, #1f9d55), var(--fx-lang-b, #178a49));
+    color: #fff;
+    font-weight: 750;
+    font-size: 18px;
+    letter-spacing: -0.03em;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+}
+
+.fx-lang-mark span {
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
