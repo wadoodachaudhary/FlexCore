@@ -77,6 +77,12 @@ public partial class ConverterShell
     [Parameter] public string TargetPreviewLabel { get; set; } = "Target";
     [Parameter] public bool AutoStartPreview { get; set; }
 
+    /// <summary>
+    /// Editor and preview pane arrangement. Vertical stacks source above target.
+    /// Horizontal keeps the two columns.
+    /// </summary>
+    [Parameter] public ProgramPreviewOrientation Orientation { get; set; } = ProgramPreviewOrientation.Vertical;
+
     /// <summary>Owner passed to the Run / Preview pair so <c>MaxSessionsPerOwner</c> follows the signed-in user.</summary>
     [Parameter] public string? OwnerKey { get; set; }
 
@@ -165,6 +171,7 @@ public partial class ConverterShell
     private IReadOnlyList<ConverterFile> OutputFileList => OutputFiles ?? [];
     private string? AcceptList => AllowedExtensions.Count == 0 ? null : string.Join(',', AllowedExtensions.Select(NormalizeExtension));
     private string PanesClass => ExpandedPane == ConverterPane.None ? "fx-converter-panes" : "fx-converter-panes is-expanded";
+    private string OrientationCss => Orientation == ProgramPreviewOrientation.Horizontal ? "horizontal" : "vertical";
     private string SourceEditorText => EffectiveMode == ConverterShellMode.FileBrowser ? SelectedSource()?.Content ?? "" : SourceText ?? "";
     private string OutputEditorText => EffectiveMode == ConverterShellMode.FileBrowser ? SelectedOutput()?.Content ?? "" : OutputText ?? "";
     private string? SourceCaption => EffectiveMode == ConverterShellMode.FileBrowser ? SelectedSource()?.DisplayName : SourceFileName;

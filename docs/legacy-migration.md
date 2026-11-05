@@ -50,7 +50,7 @@ var panes = new ProgramPreviewPane[]
 };
 ```
 
-Both launches use `ProgramPreviewKind.Web`, so the preview host proxies them through `/_flexcore/program-preview/{sessionId}/app/{**path}` when it started the process, or shows an absolute remote URL directly. The Windows chrome is the frame around that web pane. It is not a WinForms host.
+Both launches use `ProgramPreviewKind.Web`, so the preview host proxies them through `/_flexcore/program-preview/{sessionId}/app/{**path}` when it started the process, or shows an absolute remote URL directly. The Windows chrome is the frame around that web pane. It is not a WinForms host. `ProgramPreviewGroup` and `ProgramPreviewPair` stack those panes vertically unless `Orientation` is `Horizontal`.
 
 ### What actually runs the legacy app
 

@@ -9,6 +9,7 @@
      title="@Title"
      data-mode="@EffectiveMode"
      data-expanded="@ExpandedPane"
+     data-orientation="@OrientationCss"
      aria-busy='@(IsBusy ? "true" : "false")'
      aria-label="@ShellLabel">
     <div class="fx-converter-kinds">
@@ -64,6 +65,7 @@
                             SourceLabel="@SourcePreviewLabel"
                             TargetLabel="@TargetPreviewLabel"
                             OwnerKey="@OwnerKey"
+                            Orientation="Orientation"
                             AutoStart="AutoStartPreview" />
     }
     else

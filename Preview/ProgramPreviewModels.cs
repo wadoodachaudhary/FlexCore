@@ -335,6 +335,19 @@ public enum ProgramPreviewChrome
     None
 }
 
+/// <summary>
+/// How a pair or group places its panes. Vertical stacks them, first pane on top.
+/// Horizontal keeps them in one row.
+/// </summary>
+public enum ProgramPreviewOrientation
+{
+    /// <summary>First pane on top and the remaining panes below. This is the default.</summary>
+    Vertical,
+
+    /// <summary>Panes in one row, wrapping when a group has more than fit.</summary>
+    Horizontal
+}
+
 /// <summary>One pane in <see cref="ProgramPreviewGroup"/>.</summary>
 public sealed class ProgramPreviewPane
 {

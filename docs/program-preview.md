@@ -105,7 +105,7 @@ var source = new ProgramLaunch
 
 `Kind` is `Auto`, `Gui`, `Console`, or `Web`. `Auto` uses a virtual display when the server has one, and fails with the prerequisite message when it does not. It does not silently turn a GUI program into a console pipe. Set `Console` for a terminal program. Console preview writes keystrokes to standard input and shows standard output. It is line-oriented: there is no terminal emulator, so full-screen text UIs and cooked backspace are not reproduced.
 
-`ProgramPreviewPair` starts, restarts, and stops both programs together. Each pane has its own kind, status, and error output, so one side can be a GUI program and the other a web app. `ProgramPreviewGroup` does the same for any number of panes and one toolbar. A three-pane group uses three session slots.
+`ProgramPreviewPair` starts, restarts, and stops both programs together. Each pane has its own kind, status, and error output, so one pane can be a GUI program and the other a web app. `ProgramPreviewGroup` does the same for any number of panes and one toolbar. A three-pane group uses three session slots. Panes stack vertically (source or the first pane on top) unless `Orientation` is `ProgramPreviewOrientation.Horizontal`.
 
 Pass `OwnerKey` (a user id, for example) so `MaxSessionsPerOwner` applies. When it is omitted, the pair or group uses one generated owner for every window.
 
@@ -219,13 +219,15 @@ Sessions live in the server process. Scale-out needs affinity so the frame reque
 | `ProgramPreviewProxy` | `ForwardHttpAsync` and `ForwardWebSocketAsync`. The host maps the route. |
 | `ProgramPreviewWebTarget` | Status code and loopback upstream from `ResolveWeb`. |
 | `ProgramPreviewChrome` | `Default`, `Windows`, `Fusion`, `Browser`, `None`. |
+| `ProgramPreviewOrientation` | `Vertical` (default) stacks panes. `Horizontal` keeps them in a row. |
 | `ProgramPreviewPane` | `Label`, `Launch`, `Chrome`, `Icon`. Null `Chrome` uses the group theme. |
 | `ProgramPreviewWindow` | One preview. Parameters: `Launch`, `Label`, `Chrome`, `Icon`, `AutoStart`, `ShowToolbar`, `ShowOutput`, `OwnerKey`, `StartText`, `RestartText`, `StopText`. A web snapshot adds an **Open** link. |
-| `ProgramPreviewPair` | Two previews. Parameters: `SourceLaunch`, `TargetLaunch`, `SourceLabel`, `TargetLabel`, `SourceChrome`, `TargetChrome`, `SourceIcon`, `TargetIcon`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `PairLabel`. |
-| `ProgramPreviewGroup` | N previews, one toolbar. Parameters: `Items`, `Chrome`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `GroupLabel`. |
+| `ProgramPreviewPair` | Two previews. Parameters: `SourceLaunch`, `TargetLaunch`, `SourceLabel`, `TargetLabel`, `SourceChrome`, `TargetChrome`, `SourceIcon`, `TargetIcon`, `OwnerKey`, `Orientation`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `PairLabel`. |
+| `ProgramPreviewGroup` | N previews, one toolbar. Parameters: `Items`, `Chrome`, `Orientation`, `OwnerKey`, `AutoStart`, `StartText`, `RestartText`, `StopText`, `GroupLabel`. |
 | `ConverterShell.EnableRunPreview` | Adds the Run / Preview mode. |
 | `ConverterShell.OwnerKey` | Owner passed to that mode's pair. |
 | `ConverterShell.SourcePreview` / `TargetPreview` | Launches used by that mode. |
+| `ConverterShell.Orientation` | `Vertical` stacks the editors and the run-preview pair. `Horizontal` keeps two columns. |
 
 `ProgramPreviewWindow` also exposes `StartAsync`, `RestartAsync`, `StopAsync`, `PointerAsync`, and `KeyAsync`.
 

@@ -9,12 +9,18 @@
 .fx-converter-kinds,
 .fx-converter-panes {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 28px;
     align-items: start;
 }
 
-.fx-converter-panes.is-expanded {
+.fx-converter-kinds,
+.fx-converter[data-orientation="horizontal"] .fx-converter-panes {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.fx-converter-panes,
+.fx-converter-panes.is-expanded,
+.fx-converter[data-orientation="horizontal"] .fx-converter-panes.is-expanded {
     grid-template-columns: minmax(0, 1fr);
 }
 
@@ -226,7 +232,8 @@
 
 @media (max-width: 860px) {
     .fx-converter-kinds,
-    .fx-converter-panes {
+    .fx-converter-panes,
+    .fx-converter[data-orientation="horizontal"] .fx-converter-panes {
         grid-template-columns: minmax(0, 1fr);
     }
 
