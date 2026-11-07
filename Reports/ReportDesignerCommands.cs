@@ -125,9 +125,23 @@ public static class ReportDesignerCommands
         false, 1, true, true, Math.Clamp(decimalPlaces, 0, 10), 11 - Math.Clamp(decimalPlaces, 0, 10), 0, false, 0, ",", ".", "", false, false, false,
         "<Default Format>", false, "", "", SystemDefaultFormatting: false, ValueType: decimalPlaces == 0 ? 4 : 6);
 
+    /// <summary>Crystal's integer field format: no thousands separator, parentheses for negatives, value type 4.</summary>
+    public static ReportNativeNumericFormat IntegerFormat() => new(
+        false, 3, false, true, 0, 11, 0, false, 0, ",", ".", "$", false, false, false,
+        "<Default Format>", false, "", "", SystemDefaultFormatting: false, ValueType: 4);
+
     public static ReportNativeDateTimeFormat DateAndTimeFormat() => new(true, 1, 0, "  ");
 
-    public static ReportNativeDateTimeFormat ShortDateFormat() => new(true, 1, 2, "");
+    /// <summary>Crystal's short date: system default, Windows short date, date only, two-space separator.</summary>
+    public static ReportNativeDateTimeFormat ShortDateFormat() => new(true, 1, 2, "  ");
+
+    public static void SetFieldType(ReportDesignerDocument document, string table, string field, string type)
+    {
+        if (string.IsNullOrWhiteSpace(table) || string.IsNullOrWhiteSpace(field) || string.IsNullOrWhiteSpace(type)) return;
+        foreach (var item in document.Fields.Concat(document.DataSources.SelectMany(source => source.Fields)))
+            if (item.Table.Equals(table, StringComparison.OrdinalIgnoreCase) && item.Name.Equals(field, StringComparison.OrdinalIgnoreCase))
+                item.Type = type;
+    }
 
     /// <summary>A native cross-tab grid using the analysis dimensions and the object's font. Cell templates stay empty so Count and Sum both render.</summary>
     public static void ApplyStandardCrossTabGrid(ReportAnalysisDefinition analysis, ReportDesignerElement element)
@@ -169,10 +183,17 @@ public static class ReportDesignerCommands
                 : "";
             appearance = appearance with { GridLines = grid };
         }
+        var paddingX = analysis.ShowCellMargins ? native.PaddingX > 0 ? native.PaddingX : 100 : 0;
+        var paddingY = analysis.ShowCellMargins ? native.PaddingY > 0 ? native.PaddingY : 100 : 0;
+        static int Content(int outer, int padding) => Math.Clamp(outer - 2 * Math.Max(0, padding), 360, 100000);
         analysis.NativeCrossTab = native with
         {
-            PaddingX = analysis.ShowCellMargins ? native.PaddingX > 0 ? native.PaddingX : 100 : 0,
-            PaddingY = analysis.ShowCellMargins ? native.PaddingY > 0 ? native.PaddingY : 100 : 0,
+            PaddingX = paddingX,
+            PaddingY = paddingY,
+            RowWidth = Content(analysis.RowHeaderWidthTwips, paddingX),
+            ValueWidth = Content(analysis.ValueColumnWidthTwips, paddingX),
+            CellHeight = Math.Clamp(analysis.RowHeightTwips - 2 * paddingY, 180, 100000),
+            HeaderHeight = Math.Clamp(analysis.RowHeightTwips, 0, 100000),
             SuppressRowGrandTotals = !analysis.ShowRowGrandTotals,
             SuppressColumnGrandTotals = !analysis.ShowColumnGrandTotals,
             Appearance = appearance

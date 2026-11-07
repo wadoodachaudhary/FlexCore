@@ -591,6 +591,8 @@ else
 
     private static readonly string[] FontStyleChoices = ["Default", "Regular", "Bold", "Italic", "Bold Italic"];
     private static readonly string[] BorderStyleChoices = ["Default border style", "No border", "Single line", "Double line"];
+    private static readonly string[] BorderLineStyles = ["None", "Single", "Double", "Dashed", "Dotted"];
+    private static readonly string[] LinkFieldTypeChoices = ["(unchanged)", "String", "Long", "Decimal", "Date-time"];
     private static readonly string[] JoinTypeChoices = ["Inner", "Left Outer", "Right Outer", "Full Outer"];
 
     private static readonly string[] SpecialFieldNames =
@@ -950,6 +952,11 @@ else
                 break;
             case "textFormat":
             case "format":
+                _formatExpertTab = 0;
+                await OpenExpertAsync(TextFormatExpert);
+                break;
+            case "borders":
+                _formatExpertTab = 1;
                 await OpenExpertAsync(TextFormatExpert);
                 break;
             case "fontcolor":
@@ -1364,6 +1371,12 @@ else
                 break;
             case VisualLinkingExpert:
                 _document.Links = _expertLinks.Select(CloneLink).ToList();
+                foreach (var link in _document.Links)
+                    if (!string.IsNullOrWhiteSpace(link.FieldType))
+                    {
+                        ReportDesignerCommands.SetFieldType(_document, link.LeftTable, link.LeftField, link.FieldType);
+                        ReportDesignerCommands.SetFieldType(_document, link.RightTable, link.RightField, link.FieldType);
+                    }
                 _document.CustomSql = _expertSqlEditedByUser ? _expertSql : "";
                 if (_expertSqlEditedByUser && _validatedSqlFields.Count > 0)
                     ReportDesignerCommands.PromoteCommandFields(_document, _validatedSqlFields);
@@ -1771,28 +1784,44 @@ else
         }
         else
         {
-            <label>Font <DropDownListControl TValue="string" TItem="string" DataSource="@FontFamilies" Value="@_expertTextFormat.FontFamily" ValueChanged="@(value => _expertTextFormat.FontFamily = value ?? "Arial")" Width="190px" CssClass="fx-rd-expert-dd" /></label>
-            <label>Size <DropDownListControl TValue="decimal" TItem="decimal" DataSource="@FontSizes" Value="@_expertTextFormat.FontSize" ValueChanged="value => _expertTextFormat.FontSize = value" Width="90px" CssClass="fx-rd-expert-dd" /></label>
-            <div class="fx-rd-format-checks">
-                <CheckBoxControl @bind-Checked="_expertTextFormat.Bold" Label="Bold" />
-                <CheckBoxControl @bind-Checked="_expertTextFormat.Italic" Label="Italic" />
-                <CheckBoxControl @bind-Checked="_expertTextFormat.Underline" Label="Underline" />
-                <CheckBoxControl @bind-Checked="_expertTextFormat.LockFormat" Label="Lock Format" />
-                <CheckBoxControl @bind-Checked="_expertTextFormat.CanGrow" Label="Can Grow" />
+            <div class="fx-rd-expert-tabs">
+                <button type="button" class="@(_formatExpertTab == 0 ? "active" : null)" @onclick="() => _formatExpertTab = 0">Common</button>
+                <button type="button" class="@(_formatExpertTab == 1 ? "active" : null)" @onclick="() => _formatExpertTab = 1">Border</button>
+                <button type="button" class="@(_formatExpertTab == 2 ? "active" : null)" @onclick="() => _formatExpertTab = 2">Font</button>
             </div>
-            <label>Text color <ColorPickerControl Value="@_expertTextFormat.TextColor" ValueChanged="value => _expertTextFormat.TextColor = value" CssClass="fx-rd-section-color" /></label>
-            <label>Background <ColorPickerControl Value="@_expertTextFormat.BackgroundColor" ValueChanged="value => _expertTextFormat.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
-            <label>Alignment
-                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "Default", "Left", "Center", "Right", "Justified" })" Value="@_expertTextFormat.HorizontalAlignment" ValueChanged="SetExpertAlignment" Width="140px" CssClass="fx-rd-expert-dd" />
-            </label>
-            <label>Number
-                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "General", "Number", "Currency", "Integer" })" Value="@_numberPreset" ValueChanged="SetNumberPreset" Width="140px" CssClass="fx-rd-expert-dd" />
-            </label>
-            <label>Date
-                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "None", "Short date", "Date and time" })" Value="@_datePreset" ValueChanged="SetDatePreset" Width="160px" CssClass="fx-rd-expert-dd" />
-            </label>
-            <label>Format string <TextBoxControl Value="@_expertTextFormat.FormatString" ValueChanged="value => _expertTextFormat.FormatString = value ?? string.Empty" CssClass="fx-rd-expert-input" /></label>
-            <label>Indent twips <NumericTextBoxControl TValue="int" Value="@_expertTextFormat.IndentTwips" ValueChanged="value => _expertTextFormat.IndentTwips = value" CssClass="fx-rd-expert-input" /></label>
+            @if (_formatExpertTab == 0)
+            {
+                <label>Horizontal alignment
+                    <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "Default", "Left", "Center", "Right", "Justified" })" Value="@_expertTextFormat.HorizontalAlignment" ValueChanged="SetExpertAlignment" Width="160px" CssClass="fx-rd-expert-dd" />
+                </label>
+                <CheckBoxControl @bind-Checked="_expertTextFormat.CanGrow" Label="Can Grow" />
+                <CheckBoxControl @bind-Checked="_expertTextFormat.LockFormat" Label="Lock Format" />
+                <label>Number
+                    <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "General", "Number", "Currency", "Integer" })" Value="@_numberPreset" ValueChanged="SetNumberPreset" Width="160px" CssClass="fx-rd-expert-dd" />
+                </label>
+                <label>Date
+                    <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "None", "Short date", "Date and time" })" Value="@_datePreset" ValueChanged="SetDatePreset" Width="180px" CssClass="fx-rd-expert-dd" />
+                </label>
+            }
+            else if (_formatExpertTab == 1)
+            {
+                <label>Left <DropDownListControl TValue="string" TItem="string" DataSource="@BorderLineStyles" Value="@BorderStyleLabel(_expertTextFormat.Visual.LeftLine)" ValueChanged="SetLeftBorder" Width="140px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Right <DropDownListControl TValue="string" TItem="string" DataSource="@BorderLineStyles" Value="@BorderStyleLabel(_expertTextFormat.Visual.RightLine)" ValueChanged="SetRightBorder" Width="140px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Top <DropDownListControl TValue="string" TItem="string" DataSource="@BorderLineStyles" Value="@BorderStyleLabel(_expertTextFormat.Visual.TopLine)" ValueChanged="SetTopBorder" Width="140px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Bottom <DropDownListControl TValue="string" TItem="string" DataSource="@BorderLineStyles" Value="@BorderStyleLabel(_expertTextFormat.Visual.BottomLine)" ValueChanged="SetBottomBorder" Width="140px" CssClass="fx-rd-expert-dd" /></label>
+            }
+            else
+            {
+                <label>Font <DropDownListControl TValue="string" TItem="string" DataSource="@FontFamilies" Value="@_expertTextFormat.FontFamily" ValueChanged="@(value => _expertTextFormat.FontFamily = value ?? "Arial")" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                <label>Size <DropDownListControl TValue="decimal" TItem="decimal" DataSource="@FontSizes" Value="@_expertTextFormat.FontSize" ValueChanged="value => _expertTextFormat.FontSize = value" Width="90px" CssClass="fx-rd-expert-dd" /></label>
+                <div class="fx-rd-format-checks">
+                    <CheckBoxControl @bind-Checked="_expertTextFormat.Bold" Label="Bold" />
+                    <CheckBoxControl @bind-Checked="_expertTextFormat.Italic" Label="Italic" />
+                    <CheckBoxControl @bind-Checked="_expertTextFormat.Underline" Label="Underline" />
+                </div>
+                <label>Text color <ColorPickerControl Value="@_expertTextFormat.TextColor" ValueChanged="value => _expertTextFormat.TextColor = value" CssClass="fx-rd-section-color" /></label>
+                <label>Background <ColorPickerControl Value="@_expertTextFormat.BackgroundColor" ValueChanged="value => _expertTextFormat.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+            }
         }
     </div>;
 
@@ -1879,6 +1908,8 @@ else
                     <label>Right table <DropDownListControl TValue="string" TItem="string" DataSource="@ExpertTableNames" Value="@link.RightTable" ValueChanged="value => OnExpertLinkTableChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
                     <label>Right field <DropDownListControl TValue="string" TItem="string" DataSource="@GetExpertFieldNames(link.RightTable)" Value="@link.RightField" ValueChanged="value => OnExpertLinkFieldChanged(link, leftSide: false, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
                     <label>Join type <DropDownListControl TValue="string" TItem="string" DataSource="@JoinTypeChoices" Value="@link.JoinType" ValueChanged="value => OnExpertLinkJoinTypeChanged(link, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <label>Field type <DropDownListControl TValue="string" TItem="string" DataSource="@LinkFieldTypeChoices" Value="@LinkFieldTypeLabel(link)" ValueChanged="value => SetLinkFieldType(link, value)" Width="190px" CssClass="fx-rd-expert-dd" /></label>
+                    <CheckBoxControl Checked="@(link.EnforceJoin != "NotEnforced")" CheckedChanged="value => SetEnforceJoin(link, value)" Label="Enforce Join" />
                 }
                 <div class="fx-rd-pane-actions">
                     <ButtonControl OnClick="@(_ => AddExpertLink())" Disabled="@(ExpertTableNames.Count < 2)">New Join</ButtonControl>
@@ -3102,6 +3133,12 @@ else
         target.TextColor = source.TextColor;
         target.BackgroundColor = source.BackgroundColor;
         target.HorizontalAlignment = source.HorizontalAlignment;
+        target.Visual.TopLine = source.Visual.TopLine;
+        target.Visual.BottomLine = source.Visual.BottomLine;
+        target.Visual.LeftLine = source.Visual.LeftLine;
+        target.Visual.RightLine = source.Visual.RightLine;
+        target.Visual.LineWidthTwips = source.Visual.LineWidthTwips ?? 20;
+        target.Visual.BorderColor = source.Visual.BorderColor;
         target.TextRotation = source.TextRotation;
         target.CanGrow = source.CanGrow;
         target.MaxNumberOfLines = source.MaxNumberOfLines;
@@ -3478,6 +3515,68 @@ else
         return Task.CompletedTask;
     }
 
+    private static string BorderStyleLabel(string? style) => style switch
+    {
+        "Single" => "Single", "Double" => "Double", "Dash" or "Dashed" => "Dashed", "Dot" or "Dotted" => "Dotted", _ => "None"
+    };
+
+    private static string CrystalLineStyle(string? label) => label switch
+    {
+        "Single" => "Single", "Double" => "Double", "Dashed" => "Dash", "Dotted" => "Dot", _ => "NoLine"
+    };
+
+    private Task SetLeftBorder(string? label) => SetBorderSide(label, "left");
+    private Task SetRightBorder(string? label) => SetBorderSide(label, "right");
+    private Task SetTopBorder(string? label) => SetBorderSide(label, "top");
+    private Task SetBottomBorder(string? label) => SetBorderSide(label, "bottom");
+
+    private Task SetEnforceJoin(ReportDesignerDataLink link, bool enforce)
+    {
+        link.EnforceJoin = enforce ? "Enforced" : "NotEnforced";
+        return Task.CompletedTask;
+    }
+
+    private Task SetBorderSide(string? label, string side)
+    {
+        if (_expertTextFormat is null) return Task.CompletedTask;
+        var style = CrystalLineStyle(label);
+        switch (side)
+        {
+            case "left": _expertTextFormat.Visual.LeftLine = style; break;
+            case "right": _expertTextFormat.Visual.RightLine = style; break;
+            case "top": _expertTextFormat.Visual.TopLine = style; break;
+            default: _expertTextFormat.Visual.BottomLine = style; break;
+        }
+        _expertTextFormat.Visual.LineWidthTwips ??= 20;
+        return Task.CompletedTask;
+    }
+
+    private string LinkFieldTypeLabel(ReportDesignerDataLink link)
+    {
+        var type = string.IsNullOrWhiteSpace(link.FieldType)
+            ? _document.Fields.FirstOrDefault(field => field.Table.Equals(link.LeftTable, StringComparison.OrdinalIgnoreCase) && field.Name.Equals(link.LeftField, StringComparison.OrdinalIgnoreCase))?.Type
+            : link.FieldType;
+        var name = type ?? "";
+        if (name.StartsWith("crFieldValueType", StringComparison.OrdinalIgnoreCase)) name = name["crFieldValueType".Length..];
+        return name.Contains("long", StringComparison.OrdinalIgnoreCase) ? "Long"
+            : name.Contains("decimal", StringComparison.OrdinalIgnoreCase) ? "Decimal"
+            : name.Contains("date", StringComparison.OrdinalIgnoreCase) ? "Date-time"
+            : name.Contains("string", StringComparison.OrdinalIgnoreCase) ? "String" : "(unchanged)";
+    }
+
+    private Task SetLinkFieldType(ReportDesignerDataLink link, string? label)
+    {
+        link.FieldType = label switch
+        {
+            "Long" => "Xsd:longField",
+            "Decimal" => "Xsd:decimalField",
+            "Date-time" => "Xsd:dateTimeField",
+            "String" => "Xsd:stringField",
+            _ => ""
+        };
+        return Task.CompletedTask;
+    }
+
     private Task SetExpertAlignment(string? value)
     {
         if (_expertTextFormat is not null) _expertTextFormat.HorizontalAlignment = string.IsNullOrWhiteSpace(value) ? "Default" : value;
@@ -3491,7 +3590,7 @@ else
         _expertTextFormat.NativeNumericFormat = _numberPreset switch
         {
             "Currency" => ReportDesignerCommands.CurrencyFormat(),
-            "Integer" => ReportDesignerCommands.NumberFormat(0),
+            "Integer" => ReportDesignerCommands.IntegerFormat(),
             "Number" => ReportDesignerCommands.NumberFormat(2),
             _ => null
         };
@@ -3888,7 +3987,9 @@ else
             LeftField = link.LeftField,
             RightTable = link.RightTable,
             RightField = link.RightField,
-            JoinType = link.JoinType
+            JoinType = link.JoinType,
+            EnforceJoin = link.EnforceJoin,
+            FieldType = link.FieldType
         };
     }
 

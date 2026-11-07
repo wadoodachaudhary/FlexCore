@@ -112,6 +112,8 @@
     private static readonly ReportAggregateType[] Operations = [ReportAggregateType.Sum, ReportAggregateType.Count, ReportAggregateType.Average, ReportAggregateType.Min, ReportAggregateType.Max, ReportAggregateType.DistinctCount, ReportAggregateType.Median];
     private Task ChangedAsync()
     {
+        if (Element.Kind == "CrossTab" && Element.Analysis?.NativeCrossTab is not null)
+            ReportDesignerCommands.ApplyCrossTabOptions(Element.Analysis);
         if (Element.Analysis is { ChartThreeDimensional: true } analysis
             && (Element.Kind != "Chart" || !PrintedBarChart3D.Supports(analysis.ChartType)))
             analysis.ChartThreeDimensional = false;

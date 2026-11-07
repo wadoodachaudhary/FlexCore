@@ -9,6 +9,7 @@ public partial class ReportDesignerControl
     private int _splitAtTwips = 360;
     private string _sectionError = "";
     private int _sectionExpertTab;
+    private int _formatExpertTab;
     private string _moveSectionId = "";
     private List<ReportDesignerElement> SelectedObjects => _selectedElementIds.Count > 0
         ? ReportDesignerEditing.Selection(_document, _selectedElementIds) : _selectedElement is null ? [] : [_selectedElement];

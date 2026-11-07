@@ -164,7 +164,8 @@ public sealed class ReportObjectVisual
         border.SetAttributeValue("BottomLineStyle", visual.BottomLine);
         border.SetAttributeValue("LeftLineStyle", visual.LeftLine);
         border.SetAttributeValue("RightLineStyle", visual.RightLine);
-        border.SetAttributeValue("LineWidth", visual.LineWidthTwips);
+        border.SetAttributeValue("HasDropShadow", "false");
+        border.SetAttributeValue("LineWidth", visual.LineWidthTwips ?? 20);
         if (element.Name.LocalName == "LineObject") element.SetAttributeValue("LineThickness", visual.LineWidthTwips);
         var color = ReportObjectRenderer.Color(visual.BorderColor, "#000000");
         border.Element("BorderColor")?.Remove();
