@@ -151,6 +151,8 @@ public sealed partial class ReportLayoutSession
         public int Bottom { get; set; }
         public bool HasBody { get; set; }
         public bool HasHeaders { get; set; }
+        /// <summary>False on a report-header continuation page: that page has no page footer and does not reserve its space.</summary>
+        public bool FooterReserved { get; init; } = true;
     }
 
     /// <summary>Lays out <paramref name="layout"/> over <paramref name="data"/>. <c>executeSubreport</c> runs inline subreport
@@ -766,7 +768,10 @@ public sealed partial class ReportLayoutSession
         var areaOf = new Dictionary<string, string>();
         foreach (var section in _layout.Document.Sections) areaOf.TryAdd(section.Id, section.AreaId);
         (int Index, int Page, int Count, Band Band)? lastPageBand = null;
-        var page = NewPage(bands.FirstOrDefault()?.Row ?? -1, [], bands.FirstOrDefault()?.Section.Kind != "ReportHeader");
+        var opening = bands.FirstOrDefault();
+        var page = opening is null
+            ? NewPage(-1, [])
+            : Continue(opening, Height(opening), opening.Section.Kind != "ReportHeader");
         var prefixOnly = false;
         try
         {
@@ -789,7 +794,7 @@ public sealed partial class ReportLayoutSession
             // What follows an area printed at the bottom of the page starts a new page.
             if (bottomArea && (areaId, band.Row) != areaInstance) { page.Cursor = page.Bottom; bottomArea = false; }
             var withHeaders = band.Section.Kind != "ReportHeader";
-            if (!InColumns(band.Section) && (band.Section.NewPageBefore || area?.NewPageBefore == true) && page.HasBody) { CloseColumns(); page = NewPage(band.Row, band.Repeats, withHeaders); }
+            if (!InColumns(band.Section) && (band.Section.NewPageBefore || area?.NewPageBefore == true) && page.HasBody) { CloseColumns(); page = Continue(band, height, withHeaders); }
             if (withHeaders && !page.HasHeaders)
             {
                 var headerHeight = headers.Sum(section => Space(Blankness(Furnish(_furniture[(section.Id, band.Row)], page.Number))));
@@ -816,7 +821,7 @@ public sealed partial class ReportLayoutSession
                     extent = Math.Max(extent, flow + Height(bands[next]));
                     if (!bands[next].Section.UnderlayFollowingSections) flow += Height(bands[next]);
                 }
-                if (extent > page.Bottom - page.Cursor && page.HasBody && extent <= FreshBodyRoom()) page = NewPage(band.Row, band.Repeats, withHeaders);
+                if (extent > page.Bottom - page.Cursor && page.HasBody && extent <= FreshBodyRoom()) page = Continue(band, height, withHeaders);
                 if (area.PrintAtBottomOfPage && extent <= page.Bottom - page.Cursor) { page.Cursor = page.Bottom - extent; bottomArea = true; }
             }
             areaInstance = (areaId, band.Row);
@@ -838,18 +843,18 @@ public sealed partial class ReportLayoutSession
             var sectionKeep = band.KeptStartHeight ?? height;
             if (page.HasBody && ((sectionKeep > page.Bottom - page.Cursor && band.Section.KeepTogether && sectionKeep <= FreshBodyRoom())
                 || (height > page.Bottom - page.Cursor && keptSubreport)))
-                page = NewPage(band.Row, band.Repeats, withHeaders);
+                page = Continue(band, height, withHeaders);
             band = PageBand(bandIndex);
             if (band.Suppressed) { HiddenEvent(band); continue; }
             height = Height(band);
             var offset = 0;
             do
             {
-                if (page.Bottom <= page.Cursor) page = NewPage(band.Row, band.Repeats, withHeaders);
+                if (page.Bottom <= page.Cursor) page = Continue(band, height - offset, withHeaders);
                 if (page.HasBody && band.InlineSections?.Any(s => s.Start == offset && s.End > s.Start
                     && ((s.Format ?? s.Source.Section).NewPageBefore || s.Source.Owner!._layout.Areas.GetValueOrDefault(s.Source.Section.Id)?.NewPageBefore == true)) == true)
                 {
-                    page = NewPage(band.Row, band.Repeats, withHeaders);
+                    page = Continue(band, height - offset, withHeaders);
                     if (offset == 0) { band = PageBand(bandIndex); height = Height(band); }
                     AddInlineHeaders(page, band, offset);
                 }
@@ -877,7 +882,7 @@ public sealed partial class ReportLayoutSession
                     {
                         if (kept.Start > offset && SafeBreaks(band).Contains(kept.Start)) slice = kept.Start - offset;
                         else if (kept.Start == offset && page.HasBody)
-                        { page = NewPage(band.Row, band.Repeats, withHeaders); AddInlineHeaders(page, band, offset); continue; }
+                        { page = Continue(band, height - offset, withHeaders); AddInlineHeaders(page, band, offset); continue; }
                     }
                 }
                 if (forced > offset + slice) forced = 0;
@@ -888,7 +893,7 @@ public sealed partial class ReportLayoutSession
                         : SafeBreaks(band).Where(point => point > offset && point <= offset + slice).DefaultIfEmpty(0).Max();
                     if (boundary > 0) slice = boundary - offset;
                     else if (page.HasBody && band.Breaks.FirstOrDefault(point => point > offset) - offset <= page.Bottom)
-                    { page = NewPage(band.Row, band.Repeats, withHeaders); AddInlineHeaders(page, band, offset); continue; }
+                    { page = Continue(band, height - offset, withHeaders); AddInlineHeaders(page, band, offset); continue; }
                 }
                 if ((offset > 0 || slice < height) && !SafeAt(band, offset + slice) && !CanContinueAt(band, offset + slice))
                     _diagnostics.Add($"{band.Section.Name}: a band spans pages; overflowing objects are clipped at the page boundary.");
@@ -917,7 +922,7 @@ public sealed partial class ReportLayoutSession
                 if (offset < height)
                 {
                     var resetBeforeContinuation = resetPageNumber;
-                    page = NewPage(band.Row, band.Repeats, withHeaders);
+                    page = Continue(band, height - offset, withHeaders);
                     var continued = PageBand(bandIndex);
                     continued = ApplyInlineCuts(continued, band.InlineCuts, ItemHeight);
                     band = ContinueText(band, continued, offset, ItemHeight);
@@ -1019,7 +1024,10 @@ public sealed partial class ReportLayoutSession
         for (var index = 0; index < pages.Count; index++)
         {
             var current = pages[index];
+            // A report header with New Page Before fills its continuation pages. Those pages have no page number.
+            if (!current.FooterReserved) continue;
             var lastRow = current.Placements.LastOrDefault(placement => placement.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1;
+            // Print at Bottom (fixed on for the page footer) places the footer in the reserved slot at the bottom of the page.
             var footerTop = current.Bottom;
             foreach (var section in footers)
             {
@@ -1496,14 +1504,28 @@ public sealed partial class ReportLayoutSession
             lastPageBand = (index, page.Number, count, band);
             return band;
         }
-        Page NewPage(int row, List<Band> repeats, bool withHeaders = true)
+        bool ReportHeaderOwnsPage(Band current)
+        {
+            var format = _layout.Areas.GetValueOrDefault(current.Section.Id);
+            return current.Section.Kind == "ReportHeader" && (current.Section.NewPageBefore || format?.NewPageBefore == true);
+        }
+        int DesignedSpan(IEnumerable<ReportDesignerSection> furniture) =>
+            furniture.Where(section => !section.IsSuppressed).Sum(section => Math.Max(0, section.HeightTwips));
+        // The page that finishes the report header leaves room for the page header and the page footer. Earlier pages of that header do not.
+        bool ReserveFooter(Band current, int remaining) =>
+            !ReportHeaderOwnsPage(current) || remaining <= Math.Max(0, size.ContentHeightTwips - DesignedSpan(footers) - DesignedSpan(headers));
+        Page Continue(Band current, int remaining, bool withHeaders) =>
+            NewPage(current.Row, current.Repeats, withHeaders, ReserveFooter(current, remaining));
+        Page NewPage(int row, List<Band> repeats, bool withHeaders = true, bool reserveFooter = true)
         {
             if (_paginationPageLimit > 0 && pages.Count >= _paginationPageLimit) throw new PagePrefixComplete();
             if (pages.Count >= 10000) throw new InvalidDataException("Report exceeds the 10,000-page layout limit.");
             var number = resetPageNumber || pages.Count == 0 ? 1 : pages[^1].Number + 1;
             var footerRow = footerRows is not null && pages.Count < footerRows.Count ? footerRows[pages.Count] : row;
-            var reserve = footers.Sum(section => Space(Blankness(FurnitureBand(section.Id, footerRow, number, ExpectedCount(pages.Count), pages.Count + 1), pages.Count + 1)));
-            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve };
+            var reserve = reserveFooter
+                ? footers.Sum(section => Space(Blankness(FurnitureBand(section.Id, footerRow, number, ExpectedCount(pages.Count), pages.Count + 1), pages.Count + 1)))
+                : 0;
+            var next = new Page { Number = number, Bottom = size.ContentHeightTwips - reserve, FooterReserved = reserveFooter };
             resetPageNumber = false;
             if (withHeaders) AddHeaders(next, row);
             if (next.Cursor >= next.Bottom)
@@ -1632,7 +1654,8 @@ public sealed partial class ReportLayoutSession
                     var width = Math.Max(ReportTabularData.MinimumPaneWidthTwips, available);
                     if (width > available)
                         _diagnostics.Add($"{item.Element.Name}: table is narrower than the 0.25-inch minimum pane; content past its edge is clipped.");
-                    var panes = table.PaginateColumns(width, item.Element.FontSize, item.Analysis.Definition.RowHeightTwips);
+                    var keepColumns = string.Equals(item.Element.Kind, "CrossTab", StringComparison.OrdinalIgnoreCase) && item.Analysis.Definition.KeepColumnsTogether;
+                    var panes = table.PaginateColumns(width, item.Element.FontSize, item.Analysis.Definition.RowHeightTwips, keepColumns);
                     var regionCursor = top;
                     var horizontal = table.NativeCrossTab is not null && table.RepeatedColumns == 0;
                     object? headerPeers = horizontal && panes.Count > 1 ? item : null;

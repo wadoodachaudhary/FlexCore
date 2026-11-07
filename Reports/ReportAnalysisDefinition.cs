@@ -76,6 +76,16 @@ public sealed partial class ReportAnalysisDefinition
     public List<ReportAnalysisMeasure> Measures { get; set; } = [];
     public bool ShowLegend { get; set; } = true;
     public bool ShowTotals { get; set; } = true;
+    /// <summary>Cross-tab Customize Style: row grand totals. Crystal's "Suppress Row Grand Totals" is the inverse.</summary>
+    public bool ShowRowGrandTotals { get; set; } = true;
+    /// <summary>Cross-tab Customize Style: column grand totals. Crystal's "Suppress Column Grand Totals" is the inverse.</summary>
+    public bool ShowColumnGrandTotals { get; set; } = true;
+    /// <summary>Cross-tab grid options: draw the grid lines.</summary>
+    public bool ShowGrid { get; set; } = true;
+    /// <summary>Cross-tab grid options: pad cells. Off uses zero cell padding.</summary>
+    public bool ShowCellMargins { get; set; } = true;
+    /// <summary>Cross-tab grid options: keep each column whole when the grid paginates horizontally.</summary>
+    public bool KeepColumnsTogether { get; set; } = true;
     public bool EachRecord { get; set; }
     public bool ReportGroupChart { get; set; }
     /// <summary>No category group: each measure is one bar or pie slice, aggregated over the chart's rows.</summary>
@@ -228,6 +238,7 @@ public sealed partial class ReportAnalysisDefinition
         RowRanking = RowRanking, AccumulatorVariable = AccumulatorVariable, AccumulatorCount = AccumulatorCount, AccumulatorWithTies = AccumulatorWithTies,
         Title = Title, PrintAxis = PrintAxis, PerspectivePie = PerspectivePie, ChartType = ChartType, ChartThreeDimensional = ChartThreeDimensional, ChartCategoryLegend = ChartCategoryLegend, RightCategoryLegend = RightCategoryLegend, CategoryField = CategoryField, CategoryFormat = CategoryFormat, SeriesField = SeriesField, GroupScope = GroupScope,
         RowFields = [.. RowFields], ColumnFields = [.. ColumnFields], Measures = Measures.Select(m => m.Clone()).ToList(), ShowLegend = ShowLegend, ShowTotals = ShowTotals,
+        ShowRowGrandTotals = ShowRowGrandTotals, ShowColumnGrandTotals = ShowColumnGrandTotals, ShowGrid = ShowGrid, ShowCellMargins = ShowCellMargins, KeepColumnsTogether = KeepColumnsTogether,
         EachRecord = EachRecord, ReportGroupChart = ReportGroupChart, SummariesAsCategories = SummariesAsCategories, SortCategories = SortCategories, DescendingFields = [.. DescendingFields], OriginalOrderFields = [.. OriginalOrderFields],
         GroupKinds = new Dictionary<string, int>(GroupKinds, StringComparer.OrdinalIgnoreCase),
         Groups = Groups.Select(group => group.Clone()).ToList(),
@@ -260,6 +271,8 @@ public sealed partial class ReportAnalysisDefinition
         AccumulatorVariable.Length == 0 ? null : new XElement("RankedAccumulator", new XAttribute("Variable", AccumulatorVariable), new XAttribute("Count", AccumulatorCount), new XAttribute("WithTies", AccumulatorWithTies)),
         new XAttribute("CategoryField", CategoryField), string.IsNullOrEmpty(CategoryFormat) ? null : new XAttribute("CategoryFormat", CategoryFormat), new XAttribute("SeriesField", SeriesField), new XAttribute("GroupScope", GroupScope),
         new XAttribute("ShowLegend", ShowLegend), new XAttribute("ShowTotals", ShowTotals),
+        new XAttribute("ShowRowGrandTotals", ShowRowGrandTotals), new XAttribute("ShowColumnGrandTotals", ShowColumnGrandTotals),
+        new XAttribute("ShowGrid", ShowGrid), new XAttribute("ShowCellMargins", ShowCellMargins), new XAttribute("KeepColumnsTogether", KeepColumnsTogether),
         new XAttribute("EachRecord", EachRecord), ReportGroupChart ? new XAttribute("ReportGroupChart", true) : null, SummariesAsCategories ? new XAttribute("SummariesAsCategories", true) : null, new XAttribute("SortCategories", SortCategories), new XElement("DescendingFields", DescendingFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         OriginalOrderFields.Count == 0 ? null : new XElement("OriginalOrderFields", OriginalOrderFields.Select(field => new XElement("Field", new XAttribute("Binding", field)))),
         GroupKinds.Count == 0 ? null : new XElement("GroupKinds", GroupKinds.Select(pair => new XElement("Field", new XAttribute("Binding", pair.Key), new XAttribute("Kind", pair.Value)))),
@@ -287,7 +300,7 @@ public sealed partial class ReportAnalysisDefinition
         if (source.Element("FlexKitAnalysis") is not { } xml) return null;
         if (xml.DescendantsAndSelf("FlexKitAnalysis").Count() > 4096 || xml.Ancestors("FlexKitAnalysis").Count() >= 16)
             throw new InvalidDataException("Nested report regions exceed the 16-level/4096-region safety limit.");
-        return new()
+        var read = new ReportAnalysisDefinition
         {
             Title = (string?)xml.Attribute("Title") ?? "",
             ChartType = Enum.TryParse<ChartType>((string?)xml.Attribute("ChartType"), out var chart) ? chart : (ChartType)(-1),
@@ -317,6 +330,11 @@ public sealed partial class ReportAnalysisDefinition
             GroupScope = (string?)xml.Attribute("GroupScope") ?? "",
             ShowLegend = !bool.TryParse((string?)xml.Attribute("ShowLegend"), out var legend) || legend,
             ShowTotals = !bool.TryParse((string?)xml.Attribute("ShowTotals"), out var totals) || totals,
+            ShowRowGrandTotals = !bool.TryParse((string?)xml.Attribute("ShowRowGrandTotals"), out var showRowTotals) || showRowTotals,
+            ShowColumnGrandTotals = !bool.TryParse((string?)xml.Attribute("ShowColumnGrandTotals"), out var showColumnTotals) || showColumnTotals,
+            ShowGrid = !bool.TryParse((string?)xml.Attribute("ShowGrid"), out var showGrid) || showGrid,
+            ShowCellMargins = !bool.TryParse((string?)xml.Attribute("ShowCellMargins"), out var showCellMargins) || showCellMargins,
+            KeepColumnsTogether = !bool.TryParse((string?)xml.Attribute("KeepColumnsTogether"), out var keepColumns) || keepColumns,
             ReportGroupChart = (bool?)xml.Attribute("ReportGroupChart") ?? false,
             EachRecord = bool.TryParse((string?)xml.Attribute("EachRecord"), out var eachRecord) && eachRecord,
             SummariesAsCategories = bool.TryParse((string?)xml.Attribute("SummariesAsCategories"), out var summariesAsCategories) && summariesAsCategories,
@@ -353,6 +371,15 @@ public sealed partial class ReportAnalysisDefinition
                 Format = (string?)m.Attribute("Format") ?? "N2", DoNotSummarize = (bool?)m.Attribute("DoNotSummarize") ?? false
             }).ToList() ?? []
         };
+        if (xml.Attribute("ShowRowGrandTotals") is null && read.NativeCrossTab is { } native)
+        {
+            read.ShowRowGrandTotals = !native.SuppressRowGrandTotals;
+            read.ShowColumnGrandTotals = !native.SuppressColumnGrandTotals;
+            read.ShowCellMargins = native.PaddingX > 0 || native.PaddingY > 0;
+            read.ShowGrid = native.Appearance?.GridLines.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Any(part => int.TryParse(part.Split(':')[0], out var width) && width >= 0) ?? true;
+        }
+        return read;
     }
 }
 

@@ -76,7 +76,8 @@
                     }
                     <div class="fx-rd-band-body @(ReferenceEquals(reportSection, SelectedSection) ? "selected" : "") @(reportSection.IsSuppressed ? "suppressed" : "")"
                          style="@GetSectionBodyStyle(reportSection)"
-                         @onpointerdown="e => BeginMarqueeAsync(e, reportSection)" @onpointerdown:preventDefault="true">
+                         @onpointerdown="e => BeginMarqueeAsync(e, reportSection)" @onpointerdown:preventDefault="true"
+                         @ondragover:preventDefault="true" @ondrop="e => DropFieldAsync(e, reportSection)">
                         <div class="fx-rd-band-stage" style="@($"width:{ReportObjectRenderer.Number(Document.Page.ContentWidthTwips / 15d)}px;transform:scale({ReportObjectRenderer.Number(Scale)})")">
                         @foreach (var element in reportSection.Elements)
                         {
@@ -93,7 +94,7 @@
                                 <div class="fx-rd-object-content" style="@ReportObjectRenderer.Style(element, false)">
                                     @if (element.Analysis is { } analysis && element.Kind is "Chart" or "CrossTab" or "Table")
                                     {
-                                        <ReportAnalysisControl Element="element" Snapshot="@(new ReportAnalysisSnapshot(analysis, []))" />
+                                        <ReportAnalysisControl Element="element" Snapshot="@(new ReportAnalysisSnapshot(analysis, AnalysisSample ?? []))" />
                                     }
                                     else
                                     {
@@ -146,6 +147,9 @@
     [Parameter] public EventCallback<ReportDesignerSection> SectionResized { get; set; }
     [Parameter] public EventCallback<ReportDesignerSection> ElementChanged { get; set; }
     [Parameter] public EventCallback<string> CommandRequested { get; set; }
+    [Parameter] public IReadOnlyList<Dictionary<string, object>>? AnalysisSample { get; set; }
+    [Parameter] public ReportDesignerField? DragField { get; set; }
+    [Parameter] public EventCallback<ReportDesignerFieldDrop> FieldDropped { get; set; }
     [Parameter] public bool AllowSectionRowResizing { get; set; } = true;
     [Parameter] public int SectionRailWidthPx { get; set; } = 190;
 
@@ -168,6 +172,19 @@
     private int ContentWidthPx => Math.Max(1, (int)Math.Ceiling(Document.Page.ContentWidthTwips / 15d * Scale));
 
     private Task SetZoom(int value) { CancelGesture(); _zoom = value; return Task.CompletedTask; }
+
+    private async Task DropFieldAsync(DragEventArgs args, ReportDesignerSection section)
+    {
+        if (DragField is null || !FieldDropped.HasDelegate) return;
+        var left = (int)Math.Round(args.OffsetX / Math.Max(0.01, Scale) * 15);
+        var top = (int)Math.Round(args.OffsetY / Math.Max(0.01, Scale) * 15);
+        if (_snap)
+        {
+            left = left / 60 * 60;
+            top = top / 60 * 60;
+        }
+        await FieldDropped.InvokeAsync(new ReportDesignerFieldDrop(section, DragField, Math.Max(0, left), Math.Max(0, top)));
+    }
     protected override void OnParametersSet()
     {
         _selection.Clear();

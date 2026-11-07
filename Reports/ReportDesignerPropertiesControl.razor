@@ -45,6 +45,7 @@
             <div class="fx-rd-property-card">
                 <h3>Section</h3>
                 <label>Name<TextBoxControl @bind-Value="section.Name" @bind-Value:after="NotifyChangedAsync" Enabled="@(!section.ReadOnly)" /></label>
+                <label>Area<TextBoxControl Value="@section.AreaName" ValueChanged="value => RenameAreaAsync(section, value)" Enabled="@(!section.ReadOnly)" /></label>
                 <label>Kind<TextBoxControl Value="@(section.Kind)" ReadOnly="true" /></label>
                 <label>Height<NumericTextBoxControl TValue="int" Value="section.HeightTwips" ValueChanged="value => ChangeSectionHeightAsync(section, value)" Min="0" /></label>
                 <label>Background<Fx.ControlKit.Dialogs.ColorPickerControl @bind-Value="section.BackgroundColor" @bind-Value:after="NotifyChangedAsync" Enabled="@(!section.ReadOnly)" /></label>
@@ -93,6 +94,22 @@
         var section = Document.Sections.FirstOrDefault(item => item.Id == element.SectionId);
         if (section is not null)
             section.HeightTwips = Math.Max(section.HeightTwips, element.TopTwips + element.HeightTwips);
+        await NotifyChangedAsync();
+    }
+
+    private async Task RenameAreaAsync(ReportDesignerSection section, string? value)
+    {
+        if (section.ReadOnly) return;
+        var name = value ?? "";
+        var previous = section.AreaName;
+        foreach (var sibling in Document.Sections)
+        {
+            var same = !string.IsNullOrEmpty(section.AreaId)
+                ? sibling.AreaId == section.AreaId
+                : sibling.Kind == section.Kind && sibling.GroupId == section.GroupId && sibling.AreaName == previous;
+            if (same)
+                sibling.AreaName = name;
+        }
         await NotifyChangedAsync();
     }
 

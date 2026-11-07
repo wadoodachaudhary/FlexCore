@@ -52,11 +52,12 @@ public sealed class ReportDesignerDocument
 
         document.Sections.AddRange(new[]
         {
-            new ReportDesignerSection { Id = "report-header", Name = "ReportHeaderSection1", Kind = "ReportHeader", AreaName = "ReportHeaderArea1", HeightTwips = 540 },
+            // Crystal greys New Page Before on for the report header, and Print at Bottom plus New Page After on for the page footer.
+            new ReportDesignerSection { Id = "report-header", Name = "ReportHeaderSection1", Kind = "ReportHeader", AreaName = "ReportHeaderArea1", HeightTwips = 540, NewPageBefore = true },
             new ReportDesignerSection { Id = "page-header", Name = "PageHeaderSection1", Kind = "PageHeader", AreaName = "PageHeaderArea1", HeightTwips = 480 },
             new ReportDesignerSection { Id = "detail", Name = "DetailSection1", Kind = "Detail", AreaName = "DetailArea1", HeightTwips = 360 },
             new ReportDesignerSection { Id = "report-footer", Name = "ReportFooterSection1", Kind = "ReportFooter", AreaName = "ReportFooterArea1", HeightTwips = 480 },
-            new ReportDesignerSection { Id = "page-footer", Name = "PageFooterSection1", Kind = "PageFooter", AreaName = "PageFooterArea1", HeightTwips = 420 }
+            new ReportDesignerSection { Id = "page-footer", Name = "PageFooterSection1", Kind = "PageFooter", AreaName = "PageFooterArea1", HeightTwips = 420, PrintAtBottomOfPage = true, NewPageAfter = true }
         });
 
         return document;
@@ -317,6 +318,7 @@ public sealed class ReportDesignerDocument
             SourceName = table.SourceName,
             CommandText = table.CommandText,
             Schema = table.Schema,
+            DataFile = table.DataFile,
             Fields = table.Fields.Select(CloneField).ToList()
         };
     }
@@ -333,7 +335,8 @@ public sealed class ReportDesignerDocument
             Expression = field.Expression,
             Syntax = field.Syntax,
             Type = field.Type,
-            IsFormula = field.IsFormula
+            IsFormula = field.IsFormula,
+            CrystalBinding = field.CrystalBinding
         };
     }
 
@@ -401,6 +404,8 @@ public sealed class ReportDesignerSection
     public int HeightTwips { get; set; } = 360;
     public bool HideForDrillDown { get; set; }
     public bool IsSuppressed { get; set; }
+    /// <summary>Crystal section suppress formula (x+2), such as <c>OnFirstRecord</c>. Empty means no formula.</summary>
+    public string SuppressFormula { get; set; } = "";
     public bool PrintAtBottomOfPage { get; set; }
     public bool SuppressIfBlank { get; set; }
     public bool UnderlayFollowingSections { get; set; }
@@ -597,8 +602,10 @@ public sealed class ReportDesignerField : ReportDesignerSourceItem
     public string Syntax { get; set; } = "Crystal";
     public string Type { get; set; } = "";
     public bool IsFormula { get; set; }
+    /// <summary>Crystal data source when it is not <c>{Table.Name}</c>: PrintDate, PageNumber, GroupName ({...}).</summary>
+    public string CrystalBinding { get; set; } = "";
     public string DisplayName => string.IsNullOrWhiteSpace(Table) ? Name : $"{Table}.{Name}";
-    public string Reference => IsFormula ? $"{{@{Name.TrimStart('@')}}}" : $"{{{DisplayName}}}";
+    public string Reference => CrystalBinding.Length > 0 ? CrystalBinding : IsFormula ? $"{{@{Name.TrimStart('@')}}}" : $"{{{DisplayName}}}";
 }
 
 public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
@@ -609,6 +616,8 @@ public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
     public bool IsView { get; set; }
     public string SourceName { get; set; } = "";
     public string CommandText { get; set; } = "";
+    /// <summary>ADO.NET XML file this table was loaded from, written back as ConnectionInfo/@File_Path_.</summary>
+    public string DataFile { get; set; } = "";
     public List<ReportDesignerField> Fields { get; set; } = new();
     public string DisplayName => string.IsNullOrWhiteSpace(Schema) ? Name : $"{Schema}.{Name}";
 }
@@ -687,6 +696,10 @@ public sealed class ReportDesignerDataLink : ReportDesignerSourceItem
     public string RightTable { get; set; } = "";
     public string RightField { get; set; } = "";
     public string JoinType { get; set; } = "Inner";
+    /// <summary>Crystal Link Options. <c>NotEnforced</c> is the unchecked Enforce Join box.</summary>
+    public string EnforceJoin { get; set; } = "NotEnforced";
+    /// <summary>Crystal type applied to the link fields when Link Options sets one, such as <c>Xsd:longField</c>.</summary>
+    public string FieldType { get; set; } = "";
 
     public string DisplayName => string.IsNullOrWhiteSpace(LeftTable) && string.IsNullOrWhiteSpace(RightTable)
         ? "New link"
@@ -868,18 +881,26 @@ public static partial class ReportDesignerXmlSerializer
                 .Select(links =>
                     new XElement("TableLink",
                         new XAttribute("JoinType", ToCrystalJoinType(links.Key.JoinType)),
-                        new XElement("SourceFields", links.Select(link => BuildLinkField(link.LeftTable, link.LeftField))),
-                        new XElement("DestinationFields", links.Select(link => BuildLinkField(link.RightTable, link.RightField))))));
+                        string.IsNullOrWhiteSpace(links.First().EnforceJoin) ? null : new XAttribute("EnforceJoin", links.First().EnforceJoin),
+                        new XElement("SourceFields", links.Select(link => BuildLinkField(document, link.LeftTable, link.LeftField, link.FieldType))),
+                        new XElement("DestinationFields", links.Select(link => BuildLinkField(document, link.RightTable, link.RightField, link.FieldType))))));
     }
 
-    private static XElement BuildLinkField(string table, string field)
+    private static XElement BuildLinkField(ReportDesignerDocument document, string table, string field, string? linkType)
     {
+        var stored = document.Fields.Concat(document.DataSources.SelectMany(source => source.Fields))
+            .FirstOrDefault(item => item.Table.Equals(table, StringComparison.OrdinalIgnoreCase) && item.Name.Equals(field, StringComparison.OrdinalIgnoreCase))?.Type;
+        var type = NormalizeCrystalType(string.IsNullOrWhiteSpace(linkType) ? stored : linkType);
+        if (type.Length == 0) type = "Xsd:stringField";
+        var bytes = type.Contains("long", StringComparison.OrdinalIgnoreCase) || type.Contains("decimal", StringComparison.OrdinalIgnoreCase)
+            || type.Contains("date", StringComparison.OrdinalIgnoreCase) ? 8
+            : type.Contains("string", StringComparison.OrdinalIgnoreCase) ? 131070 : 0;
         return new XElement("Field",
             new XAttribute("FormulaName", $"{{{table}.{field}}}"),
             new XAttribute("Kind", "DatabaseField"),
             new XAttribute("Name", field),
-            new XAttribute("NumberOfBytes", 0),
-            new XAttribute("ValueType", "Xsd:stringField"));
+            new XAttribute("NumberOfBytes", bytes),
+            new XAttribute("ValueType", type));
     }
 
     private static XElement BuildDataDefinitionElement(ReportDesignerDocument document)
@@ -906,7 +927,8 @@ public static partial class ReportDesignerXmlSerializer
             Expression = field.Expression,
             Syntax = field.Syntax,
             Type = field.Type,
-            IsFormula = field.IsFormula
+            IsFormula = field.IsFormula,
+            CrystalBinding = field.CrystalBinding
         };
     }
 
@@ -1023,16 +1045,23 @@ public static partial class ReportDesignerXmlSerializer
         }
     }
 
+    // Crystal keeps the report header's New Page Before, the report footer's New Page After, and the page footer's
+    // Print at Bottom and New Page After on the area. Page Header and Page Footer also keep Keep Together on the area.
+    private static bool AreaOwnsNewPageBefore(ReportDesignerSection section) => section.Kind == "ReportHeader";
+    private static bool AreaOwnsNewPageAfter(ReportDesignerSection section) => section.Kind is "ReportFooter" or "PageFooter";
+    private static bool AreaOwnsPrintAtBottom(ReportDesignerSection section) => section.Kind == "PageFooter";
+    private static bool AreaKeepTogether(ReportDesignerSection section) => section.Kind is "PageHeader" or "PageFooter" && section.KeepTogether;
+
     private static XElement CreateAreaElement(ReportDesignerSection section)
     {
         return new XElement("Area",
             new XAttribute("Kind", section.Kind),
             new XAttribute("Name", string.IsNullOrWhiteSpace(section.AreaName) ? $"{section.Kind}Area" : section.AreaName),
             new XElement("AreaFormat",
-                new XAttribute("EnableKeepTogether", "false"),
-                new XAttribute("EnableNewPageAfter", "false"),
-                new XAttribute("EnableNewPageBefore", "false"),
-                new XAttribute("EnablePrintAtBottomOfPage", "false"),
+                new XAttribute("EnableKeepTogether", Lower(AreaKeepTogether(section))),
+                new XAttribute("EnableNewPageAfter", Lower(AreaOwnsNewPageAfter(section) && section.NewPageAfter)),
+                new XAttribute("EnableNewPageBefore", Lower(AreaOwnsNewPageBefore(section) && section.NewPageBefore)),
+                new XAttribute("EnablePrintAtBottomOfPage", Lower(AreaOwnsPrintAtBottom(section) && section.PrintAtBottomOfPage)),
                 new XAttribute("EnableResetPageNumberAfter", "false"),
                 new XAttribute("EnableSuppress", "false"),
                 new XAttribute("EnableHideForDrillDown", "false")),
@@ -1049,16 +1078,17 @@ public static partial class ReportDesignerXmlSerializer
                 new XAttribute("CssClass", ""),
                 new XAttribute("EnableKeepTogether", Lower(section.KeepTogether)),
                 new XAttribute("EnableHideForDrillDown", Lower(section.HideForDrillDown)),
-                new XAttribute("EnableNewPageAfter", Lower(section.NewPageAfter)),
-                new XAttribute("EnableNewPageBefore", Lower(section.NewPageBefore)),
-                new XAttribute("EnablePrintAtBottomOfPage", Lower(section.PrintAtBottomOfPage)),
+                new XAttribute("EnableNewPageAfter", Lower(!AreaOwnsNewPageAfter(section) && section.NewPageAfter)),
+                new XAttribute("EnableNewPageBefore", Lower(!AreaOwnsNewPageBefore(section) && section.NewPageBefore)),
+                new XAttribute("EnablePrintAtBottomOfPage", Lower(!AreaOwnsPrintAtBottom(section) && section.PrintAtBottomOfPage)),
                 new XAttribute("EnableResetPageNumberAfter", Lower(section.ResetPageNumberAfter)),
                 new XAttribute("EnableSuppress", Lower(section.IsSuppressed)),
                 new XAttribute("EnableSuppressIfBlank", Lower(section.SuppressIfBlank)),
                 new XAttribute("EnableUnderlaySection", Lower(section.UnderlayFollowingSections)),
                 new XAttribute("ReadOnly", Lower(section.ReadOnly)),
                 new XAttribute("RelativePositions", Lower(section.RelativePositions)),
-                new XElement("SectionAreaConditionFormulas"),
+                new XElement("SectionAreaConditionFormulas",
+                    string.IsNullOrWhiteSpace(section.SuppressFormula) ? null : new XAttribute("EnableSuppress", section.SuppressFormula)),
                 CreateColorElement("BackgroundColor", section.BackgroundColor, 0)),
             new XElement("ReportObjects"));
     }
@@ -1109,7 +1139,7 @@ public static partial class ReportDesignerXmlSerializer
         objectElement.Add(new XElement("ObjectFormat",
             new XAttribute("EnableCanGrow", Lower(element.CanGrow)),
             new XAttribute("EnableCloseAtPageBreak", "true"),
-            new XAttribute("EnableKeepTogether", "true"),
+            new XAttribute("EnableKeepTogether", Lower(!string.Equals(element.Kind, "CrossTab", StringComparison.OrdinalIgnoreCase))),
             new XAttribute("EnableSuppress", Lower(element.IsSuppressed)),
             element.TextRotation == 0 ? null : new XAttribute("TextRotation", element.TextRotation),
             new XAttribute("HorizontalAlignment", string.IsNullOrWhiteSpace(element.HorizontalAlignment) ? "Default" : element.HorizontalAlignment)));
@@ -1124,8 +1154,11 @@ public static partial class ReportDesignerXmlSerializer
         {
             var areaName = Attribute(area, "Name") ?? "";
             var areaId = Guid.NewGuid().ToString("N");
-            foreach (var sectionElement in Child(area, "Sections")?.Elements("Section") ?? Enumerable.Empty<XElement>())
+            var areaFormat = Child(area, "AreaFormat");
+            var sectionElements = (Child(area, "Sections")?.Elements("Section") ?? Enumerable.Empty<XElement>()).ToList();
+            for (var index = 0; index < sectionElements.Count; index++)
             {
+                var sectionElement = sectionElements[index];
                 var sectionName = Attribute(sectionElement, "Name") ?? "Section";
                 var sectionId = MakeUniqueId(sectionName, usedIds);
                 var format = Child(sectionElement, "SectionFormat");
@@ -1140,6 +1173,7 @@ public static partial class ReportDesignerXmlSerializer
                     HeightTwips = ParseInt(Attribute(sectionElement, "Height"), 360),
                     HideForDrillDown = ParseBool(Attribute(format, "EnableHideForDrillDown")),
                     IsSuppressed = ParseBool(Attribute(format, "EnableSuppress")),
+                    SuppressFormula = Attribute(Child(format, "SectionAreaConditionFormulas"), "EnableSuppress") ?? "",
                     PrintAtBottomOfPage = ParseBool(Attribute(format, "EnablePrintAtBottomOfPage")),
                     SuppressIfBlank = ParseBool(Attribute(format, "EnableSuppressIfBlank")),
                     UnderlayFollowingSections = ParseBool(Attribute(format, "EnableUnderlaySection")),
@@ -1151,6 +1185,11 @@ public static partial class ReportDesignerXmlSerializer
                     KeepTogether = ParseBool(Attribute(format, "EnableKeepTogether"), true),
                     BackgroundColor = ColorFromElement(Child(format, "BackgroundColor"), "#ffffff")
                 };
+                // Crystal stores the report header's New Page Before, the report footer's New Page After,
+                // and the page footer's Print at Bottom on the area. The section expert edits one set of flags.
+                if (index == 0 && ParseBool(Attribute(areaFormat, "EnableNewPageBefore"))) section.NewPageBefore = true;
+                if (index == sectionElements.Count - 1 && ParseBool(Attribute(areaFormat, "EnableNewPageAfter"))) section.NewPageAfter = true;
+                if (ParseBool(Attribute(areaFormat, "EnablePrintAtBottomOfPage"))) section.PrintAtBottomOfPage = true;
 
                 document.SourceSections[section.SourceKey] = sectionElement;
                 ParseObjects(sectionElement, section, document);
@@ -1238,7 +1277,8 @@ public static partial class ReportDesignerXmlSerializer
                 Name = tableName,
                 Schema = ParseSchemaName(Attribute(table, "QualifiedName")),
                 SourceName = Attribute(table, "Name") ?? tableName,
-                CommandText = Child(table, "Command")?.Value ?? ""
+                CommandText = Child(table, "Command")?.Value ?? "",
+                DataFile = Attribute(Child(table, "ConnectionInfo"), "File_Path_") ?? ""
             };
             document.SourceItems[dataTable.Id] = table;
 
@@ -1250,7 +1290,7 @@ public static partial class ReportDesignerXmlSerializer
                     Table = tableName,
                     LongName = Attribute(field, "LongName") ?? "",
                     Formula = Attribute(field, "FormulaForm") ?? Attribute(field, "FormulaName") ?? "",
-                    Type = Attribute(field, "Type") ?? Attribute(field, "ValueType") ?? ""
+                    Type = NormalizeCrystalType(Attribute(field, "Type") ?? Attribute(field, "ValueType"))
                 };
                 document.Fields.Add(designerField);
                 dataTable.Fields.Add(CloneField(designerField));
@@ -1295,7 +1335,9 @@ public static partial class ReportDesignerXmlSerializer
                     LeftField = source.Field,
                     RightTable = destination.Table,
                     RightField = destination.Field,
-                    JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType"))
+                    JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType")),
+                    EnforceJoin = Attribute(tableLink, "EnforceJoin") ?? "NotEnforced",
+                    FieldType = NormalizeCrystalType(source.Type.Length > 0 ? source.Type : destination.Type)
                 };
                 document.Links.Add(link);
                 document.SourceItems[link.Id] = tableLink;
@@ -1318,15 +1360,15 @@ public static partial class ReportDesignerXmlSerializer
         }
     }
 
-    private static List<(string Table, string Field)> ParseLinkFields(XElement? container)
+    private static List<(string Table, string Field, string Type)> ParseLinkFields(XElement? container)
     {
-        var fields = new List<(string Table, string Field)>();
+        var fields = new List<(string Table, string Field, string Type)>();
         foreach (var fieldElement in container?.Elements("Field") ?? Enumerable.Empty<XElement>())
         {
             var formulaName = Attribute(fieldElement, "FormulaName") ?? "";
             var parsed = ParseCrystalFieldReference(formulaName);
             if (parsed.HasValue)
-                fields.Add(parsed.Value);
+                fields.Add((parsed.Value.Table, parsed.Value.Field, NormalizeCrystalType(Attribute(fieldElement, "ValueType") ?? Attribute(fieldElement, "Type"))));
         }
 
         return fields;
@@ -1397,7 +1439,7 @@ public static partial class ReportDesignerXmlSerializer
     {
         foreach (var group in Child(Child(root, "DataDefinition"), "Groups")?.Elements("Group") ?? Enumerable.Empty<XElement>())
         {
-            var condition = Attribute(group, "ConditionField") ?? Attribute(group, "GroupCondition") ?? Attribute(group, "FormulaName") ?? "";
+            var condition = Attribute(group, "ConditionField") ?? Attribute(group, "ConditionFormula") ?? Attribute(group, "GroupCondition") ?? Attribute(group, "FormulaName") ?? "";
             if (string.IsNullOrWhiteSpace(condition))
                 condition = group.Descendants("Field").Select(field => Attribute(field, "FormulaName")).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
 
@@ -1548,14 +1590,22 @@ public static partial class ReportDesignerXmlSerializer
         if (!string.IsNullOrWhiteSpace(summaryTitle))
             return summaryTitle.Trim();
 
-        var firstTitleText = Child(root, "ReportDefinition")?
+        // A text object named as a title is the report title. The first body sentence (a note, a column heading)
+        // is not: an empty Crystal title falls back to the file name.
+        var namedTitle = Child(root, "ReportDefinition")?
             .Descendants("TextObject")
+            .Where(text => (Attribute(text, "Name") ?? "").Contains("Title", StringComparison.OrdinalIgnoreCase))
             .Select(text => Child(text, "Text")?.Value?.Trim())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        if (!string.IsNullOrWhiteSpace(firstTitleText))
-            return firstTitleText!;
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value) && value.Length <= 120 && !value.Contains('\n'));
+        if (!string.IsNullOrWhiteSpace(namedTitle))
+            return namedTitle;
 
-        return Path.GetFileNameWithoutExtension(sourceName) ?? Attribute(root, "Name") ?? "Untitled Report";
+        var fileTitle = Path.GetFileNameWithoutExtension(sourceName);
+        if (!string.IsNullOrWhiteSpace(fileTitle))
+            return fileTitle;
+
+        var reportName = Attribute(root, "Name");
+        return string.IsNullOrWhiteSpace(reportName) ? "Untitled Report" : reportName.Trim();
     }
 
     private static string InferKindFromObjectElement(XElement objectElement)
@@ -1745,4 +1795,10 @@ public static partial class ReportDesignerXmlSerializer
     }
 
     private static string Lower(bool value) => value ? "true" : "false";
+
+    private static string NormalizeCrystalType(string? type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return "";
+        return type.StartsWith("crFieldValueType", StringComparison.OrdinalIgnoreCase) ? type["crFieldValueType".Length..] : type;
+    }
 }

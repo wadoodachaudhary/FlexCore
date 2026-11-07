@@ -23,6 +23,7 @@
                          OnNodeClick="@OnNodeClick"
                          OnNodeDoubleClick="@OnNodeDoubleClick"
                          OnNodeExpand="@OnNodeExpand"
+                         PayloadDragStart="@PayloadDragStart"
                          ShowCheckboxes="@ShowCheckboxes"
                          ShowIcons="@ShowIcons"
                          AllowMultiSelect="@AllowMultiSelect"
@@ -49,6 +50,7 @@
     [Parameter] public EventCallback<TreeNode> OnNodeClick { get; set; }
     [Parameter] public EventCallback<TreeNode> OnNodeDoubleClick { get; set; }
     [Parameter] public EventCallback<TreeNode> OnNodeExpand { get; set; }
+    [Parameter] public EventCallback<TreeNode> PayloadDragStart { get; set; }
     [Parameter] public RenderFragment? ToolbarContent { get; set; }
     [Parameter] public RenderFragment? FooterContent { get; set; }
     [Parameter] public bool ShowCheckboxes { get; set; }

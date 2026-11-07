@@ -257,6 +257,7 @@ public static partial class ReportDesignerXmlSerializer
             var originalXml = links.Select(link => after.SourceItems.GetValueOrDefault(link.Id)).FirstOrDefault(node => node is not null);
             var node = originalXml is null ? new XElement("TableLink") : new XElement(originalXml);
             node.SetAttributeValue("JoinType", ToCrystalJoinType(links.Key.JoinType));
+            node.SetAttributeValue("EnforceJoin", string.IsNullOrWhiteSpace(links.First().EnforceJoin) ? null : links.First().EnforceJoin);
             var sourceFields = new List<XElement>();
             var destinationFields = new List<XElement>();
             foreach (var link in links)
@@ -271,11 +272,11 @@ public static partial class ReportDesignerXmlSerializer
                 XElement LinkField(string container, bool left)
                 {
                     var field = index >= 0 ? origin?.Element(container)?.Elements("Field").ElementAtOrDefault(index) : null;
-                    var current = BuildLinkField(left ? link.LeftTable : link.RightTable, left ? link.LeftField : link.RightField);
+                    var current = BuildLinkField(after, left ? link.LeftTable : link.RightTable, left ? link.LeftField : link.RightField, link.FieldType);
                     if (field is null || oldLink is null)
                         return current;
                     var preserved = new XElement(field);
-                    PatchShape(preserved, BuildLinkField(left ? oldLink.LeftTable : oldLink.RightTable, left ? oldLink.LeftField : oldLink.RightField), current);
+                    PatchShape(preserved, BuildLinkField(after, left ? oldLink.LeftTable : oldLink.RightTable, left ? oldLink.LeftField : oldLink.RightField, oldLink.FieldType), current);
                     return preserved;
                 }
             }
@@ -310,13 +311,27 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("QualifiedName", string.IsNullOrWhiteSpace(table.Schema) ? name : $"{table.Schema}.{name}"));
         if (!string.IsNullOrWhiteSpace(table.CommandText))
             node.Add(new XElement("Command", table.CommandText));
+        if (!string.IsNullOrWhiteSpace(table.DataFile))
+            node.Add(new XElement("ConnectionInfo",
+                new XAttribute("Server_Type", "ADO.NET (XML)"),
+                new XAttribute("Database_DLL", "crdb_adoplus.dll"),
+                new XAttribute("File_Path_", table.DataFile)));
         return node;
     }
 
-    private static XElement BuildDatabaseField(ReportDesignerField field) => new("Field",
-        new XAttribute("Name", field.Name), new XAttribute("ShortName", field.Name),
-        new XAttribute("LongName", string.IsNullOrWhiteSpace(field.LongName) ? field.DisplayName : field.LongName),
-        new XAttribute("FormulaForm", field.Reference), new XAttribute("Type", field.Type));
+    private static XElement BuildDatabaseField(ReportDesignerField field)
+    {
+        var type = string.IsNullOrWhiteSpace(field.Type) ? "Xsd:stringField" : field.Type;
+        if (!type.StartsWith("crFieldValueType", StringComparison.OrdinalIgnoreCase)) type = "crFieldValueType" + type;
+        var bare = type["crFieldValueType".Length..];
+        var length = bare.Contains("long", StringComparison.OrdinalIgnoreCase) || bare.Contains("decimal", StringComparison.OrdinalIgnoreCase)
+            || bare.Contains("date", StringComparison.OrdinalIgnoreCase) ? 8
+            : bare.Contains("string", StringComparison.OrdinalIgnoreCase) ? 131070 : 0;
+        return new("Field",
+            new XAttribute("Name", field.Name), new XAttribute("ShortName", field.Name),
+            new XAttribute("LongName", string.IsNullOrWhiteSpace(field.LongName) ? field.DisplayName : field.LongName),
+            new XAttribute("FormulaForm", field.Reference), new XAttribute("Type", type), new XAttribute("Length", length));
+    }
 
     private static XElement BuildFormula(ReportDesignerField field) => new("FormulaFieldDefinition",
         new XAttribute("Name", field.Name), new XAttribute("FormulaName", field.Reference),
@@ -325,13 +340,14 @@ public static partial class ReportDesignerXmlSerializer
 
     private static XElement BuildGroup(ReportDesignerGroup group) => new("Group",
         new XAttribute("Name", group.Name), new XAttribute("ConditionField", group.Condition),
+        string.IsNullOrWhiteSpace(group.Condition) ? null : new XAttribute("ConditionFormula", group.Condition),
         new XAttribute("SortDirection", group.SortDirection));
 
     private static XElement BuildSort(ReportDesignerSort sort) => new("SortField",
         new XAttribute("Field", sort.Field.Reference), new XAttribute("SortDirection", sort.Direction.Replace("Order", "", StringComparison.Ordinal) + "Order"),
         new XAttribute("SortType", sort.SortType));
 
-    internal static string SummaryBinding(ReportDesignerSummary summary) =>
+    public static string SummaryBinding(ReportDesignerSummary summary) =>
         $"{summary.Operation} ({summary.Field.Reference}{(string.IsNullOrWhiteSpace(summary.GroupName) ? "" : ", " + summary.GroupName)})";
 
     private static XElement BuildSummary(ReportDesignerSummary summary) => new("SummaryFieldDefinition",
