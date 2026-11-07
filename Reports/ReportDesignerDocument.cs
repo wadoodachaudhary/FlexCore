@@ -404,6 +404,8 @@ public sealed class ReportDesignerSection
     public int HeightTwips { get; set; } = 360;
     public bool HideForDrillDown { get; set; }
     public bool IsSuppressed { get; set; }
+    /// <summary>Crystal section suppress formula (x+2), such as <c>OnFirstRecord</c>. Empty means no formula.</summary>
+    public string SuppressFormula { get; set; } = "";
     public bool PrintAtBottomOfPage { get; set; }
     public bool SuppressIfBlank { get; set; }
     public bool UnderlayFollowingSections { get; set; }
@@ -1085,7 +1087,8 @@ public static partial class ReportDesignerXmlSerializer
                 new XAttribute("EnableUnderlaySection", Lower(section.UnderlayFollowingSections)),
                 new XAttribute("ReadOnly", Lower(section.ReadOnly)),
                 new XAttribute("RelativePositions", Lower(section.RelativePositions)),
-                new XElement("SectionAreaConditionFormulas"),
+                new XElement("SectionAreaConditionFormulas",
+                    string.IsNullOrWhiteSpace(section.SuppressFormula) ? null : new XAttribute("EnableSuppress", section.SuppressFormula)),
                 CreateColorElement("BackgroundColor", section.BackgroundColor, 0)),
             new XElement("ReportObjects"));
     }
@@ -1170,6 +1173,7 @@ public static partial class ReportDesignerXmlSerializer
                     HeightTwips = ParseInt(Attribute(sectionElement, "Height"), 360),
                     HideForDrillDown = ParseBool(Attribute(format, "EnableHideForDrillDown")),
                     IsSuppressed = ParseBool(Attribute(format, "EnableSuppress")),
+                    SuppressFormula = Attribute(Child(format, "SectionAreaConditionFormulas"), "EnableSuppress") ?? "",
                     PrintAtBottomOfPage = ParseBool(Attribute(format, "EnablePrintAtBottomOfPage")),
                     SuppressIfBlank = ParseBool(Attribute(format, "EnableSuppressIfBlank")),
                     UnderlayFollowingSections = ParseBool(Attribute(format, "EnableUnderlaySection")),

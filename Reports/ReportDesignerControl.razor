@@ -1607,6 +1607,9 @@ else
                 {
                     <CheckBoxControl @bind-Checked="section.HideForDrillDown" Label="Hide (Drill-Down OK)" />
                     <CheckBoxControl @bind-Checked="section.IsSuppressed" Label="Suppress (No Drill-Down)" />
+                    <label class="fx-rd-expert-field">Suppress formula (x+2)
+                        <TextBoxControl Value="@section.SuppressFormula" ValueChanged="value => section.SuppressFormula = value ?? string.Empty" Multiline="true" Rows="2" CssClass="fx-rd-expert-input textarea" />
+                    </label>
                     <CheckBoxControl @bind-Checked="section.PrintAtBottomOfPage" Label="Print at Bottom of Page" />
                     <CheckBoxControl @bind-Checked="section.KeepTogether" Label="Keep Together" />
                     <CheckBoxControl @bind-Checked="section.SuppressIfBlank" Label="Suppress Blank Section" />
