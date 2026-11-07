@@ -34,7 +34,7 @@
         aria-checked="@(ShowCheckboxes ? info.Node.IsIndeterminate ? "mixed" : info.Node.IsChecked ? "true" : "false" : null)"
         aria-disabled="@(info.Node.IsDisabled ? "true" : "false")" aria-busy="@(_loading.Contains(info.Node.Id) ? "true" : null)"
         @onclick="e=>HandleNodeClick(info.Node,e)" @ondblclick="()=>HandleNodeDoubleClick(info.Node)"
-        draggable="@(AllowDragAndDrop&&!info.Node.IsDisabled ? "true" : "false")" @ondragstart="()=>_dragId=info.Node.Id" @ondragend="()=>_dragId=null"
+        draggable="@(((AllowDragAndDrop || PayloadDragStart.HasDelegate && info.Node.Tag is not null) && !info.Node.IsDisabled) ? "true" : "false")" @ondragstart="e => StartPayloadDrag(e, info.Node)" @ondragend="()=>_dragId=null"
         @ondragover:preventDefault="@AllowDragAndDrop" @ondrop="()=>DropAsync(info.Node)">
         @if(IsOutline){@OutlineContent(info)}
         else

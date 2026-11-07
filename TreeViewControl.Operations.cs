@@ -17,6 +17,8 @@ public partial class TreeViewControl
     [Parameter] public bool AutoCheck { get; set; }
     [Parameter] public bool AllowEditing { get; set; }
     [Parameter] public bool AllowDragAndDrop { get; set; }
+    /// <summary>Drag a node out of the tree (a field onto the report canvas) without reordering the tree.</summary>
+    [Parameter] public EventCallback<TreeNode> PayloadDragStart { get; set; }
     [Parameter] public bool EnableVirtualization { get; set; }
     [Parameter] public float ItemSize { get; set; } = 32;
     [Parameter] public string? FilterText { get; set; }
@@ -271,6 +273,13 @@ public partial class TreeViewControl
         TreeViewData.Move(Roots, id, targetId, position); Reindex(); _revealId = id;
         await NodeMoved.InvokeAsync(args); await PublishChecksAsync(); await PublishExpansionAsync(); await NodesChanged.InvokeAsync(Roots); await InvokeAsync(StateHasChanged);
     }
+    private Task StartPayloadDrag(DragEventArgs _, TreeNode node)
+    {
+        if (node.IsDisabled) return Task.CompletedTask;
+        if (AllowDragAndDrop) _dragId = node.Id;
+        return PayloadDragStart.HasDelegate ? PayloadDragStart.InvokeAsync(node) : Task.CompletedTask;
+    }
+
     private async Task DropAsync(TreeNode target)
     {
         var id = _dragId; _dragId = null; if (!AllowDragAndDrop || id is null) return;

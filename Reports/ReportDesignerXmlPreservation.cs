@@ -310,6 +310,11 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("QualifiedName", string.IsNullOrWhiteSpace(table.Schema) ? name : $"{table.Schema}.{name}"));
         if (!string.IsNullOrWhiteSpace(table.CommandText))
             node.Add(new XElement("Command", table.CommandText));
+        if (!string.IsNullOrWhiteSpace(table.DataFile))
+            node.Add(new XElement("ConnectionInfo",
+                new XAttribute("Server_Type", "ADO.NET (XML)"),
+                new XAttribute("Database_DLL", "crdb_adoplus.dll"),
+                new XAttribute("File_Path_", table.DataFile)));
         return node;
     }
 
@@ -331,7 +336,7 @@ public static partial class ReportDesignerXmlSerializer
         new XAttribute("Field", sort.Field.Reference), new XAttribute("SortDirection", sort.Direction.Replace("Order", "", StringComparison.Ordinal) + "Order"),
         new XAttribute("SortType", sort.SortType));
 
-    internal static string SummaryBinding(ReportDesignerSummary summary) =>
+    public static string SummaryBinding(ReportDesignerSummary summary) =>
         $"{summary.Operation} ({summary.Field.Reference}{(string.IsNullOrWhiteSpace(summary.GroupName) ? "" : ", " + summary.GroupName)})";
 
     private static XElement BuildSummary(ReportDesignerSummary summary) => new("SummaryFieldDefinition",

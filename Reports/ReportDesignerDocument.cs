@@ -317,6 +317,7 @@ public sealed class ReportDesignerDocument
             SourceName = table.SourceName,
             CommandText = table.CommandText,
             Schema = table.Schema,
+            DataFile = table.DataFile,
             Fields = table.Fields.Select(CloneField).ToList()
         };
     }
@@ -333,7 +334,8 @@ public sealed class ReportDesignerDocument
             Expression = field.Expression,
             Syntax = field.Syntax,
             Type = field.Type,
-            IsFormula = field.IsFormula
+            IsFormula = field.IsFormula,
+            CrystalBinding = field.CrystalBinding
         };
     }
 
@@ -597,8 +599,10 @@ public sealed class ReportDesignerField : ReportDesignerSourceItem
     public string Syntax { get; set; } = "Crystal";
     public string Type { get; set; } = "";
     public bool IsFormula { get; set; }
+    /// <summary>Crystal data source when it is not <c>{Table.Name}</c>: PrintDate, PageNumber, GroupName ({...}).</summary>
+    public string CrystalBinding { get; set; } = "";
     public string DisplayName => string.IsNullOrWhiteSpace(Table) ? Name : $"{Table}.{Name}";
-    public string Reference => IsFormula ? $"{{@{Name.TrimStart('@')}}}" : $"{{{DisplayName}}}";
+    public string Reference => CrystalBinding.Length > 0 ? CrystalBinding : IsFormula ? $"{{@{Name.TrimStart('@')}}}" : $"{{{DisplayName}}}";
 }
 
 public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
@@ -609,6 +613,8 @@ public sealed class ReportDesignerDataTable : ReportDesignerSourceItem
     public bool IsView { get; set; }
     public string SourceName { get; set; } = "";
     public string CommandText { get; set; } = "";
+    /// <summary>ADO.NET XML file this table was loaded from, written back as ConnectionInfo/@File_Path_.</summary>
+    public string DataFile { get; set; } = "";
     public List<ReportDesignerField> Fields { get; set; } = new();
     public string DisplayName => string.IsNullOrWhiteSpace(Schema) ? Name : $"{Schema}.{Name}";
 }
@@ -906,7 +912,8 @@ public static partial class ReportDesignerXmlSerializer
             Expression = field.Expression,
             Syntax = field.Syntax,
             Type = field.Type,
-            IsFormula = field.IsFormula
+            IsFormula = field.IsFormula,
+            CrystalBinding = field.CrystalBinding
         };
     }
 
@@ -1238,7 +1245,8 @@ public static partial class ReportDesignerXmlSerializer
                 Name = tableName,
                 Schema = ParseSchemaName(Attribute(table, "QualifiedName")),
                 SourceName = Attribute(table, "Name") ?? tableName,
-                CommandText = Child(table, "Command")?.Value ?? ""
+                CommandText = Child(table, "Command")?.Value ?? "",
+                DataFile = Attribute(Child(table, "ConnectionInfo"), "File_Path_") ?? ""
             };
             document.SourceItems[dataTable.Id] = table;
 
@@ -1548,14 +1556,22 @@ public static partial class ReportDesignerXmlSerializer
         if (!string.IsNullOrWhiteSpace(summaryTitle))
             return summaryTitle.Trim();
 
-        var firstTitleText = Child(root, "ReportDefinition")?
+        // A text object named as a title is the report title. The first body sentence (a note, a column heading)
+        // is not: an empty Crystal title falls back to the file name.
+        var namedTitle = Child(root, "ReportDefinition")?
             .Descendants("TextObject")
+            .Where(text => (Attribute(text, "Name") ?? "").Contains("Title", StringComparison.OrdinalIgnoreCase))
             .Select(text => Child(text, "Text")?.Value?.Trim())
-            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
-        if (!string.IsNullOrWhiteSpace(firstTitleText))
-            return firstTitleText!;
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value) && value.Length <= 120 && !value.Contains('\n'));
+        if (!string.IsNullOrWhiteSpace(namedTitle))
+            return namedTitle;
 
-        return Path.GetFileNameWithoutExtension(sourceName) ?? Attribute(root, "Name") ?? "Untitled Report";
+        var fileTitle = Path.GetFileNameWithoutExtension(sourceName);
+        if (!string.IsNullOrWhiteSpace(fileTitle))
+            return fileTitle;
+
+        var reportName = Attribute(root, "Name");
+        return string.IsNullOrWhiteSpace(reportName) ? "Untitled Report" : reportName.Trim();
     }
 
     private static string InferKindFromObjectElement(XElement objectElement)

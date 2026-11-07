@@ -131,8 +131,10 @@ public partial class CrystalXmlReportLoader
     public ReportDefinition LoadPositioned(string xmlFilePath)
     {
         var report = XDocument.Load(xmlFilePath, LoadOptions.PreserveWhitespace).Root ?? throw new InvalidDataException("Missing report root.");
-        // Explicit custom SQL is a tabular contract, including when launched from a positioned viewer.
-        if (!string.IsNullOrWhiteSpace(ExtractFlexKitCustomSql(report))) return Load(xmlFilePath);
+        // A SQL command with no chart or cross-tab stays on the tabular contract. An authored analysis object
+        // keeps the positioned runtime, which evaluates that object; the command supplies its rows.
+        if (!string.IsNullOrWhiteSpace(ExtractFlexKitCustomSql(report)) && !report.Descendants("FlexKitAnalysis").Any())
+            return Load(xmlFilePath);
         return LoadPositionedSource(report, Path.GetFullPath(xmlFilePath), new HashSet<string>(StringComparer.OrdinalIgnoreCase), 0);
     }
 
@@ -262,8 +264,7 @@ public partial class CrystalXmlReportLoader
                 : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
                     useDistinct: Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords"));
             if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
-            if (!string.IsNullOrWhiteSpace(flexKitCustomSql))
-                throw new NotSupportedException("Positioned rendering needs field projections from the report model; custom SQL reports currently use the tabular viewer.");
+            // RefreshSql replaces this with the command when the report carries custom SQL and a positioned model.
             return definition;
         }
         var detailFields = ParseDetailFields(report, definition.RuntimeDiagnostics);

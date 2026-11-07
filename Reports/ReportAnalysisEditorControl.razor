@@ -87,6 +87,7 @@
             {
                 <label>Row label width (twips)<NumericTextBoxControl TValue="int" @bind-Value="analysis.RowHeaderWidthTwips" @bind-Value:after="ChangedAsync" Min="360" Max="100000" Enabled="@(!ReadOnly)" /></label>
                 <label>Value width (twips)<NumericTextBoxControl TValue="int" @bind-Value="analysis.ValueColumnWidthTwips" @bind-Value:after="ChangedAsync" Min="360" Max="100000" Enabled="@(!ReadOnly)" /></label>
+                <ButtonControl OnClick="ApplyStandardGridAsync" Disabled="ReadOnly">Standard grid</ButtonControl>
             }
         }
         @if (analysis.Validate(Element.Kind) is { } error) { <div role="status">@error</div> }
@@ -116,6 +117,13 @@
             foreach (var measure in values.Measures) measure.DoNotSummarize = false;
         return Changed.InvokeAsync();
     }
+    private async Task ApplyStandardGridAsync()
+    {
+        if (ReadOnly || Element.Analysis is not { } analysis) return;
+        ReportDesignerCommands.ApplyStandardCrossTabGrid(analysis, Element);
+        await ChangedAsync();
+    }
+
     private async Task SetDescendingAsync(string field, bool descending)
     {
         if (ReadOnly || Element.Analysis is not { } analysis || field.Length == 0) return;

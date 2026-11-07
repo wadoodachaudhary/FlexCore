@@ -91,6 +91,20 @@ public partial class CrystalXmlReportLoader
 
     private void RefreshSql(ReportDefinition definition, XElement report, bool orderRows)
     {
+        var customSql = ExtractFlexKitCustomSql(report);
+        if (!string.IsNullOrWhiteSpace(customSql) && definition.PositionedLayout is { } commandLayout)
+        {
+            // Command columns are selected by the command itself. Bind each {Table.Field} to the field name
+            // the command returns, instead of generating a table query the command replaced.
+            foreach (var reference in commandLayout.Bindings.Keys.ToList())
+                if (ParseCrystalFieldRef(reference) is { } field)
+                    commandLayout.Bindings[reference] = field.Field;
+            definition.Sql = customSql;
+            definition.PositionedIntegerSelection = null;
+            definition.PositionedTextSelection = null;
+            definition.PositionedSqlSelection = null;
+            return;
+        }
         report = new XElement(report);
         report.Elements("SubReports").Remove();
         var tables = ParseTables(report);
