@@ -330,6 +330,7 @@ public static partial class ReportDesignerXmlSerializer
 
     private static XElement BuildGroup(ReportDesignerGroup group) => new("Group",
         new XAttribute("Name", group.Name), new XAttribute("ConditionField", group.Condition),
+        string.IsNullOrWhiteSpace(group.Condition) ? null : new XAttribute("ConditionFormula", group.Condition),
         new XAttribute("SortDirection", group.SortDirection));
 
     private static XElement BuildSort(ReportDesignerSort sort) => new("SortField",

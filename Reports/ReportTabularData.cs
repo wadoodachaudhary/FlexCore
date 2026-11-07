@@ -35,7 +35,7 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
     private IReadOnlyList<ReportNativeCrossTabCellStyle?>? NativeHeaderStyles { get; init; }
     private IReadOnlyList<int>? NativeRowHeights { get; init; }
     private IReadOnlyList<bool>? NativeGrandTotalRows { get; init; }
-    private readonly Dictionary<(int Width, decimal Font, int Height), IReadOnlyList<ReportTablePane>> _panes = new();
+    private readonly Dictionary<(int Width, decimal Font, int Height, bool KeepColumns), IReadOnlyList<ReportTablePane>> _panes = new();
     internal static ReportTabularData Create(ReportDesignerElement element, ReportAnalysisSnapshot snapshot)
     {
         var definition = snapshot.Definition;
@@ -182,9 +182,9 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
     /// <summary>Narrowest pane <see cref="PaginateColumns"/> accepts (0.25 inch).</summary>
     internal const int MinimumPaneWidthTwips = 360;
 
-    public IReadOnlyList<ReportTablePane> PaginateColumns(int widthTwips, decimal fontSize, int rowHeightTwips)
+    public IReadOnlyList<ReportTablePane> PaginateColumns(int widthTwips, decimal fontSize, int rowHeightTwips, bool keepColumnsTogether = false)
     {
-        if (_panes.TryGetValue((widthTwips, fontSize, rowHeightTwips), out var cached)) return cached;
+        if (_panes.TryGetValue((widthTwips, fontSize, rowHeightTwips, keepColumnsTogether), out var cached)) return cached;
         if (widthTwips < MinimumPaneWidthTwips || fontSize is <= 0 or > 200) throw new InvalidDataException("The table has no usable printable width or font size.");
         var panes = new List<ReportTablePane>();
         var repeated = Math.Min(RepeatedColumns, Columns.Count);
@@ -199,9 +199,17 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
             var room = widthTwips - widths.Sum();
             while (start < Columns.Count)
             {
-                var width = Math.Min(Columns[start].WidthTwips, widthTwips - widths.Take(repeated).Sum());
+                var natural = Columns[start].WidthTwips;
+                var paneLimit = Math.Max(1, widthTwips - widths.Take(repeated).Sum());
+                var width = keepColumnsTogether ? natural : Math.Min(natural, paneLimit);
+                // Keep Columns Together moves a column that does not fit onto the next pane instead of narrowing it.
                 if (width > room && indexes.Count > repeated) break;
-                indexes.Add(start++); widths.Add(width); room -= width;
+                if (keepColumnsTogether && natural > paneLimit && indexes.Count == repeated)
+                {
+                    indexes.Add(start++); widths.Add(natural); break;
+                }
+                var placed = Math.Min(width, paneLimit);
+                indexes.Add(start++); widths.Add(placed); room -= placed;
             }
             if (indexes.Count == 0) break;
             var selected = indexes.Select((column, index) => Columns[column] with { WidthTwips = widths[index] }).ToArray();
@@ -231,7 +239,7 @@ public sealed partial record ReportTabularData(IReadOnlyList<ReportTabularColumn
                         ? indexes.Select(i => styles.ElementAtOrDefault(i)).ToArray() : null }).ToArray();
             }
         } while (start < Columns.Count);
-        return _panes[(widthTwips, fontSize, rowHeightTwips)] = panes;
+        return _panes[(widthTwips, fontSize, rowHeightTwips, keepColumnsTogether)] = panes;
     }
 
     private static string Format(object? value, string format) => value switch

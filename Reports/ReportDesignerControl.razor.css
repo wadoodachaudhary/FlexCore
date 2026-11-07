@@ -1285,14 +1285,19 @@
     min-height: 24px;
 }
 
-.fx-rd-expert-tabs span {
+.fx-rd-expert-tabs span,
+.fx-rd-expert-tabs button {
     min-width: 44px;
     padding: 5px 10px;
     border: 1px solid #a4a4a4;
     background: #e7e7e7;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
 }
 
-.fx-rd-expert-tabs span.active {
+.fx-rd-expert-tabs span.active,
+.fx-rd-expert-tabs button.active {
     border-bottom-color: #f0f0f0;
     background: #f0f0f0;
 }

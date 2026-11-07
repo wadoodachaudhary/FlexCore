@@ -243,17 +243,19 @@ public partial class CrystalXmlReportLoader
             var format = area?.Element("AreaFormat");
             var repeat = area?.Element("GroupAreaFormat") ?? format?.Element("GroupAreaFormat");
             var sections = xml.Parent?.Elements("Section").ToList() ?? [];
-            // Crystal's formatter ignores an area's page break before the report header, after the report footer and around page furniture
-            // (its saved default is often "on"; a subreport does not break its page for it), and page furniture keeps its place whatever its
-            // keep-together and print-at-bottom flags say.
+            // The report header's New Page Before and the report footer's New Page After are real area flags. A new page before the
+            // first section does not emit a leading blank page. A report header that continues fills those pages without page furniture;
+            // the page that finishes it keeps the page footer at the bottom. Page-header flags stay ignored. The page footer's
+            // Print at Bottom is fixed on in Crystal and places that section in the reserved bottom slot.
             var body = section.Kind is not ("PageHeader" or "PageFooter");
+            var furniture = section.Kind is "PageHeader" or "PageFooter";
             if (section.Kind == "Detail" && layout.Columns is null && format?.Element("DetailAreaFormat") is { } multiple && Flag(multiple, "EnableMultipleColumnFormatting"))
                 layout.Columns = ReadColumns(multiple);
             layout.Areas[section.Id] = new(Flag(format, "EnableSuppress"), Flag(repeat, "EnableRepeatGroupHeader"),
-                section.Kind is not ("ReportHeader" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"),
-                section.Kind is not ("ReportFooter" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"),
+                !furniture && ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"),
+                !furniture && ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"),
                 ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableResetPageNumberAfter"), Flag(repeat, "EnableKeepGroupTogether"),
-                body && Flag(format, "EnableKeepTogether"), body && Flag(format, "EnablePrintAtBottomOfPage"));
+                body && Flag(format, "EnableKeepTogether"), section.Kind != "PageHeader" && Flag(format, "EnablePrintAtBottomOfPage"));
             layout.SectionConditions[section.Id] = ReadConditions(xml.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))
                 .Concat(xml.Elements("SectionFormat").Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))), diagnostics, functions);
             layout.AreaConditions[section.Id] = ReadConditions((area?.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? [])

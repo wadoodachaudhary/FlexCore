@@ -52,11 +52,12 @@ public sealed class ReportDesignerDocument
 
         document.Sections.AddRange(new[]
         {
-            new ReportDesignerSection { Id = "report-header", Name = "ReportHeaderSection1", Kind = "ReportHeader", AreaName = "ReportHeaderArea1", HeightTwips = 540 },
+            // Crystal greys New Page Before on for the report header, and Print at Bottom plus New Page After on for the page footer.
+            new ReportDesignerSection { Id = "report-header", Name = "ReportHeaderSection1", Kind = "ReportHeader", AreaName = "ReportHeaderArea1", HeightTwips = 540, NewPageBefore = true },
             new ReportDesignerSection { Id = "page-header", Name = "PageHeaderSection1", Kind = "PageHeader", AreaName = "PageHeaderArea1", HeightTwips = 480 },
             new ReportDesignerSection { Id = "detail", Name = "DetailSection1", Kind = "Detail", AreaName = "DetailArea1", HeightTwips = 360 },
             new ReportDesignerSection { Id = "report-footer", Name = "ReportFooterSection1", Kind = "ReportFooter", AreaName = "ReportFooterArea1", HeightTwips = 480 },
-            new ReportDesignerSection { Id = "page-footer", Name = "PageFooterSection1", Kind = "PageFooter", AreaName = "PageFooterArea1", HeightTwips = 420 }
+            new ReportDesignerSection { Id = "page-footer", Name = "PageFooterSection1", Kind = "PageFooter", AreaName = "PageFooterArea1", HeightTwips = 420, PrintAtBottomOfPage = true, NewPageAfter = true }
         });
 
         return document;
@@ -1036,10 +1037,10 @@ public static partial class ReportDesignerXmlSerializer
             new XAttribute("Kind", section.Kind),
             new XAttribute("Name", string.IsNullOrWhiteSpace(section.AreaName) ? $"{section.Kind}Area" : section.AreaName),
             new XElement("AreaFormat",
-                new XAttribute("EnableKeepTogether", "false"),
-                new XAttribute("EnableNewPageAfter", "false"),
-                new XAttribute("EnableNewPageBefore", "false"),
-                new XAttribute("EnablePrintAtBottomOfPage", "false"),
+                new XAttribute("EnableKeepTogether", Lower(section.Kind == "PageFooter" && section.KeepTogether)),
+                new XAttribute("EnableNewPageAfter", Lower(section.NewPageAfter)),
+                new XAttribute("EnableNewPageBefore", Lower(section.NewPageBefore)),
+                new XAttribute("EnablePrintAtBottomOfPage", Lower(section.PrintAtBottomOfPage)),
                 new XAttribute("EnableResetPageNumberAfter", "false"),
                 new XAttribute("EnableSuppress", "false"),
                 new XAttribute("EnableHideForDrillDown", "false")),
@@ -1131,8 +1132,11 @@ public static partial class ReportDesignerXmlSerializer
         {
             var areaName = Attribute(area, "Name") ?? "";
             var areaId = Guid.NewGuid().ToString("N");
-            foreach (var sectionElement in Child(area, "Sections")?.Elements("Section") ?? Enumerable.Empty<XElement>())
+            var areaFormat = Child(area, "AreaFormat");
+            var sectionElements = (Child(area, "Sections")?.Elements("Section") ?? Enumerable.Empty<XElement>()).ToList();
+            for (var index = 0; index < sectionElements.Count; index++)
             {
+                var sectionElement = sectionElements[index];
                 var sectionName = Attribute(sectionElement, "Name") ?? "Section";
                 var sectionId = MakeUniqueId(sectionName, usedIds);
                 var format = Child(sectionElement, "SectionFormat");
@@ -1158,6 +1162,11 @@ public static partial class ReportDesignerXmlSerializer
                     KeepTogether = ParseBool(Attribute(format, "EnableKeepTogether"), true),
                     BackgroundColor = ColorFromElement(Child(format, "BackgroundColor"), "#ffffff")
                 };
+                // Crystal stores the report header's New Page Before, the report footer's New Page After,
+                // and the page footer's Print at Bottom on the area. The section expert edits one set of flags.
+                if (index == 0 && ParseBool(Attribute(areaFormat, "EnableNewPageBefore"))) section.NewPageBefore = true;
+                if (index == sectionElements.Count - 1 && ParseBool(Attribute(areaFormat, "EnableNewPageAfter"))) section.NewPageAfter = true;
+                if (ParseBool(Attribute(areaFormat, "EnablePrintAtBottomOfPage"))) section.PrintAtBottomOfPage = true;
 
                 document.SourceSections[section.SourceKey] = sectionElement;
                 ParseObjects(sectionElement, section, document);
@@ -1405,7 +1414,7 @@ public static partial class ReportDesignerXmlSerializer
     {
         foreach (var group in Child(Child(root, "DataDefinition"), "Groups")?.Elements("Group") ?? Enumerable.Empty<XElement>())
         {
-            var condition = Attribute(group, "ConditionField") ?? Attribute(group, "GroupCondition") ?? Attribute(group, "FormulaName") ?? "";
+            var condition = Attribute(group, "ConditionField") ?? Attribute(group, "ConditionFormula") ?? Attribute(group, "GroupCondition") ?? Attribute(group, "FormulaName") ?? "";
             if (string.IsNullOrWhiteSpace(condition))
                 condition = group.Descendants("Field").Select(field => Attribute(field, "FormulaName")).FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? "";
 

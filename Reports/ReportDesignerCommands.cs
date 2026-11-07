@@ -154,7 +154,37 @@ public static class ReportDesignerCommands
             RowTotalLabelStyle = Style(false, "left", Math.Max(1, size - 1)),
             ColumnTotalLabelStyle = Style(false, "left", Math.Max(1, size - 1))
         };
+        ApplyCrossTabOptions(analysis);
     }
+
+    /// <summary>Copies the cross-tab grid options onto the native layout so save and render keep the same choices.</summary>
+    public static void ApplyCrossTabOptions(ReportAnalysisDefinition analysis)
+    {
+        if (analysis.NativeCrossTab is not { } native) return;
+        var appearance = native.Appearance;
+        if (appearance is not null)
+        {
+            var grid = analysis.ShowGrid
+                ? GridVisible(appearance.GridLines) ? appearance.GridLines : StandardGridLines()
+                : "";
+            appearance = appearance with { GridLines = grid };
+        }
+        analysis.NativeCrossTab = native with
+        {
+            PaddingX = analysis.ShowCellMargins ? native.PaddingX > 0 ? native.PaddingX : 100 : 0,
+            PaddingY = analysis.ShowCellMargins ? native.PaddingY > 0 ? native.PaddingY : 100 : 0,
+            SuppressRowGrandTotals = !analysis.ShowRowGrandTotals,
+            SuppressColumnGrandTotals = !analysis.ShowColumnGrandTotals,
+            Appearance = appearance
+        };
+        analysis.ShowTotals = analysis.ShowRowGrandTotals || analysis.ShowColumnGrandTotals;
+    }
+
+    private static bool GridVisible(string lines) =>
+        lines.Split(';', StringSplitOptions.RemoveEmptyEntries).Any(part => int.TryParse(part.Split(':')[0], out var width) && width >= 0);
+
+    private static string StandardGridLines() =>
+        string.Join(';', Enumerable.Repeat("0:#000000:Single", 16)) + ";-1:#000000:Single;-1:#000000:Single;-1:#000000:Single;-1:#000000:Single";
 
     public static ReportDesignerField CloneField(ReportDesignerField field) => new()
     {

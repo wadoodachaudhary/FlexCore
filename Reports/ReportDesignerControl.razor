@@ -1526,11 +1526,18 @@ else
                                     VisibleRows="14"
                                     Height="330px"
                                     CssClass="fx-rd-expert-dual" />
-        <div class="fx-rd-pane-actions">
+            <div class="fx-rd-pane-actions">
             <ButtonControl Disabled="true">Browse Data...</ButtonControl>
             <ButtonControl Disabled="true">Find Field...</ButtonControl>
             <ButtonControl Disabled="@(_expertGroupFields.Count == 0)">Options...</ButtonControl>
         </div>
+        @if (_expertGroups.Count > 0)
+        {
+            var group = _expertGroups[Math.Clamp(_activeExpertItemIndex, 0, _expertGroups.Count - 1)];
+            <label class="fx-rd-expert-field">Condition formula
+                <TextBoxControl Value="@group.Condition" ValueChanged="value => group.Condition = value ?? group.Condition" CssClass="fx-rd-expert-input" />
+            </label>
+        }
     </div>;
 
     private RenderFragment RenderGroupSortExpert() => @<div class="fx-rd-expert fx-rd-group-sort-expert">
@@ -1547,6 +1554,9 @@ else
             <label class="fx-rd-expert-field">
                 <span>For this group sort</span>
                 <DropDownListControl TValue="string" TItem="string" DataSource="@GroupSortModes" Value="@group.SortDirection" ValueChanged="value => group.SortDirection = value ?? GroupSortModes[0]" Width="150px" CssClass="fx-rd-expert-dd" />
+            </label>
+            <label class="fx-rd-expert-field">Condition formula
+                <TextBoxControl Value="@group.Condition" ValueChanged="value => group.Condition = value ?? group.Condition" CssClass="fx-rd-expert-input" />
             </label>
         }
     </div>;
@@ -1572,21 +1582,35 @@ else
                 <ToolbarButtonControl IconCss="bi bi-scissors" Title="Split section at twips" OnClick='() => SectionCommandAsync("split")' />
             </div>
             @if (_sectionError.Length > 0) { <p class="fx-rd-validation-error" role="alert">@_sectionError</p> }
-            <div class="fx-rd-expert-tabs"><span class="active">Common</span><span>Paging</span><span>Color</span></div>
+            <div class="fx-rd-expert-tabs">
+                <button type="button" class="@(_sectionExpertTab == 0 ? "active" : null)" @onclick="() => _sectionExpertTab = 0">Common</button>
+                <button type="button" class="@(_sectionExpertTab == 1 ? "active" : null)" @onclick="() => _sectionExpertTab = 1">Paging</button>
+                <button type="button" class="@(_sectionExpertTab == 2 ? "active" : null)" @onclick="() => _sectionExpertTab = 2">Color</button>
+            </div>
             @if (ActiveExpertSection is not null)
             {
                 var section = ActiveExpertSection;
-                <CheckBoxControl @bind-Checked="section.HideForDrillDown" Label="Hide (Drill-Down OK)" />
-                <CheckBoxControl @bind-Checked="section.IsSuppressed" Label="Suppress (No Drill-Down)" />
-                <CheckBoxControl @bind-Checked="section.PrintAtBottomOfPage" Label="Print at Bottom of Page" />
-                <CheckBoxControl @bind-Checked="section.KeepTogether" Label="Keep Together" />
-                <CheckBoxControl @bind-Checked="section.SuppressIfBlank" Label="Suppress Blank Section" />
-                <CheckBoxControl @bind-Checked="section.UnderlayFollowingSections" Label="Underlay Following Sections" />
-                <CheckBoxControl @bind-Checked="section.NewPageBefore" Label="New Page Before" />
-                <CheckBoxControl @bind-Checked="section.NewPageAfter" Label="New Page After" />
-                <CheckBoxControl @bind-Checked="section.ReadOnly" Label="Read-only" />
-                <CheckBoxControl @bind-Checked="section.RelativePositions" Label="Relative Positions" />
-                <label class="fx-rd-expert-field"><span>Background</span><ColorPickerControl Value="@(section.BackgroundColor)" ValueChanged="value => section.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+                @if (_sectionExpertTab == 0)
+                {
+                    <CheckBoxControl @bind-Checked="section.HideForDrillDown" Label="Hide (Drill-Down OK)" />
+                    <CheckBoxControl @bind-Checked="section.IsSuppressed" Label="Suppress (No Drill-Down)" />
+                    <CheckBoxControl @bind-Checked="section.PrintAtBottomOfPage" Label="Print at Bottom of Page" />
+                    <CheckBoxControl @bind-Checked="section.KeepTogether" Label="Keep Together" />
+                    <CheckBoxControl @bind-Checked="section.SuppressIfBlank" Label="Suppress Blank Section" />
+                    <CheckBoxControl @bind-Checked="section.UnderlayFollowingSections" Label="Underlay Following Sections" />
+                    <CheckBoxControl @bind-Checked="section.ReadOnly" Label="Read-only" />
+                    <CheckBoxControl @bind-Checked="section.RelativePositions" Label="Relative Positions" />
+                }
+                else if (_sectionExpertTab == 1)
+                {
+                    <CheckBoxControl @bind-Checked="section.NewPageBefore" Label="New Page Before" />
+                    <CheckBoxControl @bind-Checked="section.NewPageAfter" Label="New Page After" />
+                    <CheckBoxControl @bind-Checked="section.ResetPageNumberAfter" Label="Reset Page Number After" />
+                }
+                else
+                {
+                    <label class="fx-rd-expert-field"><span>Background</span><ColorPickerControl Value="@(section.BackgroundColor)" ValueChanged="value => section.BackgroundColor = value" CssClass="fx-rd-section-color" /></label>
+                }
             }
         </div>
     </div>;
