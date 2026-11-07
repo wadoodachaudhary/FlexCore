@@ -10,11 +10,16 @@ internal static class ReportObjectCapabilities
             || string.Equals(kind, "Chart", StringComparison.OrdinalIgnoreCase)) return "Chart";
         if (string.Equals(elementName, "CrossTabObject", StringComparison.OrdinalIgnoreCase)
             || string.Equals(kind, "CrossTab", StringComparison.OrdinalIgnoreCase)) return "CrossTab";
+        if (string.Equals(elementName, "MapObject", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(kind, "Map", StringComparison.OrdinalIgnoreCase)) return "Map";
         return null;
     }
 
     internal static string Diagnostic(string report, string section, string name, string kind, bool positioned, XElement? source = null)
-        => $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: {kind} objects are not implemented. "
+        => kind == "Map"
+            ? $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: geographic map artwork is unavailable. "
+                + (positioned ? "The visible map reserves its authored space." : "Tabular output omits the map.")
+            : $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: {kind} objects are not implemented. "
             + (positioned ? "Positioned output uses an unsupported-object placeholder when visible; suppression still applies. "
                 : "Tabular output omits this object. ")
             + "Source metadata is retained in the report RDL; chart data/series and cross-tab grouping/cells are not evaluated."

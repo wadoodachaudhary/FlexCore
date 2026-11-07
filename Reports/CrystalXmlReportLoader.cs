@@ -561,7 +561,7 @@ public partial class CrystalXmlReportLoader
     /// subquery instead of a real table (e.g. PO Integration Status Report v1).
     /// </summary>
     private sealed record TableInfo(string Alias, string Name, string? CommandSql = null, string? QualifiedName = null);
-    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination, string? EnforceJoin = null);
+    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination, string? EnforceJoin = null, string Comparison = "=");
     /// <summary>
     /// One field rendered in a Crystal Detail section.
     /// <c>Name</c> is the FieldObject's <c>Name="..."</c> attribute (e.g. "Item1") — used to
@@ -953,10 +953,22 @@ public partial class CrystalXmlReportLoader
             var sourceFields = ParseFieldRefs(link.Element("SourceFields"));
             var destFields = ParseFieldRefs(link.Element("DestinationFields"));
             if (sourceFields.Count > 0 && destFields.Count > 0)
-                links.Add(new TableLinkInfo(joinType, sourceFields, destFields, (string?)link.Attribute("EnforceJoin")));
+                links.Add(new TableLinkInfo(joinType, sourceFields, destFields, (string?)link.Attribute("EnforceJoin"), ReadLinkComparison((string?)link.Attribute("Comparison"))));
         }
         return links;
     }
+
+    internal static string ReadLinkComparison(string? value) => value switch
+    {
+        string comparison when comparison is "<>" or "<" or "<=" or ">" or ">=" or "=" => comparison,
+        null => "=",
+        _ => throw new InvalidDataException("Unsupported Crystal field link comparison.")
+    };
+
+    internal static string ReverseLinkComparison(string comparison) => comparison switch
+    {
+        "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => comparison
+    };
 
     private static List<(string Table, string Field)> ParseFieldRefs(XElement? container)
     {
@@ -3334,7 +3346,7 @@ public partial class CrystalXmlReportLoader
                 {
                     var s = link.Source[k];
                     var d = link.Destination[k];
-                    onParts.Add($"[{s.Table}].{s.Field} = [{d.Table}].{d.Field}");
+                    onParts.Add($"[{s.Table}].{s.Field} {link.Comparison} [{d.Table}].{d.Field}");
                 }
             }
             sb.Append(string.Join(" AND ", onParts.Distinct(StringComparer.OrdinalIgnoreCase)));
@@ -3371,7 +3383,7 @@ public partial class CrystalXmlReportLoader
                 yield return new TableLinkInfo(link.JoinType switch
                 {
                     "LeftOuter" => "RightOuter", "RightOuter" => "LeftOuter", _ => link.JoinType
-                }, link.Destination, link.Source, link.EnforceJoin);
+                }, link.Destination, link.Source, link.EnforceJoin, ReverseLinkComparison(link.Comparison));
         }
     }
 

@@ -6,7 +6,17 @@ public static class CrystalReportXmlVersion
 {
     // Reports authored with no printer are marked (FlexKitNoPrinter) and lay out at screen metrics.
     // A label-only chart (a cheque's VOID stamp) carries its FlexKitChartMarker.
-    public const int Current = 33;
+    // Version 34 preserves ordered field-link comparisons and dual-axis line charts.
+    // Version 44 retains geographic map objects and their section occupancy.
+    // Version 45 records nested row subtotals and vertically arranged summaries.
+    // Version 46 retains legacy section conditions, inequality links, tight field borders and saved chart legend visibility.
+    // Version 47 preserves the drawing frame of group bar charts and the cell height of legacy Times text runs.
+    // Version 48 preserves the details area's new-page-after-visible-records setting.
+    // Version 49 retains multiple doughnuts, depth areas and ranked chart categories.
+    // Version 50 keeps saved record-selection lines, cross-tab column subtotal captions, charts on percentage summaries and file dates.
+    // Version 51 preserves the named remainder of a ranked cross-tab row group.
+    // Version 52 retains the individual series gradient of a stacked bar in a multi-chart report.
+    public const int Current = 52;
     public const string Attribute = "FlexKitXmlVersion";
     /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
     internal const int DrillHeaderOption = 5;
@@ -449,6 +459,10 @@ public sealed class CrystalParameterPickListModel
 
 public sealed class CrystalSummaryFieldModel
 {
+    public int? PercentSummaryIndex { get; set; }
+    public int SummaryType { get; set; }
+    public int? SummaryTypeIndex { get; set; }
+
     public string WeightField { get; set; } = "";
     public string Name { get; set; } = "";
 
@@ -525,6 +539,7 @@ public sealed class CrystalReportAreaModel
     public bool EnableRepeatGroupHeader { get; set; } = true;
 
     public bool EnableKeepGroupTogether { get; set; }
+    public int GroupsPerPage { get; set; }
 
     public CrystalSectionFormatModel Format { get; set; } = new() { EnableKeepTogether = false };
 
@@ -551,6 +566,7 @@ public sealed class CrystalSectionFormatModel
     public bool EnableKeepTogether { get; set; } = true;
 
     public bool EnableNewPageAfter { get; set; }
+    public int RecordsPerPage { get; set; }
 
     public bool EnableNewPageBefore { get; set; }
 
@@ -586,6 +602,9 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    internal int? GraphDrawingId { get; set; }
+    internal bool HiddenGaugeLegend { get; set; }
+    internal int? PerspectivePieDrawingId { get; set; }
     internal int? GridLinkId { get; set; }
     public int LineEndSection { get; set; } = -1;
     public int LineEndTop { get; set; }
@@ -625,6 +644,7 @@ public sealed class CrystalReportObjectModel
 
     public int MaxNumberOfLines { get; set; }
     public bool InterpretHtml { get; set; }
+    public bool InterpretRtf { get; set; }
 
     public string Text { get; set; } = "";
 
@@ -680,6 +700,7 @@ public sealed class CrystalBorderModel
     public string BottomLineStyle { get; set; } = "NoLine";
 
     public bool HasDropShadow { get; set; }
+    public bool EnableTightHorizontal { get; set; }
 
     public string LeftLineStyle { get; set; } = "NoLine";
 
@@ -697,10 +718,13 @@ public sealed class CrystalBorderModel
 
 public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color)
 {
+    public int CharacterSpacingTwips { get; init; }
     internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
     public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>The date/time format authored on a field embedded in a text object, once resolved against the field's type.</summary>
     public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    /// <summary>The numeric formats authored on a field embedded in a text object, currency first, resolved by the field's type where the text prints.</summary>
+    internal List<ReportNativeNumericFormat> NativeNumericCandidates { get; } = [];
 }
 
 public sealed class CrystalFontModel

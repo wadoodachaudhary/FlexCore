@@ -140,7 +140,7 @@ internal static class PrintedStageChart
             var widest = captions.Max(caption => ChartAxisLabelLayout.MeasureWidth(caption, axisFont, true, true));
             var labelDepth = (widest + axisFont) / Math.Sqrt(2);
             var left = width*.10;
-            var right = width*.96;
+            var right = legend ? plotWidth - 3 : width*.96;
             var labelBand = Math.Min(labelDepth+axisFont*1.5, height*.45);
             var bottom = Math.Min(height*.80, height-labelBand);
             bottom = Math.Max(yStart+axisFont*2, bottom);
@@ -174,6 +174,15 @@ internal static class PrintedStageChart
                 image.Shapes.Add(new("Text", [0,0], "#000000", "none", 0,
                     Transform: [Math.Cos(angle),Math.Sin(angle),-Math.Sin(angle),Math.Cos(angle),X(index),bottom+axisFont*.9],
                     Text: new(captions[index], "Arial", axisFont, 700, Italic: true, Anchor: "end")));
+            if (legend)
+            {
+                var caption = series[0].Name;
+                var keyFont = Math.Min(axisFont, (width-plotWidth-8) / Math.Max(2, caption.Length*.6+1.5));
+                var keyY = (yStart+bottom)/2;
+                Box(plotWidth, keyY-keyFont, width-plotWidth-2, keyFont*2, "#ffffff", "#000000");
+                Box(plotWidth+3, keyY-keyFont*.35, keyFont*.7, keyFont*.7, palette[0]);
+                Text(plotWidth+5+keyFont*.7, keyY+keyFont*.32, caption, keyFont, "start", italic:true);
+            }
             return image;
         }
         if (type == ChartType.HorizontalBar)
@@ -400,7 +409,7 @@ internal static class PrintedStageChart
     }
 
     // A zero-only pie has no sector; keep its compact percentage key without inventing a slice.
-    private static ReportVectorImage DrawZeroPie(ChartSeries series, string title, double width, double height, bool legend)
+    internal static ReportVectorImage DrawZeroPie(ChartSeries series, string title, double width, double height, bool legend)
     {
         var image = new ReportVectorImage { Width = width, Height = height };
         var font = Math.Min(height / 32.064, width / 16.5);

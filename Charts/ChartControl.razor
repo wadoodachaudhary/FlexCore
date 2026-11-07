@@ -38,7 +38,7 @@
     {
         var drawing = PrintedBarChart3D.Draw(Type, _effectiveSeries, Title ?? "",
             PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
-            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels);
+            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.PerspectiveStyle);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else if (PrintWidthPoints > 0 && PrintHeightPoints > 0 && Type is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble)

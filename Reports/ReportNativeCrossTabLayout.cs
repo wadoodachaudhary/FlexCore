@@ -21,6 +21,9 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
     public string ColumnSumFormat { get; init; } = "";
     public string TotalSumFormat { get; init; } = "";
     public string StackFormats { get; init; } = "";
+    public bool StackedRowGroups { get; init; }
+    public bool CompactRowHeaders { get; init; }
+    public int SummaryHeaderHeight { get; init; }
     public bool RowLabelsOnly { get; init; }
     public int HeaderHeight { get; init; }
     public bool SuppressColumnGrandTotals { get; init; }
@@ -30,6 +33,16 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
     public bool RowTotalsBefore { get; init; }
     public IReadOnlyList<int> SuppressedRowSubtotals { get; init; } = [];
     public IReadOnlyList<int> SuppressedColumnSubtotals { get; init; } = [];
+    /// <summary>Each outer column group's own subtotal caption, for the groups whose subtotal prints.</summary>
+    public IReadOnlyList<ReportNativeCrossTabCaption> ColumnSubtotalCaptions { get; init; } = [];
+    /// <summary>The summarized fields' labels of a stacked grid ("Show Labels"), one per summary, printed in a column of their own after the row labels.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<ReportNativeCrossTabTemplate> SummaryLabels { get; init; } = [];
+    /// <summary>A cell holds one line per summary at equal steps: a stacked grid, or a row-less grid with several summaries.</summary>
+    internal bool StackedLines => StackFormats.Length > 0 || ColumnSumFormat.Contains(',');
+    /// <summary>Every saved cell format: the cell templates, the subtotal captions and the summary labels.</summary>
+    internal IEnumerable<ReportNativeCrossTabCellStyle> CellFormats => Templates.Select(template => template.Style)
+        .Concat(ColumnSubtotalCaptions.Select(caption => caption.Style)).Concat(SummaryLabels.Select(label => label.Style));
     public int LeftInset => Appearance is { } a ? (int)Math.Ceiling(Math.Max(0, a.Stroke(4).Width) * 20) : 0;
     public ReportNativeCrossTabCellStyle? StyleFor(bool header, bool rowHeader, bool totalRow, bool totalColumn) => header
         ? totalColumn ? ColumnTotalLabelStyle ?? ColumnStyle : ColumnStyle
@@ -39,7 +52,8 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
     internal XElement ToXml() => new("NativeCrossTab", new XAttribute("RowWidth", RowWidth), new XAttribute("ValueWidth", ValueWidth),
         new XAttribute("CellHeight", CellHeight), new XAttribute("PaddingX", PaddingX), new XAttribute("PaddingY", PaddingY),
         new XAttribute("FontFamily", FontFamily), new XAttribute("FontSize", FontSize), new XAttribute("ValueBold", ValueBold),
-        RowLabelsOnly ? new XAttribute("RowLabelsOnly", true) : null, new XAttribute("HeaderHeight", HeaderHeight), new XAttribute("ParentHeaderHeight", ParentHeaderHeight),
+        StackedRowGroups ? new XAttribute("StackedRowGroups", true) : null,
+        new XAttribute("CompactRowHeaders", CompactRowHeaders), new XAttribute("SummaryHeaderHeight", SummaryHeaderHeight), RowLabelsOnly ? new XAttribute("RowLabelsOnly", true) : null, new XAttribute("HeaderHeight", HeaderHeight), new XAttribute("ParentHeaderHeight", ParentHeaderHeight),
         ColumnSumFormat.Length == 0 ? null : new XAttribute("ColumnSumFormat", ColumnSumFormat),
         TotalSumFormat.Length == 0 ? null : new XAttribute("TotalSumFormat", TotalSumFormat),
         new XAttribute("TotalWidth", TotalWidth), new XAttribute("StackFormats", StackFormats),
@@ -50,7 +64,9 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
         ParentHeaderStyle?.ToXml("ParentHeaderStyle"), Appearance?.ToXml(), RowStyle?.ToXml("RowStyle"), ColumnStyle?.ToXml("ColumnStyle"), ValueStyle?.ToXml("ValueStyle"),
         RowTotalStyle?.ToXml("RowTotalStyle"), ColumnTotalStyle?.ToXml("ColumnTotalStyle"), GrandTotalStyle?.ToXml("GrandTotalStyle"),
         RowTotalLabelStyle?.ToXml("RowTotalLabelStyle"), ColumnTotalLabelStyle?.ToXml("ColumnTotalLabelStyle"),
-        Templates.Count == 0 ? null : new XElement("Templates", Templates.Select(template => template.ToXml())));
+        Templates.Count == 0 ? null : new XElement("Templates", Templates.Select(template => template.ToXml())),
+        ColumnSubtotalCaptions.Count == 0 ? null : new XElement("ColumnSubtotalCaptions", ColumnSubtotalCaptions.Select(caption => caption.ToXml())),
+        SummaryLabels.Count == 0 ? null : new XElement("SummaryLabels", SummaryLabels.Select(label => label.ToXml())));
 
     internal static ReportNativeCrossTabLayout? Read(XElement? xml)
     {
@@ -67,17 +83,21 @@ public sealed record ReportNativeCrossTabLayout(int RowWidth, int ValueWidth, in
             ParentHeaderHeight = (int?)xml.Attribute("ParentHeaderHeight") ?? 0, TotalWidth = (int?)xml.Attribute("TotalWidth") ?? 0,
             ColumnSumFormat = (string?)xml.Attribute("ColumnSumFormat") ?? "", TotalSumFormat = (string?)xml.Attribute("TotalSumFormat") ?? "",
             StackFormats = (string?)xml.Attribute("StackFormats") ?? "", ParentHeaderStyle = ReportNativeCrossTabCellStyle.Read(xml.Element("ParentHeaderStyle")),
+            StackedRowGroups = (bool?)xml.Attribute("StackedRowGroups") ?? false,
+            CompactRowHeaders = (bool?)xml.Attribute("CompactRowHeaders") ?? false, SummaryHeaderHeight = (int?)xml.Attribute("SummaryHeaderHeight") ?? 0,
             RowLabelsOnly = (bool?)xml.Attribute("RowLabelsOnly") ?? false, HeaderHeight = (int?)xml.Attribute("HeaderHeight") ?? 0,
             SuppressColumnGrandTotals = (bool?)xml.Attribute("SuppressColumnGrandTotals") ?? false,
             SuppressRowGrandTotals = (bool?)xml.Attribute("SuppressRowGrandTotals") ?? false,
             Templates = xml.Element("Templates")?.Elements("Cell").Select(ReportNativeCrossTabTemplate.Read).ToArray() ?? [],
+            ColumnSubtotalCaptions = xml.Element("ColumnSubtotalCaptions")?.Elements("Caption").Select(ReportNativeCrossTabCaption.Read).ToArray() ?? [],
+            SummaryLabels = xml.Element("SummaryLabels")?.Elements("Cell").Select(ReportNativeCrossTabTemplate.Read).ToArray() ?? [],
             ColumnTotalsBefore = (bool?)xml.Attribute("ColumnTotalsBefore") ?? false,
             RowTotalsBefore = (bool?)xml.Attribute("RowTotalsBefore") ?? false,
             SuppressedRowSubtotals = Levels((string?)xml.Attribute("SuppressedRowSubtotals")),
             SuppressedColumnSubtotals = Levels((string?)xml.Attribute("SuppressedColumnSubtotals"))
         };
         if (result.RowWidth is <= 0 or > 100000 || result.ValueWidth is <= 0 or > 100000 || result.CellHeight is <= 0 or > 100000
-            || result.ParentHeaderHeight is < 0 or > 100000 || result.TotalWidth is < 0 or > 100000
+            || result.SummaryHeaderHeight is < 0 or > 100000 || result.ParentHeaderHeight is < 0 or > 100000 || result.TotalWidth is < 0 or > 100000
             || result.ParentHeaderHeight > 0 && result.TotalWidth == 0
             || result.PaddingX is < 0 or > 10000 || result.PaddingY is < 0 or > 10000 || result.HeaderHeight is < 0 or > 100000 || result.FontSize is <= 0 or > 200)
             throw new InvalidDataException("Invalid native cross-tab cell dimensions.");
@@ -92,16 +112,17 @@ public sealed record ReportNativeCrossTabCellStyle(string FontFamily, decimal Fo
 {
     public IReadOnlyList<ReportCrossTabCondition> Conditions { get; init; } = [];
     public bool Suppressed { get; init; }
+    public int TextInsetTwips { get; init; }
     public int ClipWidthTwips { get; init; }
     internal XElement ToXml(string name) => new(name, new XAttribute("Font", FontFamily), new XAttribute("Size", FontSize),
         new XAttribute("Bold", Bold), new XAttribute("Italic", Italic), new XAttribute("Underline", Underline),
         new XAttribute("Color", Color), new XAttribute("Background", Background), new XAttribute("Alignment", Alignment),
-        new XAttribute("Suppressed", Suppressed), new XAttribute("ClipWidthTwips", ClipWidthTwips), Conditions.Select(condition => condition.ToXml()));
+        new XAttribute("TextInsetTwips", TextInsetTwips), new XAttribute("Suppressed", Suppressed), new XAttribute("ClipWidthTwips", ClipWidthTwips), Conditions.Select(condition => condition.ToXml()));
     internal static ReportNativeCrossTabCellStyle? Read(XElement? xml) => xml is null ? null : new((string?)xml.Attribute("Font") ?? "Arial",
         (decimal?)xml.Attribute("Size") ?? 10, (bool?)xml.Attribute("Bold") ?? false, (bool?)xml.Attribute("Italic") ?? false,
         (bool?)xml.Attribute("Underline") ?? false, ReportValueFormatting.CssColor((string?)xml.Attribute("Color")),
         ReportValueFormatting.CssColor((string?)xml.Attribute("Background")), (string?)xml.Attribute("Alignment") is "center" ? "center" : (string?)xml.Attribute("Alignment") is "right" ? "right" : "left")
-        { Suppressed = (bool?)xml.Attribute("Suppressed") ?? false, ClipWidthTwips = (int?)xml.Attribute("ClipWidthTwips") ?? 0,
+        { Suppressed = (bool?)xml.Attribute("Suppressed") ?? false, TextInsetTwips = (int?)xml.Attribute("TextInsetTwips") ?? 0, ClipWidthTwips = (int?)xml.Attribute("ClipWidthTwips") ?? 0,
             Conditions = xml.Elements("Condition").Select(ReportCrossTabCondition.Read).ToArray() };
     internal string Css => ReportObjectRenderer.FontStyle(FontFamily, FontSize, Bold, Italic, Underline, Color)
         + $"background:{ReportValueFormatting.CssColor(Background)};text-align:{Alignment};";
@@ -118,13 +139,14 @@ public sealed record ReportNativeCrossTabTemplate(int Axis, int ColumnLevel, int
     int Left, int Top, int Width, int Height, int PaddingX, int PaddingY, string Alias,
     ReportNativeCrossTabCellStyle Style, ReportNativeNumericFormat? NumericFormat = null, ReportNativeDateTimeFormat? DateTimeFormat = null)
 {
+    public string? HeaderText { get; init; }
     public int CellWidth { get; init; }
     public int CellHeight { get; init; }
     internal XElement ToXml() => new("Cell", new XAttribute("Axis", Axis), new XAttribute("ColumnLevel", ColumnLevel),
         new XAttribute("RowLevel", RowLevel), new XAttribute("Summary", Summary), new XAttribute("Left", Left),
         new XAttribute("Top", Top), new XAttribute("Width", Width), new XAttribute("Height", Height),
         new XAttribute("PaddingX", PaddingX), new XAttribute("PaddingY", PaddingY), new XAttribute("Alias", Alias),
-        new XAttribute("CellWidth", CellWidth), new XAttribute("CellHeight", CellHeight),
+        HeaderText is null ? null : new XAttribute("HeaderText", HeaderText), new XAttribute("CellWidth", CellWidth), new XAttribute("CellHeight", CellHeight),
         Style.ToXml("Style"), NumericFormat?.ToXml(), DateTimeFormat?.ToXml());
     internal static ReportNativeCrossTabTemplate Read(XElement xml) => new((int?)xml.Attribute("Axis") ?? 0,
         (int?)xml.Attribute("ColumnLevel") ?? 0, (int?)xml.Attribute("RowLevel") ?? 0, (int?)xml.Attribute("Summary") ?? 0,
@@ -132,20 +154,50 @@ public sealed record ReportNativeCrossTabTemplate(int Axis, int ColumnLevel, int
         (int?)xml.Attribute("Height") ?? 0, (int?)xml.Attribute("PaddingX") ?? 0, (int?)xml.Attribute("PaddingY") ?? 0,
         (string?)xml.Attribute("Alias") ?? "", ReportNativeCrossTabCellStyle.Read(xml.Element("Style"))
             ?? throw new InvalidDataException("A cross-tab template has no style."), ReportNativeNumericFormat.Read(xml), ReportNativeDateTimeFormat.Read(xml))
-        { CellWidth = (int?)xml.Attribute("CellWidth") ?? 0, CellHeight = (int?)xml.Attribute("CellHeight") ?? 0 };
+        { HeaderText = (string?)xml.Attribute("HeaderText"), CellWidth = (int?)xml.Attribute("CellWidth") ?? 0, CellHeight = (int?)xml.Attribute("CellHeight") ?? 0 };
+}
+
+/// <summary>A column group's own subtotal caption and its format; level 1 is the outermost column group.</summary>
+public sealed record ReportNativeCrossTabCaption(int Level, string Text, ReportNativeCrossTabCellStyle Style)
+{
+    internal XElement ToXml() => new("Caption", new XAttribute("Level", Level), new XAttribute("Text", Text), Style.ToXml("Style"));
+    internal static ReportNativeCrossTabCaption Read(XElement xml) => new((int?)xml.Attribute("Level") is int level and > 0 and <= 6
+            ? level : throw new InvalidDataException("Invalid cross-tab subtotal caption level."), (string?)xml.Attribute("Text") ?? "",
+        ReportNativeCrossTabCellStyle.Read(xml.Element("Style")) ?? throw new InvalidDataException("A cross-tab subtotal caption has no style."));
+}
+
+/// <summary>A field embedded in a total caption, with the numeric format authored on it.</summary>
+public sealed record ReportNativeCrossTabCaptionField(string Binding, ReportNativeNumericFormat? NumericFormat)
+{
+    internal XElement ToXml() => new("CaptionField", new XAttribute("Binding", Binding), NumericFormat?.ToXml());
+    internal static ReportNativeCrossTabCaptionField Read(XElement xml) => new((string?)xml.Attribute("Binding") ?? "", ReportNativeNumericFormat.Read(xml));
 }
 
 /// <summary>Saved simple cross-tab labels, cell fills and indexed Crystal grid strokes.</summary>
 public sealed record ReportNativeCrossTabAppearance(string RowTotalCaption, string ColumnTotalCaption,
     string RowBackground, string ColumnBackground, string ValueBackground, string GridLines, decimal RowTotalFontSize, decimal ColumnTotalFontSize)
 {
+    public string RowTotalBackground { get; init; } = "transparent";
+    public string ColumnTotalBackground { get; init; } = "transparent";
+    internal string StackBackground(bool totalRow, bool totalColumn) =>
+        totalRow && RowTotalBackground != "transparent" ? RowTotalBackground : totalColumn && ColumnTotalBackground != "transparent"
+            ? ColumnTotalBackground : ValueBackground;
+    /// <summary>Fields embedded in the total captions, replaced by their values where the grid prints (sample "Field in Crosstab Text object").</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<ReportNativeCrossTabCaptionField> CaptionFields { get; init; } = [];
     internal XElement ToXml() => new("Appearance", new XAttribute("RowTotalCaption", RowTotalCaption),
         new XAttribute("ColumnTotalCaption", ColumnTotalCaption), new XAttribute("RowBackground", RowBackground),
-        new XAttribute("ColumnBackground", ColumnBackground), new XAttribute("ValueBackground", ValueBackground), new XAttribute("GridLines", GridLines), new XAttribute("RowTotalFontSize", RowTotalFontSize), new XAttribute("ColumnTotalFontSize", ColumnTotalFontSize));
+        new XAttribute("ColumnBackground", ColumnBackground), new XAttribute("ValueBackground", ValueBackground), new XAttribute("GridLines", GridLines), new XAttribute("RowTotalFontSize", RowTotalFontSize), new XAttribute("ColumnTotalFontSize", ColumnTotalFontSize),
+        RowTotalBackground == "transparent" ? null : new XAttribute("RowTotalBackground", RowTotalBackground),
+        ColumnTotalBackground == "transparent" ? null : new XAttribute("ColumnTotalBackground", ColumnTotalBackground),
+        CaptionFields.Select(field => field.ToXml()));
     internal static ReportNativeCrossTabAppearance? Read(XElement? x) => x is null ? null : new(
         (string?)x.Attribute("RowTotalCaption") ?? "", (string?)x.Attribute("ColumnTotalCaption") ?? "",
         (string?)x.Attribute("RowBackground") ?? "transparent", (string?)x.Attribute("ColumnBackground") ?? "transparent",
-        (string?)x.Attribute("ValueBackground") ?? "transparent", (string?)x.Attribute("GridLines") ?? "", (decimal?)x.Attribute("RowTotalFontSize") ?? 10, (decimal?)x.Attribute("ColumnTotalFontSize") ?? 10);
+        (string?)x.Attribute("ValueBackground") ?? "transparent", (string?)x.Attribute("GridLines") ?? "", (decimal?)x.Attribute("RowTotalFontSize") ?? 10, (decimal?)x.Attribute("ColumnTotalFontSize") ?? 10)
+        { RowTotalBackground = (string?)x.Attribute("RowTotalBackground") ?? "transparent",
+            ColumnTotalBackground = (string?)x.Attribute("ColumnTotalBackground") ?? "transparent",
+            CaptionFields = x.Elements("CaptionField").Select(ReportNativeCrossTabCaptionField.Read).ToArray() };
     public string Background(bool header, bool rowHeader) => header ? ColumnBackground : rowHeader ? RowBackground : ValueBackground;
     public (double Width, string Color) Stroke(int index)
     {

@@ -31,7 +31,12 @@ internal static partial class CrystalReportContentsParser
                 // StringFieldProperties stores a UInt16 limit before text interpretation and spacing.
                 // Zero means unlimited. This is a display limit; never truncate the bound field value.
                 reportObject.MaxNumberOfLines = reader.LoadUInt16();
-                if (reader.BytesLeftInRecord >= 2) reportObject.InterpretHtml = reader.LoadEnum() == 2;
+                if (reader.BytesLeftInRecord >= 2)
+                {
+                    var interpretation = reader.LoadEnum();
+                    reportObject.InterpretRtf = interpretation == 1;
+                    reportObject.InterpretHtml = interpretation == 2;
+                }
                 reader.SkipRestOfRecord();
             }
             else if (record.Type == 249)

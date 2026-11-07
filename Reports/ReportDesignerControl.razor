@@ -3042,6 +3042,8 @@ else
         target.BackgroundColor = source.BackgroundColor;
         target.HorizontalAlignment = source.HorizontalAlignment;
         target.TextRotation = source.TextRotation;
+        target.InterpretRtf = source.InterpretRtf;
+        target.InterpretHtml = source.InterpretHtml;
         target.CanGrow = source.CanGrow;
         target.MaxNumberOfLines = source.MaxNumberOfLines;
         target.FormatString = source.FormatString;
@@ -3664,7 +3666,7 @@ else
             LeftField = link.LeftField,
             RightTable = link.RightTable,
             RightField = link.RightField,
-            JoinType = link.JoinType
+            JoinType = link.JoinType, Comparison = link.Comparison
         };
     }
 

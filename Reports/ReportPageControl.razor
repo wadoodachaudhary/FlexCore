@@ -34,7 +34,7 @@
                         }
                         else
                         {
-                            @((MarkupString)item.FormattedContent)
+                            @((MarkupString)(PrintNumericValues ? item.UnmaskedNumericContent ?? item.FormattedContent : item.FormattedContent))
                         }
                     </div>
                 }
@@ -45,6 +45,7 @@
 
 @code {
     [Parameter, EditorRequired] public ReportPageSnapshot Page { get; set; } = default!;
+    [Parameter] public bool PrintNumericValues { get; set; }
     [Parameter] public bool IncludeNavigationAnchors { get; set; } = true;
     [Parameter] public EventCallback<string> OnDrillDown { get; set; }
     private Task DrillDown(ReportDrillTarget? target) => target is null ? Task.CompletedTask : OnDrillDown.InvokeAsync(target.GroupId);

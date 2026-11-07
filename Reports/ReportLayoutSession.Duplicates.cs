@@ -23,9 +23,19 @@ public sealed partial class ReportLayoutSession
             SuppressesDuplicates(element) || element.Kind == "Field" && element.UseCrystalScreenMetrics
                 ? raw => value = new(raw) : null),
             resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat,
-                element.NativeNumberFormat, element.NativeNumericFormat));
+                element.NativeNumberFormat, RunNumericFormat(element)));
         return (html, html.Contains("[Formula error:", StringComparison.Ordinal) ? null : value);
     }
+
+    // A field embedded in a text object without a numeric format of its own prints with Crystal's system default number
+    // format (grouped thousands, the regional decimals), as a field object saved without one would.
+    private static readonly ReportNativeNumericFormat EmbeddedNumericDefault = new(SuppressIfZero: false, NegativeType: 1, ThousandsSeparators: true,
+        LeadingZero: true, DecimalPlaces: 2, RoundingType: 9, CurrencySymbolType: 0, OneCurrencySymbolPerPage: false, CurrencyPosition: 0,
+        ThousandSymbol: ",", DecimalSymbol: ".", CurrencySymbol: "$", AllowFieldClipping: false, AccountingFormat: false, ReverseSign: false,
+        ZeroValue: "<Default Format>", SuppressIfNoHorizontalPages: false, Prefix: "", Suffix: "", SystemDefaultFormatting: true);
+    private static readonly ReportNativeNumericFormat EmbeddedIntegerDefault = EmbeddedNumericDefault with { ValueType = 4 };
+    private static ReportNativeNumericFormat? RunNumericFormat(ReportDesignerElement element)
+        => element.NativeNumericFormat ?? (element.NativeNumberFormat is null ? EmbeddedNumericDefault : null);
 
     // The run is placed by its own text, so a value that depends on the page is laid out on each page. A binding the
     // page schedule refuses (a circular reference, print-state variables in a page formula) goes through Format, which
@@ -64,7 +74,12 @@ public sealed partial class ReportLayoutSession
             var seen = _previous.TryGetValue(key, out var previous);
             if (seen && previous.Row == item.Row && previous.Occurrence == occurrence) return previous.Suppressed;
             var firstDetail = section.Kind == "Detail" && _firstDetails[detailKey] == item.Row;
-            var suppressed = seen && !firstDetail && Equals(previous.Value, value.Value);
+            // A new group starts a fresh detail duplicate run, even when its first value
+            // equals the preceding group's last value on the same physical page.
+            var newGroup = seen && section.Kind == "Detail" && owner._layout.Document.Groups.Count > 0
+                && owner.GroupStart(owner._layout.Document.Groups.Count - 1, previous.Row)
+                    != owner.GroupStart(owner._layout.Document.Groups.Count - 1, item.Row);
+            var suppressed = seen && !firstDetail && !newGroup && Equals(previous.Value, value.Value);
             _previous[key] = (item.Row, occurrence, value.Value, suppressed);
             return suppressed;
         }

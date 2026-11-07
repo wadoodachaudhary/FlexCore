@@ -49,8 +49,9 @@ public sealed partial class CrystalFormula
             => f.Context.DocumentProperty(name.ToLowerInvariant()),
         "crnoline" or "crdefaulthoraligned" => 0m, "crsingleline" or "crleftaligned" => 1m, "crdoubleline" or "crcenteredhorizontally" => 2m,
         "crdashedline" or "crrightaligned" => 3m, "crdottedline" or "crjustified" => 4m,
-        "recordnumber" => f.Context.RecordIndex + 1, "onfirstrecord" => f.Context.RecordIndex == 0,
-        "onlastrecord" => f.Context.RecordIndex == f.Context.RecordCount - 1,
+        // Without records, Crystal formats the bands once as furniture, and that pass is both the first and the last record.
+        "recordnumber" => f.Context.RecordIndex + 1, "onfirstrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == 0,
+        "onlastrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == f.Context.RecordCount - 1,
         "drilldowngrouplevel" => f.Context.DrillDownGroupLevel, "inrepeatedgroupheader" => f.Context.InRepeatedGroupHeader,
         "currentfieldvalue" => f.Context.CurrentFieldValue(), "groupnumber" => f.Context.GroupNumber(),
         "defaultattribute" => f.Context.DefaultAttribute(),
@@ -167,7 +168,7 @@ public sealed partial class CrystalFormula
             return name switch
             {
                 "isnull" => Arg(0) is null or DBNull, "hasvalue" => Arg(0) is not (null or DBNull),
-                "onfirstrecord" => f.Context.RecordIndex == 0, "onlastrecord" => f.Context.RecordIndex == f.Context.RecordCount - 1,
+                "onfirstrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == 0, "onlastrecord" => f.Context.RecordCount == 0 || f.Context.RecordIndex == f.Context.RecordCount - 1,
                 "totext" or "cstr" => ToText(Arg(0), args.Skip(1).Select(n => f.NonNull(n.Get(f))).ToArray(), Arg(0) is DateTime ? KindOf(f, args[0]) : DateKind.Unknown),
                 "tonumber" or "cdbl" or "ccur" => Number(Arg(0)), "cint" => decimal.Round(Number(Arg(0)), 0, MidpointRounding.AwayFromZero), "cbool" => Boolean(Arg(0)),
                 "val" => decimal.TryParse(Regex.Match(Str(0).TrimStart(), @"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(100)).Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var val) ? val : 0m,

@@ -15,6 +15,11 @@ public sealed class ReportDesignerDocument
     /// <summary>Report summary comments and author (Crystal's ReportComments / FileAuthor special fields).</summary>
     public string Comments { get; set; } = "";
     public string Author { get; set; } = "";
+    /// <summary>The report file's own path (Crystal's File Path and Name) and the UTC time stamps saved with it; the modification date Crystal
+    /// prints is <see cref="Created"/>, which its designer rewrites on every save. Blank or null when the source carries none.</summary>
+    public string ReportFilePath { get; set; } = "";
+    public DateTime? Created { get; set; }
+    public DateTime? LastSaved { get; set; }
     public string SourceName { get; set; } = "";
     public string SourcePath { get; set; } = "";
     public ReportDesignerPage Page { get; set; } = new();
@@ -367,7 +372,7 @@ public sealed class ReportDesignerDocument
             LeftField = link.LeftField,
             RightTable = link.RightTable,
             RightField = link.RightField,
-            JoinType = link.JoinType
+            JoinType = link.JoinType, Comparison = link.Comparison
         };
     }
 }
@@ -468,6 +473,8 @@ public sealed class ReportDesignerElement
     public bool CanGrow { get; set; }
     /// <summary>Authored maximum text lines when growing; zero means unlimited.</summary>
     public bool InterpretHtml { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool InterpretRtf { get; set; }
     public int MaxNumberOfLines { get; set; }
     /// <summary>Hide consecutive equal field values in printed sections, preserving their space and underlying data.</summary>
     public bool SuppressIfDuplicate { get; set; }
@@ -539,6 +546,7 @@ public sealed class ReportDesignerElement
             IsSuppressed = IsSuppressed,
             CanGrow = CanGrow,
             InterpretHtml = InterpretHtml,
+            InterpretRtf = InterpretRtf,
             MaxNumberOfLines = MaxNumberOfLines,
             SuppressIfDuplicate = SuppressIfDuplicate,
             SuppressEmbeddedFieldBlankLines = SuppressEmbeddedFieldBlankLines,
@@ -687,10 +695,11 @@ public sealed class ReportDesignerDataLink : ReportDesignerSourceItem
     public string RightTable { get; set; } = "";
     public string RightField { get; set; } = "";
     public string JoinType { get; set; } = "Inner";
+    public string Comparison { get; set; } = "=";
 
     public string DisplayName => string.IsNullOrWhiteSpace(LeftTable) && string.IsNullOrWhiteSpace(RightTable)
         ? "New link"
-        : $"{LeftTable}.{LeftField} = {RightTable}.{RightField}";
+        : $"{LeftTable}.{LeftField} {Comparison} {RightTable}.{RightField}";
 }
 
 public sealed class ReportDesignerElementSelection
@@ -749,6 +758,9 @@ public static partial class ReportDesignerXmlSerializer
             Title = GetReportTitle(root, sourceName),
             Comments = Attribute(Child(root, "Summaryinfo"), "ReportComments") ?? "",
             Author = Attribute(Child(root, "Summaryinfo"), "ReportAuthor") ?? "",
+            ReportFilePath = Attribute(root, "FileName") ?? "",
+            Created = FileTime(Attribute(Child(root, "Summaryinfo"), "FileCreated")),
+            LastSaved = FileTime(Attribute(Child(root, "Summaryinfo"), "FileLastSaved")),
             Page = ParsePage(root)
         };
 
@@ -783,13 +795,19 @@ public static partial class ReportDesignerXmlSerializer
         return SerializePreservingSource(document).ToString(SaveOptions.None);
     }
 
+    private static DateTime? FileTime(string? text)
+        => DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var time) ? time.Kind == DateTimeKind.Local ? time.ToUniversalTime() : time : null;
+
     private static XDocument BuildSourceDocument(ReportDesignerDocument document)
     {
         var root = new XElement("Report",
             new XAttribute("Name", string.IsNullOrWhiteSpace(document.Title) ? "Untitled Report" : document.Title),
             new XAttribute("HasSavedData", "False"));
 
-        root.Add(new XElement("Summaryinfo", new XAttribute("ReportTitle", document.Title ?? "")));
+        var summary = new XElement("Summaryinfo", new XAttribute("ReportTitle", document.Title ?? ""));
+        if (document.Created is { } created) summary.SetAttributeValue("FileCreated", created.ToString("o", CultureInfo.InvariantCulture));
+        if (document.LastSaved is { } saved) summary.SetAttributeValue("FileLastSaved", saved.ToString("o", CultureInfo.InvariantCulture));
+        root.Add(summary);
         root.Add(NewReportOptions());
         root.Add(new XElement("PrintOptions",
             new XAttribute("PageContentHeight", document.Page.ContentHeightTwips),
@@ -864,10 +882,11 @@ public static partial class ReportDesignerXmlSerializer
                     !string.IsNullOrWhiteSpace(link.LeftField) &&
                     !string.IsNullOrWhiteSpace(link.RightTable) &&
                     !string.IsNullOrWhiteSpace(link.RightField))
-                .GroupBy(link => (link.LeftTable, link.RightTable, link.JoinType))
+                .GroupBy(link => (link.LeftTable, link.RightTable, link.JoinType, link.Comparison))
                 .Select(links =>
                     new XElement("TableLink",
                         new XAttribute("JoinType", ToCrystalJoinType(links.Key.JoinType)),
+                        links.Key.Comparison == "=" ? null : new XAttribute("Comparison", links.Key.Comparison),
                         new XElement("SourceFields", links.Select(link => BuildLinkField(link.LeftTable, link.LeftField))),
                         new XElement("DestinationFields", links.Select(link => BuildLinkField(link.RightTable, link.RightField))))));
     }
@@ -940,7 +959,7 @@ public static partial class ReportDesignerXmlSerializer
         objectElement.SetAttributeValue("Width", element.WidthTwips);
         objectElement.SetAttributeValue("Height", element.HeightTwips);
 
-        if (element.Kind == "Field") objectElement.SetAttributeValue("TextInterpretation", element.InterpretHtml ? "Html" : null);
+        if (element.Kind == "Field") objectElement.SetAttributeValue("TextInterpretation", element.InterpretRtf ? "Rtf" : element.InterpretHtml ? "Html" : null);
         if (element.MaxNumberOfLines < 0)
             throw new InvalidDataException("MaxNumberOfLines must be a non-negative integer; zero means unlimited.");
         if (objectElement.Name.LocalName is "FieldObject" or "TextObject" or "FieldHeadingObject")
@@ -1073,6 +1092,7 @@ public static partial class ReportDesignerXmlSerializer
             var kind when string.Equals(kind, "Box", StringComparison.OrdinalIgnoreCase) => "BoxObject",
             var kind when string.Equals(kind, "Line", StringComparison.OrdinalIgnoreCase) => "LineObject",
             var kind when string.Equals(kind, "Picture", StringComparison.OrdinalIgnoreCase) => "PictureObject",
+            "Map" => "MapObject",
             "Chart" => "ChartObject",
             "CrossTab" => "CrossTabObject",
             "Table" => "TableObject",
@@ -1201,6 +1221,7 @@ public static partial class ReportDesignerXmlSerializer
                 IsSuppressed = ParseBool(Attribute(objectFormat, "EnableSuppress")),
                 CanGrow = ParseBool(Attribute(objectFormat, "EnableCanGrow")),
                 InterpretHtml = Attribute(objectElement, "TextInterpretation") == "Html",
+                InterpretRtf = Attribute(objectElement, "TextInterpretation") == "Rtf",
                 MaxNumberOfLines = ParseMaxNumberOfLines(Attribute(objectElement, "MaxNumberOfLines")),
                 SuppressIfDuplicate = ParseBool(Attribute(objectElement, "SuppressIfDuplicate")),
                 SuppressEmbeddedFieldBlankLines = ParseBool(Attribute(objectElement, "SuppressEmbeddedFieldBlankLines")),
@@ -1295,6 +1316,7 @@ public static partial class ReportDesignerXmlSerializer
                     LeftField = source.Field,
                     RightTable = destination.Table,
                     RightField = destination.Field,
+                    Comparison = CrystalXmlReportLoader.ReadLinkComparison(Attribute(tableLink, "Comparison")),
                     JoinType = FromCrystalJoinType(Attribute(tableLink, "JoinType"))
                 };
                 document.Links.Add(link);
@@ -1310,6 +1332,7 @@ public static partial class ReportDesignerXmlSerializer
                 LeftField = Attribute(link, "LeftField") ?? "",
                 RightTable = Attribute(link, "RightTable") ?? "",
                 RightField = Attribute(link, "RightField") ?? "",
+                Comparison = CrystalXmlReportLoader.ReadLinkComparison(Attribute(link, "Comparison")),
                 JoinType = Attribute(link, "JoinType") ?? "Inner"
             };
 
@@ -1363,6 +1386,7 @@ public static partial class ReportDesignerXmlSerializer
                string.Equals(left.LeftField, right.LeftField, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(left.RightTable, right.RightTable, StringComparison.OrdinalIgnoreCase) &&
                string.Equals(left.RightField, right.RightField, StringComparison.OrdinalIgnoreCase) &&
+               left.Comparison == right.Comparison &&
                string.Equals(left.JoinType, right.JoinType, StringComparison.OrdinalIgnoreCase);
     }
 

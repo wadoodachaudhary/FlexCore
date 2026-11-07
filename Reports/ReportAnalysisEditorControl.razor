@@ -35,6 +35,12 @@
         {
             <label>Chart<DropDownListControl TValue="ChartType" TItem="ChartType" DataSource="@(new[] { ChartType.Bar, ChartType.StackedBar, ChartType.StackedBar100, ChartType.Line, ChartType.Area, ChartType.Pie, ChartType.Donut, ChartType.Radar, ChartType.Funnel, ChartType.Gauge, ChartType.Scatter, ChartType.Bubble })"
                 @bind-Value="analysis.ChartType" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Chart type" /></label>
+            @if (analysis.ChartType == ChartType.Pie)
+            {
+                <label>Slice colors<DropDownListControl TValue="ReportPieColorScheme" TItem="ReportPieColorScheme"
+                    DataSource="@(Enum.GetValues<ReportPieColorScheme>())" @bind-Value="analysis.PieColorScheme"
+                    @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Pie color scheme" /></label>
+            }
             <label>Category<DropDownListControl TValue="string" TItem="Choice" DataSource="FieldChoices" TextFieldName="Label" ValueFieldName="Value"
                 @bind-Value="analysis.CategoryField" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" AriaLabel="Category field" /></label>
             <label>Category format<TextBoxControl @bind-Value="analysis.CategoryFormat" @bind-Value:after="ChangedAsync" Enabled="@(!ReadOnly)" /></label>
@@ -114,6 +120,7 @@
             categories.ChartCategoryLegend = false;
         if (Element.Analysis is { } values && (Element.Kind != "Chart" || values.EachRecord))
             foreach (var measure in values.Measures) measure.DoNotSummarize = false;
+        Element.Analysis?.DropStylesOfOtherChartTypes(Element.Kind);
         return Changed.InvokeAsync();
     }
     private async Task SetDescendingAsync(string field, bool descending)

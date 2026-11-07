@@ -49,7 +49,7 @@ public static class ReportNativeExport
         {
             foreach (var page in snapshots)
             {
-                var root = await renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page }));
+                var root = await renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page, [nameof(ReportPageControl.PrintNumericValues)] = true }));
                 pages.Add(root.ToHtmlString());
             }
         });

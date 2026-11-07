@@ -25,6 +25,29 @@ public sealed partial class CrystalFormula
     public bool UsesPersistentVariables { get; }
     public bool UsesSharedVariables { get; }
     public bool WritesPersistentVariables { get; }
+    /// <summary>The global and shared variables the formula declares, as "scope:name" (name in lower case).</summary>
+    public IReadOnlyCollection<string> PersistentVariables { get; }
+    /// <summary>The global and shared variables the formula assigns, as "scope:name" (name in lower case).</summary>
+    public IReadOnlyCollection<string> AssignedVariables { get; }
+    /// <summary>True when every global or shared variable the formula assigns is a temporary: one it sets before it reads it,
+    /// at its top level (OnlyTemporaries). True for a formula that assigns none.</summary>
+    internal bool AssignsOnlyTemporaries { get; }
+    /// <summary>The global and shared variables the formula sets before it uses them, as "scope:name": the first use of each,
+    /// in the order of its top-level statements, is one of those statements setting it (Temporaries). A run of the formula
+    /// never reads what another formula left in such a variable.</summary>
+    internal IReadOnlyCollection<string> TemporaryVariables { get; }
+    /// <summary>The global and shared variables the formula may read before it sets them, as "scope:name" (Reads): one it
+    /// refers to, declares inside an expression or as its result (Crystal's `WhilePrintingRecords; Shared NumberVar x;`
+    /// prints x), or changes an element of, less its temporaries. What another formula left in any other variable it
+    /// declares never reaches what it prints or assigns.</summary>
+    internal IReadOnlyCollection<string> ReadVariables { get; }
+    /// <summary>For each global or shared variable the formula assigns, as "scope:name", what the value it leaves there may
+    /// come from (AssignmentFlow) when it runs to its end: the global and shared variables as they were when the formula
+    /// began, and the formulas it refers to, as "{@name}". A variable the formula may leave as it was (set under a condition
+    /// or in a loop, or an array element) comes from itself too. A formula that fails, or stops at a null value
+    /// (Evaluate's stopped), may leave some of its variables set and not the rest.</summary>
+    internal IReadOnlyDictionary<string, IReadOnlyCollection<string>> AssignmentReads => _assignmentReads ??= AssignmentFlow(_root, AssignedVariables);
+    private IReadOnlyDictionary<string, IReadOnlyCollection<string>>? _assignmentReads;
     public bool UsesRecordContext { get; }
     public bool UsesRecordSequenceContext { get; }
     public CrystalEvaluationTime? EvaluationTime { get; }
@@ -32,6 +55,8 @@ public sealed partial class CrystalFormula
     public bool UsesPageContext { get; }
     public bool UsesGridContext { get; }
     public bool UsesAggregates { get; }
+    /// <summary>True when an aggregate names a group (Sum ({x}, {group}) or a group condition); one with the field alone is over the whole report.</summary>
+    public bool UsesGroupedAggregates { get; }
     public IReadOnlyList<string> AggregateReferences { get; }
     public bool UsesEvaluationDirectives { get; }
     public bool RequiresPrintPass { get; }
@@ -52,12 +77,12 @@ public sealed partial class CrystalFormula
         UsesVariables = declarations.Count > 0 || nodes.Any(n => n is Variable or VarRef or Assign or ElementAssign or Redim or ForLoop);
         UsesPersistentVariables = declarations.Any(b => b.Persistent);
         UsesSharedVariables = declarations.Any(b => b.Scope == "shared");
-        WritesPersistentVariables = nodes.Any(n => n switch
-        {
-            Variable v => v.Binding.Persistent && v.Value is not null,
-            Assign a => a.Binding.Persistent, ElementAssign e => e.Binding.Persistent, Redim r => r.Binding.Persistent, ForLoop l => l.Binding.Persistent,
-            _ => false
-        });
+        WritesPersistentVariables = nodes.Any(n => SetBinding(n) is { Persistent: true });
+        PersistentVariables = declarations.Where(b => b.Persistent).Select(VariableKey).ToHashSet();
+        AssignedVariables = nodes.Select(SetBinding).Where(b => b is { Persistent: true }).Select(b => VariableKey(b!)).ToHashSet();
+        AssignsOnlyTemporaries = !WritesPersistentVariables || OnlyTemporaries(root, AssignedVariables);
+        TemporaryVariables = WritesPersistentVariables ? Temporaries(root) : [];
+        ReadVariables = Reads(root).Except(TemporaryVariables).ToHashSet();
         var symbols = nodes.OfType<Symbol>().Select(n => n.Name.ToLowerInvariant()).ToHashSet();
         var calls = nodes.OfType<Call>().ToArray();
         UsesGridContext = symbols.Overlaps(GridSymbols) || calls.Any(call => GridFunctions.Contains(call.Name));
@@ -76,11 +101,223 @@ public sealed partial class CrystalFormula
         UsesPageContext = symbols.Overlaps(["pagenumber", "totalpagecount", "pagenofm", "inrepeatedgroupheader"]);
         var aggregates = calls.Where(IsAggregate).ToArray();
         UsesAggregates = aggregates.Length > 0;
+        UsesGroupedAggregates = aggregates.Any(n => n.Args.Length > 1);
         AggregateReferences = aggregates.SelectMany(n => n.Args.OfType<Reference>()).Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         RequiresPrintPass = symbols.Contains("whileprintingrecords");
         UsesEvaluationDirectives = symbols.Overlaps(["whileprintingrecords", "whilereadingrecords", "beforereadingrecords"]) || after.Length > 0;
         UnknownSymbols = unknown;
         CustomFunctions = nodes.OfType<CustomCall>().Select(n => n.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string VariableKey(Binding binding) => binding.Scope + ":" + binding.Name.ToLowerInvariant();
+
+    // The variable a node sets: a declaration with a value, an assignment (of an array element too), a ReDim or a For loop.
+    private static Binding? SetBinding(Node node) => node switch
+    {
+        Variable { Value: not null } v => v.Binding, Assign a => a.Binding, ElementAssign e => e.Binding, Redim r => r.Binding, ForLoop l => l.Binding,
+        _ => null
+    };
+
+    // The variable a node of the statement reads: a reference, a declaration used as a value (`(Global NumberVar n) + 1`), an
+    // assignment to an array element or a ReDim Preserve (both keep the array's other elements). A declaration that is the
+    // statement itself reads nothing.
+    private static Binding? ReadBinding(Node node, Node statement) => node switch
+    {
+        VarRef reference => reference.Binding,
+        Variable { Value: null } declaration when !ReferenceEquals(declaration, statement) => declaration.Binding,
+        ElementAssign element => element.Binding, Redim { Preserve: true } redim => redim.Binding,
+        _ => null
+    };
+
+    // The formula's top-level statements in order, through Basic's function body (the statements no condition or loop holds),
+    // each with the global or shared variable it sets (a declaration with a value, or an assignment) and the expression that
+    // gives the value; a statement that sets none has no target and is that expression itself.
+    private static List<(Node Statement, Binding? Target, Node Value)> TopStatements(Node root)
+    {
+        var statements = new List<(Node Statement, Binding? Target, Node Value)>();
+        void Add(Node node)
+        {
+            if (node is Sequence sequence) foreach (var child in sequence.Nodes) Add(child);
+            else if (node is FunctionBody body) Add(body.Body);
+            else statements.Add(node switch
+            {
+                Variable { Binding.Persistent: true, Value: { } initial } declaration => (node, declaration.Binding, initial),
+                Assign { Binding.Persistent: true } assignment => (node, assignment.Binding, assignment.Value),
+                _ => (node, null, node)
+            });
+        }
+        Add(root);
+        return statements;
+    }
+
+    // True when each global or shared variable the formula assigns is set before the formula reads it, by a statement of its
+    // top level (no condition or loop around it): a declaration with a value (`NumberVar d := PageNumber - 1`), or a
+    // declaration and then an assignment (`NumberVar d; d := ...`; Basic's `Global d As Number` and `d = ...`). A second run
+    // of such a formula computes nothing from its first. Variables it only reads (one the page header sets) and local
+    // variables (Basic's formula result among them) do not count. A counter (`x := x + 1`, `x := (Global NumberVar x) + 1`),
+    // an assignment under a condition or in a loop, an array element, a ReDim, or a For loop over such a variable makes it
+    // no temporary.
+    private static bool OnlyTemporaries(Node root, IReadOnlyCollection<string> assigned)
+    {
+        var initialized = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (statement, target, value) in TopStatements(root))
+        {
+            foreach (var node in Walk(value))
+            {
+                if (ReadBinding(node, statement) is { Persistent: true } read && VariableKey(read) is var key
+                    && assigned.Contains(key) && !initialized.Contains(key)) return false;
+                if (SetBinding(node) is { Persistent: true }) return false;
+            }
+            if (target is not null) initialized.Add(VariableKey(target));
+        }
+        return true;
+    }
+
+    // The global and shared variables whose first use, in the order of the top-level statements, is one of those statements
+    // setting it (TemporaryVariables). A variable read, or set under a condition, in a loop or inside an expression, before
+    // that is none; so is one only declared.
+    private static HashSet<string> Temporaries(Node root)
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        var temporaries = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (statement, target, value) in TopStatements(root))
+        {
+            foreach (var node in Walk(value))
+                if ((ReadBinding(node, statement) ?? SetBinding(node)) is { Persistent: true } binding) used.Add(VariableKey(binding));
+            if (target is not null && used.Add(VariableKey(target))) temporaries.Add(VariableKey(target));
+        }
+        return temporaries;
+    }
+
+    internal bool? ConstantGridSuppression => UsesGridContext && WritesPersistentVariables && !UsesSharedVariables
+        && _root is Sequence { Nodes: [.., var last] } ? last switch
+        {
+            Literal { Value: bool value } => value,
+            Symbol symbol when bool.TryParse(symbol.Name, out var value) => value,
+            _ => null
+        } : null;
+
+    // The global and shared variables a node of a top-level statement reads (ReadBinding), and in Crystal syntax the last
+    // statement when it is a declaration of its own: it is the formula's result (a Basic formula's result is its `formula`
+    // variable). ReadVariables takes the temporaries out.
+    private static HashSet<string> Reads(Node root)
+    {
+        var reads = new HashSet<string>(StringComparer.Ordinal);
+        var statements = TopStatements(root);
+        foreach (var (statement, _, value) in statements)
+            foreach (var node in Walk(value))
+                if (ReadBinding(node, statement) is { Persistent: true } read) reads.Add(VariableKey(read));
+        if (root is not FunctionBody && statements.Count > 0 && statements[^1].Statement is Variable { Value: null, Binding.Persistent: true } result)
+            reads.Add(VariableKey(result.Binding));
+        return reads;
+    }
+
+    // AssignmentReads: follows the formula in order, with what each variable it has set so far comes from. The branches of a
+    // condition join, each variable one sets coming from what the condition reads too, and from itself when another branch
+    // leaves it; anything else that sets a variable inside it (a loop, an assignment inside an expression, an array element,
+    // a ReDim) has each such variable come from everything it reads, itself among them. A formula too deep to follow has each
+    // variable it assigns come from everything it reads and assigns.
+    private static Dictionary<string, IReadOnlyCollection<string>> AssignmentFlow(Node root, IReadOnlyCollection<string> assigned)
+    {
+        var order = Walk(root).ToList();
+        var setting = new HashSet<Node>(ReferenceEqualityComparer.Instance);
+        for (var index = order.Count - 1; index >= 0; index--)
+            if (SetBinding(order[index]) is not null || order[index].Children.Any(setting.Contains)) setting.Add(order[index]);
+        var env = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        try { Flow(root); }
+        catch (InsufficientExecutionStackException)
+        {
+            var all = Reads(root);
+            all.UnionWith(assigned);
+            all.UnionWith(order.OfType<Reference>().Select(r => r.Name).Where(n => n.StartsWith("{@", StringComparison.Ordinal)));
+            return assigned.ToDictionary(v => v, _ => (IReadOnlyCollection<string>)all, StringComparer.Ordinal);
+        }
+        return assigned.ToDictionary(v => v, v => (IReadOnlyCollection<string>)(env.TryGetValue(v, out var from) ? from : new HashSet<string>(StringComparer.Ordinal) { v }), StringComparer.Ordinal);
+
+        HashSet<string> Of(string key) => env.TryGetValue(key, out var from) ? new(from, StringComparer.Ordinal)
+            : key.StartsWith("local:", StringComparison.Ordinal) ? new(StringComparer.Ordinal) : new(StringComparer.Ordinal) { key };
+        HashSet<string>? Read(Node node) => node switch
+        {
+            VarRef reference => Of(VariableKey(reference.Binding)),
+            Variable { Value: null } declaration => Of(VariableKey(declaration.Binding)),
+            ElementAssign element => Of(VariableKey(element.Binding)),
+            Redim { Preserve: true } redim => Of(VariableKey(redim.Binding)),
+            Reference { Name: var name } when name.StartsWith("{@", StringComparison.Ordinal) => new(StringComparer.Ordinal) { name },
+            _ => null
+        };
+        HashSet<string> Uses(Node node)
+        {
+            var from = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var inner in Walk(node)) if (Read(inner) is { } read) from.UnionWith(read);
+            return from;
+        }
+        HashSet<string> Set(Binding binding, HashSet<string> from)
+        {
+            env[VariableKey(binding)] = from;
+            return new(from, StringComparer.Ordinal);
+        }
+        HashSet<string> Branches(HashSet<string> test, IEnumerable<Node> branches)
+        {
+            var start = env;
+            var value = new HashSet<string>(test, StringComparer.Ordinal);
+            var ends = new List<Dictionary<string, HashSet<string>>>();
+            foreach (var branch in branches)
+            {
+                env = new(start, StringComparer.Ordinal);
+                value.UnionWith(Flow(branch));
+                ends.Add(env);
+            }
+            env = start;
+            foreach (var key in ends.SelectMany(end => end.Where(e => !start.TryGetValue(e.Key, out var was) || !ReferenceEquals(was, e.Value)).Select(e => e.Key))
+                         .Distinct(StringComparer.Ordinal).ToArray())
+            {
+                var joined = new HashSet<string>(test, StringComparer.Ordinal);
+                foreach (var end in ends) joined.UnionWith(end.TryGetValue(key, out var from) ? from : Of(key));
+                env[key] = joined;
+            }
+            return value;
+        }
+        HashSet<string> Flow(Node node)
+        {
+            RuntimeHelpers.EnsureSufficientExecutionStack();
+            if (!setting.Contains(node)) return Uses(node);
+            switch (node)
+            {
+                case Sequence sequence:
+                {
+                    var value = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var child in sequence.Nodes) value = Flow(child);
+                    return value;
+                }
+                case FunctionBody body:
+                    Flow(body.Body);
+                    return Of(VariableKey(body.Result));
+                case Variable { Value: { } initial } declaration:
+                    return Set(declaration.Binding, Flow(initial));
+                case Assign assignment:
+                    return Set(assignment.Binding, Flow(assignment.Value));
+                case Conditional conditional:
+                    return Branches(Flow(conditional.Test), [conditional.Yes, conditional.No]);
+                case Select select when !select.Cases.Any(c => c.Items.Any(setting.Contains)):
+                {
+                    var test = Flow(select.Value);
+                    foreach (var item in select.Cases.SelectMany(c => c.Items)) test.UnionWith(Uses(item));
+                    return Branches(test, select.Cases.Select(c => c.Body).Append(select.Otherwise));
+                }
+                default:
+                {
+                    var value = new HashSet<string>(StringComparer.Ordinal);
+                    var targets = new List<Binding>();
+                    foreach (var inner in Walk(node))
+                    {
+                        if (SetBinding(inner) is { } target) { targets.Add(target); value.UnionWith(Of(VariableKey(target))); }
+                        if (Read(inner) is { } read) value.UnionWith(read);
+                    }
+                    foreach (var target in targets) env[VariableKey(target)] = new(value, StringComparer.Ordinal);
+                    return value;
+                }
+            }
+        }
     }
 
     // Display formulas may use global declarations as temporaries when every read
@@ -147,15 +384,20 @@ public sealed partial class CrystalFormula
         return new(name, text, formula, signature.Parameters.Select(p => new CrystalCustomFunctionParameter(p.Binding.Name, p.Binding.Type, p.Binding.IsArray, p.Binding.IsRange, p.Default is not null)).ToArray());
     }
 
-    public object? Evaluate(CrystalFormulaContext context) => Evaluate(context, recordSelection: false);
+    public object? Evaluate(CrystalFormulaContext context) => Evaluate(context, recordSelection: false, out _);
 
-    internal object? EvaluateRecordSelection(CrystalFormulaContext context) => Evaluate(context, recordSelection: true);
+    /// <summary>Evaluates the formula; stopped is true when it stopped at a null value (a field, or a formula it refers to,
+    /// that is null) and gave null: it may have set some of the variables it assigns and not the rest.</summary>
+    internal object? Evaluate(CrystalFormulaContext context, out bool stopped) => Evaluate(context, recordSelection: false, out stopped);
 
-    private object? Evaluate(CrystalFormulaContext context, bool recordSelection)
+    internal object? EvaluateRecordSelection(CrystalFormulaContext context) => Evaluate(context, recordSelection: true, out _);
+
+    private object? Evaluate(CrystalFormulaContext context, bool recordSelection, out bool stopped)
     {
+        stopped = false;
         var frame = new Frame(context, _defaultValue, new Budget());
         try { return recordSelection ? RecordPredicate(frame, _root) : _root.Get(frame); }
-        catch (NullFormulaValue) { return null; }
+        catch (NullFormulaValue) { stopped = true; return null; }
         catch (DivideByZeroException) { throw new InvalidDataException("Division by zero."); }
         catch (OverflowException ex) { throw new InvalidDataException("Crystal formula numeric overflow: " + ex.Message, ex); }
         catch (InsufficientExecutionStackException) { throw new InvalidDataException("Formula nesting is too deep to evaluate."); }

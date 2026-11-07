@@ -9,7 +9,7 @@ internal static class ReportCrossTabFormatting
         or "name" or "fontname" or "style" or "horizontalalignment" or "enablesuppress" or "displaystring" or "currencysymbol";
 
     internal static (ReportNativeCrossTabCellStyle Style, string? Display) Apply(ReportNativeCrossTabCellStyle original, string originalDisplay,
-        Func<object?, CrystalFormulaContext> context)
+        Func<object?, CrystalFormulaContext> context, Func<ReportGridFormula, bool, bool?>? deferSuppression = null)
     {
         var style = original;
         string? display = null;
@@ -26,8 +26,9 @@ internal static class ReportCrossTabFormatting
                 "enablesuppress" => original.Suppressed, "displaystring" => originalDisplay,
                 _ => throw new NotSupportedException("Unsupported cross-tab formatting condition: " + condition.Property)
             };
-            var formula = condition.Formula.Compile(attribute);
-            var value = formula.Evaluate(context(attribute));
+            // The terminal Boolean can determine visibility before a stateful cell runs in print order.
+            var value = property == "enablesuppress" && deferSuppression?.Invoke(condition.Formula, original.Suppressed) is bool flag
+                ? flag : condition.Formula.Compile(attribute).Evaluate(context(attribute));
             switch (property)
             {
                 case "color": case "fontcolor": style = style with { Color = Color(value) }; break;
