@@ -25,9 +25,9 @@ public class GridColumn : ComponentBase, IDisposable
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
     /// <summary>Cell text alignment. Unset defaults by column type:
     /// <see cref="ColumnType.CheckBox"/> columns centre (vsFlexGrid
-    /// flexcpChecked parity — the check box sits in the middle of its cell,
-    /// HHM-901); <see cref="ColumnType.Date"/> columns right-align (vsFlexGrid
-    /// flexDTDate parity, HHM-920); everything else left-aligns. Set explicitly to override —
+    /// flexcpChecked parity — the check box sits in the middle of its cell);
+    /// <see cref="ColumnType.Date"/> columns right-align (vsFlexGrid
+    /// flexDTDate parity); everything else left-aligns. Set explicitly to override —
     /// except that on a CheckBox column only Right is honoured as an
     /// override (see <see cref="ResolvedTextAlign"/> for why).
     /// Mirrors <see cref="TreeGridColumn.TextAlign"/>.</summary>
@@ -44,9 +44,9 @@ public class GridColumn : ComponentBase, IDisposable
             // pass the enum default Left on EVERY column — so on CheckBox
             // columns only an explicit Right counts as an override; Left (set
             // or unset) resolves to Center. Honouring Left here would defeat
-            // the default for every layout-driven grid (HHM-901).
+            // the default for every layout-driven grid.
             ? (TextAlign == Grid.TextAlign.Right ? Grid.TextAlign.Right : Grid.TextAlign.Center)
-            // Date columns right-align (vsFlexGrid flexDTDate parity, HHM-920).
+            // Date columns right-align (vsFlexGrid flexDTDate parity).
             // Restored 2026-09-08: the 2026-09-07 FlexCore sync had dropped it.
             : (TextAlign ?? (Type == ColumnType.Date ? Grid.TextAlign.Right : Grid.TextAlign.Left));
     /// <summary>

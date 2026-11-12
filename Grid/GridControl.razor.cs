@@ -809,10 +809,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// user manipulation.
     ///
     /// <para>Format: <c>{FormName}.{gridName}</c> with optional
-    /// <c>.{instanceKey}</c> suffix — same convention as the legacy
-    /// <c>AppGridLayout</c> table used by HomeFront's existing
-    /// <c>GridLayoutService</c>. Examples: <c>"FAssembly.gComponents"</c>,
-    /// <c>"FAssembly.gItems.(0)"</c>.</para></summary>
+    /// <c>.{instanceKey}</c> suffix — same convention as a host's own
+    /// grid-layout table. Examples: <c>"FOrders.gItems"</c>,
+    /// <c>"FOrders.gItems.(0)"</c>.</para></summary>
     [Parameter] public string? PersistenceKey { get; set; }
 
     // Resolved lazily from the service provider so the grid still works in
@@ -990,9 +989,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             if (!ScrollTrack && (UseRowWindowing || UseGroupedRowWindowing))
                 return "overflow-x:auto; overflow-y:hidden; flex:1;";
 
-            return IsPagingActive
-                ? "overflow-x:auto; overflow-y:hidden; flex:1;"
-                : "overflow:auto; flex:1;";
+            // A paged grid scrolls too: a page taller than the box (a 200-value batch in a
+            // short list) would otherwise clip its lower rows, with no scrollbar or wheel.
+            return "overflow:auto; flex:1;";
         }
     }
 
@@ -1346,7 +1345,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         // A header click left the grid without a cursor: a later focus-in (window
         // re-activation, programmatic refocus) must not plant and reveal one either.
-        // The first navigation key seeds it on that header's column (HHM-1339).
+        // The first navigation key seeds it on that header's column.
         if (!pageEntry && _headerSeedField != null)
             return;
 
@@ -3032,8 +3031,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// for the un-rendered rows' height, the spacer paints an EMPTY-GRID lattice —
     /// row lines every RowHeight px plus a hard stop at every column edge, in the
     /// same border colors the real cells use — so a fast scroll shows the grid
-    /// fabric with rows filling in rather than a white void (HHM-867 issue 6;
-    /// VSFlexGrid paints its not-yet-drawn area the same way). Both spacers start
+    /// fabric with rows filling in rather than a white void
+    /// (VSFlexGrid paints its not-yet-drawn area the same way). Both spacers start
     /// on a row boundary, so the lines coincide exactly with where the real rows
     /// land. (Invariant-formatted so comma-decimal locales don't emit bad CSS.)</summary>
     private string WindowSpacerStyle(double heightPx)
@@ -4513,6 +4512,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// pull the scroll container back to the top so the first paint of the reset
     /// window lands on real rows rather than the bottom spacer. Reuses the existing
     /// vertical scroll helper so sorting/filtering does not reset the column viewport.
+    /// A paged grid has no window reader, but a page change (<see cref="GoToPage"/>,
+    /// page size) and a return to page 1 (<see cref="ResetToFirstPage"/>) set the same
+    /// flag: the page shows from its top, not at the previous scroll offset. A pending
+    /// active-cell reveal clears the flag first.
     /// </summary>
     private async Task ApplyPendingWindowScrollResetAsync()
     {
@@ -4521,12 +4524,15 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _pendingWindowScrollReset = false;
 
-        if (!_windowScrollRegistered || _gridJsModule == null)
+        var module = _windowScrollRegistered ? _gridJsModule
+            : IsPagingActive ? _gridJsModule ??= await GetGridJsModuleAsync()
+            : null;
+        if (module == null)
             return;
 
         try
         {
-            await _gridJsModule.InvokeVoidAsync("setGridScrollTop", _scrollElement, 0);
+            await module.InvokeVoidAsync("setGridScrollTop", _scrollElement, 0);
         }
         catch (Exception)
         {
@@ -5202,7 +5208,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         {
             _pageState.PageSize = resolvedPageSize;
             _lastHostResolvedPageSize = resolvedPageSize;
-            _pageState.CurrentPage = 1;
+            ResetToFirstPage();
         }
 
         var dataCount = GetCurrentDataSourceCount();
@@ -5360,7 +5366,14 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _lastFilterDataSource = DataSource;
         _lastFilterDataSourceSignature = signature;
         if (ClearFiltersOnDataSourceChange)
+        {
+            // New data sends a paged grid back to page 1; one that leaves a later
+            // page shows page 1 from its top, one already on page 1 keeps its place.
+            var leftLaterPage = _pageState.CurrentPage > 1;
             ClearAllFilterState();
+            if (leftLaterPage && IsPagingActive)
+                _pendingWindowScrollReset = true;
+        }
     }
 
     private void ClearSelectionIfDataSourceChanged()
@@ -5565,7 +5578,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             RemoveSortPriority(col.Field);
         }
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
 
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
@@ -5605,7 +5618,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         state.NumericFilterMin = null;
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
 
         if (finalizeUpdate && EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = value });
@@ -5675,7 +5688,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _columnAdvancedFilters.Remove(field);
         _columnCheckboxFilters.Remove(field);
         ResetFilterPopupDraft(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
     }
@@ -5690,7 +5703,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
     }
 
-    /// <summary>HHM-871 — the in-header clear affordance: the "filter applied"
+    /// <summary>The in-header clear affordance: the "filter applied"
     /// dot is a click-to-clear ×. Clears the column's ACTUAL filter (not just
     /// the popup draft) and closes the popup when it is showing this field.
     /// Component-receiver click, so the implicit render recomputes the view —
@@ -5885,7 +5898,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         SearchText = text;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         else
@@ -5903,6 +5916,16 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         || _columnCheckboxFilters.Count > 0;
 
     // ── Paging ───────────────────────────────────────────────────────────
+
+    /// <summary>Back to page 1 after a sort, filter, search, grouping or page-size
+    /// change. A paged grid also shows page 1 from its top, not at the old scroll
+    /// offset; an active-cell or row reveal still takes the scroll.</summary>
+    private void ResetToFirstPage()
+    {
+        _pageState.CurrentPage = 1;
+        if (IsPagingActive)
+            _pendingWindowScrollReset = true;
+    }
 
     private void EnsureCurrentPageInRange()
     {
@@ -6146,7 +6169,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 }
             }
 
-            // HHM-473 — MultiRow twin of the block above. VB6's grid ends an in-cell
+            // MultiRow twin of the block above. VB6's grid ends an in-cell
             // edit and fires AfterEdit (the mass-edit fan-out) whenever the editor is
             // LEFT by ANY means, clicking included; here only Enter/Tab committed the
             // row-selection type-over because the pointer commit lived in the CLICK
@@ -6694,7 +6717,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     }
 
     /// <summary>
-    /// HHM-473 — commits a pending row-selection type-over when the press lands on
+    /// Commits a pending row-selection type-over when the press lands on
     /// non-cell chrome (header, group rows, empty body space, toolbar): those presses
     /// never reach the cell handlers and don't move focus off the host, so neither
     /// the mousedown commit in <see cref="HandleCellMouseDown"/> nor
@@ -8300,7 +8323,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     // After a header click the cursor starts on that column, or on the nearest one
     // that can hold it on this row (a read-only column cannot), so the seed does not
-    // pull the viewport back to column 0 (HHM-1339).
+    // pull the viewport back to column 0.
     private int FindHeaderSeedCellIndex(List<GridColumn> columns, TValue? item)
     {
         if (_headerSeedField == null)
@@ -9876,7 +9899,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
             else if (ParseBatchEditDateValue(newValue) is { } parsedDate)
             {
-                // HHM-825: date cells accept compact keyboard entry (for example,
+                // Date cells accept compact keyboard entry (for example,
                 // 020226 or 08202026) and commit the normal formatted date value.
                 newValue = FormatBatchEditDateValue(parsedDate);
                 _validationStatusMessage = null;
@@ -11861,7 +11884,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             && IsCursorSeedingNavigationKey(e)
             && !TryResolveSelectedRowNavigationSource(false, out _, out _, out _))
         {
-            // HHM-1339: a header press focuses the grid without a cursor; the first
+            // A header press focuses the grid without a cursor; the first
             // navigation key seeds it (on the header's column) and then moves from it.
             // Not while a sort's provider reload is fetching: the rows are outgoing.
             TrySeedKeyboardActiveCell();
@@ -14065,7 +14088,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             Field = colField,
             HeaderText = col.DisplayHeader
         });
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
 
         if (EventsRef?.Grouped.HasDelegate == true)
             await EventsRef.Grouped.InvokeAsync(new GroupEventArgs { Field = colField });
@@ -14083,7 +14106,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         _groupDescriptors.RemoveAll(g => g.Field == colField);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
 
         if (EventsRef?.Ungrouped.HasDelegate == true)
             await EventsRef.Ungrouped.InvokeAsync(new GroupEventArgs { Field = colField });
@@ -15862,7 +15885,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     // to be assigned only in OnAfterRender, so the first wire batch shipped
     // width-less columns at 0px and the width arrived in a SECOND batch — on a
     // slow link the last column visibly materialized seconds after the rest of
-    // the header (HHM-756).
+    // the header.
     private void EnsureAutoColumnWidthsBeforeRender()
     {
         if (!_autoWidthPending)
@@ -16364,7 +16387,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     /// <summary>Clears the active-cell / last-selected-cell cues without touching row or
     /// cell selections. VB6 flexgrids move the current cell during SaveData walks, so a
     /// post-save highlight lingering on the edited column has no legacy equivalent —
-    /// hosts call this after a save to drop the cue (HHM-420).</summary>
+    /// hosts call this after a save to drop the cue.</summary>
     public async Task ClearActiveCellAsync()
     {
         _activeCell = null;
@@ -16600,7 +16623,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         _sortPriorityFields.Clear();
         GetColumnState(field).SortDirection = direction;
         EnsureSortPriority(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
@@ -16617,7 +16640,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         state.NumericFilterMin = null;
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
@@ -16627,6 +16650,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public async Task ClearFilteringAsync()
     {
         ClearAllFilterState();
+        // Not in ClearAllFilterState: a DataSource swap clears filters too and keeps the scroll offset.
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);
@@ -16710,7 +16735,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     public async Task ClearGroupingAsync()
     {
         _groupDescriptors.Clear();
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);

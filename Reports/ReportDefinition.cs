@@ -264,16 +264,16 @@ public class ReportSubreportLink
 /// <summary>One Crystal SubReportLink mapping from a main-report row field to a subreport field.</summary>
 public class ReportSubreportParameterLink
 {
-    /// <summary>Crystal linked parameter name, e.g. <c>Pm-tblSalesSheetMaster.Worksheet</c>.</summary>
+    /// <summary>Crystal linked parameter name, e.g. <c>Pm-tblOrders.OrderID</c>.</summary>
     public string LinkedParameterName { get; set; } = "";
 
-    /// <summary>Main report field reference as exported by Crystal, e.g. <c>{tblSalesSheetMaster.Worksheet}</c>.</summary>
+    /// <summary>Main report field reference as exported by Crystal, e.g. <c>{tblOrders.OrderID}</c>.</summary>
     public string MainReportFieldName { get; set; } = "";
 
-    /// <summary>Main report SQL alias selected into the row, e.g. <c>tblSalesSheetMaster_Worksheet</c>.</summary>
+    /// <summary>Main report SQL alias selected into the row, e.g. <c>tblOrders_OrderID</c>.</summary>
     public string MainReportAlias { get; set; } = "";
 
-    /// <summary>Subreport field reference as exported by Crystal, e.g. <c>{SalesSheetCostsViewNoCS.Worksheet}</c>.</summary>
+    /// <summary>Subreport field reference as exported by Crystal, e.g. <c>{OrderLinesView.OrderID}</c>.</summary>
     public string SubreportFieldName { get; set; } = "";
 
     /// <summary>Subreport table alias used in the generated SQL filter.</summary>
@@ -334,12 +334,12 @@ public class ReportGroup
     public string HeaderFormat { get; set; } = "{Value}";
 
     /// <summary>SQL-safe alias of a column carrying this group's description
-    /// (e.g. "PREPARATION" alongside the "03000" code). Sourced from
+    /// (e.g. "SITE WORK" alongside the "03000" code). Sourced from
     /// FieldObjects placed in the matching <c>&lt;Area Kind="GroupHeader"&gt;</c>
     /// section in the Crystal XML — typically a second alias of the
     /// lookup table joined on the group's code field
-    /// (Job Budget Report v1's <c>tblEstPhases_1.Description</c> joined on
-    /// <c>tblEstPhases.GroupPhaseValue</c> is the canonical example).
+    /// (<c>tblPhases_1.Description</c> joined on
+    /// <c>tblPhases.GroupPhaseValue</c> is the canonical example).
     /// Empty when the group has no description column.</summary>
     public string DescriptionField { get; set; } = "";
 
@@ -484,8 +484,8 @@ public class ReportParameter
 
     /// <summary>
     /// Table the parameter is bound to in the Crystal RecordSelectionFormula
-    /// (e.g. <c>"AssemblyCostsAllCommunities"</c> when the formula says
-    /// <c>{AssemblyCostsAllCommunities.Assembly} = {?Model}</c>). Populated
+    /// (e.g. <c>"CostsView"</c> when the formula says
+    /// <c>{CostsView.Assembly} = {?Model}</c>). Populated
     /// by <c>CrystalXmlReportLoader</c>. Empty when no equality/IN binding
     /// against this parameter was found.
     /// </summary>

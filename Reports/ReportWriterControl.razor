@@ -47,6 +47,8 @@
 @inject IReportViewerSettings ViewerSettings
 
 <ReportFontStyles />
+@* While Print prints, the printed pages carry fx-print-only: they print alone and whole, not cut off at the viewer box. *@
+<PrintOnlyStyles />
 
 @if (ShowChrome)
 {
@@ -83,13 +85,13 @@
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnPrint">
+            <ToolbarButtonControl Vertical="true" Disabled="@IsLoading" OnClick="ChromeOnPrint">
                 <span style="font-size:calc(18px * var(--fx-zoom, 1));">🖨️</span>
                 <span class="fx-rpt-toolbar-label">Print</span>
             </ToolbarButtonControl>
 
             <SplitButtonControl Text="Export" IconCss="bi bi-download" Items="@ExportItems"
-                Disabled="@(ActiveTab?.Pages.Count is not > 0)" OnClick="ChromeOnPrint"
+                Disabled="@(IsLoading || ActiveTab?.Pages.Count is not > 0)" OnClick="ChromeOnPrint"
                 OnItemClick="item => ChromeOnExport(item.Value?.ToString() ?? string.Empty)" />
 
             <ToolbarSeparatorControl />
@@ -117,8 +119,8 @@
             <div class="fx-rpt-search-controls">
                 <TextBoxControl @bind-Value="SearchText" UpdateOnInput="true" Placeholder="Search report" OnKeyDown="ChromeOnSearchKeyDown" aria-label="Search report" />
                 <ToolbarButtonControl Title="Find in report" OnClick="ChromeOnSearch"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">🔎</span></ToolbarButtonControl>
-                <ToolbarButtonControl Title="Previous match" Disabled="@(ActiveTab?.Search?.Matches.Count is not > 0)" OnClick="() => MoveSearchAsync(-1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▲</span></ToolbarButtonControl>
-                <ToolbarButtonControl Title="Next match" Disabled="@(ActiveTab?.Search?.Matches.Count is not > 0)" OnClick="() => MoveSearchAsync(1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▼</span></ToolbarButtonControl>
+                <ToolbarButtonControl Title="Previous match" Disabled="@(ActiveTab?.Search is null)" OnClick="() => MoveSearchAsync(-1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▲</span></ToolbarButtonControl>
+                <ToolbarButtonControl Title="Next match" Disabled="@(ActiveTab?.Search is null)" OnClick="() => MoveSearchAsync(1)"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">▼</span></ToolbarButtonControl>
                 <ToolbarButtonControl Title="Clear search" Disabled="@(ActiveTab?.Search is null)" OnClick="ClearSearch"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">✕</span></ToolbarButtonControl>
             </div>
 
@@ -136,13 +138,15 @@
                 <span class="fx-rpt-toolbar-label">@(ShowGroupTree && CanShowGroupTree ? "Hide Tree" : "Show Tree")</span>
             </ToolbarButtonControl>
 
-            <ToolbarSeparatorControl />
-
-            <div class="fx-rpt-tree-mode" role="radiogroup" aria-label="Tree click behavior" title="@(NativeDrillDownUnavailable ?? "What happens when you click a group node")">
-                <span class="fx-rpt-tree-mode-label">Tree:</span>
-                <RadioGroupControl TValue="TreeNavigationMode" Items="@(new RadioGroupItem<TreeNavigationMode>[] { new(TreeNavigationMode.Group, "Group"), new(TreeNavigationMode.DrillDown, "Drill down", NativeDrillDownUnavailable is not null) })"
-                    Value="EffectiveTreeMode" ValueChanged="SetTreeMode" Enabled="@CanShowGroupTree" AriaLabel="Tree navigation" />
-            </div>
+            @if (ShowTreeNavigationSelector)
+            {
+                <ToolbarSeparatorControl />
+                <div class="fx-rpt-tree-mode" title="@NativeDrillDownUnavailable">
+                    <span class="fx-rpt-tree-mode-label">Tree click:</span>
+                    <RadioGroupControl TValue="TreeNavigationMode" Items="@(new RadioGroupItem<TreeNavigationMode>[] { new(TreeNavigationMode.Group, "Go to group"), new(TreeNavigationMode.DrillDown, "Open drill-down tab", NativeDrillDownUnavailable is not null) })"
+                        Value="EffectiveTreeMode" ValueChanged="SetTreeMode" Enabled="@CanShowGroupTree" AriaLabel="Action when selecting a report group" />
+                </div>
+            }
         </ToolbarControl>
 
         @* ── Content Area — group tree + bare renderer ────────────────── *@
@@ -169,7 +173,8 @@
 
             <div class="fx-rpt-workspace" data-tab-orientation="@TabsOrientation">
                 @RenderReportTabs()
-                <div @key="ActiveTab" class="fx-rpt-viewer-panel" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
+                @* The pane outlives a page turn (it holds the print copy); report-writer-control.js shows a new data-current-page from its top. *@
+                <div @key="ActiveTab" class="fx-rpt-viewer-panel" tabindex="0" data-current-page="@CurrentPage" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
                     @RenderReportContent()
                 </div>
             </div>
@@ -177,7 +182,7 @@
 
         @* ── Status Bar ──────────────────────────────────────── *@
         <StatusBarControl CssClass="fx-rpt-status-bar">
-            <span>@StatusMessage</span>
+            <span>@ShownStatus</span>
             <span>@(ReportLoaded ? $"\u00a0Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
         </StatusBarControl>
     </div>
@@ -193,7 +198,7 @@ else
        own UI (dashboards, modal previews) set ShowChrome=false. *@
     <div class="fx-report-container fx-rpt-workspace" data-tab-orientation="@TabsOrientation" @ref="_reportRootElement">
         @RenderReportTabs()
-        <div class="fx-rpt-viewer-panel">
+        <div class="fx-rpt-viewer-panel" tabindex="0" data-current-page="@CurrentPage">
             @RenderReportContent()
         </div>
     </div>
@@ -218,6 +223,10 @@ else
     /// previews, etc.) — only the page area is shown.
     /// </summary>
     [Parameter] public bool ShowChrome { get; set; } = true;
+
+    /// <summary>Offer a toolbar choice between navigating to a group and opening its drill-down tab.
+    /// Off by default: tree clicks navigate to groups; drilling from report objects is unchanged.</summary>
+    [Parameter] public bool ShowTreeNavigationSelector { get; set; }
     [Parameter] public TabOrientation TabsOrientation { get; set; } = TabOrientation.Vertical;
     [Parameter] public TabTheme TabsTheme { get; set; } = TabTheme.WindowsClassic;
 
@@ -384,7 +393,7 @@ else
     // A native run whose layout cannot open drill views keeps its tree for Group navigation;
     // the chosen mode returns on a report that can drill.
     private string? NativeDrillDownUnavailable => ActiveTab?.NativeSession?.DrillDownUnsupportedReason;
-    private TreeNavigationMode EffectiveTreeMode => NativeDrillDownUnavailable is null ? TreeMode : TreeNavigationMode.Group;
+    private TreeNavigationMode EffectiveTreeMode => ShowTreeNavigationSelector && NativeDrillDownUnavailable is null ? TreeMode : TreeNavigationMode.Group;
 
     // Zoom (percent; 0 = Fit Page, -1 = Fit Width). Loaded from
     // IReportViewerSettings on first render.
@@ -461,9 +470,17 @@ else
                 if (module is null) return;
 
                 await module.InvokeVoidAsync("attachDrillHandler", _reportRootElement, _dotNetRef);
+                await module.InvokeVoidAsync("attachViewerNavigation", _reportRootElement, _dotNetRef);
                 _jsClickHandlerRegistered = true;
             }
             catch { /* JS not ready yet — will retry on next render */ }
+        }
+        // A searched page shows its matches however the user reached it; its highlighted rendering is prepared
+        // when the shown page changes, so the render reads a ready string.
+        if (ActiveTab is { Search: not null } searched && searched.Pages.Count > 0)
+        {
+            var page = Math.Clamp(searched.CurrentPage, 1, searched.Pages.Count);
+            if (searched.SearchHighlightPage != page && await PrepareSearchHighlightAsync(searched, page)) await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -480,8 +497,12 @@ else
         }
     }
 
+    // Set first in DisposeAsync: a find that yielded before its anchor scroll must not scroll after the viewer is gone.
+    private bool _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         CancelNativeLoad();
         _conversionWorkspace.Dispose();
         _designerPreview?.Dispose();
@@ -490,6 +511,7 @@ else
         {
             if (_reportJsModule is not null)
             {
+                await _reportJsModule.InvokeVoidAsync("detachViewerNavigation", _reportRootElement);
                 await _reportJsModule.InvokeVoidAsync("detachDrillHandler", _reportRootElement);
                 await _reportJsModule.DisposeAsync();
             }
@@ -564,6 +586,24 @@ else
         }
     }
 
+    /// <summary>Turns the page for the pane's keyboard and wheel navigation (the browser scrolls within a page on its
+    /// own and calls this only at the page's edge). True when the shown page changed.</summary>
+    [JSInvokable]
+    public async Task<bool> OnViewerNavigate(string action)
+    {
+        var before = CurrentPage;
+        switch (action)
+        {
+            case "next": if (!IsLoading && !(IsPageCountFinal && CurrentPage >= PageCount)) await OnPageChanged(CurrentPage + 1); break;
+            case "previous": if (CurrentPage > 1) JumpTo(CurrentPage - 1); break;
+            case "first": JumpTo(1); break;
+            case "last": if (!IsLoading) await OnLastPage(); break;
+        }
+        var moved = CurrentPage != before;
+        if (moved) await InvokeAsync(StateHasChanged);
+        return moved;
+    }
+
     /// <summary>JSON shape emitted in row <c>data-path</c> attributes.</summary>
     private sealed class CellPathEntry
     {
@@ -609,6 +649,7 @@ else
         var tab = ActiveTab;
         if (tab == null || tab.Pages.Count == 0) return;
         tab.CurrentPage = Math.Max(1, Math.Min(pageNum, tab.Pages.Count));
+        DropLeftPrintMark();
         StateHasChanged();
     }
 
@@ -618,6 +659,7 @@ else
         if (tabIndex >= 0 && tabIndex < Tabs.Count)
         {
             ActiveTabIndex = tabIndex;
+            DropLeftPrintMark();
             SearchText = ActiveTab?.Search?.Query ?? "";
             StateHasChanged();
             OnRenderComplete?.Invoke();
@@ -632,6 +674,7 @@ else
         if (tabIndex < ActiveTabIndex) ActiveTabIndex--;
         if (ActiveTabIndex >= Tabs.Count) ActiveTabIndex = Tabs.Count - 1;
         if (ActiveTabIndex < 0) ActiveTabIndex = 0;
+        DropLeftPrintMark();
         SearchText = ActiveTab?.Search?.Query ?? "";
         StateHasChanged();
         OnRenderComplete?.Invoke();
@@ -726,6 +769,7 @@ else
 
             Tabs.Add(tab);
             ActiveTabIndex = Tabs.Count - 1;
+            DropLeftPrintMark();
 
             Logger.LogInformation("Drill-down tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
         }
@@ -743,6 +787,9 @@ else
     }
 
     private int _nativeNavigationVersion;
+    // Moved on whenever ShowReportAsync sets IsLoading. A refresh moves _nativeNavigationVersion only once it runs the
+    // report, so a load already under way (a page, a drill-down) checks this too, and leaves IsLoading to the refresh.
+    private int _loadGeneration;
     private CancellationTokenSource? _nativeLoad;
 
     private void CancelNativeLoad()
@@ -781,6 +828,7 @@ else
         var existing = Tabs.FindIndex(tab => tab.NativeGroupId == key && tab.NativeSession is not null);
         if (existing >= 0) { SwitchTab(existing); return; }
         var version = _nativeNavigationVersion;
+        var load = _loadGeneration;
         ErrorMessage = null;
         IsLoading = true;
         await InvokeAsync(StateHasChanged);
@@ -798,6 +846,7 @@ else
                 RuntimeDiagnostics = result.Diagnostics, CreateDataExport = session.CreateDataExport
             });
             ActiveTabIndex = Tabs.Count - 1;
+            DropLeftPrintMark();
             SearchText = "";
             StatusMessage = $"Subreport: {title}";
         }
@@ -811,7 +860,7 @@ else
         {
             if (version == _nativeNavigationVersion)
             {
-                IsLoading = false;
+                if (load == _loadGeneration) IsLoading = false;
                 await InvokeAsync(StateHasChanged);
                 OnRenderComplete?.Invoke();
             }
@@ -839,6 +888,7 @@ else
         var existing = Tabs.FindIndex(tab => tab.NativeGroupId == node.AnchorId && tab.NativeSession is not null);
         if (existing >= 0) { SwitchTab(existing); return; }
         var version = _nativeNavigationVersion;
+        var load = _loadGeneration;
         IsLoading = true;
         await InvokeAsync(StateHasChanged);
         try
@@ -854,6 +904,7 @@ else
                 RuntimeDiagnostics = result.Diagnostics, CreateDataExport = session.CreateDataExport
             });
             ActiveTabIndex = Tabs.Count - 1;
+            DropLeftPrintMark();
             SearchText = "";
             StatusMessage = $"Drill down: {node.Label}";
         }
@@ -867,7 +918,7 @@ else
         {
             if (version == _nativeNavigationVersion)
             {
-                IsLoading = false;
+                if (load == _loadGeneration) IsLoading = false;
                 await InvokeAsync(StateHasChanged);
                 OnRenderComplete?.Invoke();
             }
@@ -985,6 +1036,7 @@ else
 
             Tabs.Add(tab);
             ActiveTabIndex = Tabs.Count - 1;
+            DropLeftPrintMark();
             StatusMessage = $"Subreport: {tab.Title}";
 
             Logger.LogInformation("Subreport tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
@@ -1073,6 +1125,7 @@ else
         ErrorMessage = null;
         ClearPdfPreview();
         Tabs.Clear();
+        DropLeftPrintMark();
         await InvokeAsync(StateHasChanged);
 
         try
@@ -1139,6 +1192,7 @@ else
         ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
+        DropLeftPrintMark();
         await InvokeAsync(StateHasChanged);
 
         try
@@ -1220,6 +1274,7 @@ else
         ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
+        DropLeftPrintMark();
         await InvokeAsync(StateHasChanged);
 
         try
@@ -1365,6 +1420,7 @@ else
         ErrorMessage = null;
         ClearPdfPreview();
         Tabs.Clear();
+        DropLeftPrintMark();
         // Orientation is now stored on each tab; set in the tab construction below.
         await InvokeAsync(StateHasChanged);
 
@@ -1416,14 +1472,6 @@ else
         }
     }
 
-    /// <summary>Triggers the browser print dialog for the rendered report.</summary>
-    public async Task Print()
-    {
-        if (!await EnsureNativePagesAsync(0)) return;
-        await InvokeAsync(StateHasChanged);
-        await JSRuntime.InvokeVoidAsync("window.print");
-    }
-
     /// <summary>Clears the current report.</summary>
     public void Clear()
     {
@@ -1432,6 +1480,7 @@ else
         ClearPdfPreview();
         Tabs.Clear();
         ActiveTabIndex = 0;
+        DropLeftPrintMark();
         ErrorMessage = null;
         // Closing the Crystal engine is the host's responsibility — IReportExporter
         // doesn't expose a Close() because not all implementations need one.
@@ -1463,11 +1512,13 @@ else
     /// </summary>
     public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
     {
+        StopPrint();
         ErrorMessage = null;
         ReportLoaded = false;
         try
         {
             IsLoading = true;
+            _loadGeneration++;
             var previousFile = ReportFilePath;
             ReportFilePath = file;
             await OnPageTitleChanged.InvokeAsync(Path.GetFileNameWithoutExtension(file));
@@ -1574,6 +1625,7 @@ else
                         typedParams[kv.Key] = kv.Value;
 
                     IsLoading = true;
+                    _loadGeneration++;
                     StatusMessage = $"Loading report: {xmlPath}";
                     await InvokeAsync(StateHasChanged);
                 }
@@ -1675,6 +1727,7 @@ else
     {
         var clamped = Math.Max(1, Math.Min(target, PageCount));
         if (ActiveTab != null) ActiveTab.CurrentPage = clamped;
+        DropLeftPrintMark();
     }
 
     private async Task ChromeOnPrint() => await Print();
@@ -1715,8 +1768,12 @@ else
 
     private async Task ChromeOnExport(string format)
     {
+        // Print reads the window it was pressed in before it completes the report, as the toolbar's does.
+        if (format == "Print") { if (await PrintAsync()) StatusMessage = "Print dialog requested."; return; }
+        // So does a PDF export, which falls back to Print; a refresh meanwhile ends that fallback.
+        var pressedActive = IsActiveWindow?.Invoke() ?? true;
+        var pressedStops = _printStops;
         if (!await EnsureNativePagesAsync(0)) return;
-        if (format == "Print") { await Print(); StatusMessage = "Print dialog requested."; return; }
         StatusMessage = $"Exporting as {format}...";
         await InvokeAsync(StateHasChanged);
         try
@@ -1738,8 +1795,9 @@ else
         {
             // Something on the pages the native PDF cannot write: the browser's print / save as PDF can.
             Logger.LogWarning(ex, "Native PDF export unavailable; opening Print instead");
-            await Print();
-            StatusMessage = $"PDF export is not available for this report ({ex.Message}). Print opened instead.";
+            StatusMessage = $"PDF export is not available for this report ({ex.Message}).";
+            if (pressedStops == _printStops && await PrintPressedAsync(pressedActive))
+                StatusMessage = $"PDF export is not available for this report ({ex.Message}). Print opened instead.";
         }
         catch (Exception ex)
         {
@@ -1798,43 +1856,192 @@ else
     {
         if (e.Key == "Enter") await ChromeOnSearch();
     }
+    // Find renders and searches one page at a time, from the shown page on, and stops at the first match: a
+    // long report is never rendered whole for a search. Pages not paginated yet are paginated in batches of
+    // SearchBatchPages as the search reaches them; the same text again, ▼ and ▲ continue from the match the user is on,
+    // over the pages already searched first and the rest of the report next.
+    private const int SearchBatchPages = 25;
+
     private async Task ChromeOnSearch()
     {
-        if (!await EnsureNativePagesAsync(0)) return;
         if (ActiveTab is not { } tab) return;
         if (string.IsNullOrWhiteSpace(SearchText)) { ClearSearch(); return; }
-        if (tab.Search?.Query == SearchText.Trim()) { await MoveSearchAsync(1); return; }
+        var query = SearchText.Trim();
+        if (tab.Search is { } current && current.Query == query) { await MoveSearchAsync(1); return; }
+        var version = ++_searchVersion;
         try
         {
-            var query = SearchText;
-            var version = ++_searchVersion;
-            var pages = tab.PageSnapshots.Count > 0 ? await ReportNativeExport.RenderPagesAsync(tab.PageSnapshots) : tab.Pages;
-            if (version != _searchVersion) return;
-            tab.Search = new ReportTextSearch(pages, query);
-            tab.SearchMatchIndex = -1;
-            if (!ReferenceEquals(tab, ActiveTab)) return;
-            if (tab.Search.Matches.Count == 0) StatusMessage = "No matches.";
-            else await MoveSearchAsync(1);
+            tab.Search = new ReportTextSearch(query);
+            tab.SearchMatchPage = 0; tab.SearchMatchIndex = -1;
+            tab.SearchHighlightPage = 0; tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
+            await FindAsync(tab, version, 1, Math.Clamp(tab.CurrentPage, 1, Math.Max(1, tab.Pages.Count)), -1);
         }
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
-        { StatusMessage = "Search failed: " + error.Message; }
+        {
+            if (version != _searchVersion) return;
+            tab.Search = null;
+            StatusMessage = "Search failed: " + error.Message;
+            await InvokeAsync(StateHasChanged);
+        }
     }
 
+    /// <summary>▼ / ▲: the next or previous match from the one the user is on, or from the shown page when there is none.</summary>
     private async Task MoveSearchAsync(int direction)
     {
-        if (ActiveTab?.Search is not { Matches.Count: > 0 } search) return;
-        var tab = ActiveTab;
-        ActiveTab.SearchMatchIndex = (ActiveTab.SearchMatchIndex + direction + search.Matches.Count) % search.Matches.Count;
-        JumpTo(search.Matches[ActiveTab.SearchMatchIndex].Page);
-        StatusMessage = $"Match {ActiveTab.SearchMatchIndex + 1} of {search.Matches.Count}" + (search.Truncated ? " (result limit reached)" : "");
+        if (ActiveTab is not { Search: not null } tab) return;
+        var version = ++_searchVersion;
+        var page = tab.SearchMatchPage > 0 ? tab.SearchMatchPage : Math.Clamp(tab.CurrentPage, 1, Math.Max(1, tab.Pages.Count));
+        var index = tab.SearchMatchPage > 0 ? tab.SearchMatchIndex : direction > 0 ? -1 : int.MaxValue;
+        try { await FindAsync(tab, version, direction, page, index); }
+        catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
+        {
+            if (version != _searchVersion) return;
+            StatusMessage = "Search failed: " + error.Message;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    /// <summary>Finds the match after (or, going back, before) the one at <paramref name="page"/> / <paramref name="index"/>:
+    /// over the paginated pages first, then paginating the rest in batches, then from the other end of the report.</summary>
+    private async Task FindAsync(ReportTab tab, int version, int direction, int page, int index)
+    {
+        var search = tab.Search!;
+        bool Superseded() => _disposed || version != _searchVersion || !ReferenceEquals(tab, ActiveTab) || !Tabs.Contains(tab);
+        await using var renderer = new ReportNativeExport.PageRenderer();
+        async Task<string> Html(int number) => tab.PageSnapshots.Count == tab.Pages.Count
+            ? await renderer.RenderAsync(tab.PageSnapshots[number - 1]) : tab.Pages[number - 1];
+        // Searches the pages from..to (inclusive, in the find's direction); on the first of them only the matches after
+        // (before) the given index count. Returns the match and its page's rendering, which the highlight needs.
+        async Task<(int Page, int Index, string Html)?> ScanAsync(int from, int to, int after)
+        {
+            for (var number = from; direction > 0 ? number <= to : number >= to; number += direction)
+            {
+                if (number < 1 || number > tab.Pages.Count) break;
+                string? html = null;
+                IReadOnlyList<ReportSearchMatch> matches;
+                if (search.IsSearched(number)) matches = search.MatchesOn(number);
+                else
+                {
+                    html = await Html(number);
+                    if (Superseded()) return null;
+                    matches = search.SearchPage(number, html);
+                }
+                var boundary = number == from ? after : direction > 0 ? -1 : int.MaxValue;
+                var hit = direction > 0 ? (boundary + 1 < matches.Count ? boundary + 1 : -1) : Math.Min(boundary, matches.Count) - 1;
+                if (hit < 0) continue;
+                html ??= await Html(number);
+                if (Superseded()) return null;
+                return (number, hit, html);
+            }
+            return null;
+        }
+
+        var found = await ScanAsync(page, direction > 0 ? tab.Pages.Count : 1, index);
+        if (Superseded()) return;
+        while (found is null && direction > 0 && !tab.IsPaginationComplete)
+        {
+            if (IsLoading) { StatusMessage = SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."; await InvokeAsync(StateHasChanged); return; }
+            var before = tab.Pages.Count;
+            var batch = Math.Min(10000, before + SearchBatchPages);
+            if (!await EnsureNativePagesAsync(batch, $"No match on the first {before} pages; paginating pages {before + 1}-{batch} to search them...") || Superseded()) return;
+            if (tab.Pages.Count == before) break;
+            found = await ScanAsync(before + 1, tab.Pages.Count, -1);
+            if (Superseded()) return;
+        }
+        var wrapped = false;
+        if (found is null)
+        {
+            if (direction < 0 && !tab.IsPaginationComplete)
+            {
+                if (IsLoading) { StatusMessage = SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."; await InvokeAsync(StateHasChanged); return; }
+                if (!await EnsureNativePagesAsync(0, "Paginating the rest of the report to search it from its end...") || Superseded()) return;
+            }
+            // From the other end of the report back to the starting page, whose every match counts again.
+            wrapped = true;
+            found = await ScanAsync(direction > 0 ? 1 : tab.Pages.Count, page, direction > 0 ? -1 : int.MaxValue);
+            if (Superseded()) return;
+        }
+        if (found is not { } match)
+        {
+            tab.SearchMatchPage = 0; tab.SearchMatchIndex = -1;
+            tab.SearchHighlightPage = 0; tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
+            StatusMessage = SearchStatus(tab);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+        tab.SearchMatchPage = match.Page; tab.SearchMatchIndex = match.Index;
+        ShowSearchHighlight(tab, search, match.Page, match.Html, match.Index);
+        JumpTo(match.Page);
+        StatusMessage = (wrapped ? direction > 0 ? "Reached the end of the report; continued from its first page. " : "Reached the start of the report; continued from its last page. " : "")
+            + SearchStatus(tab);
         await InvokeAsync(StateHasChanged);
-        if (ReferenceEquals(tab, ActiveTab)) await ScrollReportAnchorAsync("fx-report-hit-" + tab.SearchMatchIndex);
+        // Inside a click or key handler the render goes out at the first real yield; yield first, or the anchor scroll
+        // reaches the browser before the new page and finds the old page's mark (hit ids repeat on every page).
+        await Task.Yield();
+        if (Superseded()) return;
+        await ScrollReportAnchorAsync("fx-report-hit-" + match.Index);
+    }
+
+    /// <summary>Renders the page's matches, if it was searched and has any, so the viewer shows them when it shows the page;
+    /// false when nothing on screen changes.</summary>
+    private async Task<bool> PrepareSearchHighlightAsync(ReportTab tab, int page)
+    {
+        var had = tab.SearchHighlightHtml is not null;
+        tab.SearchHighlightPage = page;
+        tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
+        if (tab.Search is not { } search || !search.IsSearched(page) || search.MatchesOn(page).Count == 0) return had;
+        var html = tab.PageSnapshots.Count == tab.Pages.Count ? await RenderPageAsync(tab.PageSnapshots[page - 1]) : tab.Pages[page - 1];
+        if (!ReferenceEquals(tab.Search, search) || tab.SearchHighlightPage != page) return false;
+        try { ShowSearchHighlight(tab, search, page, html, tab.SearchMatchPage == page ? tab.SearchMatchIndex : -1); }
+        catch (InvalidDataException error)
+        {
+            // Called after a render: a page the highlight cannot mark is shown plain, and the status says why.
+            tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
+            StatusMessage = "Search failed: " + error.Message;
+        }
+        return true;
+    }
+
+    /// <summary>Marks the page's matches. A page rendered from its snapshot keeps its objects and their drill-down: only the
+    /// content of the objects holding a match is replaced (ReportPageControl.Highlight).</summary>
+    private static void ShowSearchHighlight(ReportTab tab, ReportTextSearch search, int page, string html, int activeMatch)
+    {
+        // Both are read before the tab changes: a page FromMarkedPage cannot match leaves the tab's highlight as it was.
+        var marked = search.HighlightPage(page, html, activeMatch);
+        var objects = tab.PageSnapshots.Count == tab.Pages.Count
+            ? ReportPageHighlight.FromMarkedPage(tab.PageSnapshots[page - 1], html, marked) : null;
+        tab.SearchHighlightPage = page;
+        tab.SearchHighlightHtml = marked;
+        tab.SearchHighlight = objects;
+    }
+
+    private static async Task<string> RenderPageAsync(ReportPageSnapshot page)
+    {
+        await using var renderer = new ReportNativeExport.PageRenderer();
+        return await renderer.RenderAsync(page);
+    }
+
+    /// <summary>"Match 3 of 12 on page 7 (7 of 40+ pages searched)", "Match 3 of 240" once every page is searched, or "No matching records found".</summary>
+    private static string SearchStatus(ReportTab tab)
+    {
+        if (tab.Search is not { } search) return "";
+        var everyPage = tab.IsPaginationComplete && search.PageCount >= tab.Pages.Count;
+        var scope = everyPage ? "" : $" ({search.PageCount} of {tab.Pages.Count}{(tab.IsPaginationComplete ? "" : "+")} pages searched)";
+        if (tab.SearchMatchPage <= 0) return $"No matching records found{scope}.";
+        var truncated = search.Truncated ? " (result limit reached)" : "";
+        return everyPage
+            ? $"Match {search.MatchesBefore(tab.SearchMatchPage) + tab.SearchMatchIndex + 1} of {search.MatchCount}{truncated}"
+            : $"Match {tab.SearchMatchIndex + 1} of {search.MatchesOn(tab.SearchMatchPage).Count} on page {tab.SearchMatchPage}{scope}{truncated}";
     }
 
     private void ClearSearch()
     {
         _searchVersion++;
-        if (ActiveTab is not null) { ActiveTab.Search = null; ActiveTab.SearchMatchIndex = -1; }
+        if (ActiveTab is { } tab)
+        {
+            tab.Search = null; tab.SearchMatchPage = 0; tab.SearchMatchIndex = -1;
+            tab.SearchHighlightPage = 0; tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
+        }
         SearchText = ""; StatusMessage = "Search cleared.";
     }
 
@@ -2003,7 +2210,7 @@ else
         // Build a row-to-page lookup using the SAME pagination logic the
         // renderer uses (rowsPerPage cap + ReportGroup.PageBreakBefore).
         // Without this the tree's PageIndex would be off whenever a group has
-        // PageBreakBefore set (e.g. Model Costs Report breaks per Model).
+        // PageBreakBefore set (e.g. a report that breaks per Model).
         var renderGroups = def.Groups
             .Where(g => paginationData.Columns.Contains(g.Field))
             .ToList();
@@ -2692,7 +2899,7 @@ else
 
         // Per-column "last rendered value" tracking for SuppressRepeats —
         // when a column flags itself as repeat-suppressing (typically the
-        // leftmost RecordSortField, e.g. Master Assembly List's POIndex),
+        // leftmost RecordSortField, e.g. an index column),
         // we emit an empty cell when the current row's value matches the
         // previous row's at the same column. Mirrors Crystal's
         // "Suppress If Duplicated" property which RptToXml doesn't export
@@ -2940,8 +3147,8 @@ else
         //
         // When a description is configured, render it stacked above the
         // group code on a second line — matches the legacy Crystal Viewer's
-        // typical "Major Group  <description>" / "Group Code  <value>"
-        // layout (Major Group and Category Report is the canonical example).
+        // typical "Group  <description>" / "Group Code  <value>"
+        // layout (a grouped category report is the canonical example).
         // Side-by-side concat looked cramped and didn't match the .rpt
         // designer's vertical layout. When no description is configured we
         // fall back to the legacy single-line "{Value}" header.
@@ -3452,16 +3659,20 @@ else
                   </AccordionItemControl>
                 </AccordionControl>
             }
-            <div class="fx-report-pages">
+            var printing = PrintCopyShown;
+            var printReady = PrintCopyReady;
+            <div class="fx-report-pages @(printReady ? (ActiveTab.PositionedPage is null ? "fx-report-printing fx-print-only" : "fx-report-printing") : null)">
                 <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
-                    @if (ActiveTab.Search is { } search)
+                    @{ var shownPage = Math.Clamp(ActiveTab.CurrentPage, 1, ActiveTab.Pages.Count);
+                       var searched = ActiveTab.Search is not null && ActiveTab.SearchHighlightHtml is not null && ActiveTab.SearchHighlightPage == shownPage; }
+                    @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
                     {
-                        @((MarkupString)search.HighlightPage(Math.Clamp(ActiveTab.CurrentPage, 1, ActiveTab.Pages.Count), ActiveTab.SearchMatchIndex))
-                    }
-                    else if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
-                    {
-                        <ReportPageControl Page="@ActiveTab.PageSnapshots[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.PageSnapshots.Count) - 1]"
+                        <ReportPageControl Page="@ActiveTab.PageSnapshots[shownPage - 1]" Highlight="@(searched ? ActiveTab.SearchHighlight : null)"
                             OnDrillDown="@(NativeDrillDownUnavailable is null ? EventCallback.Factory.Create<string>(this, OnNativeObjectDrill) : default)" />
+                    }
+                    else if (searched)
+                    {
+                        @((MarkupString)ActiveTab.SearchHighlightHtml!)
                     }
                     else
                     {
@@ -3472,16 +3683,13 @@ else
             @if (ActiveTab.PositionedPage is { } pageSize)
             {
                 <style>@($"@page fx-positioned {{ size:{ReportObjectRenderer.Number((pageSize.ContentWidthTwips + pageSize.MarginLeftTwips + pageSize.MarginRightTwips) / 15d)}px {ReportObjectRenderer.Number((pageSize.ContentHeightTwips + pageSize.MarginTopTwips + pageSize.MarginBottomTwips) / 15d)}px; margin:0; }}")</style>
-                <div class="fx-report-positioned-print" aria-hidden="true">
-                    @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
-                    {
-                        @foreach (var snapshot in ActiveTab.PageSnapshots) { <ReportPageControl Page="snapshot" IncludeNavigationAnchors="false" /> }
-                    }
-                    else
-                    {
-                        @foreach (var html in ActiveTab.Pages) { @((MarkupString)html) }
-                    }
-                </div>
+                @* The print copy of every page exists only once Print prepares it (see Print). *@
+                @if (printing)
+                {
+                    <div @key="_print" class="fx-report-positioned-print @(printReady ? "fx-report-print-ready fx-print-only" : null)" aria-hidden="true">
+                        @foreach (var (start, count) in _print!.Parts) { @PrintPart(_print, start, count) }
+                    </div>
+                }
             }
         }
         else

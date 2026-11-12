@@ -270,7 +270,7 @@
         get
         {
             var parts = new List<string>();
-            // HHM-866 issue 3 — the panel used to paint at the CELL's width and only
+            // The panel used to paint at the CELL's width and only
             // reach its real width after measureDropdown's interop round trip (a
             // NETWORK hop on Blazor Server), so QA saw it "open shortened, then
             // expand". Fit-content hosts now get their width from CSS

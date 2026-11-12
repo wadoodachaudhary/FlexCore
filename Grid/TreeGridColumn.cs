@@ -94,7 +94,7 @@ public class TreeGridColumn : ComponentBase, IDisposable
     [Parameter] public bool AllowAutoFit { get; set; } = true;
     [Parameter] public ColumnType Type { get; set; } = ColumnType.Text;
     /// <summary>Cell text alignment. Unset defaults by column type: Date
-    /// columns right-align (vsFlexGrid flexDTDate parity, HHM-920); everything
+    /// columns right-align (vsFlexGrid flexDTDate parity); everything
     /// else left-aligns. Set explicitly to override.</summary>
     [Parameter] public TextAlign? TextAlign { get; set; }
 

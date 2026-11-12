@@ -85,9 +85,8 @@ public sealed record ReportNativeNumericFormat(
         return (keepLeading ? leading : "") + formatted + (keepTrailing ? trailing : "");
     }
 
-    // The outer sign slots an alignment keeps: a right-aligned value (and a custom format's Default) drops its
-    // leading slot, a left-aligned one its trailing slot. The fit test and the painted blanks share this rule,
-    // so a value that passes the fit test is painted whole.
+    // Right alignment drops the leading slot, and left alignment drops the trailing slot.
+    // When testing fit, a system-default format can reserve both.
     private (bool Leading, bool Trailing) OuterSignSlots(string? alignment) => (alignment ?? "").ToLowerInvariant() switch
     {
         "right" => (false, true),
@@ -120,7 +119,10 @@ public sealed record ReportNativeNumericFormat(
         if (currencyTrails && core.EndsWith(currency, StringComparison.Ordinal)) core = core[..^currency.Length];
         if (leading.Length > 0 && core.StartsWith(leading, StringComparison.Ordinal)
             || trailing.Length > 0 && core.EndsWith(trailing, StringComparison.Ordinal)) return ("", "");
-        var (keepLeading, keepTrailing) = OuterSignSlots(alignment);
+        // Default numeric alignment paints against the right edge. Its leading sign reservation
+        // participates in the overflow test but must not push the final digit outside that edge.
+        var paintAlignment = string.Equals(alignment, "Default", StringComparison.OrdinalIgnoreCase) ? "Right" : alignment;
+        var (keepLeading, keepTrailing) = OuterSignSlots(paintAlignment);
         return (keepLeading && leading.Length > 0 && !currencyLeads ? " " : "",
             keepTrailing && trailing.Length > 0 && !currencyTrails ? " " : "");
     }

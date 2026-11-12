@@ -8,9 +8,8 @@ namespace Fx.ControlKit.Grid;
 /// keyed by the grid's <see cref="GridControl{T}.PersistenceKey"/>.
 ///
 /// <para>Default for any FlexCore consumer that doesn't have a database
-/// to persist into. Apps with their own grid-layout table (HomeFront /
-/// HomeFrontPB use <c>dbo.AppGridLayout</c>) should register a project-
-/// specific implementation instead.</para>
+/// to persist into. Apps with their own grid-layout table should register a
+/// project-specific implementation instead.</para>
 ///
 /// <para>Pass the file path via the constructor — the file is created on
 /// first save and read on every load. Concurrent writes are guarded with

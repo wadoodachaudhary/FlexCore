@@ -947,6 +947,21 @@ public partial class PivotControl<TValue>
         return Aggregate(ExportCellRows(row, column, 1, 1), valueColumn.ValueConfig);
     }
 
+    /// <summary>A shown value cell's aggregate, as the pivot computed it for display.</summary>
+    internal object? ExportShownValue(int row, int column)
+    {
+        var cells = _displayRows[row].Cells;
+        return cells[cells.Count - _valueColumns.Count + column - _effectiveRowFields.Count].RawValue;
+    }
+
+    /// <summary>A value column's total over every pivot record, whichever rows are shown.</summary>
+    internal object? ExportColumnTotal(int column)
+    {
+        var valueColumn = _valueColumns[column - _effectiveRowFields.Count];
+        return Aggregate(GetFilteredData().Where(item => valueColumn.IsTotal || _effectiveColumnFields.Count == 0
+            || BuildKey(item!, _effectiveColumnFields).Equals(valueColumn.Key)), valueColumn.ValueConfig);
+    }
+
     // Structured axes keep typed group identities for grid formulas and nested subtotals.
     internal IReadOnlyList<PivotExportAxis> ExportAxis(bool column, bool subtotals)
     {

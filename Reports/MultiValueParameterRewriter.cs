@@ -142,7 +142,7 @@ public static class MultiValueParameterRewriter
 
             // Crystal formulas sometimes reference the same parameter both as
             // an IN-rewrite target AND as a sentinel predicate test (e.g.
-            // Master Assembly List - No Cost v1's "IF {?Assembly Type} = -1
+            // a report's "IF {?Assembly Type} = -1
             // THEN ... ELSE ... AND tbl.AssemblyType = {?Assembly Type}"). The
             // sentinel reference becomes "@AssemblyType = -1" in SQL, and
             // without a scalar @Name binding SQL Server fails with

@@ -40,6 +40,27 @@ public static class ReportNativeExport
         return Export(new ReportTab { Title = tab.Title, Pages = pages, PositionedPage = tab.PositionedPage, Orientation = tab.Orientation }, format, fileName);
     }
 
+    /// <summary>Renders pages one at a time through one renderer, for a caller that stops early: a search ends at its first match.</summary>
+    public sealed class PageRenderer : IAsyncDisposable
+    {
+        private readonly ServiceProvider _services = new ServiceCollection().BuildServiceProvider();
+        private readonly HtmlRenderer _renderer;
+
+        public PageRenderer() => _renderer = new HtmlRenderer(_services, Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance);
+
+        public Task<string> RenderAsync(ReportPageSnapshot page) => _renderer.Dispatcher.InvokeAsync(async () =>
+        {
+            var root = await _renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page, [nameof(ReportPageControl.PrintNumericValues)] = true }));
+            return root.ToHtmlString();
+        });
+
+        public async ValueTask DisposeAsync()
+        {
+            await _renderer.DisposeAsync();
+            _services.Dispose();
+        }
+    }
+
     public static async Task<List<string>> RenderPagesAsync(IReadOnlyList<ReportPageSnapshot> snapshots)
     {
         using var services = new ServiceCollection().BuildServiceProvider();
@@ -49,7 +70,7 @@ public static class ReportNativeExport
         {
             foreach (var page in snapshots)
             {
-                var root = await renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page }));
+                var root = await renderer.RenderComponentAsync<ReportPageControl>(ParameterView.FromDictionary(new Dictionary<string, object?> { ["Page"] = page, [nameof(ReportPageControl.PrintNumericValues)] = true }));
                 pages.Add(root.ToHtmlString());
             }
         });

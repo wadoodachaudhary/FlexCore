@@ -1033,7 +1033,7 @@ public partial class GridControl<TValue>
         state.NumericFilterMin = null;
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     /// <summary>
@@ -1411,7 +1411,7 @@ public partial class GridControl<TValue>
             state.UseCheckedFilter = true;
         }
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1463,7 +1463,7 @@ public partial class GridControl<TValue>
             state.UseCheckedFilter = false;
         }
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1532,7 +1532,7 @@ public partial class GridControl<TValue>
         else
             _numericFilterMaxText.Remove(field);
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1737,7 +1737,7 @@ public partial class GridControl<TValue>
         state.UseNumericBoundsFilter = false;
         _numericFilterMinText.Remove(field);
         _numericFilterMaxText.Remove(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await NotifyGridStateChangedAsync(GridStateChangeKind.Filtering);
@@ -1907,7 +1907,7 @@ public partial class GridControl<TValue>
         }
 
         _pivotMode = enabled;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     private void EnsurePivotSeeded()
@@ -2002,7 +2002,7 @@ public partial class GridControl<TValue>
 
         _pivotMode = true;
         _activeOptionsPanel = GridOptionsPanel.Pivot;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
     }
 
     private void RemovePivotField(string field, PivotFieldArea area)

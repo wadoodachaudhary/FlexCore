@@ -209,7 +209,7 @@ public partial class GridControl<TValue>
                 GetColumnState(sort.Field).SortDirection = sort.Direction;
                 _sortPriorityFields.Add(sort.Field);
             }
-            _pageState.CurrentPage = 1;
+            ResetToFirstPage();
             ClearPassViewMemos();
             InvalidateBlazorServerOptimizationCaches();
 

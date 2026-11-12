@@ -21,7 +21,7 @@
                       Height="400px" />
 *@
 
-<div class="fx-chart @CssClass" style="@RootStyle" @onmouseleave="TipLeave">
+<div class="fx-chart @CssClass" style="@RootStyle" @onmouseleave="HoverOut">
     @if (ReportPlot is not null && PrintedSummaryPlot.Supports(ReportPlot))
     {
         var drawing = PrintedSummaryPlot.Draw(ReportPlot, _effectiveSeries, PrintWidthPoints, PrintHeightPoints);
@@ -38,10 +38,10 @@
     {
         var drawing = PrintedBarChart3D.Draw(Type, _effectiveSeries, Title ?? "",
             PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
-            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels);
+            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.PerspectiveStyle);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
-    else if (PrintWidthPoints > 0 && PrintHeightPoints > 0 && Type is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble)
+    else if (PrintedStageImage)
     {
         var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, ShowLegend, EffectivePalette, PrintReportGroupChart, XAxis);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
@@ -336,6 +336,7 @@
     [Parameter] public double PrintWidthPoints { get; set; }
     [Parameter] public double PrintHeightPoints { get; set; }
     private bool UsePrintBarLayout => Type == ChartType.Bar && PrintWidthPoints > 0 && PrintHeightPoints > 0;
+    private bool PrintedStageImage => PrintWidthPoints > 0 && PrintHeightPoints > 0 && Type is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble;
 
     [Parameter] public string[]? ColorPalette { get; set; }
 
@@ -373,6 +374,7 @@
     [Parameter] public string? KpiTrend { get; set; }
 
     // Tooltips (2026-10-31): a card follows the pointer over bars, slices, points, cells and flows; no script, Blazor events only.
+    // Hover handlers attach only when ShowTooltips or PointHover is on: a chart with ShowTooltips=false makes no hover round trips.
     /// <summary>Shows a card when the pointer is over a shape. Off, the shapes keep their native &lt;title&gt; text instead.</summary>
     [Parameter] public bool ShowTooltips { get; set; } = true;
     /// <summary>.NET numeric format for the numbers in the default card. Unset: whole numbers print as N0, the rest as N2.</summary>
@@ -384,7 +386,7 @@
     [Parameter] public Func<ChartTooltipContext, string?>? TooltipFormatter { get; set; }
     /// <summary>Replaces the whole card content.</summary>
     [Parameter] public RenderFragment<ChartTooltipContext>? TooltipTemplate { get; set; }
-    /// <summary>Raised with the context when the pointer enters a shape and with null when it leaves the shape or the chart.</summary>
+    /// <summary>Raised with the context when the pointer enters a shape and with null when it leaves the shape or the chart. Not raised by the Sunburst type.</summary>
     [Parameter] public EventCallback<ChartTooltipContext?> PointHover { get; set; }
 
     #endregion
@@ -446,6 +448,10 @@
         {
             _effectiveSeries = Series ?? new List<ChartSeries>();
         }
+        // Hover state, worked out once per parameter set; a card left open when hover goes off is dropped, not shown again later.
+        _hoverWanted = (ShowTooltips || PointHover.HasDelegate) && DrawsHoverShapes;
+        if (!ShowTooltips) _tip = null;
+        if (!_hoverWanted) { _hovering = false; _tip = null; }
     }
 
     private void ResolveLegacyData()
@@ -482,20 +488,38 @@
     private ChartTooltipContext? _tip;
     private double _tipX, _tipY;
     private bool _tipLeft, _tipUp;
+    private bool _hovering, _hoverWanted;
+
+    // Gated hover: with neither the card nor PointHover, or with no SVG shapes to hover (printed images, legacy bars, gauges,
+    // KPI cards, sparklines; the sunburst gates its own), nothing gets a handler or the fx-pt hover class.
+    private bool HoverWanted => _hoverWanted;
+    private bool DrawsHoverShapes => _effectiveSeries.Count > 0 && !UseLegacyMode && !PrintedStageImage && !ThreeDimensional && !CategoryLegend
+        && !(ReportPlot is not null && PrintedSummaryPlot.Supports(ReportPlot))
+        && Type is not (ChartType.Gauge or ChartType.LinearGauge or ChartType.ArcGauge or ChartType.RadialGauge or ChartType.KpiCard or ChartType.Sparkline or ChartType.Sunburst);
+    private string? PtClass => HoverWanted ? "fx-pt" : null;
+    private EventCallback<MouseEventArgs> Hover(Func<MouseEventArgs, Task> enter) =>
+        HoverWanted ? EventCallback.Factory.Create(this, enter) : default;
+    private EventCallback<MouseEventArgs> HoverOut =>
+        HoverWanted ? EventCallback.Factory.Create<MouseEventArgs>(this, TipLeave) : default;
 
     /// <summary>The pointer entered a shape: keep the pointer position, note which part of the drawing the shape is in so the card
     /// opens towards the middle, and tell the host. One round trip per shape, none per pixel.</summary>
     private async Task TipEnter(MouseEventArgs e, ChartTooltipContext ctx, double sx, double sy, double vbW, double vbH)
     {
-        if (!ShowTooltips) return;
-        _tip = ctx; _tipX = e.ClientX; _tipY = e.ClientY;
-        _tipLeft = sx > vbW * 0.55; _tipUp = sy > vbH * 0.6;
+        if (!HoverWanted) return;
+        _hovering = true;
+        if (ShowTooltips)
+        {
+            _tip = ctx; _tipX = e.ClientX; _tipY = e.ClientY;
+            _tipLeft = sx > vbW * 0.55; _tipUp = sy > vbH * 0.6;
+        }
         if (PointHover.HasDelegate) await PointHover.InvokeAsync(ctx);
     }
 
     private async Task TipLeave()
     {
-        if (_tip is null) return;
+        if (!_hovering) return;
+        _hovering = false;
         _tip = null;
         if (PointHover.HasDelegate) await PointHover.InvokeAsync(null);
     }
@@ -789,9 +813,9 @@
                         double barH = (val / (rangeMax - rangeMin)) * plotH;
                         double barY = padT + plotH - cumY - barH;
                         var sIdx = si; var pIdx = i;
-                        <rect class="fx-pt" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                        <rect class="@PtClass" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
                               fill="@GetSeriesColor(si)" rx="2"
-                              @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH)" @onmouseout="TipLeave">
+                              @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH))" @onmouseout="HoverOut">
                             @if (!ShowTooltips) { <title>@series[si].Name: @F1(val)</title> }
                         </rect>
                         cumY += barH;
@@ -810,9 +834,9 @@
                         double barY = Math.Min(valueY, zeroY);
                         double barX = groupX + si * subBarW;
                         var sIdx = si; var pIdx = i;
-                        <rect class="fx-pt" x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
+                        <rect class="@PtClass" x="@F(barX)" y="@F(barY)" width="@F(subBarW * 0.9)" height="@F(Math.Max(barH, 0))"
                               fill="@GetSeriesColor(si)" rx="2"
-                              @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), barX + subBarW * 0.45, barY, svgW, svgH)" @onmouseout="TipLeave">
+                              @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, GetSeriesColor(sIdx), labels[pIdx], val), barX + subBarW * 0.45, barY, svgW, svgH))" @onmouseout="HoverOut">
                             @if (!ShowTooltips) { <title>@series[si].Name: @F1(val)</title> }
                         </rect>
                     }
@@ -828,9 +852,9 @@
                         ? series[0].DataPoints[i].Color!
                         : ColorBarsByCategory ? GetPointColor(series[0].DataPoints[i], 0, i) : GetSeriesColor(0);
                     var pIdx = i;
-                    <rect class="fx-pt" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
+                    <rect class="@PtClass" x="@F(groupX)" y="@F(barY)" width="@F(usableWidth)" height="@F(Math.Max(barH, 0))"
                           fill="@color" rx="@(print ? 0 : 2)"
-                          @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH)" @onmouseout="TipLeave">
+                          @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, color, labels[pIdx], val), groupX + usableWidth / 2, barY, svgW, svgH))" @onmouseout="HoverOut">
                         @if (!ShowTooltips) { <title>@labels[i]: @F1(val)</title> }
                     </rect>
                 }
@@ -950,8 +974,8 @@
                         path.Append(move ? "M" : " L").Append(F(x)).Append(',').Append(F(y));
                         move = false;
                         var sIdxG = si; var pIdxG = index;
-                        <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="3" fill="@GetSeriesColor(si)" stroke="transparent" stroke-width="10"
-                                @onmouseover="e => TipEnter(e, MakeCtx(sIdxG, pIdxG, GetSeriesColor(sIdxG), pts[pIdxG].Label, pts[pIdxG].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                        <circle class="@PtClass" cx="@F(x)" cy="@F(y)" r="3" fill="@GetSeriesColor(si)" stroke="transparent" stroke-width="10"
+                                @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdxG, pIdxG, GetSeriesColor(sIdxG), pts[pIdxG].Label, pts[pIdxG].Value), x, y, svgW, svgH))" @onmouseout="HoverOut">
                             @if (!ShowTooltips) { <title>@pts[index].Label: @F1(pts[index].Value)</title> }
                         </circle>
                     }
@@ -1014,8 +1038,8 @@
                 var sIdx = si;
                 @foreach (var (x, y, pi) in pointCoords)
                 {
-                    <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="3" fill="@color" stroke="transparent" stroke-width="10"
-                            @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pi, color, pts[pi].Label, pts[pi].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                    <circle class="@PtClass" cx="@F(x)" cy="@F(y)" r="3" fill="@color" stroke="transparent" stroke-width="10"
+                            @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pi, color, pts[pi].Label, pts[pi].Value), x, y, svgW, svgH))" @onmouseout="HoverOut">
                         @if (!ShowTooltips) { <title>@pts[pi].Label: @F1(pts[pi].Value)</title> }
                     </circle>
                 }
@@ -1127,8 +1151,8 @@
                 var pIdx = i;
                 double midAngle = (startAngle + endAngle) / 2;
                 double tipX = cx + radius * 0.6 * Math.Cos(midAngle), tipY = cy + radius * 0.6 * Math.Sin(midAngle);
-                <path class="fx-pt" d="@path" fill="@color" stroke="white" stroke-width="1.5"
-                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value, pct), tipX, tipY, size, size)" @onmouseout="TipLeave">
+                <path class="@PtClass" d="@path" fill="@color" stroke="white" stroke-width="1.5"
+                      @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value, pct), tipX, tipY, size, size))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[i].Label: @F1(pts[i].Value) (@F1(pct)%)</title> }
                 </path>
 
@@ -1156,7 +1180,7 @@
     {
         var root = BuildSunburstFromSeries();
         if (root == null) return;
-        <SunburstChartControl RootNode="@root" Height="@(Height ?? "360px")" EnableDrilldown="true" ShowBreadcrumb="true" />
+        <SunburstChartControl RootNode="@root" Height="@(Height ?? "360px")" EnableDrilldown="true" ShowBreadcrumb="true" ShowTooltips="@ShowTooltips" />
     };
 
     private SunburstNode? BuildSunburstFromSeries()
@@ -1246,8 +1270,8 @@
                     var scatterFields = Type == ChartType.Bubble && pt.Value2.HasValue
                         ? new[] { Fld("X", xVal), Fld("Y", pt.Value), Fld("Size", pt.Value2.Value) }
                         : new[] { Fld("X", xVal), Fld("Y", pt.Value) };
-                    <circle class="fx-pt" cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color"
-                            @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, color, string.IsNullOrEmpty(series[sIdx].Name) ? pt.Label : series[sIdx].Name, pt.Value, null, scatterFields, pt.Label), px, py, svgW, svgH)" @onmouseout="TipLeave">
+                    <circle class="@PtClass" cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color"
+                            @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, color, string.IsNullOrEmpty(series[sIdx].Name) ? pt.Label : series[sIdx].Name, pt.Value, null, scatterFields, pt.Label), px, py, svgW, svgH))" @onmouseout="HoverOut">
                         @if (!ShowTooltips) { <title>(@F1(xVal), @F1(pt.Value))</title> }
                     </circle>
                 }
@@ -1314,7 +1338,7 @@
                 string color = GetSeriesColor(si);
                 <polygon points="@string.Join(" ", polyPts)" fill="@color" fill-opacity="0.2"
                          stroke="@color" stroke-width="2" />
-                @if (ShowTooltips)
+                @if (HoverWanted)
                 {
                     var sIdx = si;
                     for (int i = 0; i < n && i < s.DataPoints.Count; i++)
@@ -1323,8 +1347,8 @@
                         double angle = -Math.PI / 2 + 2 * Math.PI * i / n;
                         double r = (s.DataPoints[i].Value / maxVal) * radius;
                         double vx = cx + r * Math.Cos(angle), vy = cy + r * Math.Sin(angle);
-                        <circle class="fx-pt" cx="@F(vx)" cy="@F(vy)" r="3" fill="@color" stroke="transparent" stroke-width="10"
-                                @onmouseover="e => TipEnter(e, MakeCtx(sIdx, pIdx, color, labels[pIdx], s.DataPoints[pIdx].Value), vx, vy, size, size)" @onmouseout="TipLeave" />
+                        <circle class="@PtClass" cx="@F(vx)" cy="@F(vy)" r="3" fill="@color" stroke="transparent" stroke-width="10"
+                                @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, color, labels[pIdx], s.DataPoints[pIdx].Value), vx, vy, size, size))" @onmouseout="HoverOut" />
                     }
                 }
             }
@@ -1434,9 +1458,9 @@
 
                 var pIdx = i;
                 var waterfallFields = new[] { new ChartTooltipField("Change", (val >= 0 ? "+" : "") + Fmt(val)), Fld("Running total", cumulative[i + 1]) };
-                <rect class="fx-pt" x="@F(x)" y="@F(y1)" width="@F(barW - gap)" height="@F(barH)"
+                <rect class="@PtClass" x="@F(x)" y="@F(y1)" width="@F(barW - gap)" height="@F(barH)"
                       fill="@color" rx="2"
-                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, val, null, waterfallFields), x + (barW - gap) / 2, y1, svgW, svgH)" @onmouseout="TipLeave">
+                      @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, val, null, waterfallFields), x + (barW - gap) / 2, y1, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[i].Label: @(val >= 0 ? "+" : "")@F1(val)</title> }
                 </rect>
 
@@ -1511,9 +1535,9 @@
                     string color = $"rgb({r2},{g2},{b2})";
 
                     var rIdx = r; var cIdx = c;
-                    <rect class="fx-pt" x="@F(padL + c * cellW)" y="@F(padT + r * cellH)"
+                    <rect class="@PtClass" x="@F(padL + c * cellW)" y="@F(padT + r * cellH)"
                           width="@F(cellW - 1)" height="@F(cellH - 1)" fill="@color" rx="2"
-                          @onmouseover='e => TipEnter(e, MakeCtx(rIdx, cIdx, color, $"{categories[rIdx]} / {labels[cIdx]}", val, null, null, labels[cIdx]), padL + (cIdx + 0.5) * cellW, padT + rIdx * cellH, svgW, svgH)' @onmouseout="TipLeave">
+                          @onmouseover='Hover(e => TipEnter(e, MakeCtx(rIdx, cIdx, color, $"{categories[rIdx]} / {labels[cIdx]}", val, null, null, labels[cIdx]), padL + (cIdx + 0.5) * cellW, padT + rIdx * cellH, svgW, svgH))' @onmouseout="HoverOut">
                         @if (!ShowTooltips) { <title>@categories[r] / @labels[c]: @F1(val)</title> }
                     </rect>
                 }
@@ -1574,9 +1598,9 @@
 
                 var pIdx = i;
                 var ganttFields = new[] { new ChartTooltipField("Start", F0(start)), new ChartTooltipField("End", F0(end)) };
-                <rect class="fx-pt" x="@F(x1)" y="@F(y)" width="@F(Math.Max(x2 - x1, 2))" height="@F(h)"
+                <rect class="@PtClass" x="@F(x1)" y="@F(y)" width="@F(Math.Max(x2 - x1, 2))" height="@F(h)"
                       fill="@color" rx="3"
-                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, start, null, ganttFields), (x1 + x2) / 2, y, svgW, svgH)" @onmouseout="TipLeave">
+                      @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, start, null, ganttFields), (x1 + x2) / 2, y, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[i].Label: @F0(start) - @F0(end)</title> }
                 </rect>
 
@@ -1650,10 +1674,10 @@
                       stroke="#374151" stroke-width="1" />
                 var pIdx = i;
                 var boxFields = new[] { Fld("Max", high), Fld("Q3", q3), Fld("Median", median), Fld("Q1", q1), Fld("Min", low) };
-                <rect class="fx-pt" x="@F(bx - halfW)" y="@F(yQ3)" width="@F(halfW * 2)"
+                <rect class="@PtClass" x="@F(bx - halfW)" y="@F(yQ3)" width="@F(halfW * 2)"
                       height="@F(Math.Max(yQ1 - yQ3, 1))" fill="@GetSeriesColor(0)" fill-opacity="0.3"
                       stroke="@GetSeriesColor(0)" stroke-width="1.5" rx="2"
-                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), p.Label, median, null, boxFields), bx, yQ3, svgW, svgH)" @onmouseout="TipLeave">
+                      @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), p.Label, median, null, boxFields), bx, yQ3, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@p.Label: Q1=@F1(q1) Med=@F1(median) Q3=@F1(q3)</title> }
                 </rect>
                 <line x1="@F(bx - halfW)" y1="@F(yMed)" x2="@F(bx + halfW)" y2="@F(yMed)"
@@ -1711,8 +1735,8 @@
                 <line x1="@F(padL)" y1="@F(y)" x2="@F(x)" y2="@F(y)"
                       stroke="#e5e7eb" stroke-width="1" />
                 var pIdx = i;
-                <circle class="fx-pt" cx="@F(x)" cy="@F(y)" r="5" fill="@color" stroke="transparent" stroke-width="8"
-                        @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value), x, y, svgW, svgH)" @onmouseout="TipLeave">
+                <circle class="@PtClass" cx="@F(x)" cy="@F(y)" r="5" fill="@color" stroke="transparent" stroke-width="8"
+                        @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, color, pts[pIdx].Label, pts[pIdx].Value), x, y, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[i].Label: @F1(pts[i].Value)</title> }
                 </circle>
                 @SvgText(F(padL - 6), F(y + 4), Truncate(pts[i].Label, 12),
@@ -1769,9 +1793,9 @@
 
                 var pIdx = i;
                 var binFields = new[] { Fld("Count", val) };
-                <rect class="fx-pt" x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(barH, 0))"
+                <rect class="@PtClass" x="@F(x)" y="@F(y)" width="@F(barW)" height="@F(Math.Max(barH, 0))"
                       fill="@GetSeriesColor(0)" stroke="white" stroke-width="0.5"
-                      @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), pts[pIdx].Label, val, null, binFields), x + barW / 2, y, svgW, svgH)" @onmouseout="TipLeave">
+                      @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, GetSeriesColor(0), pts[pIdx].Label, val, null, binFields), x + barW / 2, y, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[i].Label: @F1(val)</title> }
                 </rect>
 
@@ -1830,9 +1854,9 @@
                 double x4 = fcx - botW / 2;
 
                 double share = tipTotal > 0 ? val / tipTotal * 100 : 0;
-                <polygon class="fx-pt" points="@F(x1),@F(y) @F(x2),@F(y) @F(x3),@F(y + segH) @F(x4),@F(y + segH)"
+                <polygon class="@PtClass" points="@F(x1),@F(y) @F(x2),@F(y) @F(x3),@F(y + segH) @F(x4),@F(y + segH)"
                          fill="@color" stroke="white" stroke-width="1.5"
-                         @onmouseover="e => TipEnter(e, MakeCtx(0, idx, color, pts[idx].Label, pts[idx].Value, share), fcx, y + segH / 2, svgW, svgH)" @onmouseout="TipLeave">
+                         @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, idx, color, pts[idx].Label, pts[idx].Value, share), fcx, y + segH / 2, svgW, svgH))" @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pts[idx].Label: @F1(pts[idx].Value)</title> }
                 </polygon>
 
@@ -1920,14 +1944,14 @@
                     <line x1="@F(cx)" y1="@F(yHigh)" x2="@F(cx)" y2="@F(yLow)" stroke="@candleColor" stroke-width="2.5" />
                 }
 
-                @if (ShowTooltips)
+                @if (HoverWanted)
                 {
                     var pIdx = i;
                     var priceFields = Type == ChartType.HighLow
                         ? new[] { Fld("High", p.High), Fld("Low", p.Low) }
                         : new[] { Fld("Open", p.Open), Fld("High", p.High), Fld("Low", p.Low), Fld("Close", p.Close) };
                     <rect class="fx-pt-hit" x="@F(cx - slotW * 0.4)" y="@F(yHigh)" width="@F(slotW * 0.8)" height="@F(Math.Max(yLow - yHigh, 4))" fill="transparent"
-                          @onmouseover="e => TipEnter(e, MakeCtx(0, pIdx, candleColor, p.Label, p.Close, null, priceFields), cx, yHigh, svgW, svgH)" @onmouseout="TipLeave" />
+                          @onmouseover="Hover(e => TipEnter(e, MakeCtx(0, pIdx, candleColor, p.Label, p.Close, null, priceFields), cx, yHigh, svgW, svgH))" @onmouseout="HoverOut" />
                 }
                 @if (ShowAxisLabels && visibleLabels.Contains(i))
                 {
@@ -1972,8 +1996,8 @@
                 var pIdx = i;
                 var bulletFields = new[] { Fld("Actual", p.Actual), Fld("Target", p.Target) };
                 var actualColor = ThemedPointColor(p, "#1e293b");
-                <rect class="fx-pt" x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="@actualColor" rx="1"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, actualColor, p.Label, p.Actual, null, bulletFields), padL + actualW / 2, y, svgW, svgH)' @onmouseout="TipLeave">
+                <rect class="@PtClass" x="@F(padL)" y="@F(y + h * 0.25)" width="@F(actualW)" height="@F(h * 0.5)" fill="@actualColor" rx="1"
+                      @onmouseover='Hover(e => TipEnter(e, MakeCtx(0, pIdx, actualColor, p.Label, p.Actual, null, bulletFields), padL + actualW / 2, y, svgW, svgH))' @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@p.Label: Actual=@p.Actual, Target=@p.Target</title> }
                 </rect>
 
@@ -2035,9 +2059,9 @@
                 var pIdx = i;
                 var rangeFields = new[] { Fld("Min", valMin), Fld("Max", valMax) };
                 var rangeColor = ThemedPointColor(p, "#3b82f6");
-                <rect class="fx-pt" x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
+                <rect class="@PtClass" x="@F(cx - barW / 2)" y="@F(yTop)" width="@F(barW)" height="@F(barH)"
                       fill="@rangeColor" opacity="0.85" rx="3"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, rangeColor, p.Label, valMax, null, rangeFields), cx, yTop, svgW, svgH)' @onmouseout="TipLeave">
+                      @onmouseover='Hover(e => TipEnter(e, MakeCtx(0, pIdx, rangeColor, p.Label, valMax, null, rangeFields), cx, yTop, svgW, svgH))' @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@p.Label: @valMin - @valMax</title> }
                 </rect>
 
@@ -2098,8 +2122,8 @@
 
                 <!-- Smooth Flow Ribbon -->
                 <path d="M @F(x1) @F(y1) C @F(cp1X) @F(y1), @F(cp2X) @F(y2), @F(x2) @F(y2) L @F(x2) @F(y2 + flowH) C @F(cp2X) @F(y2 + flowH), @F(cp1X) @F(y1 + flowH), @F(x1) @F(y1 + flowH) Z"
-                      fill="@flowFill" fill-opacity="0.45" stroke="@flowStroke" stroke-width="0.5" class="fx-pt"
-                      @onmouseover='e => TipEnter(e, MakeCtx(0, pIdx, flowFill, $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH)' @onmouseout="TipLeave">
+                      fill="@flowFill" fill-opacity="0.45" stroke="@flowStroke" stroke-width="0.5" class="@PtClass"
+                      @onmouseover='Hover(e => TipEnter(e, MakeCtx(0, pIdx, flowFill, $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH))' @onmouseout="HoverOut">
                     @if (!ShowTooltips) { <title>@pt.Source → @pt.Destination: @pt.Value</title> }
                 </path>
 

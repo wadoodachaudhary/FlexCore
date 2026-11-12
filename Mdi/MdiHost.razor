@@ -13,7 +13,7 @@
    position, edits-in-progress) across tab switches.
 
    This is a "dumb" presentation control — it doesn't decide WHEN a
-   window opens or closes. The consumer (e.g. HomeFront's FMain) owns
+   window opens or closes. The consumer (e.g. the app's main form) owns
    the Windows list, raises OpenOrFocus calls itself, and reacts to the
    OnActivate / OnCloseRequested events the host emits. MdiPane captures
    each child component instance so the consumer can call optional close
@@ -268,7 +268,9 @@
                cascading delegates without unmounting. *@
             var paneClass = "fx-mdi-pane"
                 + (split && isActivePane ? " fx-mdi-pane-active" : "")
-                + (isPartnerPane ? " fx-mdi-pane-partner" : "");
+                + (isPartnerPane ? " fx-mdi-pane-partner" : "")
+                // Only the active window prints: an element marked fx-print-only elsewhere does not (PrintOnlyStyles).
+                + (isActivePane ? "" : " fx-print-skip");
             <div @key="win.Id"
                  class="@paneClass"
                  style="@paneStyle"

@@ -53,9 +53,17 @@
     padding-top: 6px;
 }
 
-/* A prompt with a value list keeps Crystal's tall window, so the list opens below the combo instead of into a two-row gap. */
-.fx-param-body-lists {
-    min-height: min(60vh, calc(440px * var(--fx-zoom, 1)));
+/* The window ends at its prompts. While a value list is open, nothing between it and the window clips it (the prompt
+   body, the resizable dialog's scrolling body and the dialog itself), so the list drops below its combo, over the
+   buttons or past the window's edge, as a desktop combo's list does. Scrolling (a window taller than the screen)
+   resumes when the list closes. */
+.fx-param-body:has(.fx-dropdown-panel) {
+    overflow: visible;
+}
+
+.fx-param-dialog-host ::deep .fx-dialog:has(.fx-dropdown-panel),
+.fx-param-dialog-host ::deep .fx-dialog:has(.fx-dropdown-panel) .fx-dialog-body {
+    overflow: visible;
 }
 
 /* The overlay is position:fixed, so this wrapper only scopes the rules below to the dialog's own parts. */
@@ -292,7 +300,7 @@
     margin: 10px 0 2px;
 }
 
-.fx-param-custom-row ::deep .fx-param-value-input {
+.fx-param-custom-row ::deep .fx-textbox-clear-host {
     grid-column: 1;
     grid-row: 3;
     min-width: 0;
@@ -337,7 +345,7 @@
         column-gap: 10px;
     }
     .fx-param-custom-row .fx-param-value-label { grid-row: 1; }
-    .fx-param-custom-row ::deep .fx-param-value-input,
+    .fx-param-custom-row ::deep .fx-textbox-clear-host,
     .fx-param-custom-row ::deep .fx-param-custom-add { grid-row: 2; }
 }
 
@@ -347,7 +355,7 @@
     background: #fff3cd;
     border: 1px solid #ffeaa7;
     border-radius: 3px;
-    color: #856404;
+    color: #b71c1c;
     font-size: calc(13px * var(--fx-zoom, 1));
 }
 

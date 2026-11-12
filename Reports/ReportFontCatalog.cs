@@ -15,7 +15,7 @@ public static class ReportFontCatalog
 
     internal static double? NativeLineHeightPixels(string family, decimal points, bool native, bool bold = false, bool italic = false, int dpi = CrystalDeviceText.DeviceDpi)
     {
-        if (native && family.Equals("Arial", StringComparison.OrdinalIgnoreCase))
+        if (native && PrinterFace(family))
         {
             // Crystal's paragraph leading is the printer font's GDI line pitch: the face's hinted
             // VDMX extent at the 600-dpi ppem plus the rounded line gap (95 device pixels for 10pt,
@@ -26,6 +26,7 @@ public static class ReportFontCatalog
             var ppem = (int)Math.Round(size * dpi / 72, MidpointRounding.AwayFromZero);
             if (CrystalDeviceFont.Resolve(family, bold, italic)?.LinePitch(ppem) is { } pitch)
                 return pitch * 96d / dpi;
+            if (!family.Equals("Arial", StringComparison.OrdinalIgnoreCase)) return null;
             // Without the installed font: 11.4pt for a 10pt font, truncated to whole device units.
             return (double)(Math.Floor(size * 1.14m * dpi / 72) * 96 / dpi);
         }
@@ -40,15 +41,19 @@ public static class ReportFontCatalog
 
     /// <summary>
     /// The printer font's GDI ascent (the hinted VDMX yMax at the 600-dpi ppem) in CSS pixels: where Crystal puts
-    /// a line's baseline below the line's top. Null for faces other than the installed Arial.
+    /// a line's baseline below the line's top. Null for faces other than the installed Arial and Times New Roman.
     /// </summary>
     internal static double? NativeAscentPixels(string family, decimal points, bool bold = false, bool italic = false, int dpi = CrystalDeviceText.DeviceDpi)
     {
-        if (!family.Equals("Arial", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!PrinterFace(family)) return null;
         var size = Math.Clamp(points, 1, 300);
         var ppem = (int)Math.Round(size * dpi / 72, MidpointRounding.AwayFromZero);
         return CrystalDeviceFont.Resolve(family, bold, italic)?.Ascent(ppem) * 96d / dpi;
     }
+
+    // The faces whose installed printer metrics (hdmx advances, VDMX extents) stand in for Crystal's GDI layout.
+    private static bool PrinterFace(string family) => family.Trim().Trim('\'', '"') is var face
+        && (face.Equals("Arial", StringComparison.OrdinalIgnoreCase) || face.Equals("Times New Roman", StringComparison.OrdinalIgnoreCase));
 
     private static string BuildStyles()
     {

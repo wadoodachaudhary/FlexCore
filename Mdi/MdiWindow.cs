@@ -1,6 +1,6 @@
 // Fx.ControlKit.Mdi.MdiWindow — descriptor for one open child window inside
 // an <see cref="MdiHost"/> tab strip. The host doesn't own routing decisions;
-// the consumer (FMain in HomeFront, FApp in a future client, …) builds the
+// the consumer (the app's main form) builds the
 // list, hands it to MdiHost, and reacts to OnActivate / OnCloseRequested
 // callbacks.
 //

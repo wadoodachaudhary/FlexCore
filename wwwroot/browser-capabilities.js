@@ -1,6 +1,9 @@
 // DOM capabilities shared by FlexCore controls. Imported only when requested.
 const bindings = new WeakMap();
 const stop = element => { bindings.get(element)?.(); bindings.delete(element); };
+// Popup hosts with a live binding. A host the page removed while its popup was open never had its binding
+// disposed (the element can no longer be passed in): it is let go when the next popup attaches.
+const popupHosts = new Set();
 const tabViewport = element => element.querySelector('.fx-tabstrip-viewport') || element;
 const revealTab = element => {
     const view = tabViewport(element);
@@ -103,6 +106,7 @@ export async function invoke(action, element, data, callback) {
         setTimeout(() => URL.revokeObjectURL(url), 60000); return;
     }
     if (action === 'popup') {
+        for (const host of popupHosts) if (!host.isConnected) { stop(host); popupHosts.delete(host); }
         stop(element);
         const panel = element.querySelector('[data-fx-popup]');
         const anchor = (data.anchorId && document.getElementById(data.anchorId)) || element.querySelector('[data-fx-anchor]');
@@ -119,13 +123,21 @@ export async function invoke(action, element, data, callback) {
             panel.style.top = `${Math.max(8, Math.min(y, innerHeight-p.height-8))}px`;
         };
         const dismiss = e => { if (!panel.contains(e.target) && !anchor.contains(e.target)) callback.invokeMethodAsync('DismissAsync').catch(()=>{}); };
-        const key = e => { if (e.key === 'Escape') { e.stopPropagation(); callback.invokeMethodAsync('DismissAsync').catch(()=>{}); } };
+        // On the host, which outlives its panel: a panel rendered again (closed and reopened within one round trip)
+        // keeps its Escape. A nested popup's own host listener sees its keys first.
+        const key = e => {
+            if (e.key !== 'Escape' || !(e.target instanceof Element)) return;
+            const current = e.target.closest('[data-fx-popup]');
+            if (!current || current.parentElement !== element) return;
+            e.stopPropagation(); callback.invokeMethodAsync('DismissAsync').catch(()=>{});
+        };
         position(); const resize = new ResizeObserver(position); resize.observe(panel); resize.observe(anchor);
         window.addEventListener('resize',position); window.addEventListener('scroll',position,true);
         if (data.dismiss) document.addEventListener('pointerdown',dismiss,true);
-        panel.addEventListener('keydown',key);
+        element.addEventListener('keydown',key);
         if (data.focus) (panel.querySelector('input,button,textarea,[tabindex="0"]') || panel).focus({preventScroll:true});
-        bindings.set(element,()=>{ resize.disconnect(); window.removeEventListener('resize',position); window.removeEventListener('scroll',position,true); document.removeEventListener('pointerdown',dismiss,true); panel.removeEventListener('keydown',key); if(panel.contains(document.activeElement)) (anchor.querySelector('button,input,[tabindex]') || anchor).focus({preventScroll:true}); });
+        popupHosts.add(element);
+        bindings.set(element,()=>{ popupHosts.delete(element); resize.disconnect(); window.removeEventListener('resize',position); window.removeEventListener('scroll',position,true); document.removeEventListener('pointerdown',dismiss,true); element.removeEventListener('keydown',key); if(panel.contains(document.activeElement)) (anchor.querySelector('button,input,[tabindex]') || anchor).focus({preventScroll:true}); });
         return true;
     }
     if (action === 'mediaQuery') {

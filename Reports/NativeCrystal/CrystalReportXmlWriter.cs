@@ -161,6 +161,8 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "ReportComments", summary.Comments);
         Attr(writer, "ReportSubject", summary.Subject);
         Attr(writer, "ReportTitle", summary.Title);
+        if (summary.Created is { } created) Attr(writer, "FileCreated", created.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
+        if (summary.LastSaved is { } saved) Attr(writer, "FileLastSaved", saved.ToString("o", System.Globalization.CultureInfo.InvariantCulture));
         writer.WriteEndElement();
     }
 
@@ -231,11 +233,17 @@ internal static class CrystalReportXmlWriter
                 SourceTable = link.FromField!.Table!.ObjectId,
                 DestinationTable = link.ToField!.Table!.ObjectId,
                 link.JoinType,
+                link.LinkOperator,
                 link.Enforced
             }))
         {
             writer.WriteStartElement("TableLink");
             Attr(writer, "JoinType", LegacyJoin(group.Key.JoinType));
+            var comparison = group.Key.LinkOperator switch
+            {
+                8 => "<>", 16 => "<", 32 => "<=", 64 => ">", 128 => ">=", _ => "="
+            };
+            if (comparison != "=") Attr(writer, "Comparison", comparison);
             Attr(writer, "EnforceJoin", group.Key.Enforced switch
             {
                 1 => "NotEnforced", 2 => "From", 4 => "To", 8 => "Both",
@@ -590,6 +598,7 @@ internal static class CrystalReportXmlWriter
         Attr(writer, "OperationParameter", summary.OperationParameter);
         Attr(writer, "SummarizedField", summary.SummarizedField);
         if (summary.WeightField.Length > 0) Attr(writer, "WeightField", summary.WeightField);
+        if (summary.PercentSummaryIndex is int scope) Attr(writer, "PercentOfGroup", scope);
         Attr(writer, "ValueType", CrystalValueTypeMapper.XmlValueType(summary.ValueType));
         if (summary.AcrossHierarchy) Attr(writer, "HierarchicalSummaryType", "AcrossHierarchy");
         writer.WriteEndElement();
@@ -660,12 +669,14 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "EnableResetPageNumberAfter", LowerBool(area.Format.EnableResetPageNumberAfter));
             Attr(writer, "EnableSuppress", LowerBool(area.Format.EnableSuppress));
             Attr(writer, "EnableHideForDrillDown", LowerBool(area.Format.EnableHideForDrillDown));
+            if (area.Kind == "Detail" && area.Format.RecordsPerPage > 0)
+                Attr(writer, "NewPageAfterNVisibleRecords", area.Format.RecordsPerPage);
             if (area.Kind == "GroupHeader")
             {
                 writer.WriteStartElement("GroupAreaFormat");
                 Attr(writer, "EnableKeepGroupTogether", LowerBool(area.EnableKeepGroupTogether));
                 Attr(writer, "EnableRepeatGroupHeader", LowerBool(area.EnableRepeatGroupHeader));
-                Attr(writer, "VisibleGroupNumberPerPage", "");
+                Attr(writer, "VisibleGroupNumberPerPage", area.GroupsPerPage > 0 ? area.GroupsPerPage.ToString(System.Globalization.CultureInfo.InvariantCulture) : "");
                 writer.WriteEndElement();
             }
             // The SDK's DetailAreaFormat: a mailing-label or multiple-column report formats its details area in columns.
@@ -700,6 +711,7 @@ internal static class CrystalReportXmlWriter
             Attr(writer, "CssClass", "");
             Attr(writer, "EnableKeepTogether", LowerBool(section.Format.EnableKeepTogether));
             Attr(writer, "EnableNewPageAfter", LowerBool(section.Format.EnableNewPageAfter));
+            if (section.Format.RecordsPerPage > 0) Attr(writer, "NewPageAfterNVisibleRecords", section.Format.RecordsPerPage);
             Attr(writer, "EnableNewPageBefore", LowerBool(section.Format.EnableNewPageBefore));
             Attr(writer, "EnablePrintAtBottomOfPage", LowerBool(section.Format.EnablePrintAtBottomOfPage));
             Attr(writer, "EnableResetPageNumberAfter", LowerBool(section.Format.EnableResetPageNumberAfter));
@@ -809,7 +821,8 @@ internal static class CrystalReportXmlWriter
         else if (reportObject.ElementName == "FieldObject")
         {
             Attr(writer, "DataSource", reportObject.DataSource);
-            if (reportObject.InterpretHtml) Attr(writer, "TextInterpretation", "Html");
+            if (reportObject.InterpretRtf) Attr(writer, "TextInterpretation", "Rtf");
+            else if (reportObject.InterpretHtml) Attr(writer, "TextInterpretation", "Html");
             Attr(writer, "MaxNumberOfLines", reportObject.MaxNumberOfLines);
             Attr(writer, "SuppressIfDuplicate", LowerBool(reportObject.SuppressIfDuplicate));
         }
@@ -842,7 +855,7 @@ internal static class CrystalReportXmlWriter
             writer.WriteStartElement("Text");
             writer.WriteString(reportObject.Text);
             writer.WriteEndElement();
-            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0 || run.FontConditionFormulas.Count > 0) ||
+            if (reportObject.TextRuns.Any(run => run.Binding.Length > 0 || run.FontConditionFormulas.Count > 0 || run.CharacterSpacingTwips > 0) ||
                 reportObject.TextRuns.Select(run => (run.FontFamily, run.Size, run.Bold, run.Italic, run.Underline, run.Color)).Distinct().Skip(1).Any())
             {
                 writer.WriteStartElement("FlexKitVisual");
@@ -856,6 +869,7 @@ internal static class CrystalReportXmlWriter
                     Attr(writer, "Italic", LowerBool(run.Italic));
                     Attr(writer, "Underline", LowerBool(run.Underline));
                     Attr(writer, "Color", run.Color);
+                    if (run.CharacterSpacingTwips > 0) Attr(writer, "CharacterSpacingTwips", run.CharacterSpacingTwips);
                     writer.WriteString(run.Text);
                     run.NativeDateTimeFormat?.ToXml().WriteTo(writer);
                     if (run.FontConditionFormulas.Count > 0)
@@ -903,6 +917,7 @@ internal static class CrystalReportXmlWriter
         writer.WriteStartElement("Border");
         Attr(writer, "BottomLineStyle", border.BottomLineStyle);
         Attr(writer, "HasDropShadow", LowerBool(border.HasDropShadow));
+        if (border.EnableTightHorizontal) Attr(writer, "EnableTightHorizontal", "true");
         Attr(writer, "LeftLineStyle", border.LeftLineStyle);
         Attr(writer, "RightLineStyle", border.RightLineStyle);
         Attr(writer, "TopLineStyle", border.TopLineStyle);
@@ -1099,14 +1114,16 @@ internal static class CrystalReportXmlWriter
         return parameter.AllowCustomValues;
     }
 
-    private static string SummaryFormulaName(
+    internal static string SummaryFormulaName(
         CrystalSummaryFieldModel summary,
         CrystalDataDefinitionModel dataDefinition)
     {
         var groupField = SummaryGroupField(summary, dataDefinition);
-        return string.IsNullOrWhiteSpace(groupField)
-            ? $"{SummaryOperationName(summary.Operation)} ({summary.SummarizedField})"
-            : $"{SummaryOperationName(summary.Operation)} ({summary.SummarizedField}, {groupField})";
+        var operation = SummaryOperationName(summary.Operation);
+        var name = string.IsNullOrWhiteSpace(groupField)
+            ? $"{operation} ({summary.SummarizedField})" : $"{operation} ({summary.SummarizedField}, {groupField})";
+        // Absolute and percentage summaries can bind to the same field and group.
+        return summary.PercentSummaryIndex is int scope ? $"Percentage of {name} [group {scope}]" : name;
     }
 
     private static string SummaryName(CrystalSummaryFieldModel summary)

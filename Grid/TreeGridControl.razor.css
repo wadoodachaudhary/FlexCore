@@ -275,7 +275,7 @@
 /* NOTE: the tree ROOT and .fx-treegrid-content deliberately KEEP their
    normal overflow while a popup is open — flipping the scroll container to
    overflow:visible removed its scrollbar and reflowed (shifted) the whole
-   grid on every open/close (HHM-946). Editor popups therefore render within
+   grid on every open/close. Editor popups therefore render within
    the content area's bounds; only the CELL and ROW clip/stacking are lifted. */
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-host),
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-datepicker-host),

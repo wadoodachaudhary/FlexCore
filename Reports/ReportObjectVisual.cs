@@ -9,6 +9,9 @@ public sealed class ReportTextRun
 {
     public string Text { get; set; } = "";
     public string Binding { get; set; } = "";
+    /// <summary>A positive Crystal character spacing sets the advance between glyph origins in twips.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int CharacterSpacingTwips { get; set; }
     public string FontFamily { get; set; } = "Arial";
     public decimal FontSize { get; set; } = 10;
     public bool Bold { get; set; }
@@ -38,6 +41,13 @@ public sealed class ReportObjectVisual
     public string BottomLine { get; set; } = "NoLine";
     public string LeftLine { get; set; } = "NoLine";
     public string RightLine { get; set; } = "NoLine";
+    /// <summary>Crystal's hard, three-point shadow outside the bottom and right edges.</summary>
+    // Omitted from snapshots when unset, so page-band baselines stay stable (as NoPrinterLayout).
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool HasDropShadow { get; set; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool TightHorizontal { get; set; }
+    internal const double DropShadowPoints = 3;
     /// <summary>Native stroke width in twips; zero is a hairline, null preserves legacy renderer defaults.</summary>
     public int? LineWidthTwips { get; set; }
     public bool CloseAtPageBreak { get; set; } = true;
@@ -49,7 +59,7 @@ public sealed class ReportObjectVisual
         {
             ImageDataUrl = ImageDataUrl, VectorImage = VectorImage?.Clone(), ImageFit = ImageFit, Runs = runs,
             BorderColor = BorderColor, TopLine = TopLine, BottomLine = BottomLine, LeftLine = LeftLine, RightLine = RightLine,
-            CloseAtPageBreak = CloseAtPageBreak, LineWidthTwips = LineWidthTwips
+            CloseAtPageBreak = CloseAtPageBreak, LineWidthTwips = LineWidthTwips, HasDropShadow = HasDropShadow, TightHorizontal = TightHorizontal
         };
     }
 
@@ -101,6 +111,8 @@ public sealed class ReportObjectVisual
             BottomLine = (string?)border?.Attribute("BottomLineStyle") ?? "NoLine",
             LeftLine = (string?)border?.Attribute("LeftLineStyle") ?? "NoLine",
             RightLine = (string?)border?.Attribute("RightLineStyle") ?? "NoLine",
+            TightHorizontal = (bool?)border?.Attribute("EnableTightHorizontal") ?? false,
+            HasDropShadow = (bool?)border?.Attribute("HasDropShadow") ?? false,
             LineWidthTwips = lineWidth,
             CloseAtPageBreak = (bool?)element.Element("ObjectFormat")?.Attribute("EnableCloseAtPageBreak") ?? true,
             BorderColor = color is null ? "#000000" : $"#{Channel("R"):x2}{Channel("G"):x2}{Channel("B"):x2}"
@@ -111,13 +123,16 @@ public sealed class ReportObjectVisual
             FontFamily = (string?)run.Attribute("Font") ?? "Arial", FontSize = (decimal?)run.Attribute("Size") ?? 10,
             Bold = (bool?)run.Attribute("Bold") ?? false, Italic = (bool?)run.Attribute("Italic") ?? false,
             Underline = (bool?)run.Attribute("Underline") ?? false, Color = (string?)run.Attribute("Color") ?? "#000000",
+            CharacterSpacingTwips = (int?)run.Attribute("CharacterSpacingTwips") ?? 0,
             NativeDateTimeFormat = ReportNativeDateTimeFormat.Read(run),
             FontConditionFormulas = run.Element("FontColorConditionFormulas")?.Attributes()
                 .ToDictionary(a => a.Name.LocalName, a => a.Value, StringComparer.OrdinalIgnoreCase) ?? new(StringComparer.OrdinalIgnoreCase)
         });
         // Crystal's SDK export keeps a text object's embedded fields as "{Table.Field}" / "{@Formula}" tokens inside <Text>, in the
         // object's one font; the native converter writes them as runs. Without runs the tokens would print as text.
-        if (visual is null && element.Name.LocalName == "TextObject" && element.Element("Text")?.Value is { } text && EmbeddedField.IsMatch(text))
+        if (visual is null && element.Name.LocalName == "TextObject"
+            && element.Ancestors("Report").FirstOrDefault()?.Attribute(NativeCrystal.CrystalReportXmlVersion.Attribute) is null
+            && element.Element("Text")?.Value is { } text && EmbeddedField.IsMatch(text))
         {
             var font = element.Element("Font");
             var ink = element.Element("Color");
@@ -154,7 +169,8 @@ public sealed class ReportObjectVisual
                 visual.Runs.Select(run => new XElement("Run", new XAttribute("Binding", run.Binding),
                     new XAttribute("Font", run.FontFamily), new XAttribute("Size", run.FontSize),
                     new XAttribute("Bold", run.Bold), new XAttribute("Italic", run.Italic),
-                    new XAttribute("Underline", run.Underline), new XAttribute("Color", run.Color), run.Text,
+                    new XAttribute("Underline", run.Underline), new XAttribute("Color", run.Color),
+                    run.CharacterSpacingTwips > 0 ? new XAttribute("CharacterSpacingTwips", run.CharacterSpacingTwips) : null, run.Text,
                     run.NativeDateTimeFormat?.ToXml(),
                     run.FontConditionFormulas.Count == 0 ? null : new XElement("FontColorConditionFormulas",
                         run.FontConditionFormulas.Select(c => new XAttribute(c.Key, c.Value)))))));
@@ -164,6 +180,8 @@ public sealed class ReportObjectVisual
         border.SetAttributeValue("BottomLineStyle", visual.BottomLine);
         border.SetAttributeValue("LeftLineStyle", visual.LeftLine);
         border.SetAttributeValue("RightLineStyle", visual.RightLine);
+        border.SetAttributeValue("HasDropShadow", visual.HasDropShadow);
+        border.SetAttributeValue("EnableTightHorizontal", visual.TightHorizontal ? true : (bool?)null);
         border.SetAttributeValue("LineWidth", visual.LineWidthTwips);
         if (element.Name.LocalName == "LineObject") element.SetAttributeValue("LineThickness", visual.LineWidthTwips);
         var color = ReportObjectRenderer.Color(visual.BorderColor, "#000000");
@@ -298,7 +316,62 @@ public static class ReportObjectRenderer
         var lineHeight = ReportFontCatalog.NativeLineHeight(item.FontFamily, item.FontSize, item.UseCrystalScreenMetrics, item.Bold, item.Italic, TextDpi(item));
         return bounds + geometry + clip + writingMode + $"width:{Number(Math.Max(0, item.WidthTwips) / 15d)}px;height:{Number(Math.Max(0, item.HeightTwips) / 15d)}px;box-sizing:border-box;white-space:{whiteSpace};overflow-wrap:{(whiteSpace == "pre" || ClipNativeLongWords(textFrame) ? "normal" : "anywhere")};line-height:{lineHeight};letter-spacing:0;text-align:{align};{(item.HasRotatedText ? "padding-inline-start" : "padding-left")}:{Number(item.IndentTwips / 15d)}px;background:{Color(item.BackgroundColor)};" +
             FontStyle(item.FontFamily, item.FontSize, item.Bold, item.Italic, item.Underline, item.TextColor, item.UseCrystalScreenMetrics, TextDpi(item)) +
-            (item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual));
+            NativeUnderline(item) +
+            (item.Kind == "Line" || outsideBorder ? "" : BorderStyle(item.Visual)) +
+            (item.Kind != "Line" && item.Visual.HasDropShadow ? $"box-shadow:{Number(ReportObjectVisual.DropShadowPoints * 4 / 3)}px {Number(ReportObjectVisual.DropShadowPoints * 4 / 3)}px 0 #000000;" : "");
+    }
+
+    /// <summary>
+    /// How native underlined text draws its underline. GDI draws it straight through descenders, and Crystal shows it
+    /// inside a one-line frame shorter than the line pitch (a 180-twip 8pt bold heading has a 14px pitch in a 12px frame).
+    /// The browser centres the glyphs in the pitch and draws the underline below the baseline, past such a frame's clip.
+    /// There the underline is raised onto the frame's last pixel row, never above the baseline, and the glyphs stay where
+    /// they are. The offset and skip-ink are inherited by the runs; the thickness applies to the object's own underline
+    /// and is emitted after the font's text-decoration shorthand, which would reset it.
+    /// </summary>
+    internal static string NativeUnderline(ReportDesignerElement item)
+    {
+        if (!item.UseCrystalScreenMetrics || item.Kind is not ("Text" or "Field" or "FieldHeading") || item.HasRotatedText
+            || !item.Underline && !item.Visual.Runs.Any(run => run.Underline)) return "";
+        const string throughDescenders = "text-decoration-skip-ink:none;";
+        if (NativeNumericOutsideBorder(item) || ClipNativeLongWords(item)) return throughDescenders;
+        var dpi = TextDpi(item);
+        if (ReportFontCatalog.NativeLineHeightPixels(item.FontFamily, item.FontSize, true, item.Bold, item.Italic, dpi) is not { } pitch)
+            return throughDescenders;
+        // The clip as the browser paints it: the frame's top is on a pixel, its bottom edge snaps to the nearest one and
+        // borders are drawn in whole pixels.
+        var top = BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips);
+        var bottom = BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips);
+        var height = Math.Max(0, item.HeightTwips) / 15d;
+        if (TextLineLimit(item) is > 0 and var lines) height = Math.Min(height, lines * pitch + top + bottom);
+        var inner = Math.Round(height, MidpointRounding.AwayFromZero) - Math.Floor(top) - Math.Floor(bottom);
+        // The browser's baseline is the largest of its inline boxes' half leading plus rounded ascent (the face's
+        // hhea metrics, which Arial, Times New Roman and Calibri share with their metric-compatible faces on every
+        // platform), floored to a pixel when the frame's top is on one.
+        var baseline = 0d;
+        var largest = 0d;
+        foreach (var (family, points, bold, italic) in item.Visual.Runs.Select(run => (run.FontFamily, run.FontSize, run.Bold, run.Italic))
+            .Prepend((item.FontFamily, item.FontSize, item.Bold, item.Italic)))
+        {
+            Fx.ControlKit.Grid.NativePdfFont face;
+            try { face = Fx.ControlKit.Grid.NativePdfFont.Resolve(family, bold, italic); }
+            catch (Exception error) when (error is NotSupportedException or InvalidDataException or IOException) { return throughDescenders; }
+            // The em FontStyle realizes, as the browser reads it back.
+            var size = Math.Round(Math.Round((double)Math.Clamp(points, 1, 300) * dpi / 72, MidpointRounding.AwayFromZero) * 96 / dpi, 3);
+            var ascent = Math.Round(face.Ascent * size / 1000, MidpointRounding.AwayFromZero);
+            var descent = Math.Round(-face.Descent * size / 1000, MidpointRounding.AwayFromZero);
+            baseline = Math.Max(baseline, (pitch - ascent - descent) / 2 + ascent);
+            largest = Math.Max(largest, size);
+        }
+        baseline = Math.Floor(baseline + 1 / 64d);
+        // A frame tall enough for a second line keeps the browser's own position on every line.
+        if (inner >= pitch + baseline) return throughDescenders;
+        // The browser's own underline: at least a pixel below the baseline, a tenth of the em thick.
+        var thickness = Math.Max(1, Math.Floor(largest / 10));
+        if (baseline + Math.Max(1, Math.Ceiling(largest / 20)) + thickness <= inner) return throughDescenders;
+        var offset = Math.Floor(inner - thickness - baseline);
+        return offset < 0 ? throughDescenders
+            : throughDescenders + $"text-underline-offset:{Number(offset)}px;text-decoration-thickness:{Number(thickness)}px;";
     }
 
     internal static bool IsDuplicateNativeTextPaint(ReportPageObject? previous, ReportPageObject current, int originLeft, int originTop)
@@ -371,6 +444,13 @@ public static class ReportObjectRenderer
         "Dash" => $"{Number(Math.Max(1, (widthTwips ?? 15) / 15d))}px dashed {Color(color, "#000000")}", "Dot" => $"{Number(Math.Max(1, (widthTwips ?? 15) / 15d))}px dotted {Color(color, "#000000")}", _ => "0"
     };
 
+    internal static string VerticalRuleContent(ReportDesignerElement e)
+    {
+        var style = e.Visual.TopLine is "" or "NoLine" ? "Single" : e.Visual.TopLine;
+        var pixels = BorderPixels(style, e.Visual.LineWidthTwips);
+        return $"<span style=\"position:absolute;top:0;left:-{Number(pixels / 2)}px;height:100%;border-left:{Border(style, e.Visual.BorderColor, e.Visual.LineWidthTwips)}\"></span>";
+    }
+
     public static string Content(ReportDesignerElement item, Func<string, string>? resolve = null, bool design = false,
         Func<ReportTextRun, string?>? resolveRun = null)
     {
@@ -405,16 +485,16 @@ public static class ReportObjectRenderer
             }
             return $"<span style=\"display:block;position:absolute;transform-origin:0 0;width:{Number(Math.Sqrt((double)item.WidthTwips * item.WidthTwips + (double)item.HeightTwips * item.HeightTwips) / 15)}px;transform:rotate({Number(Math.Atan2(item.HeightTwips, item.WidthTwips))}rad){center};border-top:{border}\"></span>";
         }
+        if (item.Kind == "Map") return design ? Encode(item.Name) : "";
         if (item.Kind == "Box") return "";
         if (item.Kind == "Subreport") return Encode("[Subreport: " + item.SubreportName + "]");
         if (item.Kind is not ("Text" or "FieldHeading" or "Field")) return Encode("[Unsupported " + item.Kind + ": " + item.Name + "]");
         if (item.Visual.Runs.Count > 0)
         {
             var html = new StringBuilder();
-            // Crystal drops the line break that ends an embedded field's value: the run after it
-            // continues on the same line ("{ItemDesc} " prints "Siding - Mitten As Per Quote " on one
-            // line for a description stored with a trailing line feed). Breaks inside the value stay.
-            var resolved = item.Visual.Runs.Select(run => (Run: run, Value: string.IsNullOrWhiteSpace(run.Binding) ? run.Text : (resolveRun(run) ?? "").TrimEnd('\r', '\n'))).ToArray();
+            // Embedded data keeps its line endings. A following literal (even a space) belongs on
+            // the next line when the field ends in a newline, and contributes to CanGrow height.
+            var resolved = item.Visual.Runs.Select(run => (Run: run, Value: string.IsNullOrWhiteSpace(run.Binding) ? run.Text : resolveRun(run) ?? "")).ToArray();
             if (item.SuppressEmbeddedFieldBlankLines)
             {
                 var lines = new List<List<(ReportTextRun Run, string Value)>> { new() };
@@ -438,11 +518,32 @@ public static class ReportObjectRenderer
             else foreach (var value in resolved) Append(value.Run, value.Value);
             return DecorateNativeField(item, html.ToString());
 
-            void Append(ReportTextRun run, string value) =>
-                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics, TextDpi(item))).Append("\">")
-                    .Append(EncodeText(item, value)).Append("</span>");
+            void Append(ReportTextRun run, string value)
+            {
+                var dpi = TextDpi(item);
+                html.Append("<span style=\"").Append(FontStyle(run.FontFamily, run.FontSize, run.Bold, run.Italic, run.Underline, run.Color, item.UseCrystalScreenMetrics, dpi));
+                if (run.CharacterSpacingTwips > 0)
+                {
+                    // Crystal sets a fixed advance on the printer grid. CSS letter-spacing would add to each glyph's natural width.
+                    const int printDpi = CrystalDeviceText.DeviceDpi;
+                    var advance = Math.Max(1, Math.Round(run.CharacterSpacingTwips * (double)printDpi / 1440, MidpointRounding.AwayFromZero)) * 72 / printDpi;
+                    html.Append("--fx-character-pitch:").Append(Number(advance)).Append("pt\">");
+                    var characters = StringInfo.GetTextElementEnumerator(value.ReplaceLineEndings("\n"));
+                    while (characters.MoveNext())
+                    {
+                        var glyph = characters.GetTextElement();
+                        if (glyph == "\n") html.Append('\n');
+                        else html.Append("<span style=\"display:inline-block;width:var(--fx-character-pitch);white-space:pre\">")
+                            .Append(Encode(glyph)).Append("</span>");
+                    }
+                }
+                else html.Append("\">").Append(EncodeText(item, value));
+                html.Append("</span>");
+            }
         }
         var text = item.Kind == "Field" ? resolve(item.Binding) : item.Text;
+        if (item.Kind == "Field" && item.InterpretRtf && ReportRtfField.TryFormat(text, out var richText))
+            return DecorateNativeField(item, richText);
         return DecorateNativeField(item, item.Kind == "Field" && item.InterpretHtml ? HtmlField(text) : EncodeText(item, text));
     }
 

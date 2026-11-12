@@ -243,8 +243,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
     /// <summary>Fires when a row is right-clicked, AFTER the row has been selected —
     /// VB6 VSFlexGrid BeforeMouseDown parity (.Row = .MouseRow), so a context menu
-    /// opened by an ancestor's @oncontextmenu acts on the row under the cursor
-    /// (HHM-88, owner-authorized 2026-07-29). Purely additive: when no delegate is
+    /// opened by an ancestor's @oncontextmenu acts on the row under the cursor.
+    /// Purely additive: when no delegate is
     /// attached, right-click behavior is unchanged. The event does not stop
     /// propagation; the browser contextmenu event still bubbles to page handlers.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }

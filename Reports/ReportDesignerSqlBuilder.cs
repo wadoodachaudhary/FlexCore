@@ -165,7 +165,7 @@ internal static partial class ReportDesignerSqlBuilder
 
     private static string JoinCondition(ReportDesignerDataLink link)
     {
-        return $"{QuoteIdentifier(link.LeftTable)}.{QuoteIdentifier(link.LeftField)} = {QuoteIdentifier(link.RightTable)}.{QuoteIdentifier(link.RightField)}";
+        return $"{QuoteIdentifier(link.LeftTable)}.{QuoteIdentifier(link.LeftField)} {CrystalXmlReportLoader.ReadLinkComparison(link.Comparison)} {QuoteIdentifier(link.RightTable)}.{QuoteIdentifier(link.RightField)}";
     }
 
     private static string OrientedJoin(ReportDesignerDataLink link, string newAlias)

@@ -570,6 +570,9 @@ public sealed class TslvArchiveReader
 
     internal bool LegacyValueLengths { get; init; }
 
+    /// <summary>Written by Crystal Reports 7 or earlier: a text run's font size is the GDI cell height, not the em.</summary>
+    internal bool LegacyCellHeights { get; set; }
+
     public TslvRecordHeader? CurrentRecord => _records.Count == 0 ? null : _records.Peek().Header;
 
     public int BytesLeftInRecord
@@ -669,7 +672,7 @@ public sealed class TslvArchiveReader
         {
             Position = Position, _simpleKey = _simpleKey, _enhancedStrings = _enhancedStrings,
             _readObjectIds = _readObjectIds, _readEnumsAsInt32 = _readEnumsAsInt32,
-            LegacyValueLengths = LegacyValueLengths
+            LegacyValueLengths = LegacyValueLengths, LegacyCellHeights = LegacyCellHeights
         };
         foreach (var frame in _records.Reverse()) copy._records.Push(frame);
         return copy;

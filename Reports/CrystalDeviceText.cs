@@ -38,10 +38,10 @@ internal static class CrystalDeviceText
         try { runs = Runs(element, html); }
         catch (Exception error) when (error is NotSupportedException or InvalidDataException or System.Xml.XmlException or FileNotFoundException) { return null; }
         if (runs is null) return null;
-        // Chrome keeps line boxes in 1/64 px; use the same quantized leading so a native box and a browser-measured
-        // sibling of the same font agree to the twip (12.16 px for 8pt Arial is 12.15625 px in the browser).
+        // Keep printer leading at its native precision. Quantizing to CSS 1/64 pixels before
+        // accumulating lines shortens three-line paragraphs by a twip and eventually changes page breaks.
         var dpi = ReportObjectRenderer.TextDpi(element);
-        var leading = Math.Floor(ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true, element.Bold, element.Italic, dpi)!.Value * 64) / 64 * 15;
+        var leading = ReportFontCatalog.NativeLineHeightPixels(element.FontFamily, element.FontSize, true, element.Bold, element.Italic, dpi)!.Value * 15;
         var available = Math.Max(0, element.WidthTwips - element.IndentTwips
             - ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips) * 15
             - ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips) * 15);
@@ -139,6 +139,29 @@ internal static class CrystalDeviceText
             foreach (var run in runs) { if (offset < at + run.Text.Length) return run; at += run.Text.Length; }
             return null;
         }
+    }
+
+    /// <summary>Fit a tight field background to its painted value and horizontal alignment.</summary>
+    internal static void FitTightFrame(ReportDesignerElement element, string html, IReadOnlyList<ReportTextLine>? lines)
+    {
+        var plain = WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", ""));
+        var border = ReportObjectRenderer.BorderPixels(element.Visual.LeftLine, element.Visual.LineWidthTwips)
+            + ReportObjectRenderer.BorderPixels(element.Visual.RightLine, element.Visual.LineWidthTwips);
+        // A native tight string field containing only trailing spaces and line breaks has no printable
+        // text to enclose. Keep its layout and fill; don't stroke a box around just the fitting gutter.
+        if (element is { Kind: "Field", UseCrystalScreenMetrics: true, InterpretHtml: false, NativeNumericFormat: null, NativeNumberFormat: null }
+            && plain.Length > 0 && plain.All(c => c is ' ' or '\r' or '\n'))
+            element.Visual.LeftLine = element.Visual.RightLine = element.Visual.TopLine = element.Visual.BottomLine = "NoLine";
+        var width = CssLineWidth(element, html, lines ?? [new ReportTextLine(0, 0, 0, plain.Length)]);
+        if (width is null) return;
+        // Keep a small gutter between the value and uncovered objects behind the field.
+        var fitted = (int)Math.Ceiling((width.Value + border) * 15) + element.IndentTwips + 100;
+        var spare = element.WidthTwips - fitted;
+        if (spare <= 0) return;
+        var alignment = element.HorizontalAlignment.ToLowerInvariant();
+        if (alignment == "right" || alignment == "default" && (element.NativeNumericFormat != null || element.NativeNumberFormat != null)) element.LeftTwips += spare;
+        else if (alignment is "center" or "horizontalcenter") element.LeftTwips += spare / 2;
+        element.WidthTwips = fitted;
     }
 
     /// <summary>
@@ -341,8 +364,8 @@ internal static class CrystalDeviceText
 
     /// <summary>
     /// The characters of a text object's line that Crystal paints: a glyph is painted, and so exported, when its
-    /// kerned device start lies inside the box, and the clip cuts the rest of it ("Item Notes: ... Smooth &amp; Ch"
-    /// keeps the h that begins 6 pixels before the edge; the ":" of an overlong right-aligned summary label begins
+    /// kerned device start lies inside the box, and the clip cuts the rest of it ("Notes: ... The quick br"
+    /// keeps the r that begins 6 pixels before the edge; the ":" of an overlong right-aligned summary label begins
     /// beyond it). Null when a glyph or the device font is unavailable.
     /// </summary>
     internal static string? PaintedDevicePrefix(string text, string family, double points, bool bold, bool italic,
@@ -457,9 +480,21 @@ internal sealed class CrystalDeviceFont
     private readonly Dictionary<int, (short YMax, short YMin)> _vdmx = new();
     private readonly Dictionary<uint, short> _kern = new();
     private readonly int _lineGap;
+    private readonly double _cellHeightPerEm;
     private readonly NativePdfFont? _fallback;
     public int UnitsPerEm { get; } = 2048;
     public string Source { get; }
+
+    /// <summary>GDI's cell height for the face as a fraction of the em (usWinAscent + usWinDescent over the units per em:
+    /// 2268/2048 for Times New Roman, 2288/2048 for Arial); the bundled fallback's ascent plus descent. Zero without an OS/2 table.</summary>
+    public double CellHeightPerEm => _fallback is not null ? (_fallback.Ascent - _fallback.Descent) / 1000d : _cellHeightPerEm;
+
+    /// <summary>
+    /// The em a GDI cell height maps to for the face. A positive LOGFONT height names the cell, not the em, so a
+    /// 10pt Times New Roman cell realizes a 9.03pt em (and Crystal lays such a text object out as 9pt). Null without metrics.
+    /// </summary>
+    public static double? EmFromCellHeight(string family, bool bold, bool italic, double cellPoints)
+        => Resolve(family, bold, italic) is { CellHeightPerEm: > 0 } font ? cellPoints / font.CellHeightPerEm : null;
 
     public static CrystalDeviceFont? Resolve(string family, bool bold, bool italic)
     {
@@ -532,6 +567,8 @@ internal sealed class CrystalDeviceFont
         var head = Table("head", 54);
         UnitsPerEm = U16(head + 18);
         if (UnitsPerEm is < 16 or > 16384) throw new InvalidDataException("Invalid font units per em: " + path);
+        if (_tables.TryGetValue("OS/2", out var os2) && os2.Length >= 78)
+            _cellHeightPerEm = (double)(U16(os2.Offset + 74) + U16(os2.Offset + 76)) / UnitsPerEm;
         var glyphCount = U16(Table("maxp", 6) + 4);
         var hhea = Table("hhea", 36);
         _lineGap = (short)U16(hhea + 8);
@@ -549,7 +586,7 @@ internal sealed class CrystalDeviceFont
     /// <summary>
     /// The face's kerning adjustment between two characters in whole device pixels at the ppem (Arial's "To" at
     /// 83 ppem is -9), as GDI reports its kerning pairs. Crystal applies them when it decides where a paragraph
-    /// wraps: a Job Budget description whose unkerned advances reach 2101 pixels stays on one 2100-pixel line when
+    /// wraps: a description whose unkerned advances reach 2101 pixels stays on one 2100-pixel line when
     /// its pairs take it to 2096, and an identical-width line without pairs wraps. It draws a line with the plain
     /// advances, so a memo's character break stays unkerned while a painted prefix follows the kerned starts.
     /// Zero without a pair, a glyph or a device table.

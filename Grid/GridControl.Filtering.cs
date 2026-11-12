@@ -302,7 +302,7 @@ public partial class GridControl<TValue>
             _simpleColumnFilters[field] = normalized;
 
         _filterRowDrafts[field] = normalized;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
 
@@ -329,7 +329,7 @@ public partial class GridControl<TValue>
         _filterRowOperators.Remove(field);
         _simpleColumnFilters.Remove(field);
         ReseedFilterRowBox(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
         if (UsesItemsProvider)

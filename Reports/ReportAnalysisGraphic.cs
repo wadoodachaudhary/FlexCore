@@ -51,15 +51,27 @@ internal static class ReportAnalysisGraphic
             }
             return CoordinateSeries(definition, series);
         }
-        var categoryValues = snapshot.Rows.GroupBy(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => Value(group.First(), definition.CategoryField), StringComparer.Ordinal);
-        var categories = categoryValues.Keys.ToArray();
+        var categoryName = definition.Groups.FirstOrDefault(group => group.Field.Equals(definition.CategoryField, StringComparison.OrdinalIgnoreCase))?.NameSelector();
+        var seriesName = definition.Groups.FirstOrDefault(group => group.Field.Equals(definition.SeriesField, StringComparison.OrdinalIgnoreCase))?.NameSelector();
+        var categoryRowsByKey = snapshot.Rows.GroupBy(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+        object? CategoryValue(string key) => Value(categoryRowsByKey[key], definition.CategoryField);
+        string Caption(string key) => categoryName?.Invoke(categoryRowsByKey[key]) ?? CategoryCaption(definition, key, CategoryValue(key));
+        var categories = categoryRowsByKey.Keys.ToArray();
         var descending = definition.DescendingFields.Contains(definition.CategoryField, StringComparer.OrdinalIgnoreCase);
         if (definition.SortCategories || descending)
         {
-            Array.Sort(categories, (a, b) => descending ? CompareCategory(categoryValues[b], categoryValues[a]) : CompareCategory(categoryValues[a], categoryValues[b]));
+            Array.Sort(categories, (a, b) => descending ? CompareCategory(CategoryValue(b), CategoryValue(a)) : CompareCategory(CategoryValue(a), CategoryValue(b)));
         }
         if (categories.Length > 5000) throw new InvalidDataException("Chart exceeds 5,000 categories.");
+        if (definition.RankedCategoryCount > 0)
+        {
+            var rankedRows = snapshot.Rows.ToLookup(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)));
+            var measure = definition.Measures[0];
+            categories = categories.OrderByDescending(key => decimal.TryParse(Aggregate(rankedRows[key], measure),
+                NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var value) ? value : decimal.MinValue)
+                .Take(definition.RankedCategoryCount).ToArray();
+        }
         IEnumerable<IGrouping<string, Dictionary<string, object>>> partitions = snapshot.Rows.GroupBy(row => Label(definition, definition.SeriesField, Value(row, definition.SeriesField)));
         if (definition.SeriesField.Length > 0 && !definition.OriginalOrderFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase)
             && (definition.SortCategories || definition.DescendingFields.Contains(definition.SeriesField, StringComparer.OrdinalIgnoreCase)))
@@ -76,22 +88,35 @@ internal static class ReportAnalysisGraphic
             var categoryRows = partition.ToLookup(row => Label(definition, definition.CategoryField, Value(row, definition.CategoryField)), StringComparer.Ordinal);
             foreach (var category in categories)
             {
+                if (definition.CrossTabSeries && measure.Aggregate == ReportAggregateType.Sum && !categoryRows.Contains(category))
+                {
+                    points.Add(new(Caption(category), 0));
+                    continue;
+                }
+                // A missing category/series intersection has no bar. A real zero
+                // still draws a zero-height face in a perspective chart.
+                if ((definition.ChartThreeDimensional || definition.SpatialStyle?.Family is 1 or 4 or 5 or 6) && !definition.CrossTabSeries && definition.SeriesField.Length > 0 && !categoryRows.Contains(category))
+                {
+                    points.Add(new(Caption(category), 0) { IsEmpty = true });
+                    continue;
+                }
                 var formatted = Aggregate(categoryRows[category], measure);
                 if (decimal.TryParse(formatted, NumberStyles.Number | NumberStyles.AllowExponent, CultureInfo.CurrentCulture, out var number))
                 {
                     ValidateChartValue(number, definition.ChartType);
-                    points.Add(new(CategoryCaption(definition, category, categoryValues[category]), (double)number));
+                    points.Add(new(Caption(category), (double)number));
                 }
                 else if (definition.ChartType is not (ChartType.Pie or ChartType.Donut))
-                    points.Add(new(CategoryCaption(definition, category, categoryValues[category]), 0) { IsEmpty = true });
+                    points.Add(new(Caption(category), 0) { IsEmpty = true });
             }
             var caption = string.IsNullOrWhiteSpace(measure.Caption) ? measure.Field : measure.Caption;
-            if (definition.ChartType is ChartType.Gauge or ChartType.Line or ChartType.Area && string.IsNullOrWhiteSpace(measure.Caption))
+            if (definition.ChartType is ChartType.Gauge or ChartType.Line or ChartType.Area or ChartType.Ohlc or ChartType.StackedBar100 && string.IsNullOrWhiteSpace(measure.Caption))
             {
                 var field = measure.Field.Trim('{', '}').Split('.').Last();
                 caption = (measure.Aggregate == ReportAggregateType.Average ? "Avg" : measure.Aggregate.ToString()) + " of " + field;
             }
-            series.Add(new(partition.Key.Length == 0 ? caption : definition.Measures.Count == 1 ? partition.Key : partition.Key + " / " + caption, definition.ChartType, points));
+            var seriesLabel = seriesName?.Invoke(partition.First()) ?? partition.Key;
+            series.Add(new(partition.Key.Length == 0 ? caption : definition.Measures.Count == 1 ? seriesLabel : seriesLabel + " / " + caption, definition.ChartType, points));
             if (series.Count > 64) throw new InvalidDataException("Chart exceeds 64 series.");
         }
         return CoordinateSeries(definition, series);

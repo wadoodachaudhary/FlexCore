@@ -3,10 +3,14 @@ using System.Text;
 
 namespace Fx.ControlKit.Reports.NativeCrystal;
 
-/// <summary>Document summary of an RPT (the OLE "\u0005SummaryInformation" property set Crystal saves as Report Summary Info).</summary>
-public sealed record CrystalSummaryInformation(string Title = "", string Subject = "", string Author = "", string Keywords = "", string Comments = "");
+/// <summary>Document summary of an RPT (the OLE "\u0005SummaryInformation" property set Crystal saves as Report Summary Info).
+/// <paramref name="Created"/> and <paramref name="LastSaved"/> are the property set's UTC time stamps; the designer rewrites the first on
+/// every save and prints it as the report's modification date, while other tools update only the second.</summary>
+public sealed record CrystalSummaryInformation(string Title = "", string Subject = "", string Author = "", string Keywords = "", string Comments = "",
+    DateTime? Created = null, DateTime? LastSaved = null);
 
-/// <summary>Reads the FMTID_SummaryInformation section of an OLE property set stream (MS-OLEPS): title 2, subject 3, author 4, keywords 5, comments 6.</summary>
+/// <summary>Reads the FMTID_SummaryInformation section of an OLE property set stream (MS-OLEPS): title 2, subject 3, author 4, keywords 5, comments 6,
+/// create time 12 and last-saved time 13.</summary>
 internal static class CrystalSummaryInformationParser
 {
     private const int MaxText = 65_536;
@@ -65,8 +69,17 @@ internal static class CrystalSummaryInformationParser
             var end = text.IndexOf('\0');
             return end < 0 ? text : text[..end];
         }
-        return new(Text(section, 2), Text(section, 3), Text(section, 4), Text(section, 5), Text(section, 6));
+        // A FILETIME property (type 0x40): 100-ns intervals since 1601 in UTC, zero when never set.
+        DateTime? Time(ReadOnlySpan<byte> section, int id)
+        {
+            if (!values.TryGetValue(id, out var position) || position > size - 12 || BinaryPrimitives.ReadUInt16LittleEndian(section[position..]) != 0x40) return null;
+            var fileTime = BinaryPrimitives.ReadInt64LittleEndian(section[(position + 4)..]);
+            return fileTime > 0 && fileTime <= MaxFileTime ? DateTime.FromFileTimeUtc(fileTime) : null;
+        }
+        return new(Text(section, 2), Text(section, 3), Text(section, 4), Text(section, 5), Text(section, 6), Time(section, 12), Time(section, 13));
     }
+
+    private static readonly long MaxFileTime = DateTime.MaxValue.ToFileTimeUtc();
 
     // The property set's code page: one .NET has built in (1200, 20127, 28591, 65001, ...) or one of the Windows code pages.
     private static Encoding TextEncoding(int codePage)

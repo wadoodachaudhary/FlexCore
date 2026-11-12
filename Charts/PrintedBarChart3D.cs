@@ -12,7 +12,7 @@ internal static class PrintedBarChart3D
 
     internal static ReportVectorImage Draw(ChartType type, IReadOnlyList<ChartSeries> series, string title,
         double width, double height, bool legend, string[]? palette = null, ChartAxis? xAxis = null,
-        ChartAxis? yAxis = null, bool showAxisLabels = true)
+        ChartAxis? yAxis = null, bool showAxisLabels = true, ReportPerspectiveBarStyle? style = null)
     {
         if (!Supports(type)) throw new NotSupportedException("This chart type has no three-dimensional bar adapter.");
         if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
@@ -20,9 +20,11 @@ internal static class PrintedBarChart3D
         var image = new ReportVectorImage { Width = width, Height = height };
         var groups = series?.Where(group => group is not null).ToArray() ?? [];
         var count = groups.Select(group => group.DataPoints?.Count ?? 0).DefaultIfEmpty().Max();
+        if (style is { Palette.Length: > 0 }) palette = style.Palette.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var colors = palette?.Select(NormalizeColor).Where(color => color is not null).Select(color => color!).ToArray();
         if (colors is not { Length: > 0 }) colors = DefaultPalette;
         var font = groups.Length > 1 ? Math.Min(width / 80, height / 31.93) : Math.Min(width / 118, height / 31.78);
+        if (style is not null) font = Math.Min(width / 50, height / 32);
         ChartDataPoint? Point(int group, int category) => groups[group].DataPoints is { } points && category < points.Count ? points[category] : null;
         static bool Present(ChartDataPoint? point) => point is { IsEmpty: false } && double.IsFinite(point.Value);
         var labels = Enumerable.Range(0, count).Select(category => groups.Select((_, group) => Point(group, category))
@@ -37,20 +39,21 @@ internal static class PrintedBarChart3D
         var showLegend = entries.Count > 0;
 
         void Line(double x1, double y1, double x2, double y2, double stroke = .24) =>
-            image.Shapes.Add(new("Polyline", [x1, y1, x2, y2], "none", "#000000", stroke));
+            image.Shapes.Add(new("Polyline", [x1, y1, x2, y2], "none", "#000000", style is null ? stroke : Math.Max(stroke, .36)));
         void Polygon(double[] points, string fill = "none", double stroke = .24) =>
             image.Shapes.Add(new("Polygon", points, fill, "#000000", stroke));
         void Box(double x, double y, double w, double h, string fill, string stroke = "none", double thickness = .12) =>
             image.Shapes.Add(new("Rectangle", [x, y, w, h], fill, stroke, thickness));
-        void Text(string text, double x, double y, double size, string anchor = "start", double angle = 0)
+        void Text(string text, double x, double y, double size, string anchor = "start", double angle = 0, string color = "#000000", bool bold = false)
         {
             var radians = angle * Math.PI / 180;
-            image.Shapes.Add(new("Text", [0, 0], "#000000", "none", 0,
+            image.Shapes.Add(new("Text", [0, 0], color, "none", 0,
                 Transform: [Math.Cos(radians), Math.Sin(radians), -Math.Sin(radians), Math.Cos(radians), x, y],
-                Text: new(text, "Arial", size, Anchor: anchor)));
+                Text: new(text, "Arial", size, bold ? 700 : 400, Anchor: anchor)));
         }
         Box(0, 0, width, height, "#ffffff");
-        if (!string.IsNullOrEmpty(title)) Text(title, width / 2, height * .08, font * 1.6, "middle");
+        if (!string.IsNullOrEmpty(title)) Text(title, width / 2, height * .08, font * (style is null ? 1.6 : 2),
+            "middle", color: NormalizeColor(style?.TitleColor) ?? "#000000", bold: style is not null);
 
         // Percent stacks use absolute totals, so positive and negative values cannot cancel the denominator.
         var values = new double[groups.Length, count];
@@ -111,13 +114,20 @@ internal static class PrintedBarChart3D
         var dx = width * .022; var dy = -height * .0224;
         var frontLeft = backLeft - dx; var frontRight = backRight - dx;
         var frontTop = backTop - dy; var frontBottom = backBottom - dy;
+        if (style?.Plot is { } frame)
+        {
+            frontLeft = width * frame.Left; frontRight = width * frame.Right;
+            frontTop = height * frame.Top; frontBottom = height * frame.Bottom;
+            backLeft = frontLeft + dx; backRight = frontRight + dx;
+            backTop = frontTop + dy; backBottom = frontBottom + dy;
+        }
         var slot = (frontRight - frontLeft) / Math.Max(1, count);
         double Y(double value) => frontBottom - (Math.Clamp(value, low, high) - low) / (high - low) * (frontBottom - frontTop);
 
-        Box(backLeft, backTop, backRight - backLeft, backBottom - backTop, "none", "#000000", .24);
+        Box(backLeft, backTop, backRight - backLeft, backBottom - backTop, "none", "#000000", style is null ? .24 : .36);
         Polygon([frontLeft, frontTop, backLeft, backTop, backLeft, backBottom, frontLeft, frontBottom]);
         Polygon([frontLeft, frontBottom, backLeft, backBottom, backRight, backBottom, frontRight, frontBottom]);
-        if (xAxis?.ShowGridLines != false)
+        if (style?.CategoryGrid ?? (xAxis?.ShowGridLines != false))
             for (var category = 1; category < count; category++)
             {
                 var x = frontLeft + category * slot;
@@ -128,9 +138,9 @@ internal static class PrintedBarChart3D
         {
             var value = low + (high - low) * (tick / (ticks - 1d));
             var y = Y(value);
-            if (yAxis?.ShowGridLines != false && tick > 0 && tick < ticks - 1 && Math.Abs(value) > (high - low) * 1e-12)
+            if ((style?.ValueGrid ?? (yAxis?.ShowGridLines != false)) && tick > 0 && tick < ticks - 1 && Math.Abs(value) > (high - low) * 1e-12)
             { Line(frontLeft, y, backLeft, y + dy); Line(backLeft, y + dy, backRight, y + dy); }
-            if (showAxisLabels) Text(Tick(value), frontLeft - font * 1.12, y + font * .343, font, "end");
+            if (showAxisLabels) Text(Tick(value), frontLeft - font * (style is null ? 1.12 : .55), y + font * .343, font, "end");
         }
         if (low <= 0 && high >= 0)
         { Line(frontLeft, Y(0), backLeft, Y(0) + dy, .48); Line(backLeft, Y(0) + dy, backRight, Y(0) + dy, .48); }
@@ -161,24 +171,35 @@ internal static class PrintedBarChart3D
         }
         if (showAxisLabels)
         {
-            double X(int index) => frontLeft + (index + .5) * slot + font * .66;
-            var labelBaseline = frontBottom + font * 1.725;
-            var visible = ChartAxisLabelLayout.Select(labels, X, font, -45, "end", axis: xAxis,
+            double X(int index) => frontLeft + (index + .5) * slot + (style is null ? font * .66 : 0);
+            var labelBaseline = frontBottom + font * (style is null ? 1.725 : 1.4);
+            var angle = style is null || style.RotateCategoryLabels ? -45 : 0;
+            var anchor = angle == 0 ? "middle" : "end";
+            var visible = ChartAxisLabelLayout.Select(labels, X, font, angle, anchor, axis: xAxis,
                 minimumX: 0, maximumX: width, maximumDepth: Math.Max(0, height - labelBaseline));
-            foreach (var category in visible.Order()) Text(labels[category], X(category), labelBaseline, font, "end", -45);
-            if (!string.IsNullOrEmpty(xAxis?.Title)) Text(xAxis.Title, (frontLeft + frontRight) / 2, height - font * .2, font, "middle");
-            if (!string.IsNullOrEmpty(yAxis?.Title)) Text(yAxis.Title, font * 1.5, (frontTop + frontBottom) / 2, font, "middle", -90);
+            foreach (var category in visible.Order()) Text(labels[category], X(category), labelBaseline, font, anchor, angle);
+            var xTitle = style?.CategoryTitle ?? xAxis?.Title;
+            var yTitle = style?.ValueTitle ?? yAxis?.Title;
+            if (!string.IsNullOrEmpty(xTitle)) Text(xTitle, (frontLeft + frontRight) / 2, height - font * .2, font, "middle");
+            if (!string.IsNullOrEmpty(yTitle)) Text(yTitle, style is null ? font * 1.5 : font * 1.35, (frontTop + frontBottom) / 2 + (style is null ? 0 : font), style is null ? font : font * 1.1, "middle", -90, bold: style is not null);
         }
         if (showLegend)
         {
             var top = Math.Max(font, Math.Min(height - legendHeight - font, height * (groups.Length > 1 ? .39643 : .40870) - legendHeight / 2));
-            Box(legendLeft + width * .009113, top + height * .01079, legendWidth, legendHeight, "#000000");
+            if (style?.Legend is { } legendFrame)
+            {
+                legendLeft = legendFrame.Left * width; legendWidth = (legendFrame.Right - legendFrame.Left) * width;
+                top = legendFrame.Top * height; legendHeight = (legendFrame.Bottom - legendFrame.Top) * height;
+                legendFont = Math.Min(font, legendHeight / (entries.Count * 1.2 + 1.1));
+            }
+            else Box(legendLeft + width * .009113, top + height * .01079, legendWidth, legendHeight, "#000000");
+            if (style is not null && stacked && groups.Length > 1) entries.Reverse();
             Box(legendLeft, top, legendWidth, legendHeight, "#ffffff", "#000000", .12);
             for (var index = 0; index < entries.Count; index++)
             {
-                var row = top + legendFont * ((groups.Length > 1 ? 1.086 : 1.398) + index * 1.2);
-                Box(legendLeft + legendFont * (groups.Length > 1 ? 1.212 : 1.578), row, legendFont * .921, legendFont * .923, entries[index].Color, "#000000", .12);
-                Text(entries[index].Label, legendLeft + legendFont * (groups.Length > 1 ? 2.748 : 3.114), row + legendFont * .791, legendFont);
+                var row = top + legendFont * ((style?.Legend is not null ? .8 : groups.Length > 1 ? 1.086 : 1.398) + index * 1.2);
+                Box(legendLeft + legendFont * (style?.Legend is not null ? .85 : groups.Length > 1 ? 1.212 : 1.578), row, legendFont * .921, legendFont * .923, entries[index].Color, "#000000", .12);
+                Text(entries[index].Label, legendLeft + legendFont * (style?.Legend is not null ? 2.26 : groups.Length > 1 ? 2.748 : 3.114), row + legendFont * .791, legendFont);
             }
         }
         image.Validate();

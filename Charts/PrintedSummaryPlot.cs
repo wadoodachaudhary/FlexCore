@@ -7,11 +7,33 @@ namespace Fx.ControlKit.Charts;
 internal static class PrintedSummaryPlot
 {
     private static readonly string[] Palette = ["#0066ff","#ff0000","#ffff00","#00cc00","#00ffff","#ff00ff"];
-    internal static bool Supports(ReportAnalysisDefinition d) => d.PrintAxis is not null && d.Measures.Count == 1 && d.SeriesField.Length == 0 && d.ChartType is (ChartType.Bar or ChartType.Area)
+    // A flat pie (even with a detached slice) and a 3D riser without its saved camera print as ordinary charts.
+    private static bool Spatial(ReportAnalysisDefinition d) => d.SpatialStyle is { Family: not (3 or 5 or 6) } or { Family: 5, CameraValues.Length: 12 }
+        or { Family: 6, CameraValues.Length: 12, VolumeValues.Length: 3, ColumnView: not null };
+    internal static bool Supports(ReportAnalysisDefinition d) => d.ChartType == ChartType.StackedBar100 && !d.ChartThreeDimensional || Spatial(d) || d.LineStyle is not null && d.ChartType == ChartType.Line || d.PerspectivePie && d.ChartType == ChartType.Pie
+        || d.HasFixedSeriesBarAxis || d.PrintAxis is not null && d.Measures.Count == 1 && d.SeriesField.Length == 0 && d.ChartType is (ChartType.Bar or ChartType.Area)
         || d.SummariesAsCategories && (d.PerspectivePie || d.ChartType == ChartType.Bar);
 
     internal static ReportVectorImage Draw(ReportAnalysisDefinition d, IReadOnlyList<ChartSeries> series, double w, double h)
     {
+        if (d.ChartType == ChartType.StackedBar100 && !d.ChartThreeDimensional)
+            return PrintedCategoryBarChart.Draw(d.ChartType, series, d.Title, w, h, d.ShowLegend,
+                yAxis: new ChartAxis { TickCount = 11, Format = "0'%'" },
+                rightKey: d.RightCategoryLegend ?? new("", "", false, true) { KeyBySeries = true });
+        if (Spatial(d)) return PrintedSpatialChart.Draw(d, series, w, h);
+        if (d.LineStyle is not null && d.ChartType == ChartType.Line) return PrintedLineChart.Draw(d, series, w, h);
+        if (d.PerspectivePie && !d.SummariesAsCategories) return PrintedPerspectivePie.Draw(d, series, w, h);
+        if (d.PerspectivePie && series is [{ DataPoints: { Count: > 0 } points0 }] && points0.All(p => p is not null && (p.IsEmpty || p.Value == 0)))
+            return PrintedStageChart.DrawZeroPie(series[0], d.Title, w, h, d.ShowLegend);
+        if (d.HasFixedSeriesBarAxis && d.PrintAxis is { } fixedAxis)
+        {
+            var key = d.RightCategoryLegend ?? new(fixedAxis.CategoryTitle, fixedAxis.ValueTitle, false, fixedAxis.Grid);
+            var paint = key.Drawing ?? new ReportBarDrawing("", "#ffffff", null, null, null, fixedAxis.Frame);
+            var valueAxis = new ChartAxis { Min = fixedAxis.Minimum, Max = fixedAxis.Maximum, TickCount = fixedAxis.Intervals + 1,
+                Format = fixedAxis.Format, Title = fixedAxis.ValueTitle, ShowGridLines = fixedAxis.Grid };
+            return PrintedCategoryBarChart.Draw(d.ChartType, series, d.Title, w, h, d.ShowLegend, yAxis: valueAxis,
+                rightKey: key with { Drawing = paint, KeyBySeries = true });
+        }
         var image = new ReportVectorImage { Width=w, Height=h };
         var points = series.FirstOrDefault()?.DataPoints ?? [];
         var summaries = d.SummariesAsCategories;
@@ -26,13 +48,14 @@ internal static class PrintedSummaryPlot
             image.Shapes.Add(new("Text",angle==0?[x,y]:[0,0],color,"none",0,Transform:angle==0?null:[Math.Cos(a),Math.Sin(a),-Math.Sin(a),Math.Cos(a),x,y],
                 Text:new(text,"Arial",size,bold?700:400,Anchor:anchor)));
         }
+        var pieColors = d.PiePalette ?? Palette;
         void Key(IReadOnlyList<string> labels)
         {
             if(!d.ShowLegend || labels.Count==0)return;
             var fs=Math.Clamp(Math.Min(w*.015,h*.033),5,10); var x=w*.688; var y=h*.54-(labels.Count+1)*fs*.67;
             Box(x,y,w*.304,(labels.Count+.7)*fs*1.42,"#ffffff","#000000");
             for(var i=0;i<labels.Count;i++){
-                if(i<points.Count)Box(x+fs*.65,y+fs*(.65+i*1.42),fs*.83,fs*.83,Palette[i%Palette.Length],"#000000");
+                if(i<points.Count)Box(x+fs*.65,y+fs*(.65+i*1.42),fs*.83,fs*.83,pieColors[i % pieColors.Length],"#000000");
                 Label(x+fs*2.1,y+fs*(1.4+i*1.42),labels[i],fs,"start");
             }
         }
@@ -48,13 +71,13 @@ internal static class PrintedSummaryPlot
                 int steps=Math.Max(1,(int)Math.Ceiling(120*fraction));
                 for(int k=0;k<=steps;k++){var t=start+(end-start)*k/steps; poly.Add(cx+rx*Math.Cos(t));poly.Add(cy+ry*Math.Sin(t));}
                 if(fraction>0){
-                    faces.Add(new("Polygon",poly.ToArray(),Palette[i%Palette.Length],"#000000",.55));
+                    faces.Add(new("Polygon",poly.ToArray(),pieColors[i % pieColors.Length],"#000000",.55));
                     var front=new List<double>();
                     for(int turn=0;turn<2;turn++){
                         var lo=Math.Max(start,turn*2*Math.PI);var hi=Math.Min(end,(turn*2+1)*Math.PI);if(hi<=lo)continue;
                         front.Clear();for(int k=0;k<=steps;k++){var t=lo+(hi-lo)*k/steps;front.Add(cx+rx*Math.Cos(t));front.Add(cy+ry*Math.Sin(t));}
                         for(int k=steps;k>=0;k--){var t=lo+(hi-lo)*k/steps;front.Add(cx+rx*Math.Cos(t));front.Add(cy+ry*Math.Sin(t)+depth);}
-                        var rgb=Convert.ToInt32(Palette[i%Palette.Length][1..],16);
+                        var rgb=Convert.ToInt32(pieColors[i % pieColors.Length][1..],16);
                         image.Shapes.Add(new("Polygon",front.ToArray(),$"#{(rgb>>16)*3/4:x2}{(rgb>>8&255)*3/4:x2}{(rgb&255)*3/4:x2}","#000000",.5));
                     }
                 }
@@ -112,18 +135,34 @@ internal static class PrintedSummaryPlot
                 start=end;
             }
         }
+        // Crystal turns the category captions of a bar chart only when they do not fit their slots.
+        var rotate=d.ChartType==ChartType.Bar&&points.Any(p=>ChartAxisLabelLayout.MeasureWidth(p.Label,f)>step-f*.3);
         for(int i=0;i<points.Count;i++){
             var p=points[i];var x=left+(i+.5)*step;
             if(!p.IsEmpty&&d.ChartType==ChartType.Bar){
                 var baseline=Y(Math.Clamp(0,min,max));var y=Y(Math.Clamp(p.Value,min,max));
                 if(Math.Abs(baseline-y)>.001)Box(x-step*.44,Math.Min(y,baseline),step*.88,Math.Abs(baseline-y),Palette[summaries?i%Palette.Length:0],summaries?"#000000":"none");
             }
-            if(!summaries)Label(x,bottom+(axesOnly ? .82*f : f),p.Label,axesOnly ? f*.62 : f,d.ChartType==ChartType.Bar?"end":"middle",angle:d.ChartType==ChartType.Bar?-45:0);
+            if(!summaries)Label(x,bottom+(axesOnly ? .82*f : rotate ? f : f*1.4),p.Label,axesOnly ? f*.62 : f,rotate?"end":"middle",angle:rotate?-45:0);
         }
         if(axis is not null && !axesOnly){
             Label(w*.51,h*.99,axis.CategoryTitle,f*1.35,bold:true);
             Label(left-f*8,(top+bottom)/2,axis.ValueTitle,f*1.35,bold:true,angle:-90);
         }
-        Key(points.Select(p=>p.Label).ToArray());return image;
+        if(summaries)Key(points.Select(p=>p.Label).ToArray());else SideKey(points.Select(p=>p.Label).ToArray());return image;
+        // The key of a saved-axis chart stands beside the plot, centred on it and fitted to its captions, never over the plot.
+        void SideKey(IReadOnlyList<string> labels)
+        {
+            if(!d.ShowLegend || labels.Count==0)return;
+            var boxWidth=Math.Min(w-right-f*2.4,f*4.05+labels.Max(l=>ChartAxisLabelLayout.MeasureWidth(l,f)));
+            if(boxWidth<f*3)return;
+            var boxHeight=(labels.Count*1.42+1.12)*f;
+            var x=right+Math.Min(w*.0395,Math.Max(f*.5,w-right-boxWidth-f*.5)); var y=(top+bottom)/2-boxHeight/2;
+            Box(x,y,boxWidth,boxHeight,"#ffffff","#000000");
+            for(var i=0;i<labels.Count;i++){
+                Box(x+f*.85,y+f*(.8+i*1.42),f*.83,f*.83,pieColors[i % pieColors.Length],"#000000");
+                Label(x+f*2.5,y+f*(1.55+i*1.42),labels[i],f,"start");
+            }
+        }
     }
 }

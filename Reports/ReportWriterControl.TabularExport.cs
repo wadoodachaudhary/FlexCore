@@ -12,6 +12,7 @@ public partial class ReportWriterControl
         Tabs.Clear();
         Tabs.Add(RenderTabularSnapshot(definition, data, parameters));
         ActiveTabIndex = 0;
+        DropLeftPrintMark();
         IsLoading = false;
         await InvokeAsync(StateHasChanged);
     }

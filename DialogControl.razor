@@ -16,8 +16,7 @@
          @onmouseup="e => HandleOverlayMouseUp(e, true)"
          @onmouseleave="e => HandleOverlayMouseUp(e, false)"
          tabindex="0"
-         data-fx-dialog-shortcuts="@HostKeyboardShortcutDomValue"
-         @onkeydown="HandleKeyDown">
+         data-fx-dialog-shortcuts="@HostKeyboardShortcutDomValue">
         <div class="@DialogCssClass" style="@DialogStyle" role="dialog" aria-modal="@(IsModal ? "true" : null)"
              data-fx-dialog-enter="@(OnEnter.HasDelegate ? "true" : null)"
              aria-label="@AriaLabel" aria-labelledby="@(string.IsNullOrWhiteSpace(AriaLabel) && (HeaderContent != null || !string.IsNullOrWhiteSpace(Header)) ? _titleId : null)"
@@ -155,6 +154,8 @@
 
     private readonly DefaultButtonScope _defaultButtonScope = new();
     private bool _enterRunning;
+    private bool _altF4Settling;
+    private bool _disposed;
 
     /// <summary>Ctrl+Enter requests close (the OnClose path) — the keyboard
     /// "OK" for dialogs whose close commits.</summary>
@@ -412,34 +413,9 @@
         await RequestClose();
     }
 
-    private async Task HandleKeyDown(KeyboardEventArgs e)
-    {
-        if (_moveArmed && e.Key == "Escape")
-        {
-            _moveArmed = false;
-            return;
-        }
-
-        if (e.AltKey && string.Equals(e.Key, "F4", StringComparison.OrdinalIgnoreCase))
-        {
-            _systemMenuVisible = false;
-            await RequestClose();
-            return;
-        }
-
-        // Escape / Ctrl+Enter are handled by the CAPTURE-phase JS listener
-        // (registerDialogKeys) so they work even when the focused control stops
-        // keydown propagation — do not double-handle them here.
-        if (e.Key == "Escape" || (e.CtrlKey && (e.Key == "Enter" || e.Key == "NumpadEnter")))
-            return;
-
-        // Every other key is content typing — this handler fires once per
-        // keystroke anywhere in the dialog, and re-rendering the dialog (and
-        // its content fragments) per character is what makes popup editors
-        // sluggish.
-        _suppressNextRenderOnce = true;
-    }
-
+    // The dialog's keys are listened in the browser (dialog-control.js registerDialogKeys), which calls
+    // the [JSInvokable] methods below only for a key the dialog acts on. A Blazor @onkeydown on the
+    // overlay was a server round trip for every key typed anywhere in the dialog.
     private bool _suppressNextRenderOnce;
 
     protected override bool ShouldRender()
@@ -760,6 +736,8 @@
             _press = null;
             _openGenerationForPress++;
             _moveArmed = false;
+            // A dialog shown again before its hide reached the browser is rendered anew: its keys too.
+            _keysRegisteredForShow = false;
 
             // Rising edge: the dialog renders AFTER this method, so a capture
             // enqueued HERE reaches the browser BEFORE the render batch that
@@ -933,7 +911,7 @@
     {
         if (_moveArmed)
         {
-            _moveArmed = false;
+            await CancelKeyboardMoveAsync();
             return;
         }
 
@@ -974,8 +952,56 @@
             await RequestClose();
     }
 
+    /// <summary>Alt+F4 anywhere in the dialog or on its backdrop: close, as the window menu's Close does.
+    /// <paramref name="blurred"/> is true when the browser first took the focus from a text box, which
+    /// commits its typing on that blur. Returns true when the dialog is still shown afterwards (its close
+    /// handler kept it open), so the browser gives that box its focus back.</summary>
+    [JSInvokable]
+    public async Task<bool> OnDialogAltF4Async(bool blurred)
+    {
+        // A key that reached a dialog already hidden, or a second press while the first one still waits for
+        // its commit, closes nothing more.
+        if (!Visible || _disposed)
+            return false;
+        if (_altF4Settling)
+            return true;
+
+        _systemMenuVisible = false;
+        if (blurred && _focusModule != null)
+        {
+            // A grid cell's editor reads its text back from the browser before it commits. Replies come back
+            // in order, so one round trip here lets that commit land first: the close handler reads what was
+            // typed, as after a click on the close button. Bounded, so a reply lost to a dropped connection
+            // holds the close for seconds, not the interop timeout.
+            _altF4Settling = true;
+            try { await _focusModule.InvokeVoidAsync("settle", TimeSpan.FromSeconds(2)); }
+            catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
+            finally { _altF4Settling = false; }
+            // Closed or torn down another way meanwhile: its close handler has run already.
+            if (!Visible || _disposed)
+                return false;
+        }
+        // A failing close handler reaches the renderer, as it does from the title bar's close button.
+        try { await RequestClose(); }
+        catch (Exception error) { await DispatchExceptionAsync(error); }
+        await InvokeAsync(StateHasChanged);
+        return Visible && !_disposed;
+    }
+
+    /// <summary>Escape on the backdrop while a keyboard Move is armed ends the Move, and nothing else.</summary>
+    [JSInvokable]
+    public Task OnDialogMoveEscapeAsync() => _moveArmed ? CancelKeyboardMoveAsync() : Task.CompletedTask;
+
+    // A call from the browser renders nothing by itself, so the move-armed classes are repainted here.
+    private Task CancelKeyboardMoveAsync()
+    {
+        _moveArmed = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         _selfRef?.Dispose();
         if (_focusModule != null)
         {

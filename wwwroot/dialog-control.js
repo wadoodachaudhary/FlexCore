@@ -222,8 +222,9 @@ export function unwatchPopupPlacement() {
 
 // Escape / Ctrl+Enter / Tab for the dialog, listened in the CAPTURE phase so
 // they work even when the focused control stops keydown propagation
-// (TextBoxControl does, for its grid-embedded editors). The listener dies with
-// the element.
+// (TextBoxControl does, for its grid-embedded editors), and Alt+F4 on the
+// overlay. Only a key the dialog acts on calls .NET: every other key typed in
+// the dialog stays in the browser. The listeners die with the elements.
 const DIALOG_TABBABLE =
     "input:not([type=hidden]):not(:disabled), textarea:not(:disabled), " +
     "select:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex='-1'])";
@@ -238,6 +239,14 @@ const DIALOG_ENTER_OWNERS =
     "input[type='file'], input[type='color'], " +
     "[role='button'], [role='link'], [role='menuitem'], [role='option'], [role='tab'], [role='tree'], " +
     "[aria-expanded='true'], [data-fx-enter-owner], .fx-grid, .fx-treegrid";
+
+// Controls that keep Alt+F4, so it does not also close the dialog: the list and date boxes, whose F4 opens them,
+// and the controls that keep every key, as they did before the dialog listened in the browser (a grid-list box, a
+// grid's or tree grid's filter popup, a grid's pager, rename box and context menus, a colour picker, a drop-down
+// menu and its buttons). Anywhere else in the dialog Alt+F4 closes it, as it closes a VB6 form.
+const DIALOG_ALT_F4_KEEPERS = ".fx-dropdown-host, .fx-dropdown-grid, .fx-datepicker-host, .fx-filter-popup, " +
+    ".fx-treegrid-filter-popup, .fx-grid-pager, .fx-grid-rename-dialog, .fx-grid-cell-context-menu, " +
+    ".fx-grid-header-context-menu, .fx-colorpicker-panel, .fx-menu-dropdown";
 
 // A closed list's trigger button is a combo box, not a command button: in VB6 Enter on a
 // closed combo presses the default button, so the key is taken before the list can open.
@@ -312,8 +321,13 @@ function keyGesture(e) {
     return parts.join("+").toLowerCase();
 }
 
+// Does nothing: a dialog awaits it as one round trip, so the replies the browser owes before it (a text box
+// committing its typing on blur) reach the server first.
+export function settle() { }
+
 export function registerDialogKeys(root, dotNetRef) {
-    if (!root) return;
+    if (!root || root.dataset.fxDialogKeys === "1") return;   // once per rendered dialog
+    root.dataset.fxDialogKeys = "1";
     // Gestures the host handles itself for the whole window (DialogControl.HostKeyboardShortcuts, on the
     // overlay as data-fx-dialog-shortcuts): the browser's own default is prevented wherever the key is
     // pressed in the window — the backdrop included, which a click leaves focused outside the dialog element
@@ -328,6 +342,41 @@ export function registerDialogKeys(root, dotNetRef) {
         if (!target || (target !== overlay && target.closest("[role='dialog']") !== root)) return;
         if (gestures.split("|").includes(keyGesture(e))) e.preventDefault();
     }, true);
+    // Alt+F4 closes the dialog from its content, its window menu or its backdrop, and Escape on the backdrop
+    // ends a keyboard Move (the window menu's Move); Escape in the content is the capture listener's below.
+    // Bubble phase, so a control that stops the key natively keeps it. A nested dialog or message box owns
+    // its keys, and so do the controls in DIALOG_ALT_F4_KEEPERS.
+    // Only this overlay's own descendants count: a match above the overlay belongs to the page around it.
+    const inOverlay = (target, selector) => {
+        const found = target.closest(selector);
+        return !!found && found !== overlay && overlay.contains(found);
+    };
+    if (overlay) overlay.addEventListener("keydown", e => {
+        const target = e.target instanceof Element ? e.target : null;
+        if (!target || target.closest(".fx-dialog-overlay") !== overlay || inOverlay(target, ".fx-msgbox-overlay")) return;
+        if (target !== overlay && !root.contains(target)
+            && target.closest(".fx-dialog-system-menu")?.parentElement !== overlay) return;
+        if (e.altKey && e.key === "F4") {
+            // A held key's repeats close nothing more; the first press has asked for the close.
+            if (e.repeat || inOverlay(target, DIALOG_ALT_F4_KEEPERS)) return;
+            // The focused text box gives up the focus first, as it does to a click on the close button: a text
+            // box commits its typing on blur, and a browser-buffered one only then. The close is asked for one
+            // tick later, after that commit, and waits for it to land (OnDialogAltF4Async), so the close handler
+            // reads what was typed, as a VB6 form's unload code reads its text boxes. A close the handler refuses
+            // gives the box its focus back, as VB6 keeps it on the active control when the unload is cancelled.
+            const blurred = (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+                && target === document.activeElement ? target : null;
+            blurred?.blur();
+            setTimeout(() => dotNetRef.invokeMethodAsync("OnDialogAltF4Async", !!blurred).then(open => {
+                if (open && blurred && blurred.isConnected && root.contains(blurred) && !blurred.disabled
+                    && (!document.activeElement || document.activeElement === document.body))
+                    blurred.focus({ preventScroll: true });
+            }).catch(() => { }), 0);
+        } else if (e.key === "Escape" && target === overlay
+            && overlay.classList.contains("fx-dialog-overlay-move-armed")) {
+            dotNetRef.invokeMethodAsync("OnDialogMoveEscapeAsync").catch(() => { });
+        }
+    });
     // Text boxes typed into since their last change event. A text input only
     // fires change on blur, so the default button commits it first — as a
     // blur would — or OnEnter would read the value from before the typing.

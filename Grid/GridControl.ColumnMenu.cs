@@ -78,7 +78,7 @@ public partial class GridControl<TValue>
         else
             RemoveSortPriority(column.Field);
 
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (EventsRef?.Sorted.HasDelegate == true)
         {
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs

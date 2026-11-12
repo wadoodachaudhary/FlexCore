@@ -31,7 +31,12 @@ internal static partial class CrystalReportContentsParser
                 // StringFieldProperties stores a UInt16 limit before text interpretation and spacing.
                 // Zero means unlimited. This is a display limit; never truncate the bound field value.
                 reportObject.MaxNumberOfLines = reader.LoadUInt16();
-                if (reader.BytesLeftInRecord >= 2) reportObject.InterpretHtml = reader.LoadEnum() == 2;
+                if (reader.BytesLeftInRecord >= 2)
+                {
+                    var interpretation = reader.LoadEnum();
+                    reportObject.InterpretRtf = interpretation == 1;
+                    reportObject.InterpretHtml = interpretation == 2;
+                }
                 reader.SkipRestOfRecord();
             }
             else if (record.Type == 249)
@@ -171,6 +176,10 @@ internal static partial class CrystalReportContentsParser
         if (dataSource.Equals("PrintDate", StringComparison.OrdinalIgnoreCase)) return format with { Order = 2 };
         if (dataSource.Equals("PrintTime", StringComparison.OrdinalIgnoreCase)) return format with { Order = 3 };
         if (resolved != true || type is not (9 or 15)) return null;
-        return type == 9 ? format with { Order = 2 } : format;
+        // A report may display database timestamps as dates without changing their database type
+        // or the declared type of a formula/parameter. Embedded field runs use this same resolver.
+        var databaseDate = type == 15 && definition.ConvertDatabaseDateTimeToDate && database.Tables
+            .SelectMany(t => t.Fields).Any(f => f.FormulaName.Equals(dataSource, StringComparison.OrdinalIgnoreCase));
+        return type == 9 || databaseDate ? format with { Order = 2 } : format;
     }
 }

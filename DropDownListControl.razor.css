@@ -163,7 +163,7 @@
 
 /* Content-sized panel (grid cell editors opt in via PanelFitContentWidth).
    Sized by CSS so the very first paint is already correct — no interop round
-   trip, hence no visible "grows a moment later" (HHM-866 issue 3). The gutter
+   trip, hence no visible "grows a moment later". The gutter
    is reserved so a scrolling list never lays its scrollbar over the text. */
 .fx-dropdown-panel.fx-dropdown-panel-fit {
     width: max-content;

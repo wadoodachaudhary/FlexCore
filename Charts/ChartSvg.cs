@@ -23,7 +23,9 @@ public static class ChartSvg
             ["Legend"] = new ChartLegend { Visible = showLegend },
             ["Width"] = width,
             ["Height"] = height,
-            ["Animate"] = false
+            ["Animate"] = false,
+            // A static string cannot hover: no tooltip handlers, the shapes keep their <title> text.
+            ["ShowTooltips"] = false
         };
         using var services = new ServiceCollection().AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance).BuildServiceProvider();
         using var renderer = new HtmlRenderer(services, NullLoggerFactory.Instance);

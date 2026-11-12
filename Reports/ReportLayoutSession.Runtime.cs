@@ -25,11 +25,15 @@ public sealed partial class ReportLayoutSession
         /// <summary>Page tokens that resolve to markup built from the page's value, not to encoded text.</summary>
         public Dictionary<string, Func<int, int, bool, string>> PageMarkup { get; } = new();
         public bool PhysicalSchedule { get; set; }
+        /// <summary>The variables of the run's reports, worked out at the run's first page break that needs them.</summary>
+        public RunVariables? Variables { get; set; }
         public List<ReportLayoutSession> Sessions { get; } = [];
         public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
         public Dictionary<PrintBandKey, bool> PrintedVisibility { get; set; } = new();
         public Dictionary<PrintBandKey, PrintSectionFormat> PrintedSections { get; set; } = new();
         public List<HashSet<PrintBandKey>> BlankHistory { get; } = [];
+        /// <summary>The states the page replays of one pagination left, to tell a cycle from a layout still settling.</summary>
+        public HashSet<(long, long, int)> ReplayStates { get; } = [];
         public Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool> PrintedBlank { get; set; } = new();
     }
     private readonly RuntimeState _state;
@@ -76,9 +80,21 @@ public sealed partial class ReportLayoutSession
         DocumentProperty = _documentPropertyDelegate ??= name => name switch
         {
             "reporttitle" => ReportTitle, "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
+            "filename" => FilePathAndName, "filecreationdate" => FileCreationTime.Date,
+            "modificationdate" => ModificationTime.Date, "modificationtime" => ModificationTime.TimeOfDay,
             _ => throw new NotSupportedException($"Document property '{name}' is not available to this report run.")
         }
     };
+
+    // Crystal's file properties: the report's own path, else the document's, and the time stamps saved with it. Crystal prints the
+    // property set's creation stamp (rewritten by its designer on every save) as the modification date; a document saved without
+    // stamps reads its file's, and one that has no file prints the print time.
+    private string FilePathAndName => _layout.Document.ReportFilePath is { Length: > 0 } path ? path
+        : _layout.Document.SourcePath is { Length: > 0 } source ? source : _layout.Document.SourceName;
+    private DateTime FileCreationTime => (_layout.Document.Created ?? _layout.Document.LastSaved)?.ToLocalTime() ?? SourceFileTime(File.GetCreationTime) ?? _printTime;
+    private DateTime ModificationTime => (_layout.Document.Created ?? _layout.Document.LastSaved)?.ToLocalTime() ?? SourceFileTime(File.GetLastWriteTime) ?? _printTime;
+    private DateTime? SourceFileTime(Func<string, DateTime> read)
+        => _layout.Document.SourcePath is { Length: > 0 } path && File.Exists(path) ? read(path) : null;
 
     // Crystal's ReportTitle is the saved summary title, blank when none was saved; the document title falls back to other text for display.
     private string ReportTitle => _layout.Document.SourceDocument?.Root is not { } root ? _layout.Document.Title
@@ -196,6 +212,21 @@ public sealed partial class ReportLayoutSession
         if (formula.RequiresPrintPass || RequiredTime(formula) == CrystalEvaluationTime.WhilePrintingRecords)
             throw new NotSupportedException(name + " cannot depend on print-time formulas.");
     }
+    // A formula whose only print-time need is a group or report summary of read-time values (no variable, page or record
+    // context) is known for every record once they are read: Crystal groups a cross-tab by such a formula.
+    private bool SummaryBound(CrystalFormula formula, HashSet<string>? visiting = null)
+    {
+        if (formula.RequiresPrintPass || formula.UsesPageContext || formula.UsesSharedVariables || formula.UsesRecordContext
+            || formula.UsesPersistentVariables || formula.UsesGroupNumber || formula.EvaluationTime is CrystalEvaluationTime.WhilePrintingRecords) return false;
+        visiting ??= new(StringComparer.OrdinalIgnoreCase);
+        foreach (var dependency in formula.References)
+        {
+            if (!visiting.Add(dependency)) continue;
+            if (_layout.Formulas.TryGetValue(dependency, out var nested)) { if (!SummaryBound(nested, visiting)) return false; }
+            else if (EvaluationTime(dependency) == CrystalEvaluationTime.WhilePrintingRecords) return false;
+        }
+        return true;
+    }
     private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _groupStarts.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
 
     private string DeferredPageValue(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime, ReportNativeNumberFormat? nativeNumber, ReportNativeNumericFormat? nativeNumeric)
@@ -263,7 +294,10 @@ public sealed partial class ReportLayoutSession
             throw new NotSupportedException("Page header/footer formatting cannot assign persistent variables during speculative measurement.");
         if (pageOnly && !_replayingPrint && NeedsPrintState(formula))
             throw new NotSupportedException("Page-dependent formatting cannot mutate shared/global variables.");
-        return formula.Evaluate(Context(row, currentField: currentField));
+        var value = formula.Evaluate(Context(row, currentField: currentField), out var stopped);
+        // A condition that stopped at a null value may have set some of the variables it assigns and not the rest (Furnish).
+        if (stopped && formula.WritesPersistentVariables) _state.Sessions[0]._assignmentFailures++;
+        return value;
     }
     private static ReportDesignerSection CopySection(ReportDesignerSection source) => new()
         {
@@ -377,6 +411,7 @@ public sealed partial class ReportLayoutSession
                     break;
                 case "horizontalalignment": element.HorizontalAlignment = value?.ToString() ?? "Left"; break;
                 case "bordercolor": element.Visual.BorderColor = FormulaColor(value); break;
+                case "hasdropshadow": element.Visual.HasDropShadow = CrystalFormula.Boolean(value); break;
                 case "linewidth": element.Visual.LineWidthTwips = Math.Max(0, (int)CrystalFormula.Number(value)); break;
                 case "leftlinestyle": element.Visual.LeftLine = FormulaLine(value); break;
                 case "rightlinestyle": element.Visual.RightLine = FormulaLine(value); break;
@@ -428,10 +463,11 @@ public sealed partial class ReportLayoutSession
         return element;
     }
 
-    private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null)
+    // furniture: the band prints inside the page header or footer of physicalPage (a subreport's section there).
+    private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null, bool furniture = false)
     {
         if (source.EvaluationOnly) return source;
-        source = ApplyPrintedItems(source, physicalPage, repeated);
+        source = ApplyPrintedItems(source, physicalPage, repeated || furniture);
         var sectionOwner = source.Owner ?? this;
         var previousPage = sectionOwner._formulaPage; var previousCount = sectionOwner._formulaPages; var previousRepeat = sectionOwner._repeatedHeader;
         // Box the page numbers once per band, not once per object.
@@ -441,7 +477,7 @@ public sealed partial class ReportLayoutSession
         try
         {
             sectionOwner._formulaPage = pageBox; sectionOwner._formulaPages = countBox; sectionOwner._repeatedHeader = repeated;
-            var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
+            var occurrence = repeated || furniture || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
             var hasFormat = _state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format);
             var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true, allowShared: !hasFormat);
             if (hasFormat) format!.Apply(section);
@@ -579,16 +615,26 @@ public sealed partial class ReportLayoutSession
         return null;
     }
 
-    private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row)
+    /// <summary>What a subreport object whose query failed prints in place of its records, or null.</summary>
+    private string? SubreportErrorHtml(ReportDesignerElement element) => _subreportErrors.TryGetValue(element.Id, out var message)
+        ? "<span class=\"fx-report-subreport-error\" style=\"color:#b00020;font-style:italic\">[Subreport error: " + System.Net.WebUtility.HtmlEncode(message) + "]</span>"
+        : null;
+
+    // How deep inline subreports nest below the report that prints them: a session at this depth prints none.
+    private const int MaxSubreportDepth = 8;
+
+    // run: the subreport's records and parameters, already read for this row.
+    private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row, bool initializePrintContext = false, SubreportRun? run = null)
     {
         if (!_layout.Subreports.TryGetValue(element.Id, out var subreport))
         { _diagnostics.Add($"{element.Name}: subreport is on-demand or its definition is unavailable."); return null; }
         if (_executeSubreport is null)
         { _diagnostics.Add($"{element.Name}: an inline subreport data executor is required."); return null; }
-        if (_depth >= 8 || ++_state.Instances > 10000) throw new InvalidDataException("Inline subreport instance/nesting limit exceeded.");
-        var run = ResolveSubreportRun(element, subreport, row);
+        if (_depth >= MaxSubreportDepth || ++_state.Instances > 10000) throw new InvalidDataException("Inline subreport instance/nesting limit exceeded.");
+        run ??= ResolveSubreportRun(element, subreport, row);
         if (run is null) return null;
-        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport, _state, _depth + 1, this, run.Selections)
+        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport, _state, _depth + 1, this, run.Selections,
+            initializePrintContext: initializePrintContext)
             { _link = new(this, element.SectionId, row, element.Name, subreport.Links, run.Values) };
         if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
             _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");

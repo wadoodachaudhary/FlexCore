@@ -160,6 +160,9 @@ public sealed partial class ReportLayoutSession
 
         // A drill view's tree starts at the drilled group, as its tab does.
         var rootLevel = Math.Max(0, _drillDownGroupLevel - 1);
+        // A band links to its group only when CreateDrillDown would open that group; a refused level prints as plain text.
+        var reportDrills = DrillDownUnsupportedReason is null;
+        var drillableLevels = new bool?[_layout.Document.Groups.Count];
         List<FxGroupNode> Level(int level, int start, int end)
         {
             var nodes = new List<FxGroupNode>();
@@ -195,13 +198,14 @@ public sealed partial class ReportLayoutSession
                     PageIndex = target.Page, AnchorId = id, Expanded = false, Children = Level(level + 1, first, last)
                 };
                 _navigationGroups.Add(node, new(level, first, last));
+                var drillable = drillableLevels[level] ??= reportDrills && OmittedDrillStateReason(level + 1) is null;
                 foreach (var candidate in candidates)
                 {
                     var section = candidate.Placement.Band.Section;
                     var ownsBand = section.Kind is "GroupHeader" or "GroupFooter"
                         ? DrillSectionDepth(section) == level + 1
                         : level == _layout.Document.Groups.Count - 1;
-                    if (ownsBand) targets[candidate.Placement] = new(id, node.Label);
+                    if (ownsBand && drillable) targets[candidate.Placement] = new(id, node.Label);
                 }
                 if (target.Placement is not null)
                 {
@@ -218,12 +222,19 @@ public sealed partial class ReportLayoutSession
 
     private string? OmittedDrillStateReason(int groupLevel) => _layout.ShowAllHeadersOnDrillDown == false && _layout.Document.Sections
         .Where(section => DrillSectionDepth(section) < groupLevel)
-        .Any(section => section.Elements.Any(element => element.Kind == "Subreport")
+        .Any(section => section.Elements.Any(element => element.Kind == "Subreport" && !OmittableSubreport(element))
             || section.Elements.SelectMany(FieldBindings).Any(BindsPrintState)
             || section.Elements.Any(element => _layout.ObjectConditions.GetValueOrDefault(element.Id)?.Values.Any(NeedsPrintState) ?? false)
             || (_layout.AreaConditions.GetValueOrDefault(section.Id)?.Values.Any(NeedsPrintState) ?? false)
             || (_layout.SectionConditions.GetValueOrDefault(section.Id)?.Values.Any(NeedsPrintState) ?? false))
         ? "Native drill-down cannot omit ancestor/report sections that participate in persistent print state or subreport execution." : null;
+
+    // Leaving out an inline subreport changes nothing the drill view prints when its report keeps no state (no variables,
+    // running totals, charts or cross-tabs, nested subreports included) and its links read no print state. An on-demand
+    // subreport, or one whose definition is unavailable, keeps the refusal.
+    private bool OmittableSubreport(ReportDesignerElement element) => _layout.Subreports.TryGetValue(element.Id, out var subreport)
+        && subreport.Definition.PositionedLayout is { } layout && StatelessSubreport(element.Id, layout)
+        && !subreport.Links.Any(link => BindsPrintState(link.MainField));
 
     private int DrillSectionDepth(ReportDesignerSection section) => section.Kind switch
     {

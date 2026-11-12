@@ -119,7 +119,7 @@ public partial class CrystalXmlReportLoader
 
     /// <summary>
     /// The Unicode type the guarded selection compares in. nvarchar(max) made every comparison a LOB operation and
-    /// collapsed the optimizer's estimates to one row (the guards then ran inside nested loops: Global Option Costs
+    /// collapsed the optimizer's estimates to one row (the guards then ran inside nested loops: one sample report
     /// spent 2.5 of its 4.1 query seconds there); nvarchar(4000) keeps the code-page guard with the same result for
     /// every column that fits, and a wider column keeps max.
     /// </summary>

@@ -166,8 +166,8 @@ public partial class CrystalXmlReportLoader
         // the SQL/HTML pipeline. Leaving them in causes Descendants("Table"),
         // Descendants("ParameterFieldDefinition"), Descendants("Area") etc. to pull
         // in subreport-only tables, formulas, and field objects, which then leak
-        // into the main report's SQL (e.g. Open PO's v1 cross-joining
-        // POInvoicedAmounts and invoiceitems with no link conditions).
+        // into the main report's SQL (e.g. a report cross-joining two
+        // subreport-only tables with no link conditions).
         foreach (var sr in report.Descendants("SubReports").ToList())
             sr.Remove();
 
@@ -375,9 +375,9 @@ public partial class CrystalXmlReportLoader
         // so we infer from the sort hierarchy: the first record-level sort
         // is the column the report visually groups its detail rows by, and
         // Crystal authors almost always set it to suppress repeats
-        // (Master Assembly List's POIndex is the canonical example — sorted
-        // first, with one "050 Excavation" label spanning all the rows in
-        // that POIndex's slice). Conservative: only the FIRST record-sort
+        // (an index column is the canonical example — sorted first, with
+        // one label spanning all the rows in that index value's slice).
+        // Conservative: only the FIRST record-sort
         // gets the flag; subsequent record-sort columns (Phase, Item) keep
         // showing on every row, matching the legacy Crystal Viewer.
         var firstRecordSort = sortFields
@@ -558,10 +558,10 @@ public partial class CrystalXmlReportLoader
     /// <summary>
     /// One Crystal table reference. <c>CommandSql</c> is non-null when the source
     /// is a Crystal <c>&lt;Command&gt;</c> table — an embedded SELECT used as a derived
-    /// subquery instead of a real table (e.g. PO Integration Status Report v1).
+    /// subquery instead of a real table.
     /// </summary>
     private sealed record TableInfo(string Alias, string Name, string? CommandSql = null, string? QualifiedName = null);
-    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination, string? EnforceJoin = null);
+    private sealed record TableLinkInfo(string JoinType, List<(string Table, string Field)> Source, List<(string Table, string Field)> Destination, string? EnforceJoin = null, string Comparison = "=");
     /// <summary>
     /// One field rendered in a Crystal Detail section.
     /// <c>Name</c> is the FieldObject's <c>Name="..."</c> attribute (e.g. "Item1") — used to
@@ -953,10 +953,22 @@ public partial class CrystalXmlReportLoader
             var sourceFields = ParseFieldRefs(link.Element("SourceFields"));
             var destFields = ParseFieldRefs(link.Element("DestinationFields"));
             if (sourceFields.Count > 0 && destFields.Count > 0)
-                links.Add(new TableLinkInfo(joinType, sourceFields, destFields, (string?)link.Attribute("EnforceJoin")));
+                links.Add(new TableLinkInfo(joinType, sourceFields, destFields, (string?)link.Attribute("EnforceJoin"), ReadLinkComparison((string?)link.Attribute("Comparison"))));
         }
         return links;
     }
+
+    internal static string ReadLinkComparison(string? value) => value switch
+    {
+        string comparison when comparison is "<>" or "<" or "<=" or ">" or ">=" or "=" => comparison,
+        null => "=",
+        _ => throw new InvalidDataException("Unsupported Crystal field link comparison.")
+    };
+
+    internal static string ReverseLinkComparison(string comparison) => comparison switch
+    {
+        "<" => ">", "<=" => ">=", ">" => "<", ">=" => "<=", _ => comparison
+    };
 
     private static List<(string Table, string Field)> ParseFieldRefs(XElement? container)
     {
@@ -987,7 +999,7 @@ public partial class CrystalXmlReportLoader
         // Track which parameter names we've already emitted so a parameter
         // declared in multiple subreports (or echoed in the main report as a
         // <SubReportLink> reference) is only added once. Without this, e.g.
-        // Open PO's v1 — which has THREE copies of "Pm-POMaster.PONumber"
+        // a report with THREE copies of "Pm-Orders.OrderNumber"
         // (one per subreport + the linked references in the main report) —
         // blew up downstream when ReportParamDialogControl tried to build a
         // Dictionary keyed by name.
@@ -1017,8 +1029,8 @@ public partial class CrystalXmlReportLoader
                 && !string.Equals((string?)p.Attribute("IsLinkedToSubreport"),
                     "True", StringComparison.OrdinalIgnoreCase)
                 // Skip parameter definitions nested inside a <SubReports> block —
-                // those belong to the subreport, not the main report. (e.g. Open
-                // PO's v1 declares "Pm-POMaster.PONumber" inside two subreports
+                // those belong to the subreport, not the main report. (e.g. a
+                // report declares "Pm-Orders.OrderNumber" inside two subreports
                 // and only references it via SubReportLink in the main report.)
                 && !p.Ancestors("SubReports").Any());
 
@@ -1047,7 +1059,7 @@ public partial class CrystalXmlReportLoader
             // Tokenize usage flags. Crystal emits a comma-separated list like
             // "InUse, DataFetching" or "NotInUse, ShowOnPanel" — a substring
             // check for "InUse" wrongly matches "NotInUse" too, which is what
-            // caused Open PO's v1 to prompt for orphan parameters.
+            // caused one report to prompt for orphan parameters.
             //
             // Exported usage flags can be NotInUse even for live parameters.
             // References in selection, named and formatting formulas are
@@ -1115,9 +1127,9 @@ public partial class CrystalXmlReportLoader
             var bindingDescField = ResolveDescriptionField(bindingTable, bindingField, tableFields);
 
             // Auto-synthesize PickListSql only when the bound table looks
-            // like a base table (e.g. tblModels, tblJobs) — i.e. an
+            // like a base table (e.g. tblOrders, tblCustomers) — i.e. an
             // explicit "tbl" prefix in the XML's table alias. For VIEWS
-            // (AssemblyCostsAllCommunities, EstModelList, etc.) the
+            // (e.g. a cost or listing view) the
             // bound field is intentionally wide (it carries join-expanded
             // values) so DISTINCT-from-view returns far more rows than
             // Crystal's native picklist shows. Crystal stores the picklist
@@ -1299,11 +1311,11 @@ public partial class CrystalXmlReportLoader
         if (string.IsNullOrEmpty(table) || string.IsNullOrEmpty(field)) return "";
         if (!tableFields.TryGetValue(table, out var fields)) return "";
 
-        // Direct {Field}Desc — most common pattern in HomeFront's view layer.
+        // Direct {Field}Desc — the most common pattern in reporting views.
         var direct = field + "Desc";
         if (fields.Contains(direct)) return direct;
 
-        // Prefix-stripped Desc — handles AssemblyCostsAllCommunities.CostCommunity →
+        // Prefix-stripped Desc — handles a view's CostCommunity →
         // CommunityDesc, where the parameter binds against a renamed column.
         foreach (var prefix in new[] { "Cost", "Source", "Pricing" })
         {
@@ -1315,7 +1327,7 @@ public partial class CrystalXmlReportLoader
             }
         }
 
-        // Plain Description column — tblLocality / tblModels / tblJobs / etc.
+        // Plain Description column — lookup tables such as tblRegions.
         if (fields.Contains("Description")) return "Description";
 
         return "";
@@ -1325,7 +1337,7 @@ public partial class CrystalXmlReportLoader
     /// Synthesizes a default picklist SQL from a parameter's
     /// (table, field) binding. Adds a <c>DivisionID = @DivisionID</c>
     /// filter when the table exposes a DivisionID column, since every
-    /// HomeFront-multi-tenant table is partitioned by it.
+    /// multi-tenant table is partitioned by it.
     /// </summary>
     private string SynthesizePickListSql(string table, string field, string descField,
         Dictionary<string, HashSet<string>> tableFields)
@@ -1412,7 +1424,7 @@ public partial class CrystalXmlReportLoader
     /// Returns true if the Detail section is suppressed at <c>drilldowngrouplevel=0</c>
     /// (Crystal's "show only group summaries" mode). When true, the loader substitutes a
     /// SELECT-DISTINCT-at-group-level query so the initial view shows one row per innermost
-    /// visible group — matching VB6's behavior where Estimating Worksheet Detail v1 fits in
+    /// visible group — matching VB6's behavior where a drill-down summary report fits in
     /// 2 pages instead of 50.
     /// </summary>
     private bool IsDetailSuppressedAtTopLevel(XElement report)
@@ -1441,7 +1453,7 @@ public partial class CrystalXmlReportLoader
     ///   (c) it actually contains FieldObjects (data fields — empty sections don't count).
     ///
     /// <para>
-    /// For Estimating Worksheet Detail v1, the visible Assembly-level section (GroupHeaderArea3 /
+    /// For one drill-down report, the visible Assembly-level section (GroupHeaderArea3 /
     /// GroupHeaderSection9) has the row: Assembly code, Description, Total Selling, Cost, Profit —
     /// exactly what VB6 shows.
     /// </para>
@@ -2157,10 +2169,10 @@ public partial class CrystalXmlReportLoader
             }
 
             // Description detection — Crystal report authors typically place a
-            // second FieldObject (e.g. Job Budget Report v1's
-            // tblEstPhases_1.Description) OR embed a {Table.Field} reference
-            // inside a TextObject template (Major Group and Category Report's
-            // "Major Group  {tblMajorGroups.Description}") in the GroupHeader
+            // second FieldObject (e.g. a second alias's
+            // tblPhases_1.Description) OR embed a {Table.Field} reference
+            // inside a TextObject template (e.g.
+            // "Group  {tblGroups.Description}") in the GroupHeader
             // section showing the group's human-readable description. Pick
             // the first plain {Table.Field} reference that ISN'T the group's
             // own ConditionField and ISN'T a "GroupName(...)" formula — that's
@@ -2479,9 +2491,9 @@ public partial class CrystalXmlReportLoader
             return "NULL";
 
         // Crystal field refs: {tbl.field} → " [tbl].field ". The leading and trailing
-        // spaces are critical — Crystal often writes "If{POMaster.X}=true" with no
+        // spaces are critical — Crystal often writes "If{Orders.X}=true" with no
         // separator between the keyword and the field, which would collapse to
-        // "If[POMaster].X=true" and break the If/Then/Else regex below.
+        // "If[Orders].X=true" and break the If/Then/Else regex below.
         // Brackets around the alias defend against T-SQL reserved-word clashes.
         text = Regex.Replace(text, @"\{([A-Za-z_][\w]*)\.([^}]+)\}", m => $" [{m.Groups[1].Value}].{m.Groups[2].Value.Trim()} ");
         // Crystal string literals use double quotes in formulas but SQL needs single quotes.
@@ -2659,7 +2671,7 @@ public partial class CrystalXmlReportLoader
 
     private List<SummaryFieldInfo> ParseSummaryFields(XElement report)
     {
-        // Example: Sum ({@Total Cost}, {SalesSheetCostsView.Phase})
+        // Example: Sum ({@Total Cost}, {CostsView.Phase})
         // Either ref can be a formula (e.g. {@PhaseDesc}) — we keep the raw "@Name"
         // form so BuildReportGroups can match formula-based group definitions.
         var list = new List<SummaryFieldInfo>();
@@ -2695,7 +2707,7 @@ public partial class CrystalXmlReportLoader
         if (string.IsNullOrWhiteSpace(formula)) return "";
 
         // Strip Crystal "//" line comments. Mirrors TranslateCrystalFormula: report
-        // authors comment out trial WHERE clauses (e.g. Job Cost Overview v1 main
+        // authors comment out trial WHERE clauses (e.g. one sample's main
         // report's commented "{TransactionDate}>={?Start Date}" line); without this
         // they would leak into the SQL as `// {...} AND` and fail with
         // "Incorrect syntax near '/'." Per-line strip keeps the rest intact.
@@ -2730,7 +2742,7 @@ public partial class CrystalXmlReportLoader
         // Crystal: '*' = any chars, '?' = single char.   T-SQL: '%' and '_'.
         // Without this translation, e.g. `Job like @p + '*'` matches a literal asterisk
         // (returning zero rows), instead of "any suffix" — breaking optional Job filters
-        // in PO Integration Status Report v1 etc.
+        // in several sample reports.
         formula = TranslateLikeWildcards(formula);
 
         // Translate Crystal built-in functions (Date(), Year(), ToText(), etc.)
@@ -2775,8 +2787,8 @@ public partial class CrystalXmlReportLoader
         // Crystal Reports' default report option "Convert Database NULL Values
         // to Default" makes NULL strings behave like "" — so `{field} = ""`
         // is true for both empty AND null. SQL Server is strict: `field = ''`
-        // is false when field is NULL. Reports like Global Option Costs v1
-        // filter `Model = ""` to capture Global Options (Model is NULL in the
+        // is false when field is NULL. Reports may
+        // filter `Model = ""` to capture unassigned rows (Model is NULL in the
         // underlying view); the legacy Crystal viewer shows those rows, ours
         // dropped them until this rewrite.
         // Only literal `= ''` is rewritten — `= @Param` and `= 'something'`
@@ -2789,7 +2801,7 @@ public partial class CrystalXmlReportLoader
 
         // Top-level Crystal "IF cond THEN then-pred ELSE else-pred" → SQL boolean.
         // Crystal lets the record-selection formula switch its WHERE based on a
-        // condition (Job Cost Overview v1's main report does this for AP rows).
+        // condition (one sample's main report does this for AP rows).
         // SQL has no IF inside WHERE, so re-express as
         //   ((cond) AND (then-pred)) OR (NOT (cond) AND (else-pred)).
         // Done last so the branches are fully translated when we wrap them.
@@ -2930,8 +2942,8 @@ public partial class CrystalXmlReportLoader
         // 1. Crystal's explicit FieldHeadingObject ↔ FieldObject binding.
         //    Heading.FieldObjectName == Field.Name is the primary link, but
         //    only when the label is ALSO positioned near the field — RptToXml
-        //    sometimes exports the wrong FieldObjectName attribute. Model
-        //    Costs v1's PageHeader has FOUR FieldHeadingObjects all claiming
+        //    sometimes exports the wrong FieldObjectName attribute. One
+        //    report's PageHeader has FOUR FieldHeadingObjects all claiming
         //    FieldObjectName="Item1" (Item, Qty, UOM, Rate) with the Text
         //    actually appropriate to whichever column they're positioned
         //    over. Without the positional sanity check, the first far-away
@@ -3154,8 +3166,8 @@ public partial class CrystalXmlReportLoader
                     // formula concatenates CHAR(n) columns or columns
                     // with trailing whitespace — the rendered value is
                     // trimmed (see BuildCellPathAttribute), so the SQL
-                    // comparison must trim too or "1132 1132 Plan" never
-                    // equals "1132   1132 Plan          " under the hood.
+                    // comparison must trim too or "100 100 Ranch" never
+                    // equals "100   100 Ranch          " under the hood.
                     lhs = $"LTRIM(RTRIM({inlined}))";
                 }
             }
@@ -3334,7 +3346,7 @@ public partial class CrystalXmlReportLoader
                 {
                     var s = link.Source[k];
                     var d = link.Destination[k];
-                    onParts.Add($"[{s.Table}].{s.Field} = [{d.Table}].{d.Field}");
+                    onParts.Add($"[{s.Table}].{s.Field} {link.Comparison} [{d.Table}].{d.Field}");
                 }
             }
             sb.Append(string.Join(" AND ", onParts.Distinct(StringComparer.OrdinalIgnoreCase)));
@@ -3371,7 +3383,7 @@ public partial class CrystalXmlReportLoader
                 yield return new TableLinkInfo(link.JoinType switch
                 {
                     "LeftOuter" => "RightOuter", "RightOuter" => "LeftOuter", _ => link.JoinType
-                }, link.Destination, link.Source, link.EnforceJoin);
+                }, link.Destination, link.Source, link.EnforceJoin, ReverseLinkComparison(link.Comparison));
         }
     }
 
@@ -3411,17 +3423,17 @@ public partial class CrystalXmlReportLoader
                 ShowHeader = true,
                 // ShowFooter is set BELOW after aggregates are populated —
                 // groups with no subtotals would otherwise produce a phantom
-                // footer row containing only the group's code (the "DOORHW"
-                // repeated at the bottom of each group in the Major Group
-                // and Category Report). When the XML's GroupFooter section
+                // footer row containing only the group's code (a code like
+                // "ABC123" repeated at the bottom of each group of a grouped
+                // category report). When the XML's GroupFooter section
                 // is empty AND the group has no Crystal-defined Summary
                 // fields, we skip the footer entirely.
                 ShowFooter = false,
                 // Group header shows JUST the value — no "FieldName: " caption
                 // prefix. Mirrors the VB6 Crystal Reports look-and-feel where the
-                // value is the entire header (e.g. "Alcovy Meadows", "1132 Plan",
-                // "03000 PREPARATION PRELIMINARIES") rather than "Community: Alcovy
-                // Meadows" / "Model: 1132 Plan" etc.
+                // value is the entire header (e.g. "Sample Estates", "100 Ranch",
+                // "03000 SITE WORK") rather than "Community: Sample
+                // Estates" / "Model: 100 Ranch" etc.
                 HeaderFormat = hasDescription ? "{Value}  {Description}" : "{Value}",
                 DescriptionField = hasDescription ? $"{alias}_Desc" : "",
                 // Page-break flag faithfully reflects the Crystal author's

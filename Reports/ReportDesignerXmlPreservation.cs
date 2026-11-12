@@ -251,12 +251,13 @@ public static partial class ReportDesignerXmlSerializer
         var managed = before.Links.Where(link => sources.ContainsKey(link.Id)).Select(link => sources[link.Id]).Distinct().ToList();
         var desired = new List<XElement>();
         foreach (var links in after.Links.GroupBy(link => (
-            Source: after.SourceItems.GetValueOrDefault(link.Id), link.LeftTable, link.RightTable, link.JoinType)))
+            Source: after.SourceItems.GetValueOrDefault(link.Id), link.LeftTable, link.RightTable, link.JoinType, link.Comparison)))
         {
             // OriginalDesign is a value snapshot; source XML is owned by the live document.
             var originalXml = links.Select(link => after.SourceItems.GetValueOrDefault(link.Id)).FirstOrDefault(node => node is not null);
             var node = originalXml is null ? new XElement("TableLink") : new XElement(originalXml);
             node.SetAttributeValue("JoinType", ToCrystalJoinType(links.Key.JoinType));
+            node.SetAttributeValue("Comparison", links.Key.Comparison == "=" ? null : links.Key.Comparison);
             var sourceFields = new List<XElement>();
             var destinationFields = new List<XElement>();
             foreach (var link in links)

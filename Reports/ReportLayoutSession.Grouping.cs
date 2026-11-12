@@ -83,7 +83,8 @@ public sealed partial class ReportLayoutSession
     {
         if (level < 0 || level >= _layout.Document.Groups.Count) throw new InvalidDataException("GroupName requires a field the report groups on.");
         var options = Options(level);
-        object? Named(object? value) => value is string { Length: 0 } ? null : value is DateTime date && (options?.ConditionKind ?? 0) < DateConditionNames.Length ? date.ToString("d", CultureInfo.CurrentCulture) : value;
+        object? Named(object? value) => value is string { Length: 0 } ? null
+            : value is DateTime date && (options?.ConditionKind ?? 0) is var kind && kind < DateConditionNames.Length ? date.ToString(DefaultGroupDateFormat(kind), CultureInfo.CurrentCulture) : value;
         var key = GroupKey(level, row);
         if (key is OthersKey others) return others.Name;
         if (options is { NameFormulaError.Length: > 0 })
@@ -101,6 +102,23 @@ public sealed partial class ReportLayoutSession
                     : options.UnspecifiedValues == "separateValues" ? Named(Period(Value(_layout.Document.Groups[level].Condition, row), options, options.ShowLastDateInPeriod)) : options.OthersName;
         }
         return Named(Period(Value(_layout.Document.Groups[level].Condition, row), options, options?.ShowLastDateInPeriod ?? false));
+    }
+
+    // Crystal names a date group by its period: a day, week, fortnight or half month by the regional short date
+    // ("1/8/2000"), a month (and the quarter and half year that start on one) as "1/2003", a year as "2003".
+    private static string DefaultGroupDateFormat(int kind) => kind switch { 4 or 5 or 6 => "M/yyyy", 7 => "yyyy", _ => "d" };
+
+    // The period behind a date group's name and the group's condition kind, for a name field with its own date format
+    // ("1/03"); no date when the group is named by a formula or a specified-group list, or is not a date group.
+    private (DateTime? Date, int Kind) GroupPeriodDate(string reference, int row)
+    {
+        if (!_layout.GroupNames.TryGetValue(reference, out var condition)) return default;
+        var level = GroupLevel(condition);
+        if (level < 0 || row < 0 || row >= _rows.Length) return default;
+        var options = Options(level);
+        if (options?.NameFormula is not null || options is { NameFormulaError.Length: > 0 } || GroupKey(level, row) is SpecifiedKey or OthersKey) return default;
+        var kind = options?.ConditionKind ?? 0;
+        return kind < DateConditionNames.Length && Period(Value(condition, row), options, options?.ShowLastDateInPeriod ?? false) is DateTime date ? (date, kind) : default;
     }
 
     private readonly HashSet<int> _namingLevels = [];

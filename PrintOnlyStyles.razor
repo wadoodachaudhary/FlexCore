@@ -1,0 +1,21 @@
+@namespace Fx.ControlKit
+@* The browser's print prints an element marked fx-print-only alone and whole. Its ancestors lay out as plain blocks
+   of their content's height, with no fixed or viewport height, clipping, scrolling, offset, inset or transform, so the
+   browser paginates the whole element instead of the box it scrolls in; everything beside that path is left out.
+   Global rules, so they reach a host's containers; a component's scoped CSS reaches only its own elements. *@
+<style>@((MarkupString)Css)</style>
+
+@code {
+    // A marked element inside a container marked fx-print-skip (a window the user is not on) is left alone.
+    private const string Marked = ".fx-print-only:not(.fx-print-skip *)";
+    internal const string Css = "@media print{"
+        + ":has(" + Marked + "){display:block!important;position:static!important;float:none!important;"
+        + "width:auto!important;min-width:0!important;max-width:none!important;"
+        + "height:auto!important;min-height:0!important;max-height:none!important;"
+        + "margin:0!important;padding:0!important;border:0!important;overflow:visible!important;"
+        + "transform:none!important;contain:none!important;background:none!important}"
+        + ":has(" + Marked + ")>:not(" + Marked + ",:has(" + Marked + ")){display:none!important}"
+        + Marked + "{position:static!important;height:auto!important;min-height:0!important;max-height:none!important;"
+        + "margin:0!important;overflow:visible!important;transform:none!important}"
+        + "}";
+}

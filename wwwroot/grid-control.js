@@ -5035,8 +5035,8 @@ export function registerGridDragSelection(gridRoot, dotNetRef, mode, anchorIndex
     doc.addEventListener("pointermove", onMove, true);
     doc.addEventListener("pointerup", onUp, true);
 
-    // Immediate visual feedback the moment the drag capture arms (HHM-871
-    // follow-up QA complaint): the old flow painted nothing until the pointer
+    // Immediate visual feedback the moment the drag capture arms: the old
+    // flow painted nothing until the pointer
     // crossed into ANOTHER row, so a cell-mode press + short drag looked dead
     // until the server's post-mouseup render delivered the whole range at
     // once. Paint the anchor cell now; the range then grows live under the

@@ -14,12 +14,13 @@ else if (Snapshot is null)
 else if (Element.Kind == "Chart")
 {
     <ChartControl Type="Snapshot.Definition.ChartType" ReportPlot="Snapshot.Definition" ThreeDimensional="Snapshot.Definition.ChartThreeDimensional" CategoryLegend="Snapshot.Definition.ChartCategoryLegend" Title="@Snapshot.Definition.Title" Series="_series"
-        Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false"
-        ColorBarsByCategory="PrintBars" ColorPalette="@(PrintBars && !Snapshot.Definition.ChartThreeDimensional && !Snapshot.Definition.ChartCategoryLegend ? ReportAnalysisGraphic.CrystalBarPalette : null)"
+        Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false" ShowTooltips="false"
+        ColorBarsByCategory="PrintBars" ColorPalette="@(Snapshot.Definition.PiePalette ?? (PrintBars && !Snapshot.Definition.ChartThreeDimensional && !Snapshot.Definition.ChartCategoryLegend ? ReportAnalysisGraphic.CrystalBarPalette : null))"
         PrintReportGroupChart="Snapshot.Definition.ReportGroupChart" PrintWidthPoints="@(PrintBars ? Element.WidthTwips / 20d : 0)" PrintHeightPoints="@(PrintBars ? Element.HeightTwips / 20d : 0)"
         Width="100%" Height="@($"{Math.Max(1, Element.HeightTwips / 15 - (PrintBars ? 0 : 64))}px")" />
 }
-else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0 && Snapshot.Definition.NativeCrossTab is null && Snapshot.Definition.CalculatedMembers.Count == 0)
+else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0 && Snapshot.Definition.NativeCrossTab is null && Snapshot.Definition.CalculatedMembers.Count == 0
+    && !PrintsPercentages(Snapshot.Definition))
 {
     <PivotControl TValue="Dictionary<string, object>" DataSource="_pivotRows" RowFields="Snapshot.Definition.RowFields"
         ColumnFields="Snapshot.Definition.ColumnFields" ValueFields="_pivotMeasures" FieldLabels="_labels"
@@ -41,7 +42,7 @@ else if (Element.Kind is "Table" or "CrossTab")
 @code {
     [Parameter, EditorRequired] public ReportDesignerElement Element { get; set; } = new();
     [Parameter] public ReportAnalysisSnapshot? Snapshot { get; set; }
-    private bool PrintBars => Snapshot?.Definition.ChartCategoryLegend == true || Snapshot?.Definition.ChartThreeDimensional == true || (Element.UseCrystalScreenMetrics && Snapshot?.Definition.ChartType == ChartType.Bar) || Snapshot?.Definition.ChartType is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble;
+    private bool PrintBars => Snapshot?.Definition.ChartType == ChartType.StackedBar100 || Snapshot?.Definition.HasFixedSeriesBarAxis == true || Snapshot?.Definition.SpatialStyle is not null || Snapshot?.Definition.ChartCategoryLegend == true || Snapshot?.Definition.ChartThreeDimensional == true || (Element.UseCrystalScreenMetrics && Snapshot?.Definition.ChartType == ChartType.Bar) || Snapshot?.Definition.ChartType is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble;
     private string? _error;
     private List<ChartSeries> _series = [];
     private List<Dictionary<string, object>> _pivotRows = [];
@@ -62,7 +63,8 @@ else if (Element.Kind is "Table" or "CrossTab")
                 _series = ReportAnalysisGraphic.Series(Snapshot);
                 return;
             }
-            else if (Element.Kind == "Table" || definition.Cells.Count > 0 || definition.NativeCrossTab is not null || definition.CalculatedMembers.Count > 0)
+            else if (Element.Kind == "Table" || definition.Cells.Count > 0 || definition.NativeCrossTab is not null || definition.CalculatedMembers.Count > 0
+                || PrintsPercentages(definition))
             {
                 var table = Snapshot.Table ?? ReportTabularData.Create(Element, Snapshot);
                 var width = definition.NativeCrossTab is null ? Element.WidthTwips : table.Columns.Sum(column => column.WidthTwips);
@@ -97,4 +99,6 @@ else if (Element.Kind is "Table" or "CrossTab")
     }
 
     private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
+    // The live pivot shows raw summaries; a percentage summary previews as the printed table.
+    private static bool PrintsPercentages(ReportAnalysisDefinition definition) => definition.Measures.Any(measure => measure.PercentOfColumnTotal is not null);
 }

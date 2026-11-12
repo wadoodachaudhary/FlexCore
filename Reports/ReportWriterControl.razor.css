@@ -587,6 +587,10 @@
     padding: 16px;
 }
 
+/* The pane takes the keyboard (PageUp/PageDown, Home/End) once clicked; the page itself is the focus cue. */
+.fx-rpt-viewer-panel:focus { outline: none; }
+.fx-rpt-viewer-panel:focus-visible { outline: 2px solid #6b8fc9; outline-offset: -2px; }
+
 /* The authored page keeps its physical height; it must not collapse the drill tabs. */
 .fx-rpt-viewer-panel ::deep .fx-tabstrip {
     flex-shrink: 0;
@@ -658,8 +662,21 @@
 @media print {
     .fx-rpt-workspace { display: block; overflow: visible; }
     .fx-rpt-workspace > ::deep .fx-tabstrip { display: none; }
-    .fx-report-page.positioned { display:none; }
-    .fx-report-positioned-print { display:block; }
+    /* Print prints its copy of every page once the dialog is requested; otherwise (the browser's own print, also while
+       Print prepares the copy) the shown page prints alone, at its authored place and size. Print prints its marked
+       pages alone (PrintOnlyStyles): no pane inset, zoom or border. */
+    .fx-report-printing .fx-report-page.positioned { display:none; }
+    .fx-report-page.positioned ::deep article { page:fx-positioned; break-after:auto !important; }
+    .fx-report-page.positioned ::deep mark { background:none !important; color:inherit !important; outline:none !important; }
+    .fx-report-page.positioned ::deep .fx-report-drill-object { outline:none !important; }
+    .fx-report-page.positioned ::deep .fx-rpt-native-anchor { background:none !important; outline:none !important; }
+    /* The viewer's zoom is for the screen only, as in Crystal's viewer: every print is at the report's own size. */
+    .fx-rpt-viewer-panel { outline:none !important; transform:none !important; }
+    /* The browser's own print of a positioned report's shown page has no pane padding, zoom or border either: the page
+       prints at its authored place and size. A classic report's page keeps the pane's inset. */
+    .fx-rpt-viewer-panel:has(.fx-report-page.positioned):not(:has(.fx-report-printing)) { padding:0 !important; transform:none !important; }
+    .fx-rpt-content-area:has(.fx-report-page.positioned):not(:has(.fx-report-printing)) { border:none !important; }
+    .fx-report-positioned-print.fx-report-print-ready { display:block; }
     .fx-report-positioned-print ::deep article { page:fx-positioned; }
     .fx-report-positioned-print ::deep article:last-child { break-after:auto !important; }
     .fx-report-runtime-diagnostics { display:none; }

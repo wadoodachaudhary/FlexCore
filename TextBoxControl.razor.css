@@ -22,6 +22,43 @@
     box-shadow: none;
 }
 
+.fx-textbox-clear-host {
+    display: inline-grid;
+    position: relative;
+    min-width: 0;
+    max-width: 100%;
+    vertical-align: middle;
+}
+.fx-textbox-clear-host > input {
+    min-width: 0;
+    box-sizing: border-box;
+    padding-inline-end: 22px !important;
+}
+.fx-textbox-clear {
+    display: none;
+    position: absolute;
+    inset-inline-end: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 18px;
+    height: min(18px, 100%);
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: transparent;
+    color: #666;
+    font: 13px/1 Arial, sans-serif;
+    cursor: pointer;
+}
+.fx-textbox-clear-host:focus-within > input:not(:placeholder-shown):not(:disabled):not([readonly]) + .fx-textbox-clear {
+    display: grid;
+    place-items: center;
+}
+.fx-textbox-clear:hover, .fx-textbox-clear:focus-visible {
+    color: #222;
+    background: #eee;
+}
+
 .fx-textbox-password-host {
     position: relative;
     display: inline-block;

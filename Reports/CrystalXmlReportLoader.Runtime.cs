@@ -205,7 +205,7 @@ public partial class CrystalXmlReportLoader
             var refs = Regex.Matches(name, @"\{[^}]+\}");
             var group = refs.Count > 1 ? refs[1].Value : "";
             layout.Summaries[name] = new((string?)summary.Attribute("Operation") ?? "Sum", (string?)summary.Attribute("SummarizedField") ?? "", group)
-            { WeightField = (string?)summary.Attribute("WeightField") ?? "", AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
+            { PercentOfGroup = (int?)summary.Attribute("PercentOfGroup"), WeightField = (string?)summary.Attribute("WeightField") ?? "", AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
         }
         ReadGroupRuntime(document, layout, data, functions, diagnostics, kinds, legacy);
         foreach (var running in data?.Descendants("RunningTotalFieldDefinition") ?? [])
@@ -233,17 +233,38 @@ public partial class CrystalXmlReportLoader
             // (its saved default is often "on"; a subreport does not break its page for it), and page furniture keeps its place whatever its
             // keep-together and print-at-bottom flags say.
             var body = section.Kind is not ("PageHeader" or "PageFooter");
+            if (section.Kind == "Detail")
+                layout.VisibleRecordsPerPage = (int?)format?.Attribute("NewPageAfterNVisibleRecords") ?? 0;
             if (section.Kind == "Detail" && layout.Columns is null && format?.Element("DetailAreaFormat") is { } multiple && Flag(multiple, "EnableMultipleColumnFormatting"))
                 layout.Columns = ReadColumns(multiple);
             layout.Areas[section.Id] = new(Flag(format, "EnableSuppress"), Flag(repeat, "EnableRepeatGroupHeader"),
                 section.Kind is not ("ReportHeader" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"),
                 section.Kind is not ("ReportFooter" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"),
                 ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableResetPageNumberAfter"), Flag(repeat, "EnableKeepGroupTogether"),
-                body && Flag(format, "EnableKeepTogether"), body && Flag(format, "EnablePrintAtBottomOfPage"));
+                body && Flag(format, "EnableKeepTogether"), body && Flag(format, "EnablePrintAtBottomOfPage"))
+            {
+                VisibleInstanceLimit = section.Kind == "GroupHeader" && ReferenceEquals(sections.FirstOrDefault(), xml)
+                    ? int.TryParse((string?)repeat?.Attribute("VisibleGroupNumberPerPage"), out var groupsPerPage) ? groupsPerPage : 0
+                    : section.Kind == "Detail" ? (int?)xml.Element("SectionFormat")?.Attribute("NewPageAfterNVisibleRecords") ?? 0 : 0
+            };
             layout.SectionConditions[section.Id] = ReadConditions(xml.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))
                 .Concat(xml.Elements("SectionFormat").Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))), diagnostics, functions);
             layout.AreaConditions[section.Id] = ReadConditions((area?.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? [])
                 .Concat(format?.Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? []), diagnostics, functions);
+            // Area breaks apply at the boundary of the entire area, not between its subsections.
+            var areaConditions = layout.AreaConditions[section.Id];
+            if (!ReferenceEquals(sections.FirstOrDefault(), xml)) areaConditions.Remove("EnableNewPageBefore");
+            if (!ReferenceEquals(sections.LastOrDefault(), xml))
+            {
+                areaConditions.Remove("EnableNewPageAfter");
+                areaConditions.Remove("EnableResetPageNumberAfter");
+            }
+            if (areaConditions.ContainsKey("EnableNewPageAfter"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { NewPageAfter = false };
+            if (areaConditions.ContainsKey("EnableNewPageBefore"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { NewPageBefore = false };
+            if (section.Kind == "ReportFooter" && Flag(format, "EnableNewPageAfter"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { ReserveFinalFooter = true };
             foreach (var element in section.Elements)
                 if (document.SourceObjects.TryGetValue(element.SourceKey, out var objectXml))
                 {

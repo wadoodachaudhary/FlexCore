@@ -11,6 +11,7 @@ internal static partial class CrystalReportContentsParser
         var objectType = reader.CurrentRecord!.Type;
         var definition = new ReportAnalysisDefinition();
         var groups = new List<string>();
+        var boundSummaries = new HashSet<CrystalSummaryFieldModel>();
         var containers = new Stack<int>();
         var styleFound = false;
         bool? savedThreeDimensionalLegend = null;
@@ -18,10 +19,13 @@ internal static partial class CrystalReportContentsParser
         ReportChartRightLegend? rightLegend = null;
         bool? savedLegendEnabled = null;
         bool isPerspectivePie = false;
+        ReportPerspectiveBarStyle? perspectiveStyle = null;
         var crossTabChart = false;
         var bindingFound = false;
         var expectedMeasures = -1;
         var expectedGroups = -1;
+        TslvArchiveReader? categoryOptions = null;
+        var sortLists = 0;
         var chartMeasureFlags = new List<int>();
         var complete = false;
         var nativeCells = new List<(int Axis, int Column, int Row, int Group, int PaddingX, int PaddingY, CrystalReportObjectModel Cell)>();
@@ -29,6 +33,7 @@ internal static partial class CrystalReportContentsParser
         var groupGeometry = new Dictionary<(int Axis, int Level), (int Width, int Height)>();
         var groupFills = new Dictionary<int, List<string>>();
         var totalStyles = new Dictionary<int, CrystalReportObjectModel>();
+        var rowSubtotalLabels = new Dictionary<int, CrystalReportObjectModel>();
         var cellColumn = 0;
         var cellRow = 0;
         CrystalReportObjectModel? nativeCell = null;
@@ -40,6 +45,8 @@ internal static partial class CrystalReportContentsParser
         CrystalGroupModel? pendingGroup = null;
         ReportAnalysisGroup? analyticalGroup = null;
         var totalLabels = new Dictionary<int, string>();
+        var summaryLabels = new List<CrystalReportObjectModel>();
+        var columnCaptions = new Dictionary<int, CrystalReportObjectModel>();
         var gridLines = new List<string>();
         CrystalGroupModel? ranked = null;
         var drawGrid = true;
@@ -101,7 +108,9 @@ internal static partial class CrystalReportContentsParser
                 {
                     nativeCell = null;
                     var axis = containers.Contains(211) ? 211 : containers.Contains(207) ? 207 : 0;
-                    if (axis != 0 && !totalStyles.ContainsKey(axis))
+                    // Each column group stores its subtotal caption before any summary labels; the caption heads no summary.
+                    var groupCaption = axis == 207 && axisLevels.GetValueOrDefault(207) > 0 && !columnCaptions.ContainsKey(axisLevels[207]);
+                    if (axis != 0)
                     {
                         var p = reader.Fork(); p.LoadNextRecord(165, 1792, 168);
                         var label = ReadReportObjectBase(p, "TextObject", "Text", 168);
@@ -110,8 +119,19 @@ internal static partial class CrystalReportContentsParser
                         var paragraphs = p.LoadUInt16();
                         p.SkipRestOfRecord(); p.SkipRestOfRecord();
                         ReadCommonReportObjectRecords(p, label);
-                        totalLabels[axis] = ReadTextParagraphs(p, paragraphs, fields, data, label);
-                        totalStyles[axis] = label;
+                        label.Text = ReadTextParagraphs(p, paragraphs, fields, data, label);
+                        if (groupCaption) columnCaptions[axisLevels[207]] = label;
+                        else if (!totalStyles.ContainsKey(axis))
+                        {
+                            // A caption's trailing paragraph break adds no line (sample "Field in Crosstab Text object").
+                            totalLabels[axis] = label.Text.TrimEnd('\n');
+                            totalStyles[axis] = label;
+                        }
+                        else if (axis == 211 && axisLevels[211] > 0 && label.Height > 0)
+                            rowSubtotalLabels.TryAdd(axisLevels[211], label);
+                        // After its total caption the row axis's root container carries the summarized fields' labels ("Show Labels").
+                        else if (axis == 211 && axisLevels.GetValueOrDefault(211) == 0 && label.Height > 0) summaryLabels.Add(label);
+                        else if (axis == 207 && label.Height > 0) nativeCells.Add((axis, cellColumn, cellRow, axisLevels.GetValueOrDefault(axis), 0, 0, label));
                     }
                 }
                 if (record.Type == 325)
@@ -142,23 +162,28 @@ internal static partial class CrystalReportContentsParser
                     (0, 0 or 3) => ChartType.Bar,
                     (0, 1 or 4) => ChartType.StackedBar,
                     (0, 2 or 5) => ChartType.StackedBar100,
-                    (2, 20) => ChartType.Area,
-                    (1, 10 or 13) => ChartType.Line,
+                    (2, 20 or 22) => ChartType.Area,
+                    (1, 10 or 13 or 1000) => ChartType.Line,
                     (3, 30 or 31) => ChartType.Pie,
-                    (4, 40) => ChartType.Donut,
+                    (4, 40 or 41 or 42) => ChartType.Donut,
                     (14, 140) => ChartType.Funnel,
                     (12, 120) => ChartType.Gauge,
                     (7, 70) => ChartType.Scatter,
                     (8, 80) => ChartType.Radar,
                     (9, 90) => ChartType.Bubble,
                     (6, 60) => ChartType.Surface,
+                    (5, 50) => ChartType.Bar,
+                    (15, 150) => ChartType.Histogram,
+                    (10, 100) => ChartType.HighLow,
                     (10, 101) => ChartType.Ohlc,
+                    (11, 114) => ChartType.Line,
                     _ => throw new NotSupportedException($"Native chart type {nativeType}, subtype {subtype} has no exact report adapter.")
                 };
                 definition.Title = reader.LoadString() ?? "";
                 definition.ChartThreeDimensional = nativeType == 0 && subtype is 3 or 4 or 5;
                 isPerspectivePie = nativeType == 3 && subtype == 31;
-                if (definition.ChartThreeDimensional || nativeType is 0 or 2 or 3)
+                if (nativeType == 1 && subtype == 1000) definition.LineStyle = new("0.##", true, true);
+                if (definition.ChartThreeDimensional || nativeType is 0 or 1 or 2 or 3 or 4 or 5 or 6 or 7 or 8 or 10 or 11 or 12 or 15)
                 {
                     // The legacy graph style stores eight captions and eight font families before its legend flag.
                     // Probe independently so shorter style records retain their existing defaults.
@@ -175,23 +200,80 @@ internal static partial class CrystalReportContentsParser
                         if (definition.ChartThreeDimensional) savedThreeDimensionalLegend = visible == 1;
                         else categoryLegend = nativeType == 0 && visible == 1 && placement == 3;
                         savedLegendEnabled = visible == 1;
-                        if (nativeType is 0 or 2 && subtype is 0 or 1 or 20)
+                        if (nativeType is 5 or 6 or 7 or 8 or 10 or 11 or 15 || (nativeType, subtype) is (4, 41 or 42) or (2, 22))
+                            definition.SpatialStyle = new() { Family = nativeType, CategoryTitle = captions[4], ValueTitle = captions[5],
+                                DepthTitle = nativeType is 5 or 6 ? captions[6] : "", ProportionalRings = subtype == 42 };
+                        if (nativeType == 1 && subtype == 13 && groups.Count == 2 && visible == 0)
+                        {
+                            var line = probe.Fork();
+                            var vertical = line.LoadBoolean();
+                            _ = line.LoadEnum(); // bar size
+                            var markerSize = line.LoadEnum();
+                            var markerShape = line.LoadEnum();
+                            if (markerSize > 0 && markerShape == 9) // automatic series markers
+                                definition.SpatialStyle = new() { Family = 1, Horizontal = !vertical };
+                        }
+                        if (nativeType == 12 && visible == 0 && definition.Measures.Count > 1)
+                            definition.SpatialStyle = new() { Family = 12 };
+                        var readBarDrawing = nativeType == 0 && (subtype == 0 && visible == 1 && placement is 0 or 1
+                            || subtype == 1 && visible == 0);
+                        if (nativeType is 6 or 12 || definition.SpatialStyle?.Family == 1 || definition.ChartThreeDimensional || readBarDrawing)
+                        {
+                            owner.HiddenGaugeLegend = nativeType == 12 && visible == 0;
+                            var saved = probe.Fork();
+                            _ = saved.LoadBoolean();
+                            for (var option = 0; option < 7; option++) _ = saved.LoadEnum();
+                            for (var bound = 0; bound < 6; bound++) _ = saved.LoadDouble();
+                            for (var mode = 0; mode < 9; mode++) _ = saved.LoadEnum();
+                            for (var count = 0; count < 3; count++) _ = saved.LoadInt32();
+                            for (var format = 0; format < 3; format++) _ = saved.LoadEnum();
+                            owner.GraphDrawingId = saved.LoadInt32();
+                        }
+                        if (nativeType == 3)
+                        {
+                            var pie = probe.Fork();
+                            _ = pie.LoadBoolean(); _ = pie.LoadEnum(); _ = pie.LoadEnum();
+                            var detach = pie.LoadEnum();
+                            if (detach is >= 1 and <= 3) definition.SpatialStyle = new() { Family = 3, PieDetachment = detach };
+                            if (isPerspectivePie && detach == 0 && pie.BytesLeftInRecord >= 82)
+                            {
+                                // Marker and grid enums (6), six axis bounds (48), formats and modes (9),
+                                // three division counts (12), then color, data point and data format (3).
+                                pie.SkipBytes(78);
+                                owner.PerspectivePieDrawingId = pie.LoadInt32();
+                            }
+                        }
+
+                        if (definition.ChartThreeDimensional)
+                        {
+                            var axes = probe.Fork();
+                            _ = axes.LoadBoolean();
+                            for (var i = 0; i < 3; i++) _ = axes.LoadEnum();
+                            var categoryGrid = axes.LoadEnum() != 0;
+                            _ = axes.LoadEnum();
+                            var valueGrid = axes.LoadEnum() != 0;
+                            perspectiveStyle = new(captions[4].Trim(), captions[5].Trim(), categoryGrid, valueGrid);
+                        }
+                        if (nativeType is 0 or 2 && subtype is 0 or 1 or 2 or 20 || definition.LineStyle is not null)
                         {
                             var vertical = probe.LoadBoolean(); _ = probe.LoadEnum(); // series orientation and bar size
-                            _ = probe.LoadEnum(); _ = probe.LoadEnum(); // marker size/shape
+                            var markerSize = probe.LoadEnum(); _ = probe.LoadEnum(); // marker size/shape
                             var grids = Enumerable.Range(0,4).Select(_ => probe.LoadEnum()).ToArray();
-                            if (vertical && nativeType == 0 && visible == 1 && placement == 0)
-                                rightLegend = new(captions[4], captions[5], grids[0] != 0, grids[2] != 0);
+                            if (vertical && nativeType == 0 && visible == 1 && placement is 0 or 1)
+                                rightLegend = new(captions[4], captions[5], grids[0] != 0, grids[2] != 0) { OnLeft = placement == 1 };
                             if (vertical && nativeType == 0 && subtype == 1 && visible == 0 && (captions[4].Length > 0 || captions[5].Length > 0))
                                 rightLegend = new(captions[4], captions[5], grids[0] != 0, grids[2] != 0);
                             var bounds = Enumerable.Range(0,6).Select(_ => probe.LoadDouble()).ToArray();
                             var formats = Enumerable.Range(0,3).Select(_ => probe.LoadEnum()).ToArray();
                             var automatic = Enumerable.Range(0,3).Select(_ => probe.LoadEnum()).ToArray();
+                            if (definition.LineStyle is not null) definition.LineStyle = new(formats[0] == 3 ? "C0" : formats[0] == 4 ? "C2" : "0.##", markerSize > 0, grids[2] != 0);
                             _ = probe.LoadEnum(); _ = probe.LoadEnum(); _ = probe.LoadEnum();
                             var divisions = probe.LoadInt32();
-                            if (subtype != 1 && automatic[0] == 0 && formats[0] is 3 or 4 && double.IsFinite(bounds[0]) && double.IsFinite(bounds[1])
-                                && bounds[1] > bounds[0] && divisions is >= 1 and < 60)
-                                definition.PrintAxis = new(bounds[0], bounds[1], divisions+1, formats[0]==3 ? "C0" : "C2",
+                            // The fixed value-axis bounds apply to ordinary numeric formats as well as currency.
+                            var tickFormat = formats[0] switch { 0 => "F0", 1 => "F1", 2 => "F2", 3 => "C0", 4 => "C2", _ => null };
+                            if (definition.LineStyle is null && subtype != 1 && automatic[0] == 0 && tickFormat is not null
+                                && double.IsFinite(bounds[0]) && double.IsFinite(bounds[1]) && bounds[1] > bounds[0] && divisions is >= 1 and < 60)
+                                definition.PrintAxis = new(bounds[0], bounds[1], divisions+1, tickFormat,
                                     captions[4],captions[5],grids[2]!=0);
                         }
                     }
@@ -244,6 +326,8 @@ internal static partial class CrystalReportContentsParser
                 var direction = reader.LoadEnum();
                 pendingGroup = new() { ConditionField = field, Condition = grouping, Direction = direction };
                 var hasRanges = objectType == 185 && ReadGroupOptions(reader, pendingGroup, data, fields);
+                if (objectType == 180 && groups.Count == 0 && reader.BytesLeftInRecord > 0)
+                    categoryOptions = reader.Fork();
                 analyticalGroup = null;
                 if (!string.IsNullOrWhiteSpace(field))
                 {
@@ -251,7 +335,7 @@ internal static partial class CrystalReportContentsParser
                     if ((grouping is < 0 or > 7) || direction is < 0 or > 3 || objectType == 180 && direction > 1)
                         throw new NotSupportedException("Native analytical date/Top N grouping is not supported.");
                     if (pendingGroup.TopNCount > 0 && objectType == 185 && ranked is null && containers.Contains(211)
-                        && direction is 0 or 1 && pendingGroup.DiscardOthers && !pendingGroup.TopNHasFormula && pendingGroup.TopNPercentage == 0
+                        && direction is 0 or 1 && !pendingGroup.TopNHasFormula && pendingGroup.TopNPercentage == 0
                         && pendingGroup.ParentIdField.Length == 0)
                         ranked = pendingGroup;
                     else if (pendingGroup.TopNCount > 0 || pendingGroup.TopNPercentage > 0 || pendingGroup.ParentIdField.Length > 0)
@@ -262,6 +346,17 @@ internal static partial class CrystalReportContentsParser
                         analyticalGroup = new() { Field = field, OriginalOrder = direction == 2,
                             OthersName = pendingGroup.SpecifiedOthersName };
                         definition.Groups.Add(analyticalGroup);
+                    }
+                    if (objectType == 185 && analyticalGroup is null && pendingGroup.NameFormula is { } nameFormula)
+                    {
+                        var caption = new ReportGridFormula(nameFormula.FormulaText, nameFormula.Syntax == 1 ? "Basic" : "Crystal");
+                        // Only replay names determined by the group key; unsupported names keep the existing raw label.
+                        try
+                        {
+                            if (ReportAnalysisDefinition.IsAxisLabelFormula(caption.Compile(), field))
+                                definition.Groups.Add(new() { Field = field, NameFormula = caption });
+                        }
+                        catch (Exception e) when (e is InvalidDataException or NotSupportedException) { }
                     }
                     if (objectType == 180) groups.Add(field);
                     else if (containers.Contains(207)) definition.ColumnFields.Add(field);
@@ -323,21 +418,57 @@ internal static partial class CrystalReportContentsParser
                 var hasTarget = reader.BytesLeftInRecord == 0 || reader.LoadBoolean();
                 var grids = fields.AnalyticalObjects.Where(item => item.Item1.Kind == "CrossTab" && item.Item1.GridLinkId == id)
                     .Select(item => item.Item1).Take(2).ToArray();
-                if (!hasTarget || grids.Length != 1 || grids[0].Analysis is not {} grid || orientation is not (0 or 1)
-                    || secondGrouping || measure >= grid.Measures.Count || grid.Groups.Count != 0 || grid.RowRanking is not null
+                if (!hasTarget || grids.Length != 1 || grids[0].Analysis is not {} grid || orientation is < 0 or > 3
+                    || measure >= grid.Measures.Count || grid.Groups.Any(rule => rule.NameFormula is null) || grid.RowRanking is not null
                     || grid.CalculatedMembers.Count != 0 || grid.GroupScope.Length != 0)
                     throw new NotSupportedException("Cross-tab chart target, grouping or summary cannot be resolved.");
-                var axis = orientation == 0 ? grid.RowFields : grid.ColumnFields;
-                if (axis.Count == 0) throw new NotSupportedException("The chart's selected cross-tab axis has no group.");
-                var field = axis[0];
-                groups.Add(field);
-                if (grid.GroupKinds.TryGetValue(field, out var kind)) definition.GroupKinds[field] = kind;
-                if (grid.DescendingFields.Contains(field)) definition.DescendingFields.Add(field);
-                definition.Measures.Add(grid.Measures[measure].Clone());
+                // Orientations 2 and 3 traverse opposite axes. The single-axis variants may use two levels on the same axis.
+                var rowsFirst = orientation is 0 or 2;
+                var primary = rowsFirst ? grid.RowFields : grid.ColumnFields;
+                var opposite = rowsFirst ? grid.ColumnFields : grid.RowFields;
+                if (primary.Count == 0) throw new NotSupportedException("The chart's selected cross-tab axis has no group.");
+                AddAxis(primary[0]);
+                if (secondGrouping)
+                {
+                    definition.CrossTabSeries = true;
+                    if (orientation < 2 && primary.Count > 1) AddAxis(primary[1]);
+                    else if (opposite.Count > 0) AddAxis(opposite[0]);
+                    else throw new NotSupportedException("The chart's second cross-tab grouping cannot be resolved.");
+                }
+                void AddAxis(string field)
+                {
+                    groups.Add(field);
+                    if (grid.GroupKinds.TryGetValue(field, out var kind)) definition.GroupKinds[field] = kind;
+                    if (grid.DescendingFields.Contains(field)) definition.DescendingFields.Add(field);
+                    if (grid.Groups.FirstOrDefault(rule => rule.Field.Equals(field, StringComparison.OrdinalIgnoreCase)) is { } label) definition.Groups.Add(label.Clone());
+                }
+                // The chart plots the summary's values; the column-total percentage is the grid's own.
+                var charted = grid.Measures[measure].Clone();
+                charted.PercentOfColumnTotal = null;
+                definition.Measures.Add(charted);
                 bindingFound = crossTabChart = true;
             }
             else if (record.Type == 292)
                 throw new NotSupportedException("OLAP chart bindings are retained but not evaluated.");
+            else if (record.Type == 319 && objectType == 180)
+            {
+                var count = reader.LoadUInt16();
+                if (count > 0)
+                {
+                    if (sortLists != 0 || count != 1 || reader.LoadInt16() != 0 || categoryOptions is null)
+                        throw new NotSupportedException("Unsupported analytical ranking rule.");
+                    var options = new CrystalGroupModel();
+                    ReadGroupOptions(categoryOptions, options, data, fields);
+                    if (!options.DiscardOthers || options.WithTies || options.TopNHasFormula || options.TopNPercentage > 0 || options.TopNCount <= 0)
+                        throw new NotSupportedException("Unsupported analytical Top N options.");
+                    reader.SkipRestOfRecord();
+                    var rule = ReadSortField(reader, fields, "ChartSortField");
+                    if (rule.Direction != 1) throw new NotSupportedException("Unsupported analytical ranking direction.");
+                    reader.LoadNextRecord(320, 1792, objectType + 1);
+                    definition.RankedCategoryCount = options.TopNCount;
+                }
+                sortLists++;
+            }
             else if (record.Type == 319 && reader.LoadUInt16() != 0)
                 throw new NotSupportedException("Native analytical sort rules require an explicit sort adapter.");
             reader.SkipRestOfRecord();
@@ -361,7 +492,15 @@ internal static partial class CrystalReportContentsParser
                 && definition.ChartType is ChartType.Bar or ChartType.StackedBar or ChartType.StackedBar100
                     or ChartType.HorizontalBar or ChartType.Line or ChartType.Area)
                 definition.ShowLegend = false;
-            if (definition.PrintAxis is not null || definition.SummariesAsCategories)
+            definition.PerspectivePie = isPerspectivePie;
+            // Existing simple plots keep their established renderer when no saved axis styling is present.
+            if (definition.SpatialStyle is { Family:7 or 8, CategoryTitle.Length:0, ValueTitle.Length:0 }) definition.SpatialStyle=null;
+            if (definition.SpatialStyle is { Family:10 } && definition.ChartType == ChartType.Ohlc && definition.Measures.Count == 4) definition.SpatialStyle=null;
+            if (definition.ChartType == ChartType.Gauge && groups.Count == 1 && definition.Measures.Count == 1 && savedLegendEnabled == true)
+                definition.SpatialStyle = new() { Family = 12 };
+            if (definition.SpatialStyle is not null) definition.ShowLegend = savedLegendEnabled ?? definition.ShowLegend;
+            if (definition.PrintAxis is not null || definition.SummariesAsCategories || isPerspectivePie || definition.LineStyle is not null
+                || (definition.ChartType == ChartType.Line && !definition.ReportGroupChart) || definition.ChartType == ChartType.Ohlc)
                 definition.ShowLegend = savedLegendEnabled ?? definition.ShowLegend;
             if (definition.SummariesAsCategories)
             {
@@ -380,10 +519,24 @@ internal static partial class CrystalReportContentsParser
                 definition.ChartCategoryLegend = true;
             }
             if (rightLegend is not null && groups.Count == 1 && definition.Measures.Count == 1
-                && !definition.ReportGroupChart && definition.PrintAxis is null && !definition.SummariesAsCategories)
+                && (!definition.ReportGroupChart || definition.ChartType == ChartType.Bar && owner.GraphDrawingId.HasValue)
+                && definition.PrintAxis is null && !definition.SummariesAsCategories)
             {
                 definition.RightCategoryLegend = rightLegend with { RotateCategories = crossTabChart };
                 categoryLegend = true;
+            }
+            if (definition.ChartType == ChartType.StackedBar100 && rightLegend is not null)
+                definition.RightCategoryLegend = rightLegend with { KeyBySeries = true };
+            if (definition.HasFixedSeriesBarAxis)
+            {
+                definition.RightCategoryLegend = rightLegend;
+                categoryLegend = false;
+                // Crystal keys the series by their summary captions, independent of the numeric axis format.
+                foreach (var measure in definition.Measures.Where(m => m.Caption.Length == 0))
+                {
+                    var field = measure.Field.Trim('{', '}').Split('.').Last();
+                    measure.Caption = (measure.Aggregate == ReportAggregateType.Average ? "Avg" : measure.Aggregate.ToString()) + " of " + field;
+                }
             }
             if (categoryLegend)
             {
@@ -410,6 +563,9 @@ internal static partial class CrystalReportContentsParser
             }
             if (definition.ChartThreeDimensional)
             {
+                if (crossTabChart) definition.PerspectiveStyle = perspectiveStyle;
+                else if (groups.Count == 2 && owner.GraphDrawingId.HasValue && perspectiveStyle is not null)
+                    definition.PerspectiveStyle = perspectiveStyle with { RotateCategoryLabels = definition.GroupKinds.ContainsKey(definition.CategoryField) };
                 foreach (var measure in definition.Measures.Where(measure => measure.Caption.Length == 0))
                     measure.Caption = measure.Field.Trim('{', '}');
                 if (ChartFormula(definition.CategoryField)?.ValueType is 6 or 7)
@@ -427,33 +583,43 @@ internal static partial class CrystalReportContentsParser
             }
         }
         var measureCount = definition.Measures.Count;
-        if (objectType == 185 && definition.RowFields.Count == 0 && definition.ColumnFields.Count == 1
-            && definition.Measures.Count == 1 && definition.Measures[0].Aggregate is ReportAggregateType.Sum or ReportAggregateType.Count or ReportAggregateType.Average or ReportAggregateType.Median
+        if (objectType == 185 && definition.RowFields.Count == 0 && definition.ColumnFields.Count == 1 && measureCount >= 1
+            && definition.Measures.All(measure => measure.Aggregate is ReportAggregateType.Sum or ReportAggregateType.Count or ReportAggregateType.Average or ReportAggregateType.Median)
             && totalStyles.TryGetValue(211, out var rowCaption))
         {
-            var column = nativeCells.LastOrDefault(c => c.Axis == 207).Cell;
-            var detail = nativeCells.LastOrDefault(c => c.Axis == 216 && c.Row == 1).Cell;
-            var total = nativeCells.LastOrDefault(c => c.Axis == 216 && c.Row == 0).Cell;
-            if (column is not null && detail is not null && total is not null)
+            var column = nativeCells.LastOrDefault(c => c.Axis == 207 && c.Cell.Kind != "Text").Cell;
+            // Several summaries stack inside each cell at one left edge, one below the other; one summary is the last saved cell.
+            var details = nativeCells.Where(c => c.Axis == 216 && c.Row == 1).Select(c => c.Cell).TakeLast(measureCount).ToArray();
+            var totals = nativeCells.Where(c => c.Axis == 216 && c.Row == 0).Select(c => c.Cell).TakeLast(measureCount).ToArray();
+            static bool Stacks(CrystalReportObjectModel[] cells) => cells.Select(cell => cell.Left).Distinct().Count() == 1
+                && cells.Zip(cells.Skip(1)).All(pair => pair.First.Top + pair.First.Height == pair.Second.Top);
+            if (column is not null && details.Length == measureCount && totals.Length == measureCount && Stacks(details) && Stacks(totals))
             {
+                var detail = details[0]; var total = totals[0];
+                var stackHeight = details[^1].Top + details[^1].Height - detail.Top;
                 var fill = groupFills.GetValueOrDefault(206)?.LastOrDefault() ?? "transparent";
                 var totalFill = groupFills.GetValueOrDefault(206)?.FirstOrDefault() ?? "transparent";
-                definition.NativeCrossTab = new(rowCaption.Width, detail.Width, detail.Height, paddingX, paddingY,
+                var corner = totalStyles.GetValueOrDefault(207);
+                definition.NativeCrossTab = new(rowCaption.Width, detail.Width, stackHeight, paddingX, paddingY,
                     detail.Font.FontFamily, (decimal)detail.Font.Size, detail.Font.Bold)
                 {
-                    ColumnSumFormat = StackFormat(detail), TotalSumFormat = StackFormat(total),
-                    HeaderHeight = column.Height + 2 * paddingY, TotalWidth = total.Width + 2 * paddingX,
+                    ColumnSumFormat = string.Join(",", details.Select(StackFormat)), TotalSumFormat = string.Join(",", totals.Select(StackFormat)),
+                    // The header row is as tall as its tallest object: the column heading or the corner caption.
+                    HeaderHeight = Math.Max(column.Height, corner?.Height ?? 0) + 2 * paddingY, TotalWidth = total.Width + 2 * paddingX,
                     ColumnStyle = CellStyle(column, fill, "left"), RowStyle = CellStyle(rowCaption, "transparent", "left"),
                     RowTotalLabelStyle = CellStyle(rowCaption, "transparent", "left"), ValueStyle = CellStyle(detail, fill, "right"),
                     GrandTotalStyle = CellStyle(total, totalFill, "right"), ColumnTotalStyle = CellStyle(detail, fill, "right"),
-                    ColumnTotalLabelStyle = CellStyle(totalStyles.GetValueOrDefault(207) ?? column, totalFill, "left"),
+                    ColumnTotalLabelStyle = CellStyle(corner ?? column, totalFill, "left"),
                     SuppressRowGrandTotals = suppressRowTotals,
+                    // An older row-less grid omits its stroke records when it uses the default hairline grid.
                     Appearance = new(totalLabels.GetValueOrDefault(211, ""), totalLabels.GetValueOrDefault(207, ""),
-                        "transparent", fill, fill, string.Join(";", gridLines), (decimal)rowCaption.Font.Size, (decimal)column.Font.Size)
+                        "transparent", fill, fill, string.Join(";", drawGrid && gridLines.Count == 0 ? Enumerable.Repeat("0:#000000:Single", 20) : gridLines),
+                        (decimal)rowCaption.Font.Size, (decimal)column.Font.Size)
+                        { CaptionFields = CaptionFields(rowCaption, corner) }
                 };
                 definition.RowHeaderWidthTwips = Math.Max(360, rowCaption.Width + 2 * paddingX);
                 definition.ValueColumnWidthTwips = Math.Max(360, detail.Width + 2 * paddingX);
-                definition.RowHeightTwips = Math.Max(180, detail.Height + 2 * paddingY);
+                definition.RowHeightTwips = Math.Max(180, stackHeight + 2 * paddingY);
             }
         }
         var summaryCells = nativeCells.Where(c => c.Axis == 216).GroupBy(c => (c.Column, c.Row)).ToArray();
@@ -479,6 +645,16 @@ internal static partial class CrystalReportContentsParser
                 >= summaryCells.First(group => group.Key == (1, 0)).Last().Cell.Top
                     + summaryCells.First(group => group.Key == (1, 0)).Last().Cell.Height;
         stacked |= totalColumnStack;
+        // Nested row groups can also print several summaries down the same numeric column.
+        // The multiline renderer shares a text style within a cell; require compatible saved lines.
+        var stackedRowGroups = stacked && depth == 1 && definition.RowFields.Count > 1
+            && summaryCells.Length == (definition.RowFields.Count + 1) * (depth + 1)
+            && summaryCells.All(group => group.All(item => !item.Cell.Format.EnableCanGrow
+                && item.Cell.FontConditionReferences.Count == 0 && item.Cell.Border.ConditionReferences.Count == 0
+                && item.Cell.Format.ConditionReferences.Count == 0)
+                && group.Select(item => (item.Cell.Width, item.Cell.Height, item.Cell.Font.FontFamily, item.Cell.Font.Size,
+                    item.Cell.Font.Bold, item.Cell.Font.Italic, item.Cell.Font.Underline, Css(item.Cell.Color),
+                    item.Cell.Format.HorizontalAlignment, Css(item.Cell.Border.BackgroundColor))).Distinct().Count() == 1);
         // Older row-only grids omit stroke records when using the default hairline grid.
         if (totalColumnStack && drawGrid && gridLines.Count == 0)
             gridLines.AddRange(Enumerable.Repeat("0:#000000:Single", 20));
@@ -486,8 +662,8 @@ internal static partial class CrystalReportContentsParser
         {
             var row = nativeCells.FirstOrDefault(c => c.Axis == 211).Cell;
             var value = nativeCells.LastOrDefault(c => c.Axis == 216).Cell;
-            var column = nativeCells.LastOrDefault(c => c.Axis == 207).Cell ?? (depth == 0 ? totalStyles.GetValueOrDefault(207) : null);
-            var parent = nativeCells.FirstOrDefault(c => c.Axis == 207).Cell;
+            var column = nativeCells.LastOrDefault(c => c.Axis == 207 && c.Cell.Kind != "Text").Cell ?? (depth == 0 ? totalStyles.GetValueOrDefault(207) : null);
+            var parent = nativeCells.FirstOrDefault(c => c.Axis == 207 && c.Cell.Kind != "Text").Cell;
             if (row is { HasFont: true } && value is { HasFont: true } && column is { HasFont: true } && paddingX >= 0 && paddingY >= 0
                 && row.Width > 0 && value.Width > 0 && value.Height > 0
                 && !row.Format.EnableCanGrow && !value.Format.EnableCanGrow && uniformPadding
@@ -518,10 +694,15 @@ internal static partial class CrystalReportContentsParser
                     ColumnTotalStyle = Summary(0, totalColumnStack ? 0 : 1, rowTotalFill), GrandTotalStyle = Summary(0, 0, rowTotalFill),
                     RowTotalLabelStyle = CellStyle(totalStyles.GetValueOrDefault(211) ?? row, rowTotalFill, "left"),
                     ColumnTotalLabelStyle = CellStyle(totalStyles.GetValueOrDefault(207) ?? column, columnTotalFill, "left"),
+                    // "Show Labels": each summary's label prints in a column of its own after the row labels, one line per summary.
+                    SummaryLabels = stacked && summaryLabels.Count == measureCount ? summaryLabels.Select((label, index) => new ReportNativeCrossTabTemplate(211, 0, 0, index,
+                        label.Left, label.Top, label.Width, label.Height, paddingX, paddingY, "", CellStyle(label, rowFill, "left")) { HeaderText = label.Text.TrimEnd('\n') }).ToArray() : [],
                     Appearance = new ReportNativeCrossTabAppearance(totalLabels.GetValueOrDefault(211, ""),
                         totalLabels.GetValueOrDefault(207, ""), rowFill,
                         columnFill, columnFill, string.Join(";", gridLines), (decimal)(totalStyles.GetValueOrDefault(211) ?? row).Font.Size,
                         (decimal)(totalStyles.GetValueOrDefault(207) ?? column).Font.Size)
+                    { RowTotalBackground = rowTotalFill, ColumnTotalBackground = columnTotalFill,
+                        CaptionFields = CaptionFields(totalStyles.GetValueOrDefault(211), totalStyles.GetValueOrDefault(207)) }
                 };
                 definition.RowHeaderWidthTwips = row.Width + 2 * paddingX;
                 definition.ValueColumnWidthTwips = value.Width + 2 * paddingX;
@@ -531,7 +712,7 @@ internal static partial class CrystalReportContentsParser
         if (objectType == 185 && definition.RowFields.Count > 0 && definition.ColumnFields.Count > 0 && measureCount > 0)
         {
             var row = nativeCells.LastOrDefault(c => c.Axis == 211).Cell;
-            var column = nativeCells.LastOrDefault(c => c.Axis == 207).Cell;
+            var column = nativeCells.LastOrDefault(c => c.Axis == 207 && c.Cell.Kind != "Text").Cell;
             var value = nativeCells.LastOrDefault(c => c.Axis == 216).Cell;
             if (row is { HasFont: true, Width: > 0 } && column is { HasFont: true, Width: > 0 } && value is { HasFont: true, Width: > 0, Height: > 0 })
             {
@@ -540,14 +721,17 @@ internal static partial class CrystalReportContentsParser
                 foreach (var item in nativeCells)
                 {
                     var cell = item.Cell;
+                    if (cell.Kind == "Text" && (stacked || measureCount <= 1 || !summaryCells.All(g =>
+                        g.Count() == measureCount && g.Select(c => c.Cell.Top).Distinct().Count() == 1))) continue;
                     var level = item.Axis == 216 ? 0 : item.Group;
                     // GridCell's first group coordinate is the row; the second is the column.
                     var colLevel = item.Axis == 216 ? item.Row : item.Axis == 207 ? level : 0;
                     var rowLevel = item.Axis == 216 ? item.Column : item.Axis == 211 ? level : 0;
-                    var summary = item.Axis == 216 ? summaries.GetValueOrDefault((colLevel, rowLevel)) : 0;
+                    var summary = item.Axis == 216 ? summaries.GetValueOrDefault((colLevel, rowLevel)) : cell.Kind == "Text" ? nativeCells.Where(c => c.Axis == 207 && c.Group == item.Group && c.Cell.Kind == "Text" && c.Cell.Left < cell.Left).Count() : 0;
                     if (item.Axis == 216) summaries[(colLevel, rowLevel)] = summary + 1;
-                    var fillAxis = item.Axis == 211 ? 210 : 206;
-                    var fillLevel = item.Axis == 211 ? rowLevel : colLevel;
+                    var rowSubtotal = stackedRowGroups && item.Axis == 216 && rowLevel < definition.RowFields.Count;
+                    var fillAxis = item.Axis == 211 || item.Axis == 216 && rowLevel == 0 || rowSubtotal ? 210 : 206;
+                    var fillLevel = fillAxis == 210 ? rowLevel : colLevel;
                     var fill = groupFills.GetValueOrDefault(fillAxis)?.ElementAtOrDefault(fillLevel) ?? "transparent";
                     ReportNativeNumericFormat? numeric = null;
                     var dateTime = cell.NativeDateTimeFormat;
@@ -576,12 +760,21 @@ internal static partial class CrystalReportContentsParser
                         templates[^1] = last with { Style = last.Style with { Conditions = [..last.Style.Conditions,
                             new("CurrencySymbol", new(formula.FormulaText, formula.Syntax == 1 ? "Basic" : "Crystal"))] }};
                     }
-                    if (item.Axis is 207 or 211) templates[^1] = templates[^1] with { CellWidth = geometry.Width, CellHeight = geometry.Height };
+                    if (item.Axis is 207 or 211) templates[^1] = templates[^1] with { CellWidth = geometry.Width, CellHeight = geometry.Height, HeaderText = cell.Kind == "Text" ? cell.Text : null };
+                }
+                if (stackedRowGroups)
+                {
+                    foreach (var (level, label) in rowSubtotalLabels.Where(pair => pair.Key < definition.RowFields.Count))
+                    {
+                        var fill = groupFills.GetValueOrDefault(210)?.ElementAtOrDefault(level) ?? "transparent";
+                        templates.Add(new(211, 0, level, 0, label.Left, label.Top, label.Width, label.Height,
+                            paddingX, paddingY, "", CellStyle(label, fill, "left")) { HeaderText = label.Text });
+                    }
                 }
                 foreach (var total in totalStyles)
                 {
                     var fill = groupFills.GetValueOrDefault(total.Key == 211 ? 210 : 206)?.FirstOrDefault() ?? "transparent";
-                    templates.RemoveAll(template => template.Axis == total.Key && template.RowLevel == 0 && template.ColumnLevel == 0);
+                    templates.RemoveAll(template => template.Axis == total.Key && template.RowLevel == 0 && template.ColumnLevel == 0 && template.HeaderText is null);
                     var cell = total.Value;
                     templates.Add(new(total.Key, 0, 0, 0, cell.Left, cell.Top, cell.Width, cell.Height, paddingX, paddingY, "", CellStyle(cell, fill, "left")));
                 }
@@ -594,14 +787,22 @@ internal static partial class CrystalReportContentsParser
                     ValueStyle = CellStyle(value, "transparent", "right"),
                     Appearance = new(totalLabels.GetValueOrDefault(211, ""), totalLabels.GetValueOrDefault(207, ""),
                         "transparent", "transparent", "transparent", string.Join(";", gridLines), (decimal)row.Font.Size, (decimal)column.Font.Size)
+                        { CaptionFields = CaptionFields(totalStyles.GetValueOrDefault(211), totalStyles.GetValueOrDefault(207)) }
                 };
                 var leaf = templates.FirstOrDefault(template => template.Axis == 216 && template.RowLevel == definition.RowFields.Count && template.ColumnLevel == definition.ColumnFields.Count);
                 var rowTotal = templates.FirstOrDefault(template => template.Axis == 216 && template.RowLevel == 0 && template.ColumnLevel == definition.ColumnFields.Count);
                 var columnTotal = templates.FirstOrDefault(template => template.Axis == 216 && template.ColumnLevel == 0 && template.RowLevel == definition.RowFields.Count);
-                definition.NativeCrossTab = definition.NativeCrossTab with { Templates = templates,
+                // A column group whose subtotal prints keeps its own caption and format.
+                var subtotalCaptions = columnCaptions.Where(caption => caption.Key < definition.ColumnFields.Count && !columnSubtotals.Contains(caption.Key))
+                    .OrderBy(caption => caption.Key).Select(caption => new ReportNativeCrossTabCaption(caption.Key, caption.Value.Text,
+                        CellStyle(caption.Value, groupFills.GetValueOrDefault(206)?.ElementAtOrDefault(caption.Key) ?? "transparent", "left"))).ToArray();
+                definition.NativeCrossTab = definition.NativeCrossTab with { Templates = templates, StackedRowGroups = stackedRowGroups, ColumnSubtotalCaptions = subtotalCaptions,
                     ColumnTotalsBefore = leaf is not null && columnTotal is not null && columnTotal.Left < leaf.Left,
                     RowTotalsBefore = leaf is not null && rowTotal is not null && rowTotal.Top < leaf.Top,
-                    SuppressedRowSubtotals = rowSubtotals, SuppressedColumnSubtotals = columnSubtotals };
+                    SuppressedRowSubtotals = rowSubtotals, SuppressedColumnSubtotals = columnSubtotals,
+                    CompactRowHeaders = templates.Any(t => t.Axis == 207 && t.HeaderText is not null) && definition.RowFields.Count > 1 && templates.Where(t => t.Axis == 211 && t.RowLevel > 0)
+                        .All(t => leaf is not null && t.Left < leaf.Left && t.Top >= leaf.Top),
+                    SummaryHeaderHeight = templates.Where(t => t.Axis == 207 && t.HeaderText is not null).Select(t => t.Height).DefaultIfEmpty(0).Max() };
                 definition.RowHeaderWidthTwips = Math.Max(360, row.Width + 2 * paddingX);
                 definition.ValueColumnWidthTwips = Math.Max(360, value.Width + 2 * paddingX);
                 definition.RowHeightTwips = Math.Max(180, Math.Max(row.Height, value.Height) + 2 * paddingY);
@@ -630,17 +831,21 @@ internal static partial class CrystalReportContentsParser
             }
         }
         if (ranked is not null && drawGrid && definition.NativeCrossTab?.Appearance is not null
-            && definition.RowFields.Count == 1 && definition.ColumnFields.Count == 0 && definition.Measures.Count == 1
-            && definition.Measures[0].Aggregate == ReportAggregateType.Sum && definition.Cells.Count == 0 && definition.CalculatedMembers.Count == 0
+            && definition.RowFields.Count == 1 && definition.Measures.Count == 1
+            && (ranked.DiscardOthers
+                ? definition.ColumnFields.Count == 0 && definition.Measures[0].Aggregate == ReportAggregateType.Sum
+                : definition.Measures[0].Aggregate is ReportAggregateType.Sum or ReportAggregateType.Count)
+            && definition.Cells.Count == 0 && definition.CalculatedMembers.Count == 0
             && nativeCells.All(cell => cell.Cell.Format.ConditionReferences.Count == 0))
         {
-            definition.RowRanking = new(ranked.TopNCount, ranked.Direction == 0, ranked.WithTies);
+            definition.RowRanking = new(ranked.TopNCount, ranked.Direction == 0, ranked.WithTies)
+            { OthersCaption = ranked.DiscardOthers ? null : string.IsNullOrWhiteSpace(ranked.OthersName) ? "Others" : ranked.OthersName };
         }
         else if (ranked is not null)
         {
             var assignments = nativeCells.Where(c => c.Axis == 216 && c.Column == 1 && c.Row == 0)
                 .SelectMany(c => c.Cell.Format.ConditionReferences).ToArray();
-            if (ranked.Direction != 1 || drawGrid || definition.RowFields.Count != 1 || definition.ColumnFields.Count != 0 ||
+            if (!ranked.DiscardOthers || ranked.Direction != 1 || drawGrid || definition.RowFields.Count != 1 || definition.ColumnFields.Count != 0 ||
                 definition.Measures.Count != 1 || definition.Measures[0].Aggregate != ReportAggregateType.Sum ||
                 nativeCells.Any(c => !c.Cell.Format.EnableSuppress) || totalStyles.Values.Any(c => !c.Format.EnableSuppress) ||
                 assignments.Length != 1 || assignments[0].Property != "EnableKeepTogether" ||
@@ -678,6 +883,20 @@ internal static partial class CrystalReportContentsParser
                 && formula.CustomFunctions.Count == 0;
         }
 
+        // A field embedded in a total caption keeps the numeric format authored on it, resolved by the field's type as a field object's is.
+        ReportNativeCrossTabCaptionField[] CaptionFields(params CrystalReportObjectModel?[] captions) => captions.OfType<CrystalReportObjectModel>()
+            .SelectMany(caption => caption.TextRuns).Where(run => run.Binding.Length > 0).DistinctBy(run => run.Binding)
+            .Select(run =>
+            {
+                var type = data.FormulaFields.FirstOrDefault(field => field.FormulaName == run.Binding)?.ValueType
+                    ?? data.SummaryFields.Select((field, index) => (field, index)).Where(entry => SummaryReferencePlaceholder(entry.index) == run.Binding
+                        || SummaryFormulaName(entry.field, data) == run.Binding).Select(entry => (int?)(entry.field.Operation is 6 or 9 ? 4 : entry.field.ValueType)).FirstOrDefault()
+                    ?? data.RunningTotalFields.FirstOrDefault(field => field.FormulaName == run.Binding)?.ValueType ?? 6;
+                var candidates = run.NativeNumericCandidates;
+                var numeric = type is >= 0 and <= 7 && candidates.Count == 2 ? candidates[type == 7 ? 0 : 1] with { ValueType = type } : null;
+                return new ReportNativeCrossTabCaptionField(run.Binding, numeric is { UnsupportedReason: null } ? numeric : null);
+            }).ToArray();
+
         string StackFormat(CrystalReportObjectModel cell)
         {
             var summary = data.SummaryFields.Select((item, index) => (item, index))
@@ -692,7 +911,7 @@ internal static partial class CrystalReportContentsParser
             cell.Border.BackgroundColor.A == 0 ? fill : Css(cell.Border.BackgroundColor), cell.Format.HorizontalAlignment switch
             { "HorizontalCenter" => "center", "RightAlign" or "Right" => "right", "LeftAlign" or "Left" => "left", _ => defaultAlignment })
             { Suppressed = cell.Format.EnableSuppress, Conditions = cell.FontConditionReferences.Concat(cell.Border.ConditionReferences)
-                .Concat(cell.Format.ConditionReferences).Select(reference =>
+                .Concat(cell.Format.ConditionReferences).Where(reference => reference.Property != "ToolTipText").Select(reference =>
                 {
                     if (reference.Type != 1 || reference.Index < 0 || reference.Index >= data.FormulaFields.Count)
                         throw new NotSupportedException("A cross-tab conditional formula reference is unavailable.");
@@ -746,8 +965,10 @@ internal static partial class CrystalReportContentsParser
                 9 => ReportAggregateType.DistinctCount, 12 when objectType == 185 && summary.WeightField.Length > 0 => ReportAggregateType.WeightedAverage, 13 => ReportAggregateType.Median,
                 _ => throw new NotSupportedException($"Native analytical aggregate {SummaryOperationName(summary.Operation)} is not supported.")
             };
-            if (objectType == 185 && definition.Measures.Any(m => m.Field == summary.SummarizedField && m.Aggregate == operation && m.Caption == summary.Name)) return;
-            definition.Measures.Add(new() { Field = summary.SummarizedField, Caption = summary.Name,
+            if (objectType == 185 && !boundSummaries.Add(summary)) return;
+            if (objectType == 185 && summary.SummaryType is not (0 or 1))
+                throw new NotSupportedException("Unsupported native cross-tab percentage direction.");
+            definition.Measures.Add(new() { PercentOfColumnTotal = objectType == 185 && summary.SummaryType == 1 ? summary.SummaryTypeIndex : null, Field = summary.SummarizedField, Caption = summary.Name,
                 Aggregate = operation, WeightField = operation == ReportAggregateType.WeightedAverage ? summary.WeightField : "", Format = operation is ReportAggregateType.Count or ReportAggregateType.DistinctCount ? "N0"
                     : summary.ValueType switch { 9 => "d", 10 => "t", 15 => "g", 11 or 12 or 13 => "", _ => "N2" } });
         }

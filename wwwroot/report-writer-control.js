@@ -94,11 +94,205 @@ export function detachDrillHandler(root) {
     drillBindings.delete(host);
 }
 
+// Keyboard and wheel paging of the viewer, owned by the browser: PageUp/PageDown, Home/End and the wheel
+// scroll the pane natively; only when the pane is already at its edge does the next step turn the page, one
+// .NET call per turned page. Ctrl+Home / Ctrl+End go to the first / last page. The keys reach the visible
+// viewer from the pane, from its toolbar and tab strip, from the MDI tab and from the page itself (nothing
+// focused); keys typed into a field, a list, a grid, a tree or a dialog stay there. A key turns the page at
+// once. The wheel movement that reached the edge, and its tail, stay on the page; a fresh movement at the
+// edge turns it, and the wheel rests for 600 ms after a turn, so a trackpad's momentum does not run through
+// the report and the notches that turned the page do not scroll the new one away from its top.
+// Several viewers can be shown at once (MDI split view): one keydown listener per document gives each key to one
+// viewer at most (viewerForKey).
+const navigationBindings = new WeakMap();
+const keyRouters = new WeakMap();
+
+const paneOf = (target) => target instanceof Element ? target.closest(".fx-rpt-viewer-panel") : null;
+const ownsKeys = (target) => target instanceof Element && !!target.closest(
+    "input, textarea, select, [contenteditable=true], [role=listbox], [role=combobox], [role=grid], [role=tree], [role=menu], [role=dialog], .fx-dialog, .fx-grid, .fx-treeview, .fx-treegrid, .fx-dropdown-list, .fx-context-menu");
+const isShown = (element) => !!(element.getClientRects && element.getClientRects().length);
+
+// The viewer a key is for. A key pressed in a viewer (its pane, toolbar or tab strip) is that viewer's. A key pressed
+// on the page itself (nothing focused), on an MDI tab or on another element that takes no focus belongs to the shown
+// viewer of the window it was pressed in: the MDI pane holding the target, else the active pane of a split view,
+// else the first shown viewer. Another focusable element keeps its own keys.
+function viewerForKey(doc, viewers, target) {
+    if (ownsKeys(target)) return null;
+    const shown = [];
+    for (const viewer of viewers) if (isShown(viewer.host)) shown.push(viewer);
+    // Document order, so the choice does not depend on which viewer attached first.
+    shown.sort((a, b) => (a.host.compareDocumentPosition(b.host) & 4) ? -1 : 1);
+    const element = target instanceof Element && target !== doc.body && target !== doc.documentElement ? target : null;
+    if (element) {
+        let holder = null;
+        for (const viewer of shown) if (viewer.host.contains(element)) holder = viewer;
+        if (holder) return holder;
+        if (paneOf(element)) return null;
+        const tab = element.closest(".fx-mdi-tab");
+        if (!tab && element.hasAttribute("tabindex")) return null;
+        const mdiPane = tab ? null : element.closest(".fx-mdi-pane");
+        if (mdiPane) return shown.find((viewer) => mdiPane.contains(viewer.host)) || null;
+    }
+    const active = ((element && element.closest(".fx-mdi")) || doc).querySelector(".fx-mdi-pane-active");
+    if (active) return shown.find((viewer) => active.contains(viewer.host)) || null;
+    return shown[0] || null;
+}
+
+function routeKeys(doc, binding) {
+    let router = keyRouters.get(doc);
+    if (!router) {
+        const viewers = new Set();
+        const onKeyDown = (event) => {
+            if (event.defaultPrevented || event.altKey || event.metaKey) return;
+            const viewer = viewerForKey(doc, viewers, event.target);
+            if (viewer) viewer.onKeyDown(event);
+        };
+        router = { viewers, onKeyDown };
+        keyRouters.set(doc, router);
+        doc.addEventListener("keydown", onKeyDown);
+    }
+    router.viewers.add(binding);
+}
+
+function unrouteKeys(doc, binding) {
+    const router = keyRouters.get(doc);
+    if (!router) return;
+    router.viewers.delete(binding);
+    if (router.viewers.size) return;
+    doc.removeEventListener("keydown", router.onKeyDown);
+    keyRouters.delete(doc);
+}
+
+export function attachViewerNavigation(root, dotNetRef) {
+    const host = getHost(root);
+    detachViewerNavigation(root);
+    const doc = getDocument(root);
+    const win = doc.defaultView || window;
+    let lastTurn = -Infinity; // the time of the last page turn; none yet
+    let turnToEnd = () => false; // a key or wheel turn back is about to show its new page from the bottom (settle)
+    let wheel = { lastAt: 0, lastInsideAt: 0, direction: 0, accumulated: 0 };
+
+    const atTop = (pane) => pane.scrollTop <= 0;
+    const atBottom = (pane) => pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 1;
+
+    function turnPage(pane, action, toEnd) {
+        lastTurn = win.performance.now();
+        wheel.direction = 0;
+        wheel.accumulated = 0;
+        // The new page's markup arrives with a render batch, before or after the call returns: settle the scroll
+        // once the pane shows another page (or give up after a while).
+        let settled = false;
+        turnToEnd = () => toEnd && !settled;
+        const settle = () => {
+            if (settled) return;
+            settled = true;
+            observer.disconnect();
+            const current = host.querySelector(".fx-rpt-viewer-panel") || pane;
+            current.scrollTop = toEnd ? current.scrollHeight : 0;
+        };
+        const observer = new win.MutationObserver(() => win.requestAnimationFrame(() => win.requestAnimationFrame(settle)));
+        observer.observe(pane, { attributeFilter: ["data-current-page"] });
+        const giveUp = win.setTimeout(() => { settled = true; observer.disconnect(); }, 3000);
+        dotNetRef.invokeMethodAsync("OnViewerNavigate", action).then((moved) => {
+            if (moved) return;
+            win.clearTimeout(giveUp);
+            settled = true;
+            observer.disconnect();
+        }).catch(() => { win.clearTimeout(giveUp); settled = true; observer.disconnect(); });
+        return true;
+    }
+
+    // Called by the document's router for a key that is this viewer's.
+    const onKeyDown = (event) => {
+        const own = paneOf(event.target);
+        const pane = own && host.contains(own) ? own : host.querySelector(".fx-rpt-viewer-panel");
+        if (!pane) return;
+        let handled = false;
+        switch (event.key) {
+            case "PageDown":
+                if (event.ctrlKey) return;
+                if (atBottom(pane)) handled = turnPage(pane, "next", false);
+                else { pane.scrollBy({ top: pane.clientHeight * 0.9 }); handled = true; }
+                break;
+            case "PageUp":
+                if (event.ctrlKey) return;
+                if (atTop(pane)) handled = turnPage(pane, "previous", true);
+                else { pane.scrollBy({ top: -pane.clientHeight * 0.9 }); handled = true; }
+                break;
+            case "Home":
+                if (event.ctrlKey) handled = turnPage(pane, "first", false);
+                else { pane.scrollTo({ top: 0 }); handled = true; }
+                break;
+            case "End":
+                if (event.ctrlKey) handled = turnPage(pane, "last", false);
+                else { pane.scrollTo({ top: pane.scrollHeight }); handled = true; }
+                break;
+            default:
+                return;
+        }
+        if (!handled) return;
+        event.preventDefault();
+        // The viewer keeps the keyboard from here on.
+        if (doc.activeElement !== pane && !paneOf(doc.activeElement)) pane.focus({ preventScroll: true });
+    };
+
+    const onWheel = (event) => {
+        if (event.ctrlKey || event.defaultPrevented) return;
+        const pane = paneOf(event.target);
+        if (!pane || !host.contains(pane)) return;
+        const direction = event.deltaY > 0 ? 1 : event.deltaY < 0 ? -1 : 0;
+        if (!direction) return;
+        const now = win.performance.now();
+        const gap = now - wheel.lastAt;
+        wheel.lastAt = now;
+        // The notches of the movement that turned the page would scroll the new page away from where the turn put it.
+        if (now - lastTurn < 600) { event.preventDefault(); return; }
+        if (!(direction > 0 ? atBottom(pane) : atTop(pane))) {
+            wheel.lastInsideAt = now;
+            wheel.direction = 0;
+            wheel.accumulated = 0;
+            return;
+        }
+        // The movement that reached the edge and its tail (within 400 ms of the last in-page scroll) stay on the page.
+        if (now - wheel.lastInsideAt < 400) return;
+        if (wheel.direction !== direction) { wheel.direction = direction; wheel.accumulated = 0; }
+        wheel.accumulated += Math.abs(event.deltaY) * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? pane.clientHeight : 1);
+        // A fresh movement (after a pause) turns the page at once; a continuous one after about three notches.
+        if (gap < 120 && wheel.accumulated < 300) return;
+        if (turnPage(pane, direction > 0 ? "next" : "previous", direction < 0)) event.preventDefault();
+    };
+
+    // A page reached by the toolbar, the page box, a find, the group tree or the host is shown from its top (a key or
+    // wheel turn back is left to its settle). An anchor scroll applies a pending page change first (showPages).
+    const showFromTop = (records) => { for (const record of records) if (!turnToEnd()) record.target.scrollTop = 0; };
+    const pages = new win.MutationObserver(showFromTop);
+    pages.observe(host, { attributeFilter: ["data-current-page"], subtree: true });
+    const binding = { host, doc, onKeyDown, onWheel, pages, showPages: () => showFromTop(pages.takeRecords()) };
+    routeKeys(doc, binding);
+    host.addEventListener("wheel", onWheel, { passive: false });
+    navigationBindings.set(host, binding);
+
+    // A freshly opened report takes the keyboard when nothing else holds it.
+    const pane = host.querySelector(".fx-rpt-viewer-panel");
+    if (pane && (!doc.activeElement || doc.activeElement === doc.body)) pane.focus({ preventScroll: true });
+}
+
+export function detachViewerNavigation(root) {
+    const host = getHost(root);
+    const binding = navigationBindings.get(host);
+    if (!binding) return;
+    unrouteKeys(binding.doc, binding);
+    host.removeEventListener("wheel", binding.onWheel);
+    binding.pages.disconnect();
+    navigationBindings.delete(host);
+}
+
 // scrollIntoView also scrolls hidden ancestors, moving the toolbar beneath host tabs.
 // Only the report's own viewport should move when navigating a group.
 function scrollReportAnchor(root, element) {
     const pane = element.closest(".fx-rpt-viewer-panel, .fx-report-container");
     if (!pane || (root && !root.contains(pane))) return;
+    navigationBindings.get(getHost(root))?.showPages();
     const target = element.getBoundingClientRect();
     const bounds = pane.getBoundingClientRect();
     const scale = pane.offsetHeight > 0 ? bounds.height / pane.offsetHeight : 1;

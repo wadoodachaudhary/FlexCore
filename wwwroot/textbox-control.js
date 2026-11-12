@@ -11,6 +11,24 @@ export function focus(element, selectText) {
     });
 }
 
+// Only an edit event leaves the control; no Blazor click is needed to clear the live draft.
+const clearButtons = new WeakSet();
+export function bindClearButton(button) {
+    if (!button || clearButtons.has(button)) return;
+    clearButtons.add(button);
+    button.addEventListener("mousedown", e => e.preventDefault());
+    button.addEventListener("click", e => {
+        e.stopPropagation();
+        const input = button.previousElementSibling;
+        if (!input || input.matches(":disabled, [readonly]") || !input.value) return;
+        input.focus({ preventScroll: true });
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        if (button.dataset.commitOnClear)
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+}
+
 export function select(element) {
     if (!element || typeof element.select !== "function") return;
     requestAnimationFrame(() => {
@@ -189,6 +207,19 @@ export function configurePasswordReveal(input, canvas, durationMs) {
     });
 }
 
+// A modifier or lock key pressed alone types nothing and is no command by itself (a chord's command comes
+// with the next key, which carries the modifier flags). No .NET handler acts on one, so a text box keeps it
+// in the browser: sent on, it was a server round trip for every Shift of every capital letter.
+const INERT_KEYS = new Set(["Shift", "Control", "Alt", "AltGraph", "Meta", "OS", "Hyper", "Super", "Fn", "FnLock",
+    "CapsLock", "NumLock", "ScrollLock", "Symbol", "SymbolLock"]);
+function isInertKey(event) {
+    return INERT_KEYS.has(event.key);
+}
+// A key of an IME composition or a dead-key sequence: typing, so it stays local wherever typing keys do.
+function isCompositionKey(event) {
+    return event.isComposing || event.keyCode === 229 || event.key === "Process" || event.key === "Dead";
+}
+
 // ── Pre-attach typing shield ────────────────────────────────────────────────
 // enableClientBufferedTyping arrives one interop round-trip AFTER a
 // ClientBuffered editor renders. Keys typed in that gap used to dispatch to
@@ -207,6 +238,10 @@ document.addEventListener("keydown", event => {
         || t.dataset.fxCbPending !== "1"
         || t.dataset.fxClientBufferedEditor === "1")
         return;
+    if (isInertKey(event)) {
+        event.stopPropagation();
+        return;
+    }
     if (event.altKey || event.ctrlKey || event.metaKey || event.isComposing)
         return;
     const key = event.key;
@@ -563,7 +598,7 @@ export function suppressTypingKeyDispatch(el) {
     // enclosing form (the box's own Enter handler still runs).
     const filterBox = "fxGridFilterBox" in el.dataset;
     el.addEventListener("keydown", e => {
-        if (filterBox && (e.isComposing || e.keyCode === 229)) {
+        if (isInertKey(e) || isCompositionKey(e)) {
             e.stopPropagation();
             return;
         }
@@ -657,6 +692,12 @@ export function enableClientBufferedTyping(el, dotNetRef, handlesNavigationKeys,
     };
 
     const onKeyDown = event => {
+        // Composition keys stay local only where typing keys do: a box that lets typing bubble (a text area,
+        // a field with no key handler) lets a host's typing watch see them as well.
+        if (isInertKey(event) || (binding.handlesNavigationKeys && isCompositionKey(event))) {
+            event.stopPropagation();
+            return;
+        }
         if (!binding.handlesNavigationKeys) {
             // A plain form field in a dialog with a default button commits its draft on Enter,
             // as a native text input's change does, so the default button reads the typed value.

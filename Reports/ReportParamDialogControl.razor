@@ -56,7 +56,7 @@
             }
         </HeaderContent>
         <ChildContent>
-            <div class="@BodyCssClass">
+            <div class="fx-param-body">
                 @foreach (var p in _parameters)
                 {
                     var pickList = _pickLists.TryGetValue(p.Name, out var list) ? list : null;
@@ -131,7 +131,7 @@
                                        Available pane; the add button shares the arrow column. *@
                                     <div class="fx-param-custom-row" data-fx-enter-owner>
                                         <label class="fx-param-value-label">Enter a Value:</label>
-                                        <TextBoxControl CssClass="fx-param-value-input" Width="100%" aria-label="@($"Enter a value for {secondaryLabel}")" Value="@_customDrafts.GetValueOrDefault(p.Name)"
+                                        <TextBoxControl ShowClearButton="true" CssClass="fx-param-value-input" Width="100%" aria-label="@($"Enter a value for {secondaryLabel}")" Value="@_customDrafts.GetValueOrDefault(p.Name)"
                                                         ValueChanged="value => _customDrafts[p.Name] = value ?? string.Empty" UpdateOnInput="true"
                                                         OnKeyDown="e => OnCustomKeyDown(e, p.Name)" />
                                         <ButtonControl CssClass="fx-param-custom-add" BareStyle="true" Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">
@@ -201,7 +201,7 @@
                 }
                 @if (!string.IsNullOrEmpty(_error))
                 {
-                    <div class="fx-param-error">@_error</div>
+                    <div class="fx-param-error" role="alert">@_error</div>
                 }
             </div>
         </ChildContent>
@@ -313,13 +313,11 @@
 
     /// <summary>The dialog's height limit (also set in the .razor.css): 90% of the window, and never over 1200px.</summary>
     private const string DialogMaxHeight = "min(90vh, calc(1200px * var(--fx-zoom, 1)))";
-    // Crystal's "Enter Parameter Values" gives a value list a wide combo whose list drops well below it, in a window that
-    // stays tall whatever it holds; the body reserves that room (fx-param-body-lists) so the list is not clamped to a short dialog.
+    // Crystal's "Enter Parameter Values" gives a value list a wide combo whose list drops well below it. The window ends
+    // at its prompts, with no room kept under them: an open list escapes the window's clipping instead (.razor.css).
     private const string PickListWidth = "min(100%, calc(440px * var(--fx-zoom, 1)))";
     private const string ScalarWidth = "min(100%, calc(320px * var(--fx-zoom, 1)))";
     private const int PickListPanelHeight = 320;
-    private string BodyCssClass => _singlePickLists.Count > 0 || _parameters.Any(p => !p.AllowMultiple && !p.AllowRange && p.DefaultValues.Count >= 2)
-        ? "fx-param-body fx-param-body-lists" : "fx-param-body";
 
     /// <summary>
     /// Height of each Available/Selected pair, for any number of pairs and other prompts. The pairs share what
@@ -849,8 +847,7 @@
         }
         if (missing.Count > 0)
         {
-            _error = "Please provide: " + string.Join(", ",
-                missing.Select(p => string.IsNullOrWhiteSpace(p.DisplayName) ? p.Name : p.DisplayName));
+            _error = "Please Provide Value for: " + string.Join(", ", missing.Select(SecondaryLabel));
             StateHasChanged();
             return;
         }

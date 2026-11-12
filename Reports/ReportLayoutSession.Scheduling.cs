@@ -4,6 +4,50 @@ namespace Fx.ControlKit.Reports;
 
 public sealed partial class ReportLayoutSession
 {
+    // A mutable section may be hidden for thousands of records. Build its child only
+    // after the physical print pass has established that this occurrence is visible.
+    private readonly Dictionary<(string Element, int Row), (ReportLayoutSession? Child, int Offset)?> _deferredSubreports = new();
+    // Page header and footer subreports linked to the page: one for each page number and page count they print with.
+    private readonly Dictionary<(string Element, int Row, int Page, int Count), (ReportLayoutSession? Child, int Offset)> _pagedFurniture = new();
+    // Page header and footer subreports built again for one physical page, from the link values in effect where they print there.
+    private readonly Dictionary<(string Element, int Row, int Physical), (ReportLayoutSession? Child, int Offset)> _replayedFurniture = new();
+    // Page header and footer subreports that read no variables, by the records they print: one for each distinct query and parameters.
+    private readonly Dictionary<(string Element, DataTable Data), List<(SubreportRun Run, ReportLayoutSession Child, int Offset)>> _sharedFurniture = new();
+    private readonly Dictionary<string, bool> _statelessSubreports = new(StringComparer.Ordinal);
+
+    private Item ResolveDeferredSubreport(Item item) => item.Child is null
+        && _deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is { } resolved
+        ? item with { Child = resolved.Child, ChildMeasurementOffset = resolved.Offset } : item;
+
+    // The item prints a subreport's records: built with its section, or once that section printed.
+    private bool HasChild(Item item) => item.Child is not null || _deferredSubreports.GetValueOrDefault((item.Element.Id, item.Row)) is { Child: not null };
+
+    private bool PrepareDeferredSubreport(Item item)
+    {
+        var key = (item.Element.Id, item.Row);
+        if (!_deferredSubreports.TryGetValue(key, out var existing) || existing.HasValue || item.Element.IsSuppressed) return false;
+        var saved = CaptureVariables();
+        var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
+        try
+        {
+            var child = CreateInlineSubreport(item.Element, item.Row, initializePrintContext: true);
+            var offset = Measurements.Count;
+            if (child is not null)
+            {
+                Measurements.AddRange(child.Measurements);
+                foreach (var native in child._nativeMetrics) _nativeMetrics.TryAdd(native.Key, native.Value);
+            }
+            _deferredSubreports[key] = (child, offset);
+            return true;
+        }
+        finally
+        {
+            RestoreVariables(saved);
+            _bandFormulaCache.Clear();
+            foreach (var value in cache) _bandFormulaCache.Add(value.Key, value.Value);
+        }
+    }
+
     private readonly Dictionary<string, CrystalEvaluationTime> _evaluationTimes = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, object?> _beforeValues = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<DataRow, Dictionary<string, object?>> _readValues = new();
@@ -13,8 +57,23 @@ public sealed partial class ReportLayoutSession
     private readonly Dictionary<int, VariableSnapshot> _rowBefore = new();
     private readonly Dictionary<int, VariableSnapshot> _rowAfter = new();
     private bool _preparingFurniture;
+    // Above zero while one band is evaluated: its layout (CreateBand) or the physical page replay. Only then is a formula's
+    // failure kept in the band cache, so a second reader in the band raises it again instead of running the formula (and
+    // its assignments) twice; a failure never outlives its band, and in the replay, when its formula reads the page (or a
+    // variable the page furniture assigns) and assigns only temporaries, never its page.
+    private int _failureScope;
+    // While the physical page replay runs: for each failure in a band cache that may run again on a later page, the values
+    // the variables its formula reads had when it failed, or the page furniture has left them since (PageReads, ReadValues).
+    private Dictionary<((string Name, int Row) Key, Exception Failure), ReadValue[]>? _failureReads;
+    // The failures noted in _failureReads since the band cache was last stored (ReplayPhysicalPages, Store).
+    private List<((string Name, int Row) Key, Exception Failure)>? _newFailures;
+    // On the run's main session (Sessions[0]): how many times a formula or condition that assigns a global or shared variable
+    // has failed, or stopped at a null value, in the run's reports. One that fails or stops while the page furniture prints
+    // may have set some of its variables and not the rest (Furnish).
+    private int _assignmentFailures;
     private bool _physicalPageSchedule;
     private bool _replayingPrint;
+    private bool _initializingPrintContext;
     private VariableSnapshot? _printStart;
     private sealed record PrintBandKey(ReportLayoutSession Owner, string Section, int Row, int Occurrence);
     private sealed record PrintItemKey(PrintBandKey Band, string Element);
@@ -72,7 +131,8 @@ public sealed partial class ReportLayoutSession
     {
         var furniture = _layout.Document.Sections.Where(s => s.Kind is "PageHeader" or "PageFooter")
             .SelectMany(s => s.Elements).SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(ValueBinding(e)));
-        var needsReplay = _scheduledFormulas.Any(r => DependsOn(r, true) && NeedsPrintState(r))
+        var needsReplay = _layout.Document.Elements.Any(e => e.Analysis?.GridPrintFormulas().Any() == true)
+            || _scheduledFormulas.Any(r => DependsOn(r, true) && NeedsPrintState(r))
             || furniture.Any(r => !_schedulingErrors.ContainsKey(r) && NeedsPrintState(r))
             || _layout.ObjectConditions.Values.Concat(_layout.SectionConditions.Values).Concat(_layout.AreaConditions.Values).SelectMany(c => c.Values).Any(NeedsPrintState);
         needsReplay |= _scheduledFormulas.Any(NeedsPrintState) && _layout.SectionConditions.Values.Concat(_layout.AreaConditions.Values)
@@ -95,7 +155,8 @@ public sealed partial class ReportLayoutSession
                 bool Reference(string reference) => visited.Add(reference) && layout.Formulas.TryGetValue(reference, out var f)
                     && (f.UsesPersistentVariables || f.References.Any(Reference));
                 var conditions = layout.SectionConditions.Values.Concat(layout.AreaConditions.Values).Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values);
-                return layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(ValueBinding(e)).Append(e.HighlightRule.FieldName)).Any(Reference)
+                return layout.Document.Elements.Any(e => e.Analysis?.GridPrintFormulas().Any() == true)
+                    || layout.Document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Binding).Append(ValueBinding(e)).Append(e.HighlightRule.FieldName)).Any(Reference)
                     || conditions.Any(f => f.UsesPersistentVariables || f.References.Any(Reference));
             }
             bool PageLinks(ReportPositionedLayout layout)
@@ -138,6 +199,30 @@ public sealed partial class ReportLayoutSession
     private Dictionary<PrintBandKey, int> LastFragmentOffsets(List<Page> pages) => pages.SelectMany(p => p.Placements)
         .GroupBy(p => FragmentKey(p.Band)).ToDictionary(g => g.Key, g => g.Max(p => p.Offset));
 
+    // What the next pass is laid out from: what the last replay printed and formatted, the page context and the subreports
+    // created so far. A pass that starts from a state seen before repeats the passes after it, so the layout never settles.
+    private (long, long, int) ReplayState(int pages, IReadOnlyList<int> counts, IReadOnlyList<int> footerRows, Dictionary<Band, (int Page, int Count)> inline)
+    {
+        long first = 0, second = 0;
+        void Add(int a, int b) { first += a; second += b; }
+        foreach (var (key, item) in _state.PrintedItems)
+        {
+            var style = ReportObjectRenderer.Style(item.Element, false);
+            Add(HashCode.Combine(key, item.Html, item.Element.CanGrow, item.Element.IsSuppressed, style), HashCode.Combine(style, item.Html, key, 1));
+        }
+        foreach (var (key, visible) in _state.PrintedVisibility) Add(HashCode.Combine(key, visible, 2), HashCode.Combine(3, visible, key));
+        foreach (var (key, format) in _state.PrintedSections) Add(HashCode.Combine(key, format, 4), HashCode.Combine(5, format, key));
+        foreach (var (key, blank) in _state.PrintedBlank) Add(HashCode.Combine(key, blank, 6), HashCode.Combine(7, blank, key));
+        foreach (var (band, context) in inline)
+            Add(HashCode.Combine(band.Owner, band.Section.Id, band.Row, context, 8), HashCode.Combine(9, context, band.Row, band.Section.Id, band.Owner));
+        var sequence = new HashCode();
+        sequence.Add(pages);
+        foreach (var count in counts) sequence.Add(count);
+        foreach (var row in footerRows) sequence.Add(row);
+        sequence.Add(_state.Sessions.Sum(session => session._deferredSubreports.Values.Count(child => child.HasValue) + session._pagedFurniture.Count + session._replayedFurniture.Count));
+        return (first, second, sequence.ToHashCode());
+    }
+
     private bool ReplayPhysicalPages(List<Page> pages, IReadOnlyList<int> counts)
     {
         if (!_state.PhysicalSchedule) return false;
@@ -148,10 +233,81 @@ public sealed partial class ReportLayoutSession
         var endings = new HashSet<PrintBandKey>();
         var hiddenValues = new HashSet<PrintBandKey>();
         var linked = new HashSet<ReportLayoutSession>();
+        var furnitureLinks = new HashSet<(ReportLayoutSession Child, int Page)>();
         var blanks = new Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool>();
         var caches = new Dictionary<PrintBandKey, Dictionary<(string Name, int Row), object?>>();
         var leaving = new Dictionary<PrintBandKey, bool>();
         var lastOffsets = LastFragmentOffsets(pages);
+        // Every band cache is stored through Store, which notes the bands whose cache holds a failure for the next page break,
+        // and the failures that may run again on a later page, with what they read (held: one for each formula of a band). A
+        // cache is stored for the band it was loaded for, so only the failures noted since then are new to it.
+        var failing = new HashSet<PrintBandKey>();
+        var held = new Dictionary<(PrintBandKey Band, (string Name, int Row) Key), (ReportLayoutSession Owner, Exception Failure, ReadValue[] Reads)>();
+        void Store(PrintBandKey key, ReportLayoutSession owner)
+        {
+            caches[key] = new(owner._bandFormulaCache);
+            foreach (var value in owner._bandFormulaCache.Values) if (value is Exception) { failing.Add(key); break; }
+            if (owner._newFailures is not { Count: > 0 } added || owner._failureReads is not { } snapshots) return;
+            foreach (var (entry, failure) in added)
+            {
+                if (!snapshots.TryGetValue((entry, failure), out var reads)) continue;
+                if (!owner._bandFormulaCache.TryGetValue(entry, out var value) || !ReferenceEquals(value, failure)) { snapshots.Remove((entry, failure)); continue; }
+                if (held.TryGetValue((key, entry), out var old) && !ReferenceEquals(old.Failure, failure)) snapshots.Remove((entry, old.Failure));
+                held[(key, entry)] = (owner, failure, reads);
+            }
+            added.Clear();
+        }
+        // The band's own formula fields, in its order (a hidden band's too: an assignment a later section reads still runs).
+        // A formula that fails here is diagnosed as Format diagnoses a printed one, and the replay goes on. With placed, only
+        // the objects placed above part (in the band's own coordinates) run: the rest print, and run, on a later page, except
+        // the formulas in read, which run in the band's order.
+        static void BandFormulas(ReportLayoutSession owner, ReportDesignerSection original, int row, bool assignmentsOnly = false, Band? placed = null, int part = int.MaxValue,
+            HashSet<string>? read = null)
+        {
+            var later = placed is null || part == int.MaxValue ? null : placed.Items
+                .Where(i => ReferenceEquals(i.Owner ?? placed.Owner ?? owner, owner) && i.Element.SectionId == original.Id && i.Element.TopTwips >= part)
+                .Select(i => i.Element.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var reference in original.Elements.OrderBy(e => e.TopTwips)
+                .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(e)).Where(r => later?.Contains(e.Id) != true || read?.Contains(r) == true))
+                .Where(r => owner._layout.Formulas.ContainsKey(r) && !owner._schedulingErrors.ContainsKey(r) && (!assignmentsOnly || owner.NeedsPrintState(r))))
+            {
+                try { _ = owner.Value(reference, row); }
+                catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidCastException or OverflowException or DivideByZeroException or NotSupportedException or ArgumentException)
+                { owner._diagnostics.Add($"{reference}: {ex.Message}"); }
+            }
+        }
+        // A failure no band cache holds any more (its formula ran again, or its band finished or is hidden, so its cache is
+        // never loaded again) never runs again, and is forgotten: at each page break and before the page furniture.
+        void Prune()
+        {
+            List<(PrintBandKey Band, (string Name, int Row) Key)>? gone = null;
+            foreach (var (entry, (_, failure, _)) in held)
+                if (endings.Contains(entry.Band) || hiddenValues.Contains(entry.Band) || !Holds(caches.GetValueOrDefault(entry.Band), entry.Key, failure)) (gone ??= []).Add(entry);
+            if (gone is null) return;
+            foreach (var entry in gone)
+                if (held.Remove(entry, out var forgotten)) forgotten.Owner._failureReads?.Remove((entry.Key, forgotten.Failure));
+        }
+        // The page furniture (a page header or footer, or a repeated group header) sets variables for its page: once it has
+        // printed, what a held failure read takes the value the furniture left, unless a band changed it since the failure, or
+        // the furniture computes it from a band's variable that changed since then, or a formula that assigns a variable
+        // failed while it printed (Rebase, from the values before the furniture, and what the section printed assigns).
+        Action Furnish(Band band)
+        {
+            Prune();
+            var furniture = (band.Owner ?? this)._layout;
+            var section = furniture.Document.Sections.FirstOrDefault(s => s.Id == band.Section.Id) ?? band.Section;
+            var before = held.Values.Select(h => (h.Owner, h.Reads, Before: h.Owner.BeforeFurniture(h.Reads))).ToList();
+            var failures = _state.Sessions[0]._assignmentFailures;
+            return () =>
+            {
+                var failed = _state.Sessions[0]._assignmentFailures != failures;
+                foreach (var (owner, reads, values) in before) owner.Rebase(reads, values, furniture, section, failed);
+            };
+        }
+        static bool Holds(Dictionary<(string Name, int Row), object?>? cache, (string Name, int Row) key, Exception failure) =>
+            cache is not null && cache.TryGetValue(key, out var value) && (ReferenceEquals(value, failure) || value is PageFailure dropped && ReferenceEquals(dropped.Failure, failure));
+        foreach (var session in saved.Keys) { session._failureScope++; session._failureReads = new(); session._newFailures = []; }
+        var preparedChildren = false;
         try
         {
             foreach (var session in _state.Sessions)
@@ -165,9 +321,11 @@ public sealed partial class ReportLayoutSession
             {
                 // Crystal decides a section's New Page Before on the page it leaves: with that page's number, and before the next page's
                 // header formats (a header that resets a variable must not decide the break that brought it). Only the band that opens
-                // the page counts; a band continued from the previous page opened nothing.
+                // the page counts; a band continued from the previous page opened nothing, and an underlay's continuation (placed
+                // before the sections it underlays) does not hide the band that did.
                 if (pageIndex > 0 && pages[pageIndex].Placements
-                        .Where(p => p.Sequence >= 0 && !p.Band.RepeatedHeader && !p.Band.Suppressed && !p.Band.Blank && p.Band.Section.Kind != "PageFooter")
+                        .Where(p => p.Sequence >= 0 && !p.Band.RepeatedHeader && !p.Band.Suppressed && !p.Band.Blank && p.Band.Section.Kind != "PageFooter"
+                            && !(p.Offset > 0 && p.Band.Section.UnderlayFollowingSections))
                         .OrderBy(p => p.Sequence).FirstOrDefault() is { Offset: 0 } opener
                     && (opener.Band.Owner ?? this) is var leavingOwner
                     && (leavingOwner.MutableCondition(leavingOwner._layout.SectionConditions, opener.Band.Section.Id, "EnableNewPageBefore")
@@ -181,15 +339,42 @@ public sealed partial class ReportLayoutSession
                     try
                     {
                         var original = leavingOwner._layout.Document.Sections.First(s => s.Id == opener.Band.Section.Id);
+                        // Crystal formats the band before it decides the break (its formulas run first, and the condition reads their values);
+                        // the band formats again on the page it opens, after that page's header, as a band moved there for want of room does.
+                        // So neither the values of this pass nor what its formulas assigned are kept; what deciding the condition assigned
+                        // stays. What formats is the part the band prints where the break is decided: for a band its own break moved here,
+                        // the part the page it leaves would have printed in this layout (Page.BrokenPart); otherwise its first part on this page.
+                        // A formula of the band that the condition reads formats here too, wherever it prints, so it counts once.
+                        var formatted = new Dictionary<(string Name, int Row), object?>(leavingOwner._bandFormulaCache);
+                        var unformatted = leavingOwner.CaptureVariables();
+                        BandFormulas(leavingOwner, original, opener.Band.Row, placed: opener.Band,
+                            part: pages[pageIndex].BrokenPart is { } broken && broken.Band == key ? broken.Part : opener.Offset + opener.Height,
+                            read: leavingOwner.ConditionReads(opener.Band.Section.Id, "EnableNewPageBefore"));
+                        var assigned = leavingOwner.CaptureVariables();
                         leaving[key] = leavingOwner.ApplySectionConditions(leavingOwner.ApplySectionConditions(original, opener.Band.Row, only: "EnableNewPageBefore"),
                             opener.Band.Row, true, only: "EnableNewPageBefore").NewPageBefore;
-                        caches[key] = new(leavingOwner._bandFormulaCache);
+                        leavingOwner.UndoAssignments(unformatted, assigned);
+                        leavingOwner._bandFormulaCache.Clear();
+                        foreach (var value in formatted) leavingOwner._bandFormulaCache.Add(value.Key, value.Value);
+                        Store(key, leavingOwner);
                     }
                     finally { leavingOwner._replayingPrint = false; }
                 }
-                foreach (var placement in pages[pageIndex].Placements.OrderBy(p => p.Sequence))
+                // A band that spans pages (a detail or group band, occurrence 0) keeps one cache on all of them. Its values carry
+                // over as before, and so does a failure, except when the formula reads the page (or a variable the page furniture
+                // assigns) and assigns only temporaries: on this page, or a later one, it may succeed, so it runs again there while
+                // nothing it reads has changed since it failed (DropPageFailures). Any other failure is raised again, as a value is
+                // reused, so a counter does not count twice for one record. A band that finished or is hidden goes on to no page.
+                Prune();
+                foreach (var key in failing) if (!endings.Contains(key) && !hiddenValues.Contains(key)) key.Owner.DropPageFailures(caches[key]);
+                failing.Clear();
+                // Set by a furniture placement, run before the next placement (or the next page).
+                Action? furnished = null;
+                foreach (var placement in pages[pageIndex].Placements.OrderBy(p => p.PrintSequence))
                 {
+                    furnished?.Invoke(); furnished = null;
                     var occurrence = placement.Band.RepeatedHeader || placement.Band.Section.Kind is "PageHeader" or "PageFooter" ? pageIndex + 1 : 0;
+                    if (occurrence > 0) furnished = Furnish(placement.Band);
                     var blocked = new HashSet<(ReportLayoutSession? Owner, string Section, int Row)>();
                     PrintBandKey Key(Band band) => new(band.Owner ?? this, band.Section.Id, band.Row, occurrence);
                     bool Section(Band band)
@@ -208,10 +393,23 @@ public sealed partial class ReportLayoutSession
                             var original = owner._layout.Document.Sections.First(s => s.Id == band.Section.Id);
                             // A New Page Before already decided on the page this band left is not evaluated again (its formula may assign a variable).
                             var decided = leaving.TryGetValue(key, out var before) ? "EnableNewPageBefore" : null;
-                            var formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, endingOnly: false, skip: decided), band.Row, true, endingOnly: false, skip: decided);
+                            // Crystal decides a band's New Page Before after formatting it: a condition that reads print-time state sees what the
+                            // band's own formulas assigned (a page counter the band itself advances breaks on the band that passes the limit).
+                            var later = decided is null && (owner.MutableCondition(owner._layout.SectionConditions, band.Section.Id, "EnableNewPageBefore")
+                                || owner.MutableCondition(owner._layout.AreaConditions, band.Section.Id, "EnableNewPageBefore")) ? "EnableNewPageBefore" : null;
+                            var formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, endingOnly: false, skip: decided ?? later), band.Row, true, endingOnly: false, skip: decided ?? later);
+                            if (later is not null && owner.Visible(formatted))
+                            {
+                                // The part of the band this page prints formats before the break; what it prints on a later page runs there
+                                // (as without a New Page Before). A band that breaks moves whole to the next page, which decides it again
+                                // from the same part.
+                                var part = ReferenceEquals(band, placement.Band) ? placement.Offset + placement.Height : int.MaxValue;
+                                BandFormulas(owner, original, band.Row, placed: band, part: part);
+                                formatted.NewPageBefore = owner.ApplySectionConditions(owner.ApplySectionConditions(original, band.Row, only: later), band.Row, true, only: later).NewPageBefore;
+                            }
                             visible = owner.Visible(formatted); formats[key] = PrintSectionFormat.Read(formatted);
                             if (decided is not null) formats[key] = formats[key] with { Before = before };
-                            caches[key] = new(owner._bandFormulaCache);
+                            Store(key, owner);
                             visibility.Add(key, visible); return visible;
                         }
                         finally { owner._replayingPrint = false; }
@@ -237,27 +435,36 @@ public sealed partial class ReportLayoutSession
                             if (formats.TryGetValue(key, out var entry)) entry.Apply(formatted);
                             // Ending formulas observe field assignments made in this section, on its final physical page.
                             formatted = owner.ApplySectionConditions(owner.ApplySectionConditions(formatted, band.Row, endingOnly: true), band.Row, true, endingOnly: true);
-                            formats[key] = PrintSectionFormat.Read(formatted); caches[key] = new(owner._bandFormulaCache);
+                            formats[key] = PrintSectionFormat.Read(formatted); Store(key, owner);
                             owner.CaptureOnDemandVariables(band);
                         }
                         finally { owner._replayingPrint = false; }
                     }
-                    // A subreport's links are evaluated when its object prints. Its query ran with the logical-pass values.
+                    // A subreport's links are evaluated when its object prints. Its query ran with the logical-pass values. A page header
+                    // or footer subreport's links are evaluated on each page, for the record that page prints it with; where a value
+                    // differs, the subreport is built again for that page from the values in effect there (ReplayFurniture).
                     void VerifyLink(ReportLayoutSession? child)
                     {
-                        if (child?._link is not { } link || !linked.Add(child)) return;
-                        var owner = link.Owner; var key = new PrintBandKey(owner, link.Section, link.Row, occurrence);
+                        if (child?._link is not { } link) return;
+                        var furniture = placement.Band.Section.Kind is "PageHeader" or "PageFooter" && ReferenceEquals(link.Owner, placement.Band.Owner ?? this)
+                            && link.Section == placement.Band.Section.Id;
+                        if (furniture ? !furnitureLinks.Add((child, pageIndex)) : !linked.Add(child)) return;
+                        var owner = link.Owner; var row = furniture ? placement.Band.Row : link.Row;
+                        var key = new PrintBandKey(owner, link.Section, row, occurrence);
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var cache)) foreach (var value in cache) owner._bandFormulaCache.Add(value.Key, value.Value);
                         owner._replayingPrint = true;
                         object?[] values;
-                        try { values = link.Links.Select(l => owner.Value(l.MainField, link.Row)).ToArray(); }
+                        try { values = link.Links.Select(l => owner.Value(l.MainField, row)).ToArray(); }
                         finally { owner._replayingPrint = false; }
-                        caches[key] = new(owner._bandFormulaCache);
+                        Store(key, owner);
                         for (var index = 0; index < values.Length; index++)
                             if (!SameLinkValue(values[index], link.Values[index]))
+                            {
+                                if (furniture && owner.ReplayFurniture(link, row, pageIndex + 1)) { preparedChildren = true; return; }
                                 throw new NotSupportedException($"{link.Element}: subreport link '{link.Links[index].MainField}' has a different value where the subreport prints on page {pages[pageIndex].Number} than in the report's logical pass; re-running linked subreports during page replay is not supported.");
+                            }
                     }
                     void Block(Band band)
                     {
@@ -283,16 +490,8 @@ public sealed partial class ReportLayoutSession
                         owner._bandFormulaCache.Clear();
                         if (caches.TryGetValue(key, out var existing)) foreach (var value in existing) owner._bandFormulaCache.Add(value.Key, value.Value);
                         // Suppression removes presentation, not named formula-field assignments used by later sections.
-                        // A formula that fails here is diagnosed as Format diagnoses a printed one, and the replay goes on.
-                        foreach (var reference in original.Elements.OrderBy(e => e.TopTwips)
-                            .SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(ValueBinding(e)))
-                            .Where(r => owner._layout.Formulas.ContainsKey(r) && !owner._schedulingErrors.ContainsKey(r) && (!band.EvaluationOnly || owner.NeedsPrintState(r))))
-                        {
-                            try { _ = owner.Value(reference, band.Row); }
-                            catch (Exception ex) when (ex is FormatException or InvalidDataException or InvalidCastException or OverflowException or DivideByZeroException or NotSupportedException or ArgumentException)
-                            { owner._diagnostics.Add($"{reference}: {ex.Message}"); }
-                        }
-                        caches[key] = new(owner._bandFormulaCache);
+                        BandFormulas(owner, original, band.Row, band.EvaluationOnly);
+                        Store(key, owner);
                     }
                     if (!Section(placement.Band)) { HiddenValues(placement.Band); Finish(placement.Band); continue; }
                     var events = (placement.Band.InlineSections ?? [])
@@ -340,7 +539,21 @@ public sealed partial class ReportLayoutSession
                             printed.Add(key, item);
                             return;
                         }
-                        // Cross-tab and table fragments are laid out from their analysis snapshot; they carry no formulas to replay.
+                        if (item.PrintGrid is { } printGrid)
+                        {
+                            // Publish a grid's assignments together, once per logical occurrence across all its panes.
+                            var variables = new Dictionary<string, object?>(owner._globals, StringComparer.OrdinalIgnoreCase);
+                            try
+                            {
+                                printGrid(variables);
+                                foreach (var pair in variables) owner._globals[pair.Key] = pair.Value;
+                            }
+                            catch (Exception error) when (error is InvalidDataException or NotSupportedException or FormatException or ArithmeticException or InvalidCastException or ArgumentException)
+                            { owner._diagnostics.Add($"{item.Element.Name}: {error.Message}"); }
+                            printed.Add(key, item);
+                            return;
+                        }
+                        // Ordinary table fragments carry their already evaluated cells.
                         if (owner._layout.Document.Elements.FirstOrDefault(e => e.Id == item.Element.Id) is not { } original) return;
                         owner._formulaPage = pages[pageIndex].Number; owner._formulaPages = counts[pageIndex]; owner._repeatedHeader = placement.Band.RepeatedHeader;
                         owner._bandFormulaCache.Clear();
@@ -364,10 +577,15 @@ public sealed partial class ReportLayoutSession
                             (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
                         }
                         finally { owner._replayingPrint = false; }
+                        preparedChildren |= owner.PrepareDeferredSubreport(item with { Element = element });
+                        // An inline subreport whose query failed prints the error in place of its records, as in the layout pass.
+                        if (element.Kind == "Subreport" && !owner._layout.OnDemandSubreports.ContainsKey(element.Id) && !owner.HasChild(item)
+                            && owner.SubreportErrorHtml(element) is { } failed) html = failed;
                         printed.Add(key, item with { Element = element, Html = html, TemplateHtml = html, Measurement = -2, DuplicateValue = duplicateValue });
-                        caches[bandKey] = new(owner._bandFormulaCache);
+                        Store(bandKey, owner);
                     }
                 }
+                furnished?.Invoke();
             }
             var changed = formats.Count != _state.PrintedSections.Count || formats.Any(p => !_state.PrintedSections.TryGetValue(p.Key, out var old) || p.Value != old)
                 || visibility.Count != _state.PrintedVisibility.Count || visibility.Any(p => !_state.PrintedVisibility.TryGetValue(p.Key, out var old) || p.Value != old)
@@ -378,13 +596,13 @@ public sealed partial class ReportLayoutSession
             _state.PrintedVisibility = visibility;
             _state.PrintedSections = formats;
             _state.PrintedBlank = blanks;
-            return changed;
+            return changed || preparedChildren;
         }
         finally
         {
             foreach (var (session, before) in saved)
             {
-                session.RestoreVariables(before.Variables); session._bandFormulaCache.Clear();
+                session.RestoreVariables(before.Variables); session._bandFormulaCache.Clear(); session._failureScope--; session._failureReads = null; session._newFailures = null;
                 session._formulaPage = before.Page; session._formulaPages = before.Count; session._repeatedHeader = before.Repeated;
             }
         }
@@ -400,6 +618,27 @@ public sealed partial class ReportLayoutSession
         _globals.Clear(); foreach (var value in snapshot.Globals) _globals.Add(value.Key, value.Value);
         _state.Shared.Clear(); foreach (var value in snapshot.Shared) _state.Shared.Add(value.Key, value.Value);
     }
+    // The formulas a section's (or its area's) condition for property reads, directly or through other formulas.
+    private HashSet<string> ConditionReads(string section, string property)
+    {
+        var reads = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<string>(new[] { _layout.SectionConditions, _layout.AreaConditions }
+            .SelectMany(table => table.GetValueOrDefault(section) ?? [])
+            .Where(condition => condition.Key.Equals(property, StringComparison.OrdinalIgnoreCase)).SelectMany(condition => condition.Value.References));
+        while (pending.TryPop(out var name))
+            if (reads.Add(name) && _layout.Formulas.TryGetValue(name, out var formula)) foreach (var next in formula.References) pending.Push(next);
+        return reads;
+    }
+    // Back to the variables of before, except those assigned or created since after (an assigned array is a new array).
+    private void UndoAssignments(VariableSnapshot before, VariableSnapshot after)
+    {
+        static List<KeyValuePair<string, object?>> Since(Dictionary<string, object?> current, Dictionary<string, object?> saved) =>
+            current.Where(value => !saved.TryGetValue(value.Key, out var old) || !Equals(old, value.Value)).ToList();
+        var globals = Since(_globals, after.Globals); var shared = Since(_state.Shared, after.Shared);
+        RestoreVariables(before);
+        foreach (var value in globals) _globals[value.Key] = value.Value;
+        foreach (var value in shared) _state.Shared[value.Key] = value.Value;
+    }
 
     private Band CreateFurniture(ReportDesignerSection section, int row)
     {
@@ -412,6 +651,141 @@ public sealed partial class ReportLayoutSession
         }
         finally { _preparingFurniture = false; RestoreVariables(saved); }
     }
+
+    // A page header or footer whose formatting is decided while printing builds its subreports for each page that prints it,
+    // as that page is laid out: for the record the page furnishes, with that record's variables (CreateFurniture) and the
+    // page's number, so the page reserves the room they print in. A subreport linked to the page number or page count is
+    // built for each page number and count it prints with. A subreport the print pass built again for this page (ReplayFurniture)
+    // prints that one. A subreport whose query failed prints the error. Without build, only the subreports already built are
+    // used (room estimates).
+    private Band PrepareFurnitureSubreports(Band band, int number, int count, int physical, bool build = true)
+    {
+        if (band.Suppressed) return band;
+        List<Item>? items = null;
+        for (var index = 0; index < band.Items.Count; index++)
+        {
+            var item = band.Items[index];
+            if (item.Element.Kind != "Subreport" || item.Element.IsSuppressed) continue;
+            (ReportLayoutSession? Child, int Offset)? built;
+            if (_replayedFurniture.TryGetValue((item.Element.Id, item.Row, physical), out var replayed)) built = replayed;
+            else
+            {
+                if (item.Child is not null || !_deferredSubreports.TryGetValue((item.Element.Id, item.Row), out built)) continue;
+                var paged = PageLinked(item.Element);
+                if (paged) built = _pagedFurniture.TryGetValue((item.Element.Id, item.Row, number, count), out var variant) ? variant : null;
+                if (!built.HasValue)
+                {
+                    if (!build) continue;
+                    var saved = CaptureVariables();
+                    var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
+                    var (page, pages, repeated) = (_formulaPage, _formulaPages, _repeatedHeader);
+                    try
+                    {
+                        if ((band.Section.Kind == "PageHeader" ? _rowBefore : _rowAfter).TryGetValue(item.Row, out var snapshot)) RestoreVariables(snapshot);
+                        _preparingFurniture = true;
+                        (_formulaPage, _formulaPages, _repeatedHeader) = (number, count, false);
+                        _bandFormulaCache.Clear();
+                        built = _deferredSubreports[(item.Element.Id, item.Row)] = BuildFurnitureSubreport(item.Element, item.Row);
+                        if (paged) _pagedFurniture[(item.Element.Id, item.Row, number, count)] = built.Value;
+                    }
+                    finally
+                    {
+                        _preparingFurniture = false; RestoreVariables(saved);
+                        (_formulaPage, _formulaPages, _repeatedHeader) = (page, pages, repeated);
+                        _bandFormulaCache.Clear();
+                        foreach (var value in cache) _bandFormulaCache.Add(value.Key, value.Value);
+                    }
+                }
+            }
+            var (resolved, resolvedOffset) = built.Value;
+            if (resolved is not null) (items ??= [.. band.Items])[index] = item with { Child = resolved, ChildMeasurementOffset = resolvedOffset };
+            else if (SubreportErrorHtml(item.Element) is { } error) (items ??= [.. band.Items])[index] = item with { Child = null, Html = error, TemplateHtml = error };
+        }
+        return items is null ? band : band with { Items = items };
+    }
+
+    // A page header or footer subreport whose report reads no variables prints the same for the same records and parameters:
+    // the records and pages that pass the same link values share one.
+    private (ReportLayoutSession? Child, int Offset) BuildFurnitureSubreport(ReportDesignerElement element, int row)
+    {
+        SubreportRun? run = null;
+        List<(SubreportRun Run, ReportLayoutSession Child, int Offset)>? shared = null;
+        if (_executeSubreport is not null && _depth < MaxSubreportDepth && _layout.Subreports.TryGetValue(element.Id, out var subreport)
+            && subreport.Definition.PositionedLayout is { } layout
+            && StatelessSubreport(element.Id, layout))
+        {
+            run = ResolveSubreportRun(element, subreport, row);
+            if (run is null) return (null, Measurements.Count);
+            if (!_sharedFurniture.TryGetValue((element.Id, run.Data), out shared)) _sharedFurniture[(element.Id, run.Data)] = shared = [];
+            foreach (var entry in shared) if (SameRun(run, entry.Run)) return (entry.Child, entry.Offset);
+        }
+        var child = CreateInlineSubreport(element, row, run: run);
+        var offset = Measurements.Count;
+        if (child is null) return (null, offset);
+        Measurements.AddRange(child.Measurements);
+        foreach (var native in child._nativeMetrics) _nativeMetrics.TryAdd(native.Key, native.Value);
+        shared?.Add((run!, child, offset));
+        return (child, offset);
+    }
+
+    private static bool SameRun(SubreportRun run, SubreportRun other) => ReferenceEquals(run.Data, other.Data)
+        && run.Parameters.Count == other.Parameters.Count && run.Parameters.All(p => other.Parameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value))
+        && run.Selections.SequenceEqual(other.Selections) && run.Values.Length == other.Values.Length && run.Values.Zip(other.Values).All(p => Equals(p.First, p.Second));
+
+    private bool StatelessSubreport(string elementId, ReportPositionedLayout layout)
+        => _statelessSubreports.TryGetValue(elementId, out var stateless) ? stateless : _statelessSubreports[elementId] = Stateless(layout);
+
+    // The report, and every subreport it holds, reads and sets no variable and keeps no running total, chart or cross-tab.
+    private static bool Stateless(ReportPositionedLayout layout)
+    {
+        // Subreports may nest deeply; they are visited from a stack, not by recursion.
+        var seen = new HashSet<ReportPositionedLayout>(ReferenceEqualityComparer.Instance) { layout };
+        var pending = new Stack<ReportPositionedLayout>([layout]);
+        while (pending.TryPop(out var next))
+        {
+            var formulas = next.Formulas.Values
+                .Concat(next.SectionConditions.Values.Concat(next.AreaConditions.Values).Concat(next.ObjectConditions.Values).SelectMany(c => c.Values))
+                .Concat(next.GroupOptions.Values.SelectMany(o => o.SpecifiedGroups.Select(g => g.Selection).Append(o.NameFormula)))
+                .Concat(next.GroupSorts.Values.Select(s => s.CountFormula)).Append(next.RecordSelection).Append(next.GroupSelection);
+            if (next.RunningTotals.Count > 0 || next.Document.Elements.Any(e => e.Analysis is not null) || formulas.Any(f => f?.UsesPersistentVariables == true))
+                return false;
+            foreach (var subreport in next.Subreports.Values.Concat(next.OnDemandSubreports.Values))
+                if (subreport.Definition.PositionedLayout is { } nested && seen.Add(nested)) pending.Push(nested);
+        }
+        return true;
+    }
+
+    // Builds a page header or footer subreport again for one physical page, with the values its links have where it prints
+    // there (the print pass's variables, page and band cache); the next layout prints it on that page.
+    private bool ReplayFurniture(SubreportLinkState link, int row, int physical)
+    {
+        if (_layout.Document.Sections.FirstOrDefault(s => s.Id == link.Section)?.Elements
+                .FirstOrDefault(e => e.Kind == "Subreport" && e.Name == link.Element) is not { } element) return false;
+        var saved = CaptureVariables();
+        var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
+        try
+        {
+            var child = CreateInlineSubreport(element, row);
+            var offset = Measurements.Count;
+            if (child is not null)
+            {
+                Measurements.AddRange(child.Measurements);
+                foreach (var native in child._nativeMetrics) _nativeMetrics.TryAdd(native.Key, native.Value);
+            }
+            _replayedFurniture[(element.Id, row, physical)] = (child, offset);
+            return true;
+        }
+        finally
+        {
+            RestoreVariables(saved);
+            _bandFormulaCache.Clear();
+            foreach (var value in cache) _bandFormulaCache.Add(value.Key, value.Value);
+        }
+    }
+
+    // The subreport's links pass a page number or page count.
+    private bool PageLinked(ReportDesignerElement element) => _layout.Subreports.TryGetValue(element.Id, out var subreport)
+        && subreport.Links.Any(link => !_schedulingErrors.ContainsKey(link.MainField) && DependsOn(link.MainField, true));
 
     private CrystalEvaluationTime EvaluationTime(string reference, HashSet<string>? visiting = null)
     {
@@ -501,7 +875,17 @@ public sealed partial class ReportLayoutSession
             return result is Exception failure ? throw (failure is NotSupportedException ? new NotSupportedException(failure.Message, failure) : new InvalidDataException(failure.Message, failure)) : result;
         var key = (reference.ToUpperInvariant(), row);
         var pageDependent = !_physicalPageSchedule && DependsOn(reference, true);
-        if (values is null && !pageDependent && _bandFormulaCache.TryGetValue(key, out result)) return result;
+        // A page failure that runs again here (RunsAgain) and fails again keeps what it noted when it first failed.
+        ReadValue[]? earlier = null;
+        if (values is null && !pageDependent && _bandFormulaCache.TryGetValue(key, out result))
+        {
+            if (result is PageFailure dropped && RunsAgain(key, dropped)) earlier = dropped.Reads;
+            else
+            {
+                if (result is Exception failed) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failed);
+                return result;
+            }
+        }
         if (_evaluating.Count >= 64 || !_evaluating.Add(key)) throw new InvalidDataException($"Circular/excessively nested formula '{reference}'.");
         try
         {
@@ -509,13 +893,29 @@ public sealed partial class ReportLayoutSession
             // EvaluateAfter is a scheduling edge, even when it occurs after an assignment in the expression.
             foreach (var dependency in formula.EvaluateAfter) _ = Value(dependency, row);
             // A named formula with no expression supplies a null to its callers.
-            result = formula.IsEmpty ? null : formula.Evaluate(Context(row));
+            var stopped = false;
+            result = formula.IsEmpty ? null : formula.Evaluate(Context(row), out stopped);
+            // One that stopped at a null value may have set some of the variables it assigns and not the rest, as one that fails.
+            if (stopped && formula.WritesPersistentVariables) _state.Sessions[0]._assignmentFailures++;
             if (values is not null) values[reference] = result;
             else if (!pageDependent) _bandFormulaCache[key] = result;
             return result;
         }
         catch (Exception failure) when (failure is InvalidDataException or NotSupportedException or ArithmeticException or ArgumentException or FormatException or InvalidCastException)
-        { if (values is not null) values[reference] = failure; throw; }
+        {
+            if (_layout.Formulas.TryGetValue(reference, out var failing) && failing.WritesPersistentVariables) _state.Sessions[0]._assignmentFailures++;
+            if (values is not null) values[reference] = failure;
+            else if (!pageDependent && _failureScope > 0)
+            {
+                _bandFormulaCache[key] = failure;
+                if (_failureReads is not null && PageReads(reference) is { } reads)
+                {
+                    _failureReads[(key, failure)] = ReadValues(reads, earlier);
+                    _newFailures?.Add((key, failure));
+                }
+            }
+            throw;
+        }
         finally { _evaluating.Remove(key); }
     }
 }

@@ -35,6 +35,8 @@ public sealed class ReportPositionedLayout
     public Dictionary<int, ReportLayoutGroupSort> GroupSorts { get; } = new();
     /// <summary>Crystal "Format with Multiple Columns" on the details area; null prints every section across the page.</summary>
     public ReportLayoutColumns? Columns { get; set; }
+    /// <summary>The details area's limit counts a visible source row once across all its sections.</summary>
+    public int VisibleRecordsPerPage { get; set; }
     internal List<string> Projections { get; } = [];
     // Stays with the layout when subreport query definitions are cloned with link filters.
     internal IReadOnlyList<string> SqlStringParameters { get; set; } = [];
@@ -71,6 +73,8 @@ public sealed record ReportLayoutGroupSort(ReportLayoutSummary Summary, bool Des
 public sealed record ReportLayoutSummary(string Operation, string Field, string Group)
 {
     public string WeightField { get; init; } = "";
+    /// <summary>A percent summary uses zero for the grand total and a one-based group number for a parent subtotal.</summary>
+    public int? PercentOfGroup { get; init; }
     /// <summary>The group level the summary totals; -1 takes the first group on <see cref="Group"/>.</summary>
     public int GroupLevel { get; init; } = -1;
     /// <summary>Crystal "summarize across hierarchy": a hierarchical group's total includes its descendant groups.</summary>
@@ -82,7 +86,11 @@ public sealed record ReportRunningTotalCondition(string Type, string Field = "",
 /// <summary>Area-level formatting; <see cref="KeepTogether"/> keeps the area's sections for one record on one page and <see cref="PrintAtBottomOfPage"/>
 /// prints them at the bottom of their page.</summary>
 public sealed record ReportLayoutArea(bool Suppressed, bool RepeatHeader, bool NewPageBefore, bool NewPageAfter, bool Hidden = false, bool ResetPageNumberAfter = false,
-    bool KeepGroupTogether = false, bool KeepTogether = false, bool PrintAtBottomOfPage = false);
+    bool KeepGroupTogether = false, bool KeepTogether = false, bool PrintAtBottomOfPage = false)
+{
+    public bool ReserveFinalFooter { get; init; }
+    public int VisibleInstanceLimit { get; init; }
+}
 /// <summary>Crystal MultiColumnInfo: detail areas, and group areas when <see cref="FormatGroups"/>, print in columns <see cref="DetailWidth"/> twips wide, as many
 /// as fit across the page with <see cref="HorizontalGap"/> between them and <see cref="VerticalGap"/> below each area. A nonzero <see cref="DetailHeight"/> fixes the
 /// height of each detail (mailing labels) when the groups print across the page. Down then across fills a column before the next; across then down fills a row.</summary>
@@ -131,9 +139,9 @@ public sealed partial class ReportLayoutSession
     public List<ReportTextMeasurement> Measurements { get; } = [];
     /// <summary>Measurements already answered by <see cref="CrystalDeviceText"/>; never sent to the browser.</summary>
     private readonly Dictionary<string, ReportTextMetrics> _nativeMetrics = new(StringComparer.Ordinal);
-    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null, ReportTableFragment? Table = null, DuplicateFieldValue? DuplicateValue = null, decimal? AccumulatorDelta = null, int HorizontalPane = 0, bool NarrowedByFrame = false);
+    private sealed record Item(ReportDesignerElement Element, string Html, int Measurement, ReportLayoutSession? Child = null, int ChildMeasurementOffset = 0, ReportLayoutSession? Owner = null, int Row = 0, string? TemplateHtml = null, string? ConsumedText = null, bool OmittedContinuation = false, ReportAnalysisSnapshot? Analysis = null, ReportTableFragment? Table = null, DuplicateFieldValue? DuplicateValue = null, decimal? AccumulatorDelta = null, Action<IDictionary<string, object?>>? PrintGrid = null, int HorizontalPane = 0, bool NarrowedByFrame = false);
     private sealed record InlineHeader(int Start, int End, Band Header, int KeepThrough = 0, bool Repeat = true, object? HorizontalPeers = null);
-    private sealed record InlineSection(int Start, int End, Band Source, ReportDesignerSection? Format = null, bool Blank = false);
+    private sealed record InlineSection(int Start, int End, Band Source, ReportDesignerSection? Format = null, bool Blank = false, bool FirstVisible = false);
     private sealed record InlineCut(Band Source, int RetainedHeight);
     private sealed record Band(ReportDesignerSection Section, List<Item> Items, int Row, List<Band> Repeats, bool Suppressed = false,
         List<int>? Breaks = null, List<int>? ForcedBreaks = null, List<InlineHeader>? InlineHeaders = null, bool RepeatedHeader = false,
@@ -141,7 +149,10 @@ public sealed partial class ReportLayoutSession
         bool EvaluationOnly = false, List<Item>? PageStartInk = null, int? KeptStartHeight = null);
     // Sequence is the print order (page header, repeated headers, bands by index, page footer); list order is drawing order.
     // A section in a multiple-column block has its column's Left and Width; Width 0 spans the page.
-    private sealed record Placement(Band Band, int Top, int Offset, int Height, int Sequence = 0, int Left = 0, int Width = 0);
+    private sealed record Placement(Band Band, int Top, int Offset, int Height, int Sequence = 0, int Left = 0, int Width = 0)
+    {
+        public int PrintSequence { get; init; } = Sequence;
+    }
     private sealed class Page
     {
         public int Number { get; init; }
@@ -151,6 +162,10 @@ public sealed partial class ReportLayoutSession
         public int Bottom { get; set; }
         public bool HasBody { get; set; }
         public bool HasHeaders { get; set; }
+        public bool EndsWithReportHeaderBreak { get; set; }
+        // Set where a band's own New Page Before opened the page: that band, and the height of the part of it the page before
+        // would have printed from where its content ends.
+        public (PrintBandKey Band, int Part)? BrokenPart { get; set; }
     }
 
     /// <summary>Lays out <paramref name="layout"/> over <paramref name="data"/>. <c>executeSubreport</c> runs inline subreport
@@ -171,9 +186,10 @@ public sealed partial class ReportLayoutSession
         Func<ReportDefinition, IReadOnlyDictionary<string, object>, DataTable>? executeSubreport, RuntimeState state, int depth, ReportLayoutSession? parent = null,
         IReadOnlyList<(string Field, object? Value)>? linkSelections = null, int drillDownGroupLevel = 0,
         string? navigationRoot = null, int[]? navigationRows = null, (DataRow[] Rows, int[] Indexes)? summaryRows = null,
-        DrillReadPass? readPass = null)
+        DrillReadPass? readPass = null, bool initializePrintContext = false)
     {
         _layout = layout;
+        CaptureCurrencySchema(data);
         _navigationRoot = navigationRoot ?? Guid.NewGuid().ToString("N");
         _drillDownGroupLevel = drillDownGroupLevel;
         _parent = parent;
@@ -210,7 +226,8 @@ public sealed partial class ReportLayoutSession
         _state.HasGrowingText |= layout.Document.Elements.Any(e => e.CanGrow);
         _state.HasPageConditions |= layout.SectionConditions.Values.Concat(layout.AreaConditions.Values).Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values).Any(UsesPage);
         _state.HasPageConditions |= layout.Formulas.Values.Any(f => f.UsesPageContext || f.References.Any(IsSpecial))
-            || layout.Document.Elements.Any(e => IsSpecial(e.Binding) || e.Visual.Runs.Any(r => IsSpecial(r.Binding)));
+            || layout.Document.Elements.Any(e => IsSpecial(e.Binding) || e.Visual.Runs.Any(r => IsSpecial(r.Binding)))
+            || layout.Subreports.Values.Any(s => s.Links.Any(l => SpecialName(l.MainField) is "pagenumber" or "totalpagecount" or "pagenofm"));
         if (ReportDesignerEditing.ValidatePage(layout.Document.Page) is { } error) throw new InvalidDataException(error);
         // A drill run's records keep the parent run's read-time values, so its schedule reads none of them again.
         if (readPass is not null)
@@ -229,12 +246,21 @@ public sealed partial class ReportLayoutSession
         else PrepareRows();
         PreparePhysicalPageSchedule();
         if (_physicalPageSchedule) { _formulaPage = 1; _formulaPages = 1; }
+        _initializingPrintContext = _replayingPrint = initializePrintContext;
         try { BuildBands(); }
-        finally { _formulaPage = null; _formulaPages = null; }
+        finally { _formulaPage = null; _formulaPages = null; _initializingPrintContext = _replayingPrint = false; }
     }
 
+    // The date/time behind a special field, for a saved date/time format that applies to it.
+    private DateTime? SpecialTime(string reference) => SpecialName(reference) switch
+    {
+        "printdate" or "printtime" or "datadate" or "datatime" => _printTime,
+        "filecreationdate" => FileCreationTime, "modificationdate" or "modificationtime" => ModificationTime,
+        _ => null
+    };
+
     public static bool IsSpecial(string reference) => SpecialName(reference) is "pagenumber" or "totalpagecount" or "pagenofm" or "reporttitle" or "reportfilename" or "printdate" or "printtime" or "recordnumber"
-        or "groupnumber" or "datadate" or "datatime" or "reportcomments" or "fileauthor";
+        or "groupnumber" or "datadate" or "datatime" or "reportcomments" or "fileauthor" or "filepathandname" or "filecreationdate" or "modificationdate" or "modificationtime";
     private static string SpecialName(string reference) => reference.Trim('{', '}').Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
 
     // Unsummarized chart formulas may read stable summaries, but never mutable printing or page state.
@@ -306,7 +332,8 @@ public sealed partial class ReportLayoutSession
         if (reference.StartsWith("{?", StringComparison.Ordinal))
         {
             var name = reference.Trim('{', '}').TrimStart('?');
-            if (_parameters.TryGetValue(name, out var parameter)) return parameter;
+            // A subreport link may carry its parameter name with trailing blanks ("Pm-@kDisplayValuesList ").
+            if (_parameters.TryGetValue(name, out var parameter) || _parameters.TryGetValue(name.Trim(), out parameter)) return parameter;
             var sqlName = new string(name.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
             if (_parameters.TryGetValue(sqlName, out parameter)) return parameter;
             _diagnostics.Add($"Parameter '{name}' has no value.");
@@ -319,7 +346,8 @@ public sealed partial class ReportLayoutSession
             "printdate" => _printTime.Date, "printtime" => _printTime.ToShortTimeString(), "recordnumber" => row + 1,
             // The session reads its records when it is created, so the data date/time is the print time.
             "datadate" => _printTime.ToShortDateString(), "datatime" => _printTime.ToShortTimeString(), "groupnumber" => GroupNumber(row),
-            "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
+            "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author, "filepathandname" => FilePathAndName,
+            "filecreationdate" => FileCreationTime.Date, "modificationdate" => ModificationTime.Date, "modificationtime" => ModificationTime.ToShortTimeString(),
             _ => throw new InvalidOperationException($"Special field '{reference}' has no value.")
         };
         if (_layout.Bindings.TryGetValue(reference, out var alias))
@@ -334,7 +362,7 @@ public sealed partial class ReportLayoutSession
             }
             _diagnostics.Add($"Result column '{alias}' for '{reference}' is missing.");
         }
-        else if (_layout.Summaries.TryGetValue(reference, out var summary)) return Summary(summary, row);
+        else if (_layout.Summaries.TryGetValue(reference, out var summary)) return PrintedSummary(summary, row);
         _diagnostics.Add($"Field '{reference}' could not be resolved.");
         return "[" + reference + "]";
     }
@@ -360,6 +388,12 @@ public sealed partial class ReportLayoutSession
         _ => throw new InvalidDataException($"Cannot convert database NULL for '{reference}': its Crystal field type is unknown.")
     };
 
+    // A summary field printed over no records is blank, not zero: Crystal prints an empty report's "Grand Total:" without
+    // a value, and a report whose group selection eliminated every group has no current record to print one from.
+    // Formulas and conditions keep the summary's own value (Count is 0) through Summary.
+    private object? PrintedSummary(ReportLayoutSummary summary, int row)
+        => _rows.Length == 0 && (_summaryRows is not { Length: > 0 } || row < 0 && _layout.GroupSelection is not null) ? null : Summary(summary, row);
+
     private object? Summary(ReportLayoutSummary summary, int row, int? stop = null)
     {
         if (_summaryRows is null || ReferenceEquals(_rows, _summaryRows)) return SummaryCore(summary, row, stop);
@@ -380,6 +414,21 @@ public sealed partial class ReportLayoutSession
 
     private object? SummaryCore(ReportLayoutSummary summary, int row, int? stop)
     {
+        if (summary.PercentOfGroup is int scope)
+        {
+            if (scope < 0 || scope > _layout.Document.Groups.Count)
+            {
+                _diagnostics.Add($"Unknown percentage summary group {scope}.");
+                return null;
+            }
+            var ordinary = summary with { PercentOfGroup = null };
+            var denominator = ordinary with { Group = scope == 0 ? "" : _layout.Document.Groups[scope - 1].Condition, GroupLevel = scope - 1 };
+            var part = SummaryCore(ordinary, row, stop);
+            var whole = SummaryCore(denominator, row, stop);
+            if (part is null || whole is null || part is string || whole is string) return null;
+            var total = Convert.ToDecimal(whole, CultureInfo.InvariantCulture);
+            return total == 0 ? null : Convert.ToDecimal(part, CultureInfo.InvariantCulture) / total * 100m;
+        }
         // With no group instance, its summary fields are blank. Report-level
         // summaries below retain their operation's no-record semantics.
         if (row < 0 && summary.Group.Length > 0) return null;
@@ -454,8 +503,17 @@ public sealed partial class ReportLayoutSession
             if (_formulaPage is null && DependsOn(reference, true)) return DeferredPageValue(reference, row, format, nativeDateTime, nativeNumber, nativeNumeric);
             // A native date/time format this renderer cannot honour (reported once per object in the
             // constructor) falls back to the special field's default text, never to a formula error.
-            var value = nativeDateTime is { UnsupportedReason: null } && (SpecialName(reference) is "printdate" or "printtime")
-                ? _printTime : Value(reference, row);
+            object? value;
+            if (nativeDateTime is { UnsupportedReason: null } && SpecialTime(reference) is { } special) value = special;
+            else if (nativeDateTime is { UnsupportedReason: null, SystemDefaultFormatting: false, WindowsDateDefault: 2, DateComponents: { } components }
+                && GroupPeriodDate(reference, row) is var (period, kind) && period is { } periodDate)
+            {
+                // A date group's name field with its own date components prints the group's period in them, without the day
+                // for a month, quarter or half-year group and without the month as well for a year group ("1/03", "2003").
+                value = periodDate;
+                if (kind >= 4) nativeDateTime = nativeDateTime with { DateComponents = components with { DayType = 2, MonthType = kind == 7 ? 4 : components.MonthType } };
+            }
+            else value = Value(reference, row);
             capture?.Invoke(value);
             // A saved format this renderer cannot honour is reported once per object (see the constructor);
             // the value still prints, with the default format, rather than as a formula error.
@@ -465,9 +523,16 @@ public sealed partial class ReportLayoutSession
                 return nativeDateTime.Format(dateTime, CultureInfo.CurrentCulture);
             if (string.IsNullOrEmpty(format) && nativeNumeric is { UnsupportedReason: null }
                 && value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal)
-                return nativeNumeric.Format(value);
+            {
+                // An embedded field without a format of its own prints whole numbers (counts, integer fields) without
+                // decimals and other numbers with the regional decimals, never with a currency symbol.
+                var effective = ReferenceEquals(nativeNumeric, EmbeddedNumericDefault)
+                    ? value is sbyte or byte or short or ushort or int or uint or long or ulong ? EmbeddedIntegerDefault : nativeNumeric
+                    : nativeNumeric.SystemDefaultFormatting && CurrencyResult(reference) ? nativeNumeric with { CurrencySymbolType = 2 } : nativeNumeric;
+                return effective.Format(value);
+            }
             // Without a field format a Crystal Date prints as a short date, without the time of day.
-            if (value is DateTime date && string.IsNullOrEmpty(format) && (ReferenceType(reference)?.BaseType == CrystalBaseType.Date || SpecialName(reference) == "printdate"))
+            if (value is DateTime date && string.IsNullOrEmpty(format) && (ReferenceType(reference)?.BaseType == CrystalBaseType.Date || SpecialName(reference) is "printdate" or "filecreationdate" or "modificationdate"))
                 return date.ToString("d", CultureInfo.CurrentCulture);
             return value is IFormattable formattable ? formattable.ToString(string.IsNullOrEmpty(format) ? null : format, CultureInfo.CurrentCulture) ?? "" : value?.ToString() ?? "";
         }
@@ -498,11 +563,562 @@ public sealed partial class ReportLayoutSession
         _globals[variable] = Convert.ToDecimal(_globals.GetValueOrDefault(variable), CultureInfo.InvariantCulture) + item.AccumulatorDelta!.Value;
     }
 
+    // A band evaluates each formula once. A failure stays in the band cache only while the band is laid out: the cache's
+    // values outlive the band (the last page-furniture variant is laid out at a tentative page 1 of 1, and a subreport's last
+    // band keeps its entries into pagination), and a stale failure would be raised again at a real page.
     private Band CreateBand(ReportDesignerSection section, int row, List<Band> repeats)
+    {
+        _failureScope++;
+        try { return LayOutBand(section, row, repeats); }
+        finally { _failureScope--; DropBandFailures(); }
+    }
+
+    private void DropBandFailures()
+    {
+        if (_failureScope == 0) DropFailures(_bandFormulaCache);
+    }
+
+    // Before a band goes on to its next physical page: marks in the band's replay cache the failures of formulas that may
+    // succeed on a later page and are safe to run again (PageReads), so they run again where they are next evaluated, on any
+    // later page, while each variable they read holds the value it had when they failed (PageFailure). Such a formula reads
+    // the page, or a variable the page furniture assigns (RunVariables.Furniture), and assigns only temporaries
+    // (CrystalFormula.AssignsOnlyTemporaries) that no other formula, condition or subreport of the run reads
+    // (RunVariables.SharesAssignments), so its second run changes nothing another object prints. A counter keeps its failure,
+    // so its record counts once. When a band has changed one of those variables since the failure (the band's own later
+    // objects, or a later record's band printed over an underlay before the underlay's next page), the failure is raised
+    // again, so a record never prints a later record's value; the page furniture's own writes count as the value it had
+    // (ReplayPhysicalPages, Rebase).
+    private void DropPageFailures(Dictionary<(string Name, int Row), object?> cache)
+    {
+        if (_failureReads is not { } reads) return;
+        List<((string Name, int Row) Key, PageFailure Failure)>? dropped = null;
+        foreach (var entry in cache)
+            if (entry.Value is Exception failure && reads.TryGetValue((entry.Key, failure), out var values)) (dropped ??= []).Add((entry.Key, new(failure, values)));
+        if (dropped is not null) foreach (var (key, failure) in dropped) cache[key] = failure;
+    }
+
+    // A failure a page break lets run again (DropPageFailures), with what its formula read when it failed (Rebase moves it on
+    // with the page furniture).
+    private sealed record PageFailure(Exception Failure, ReadValue[] Reads);
+    // A variable as "scope:name" (a global of the run's main report read from a subreport as "main:global:name"), whether it
+    // was set, and its value when the formula failed, or as the page furniture has left it since (a Crystal array is never
+    // changed in place, so the value itself is kept); for one the page furniture sets, the variables a band assigns that the
+    // furniture computes it from, and those only the furniture assigns that it computes it through (RunVariables.Sources), as
+    // they were when the formula first failed, or as the page furniture has left them since (Rebase). Kept: the furniture
+    // may have set it from a band's change since then, or a formula that sets it failed partway, so whatever its value it
+    // never matches (Rebase).
+    private sealed record ReadValue(string Variable, bool Present, object? Value, ReadValue[] Sources, bool Kept = false);
+
+    // Where a page failure is evaluated again: it runs (true, the cache forgets it) while each variable it read holds the value
+    // it had when it failed, or the page furniture has left in it since (Rebase); otherwise the band keeps the failure, raised
+    // again here.
+    private bool RunsAgain((string Name, int Row) key, PageFailure dropped)
+    {
+        if (dropped.Reads.All(Unchanged))
+        {
+            _bandFormulaCache.Remove(key);
+            _failureReads?.Remove((key, dropped.Failure));
+            return true;
+        }
+        _bandFormulaCache[key] = dropped.Failure;
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(dropped.Failure);
+        return false;
+    }
+
+    // The variables a failure compares before it runs again on a later page: what the formula, or one it reads, reads before
+    // it sets it (ReadsVariables), less those only the page furniture assigns, which change with the page, unless the page
+    // furniture placed on the page computes one from variables a band assigns; each with those band variables (Sources). null
+    // when the failure never runs again (it reads neither the page nor a variable the page furniture assigns, assigns more
+    // than temporaries, or assigns one another object reads). A circular reference runs again. The same for every failure of
+    // the formula (_pageReads).
+    private (string Variable, string[] Sources)[]? PageReads(string name) =>
+        _pageReads.TryGetValue(name, out var known) ? known : _pageReads[name] = FindPageReads(name);
+
+    private readonly Dictionary<string, (string Variable, string[] Sources)[]?> _pageReads = new(StringComparer.OrdinalIgnoreCase);
+
+    private (string Variable, string[] Sources)[]? FindPageReads(string name)
+    {
+        var run = RunVariableMap();
+        if (_layout.Formulas.TryGetValue(name, out var formula) && formula.WritesPersistentVariables
+            && (!formula.AssignsOnlyTemporaries || run.SharesAssignments(_layout, formula))) return null;
+        try
+        {
+            var reads = ReadsVariables(name);
+            var furniture = run.Furniture(_layout);
+            var bands = run.Bands(_layout);
+            bool Furnished(string variable) => furniture.Contains(variable) || run.SharedFurniture.Contains(variable);
+            if (!DependsOn(name, true) && !reads.Any(Furnished)) return null;
+            return reads.Select(v => (Variable: v, Sources: Furnished(v) ? run.Sources(_layout, v) : []))
+                .Where(r => !Furnished(r.Variable) || bands.Contains(r.Variable) || run.SharedBands.Contains(r.Variable) || r.Sources.Length > 0 && run.Placed(_layout, r.Variable))
+                .ToArray();
+        }
+        catch (InvalidDataException) { return []; }
+    }
+
+    // A formula that ran again on a later page and failed again (earlier: what its failure noted) keeps the band variables'
+    // values from when it first failed, as the page furniture has left them since: a band may have changed them since, and
+    // what the furniture computes from them then may come from a later record. earlier lists the same reads in the same
+    // order, as PageReads is the same for every failure of a formula.
+    private ReadValue[] ReadValues((string Variable, string[] Sources)[] reads, ReadValue[]? earlier = null) =>
+        reads.Select((read, index) => Current(read.Variable) with
+        {
+            Sources = (earlier is null ? null : index < earlier.Length && earlier[index].Variable == read.Variable ? earlier[index]
+                : Array.Find(earlier, e => e.Variable == read.Variable))?.Sources ?? read.Sources.Select(Current).ToArray()
+        }).ToArray();
+
+    private ReadValue Current(string variable)
+    {
+        var (present, value) = Read(variable);
+        return new(variable, present, value, []);
+    }
+
+    private bool Unchanged(ReadValue read) => Matches(read, Current(read.Variable));
+
+    // A variable unset when the formula failed reads as its type's default, as it does once a declaration sets it. A kept
+    // variable never matches.
+    private static bool Matches(ReadValue read, ReadValue current) =>
+        !read.Kept && (read.Present ? current.Present && SameValue(current.Value, read.Value) : !current.Present || Declared(current.Value));
+
+    // Before the page furniture prints: what each read, and each variable its Sources name, holds.
+    private (ReadValue Value, ReadValue[] Sources)[] BeforeFurniture(ReadValue[] reads) =>
+        reads.Select(read => (Current(read.Variable), Array.ConvertAll(read.Sources, source => Current(source.Variable)))).ToArray();
+
+    // After the page furniture (section, of the report furniture) prints. A read the furniture computes from no band's
+    // variable takes the value the furniture left when it held its value up to the furniture (before), or the furniture
+    // changed it and sets it without reading it (RunVariables.Resets). For any other, each variable the section assigns among
+    // the read and its Sources is noted again, from what the section computes it from (RunVariables.Placing). One it may
+    // compute from a variable that changed since it was noted (a band's change, or a kept one) is kept, whatever its value,
+    // so the failure is raised again rather than run with what the furniture computed from a band's later change; so is
+    // each one when a formula that assigns a variable failed while the section printed (failed), as that formula may have
+    // set some of its variables and not the rest. One a band changed that the section left as it was stays as noted. Any
+    // other takes the value the section left, which then counts as unchanged: only the furniture printed since it was
+    // compared, so a change it makes itself (a page count it resets) is no band's change. A variable the section does not
+    // assign stays as noted, so a band's change to it stays a change.
+    private void Rebase(ReadValue[] reads, (ReadValue Value, ReadValue[] Sources)[] before, ReportPositionedLayout furniture, ReportDesignerSection section,
+        bool failed)
+    {
+        var run = RunVariableMap();
+        for (var index = 0; index < reads.Length; index++)
+        {
+            var read = reads[index];
+            var (held, heldSources) = before[index];
+            var after = Current(read.Variable);
+            if (read.Sources.Length == 0)
+            {
+                if (Matches(read, held) || !Matches(held, after) && run.Resets(_layout, read.Variable)) reads[index] = after;
+                continue;
+            }
+            var placing = run.Placing(_layout, furniture, section);
+            var noted = read.Sources;
+            bool Changed(string variable)
+            {
+                if (variable == read.Variable) return !Matches(read, held);
+                var source = Array.FindIndex(noted, s => s.Variable == variable);
+                return source >= 0 && !Matches(noted[source], heldSources[source]);
+            }
+            ReadValue Next(ReadValue value, ReadValue was, ReadValue now) =>
+                !placing.TryGetValue(value.Variable, out var from) ? value
+                : failed || from.Any(Changed) ? value with { Kept = true }
+                : !Matches(value, was) && Matches(was, now) ? value
+                : now;
+            var sources = new ReadValue[noted.Length];
+            for (var source = 0; source < noted.Length; source++) sources[source] = Next(noted[source], heldSources[source], Current(noted[source].Variable));
+            reads[index] = Next(read, held, after) with { Sources = sources };
+        }
+    }
+
+    // The value a declaration gives a variable it finds unset (the type's default).
+    private static bool Declared(object? value) => value switch
+    {
+        null or "" or false => true,
+        decimal number => number == 0,
+        DateTime date => date == DateTime.MinValue,
+        TimeSpan time => time == TimeSpan.Zero,
+        object?[] items => items.Length == 0,
+        CrystalRange range => range is { IncludeStart: true, IncludeEnd: true } && Declared(range.Start) && Equals(range.Start, range.End),
+        _ => false
+    };
+
+    // A global variable of this report (or, as "main:global:name", of the run's main report), or a shared one of the run, by
+    // its "scope:name".
+    private (bool Present, object? Value) Read(string variable)
+    {
+        if (variable.StartsWith("main:", StringComparison.Ordinal)) return _state.Sessions[0].Read(variable["main:".Length..]);
+        var store = variable.StartsWith("shared:", StringComparison.Ordinal) ? _state.Shared : _globals;
+        return store.TryGetValue(variable[(variable.IndexOf(':') + 1)..], out var value) ? (true, value) : (false, null);
+    }
+
+    // Arrays compare element by element, the same array at once; an array may hold arrays to any depth, so without recursion,
+    // and may hold one array many times, so each pair of arrays is compared once (the work grows with the arrays, never with
+    // the paths through them). A short array (8 elements or fewer) that holds no array is compared again each time it is
+    // reached, at most 8 comparisons each time, and is not recorded, so a value of many small arrays keeps no record of them.
+    private static bool SameValue(object? a, object? b)
+    {
+        var pending = new Stack<(object? Left, object? Right)>();
+        HashSet<(object?[] Left, object?[] Right)>? compared = null;
+        pending.Push((a, b));
+        while (pending.TryPop(out var pair))
+        {
+            if (ReferenceEquals(pair.Left, pair.Right)) continue;
+            if (pair.Left is object?[] left)
+            {
+                if (pair.Right is not object?[] right || left.Length != right.Length) return false;
+                if ((left.Length > 8 || Array.Exists(left, item => item is object?[])) && !(compared ??= new(new ArrayPairs())).Add((left, right))) continue;
+                for (var index = 0; index < left.Length; index++) pending.Push((left[index], right[index]));
+            }
+            else if (pair.Right is object?[] || !Equals(pair.Left, pair.Right)) return false;
+        }
+        return true;
+    }
+
+    // A pair of arrays by reference.
+    private sealed class ArrayPairs : IEqualityComparer<(object?[] Left, object?[] Right)>
+    {
+        public bool Equals((object?[] Left, object?[] Right) x, (object?[] Left, object?[] Right) y) => ReferenceEquals(x.Left, y.Left) && ReferenceEquals(x.Right, y.Right);
+        public int GetHashCode((object?[] Left, object?[] Right) pair) =>
+            HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(pair.Left), System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(pair.Right));
+    }
+
+    private RunVariables RunVariableMap() => _state.Variables ??= new(_state.Sessions[0]._layout);
+
+    // What the formula, or one it reads, reads before it sets it (CrystalFormula.ReadVariables), as "scope:name".
+    private HashSet<string> ReadsVariables(string reference, HashSet<string>? stack = null)
+    {
+        if (!_layout.Formulas.TryGetValue(reference, out var formula) || formula.ReadVariables.Count == 0 && formula.References.Count == 0) return [];
+        var readers = RunVariableMap().Readers(_layout);
+        if (readers.TryGetValue(reference, out var cached)) return cached;
+        stack ??= new(StringComparer.OrdinalIgnoreCase);
+        if (!stack.Add(reference)) throw new InvalidDataException($"Circular formula reference '{reference}'.");
+        var reads = new HashSet<string>(formula.ReadVariables, StringComparer.Ordinal);
+        foreach (var other in formula.References) reads.UnionWith(ReadsVariables(other, stack));
+        stack.Remove(reference);
+        return readers[reference] = reads;
+    }
+
+    // What a page break needs to know about the variables of the run's reports (its main report and the inline subreports
+    // below it), worked out once a run, however many subreport instances print: the variables each report's page furniture
+    // assigns and those its bands assign, the shared ones the run's furniture assigns and those its bands assign, and the
+    // formulas and conditions that declare each variable.
+    // An on-demand subreport, and every subreport below it, declares the shared variables its formulas and conditions do (it
+    // reads the run's shared variables when it opens); it prints no page furniture in the run.
+    private sealed class RunVariables
+    {
+        private readonly ReportPositionedLayout _main;
+        private readonly Dictionary<ReportPositionedLayout, Furnishing> _furniture = new(ReferenceEqualityComparer.Instance);
+        private readonly HashSet<string> _sharedRereads = new(StringComparer.Ordinal);
+        // What the page furniture of the run's printed reports computes each variable it assigns from (FurnitureVariables), and
+        // the variables the furniture of a subreport assigns (a subreport's repeated group header prints inside its band, so
+        // it never rebases a failure): a global keyed by its report, a shared variable by none.
+        private readonly Dictionary<(ReportPositionedLayout? Layout, string Variable), HashSet<(ReportPositionedLayout? Layout, string Variable)>> _sources = new();
+        private readonly HashSet<(ReportPositionedLayout? Layout, string Variable)> _unplaced = new();
+        private readonly Dictionary<(ReportPositionedLayout Layout, string Variable), string[]> _bandSources = new();
+        private readonly Dictionary<(ReportPositionedLayout Layout, ReportPositionedLayout Furniture, string Section), Dictionary<string, HashSet<string>>> _placing = new();
+        private readonly Dictionary<ReportPositionedLayout, HashSet<string>> _bands = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<ReportPositionedLayout, Dictionary<string, HashSet<string>>> _readers = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<string, List<(ReportPositionedLayout Layout, CrystalFormula Formula)>> _declarers = new(StringComparer.Ordinal);
+
+        public RunVariables(ReportPositionedLayout main)
+        {
+            _main = main;
+            SharedBands.UnionWith(Bands(main).Where(IsShared));
+            var printed = new HashSet<ReportPositionedLayout>(ReferenceEqualityComparer.Instance);
+            var opened = new HashSet<ReportPositionedLayout>(ReferenceEqualityComparer.Instance);
+            var pending = new Stack<(ReportPositionedLayout Layout, bool OnDemand)>();
+            pending.Push((main, false));
+            while (pending.TryPop(out var next))
+            {
+                var (layout, onDemand) = next;
+                if (!(onDemand ? opened : printed).Add(layout)) continue;
+                foreach (var child in layout.Subreports.Values) if (child.Definition.PositionedLayout is { } nested) pending.Push((nested, onDemand));
+                foreach (var child in layout.OnDemandSubreports.Values) if (child.Definition.PositionedLayout is { } nested) pending.Push((nested, true));
+                if (!onDemand)
+                {
+                    var furnishing = Furnished(layout);
+                    SharedFurniture.UnionWith(furnishing.Assigned.Where(IsShared));
+                    _sharedRereads.UnionWith(furnishing.Rereads.Where(IsShared));
+                    foreach (var (variable, from) in furnishing.Sources)
+                    {
+                        (_sources.TryGetValue(variable, out var set) ? set : _sources[variable] = []).UnionWith(from);
+                        if (!ReferenceEquals(layout, main)) _unplaced.Add(variable);
+                    }
+                }
+                foreach (var formula in layout.Formulas.Values.Concat(layout.SectionConditions.Values.Concat(layout.AreaConditions.Values)
+                             .Concat(layout.ObjectConditions.Values).SelectMany(c => c.Values)))
+                    foreach (var variable in formula.PersistentVariables)
+                        if (!onDemand || IsShared(variable))
+                            (_declarers.TryGetValue(variable, out var list) ? list : (_declarers[variable] = [])).Add((layout, formula));
+            }
+        }
+
+        /// <summary>The shared variables the page furniture of any report of the run assigns.</summary>
+        public HashSet<string> SharedFurniture { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The shared variables the bands of the run assign: the main report's, and those of the subreports they print.</summary>
+        public HashSet<string> SharedBands { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>The variables the report's page furniture assigns (FurnitureVariables).</summary>
+        public HashSet<string> Furniture(ReportPositionedLayout layout) => Furnished(layout).Assigned;
+
+        /// <summary>True when the page furniture of the report (for a global) or of the run (for a shared variable) assigns the
+        /// variable and none of its formulas that assign a variable reads it: what the furniture sets in it never carries
+        /// what was in it.</summary>
+        public bool Resets(ReportPositionedLayout layout, string variable) => IsShared(variable)
+            ? SharedFurniture.Contains(variable) && !_sharedRereads.Contains(variable)
+            : Furnished(layout) is var (assigned, rereads, _) && assigned.Contains(variable) && !rereads.Contains(variable);
+
+        /// <summary>For each variable the section of a report's furniture assigns (SectionVariables), as the report (layout)
+        /// names it, the variables whose values when the section began the value it leaves there may come from: what each
+        /// formula there assigns from what (CrystalFormula.AssignmentReads), followed back to formulas that may run before it
+        /// (FurnitureStep); a formula that runs once there never feeds itself.</summary>
+        public Dictionary<string, HashSet<string>> Placing(ReportPositionedLayout layout, ReportPositionedLayout furniture, ReportDesignerSection section)
+        {
+            if (_placing.TryGetValue((layout, furniture, section.Id), out var cached)) return cached;
+            var steps = new Dictionary<(ReportPositionedLayout? Layout, string Variable), List<FurnitureStep>>();
+            SectionVariables(furniture, [section], steps: steps);
+            var placing = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var (variable, into) in steps)
+            {
+                if (Named(layout, variable) is not { } name) continue;
+                var from = placing.TryGetValue(name, out var known) ? known : placing[name] = new(StringComparer.Ordinal);
+                // A variable as it was where a formula ran (before Before), and that formula.
+                var seen = new HashSet<((ReportPositionedLayout? Layout, string Variable) Node, int Before, CrystalFormula? Formula)>();
+                var pending = new Stack<((ReportPositionedLayout? Layout, string Variable) Node, int Before, CrystalFormula? Formula)>();
+                foreach (var step in into) pending.Push((step.From, step.Hi, step.Formula));
+                while (pending.TryPop(out var state))
+                {
+                    if (!seen.Add(state)) continue;
+                    if (Named(layout, state.Node) is { } source) from.Add(source);
+                    if (steps.TryGetValue(state.Node, out var next))
+                        foreach (var step in next)
+                            if (step.Lo <= state.Before && (state.Formula is null || !ReferenceEquals(step.Formula, state.Formula)))
+                                pending.Push((step.From, Math.Min(step.Hi, state.Before), step.Formula));
+                }
+            }
+            return _placing[(layout, furniture, section.Id)] = placing;
+        }
+
+        // A variable of the run as the report (layout) names it; null for a subreport's own global another report prints.
+        private string? Named(ReportPositionedLayout layout, (ReportPositionedLayout? Layout, string Variable) node) =>
+            node.Layout is null || ReferenceEquals(node.Layout, layout) ? node.Variable : ReferenceEquals(node.Layout, _main) ? "main:" + node.Variable : null;
+
+        /// <summary>The variables a band assigns that the page furniture computes the variable from, through the variables the
+        /// furniture assigns in between (the furniture formulas that assign one read them, or a formula they refer to):
+        /// globals of the report, those of the run's main report (as "main:global:name"), and shared variables; then, when
+        /// there is one, the other variables in between. A subreport's own globals that its furniture prints are followed,
+        /// not compared; the variable itself never counts.</summary>
+        public string[] Sources(ReportPositionedLayout layout, string variable)
+        {
+            if (_bandSources.TryGetValue((layout, variable), out var cached)) return cached;
+            var found = new List<string>();
+            var through = new List<string>();
+            var start = Node(layout, variable);
+            var seen = new HashSet<(ReportPositionedLayout? Layout, string Variable)> { start };
+            var pending = new Stack<(ReportPositionedLayout? Layout, string Variable)>();
+            pending.Push(start);
+            while (pending.TryPop(out var node))
+            {
+                if (!_sources.TryGetValue(node, out var from)) continue;
+                foreach (var source in from)
+                {
+                    if (!seen.Add(source)) continue;
+                    pending.Push(source);
+                    if (source.Layout is null) (SharedBands.Contains(source.Variable) ? found : through).Add(source.Variable);
+                    else if (ReferenceEquals(source.Layout, layout)) (Bands(layout).Contains(source.Variable) ? found : through).Add(source.Variable);
+                    else if (ReferenceEquals(source.Layout, _main)) (Bands(_main).Contains(source.Variable) ? found : through).Add("main:" + source.Variable);
+                }
+            }
+            return _bandSources[(layout, variable)] = found.Count == 0 ? [] : [.. found, .. through];
+        }
+
+        /// <summary>True when only furniture placed on the page itself assigns the variable: the run's main report's page
+        /// header and footer and repeated group headers (and what they print), whose writes rebase a failure (Rebase).</summary>
+        public bool Placed(ReportPositionedLayout layout, string variable) => !_unplaced.Contains(Node(layout, variable));
+
+        private static (ReportPositionedLayout? Layout, string Variable) Node(ReportPositionedLayout layout, string variable) =>
+            IsShared(variable) ? (null, variable) : (layout, variable);
+
+        private Furnishing Furnished(ReportPositionedLayout layout) =>
+            _furniture.TryGetValue(layout, out var sets) ? sets : _furniture[layout] = FurnitureVariables(layout, ReferenceEquals(layout, _main));
+
+        /// <summary>The variables the report's bands assign (BandVariables).</summary>
+        public HashSet<string> Bands(ReportPositionedLayout layout) =>
+            _bands.TryGetValue(layout, out var set) ? set : _bands[layout] = BandVariables(layout);
+
+        /// <summary>For the report, the variables each of its formulas reads (ReadsVariables).</summary>
+        public Dictionary<string, HashSet<string>> Readers(ReportPositionedLayout layout) =>
+            _readers.TryGetValue(layout, out var readers) ? readers : _readers[layout] = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>True when another formula or condition of the run declares a variable the formula assigns, a shared one in
+        /// any of the run's reports, a global one in the formula's own, and may read it before it sets it
+        /// (CrystalFormula.ReadVariables): one that only declares it, or sets it before it uses it, never reads what the
+        /// formula left.</summary>
+        public bool SharesAssignments(ReportPositionedLayout layout, CrystalFormula formula) =>
+            formula.AssignedVariables.Any(variable => _declarers.TryGetValue(variable, out var declarers)
+                && declarers.Any(d => !ReferenceEquals(d.Formula, formula) && (IsShared(variable) || ReferenceEquals(d.Layout, layout))
+                    && d.Formula.ReadVariables.Contains(variable)));
+
+        private static bool IsShared(string variable) => variable.StartsWith("shared:", StringComparison.Ordinal);
+    }
+
+    // The variables a report's page furniture assigns: through the formulas its repeated group headers print and, for the run's
+    // main report, its page header and page footer (a subreport prints neither), their objects' and sections' conditions, the
+    // link formulas of the subreports printed there and the formulas those read, the print-time cell formulas of a cross-tab
+    // printed there, and the global a ranked cross-tab printed there adds to; and the shared variables of a subreport printed
+    // there, through what its own sections print. With them, the variables its formulas that assign a variable read, or the
+    // formulas those refer to (Rereads), and for each variable they assign (a subreport's own globals too), what the formulas
+    // that assign it read (Sources).
+    private sealed record Furnishing(HashSet<string> Assigned, HashSet<string> Rereads,
+        Dictionary<(ReportPositionedLayout? Layout, string Variable), HashSet<(ReportPositionedLayout? Layout, string Variable)>> Sources);
+
+    private static Furnishing FurnitureVariables(ReportPositionedLayout layout, bool main)
+    {
+        var furnishing = new Furnishing(new(StringComparer.Ordinal), new(StringComparer.Ordinal), new());
+        furnishing.Assigned.UnionWith(SectionVariables(layout, layout.Document.Sections.Where(s => (main && s.Kind is "PageHeader" or "PageFooter")
+            || s.Kind == "GroupHeader" && (layout.Areas.GetValueOrDefault(s.Id)?.RepeatHeader ?? false)), furnishing));
+        return furnishing;
+    }
+
+    // The variables a report's bands assign in the same way: through every section but its page header and page footer (a
+    // repeated group header prints as a band too).
+    private static HashSet<string> BandVariables(ReportPositionedLayout layout) =>
+        SectionVariables(layout, layout.Document.Sections.Where(s => s.Kind is not ("PageHeader" or "PageFooter")));
+
+    // A variable a furniture formula (Formula; null for one that may run again there) assigns takes its value from From, as
+    // it was where the formula ran: between the tops Lo and Hi of the section printed.
+    private sealed record FurnitureStep((ReportPositionedLayout? Layout, string Variable) From, CrystalFormula? Formula, int Lo, int Hi);
+
+    // steps: for each variable the sections assign, where its value comes from (RunVariables.Placing). A formula runs where
+    // the objects that print it are (their tops), where a formula that refers to it runs, and anywhere for a condition; a
+    // subreport's sections run from its top on, and run again. The objects are followed in the order they print, so a
+    // subreport the section prints twice runs from the upper one's top on. The walk recurses only into a subreport's
+    // sections, as deep as inline subreports nest; the formulas a formula refers to are followed from a stack.
+    private static HashSet<string> SectionVariables(ReportPositionedLayout layout, IEnumerable<ReportDesignerSection> printed, Furnishing? furnishing = null,
+        Dictionary<(ReportPositionedLayout? Layout, string Variable), List<FurnitureStep>>? steps = null)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        var nested = new HashSet<ReportPositionedLayout>(ReferenceEqualityComparer.Instance);
+        var rereads = furnishing?.Rereads;
+        var spans = new Dictionary<CrystalFormula, (int Lo, int Hi)>(ReferenceEqualityComparer.Instance);
+        Sections(layout, printed, false, int.MinValue, 0);
+        if (steps is not null)
+            foreach (var into in steps.Values)
+                for (var index = 0; index < into.Count; index++)
+                    if (into[index].Formula is { } formula) into[index] = into[index] with { Lo = spans[formula].Lo, Hi = spans[formula].Hi };
+        return set;
+
+        // level: how many subreports deep owner is below layout.
+        void Sections(ReportPositionedLayout owner, IEnumerable<ReportDesignerSection> sections, bool sharedOnly, int at, int level)
+        {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var following = new Stack<(string? Reference, int Lo, int Hi, bool Again)>();
+            (ReportPositionedLayout? Layout, string Variable) Node(string variable) => variable.StartsWith("shared:", StringComparison.Ordinal) ? (null, variable) : (owner, variable);
+            // again: the formula may run more than once there (a cross-tab's cells).
+            void Assigns(CrystalFormula formula, int lo, int hi, bool again = false)
+            {
+                if (sharedOnly) (lo, hi) = (at, int.MaxValue);
+                Span(formula, lo, hi);
+                set.UnionWith(sharedOnly ? formula.AssignedVariables.Where(v => v.StartsWith("shared:", StringComparison.Ordinal)) : formula.AssignedVariables);
+                if (furnishing is not null && formula.AssignedVariables.Count > 0)
+                {
+                    var reads = Rereads(formula);
+                    rereads!.UnionWith(reads);
+                    foreach (var variable in formula.AssignedVariables)
+                    {
+                        var sources = furnishing.Sources.TryGetValue(Node(variable), out var found) ? found : furnishing.Sources[Node(variable)] = [];
+                        foreach (var read in reads) if (read != variable) sources.Add(Node(read));
+                    }
+                }
+                if (steps is not null)
+                    foreach (var (variable, from) in formula.AssignmentReads)
+                    {
+                        var into = steps.TryGetValue(Node(variable), out var known) ? known : steps[Node(variable)] = [];
+                        foreach (var read in from)
+                            if (!read.StartsWith("{@", StringComparison.Ordinal)) into.Add(new(Node(read), sharedOnly || again ? null : formula, lo, hi));
+                            // What a formula it refers to reads, wherever that one ran.
+                            else if (owner.Formulas.TryGetValue(read, out var referred)) foreach (var inner in Rereads(referred)) into.Add(new(Node(inner), null, int.MinValue, int.MaxValue));
+                    }
+                Refers(formula, lo, hi, again);
+            }
+            HashSet<string> Rereads(CrystalFormula formula)
+            {
+                var reads = new HashSet<string>(StringComparer.Ordinal);
+                var seen = new HashSet<CrystalFormula>(ReferenceEqualityComparer.Instance);
+                var pending = new Stack<CrystalFormula>([formula]);
+                while (pending.TryPop(out var next))
+                {
+                    if (!seen.Add(next)) continue;
+                    reads.UnionWith(next.ReadVariables);
+                    foreach (var reference in next.References) if (owner.Formulas.TryGetValue(reference, out var f)) pending.Push(f);
+                }
+                return reads;
+            }
+            void Span(CrystalFormula formula, int lo, int hi)
+            {
+                if (steps is not null) spans[formula] = spans.TryGetValue(formula, out var span) ? (Math.Min(span.Lo, lo), Math.Max(span.Hi, hi)) : (lo, hi);
+            }
+            // The formulas a formula refers to are followed from a stack (following), in the order a recursive walk would follow
+            // them, so a long chain of references never runs out of the thread's stack.
+            void Refers(CrystalFormula formula, int lo, int hi, bool again)
+            {
+                for (var index = formula.References.Count - 1; index >= 0; index--) following.Push((formula.References[index], lo, hi, again));
+            }
+            void Follow() { while (following.TryPop(out var next)) Visit(next.Reference, next.Lo, next.Hi, next.Again); }
+            void Read(string? reference, int lo, int hi) { Visit(reference, lo, hi, false); Follow(); }
+            void Visit(string? reference, int lo, int hi, bool again)
+            {
+                if (string.IsNullOrEmpty(reference) || !owner.Formulas.TryGetValue(reference, out var f)) return;
+                if (visited.Add(again ? "*" + reference : reference)) { Assigns(f, lo, hi, again); return; }
+                if (sharedOnly) (lo, hi) = (at, int.MaxValue);
+                // Reached again, from another place: it may run there, and so may the formulas it refers to.
+                if (steps is null || !spans.TryGetValue(f, out var span) || lo >= span.Lo && hi <= span.Hi) return;
+                Span(f, lo, hi);
+                Refers(f, lo, hi, again);
+            }
+            void Conditions(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id) { if (table.TryGetValue(id, out var c)) foreach (var f in c.Values) { Assigns(f, int.MinValue, int.MaxValue); Follow(); } }
+            foreach (var section in sections)
+            {
+                Conditions(owner.SectionConditions, section.Id);
+                Conditions(owner.AreaConditions, section.Id);
+                foreach (var element in section.Elements.OrderBy(e => e.TopTwips))
+                {
+                    foreach (var binding in element.Visual.Runs.Select(r => r.Binding).Prepend(element.Binding).Append(ValueBinding(element)).Append(element.HighlightRule.FieldName))
+                        Read(binding, element.TopTwips, element.TopTwips);
+                    Conditions(owner.ObjectConditions, element.Id);
+                    if (owner.Subreports.TryGetValue(element.Id, out var sub))
+                    {
+                        // The links are evaluated where the subreport prints.
+                        foreach (var link in sub.Links) Read(link.MainField, element.TopTwips, element.TopTwips);
+                        // A subreport nested deeper than inline subreports print (MaxSubreportDepth) never runs, so the walk stops there.
+                        if (sub.Definition.PositionedLayout is { } inner && level < MaxSubreportDepth && nested.Add(inner))
+                            Sections(inner, inner.Document.Sections.Where(s => s.Kind is not ("PageHeader" or "PageFooter")), true, sharedOnly ? at : element.TopTwips, level + 1);
+                    }
+                    // A cross-tab's print-time cell formulas assign the globals of the report that prints it, where it prints.
+                    if (element.Analysis is { } grid) foreach (var (_, formula) in grid.GridPrintFormulas()) { Assigns(formula, element.TopTwips, element.TopTwips, true); Follow(); }
+                    if (!sharedOnly && element.Analysis is { AccumulatorVariable.Length: > 0 } analysis)
+                    {
+                        set.Add("global:" + analysis.AccumulatorVariable.ToLowerInvariant());
+                        rereads?.Add("global:" + analysis.AccumulatorVariable.ToLowerInvariant());
+                        var total = Node("global:" + analysis.AccumulatorVariable.ToLowerInvariant());
+                        if (steps is not null) (steps.TryGetValue(total, out var known) ? known : steps[total] = []).Add(new(total, null, element.TopTwips, element.TopTwips));
+                    }
+                }
+            }
+        }
+    }
+
+    private static void DropFailures(Dictionary<(string Name, int Row), object?> cache)
+    {
+        List<(string Name, int Row)>? failed = null;
+        foreach (var entry in cache) if (entry.Value is Exception) (failed ??= []).Add(entry.Key);
+        if (failed is not null) foreach (var key in failed) cache.Remove(key);
+    }
+
+    private Band LayOutBand(ReportDesignerSection section, int row, List<Band> repeats)
     {
         _bandFormulaCache.Clear();
         section = ApplySectionConditions(section, row);
-        if (!Visible(section))
+        var sectionHidden = !Visible(section);
+        if (sectionHidden && !(_initializingPrintContext && HasScheduledSection(section.Id)))
         {
             // Suppression hides output; Crystal still evaluates the section's formula fields (variable assignments).
             foreach (var reference in section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(BindsPrintState)) _ = Format(reference, row, "");
@@ -516,15 +1132,22 @@ public sealed partial class ReportLayoutSession
             {
                 if (element.Kind is not "Subreport" && FieldBindings(element).Any(BindsPrintState))
                     items.Add(new(element, element.Kind == "Chart" && element.ChartMarker is { } stamp ? MarkerHtml(element, stamp, row) : ReportObjectRenderer.Content(element, reference => Format(reference, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat),
-                        resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat, element.NativeNumberFormat, element.NativeNumericFormat)), -1, Owner: this, Row: row));
+                        resolveRun: run => Format(run.Binding, row, element.FormatString, run.NativeDateTimeFormat ?? element.NativeDateTimeFormat, element.NativeNumberFormat, RunNumericFormat(element))), -1, Owner: this, Row: row));
                 continue;
             }
             if (element.Kind == "Picture" && element.Visual.VectorImage is null && !ReportObjectVisual.IsEmbeddedImage(element.Visual.ImageDataUrl))
                 _diagnostics.Add($"{element.Name}: embedded image bytes are missing. Replace the picture in the designer.");
             var onDemand = element.Kind == "Subreport" && _layout.OnDemandSubreports.ContainsKey(element.Id);
-            var child = element.Kind == "Subreport" && !onDemand ? CreateInlineSubreport(element, row) : null;
+            // A page header or footer builds such a subreport, or one linked to the page, when a page lays it out (PrepareFurnitureSubreports).
+            var deferChild = element.Kind == "Subreport" && !onDemand && _physicalPageSchedule
+                && (HasScheduledSection(section.Id) || section.Kind is "PageHeader" or "PageFooter" && PageLinked(element));
+            if (deferChild) _deferredSubreports.TryAdd((element.Id, row), null);
+            ReportLayoutSession? child = null;
             var childOffset = Measurements.Count;
-            if (child is not null)
+            // The records of a page header or footer share its subreport where they pass it the same values (BuildFurnitureSubreport).
+            if (element.Kind == "Subreport" && !onDemand && !deferChild && _preparingFurniture && section.Kind is "PageHeader" or "PageFooter")
+                (child, childOffset) = BuildFurnitureSubreport(element, row);
+            else if (element.Kind == "Subreport" && !onDemand && !deferChild && (child = CreateInlineSubreport(element, row)) is not null)
             {
                 Measurements.AddRange(child.Measurements);
                 foreach (var native in child._nativeMetrics) _nativeMetrics.TryAdd(native.Key, native.Value);
@@ -536,8 +1159,7 @@ public sealed partial class ReportLayoutSession
             // Crystal prints an on-demand subreport as its caption (the subreport's name unless the Format Editor's caption formula
             // says otherwise) in the object's font; the reader opens the subreport from it, for the record this band printed.
             if (onDemand) html = OnDemandCaptionHtml(element, row);
-            if (element.Kind == "Subreport" && child is null && _subreportErrors.TryGetValue(element.Id, out var subreportError))
-                html = "<span class=\"fx-report-subreport-error\" style=\"color:#b00020;font-style:italic\">[Subreport error: " + System.Net.WebUtility.HtmlEncode(subreportError) + "]</span>";
+            if (element.Kind == "Subreport" && child is null && SubreportErrorHtml(element) is { } subreportError) html = subreportError;
             var measure = -1;
             if (element.CanGrow && !element.HasRotatedText && element.Kind is "Text" or "Field" or "FieldHeading")
             {
@@ -572,8 +1194,11 @@ public sealed partial class ReportLayoutSession
                             measure.Aggregate is ReportAggregateType.Max or ReportAggregateType.Min
                             && measure.Field.Equals(reference, StringComparison.OrdinalIgnoreCase))
                             && _layout.Formulas.TryGetValue(reference, out var totalFormula) && totalFormula.UsesAggregates;
+                        // A cross-tab groups by a formula over a group or report summary (SummaryBound, sample "Group on Subtotals"); a
+                        // chart axis or a summarized measure keeps the read-time gate, or Sum of {@Total} would plot the total once per record.
+                        var gridAxis = element.Kind == "CrossTab" && definition.RowFields.Concat(definition.ColumnFields).Contains(reference, StringComparer.OrdinalIgnoreCase);
                         if (totalMeasure || directMeasure && !recordRole) RequireChartFormulaValue(reference, new(StringComparer.OrdinalIgnoreCase));
-                        else if (_layout.Formulas.TryGetValue(reference, out var formula)) RequireReadTime(formula, "Analytical item");
+                        else if (_layout.Formulas.TryGetValue(reference, out var formula) && !(gridAxis && SummaryBound(formula))) RequireReadTime(formula, "Analytical item");
                         if (_layout.RunningTotals.ContainsKey(reference) || _layout.Summaries.ContainsKey(reference) || IsSpecial(reference))
                             throw new InvalidDataException("Analytical fields must be record-time values, not page values or accumulated summaries.");
                     }
@@ -585,13 +1210,25 @@ public sealed partial class ReportLayoutSession
                         indexes = indexes.Where(index => SameGroup(index, row, level));
                     }
                     var scopeStart = definition.GroupScope.Length == 0 ? -1 : indexes.FirstOrDefault(-1);
-                    if (!_analysisSnapshots.TryGetValue((original.Id, scopeStart), out analysis))
+                    // A grid whose captions embed fields prints the values current where it prints, so each band instance gets its own snapshot.
+                    var snapshotKey = (original.Id, definition.NativeCrossTab?.Appearance is { CaptionFields.Count: > 0 } ? row : scopeStart);
+                    if (!_analysisSnapshots.TryGetValue(snapshotKey, out analysis))
                     {
                         var scopeIndexes = indexes.ToArray();
                         ValidateReportChartOthers(definition, scopeIndexes);
                         var data = scopeIndexes.Select(index => definition.References.ToDictionary(reference => reference,
                             reference => AxisValue(definition, reference, index), StringComparer.OrdinalIgnoreCase)).ToList();
                         var snapshotDefinition = definition.Clone();
+                        // A field embedded in a total caption prints the value current where the grid prints, in its own format
+                        // (sample "Field in Crosstab Text object": the corner reads "Fedex:" over the group's percentage).
+                        if (snapshotDefinition.NativeCrossTab is { Appearance: { CaptionFields.Count: > 0 } captionAppearance } captionGrid)
+                        {
+                            string SubstituteCaptionFields(string caption) => captionAppearance.CaptionFields.Aggregate(caption, (current, embedded) =>
+                                current.Replace(embedded.Binding, Format(embedded.Binding, row, "", nativeNumeric: embedded.NumericFormat ?? EmbeddedNumericDefault)));
+                            snapshotDefinition.NativeCrossTab = captionGrid with { Appearance = captionAppearance with {
+                                RowTotalCaption = SubstituteCaptionFields(captionAppearance.RowTotalCaption),
+                                ColumnTotalCaption = SubstituteCaptionFields(captionAppearance.ColumnTotalCaption), CaptionFields = [] } };
+                        }
                         foreach (var field in new[] { definition.CategoryField, definition.SeriesField })
                         {
                             var level = ReportChartGroupLevel(definition, field);
@@ -621,7 +1258,7 @@ public sealed partial class ReportLayoutSession
                             continue;
                         }
                         if (element.Kind is "CrossTab" or "Table") analysis = analysis with { Table = ReportTabularData.Create(element, analysis) };
-                        _analysisSnapshots[(original.Id, scopeStart)] = analysis;
+                        _analysisSnapshots[snapshotKey] = analysis;
                     }
                     html = "[Analytical report item: use the component viewer or asynchronous HTML export]";
                 }
@@ -630,12 +1267,18 @@ public sealed partial class ReportLayoutSession
             }
             items.Add(new(element, html, measure, child, childOffset, this, row, Analysis: analysis, DuplicateValue: duplicateValue));
         }
-        var band = new Band(section, items, row, repeats.ToList(), Owner: this);
+        var band = new Band(section, items, row, repeats.ToList(), Suppressed: sectionHidden, Owner: this);
         CaptureOnDemandVariables(band);
         return band;
     }
 
-    private static bool IsBlank(Band band) => band.Items.All(item => item.Element.IsSuppressed || item.Child is null && item.Element.Kind is not ("Line" or "Box" or "Picture") &&
+    // Crystal paints a subreport's frame outside its content edges: a one-point gutter plus the line's device pixels.
+    private static int FrameOutset(string line, int? lineWidthTwips)
+    {
+        var pixels = ReportObjectRenderer.BorderPixels(line, lineWidthTwips);
+        return pixels > 0 ? 20 + (int)Math.Ceiling(pixels * 15) : 0;
+    }
+    private static bool IsBlank(Band band) => band.Items.All(item => item.Element.IsSuppressed || item.Child is null && item.Element.Kind is not ("Line" or "Box" or "Picture" or "Map") &&
         string.IsNullOrWhiteSpace(System.Net.WebUtility.HtmlDecode(System.Text.RegularExpressions.Regex.Replace(item.Html, "<[^>]+>", ""))));
 
     private static IEnumerable<string> FieldBindings(ReportDesignerElement element) =>
@@ -666,29 +1309,16 @@ public sealed partial class ReportLayoutSession
         }
         Add("ReportHeader", _rows.Length > 0 ? 0 : -1);
         _rowBefore[-1] = _rowAfter[-1] = CaptureVariables();
-        if (_rows.Length == 0 && _parent is null)
+        if (_rows.Length == 0)
         {
-            // Empty main reports retain template furniture.
+            // Empty reports retain template furniture, subreports included: Crystal formats the group and detail bands once
+            // without a record, under their own conditions, with blank summaries (see PrintedSummary) and zero running totals.
             for (var group = 0; group < _layout.Document.Groups.Count; group++) Add("GroupHeader", -1, group);
             Add("Detail", -1);
             for (var group = _layout.Document.Groups.Count - 1; group >= 0; group--)
             {
                 Add("GroupFooter", -1, group);
                 repeats.RemoveAll(band => ReportDesignerEditing.GetGroupNumber(_layout.Document, band.Section) == group + 1);
-            }
-        }
-        else if (_rows.Length == 0)
-        {
-            // An empty child still evaluates authored print-state formulas with
-            // null fields (for example a shared total's IsNull reset). These are
-            // zero-space events, not invented records or printed detail bands.
-            foreach (var section in sections.Where(s => s.Kind == "Detail"))
-            {
-                var fields = section.Elements.OrderBy(e => e.TopTwips).SelectMany(FieldBindings).Where(BindsPrintState).ToArray();
-                if (fields.Length == 0) continue;
-                _bandFormulaCache.Clear();
-                foreach (var reference in fields) _ = Format(reference, -1, "");
-                _bands.Add(new(section, [], -1, [], true, Owner: this, EvaluationOnly: true));
             }
         }
         for (var row = 0; row < _rows.Length; row++)
@@ -725,12 +1355,25 @@ public sealed partial class ReportLayoutSession
 
     private readonly Dictionary<(string Id, int Row), Band> _furniture = new();
 
-    public ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights = null)
-        => Paginate(measuredHeights, 1, 0, null);
+    private sealed record PaginationRetry(int Pages, int Attempt, IReadOnlyList<int>? Counts,
+        Dictionary<Band, (int Page, int Count)>? Inline, IReadOnlyList<int>? Footers, int ScheduleAttempt);
 
-    private ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights, int expectedPages, int attempt, IReadOnlyList<int>? expectedCounts,
-        Dictionary<Band, (int Page, int Count)>? inlineContexts = null, IReadOnlyList<int>? footerRows = null, int scheduleAttempt = 0)
+    public ReportLayoutResult Paginate(IReadOnlyList<int>? measuredHeights = null)
     {
+        var next = new PaginationRetry(1, 0, null, null, null, 0);
+        while (true)
+        {
+            var result = PaginatePass(measuredHeights, next.Pages, next.Attempt, next.Counts,
+                next.Inline, next.Footers, next.ScheduleAttempt, out var retry);
+            if (retry is null) return result;
+            next = retry;
+        }
+    }
+
+    private ReportLayoutResult PaginatePass(IReadOnlyList<int>? measuredHeights, int expectedPages, int attempt, IReadOnlyList<int>? expectedCounts,
+        Dictionary<Band, (int Page, int Count)>? inlineContexts, IReadOnlyList<int>? footerRows, int scheduleAttempt, out PaginationRetry? retry)
+    {
+        retry = null;
         if (_textMetrics is null && Measurements.Count > 0 && _state.HasGrowingText && (measuredHeights is null || measuredHeights.Count != Measurements.Count))
             _diagnostics.Add("Browser text measurement is unavailable; CanGrow pagination uses an approximate font metric.");
         var size = _layout.Document.Page;
@@ -751,6 +1394,25 @@ public sealed partial class ReportLayoutSession
         var pendingHidden = new List<(Band Band, int Height, int Sequence)>();
         var sequence = -1;
         var underlays = new List<(int Index, int Page, int Top)>();
+        (Page Page, int Row, int End)? detailUnderlay = null;
+        var scopedUnderlays = new List<(Band Band, Page Page, int End)>();
+        var limitedInstances = new Dictionary<string, (Page Page, int Count)>();
+        Page? countedPage = null;
+        var lastDetailRow = -1;
+        var visibleDetailRows = 0;
+        void CountVisibleDetail(Page target, Band band)
+        {
+            if (_layout.VisibleRecordsPerPage <= 0 || band.Section.Kind != "Detail") return;
+            if (target != countedPage)
+            {
+                countedPage = target;
+                lastDetailRow = -1;
+                visibleDetailRows = 0;
+            }
+            if (band.Row == lastDetailRow) return;
+            lastDetailRow = band.Row;
+            visibleDetailRows++;
+        }
         var resetPageNumber = false;
         var areaInstance = (Area: "", Row: -1);
         var bottomArea = false;
@@ -775,34 +1437,136 @@ public sealed partial class ReportLayoutSession
             _paginationCancellationToken.ThrowIfCancellationRequested();
             sequence = bandIndex;
             var band = PageBand(bandIndex);
+            // A detail underlay shares the following subsections of this record.
+            // Finish the taller of the overlay and foreground before starting the next record or footer.
+            if (detailUnderlay is { } previous && (band.Section.Kind != "Detail" || band.Row != previous.Row))
+            {
+                if (previous.Page == page) page.Cursor = Math.Max(page.Cursor, Math.Min(page.Bottom, previous.End));
+                detailUnderlay = null;
+            }
             if (bandIndex >= trailingSpacer && !(band.Section.Kind == "ReportFooter" && bandIndex > 0
                 && bands[bandIndex - 1] is var preceding && preceding.Section.Kind == "GroupFooter"
                 && (preceding.Section.NewPageAfter || _layout.Areas.GetValueOrDefault(preceding.Section.Id)?.NewPageAfter == true))) continue;
             if (band.Suppressed) { HiddenEvent(band); continue; }
             if (band.Section.SuppressIfBlank && IsBlank(band)) { BlankEvent(band); continue; }
+            // A header may underlay the body of its group, but its matching footer follows its full extent.
+            if (band.Section.Kind is "GroupFooter" or "ReportFooter")
+            {
+                for (var u = scopedUnderlays.Count - 1; u >= 0; u--)
+                {
+                    var pending = scopedUnderlays[u];
+                    if (band.Section.Kind != "ReportFooter" && (pending.Band.Section.Kind != "GroupHeader"
+                        || pending.Band.Section.GroupId != band.Section.GroupId)) continue;
+                    if (pending.Page == page) page.Cursor = Math.Max(page.Cursor, Math.Min(page.Bottom, pending.End));
+                    scopedUnderlays.RemoveAt(u);
+                }
+            }
             var height = Height(band);
             var area = _layout.Areas.GetValueOrDefault(band.Section.Id);
             var areaId = areaOf.GetValueOrDefault(band.Section.Id) ?? "";
             int FreshBodyRoom() => page.Bottom - (band.Section.Kind == "ReportHeader" ? 0 :
-                headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)], page.Number)))))
+                headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)])))))
                 - band.Repeats.Sum(r => Space(Blankness(r)));
-            // What follows an area printed at the bottom of the page starts a new page.
+            // Close the preceding record (including its group footers) before the next
+            // record's group headings or details. Repeated headings do not consume a record.
+            if (countedPage == page && visibleDetailRows >= _layout.VisibleRecordsPerPage
+                && band.Row != lastDetailRow && band.Section.Kind is "GroupHeader" or "Detail")
+            {
+                CloseColumns();
+                page = NewPage(band.Row, band.Repeats, withHeaders: true);
+            }
+            if (area is { VisibleInstanceLimit: > 0 } && limitedInstances.TryGetValue(band.Section.Id, out var prior)
+                && prior.Page == page && prior.Count >= area.VisibleInstanceLimit)
+            {
+                CloseColumns(); page = NewPage(band.Row, band.Repeats, band.Section.Kind != "ReportHeader");
+            }
             if (bottomArea && (areaId, band.Row) != areaInstance) { page.Cursor = page.Bottom; bottomArea = false; }
             var withHeaders = band.Section.Kind != "ReportHeader";
-            if (!InColumns(band.Section) && (band.Section.NewPageBefore || area?.NewPageBefore == true) && page.HasBody) { CloseColumns(); page = NewPage(band.Row, band.Repeats, withHeaders); }
+            // A kept subreport starts on a fresh page even when its complete output must span pages.
+            // Expansion replaces the container, so retain its authored keep request from the source band
+            // (its child may have been built only once its section printed).
+            bool KeptSubreport() => _bands[bandIndex].Items is { Count: 1 } sourceItems && (sourceItems[0].Owner ?? this).HasChild(sourceItems[0])
+                && sourceItems[0].Element.TopTwips == 0
+                && _layout.Document.SourceObjects.TryGetValue(sourceItems[0].Element.SourceKey, out var subreportSource)
+                && (bool?)subreportSource.Element("ObjectFormat")?.Attribute("EnableKeepTogether") == true;
+            // The part of the band this page would print from its cursor, as the rules below place it (keeping a group, an area or a
+            // section together, an underlay's ink and suppressed objects, safe breaks); 0 when it would start on the next page. An
+            // inline subreport's section rules are not repeated here.
+            int PartHere()
+            {
+                var room = page.Bottom - page.Cursor;
+                if (room <= 0) return 0;
+                if (band.Section.Kind == "GroupHeader")
+                {
+                    var freshRoom = page.Bottom - headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)])))) - band.Repeats.Sum(r => Space(Blankness(r)));
+                    var keepHeight = KeepHeight(bandIndex, band, area, freshRoom, afterPriorDetails: true);
+                    if (keepHeight > room && keepHeight <= freshRoom) return 0;
+                }
+                if (area?.KeepTogether == true && (areaId, band.Row) != areaInstance)
+                {
+                    int extent = 0, flow = 0;
+                    for (var next = bandIndex; next < bands.Count && areaOf.GetValueOrDefault(bands[next].Section.Id) == areaId && bands[next].Row == band.Row; next++)
+                    {
+                        if (bands[next].Suppressed || bands[next].Section.SuppressIfBlank && IsBlank(bands[next])) continue;
+                        extent = Math.Max(extent, flow + Height(bands[next]));
+                        if (!bands[next].Section.UnderlayFollowingSections) flow += Height(bands[next]);
+                    }
+                    if (extent > room && extent <= FreshBodyRoom()) return 0;
+                }
+                if (band.Section.UnderlayFollowingSections)
+                {
+                    var ink = UnderlayInkHeight(band);
+                    var kept = band.Section.Kind is "GroupHeader" or "Detail" ? height : band.Section.Kind == "ReportHeader" ? ink : 0;
+                    if (band.Section.KeepTogether && kept > room && height <= FreshBodyRoom()) return 0;
+                    var slice = Math.Min(ink, room);
+                    if (slice < ink && !SafeAt(band, slice) && SafeBreaks(band).Where(point => point <= slice).DefaultIfEmpty(0).Max() is > 0 and var safe) slice = safe;
+                    return slice >= ink ? Math.Max(slice, Math.Min(Math.Max(ink, SuppressedBottom(band)), room)) : slice;
+                }
+                var sectionKeep = band.KeptStartHeight ?? height;
+                if (sectionKeep > room && band.Section.KeepTogether && (sectionKeep <= FreshBodyRoom() || band.Section.Kind == "GroupFooter" && page.Cursor > page.BodyStart)
+                    || height > room && KeptSubreport()) return 0;
+                if (band.InlineSections?.Any(s => !s.FirstVisible && s.Start == 0 && s.End > s.Start
+                    && ((s.Format ?? s.Source.Section).NewPageBefore || s.Source.Owner!._layout.Areas.GetValueOrDefault(s.Source.Section.Id)?.NewPageBefore == true)) == true) return 0;
+                var part = Math.Min(height, room);
+                if ((band.ForcedBreaks?.Where(point => point > 0 && point <= part).DefaultIfEmpty(0).Min() ?? 0) is > 0 and var forced) return forced;
+                if (part < height && band.Breaks is { Count: > 0 } && !SafeAt(band, part))
+                {
+                    var boundary = SafeBreaks(band).Where(point => point <= part).DefaultIfEmpty(0).Max();
+                    if (boundary > 0) return boundary;
+                    if (band.Breaks.FirstOrDefault(point => point > 0) <= page.Bottom) return 0;
+                }
+                return part;
+            }
+            if (!InColumns(band.Section) && (band.Section.NewPageBefore || area?.NewPageBefore == true) && page.HasBody)
+            {
+                CloseColumns();
+                // A New Page Before that reads print-time state is decided again on the page it leaves, from the part of the band
+                // that page would have printed (ReplayPhysicalPages).
+                var part = _state.PhysicalSchedule && (MutableCondition(_layout.SectionConditions, band.Section.Id, "EnableNewPageBefore")
+                    || MutableCondition(_layout.AreaConditions, band.Section.Id, "EnableNewPageBefore")) ? PartHere() : 0;
+                page = NewPage(band.Row, band.Repeats, withHeaders);
+                if (part > 0) page.BrokenPart = (FragmentKey(band), part);
+            }
+            if (withHeaders && page.EndsWithReportHeaderBreak) page = NewPage(band.Row, band.Repeats, withHeaders);
             if (withHeaders && !page.HasHeaders)
             {
-                var headerHeight = headers.Sum(section => Space(Blankness(Furnish(_furniture[(section.Id, band.Row)], page.Number))));
+                var headerHeight = headers.Sum(section => Space(Blankness(Furnish(_furniture[(section.Id, band.Row)], fresh: false))));
                 if (page.Cursor + headerHeight + height > page.Bottom && page.HasBody) { CloseColumns(); page = NewPage(band.Row, band.Repeats); }
                 else AddHeaders(page, band.Row);
             }
-            if (InColumns(band.Section)) { PlaceInColumns(bandIndex, band, area, areaId); continue; }
+            if (InColumns(band.Section))
+            {
+                PlaceInColumns(bandIndex, band, area, areaId);
+                CountVisibleDetail(page, band);
+                continue;
+            }
             CloseColumns();
             if (band.Section.Kind == "GroupHeader" && page.HasBody)
             {
-                // A chain taller than a fresh page gains nothing from a new page.
-                var freshRoom = page.Bottom - headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)], page.Number)))) - band.Repeats.Sum(r => Space(Blankness(r)));
-                var keepHeight = KeepHeight(bandIndex, band, area, freshRoom);
+                // An overheight kept group may share its first page with an introduction.
+                // After a previous group's details it starts a fresh page, then flows normally.
+                var freshRoom = page.Bottom - headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)])))) - band.Repeats.Sum(r => Space(Blankness(r)));
+                var keepHeight = KeepHeight(bandIndex, band, area, freshRoom, afterPriorDetails: true);
                 if (keepHeight > page.Bottom - page.Cursor && keepHeight <= freshRoom) page = NewPage(band.Row, band.Repeats);
             }
             // Area formatting applies to the area's sections for one record (FormattedArea): kept together, they start a new page when they do not fit;
@@ -822,22 +1586,31 @@ public sealed partial class ReportLayoutSession
             areaInstance = (areaId, band.Row);
             if (band.Section.UnderlayFollowingSections)
             {
+                if (band.Section.Kind is "GroupHeader" or "ReportHeader")
+                {
+                    var keepHeight = band.Section.Kind == "GroupHeader" ? height : UnderlayInkHeight(band);
+                    if (band.Section.KeepTogether && page.HasBody && keepHeight > page.Bottom - page.Cursor && height <= FreshBodyRoom())
+                        page = NewPage(band.Row, band.Repeats, withHeaders);
+                    scopedUnderlays.Add((band, page, page.Cursor + height));
+                }
+                if (band.Section.Kind == "Detail")
+                {
+                    if (band.Section.KeepTogether && page.HasBody && height > page.Bottom - page.Cursor && height <= FreshBodyRoom())
+                        page = NewPage(band.Row, band.Repeats, withHeaders);
+                    var end = page.Cursor + height;
+                    if (detailUnderlay is { } earlier && earlier.Page == page) end = Math.Max(end, earlier.End);
+                    detailUnderlay = (page, band.Row, end);
+                }
                 underlays.Add((bandIndex, pages.Count - 1, page.Cursor)); page.HasBody = true;
+                CountVisibleDetail(page, band);
                 if (band.Section.PrintAtBottomOfPage || band.Section.NewPageAfter || area?.NewPageAfter == true
                     || band.Section.ResetPageNumberAfter || area?.ResetPageNumberAfter == true)
                     _diagnostics.Add($"{band.Section.Name}: underlay placement ignores bottom alignment and ending page-break/reset flags; foreground flow is retained.");
                 continue;
             }
-            // A kept subreport starts on a fresh page even when its complete output must span pages.
-            // Expansion replaces the container, so retain its authored keep request from the source band.
-            var sourceItems = _bands[bandIndex].Items;
-            var keptSubreport = sourceItems.Count == 1 && sourceItems[0].Child is not null
-                && sourceItems[0].Element.TopTwips == 0
-                && _layout.Document.SourceObjects.TryGetValue(sourceItems[0].Element.SourceKey, out var subreportSource)
-                && (bool?)subreportSource.Element("ObjectFormat")?.Attribute("EnableKeepTogether") == true;
             var sectionKeep = band.KeptStartHeight ?? height;
-            if (page.HasBody && ((sectionKeep > page.Bottom - page.Cursor && band.Section.KeepTogether && sectionKeep <= FreshBodyRoom())
-                || (height > page.Bottom - page.Cursor && keptSubreport)))
+            if (page.HasBody && ((sectionKeep > page.Bottom - page.Cursor && band.Section.KeepTogether && (sectionKeep <= FreshBodyRoom() || band.Section.Kind == "GroupFooter" && page.Cursor > page.BodyStart))
+                || (height > page.Bottom - page.Cursor && KeptSubreport())))
                 page = NewPage(band.Row, band.Repeats, withHeaders);
             band = PageBand(bandIndex);
             if (band.Suppressed) { HiddenEvent(band); continue; }
@@ -846,7 +1619,7 @@ public sealed partial class ReportLayoutSession
             do
             {
                 if (page.Bottom <= page.Cursor) page = NewPage(band.Row, band.Repeats, withHeaders);
-                if (page.HasBody && band.InlineSections?.Any(s => s.Start == offset && s.End > s.Start
+                if (page.HasBody && band.InlineSections?.Any(s => !s.FirstVisible && s.Start == offset && s.End > s.Start
                     && ((s.Format ?? s.Source.Section).NewPageBefore || s.Source.Owner!._layout.Areas.GetValueOrDefault(s.Source.Section.Id)?.NewPageBefore == true)) == true)
                 {
                     page = NewPage(band.Row, band.Repeats, withHeaders);
@@ -871,7 +1644,7 @@ public sealed partial class ReportLayoutSession
                 if (kept is not null && (forced == 0 || forced >= kept.End))
                 {
                     // Honor the child's section boundary, not just the outer subreport object's KeepTogether.
-                    var freshRoom = page.Bottom - headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)], page.Number)))) - band.Repeats.Sum(r => Space(Blankness(r)))
+                    var freshRoom = page.Bottom - headers.Sum(s => Space(Blankness(Furnish(_furniture[(s.Id, band.Row)])))) - band.Repeats.Sum(r => Space(Blankness(r)))
                         - (band.InlineHeaders?.Where(h => h.Repeat && h.Start < kept.Start && h.End > kept.Start).Sum(h => Height(h.Header)) ?? 0);
                     if (kept.End - kept.Start <= freshRoom)
                     {
@@ -910,6 +1683,7 @@ public sealed partial class ReportLayoutSession
                 }
                 var top = atBottom ? page.Bottom - slice : page.Cursor;
                 page.Placements.Add(new(band, top, offset, slice, sequence));
+                CountVisibleDetail(page, band);
                 page.Cursor = top + slice;
                 if (forced > 0 && forced == offset + slice) page.Cursor = page.Bottom;
                 page.HasBody = true;
@@ -932,20 +1706,36 @@ public sealed partial class ReportLayoutSession
                     AddInlineHeaders(page, band, offset);
                 }
             } while (offset < height);
-            // The page header prints on the report header's page too, below the report header (before its "new page after").
-            if (band.Section.Kind == "ReportHeader" && !page.HasHeaders && _bands.Skip(bandIndex + 1).All(next => next.Section.Kind != "ReportHeader")) EnsureHeaders(band.Row);
-            if (band.Section.NewPageAfter || area?.NewPageAfter == true) page.Cursor = page.Bottom;
+            if (area is { VisibleInstanceLimit: > 0 })
+            {
+                var last = limitedInstances.GetValueOrDefault(band.Section.Id);
+                limitedInstances[band.Section.Id] = (page, last.Page == page ? last.Count + 1 : 1);
+            }
+            var breakAfter = band.Section.NewPageAfter || area?.NewPageAfter == true;
+            if (band.Section.Kind == "ReportHeader")
+            {
+                // Crystal omits page furniture on a title sheet closed by New Page After.
+                if (breakAfter) page.EndsWithReportHeaderBreak = true;
+                else if (!page.HasHeaders && _bands.Skip(bandIndex + 1).All(next => next.Section.Kind != "ReportHeader"))
+                {
+                    // A group that requests a fresh sheet takes the first page header with it.
+                    var next = bands.Skip(bandIndex + 1).FirstOrDefault(b => !b.Suppressed && !(b.Section.SuppressIfBlank && IsBlank(b)));
+                    if (next?.Section.Kind != "GroupHeader" || !(next.Section.NewPageBefore
+                        || _layout.Areas.GetValueOrDefault(next.Section.Id)?.NewPageBefore == true)) EnsureHeaders(band.Row);
+                }
+            }
+            if (breakAfter) page.Cursor = page.Bottom;
             resetPageNumber |= band.Section.ResetPageNumberAfter || area?.ResetPageNumberAfter == true;
         }
         CloseColumns();
         }
         catch (PagePrefixComplete) { prefixOnly = true; }
         // A report whose body prints nothing still has page headers on its page.
-        if (!page.HasHeaders) EnsureHeaders(bands.LastOrDefault()?.Row ?? -1);
+        if (!page.HasHeaders && !page.EndsWithReportHeaderBreak) EnsureHeaders(bands.LastOrDefault()?.Row ?? -1);
         void EnsureHeaders(int row)
         {
             if (headers.Count == 0) return;
-            var headerHeight = headers.Sum(section => Space(Blankness(Furnish(_furniture[(section.Id, row)], page.Number))));
+            var headerHeight = headers.Sum(section => Space(Blankness(Furnish(_furniture[(section.Id, row)], fresh: false))));
             if (page.Cursor + headerHeight <= page.Bottom) AddHeaders(page, row);
         }
 
@@ -954,7 +1744,7 @@ public sealed partial class ReportLayoutSession
         foreach (var underlay in underlays)
         {
             sequence = underlay.Index;
-            var offset = 0; Band? previous = null;
+            var offset = 0; Band? previous = null; var placed = false;
             for (var index = underlay.Page; ; index++)
             {
                 var created = index == pages.Count;
@@ -967,25 +1757,32 @@ public sealed partial class ReportLayoutSession
                     band = ContinueText(previous, band, offset, ItemHeight);
                     band = SuppressInlineContinuations(band, offset, page.Number, ExpectedCount(index), ItemHeight);
                 }
-                var height = Height(band);
-                if (band.Suppressed || offset >= height)
+                var height = UnderlayInkHeight(band);
+                // Suppressed objects paint nothing but still run their print-time formulas. Past the ink, the section
+                // continues only onto pages that already exist.
+                var reach = Math.Max(height, SuppressedBottom(band));
+                // A section with no ink still prints where it starts: its section formulas run there. It adds no page.
+                var start = !placed && offset == 0;
+                if (band.Suppressed || offset >= height && !start && (created || offset >= reach))
                 {
                     if (created) { pages.RemoveAt(index); resetPageNumber = resetBeforeUnderlay; }
                     break;
                 }
                 var top = index == underlay.Page ? underlay.Top : page.BodyStart;
                 var room = page.Bottom - top;
-                if (room <= 0) { previous = band; continue; }
-                var slice = Math.Min(height - offset, room);
+                // A section that starts at the page bottom prints on the next page, with the sections it underlays.
+                if (room <= 0 && (offset < height || !start || index + 1 < pages.Count)) { previous = band; continue; }
+                var slice = Math.Max(0, Math.Min(height - offset, room));
                 if (slice < height - offset && !SafeAt(band, offset + slice))
                 {
                     var safe = SafeBreaks(band).Where(p => p > offset && p <= offset + slice).DefaultIfEmpty(0).Max();
                     if (safe > offset) slice = safe - offset;
                     else if (!CanContinueAt(band, offset + slice)) _diagnostics.Add($"{band.Section.Name}: oversized underlay objects are clipped at the page boundary.");
                 }
+                if (offset + slice >= height) slice = Math.Max(slice, Math.Min(reach - offset, room));
                 var insertion = page.Placements.TakeWhile(p => p.Band.Section.Kind == "PageHeader" || p.Band.Section.UnderlayFollowingSections).Count();
-                page.Placements.Insert(insertion, new(band, top, offset, slice, sequence)); page.HasBody = true;
-                offset += slice; if (offset >= height) break;
+                page.Placements.Insert(insertion, new(band, top, offset, slice, sequence)); page.HasBody = true; placed = true;
+                offset += slice; if (offset >= reach) break;
                 previous = band;
             }
         }
@@ -1014,12 +1811,16 @@ public sealed partial class ReportLayoutSession
         if (footerChanged || _state.HasPageConditions && (inlineChanged || pages.Count != expectedPages || expectedCounts is null || !counts.SequenceEqual(expectedCounts)))
         {
             if (attempt >= 7) _diagnostics.Add("Page-dependent formatting did not stabilize within eight passes; the last computed layout is retained.");
-            else return Paginate(measuredHeights, pages.Count, attempt + 1, counts, nextInlineContexts, nextFooterRows, scheduleAttempt);
+            else { retry = new(pages.Count, attempt + 1, counts, nextInlineContexts, nextFooterRows, scheduleAttempt); return new([], []); }
         }
         for (var index = 0; index < pages.Count; index++)
         {
             var current = pages[index];
             var lastRow = current.Placements.LastOrDefault(placement => placement.Band.Section.Kind != "PageHeader")?.Band.Row ?? -1;
+            if (current.EndsWithReportHeaderBreak || (!current.HasHeaders && index < pages.Count - 1
+                && current.Placements.Any(p => !p.Band.Suppressed && p.Band.Section.Kind == "ReportHeader")
+                && current.Placements.Where(p => !p.Band.Suppressed).All(p => p.Band.Section.Kind == "ReportHeader"
+                    && p.Offset == 0 && p.Height >= Height(p.Band)))) continue;
             var footerTop = current.Bottom;
             foreach (var section in footers)
             {
@@ -1030,7 +1831,7 @@ public sealed partial class ReportLayoutSession
         }
         if (_state.PhysicalSchedule)
         {
-            if (scheduleAttempt == 0) _state.BlankHistory.Clear();
+            if (scheduleAttempt == 0) { _state.BlankHistory.Clear(); _state.ReplayStates.Clear(); }
             _state.BlankHistory.Add(pages.SelectMany((current, index) => current.Placements.SelectMany(placement => (placement.Band.InlineSections ?? []).Where(s => s.Blank)
                 .Select(s => new PrintBandKey(s.Source.Owner ?? this, s.Source.Section.Id, s.Source.Row, 0))
                 .Concat(placement.Band.Blank ? [new PrintBandKey(placement.Band.Owner ?? this, placement.Band.Section.Id, placement.Band.Row,
@@ -1038,19 +1839,25 @@ public sealed partial class ReportLayoutSession
         }
         if (ReplayPhysicalPages(pages, counts))
         {
+            // A page-counter reset can advance the settled boundary one page per replay.
+            // Long reports need room to converge; iterative retries release each old layout.
+            // A replay that repeats an earlier one is a cycle that never settles: it stops after sixteen replays.
+            var replayLimit = Math.Min(256, Math.Max(16, pages.Count + 16));
+            var cycle = !_state.ReplayStates.Add(ReplayState(pages.Count, counts, nextFooterRows, nextInlineContexts));
+            var last = scheduleAttempt + 1 >= replayLimit || cycle && scheduleAttempt >= 15;
             // Blankness is decided from the previous replay. A section that is blank where it was placed but not blank
             // on the page it moves to (or the reverse) flips on every replay.
             var history = _state.BlankHistory;
             if (history.Count >= 2 && !history[^1].SetEquals(history[^2])
-                && (scheduleAttempt >= 15 || history.Count >= 4 && history[^1].SetEquals(history[^3]) && history[^2].SetEquals(history[^4])))
+                && (last || history.Count >= 4 && history[^1].SetEquals(history[^3]) && history[^2].SetEquals(history[^4])))
             {
                 var names = history[^1].Except(history[^2]).Concat(history[^2].Except(history[^1]))
                     .Select(key => key.Owner._layout.Document.Sections.First(s => s.Id == key.Section).Name).Distinct(StringComparer.Ordinal);
                 throw new NotSupportedException($"{string.Join(", ", names)}: 'Suppress Blank Section' does not settle, because whether the section is blank depends on the page it prints on. "
                     + "Crystal formats such a section again on the page it moves to; that re-formatting is not supported.");
             }
-            if (scheduleAttempt >= 15) _diagnostics.Add("Mutable page formula layout did not stabilize within sixteen replays; the last computed layout is retained.");
-            else return Paginate(measuredHeights, pages.Count, 0, counts, nextInlineContexts, nextFooterRows, scheduleAttempt + 1);
+            if (last) _diagnostics.Add($"Mutable page formula layout did not stabilize within {scheduleAttempt + 1} replays; the last computed layout is retained.");
+            else { retry = new(pages.Count, 0, counts, nextInlineContexts, nextFooterRows, scheduleAttempt + 1); return new([], []); }
         }
         if (_textMetrics is not null)
         {
@@ -1065,46 +1872,114 @@ public sealed partial class ReportLayoutSession
         // Cross-section lines follow the printed bands, including repeated detail rows.
         // Split them at band boundaries so the HTML and PDF clips agree.
         var strokes = new Dictionary<Placement, List<Item>>(ReferenceEqualityComparer.Instance);
+        var borderTails = new Dictionary<Placement, Placement>(ReferenceEqualityComparer.Instance);
+        var footerRuleLayers = new Dictionary<Page, Placement>();
         if (_layout.Document.Sections.Any(section => section.Elements.Any(element => element.LineEndSection.Length > 0)))
         {
-            var pageEnds = pages.Select(sheet => sheet.Placements.LastOrDefault(p => !p.Band.Suppressed && !p.Band.Blank
-                && p.Band.Section.Kind is not ("PageHeader" or "PageFooter"))).ToHashSet(ReferenceEqualityComparer.Instance);
+            var detailNames = _layout.Document.Sections.Where(s => s.Kind == "Detail").Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+            var pageDetailSpans = _layout.Document.Sections.Where(s => s.Kind == "PageHeader").SelectMany(s => s.Elements)
+                .Where(e => detailNames.Contains(e.LineEndSection)).Select(e => e.Id).ToHashSet(StringComparer.Ordinal);
             var activeLines = new List<Item>();
-            foreach (var placement in pages.SelectMany(sheet => sheet.Placements))
+            foreach (var sheet in pages)
             {
-                if (placement.Band.Suppressed || placement.Band.Blank || placement.Band.Section.UnderlayFollowingSections) continue;
-                var section = placement.Band.Section;
-                bool furniture = section.Kind is "PageHeader" or "PageFooter";
-                var starts = placement.Band.Items.Where(i => SpanningLine(i) && !i.Element.IsSuppressed
-                    && i.Element.TopTwips >= placement.Offset && i.Element.TopTwips < placement.Offset + placement.Height).ToList();
-                foreach (var line in starts)
+                var lastBody = sheet.Placements.LastOrDefault(p => !p.Band.Suppressed && !p.Band.Blank
+                    && p.Band.Section.Kind is not ("PageHeader" or "PageFooter"));
+                // A page-header frame ending in details closes at the last printed record on that sheet.
+                var lastDetailRows = new Dictionary<string, int>(StringComparer.Ordinal);
+                if (pageDetailSpans.Count != 0)
+                    foreach (var p in sheet.Placements.Where(p => p.Band.Section.Kind == "Detail" && !p.Band.Suppressed
+                        && !p.Band.Blank && !p.Band.Section.UnderlayFollowingSections))
+                        lastDetailRows[p.Band.Section.Name] = p.Band.Row;
+                var footerRules = new HashSet<Item>(ReferenceEqualityComparer.Instance);
+                if (PageFooterRuleLayer(sheet, size.ContentHeightTwips, footerRules, strokes,
+                    (band, end) => TextGrowthAbove(band.Items, end)) is { } layer)
                 {
-                    activeLines.RemoveAll(previous => previous.Element.Id == line.Element.Id);
-                    activeLines.Add(line);
+                    footerRuleLayers.Add(sheet, layer);
+                    activeLines.RemoveAll(previous => footerRules.Any(i => i.Element.Id == previous.Element.Id));
                 }
-                foreach (var line in activeLines.ToArray())
+                var drawnBoxes = new HashSet<Item>(ReferenceEqualityComparer.Instance);
+                foreach (var placement in sheet.Placements)
                 {
-                    var ends = line.Element.LineEndSection == section.Name;
-                    if (furniture && !ends && !starts.Contains(line)) continue;
-                    var top = starts.Contains(line) ? line.Element.TopTwips : placement.Offset;
-                    var end = placement.Offset + placement.Height;
-                    if (ends && line.Element.LineEndTop <= end)
+                    if (placement.Band.Suppressed || placement.Band.Blank || placement.Band.Section.UnderlayFollowingSections) continue;
+                    var section = placement.Band.Section;
+                    bool furniture = section.Kind is "PageHeader" or "PageFooter";
+                    var starts = placement.Band.Items.Where(i => SpanningLine(i) && !i.Element.IsSuppressed && !footerRules.Contains(i)
+                        && i.Element.TopTwips >= placement.Offset && i.Element.TopTwips < placement.Offset + placement.Height).ToList();
+                    foreach (var line in starts)
                     {
-                        end = line.Element.LineEndTop;
-                        activeLines.Remove(line);
+                        activeLines.RemoveAll(previous => previous.Element.Id == line.Element.Id);
+                        activeLines.Add(line);
                     }
-                    if (end <= top) continue;
-                    var segment = line.Element.CloneFor(section.Id, line.Element.Name);
-                    if (segment.Kind == "Box")
+                    foreach (var line in activeLines.ToArray())
                     {
-                        if (!starts.Contains(line)) segment.Visual.TopLine = "NoLine";
-                        if (!ends && !(segment.Visual.CloseAtPageBreak && pageEnds.Contains(placement))) segment.Visual.BottomLine = "NoLine";
+                        var ends = line.Element.LineEndSection == section.Name
+                            && (!pageDetailSpans.Contains(line.Element.Id) || lastDetailRows[section.Name] == placement.Band.Row);
+                        if (furniture && !ends && !starts.Contains(line)) continue;
+                        var top = starts.Contains(line) ? line.Element.TopTwips : placement.Offset;
+                        var end = placement.Offset + placement.Height;
+                        bool reachesPageEdge = false;
+                        if (ends && line.Element.LineEndTop <= end)
+                        {
+                            end = line.Element.LineEndTop;
+                            // When a field above the endpoint grows, the rule extends down its printed
+                            // fragment. Crystal closes it on this sheet even when the field continues.
+                            if (line.Element.Kind == "Line")
+                            {
+                                end += TextGrowthAbove(placement.Band.Items, line.Element.LineEndTop);
+                                reachesPageEdge = end > placement.Offset + placement.Height && ReferenceEquals(placement, lastBody);
+                                end = Math.Min(end, placement.Offset + placement.Height);
+                            }
+                            activeLines.Remove(line);
+                        }
+                        if (end <= top) continue;
+                        var segment = line.Element.CloneFor(section.Id, line.Element.Name);
+                        if (segment.Kind == "Box")
+                        {
+                            var firstOnSheet = drawnBoxes.Add(line);
+                            if (!starts.Contains(line) && !(segment.Visual.CloseAtPageBreak && firstOnSheet)) segment.Visual.TopLine = "NoLine";
+                            var closesPage = segment.Visual.CloseAtPageBreak && ReferenceEquals(placement, lastBody);
+                            reachesPageEdge = !ends && closesPage;
+                            if (!ends && !closesPage) segment.Visual.BottomLine = "NoLine";
+                        }
+                        // Continue the border through the unoccupied page strip without changing the flow.
+                        if (reachesPageEdge && !ReferenceEquals(sheet, pages[^1]) && placement.Width == 0
+                            && sheet.Bottom > placement.Top + placement.Height)
+                        {
+                            if (!borderTails.TryGetValue(placement, out var tail))
+                            {
+                                var y = placement.Top + placement.Height;
+                                var ink = new ReportDesignerSection { Name = "Continuation borders", HeightTwips = sheet.Bottom - y, BackgroundColor = "transparent" };
+                                tail = new(new Band(ink, [], placement.Band.Row, []), y, 0, sheet.Bottom - y);
+                                borderTails.Add(placement, tail);
+                            }
+                            var edge = line.Element.CloneFor(section.Id, segment.Name);
+                            edge.LeftTwips = line.Element.LeftTwips;
+                            edge.TopTwips = 0;
+                            edge.HeightTwips = tail.Height;
+                            edge.LineEndSection = "";
+                            if (edge.Kind == "Box")
+                            {
+                                edge.Visual.TopLine = "NoLine";
+                                segment.Visual.BottomLine = "NoLine";
+                            }
+                            tail.Band.Items.Add(line with { Element = edge, Html = edge.Kind == "Line" ? ReportObjectRenderer.Content(edge) : line.Html });
+                        }
+                        segment.Id = line.Element.Id; segment.LeftTwips = line.Element.LeftTwips;
+                        segment.TopTwips = top; segment.HeightTwips = end - top; segment.LineEndSection = "";
+                        if (!strokes.TryGetValue(placement, out var parts)) strokes[placement] = parts = [];
+                        parts.Add(line with { Element = segment, Html = segment.Kind == "Line" ? ReportObjectRenderer.Content(segment) : line.Html });
                     }
-                    segment.Id = line.Element.Id; segment.LeftTwips = line.Element.LeftTwips;
-                    segment.TopTwips = top; segment.HeightTwips = end - top; segment.LineEndSection = "";
-                    if (!strokes.TryGetValue(placement, out var parts)) strokes[placement] = parts = [];
-                    parts.Add(line with { Element = segment });
                 }
+                activeLines.RemoveAll(line => pageDetailSpans.Contains(line.Element.Id));
+            }
+        }
+        IEnumerable<Placement> PaintPlacements(Page sheet)
+        {
+            if (footerRuleLayers.TryGetValue(sheet, out var layer)) yield return layer;
+            foreach (var placement in sheet.Placements)
+            {
+                yield return placement;
+                if (borderTails.TryGetValue(placement, out var tail)) yield return tail;
             }
         }
         var navigation = BuildNativeNavigation(pages);
@@ -1112,17 +1987,53 @@ public sealed partial class ReportLayoutSession
         var output = new List<string>();
         var snapshots = new List<ReportPageSnapshot>();
         var duplicates = new DuplicateFields();
-        // Main-report grids allocate horizontal pages. Subreports can paint on those pages.
+        // Crystal tiles oversized main-report pictures across printable sheets. Other objects
+        // intersecting those tiles keep the logical page's formulas and their original alignment.
         var sheets = pages.SelectMany((current, index) =>
         {
             var lastPane = current.Placements.Where(p => !p.Band.Suppressed)
                 .SelectMany(p => p.Band.Items.Where(i => i.Owner == this && i.Element.TopTwips >= p.Offset
                     && i.Element.TopTwips < p.Offset + p.Height))
                 .Select(i => i.HorizontalPane).DefaultIfEmpty().Max();
-            return Enumerable.Range(0, lastPane + 1).Select(pane => (current, index, pane));
+            var picturePane = 0;
+            if (_rows.Length > 0 && size.ContentWidthTwips > 0)
+            {
+                var pictureRight = current.Placements.Where(p => p.Width == 0 && !p.Band.Suppressed && !p.Band.Blank)
+                    .SelectMany(p => p.Band.Items.Where(i => i.Owner == this && !i.Element.IsSuppressed
+                        && i.Element is { Kind: "Picture", UseCrystalScreenMetrics: true }
+                        && i.Element.TopTwips < p.Offset + p.Height && i.Element.TopTwips + ItemHeight(i) > p.Offset))
+                    .Select(i => (long)i.Element.LeftTwips + i.Element.WidthTwips).DefaultIfEmpty().Max();
+                var panes = Math.Max(0, pictureRight - 1) / size.ContentWidthTwips;
+                if (panes > 5000) throw new InvalidDataException("Report exceeds the horizontal page limit.");
+                picturePane = (int)panes;
+            }
+            var gridSheets = Enumerable.Range(0, Math.Max(lastPane, picturePane) + 1)
+                .Select(pane => (current, index, pane, pictureTile: pane > 0 && pane <= picturePane, footerContinuation: false, rulesOnly: false));
+            if (_rows.Length > 0 || size.ContentWidthTwips <= 0) return gridSheets;
+
+            // On a no-records print, an oversized report-footer picture tiles the closing band horizontally.
+            // Each additional tile has a rules-only sheet followed by its repeated furniture.
+            var lastFooterPane = current.Placements.Where(p => p.Band.Section.Kind == "ReportFooter" && !p.Band.Suppressed)
+                .SelectMany(p => p.Band.Items)
+                .Where(i => i.Element is { Kind: "Picture", UseCrystalScreenMetrics: true })
+                .Select(i => (int)Math.Max(0, ((long)i.Element.LeftTwips + i.Element.WidthTwips - 1) / size.ContentWidthTwips))
+                .DefaultIfEmpty().Max();
+            if (lastFooterPane > 5000) throw new InvalidDataException("Report exceeds the horizontal page limit.");
+            return gridSheets.Concat(Enumerable.Range(1, lastFooterPane).SelectMany(pane => new[]
+            {
+                (current, index, pane, pictureTile: false, footerContinuation: true, rulesOnly: true),
+                (current, index, pane, pictureTile: false, footerContinuation: true, rulesOnly: false)
+            }));
         });
-        foreach (var (current, index, paneIndex) in sheets)
+        var duplicateDecisions = new Dictionary<(Placement, Item), bool>();
+        var firstSheet = new int[pages.Count];
+        foreach (var (current, index, paneIndex, pictureTile, footerContinuation, rulesOnly) in sheets)
         {
+            if (paneIndex == 0)
+            {
+                duplicateDecisions.Clear();
+                firstSheet[index] = snapshots.Count + 1;
+            }
             var pageBands = new List<ReportPageBand>();
             var html = new StringBuilder();
             var paper = ReportDesignerEditing.PhysicalPaperSize(size);
@@ -1130,7 +2041,7 @@ public sealed partial class ReportLayoutSession
                 .Append(Px(paper.Width)).Append("px;height:")
                 .Append(Px(paper.Height)).Append("px;break-after:page;\">");
             html.Append("<div style=\"position:absolute;left:").Append(Px(size.MarginLeftTwips)).Append("px;top:").Append(Px(size.MarginTopTwips)).Append("px;width:").Append(Px(size.ContentWidthTwips)).Append("px;height:").Append(Px(size.ContentHeightTwips)).Append("px;overflow:hidden;\">");
-            foreach (var placement in current.Placements)
+            foreach (var placement in PaintPlacements(current))
             {
                 if (placement.Band.Suppressed || placement.Band.Blank) continue;
                 var objects = new List<ReportPageObject>();
@@ -1143,7 +2054,7 @@ public sealed partial class ReportLayoutSession
                 IEnumerable<Item> paintItems = placement.Band.Items;
                 // Expansion orders items vertically for pagination. Opaque chart drawings
                 // must cover earlier objects in the section's authored stacking order.
-                if (placement.Band.Items.Any(i => i.Element.Analysis?.ChartType is Charts.ChartType.Area or Charts.ChartType.Pie or Charts.ChartType.Donut or Charts.ChartType.Radar or Charts.ChartType.Funnel or Charts.ChartType.Gauge or Charts.ChartType.Scatter or Charts.ChartType.Bubble))
+                if (placement.Band.Items.Any(i => i.Element.Visual.TightHorizontal || i.Element.Analysis?.ChartType is Charts.ChartType.Area or Charts.ChartType.Pie or Charts.ChartType.Donut or Charts.ChartType.Radar or Charts.ChartType.Funnel or Charts.ChartType.Gauge or Charts.ChartType.Scatter or Charts.ChartType.Bubble))
                 {
                     var sources = _layout.Document.SourceObjects;
                     if (placement.Band.Items.All(i => sources.ContainsKey(i.Element.SourceKey) && i.Child is null))
@@ -1155,8 +2066,19 @@ public sealed partial class ReportLayoutSession
                     paintItems = paintItems.Concat(ink);
                 foreach (var item in paintItems)
                 {
-                    var wideFrame = paneIndex > 0 && item.Element.Kind == "Box" && item.Element.LeftTwips + item.Element.WidthTwips > paneIndex * size.ContentWidthTwips;
-                    if (SpanningLine(item) || item.Element.IsSuppressed || item.HorizontalPane != paneIndex && !wideFrame) continue;
+                    var tileLeft = (long)paneIndex * size.ContentWidthTwips;
+                    var right = (long)item.Element.LeftTwips + Math.Max(1, item.Element.WidthTwips);
+                    var intersectsTile = paneIndex > 0 && right > tileLeft && item.Element.LeftTwips < tileLeft + size.ContentWidthTwips;
+                    var translate = !footerContinuation && intersectsTile && (item.Element.Kind == "Box"
+                        || pictureTile && placement.Width == 0 && item.HorizontalPane == 0 && item.Table is null);
+                    // A legacy map without rendered artwork occupies space but paints no frame.
+                    if (SpanningLine(item) || item.Element.IsSuppressed || item.Element.Kind == "Map") continue;
+                    if (footerContinuation)
+                    {
+                        if (item.Element.Kind != "Line" && (rulesOnly || placement.Band.Section.Kind != "ReportFooter"
+                            && !(placement.Band.Section.Kind == "ReportHeader" && item.Element.Kind == "Picture"))) continue;
+                    }
+                    else if (item.HorizontalPane != paneIndex && !translate) continue;
                     var element = item.Element.CloneFor(item.Element.SectionId, item.Element.Name);
                     // Crystal leaves a NULL field unpainted, including its border and fill. An empty string,
                     // suppressed zero, or defaulted database NULL still owns its authored decoration.
@@ -1167,7 +2089,7 @@ public sealed partial class ReportLayoutSession
                         element.BackgroundColor = "transparent";
                         element.Visual.TopLine = element.Visual.BottomLine = element.Visual.LeftLine = element.Visual.RightLine = "NoLine";
                     }
-                    element.LeftTwips = item.Element.LeftTwips - (wideFrame ? paneIndex * size.ContentWidthTwips : 0); element.TopTwips = item.Element.TopTwips - placement.Offset;
+                    element.LeftTwips = checked((int)(item.Element.LeftTwips - (translate ? tileLeft : 0))); element.TopTwips = item.Element.TopTwips - placement.Offset;
                     element.HeightTwips = ItemHeight(item);
                     if (element.CanGrow && TextMetrics(item) is { } metric
                         && metric.Lines.Any(l => l.Top < placement.Height - element.TopTwips && l.Bottom > placement.Height - element.TopTwips))
@@ -1190,14 +2112,36 @@ public sealed partial class ReportLayoutSession
                             if (end > placement.Height) element.Visual.BottomLine = "NoLine";
                         }
                         // Each fragment owns its borders; clipping the original box loses page-edge closure.
+                        var childTop = element.TopTwips;
                         element.TopTwips = Math.Max(0, element.TopTwips);
                         element.HeightTwips = Math.Min(placement.Height, end) - element.TopTwips;
+                        if (element.UseCrystalScreenMetrics && element.SubreportName.Length > 0)
+                        {
+                            // The child's coordinates are content edges. Crystal paints its frame outside them on all four
+                            // sides, including the one-point gutter; a fragment cut by a page break keeps the cut edge in place.
+                            int FrameInset(string line) => FrameOutset(line, element.Visual.LineWidthTwips);
+                            var leftInset = FrameInset(element.Visual.LeftLine);
+                            element.LeftTwips -= leftInset;
+                            element.WidthTwips += leftInset + FrameInset(element.Visual.RightLine);
+                            var topInset = childTop >= 0 ? FrameInset(element.Visual.TopLine) : 0;
+                            var bottomInset = end <= placement.Height ? FrameInset(element.Visual.BottomLine) : 0;
+                            element.TopTwips -= topInset;
+                            element.HeightTwips += topInset + bottomInset;
+                        }
                     }
                     var content = nullNativeField ? "" : ResolvePageValues(item.Html.Replace(_pageToken, current.Number.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal).Replace(_countToken, counts[index].ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), current.Number, counts[index], placement.Band.RepeatedHeader);
                     var numericContent = content;
                     content = MaskNumericOverflow(item with { Element = element, Html = content });
                     numericContent = numericContent != content ? numericContent : null;
-                    if (duplicates.Suppress(item, placement.Band.Owner ?? this, index + 1, placement.Band.RepeatedHeader))
+                    // Repainting a duplicate field's right-hand fragment must not advance its logical row.
+                    var suppressedDuplicate = false;
+                    if (paneIndex == 0 || !duplicateDecisions.TryGetValue((placement, item), out suppressedDuplicate))
+                    {
+                        suppressedDuplicate = duplicates.Suppress(item, placement.Band.Owner ?? this, index + 1, placement.Band.RepeatedHeader);
+                        if (item.HorizontalPane == 0 && right > size.ContentWidthTwips && SuppressesDuplicates(item.Element))
+                            duplicateDecisions[(placement, item)] = suppressedDuplicate;
+                    }
+                    if (suppressedDuplicate)
                     {
                         content = "";
                         numericContent = null;
@@ -1216,6 +2160,8 @@ public sealed partial class ReportLayoutSession
                     }
                     else if (textMetric is null && element.UseCrystalScreenMetrics && !element.HasRotatedText && content.Length > 0) CrystalDeviceText.WidenSingleLine(element, content);
                     if (item.NarrowedByFrame && !element.HasRotatedText) content = CrystalDeviceText.PreviewInFixedFrame(element, content);
+                    if (element.Visual.TightHorizontal && !element.HasRotatedText && element.Kind is "Field" or "Text" or "FieldHeading")
+                        CrystalDeviceText.FitTightFrame(element, content, textLines);
                     var painted = new ReportPageObject(element, content, item.Analysis)
                     { Table = item.Table, TextLines = textLines, UnmaskedNumericContent = numericContent };
                     var overprint = ReportObjectRenderer.IsDuplicateNativeTextPaint(objects.LastOrDefault(), painted,
@@ -1238,6 +2184,9 @@ public sealed partial class ReportLayoutSession
             }, pageBands));
             html.Append("</div></article>"); output.Add(html.ToString());
         }
+        // The formula page number stays vertical; navigation indexes the physical sheets.
+        foreach (var node in _navigationGroups.Keys)
+            if (node.PageIndex > 0) node.PageIndex = firstSheet[node.PageIndex - 1];
         // Nested sessions' own diagnostics reach the result, except those a parent already copied
         // with its "<element>: " prefix (ReportLayoutSession.Runtime), which would show twice.
         var diagnostics = new List<string>(_diagnostics);
@@ -1304,7 +2253,7 @@ public sealed partial class ReportLayoutSession
         }
         // Native areas honor their explicit group-keep flag; Crystal can leave a heading on the preceding page.
         // Designer-only layouts without area metadata retain the implicit header/detail keep.
-        int KeepHeight(int bandIndex, Band band, ReportLayoutArea? area, int room)
+        int KeepHeight(int bandIndex, Band band, ReportLayoutArea? area, int room, bool afterPriorDetails = false)
         {
             int Flow(int index)
             {
@@ -1320,13 +2269,27 @@ public sealed partial class ReportLayoutSession
             }
             if (area?.KeepGroupTogether != true) return keepHeight;
             var wholeGroup = Flow(bandIndex);
-            var groupNumber = ReportDesignerEditing.GetGroupNumber(_layout.Document, _layout.Document.Sections.First(s => s.Id == band.Section.Id));
+            var groupNumber = DrillSectionDepth(band.Section);
+            if (groupNumber < 1 || band.Row < 0) return keepHeight;
+            var level = groupNumber - 1;
+            var hierarchy = HierarchyAt(level);
+            var groupEnd = hierarchy is null ? -1 : hierarchy.Nodes[hierarchy.NodeOfRow[band.Row]].SubtreeEnd;
             for (var next = bandIndex + 1; next < bands.Count; next++)
             {
+                var candidate = bands[next];
+                if (candidate.Section.Kind == "ReportFooter" ||
+                    candidate.Section.Kind == "GroupFooter" && DrillSectionDepth(candidate.Section) < groupNumber) break;
+                if (groupEnd >= 0 ? candidate.Row >= groupEnd : GroupStart(level, candidate.Row) != GroupStart(level, band.Row)) break;
                 wholeGroup += Flow(next);
-                if (bands[next].Section.Kind == "GroupFooter" && ReportDesignerEditing.GetGroupNumber(_layout.Document, _layout.Document.Sections.First(s => s.Id == bands[next].Section.Id)) == groupNumber) break;
+                if (wholeGroup > room)
+                {
+                    if (afterPriorDetails && page.Placements.Any(p => p.Band.Section.Kind == "Detail"
+                        && !p.Band.Suppressed && !p.Band.Blank && p.Band.Row < band.Row))
+                        return room;
+                    return keepHeight;
+                }
             }
-            return wholeGroup <= room ? wholeGroup : keepHeight;
+            return wholeGroup;
         }
         bool InColumns(ReportDesignerSection section) => columns is not null && (section.Kind == "Detail" || columns.FormatGroups && section.Kind is "GroupHeader" or "GroupFooter");
         int ColumnLeft(int index) => index * (columns!.DetailWidth + columns.HorizontalGap);
@@ -1471,7 +2434,7 @@ public sealed partial class ReportLayoutSession
             return blank ? band with { Blank = true } : band;
         }
         bool IsFooterSpacer(Band band) => band.Section.Kind is "GroupFooter" or "ReportFooter"
-            && !band.Section.NewPageAfter && _layout.Areas.GetValueOrDefault(band.Section.Id)?.NewPageAfter != true
+            && !band.Section.NewPageAfter && _layout.Areas.GetValueOrDefault(band.Section.Id) is not ({ NewPageAfter: true } or { ReserveFinalFooter: true })
             && band.Items.Count == 0 && band.Section.Elements.Count == 0
             && band.Section.BackgroundColor.ToLowerInvariant() is "transparent" or "#ffffff"
             && !band.Section.UnderlayFollowingSections
@@ -1479,12 +2442,21 @@ public sealed partial class ReportLayoutSession
             && !(_layout.SectionConditions.GetValueOrDefault(band.Section.Id)?.Count > 0)
             && !(_layout.AreaConditions.GetValueOrDefault(band.Section.Id)?.Count > 0);
         int Space(Band band) => band.Blank || band.Section.UnderlayFollowingSections ? 0 : Height(band);
-        // Page headers and footers print their subreports on every page, laid out like a body section's.
-        Band Furnish(Band band, int number) => band.Items.Any(i => i.Child is not null) ? Expand(band, 0, number) : band;
-        Band FurnitureBand(string section, int row, int number, int count, int physical)
+        // Page headers and footers print their subreports on every page, laid out like a body section's. The subreport's
+        // sections print on the furniture's page, under that page's formatting.
+        bool Subreports(Band band) => band.Items.Any(i => (i.Owner ?? band.Owner ?? this).HasChild(i));
+        Band Furnished(Band band, int number, int count, int physical) =>
+            Subreports(band) ? ForPage(Expand(band, 0, number, furniture: (number, count, physical)), number, count, physicalPage: physical) : band;
+        Band FurnitureBand(string section, int row, int number, int count, int physical) =>
+            Furnished(PrepareFurnitureSubreports(ForPage(_furniture[(section, row)], number, count, physicalPage: physical), number, count, physical), number, count, physical);
+        // The room a page header takes for a record, on a fresh page (or this one), with the subreports built so far.
+        Band Furnish(Band band, bool fresh = true)
         {
-            var band = ForPage(_furniture[(section, row)], number, count, physicalPage: physical);
-            return band.Items.Any(i => i.Child is not null) ? ForPage(Expand(band, 0, number), number, count, physicalPage: physical) : band;
+            if (!Subreports(band)) return band;
+            var physical = fresh ? pages.Count + 1 : pages.Count;
+            var number = !fresh ? page.Number : resetPageNumber ? 1 : page.Number + 1;
+            var count = ExpectedCount(physical - 1);
+            return Furnished(PrepareFurnitureSubreports(ForPage(band, number, count, physicalPage: physical), number, count, physical, build: false), number, count, physical);
         }
         // The band loop asks for the same page band twice (before and after the keep/new-page decisions); when neither the
         // page number nor the expected count changed in between, the second answer is the first one.
@@ -1565,7 +2537,10 @@ public sealed partial class ReportLayoutSession
                 var physical = pages.Contains(target) ? pages.Count : pages.Count + 1;
                 var band = Blankness(FurnitureBand(section.Id, row, target.Number, ExpectedCount(physical - 1), physical), physical);
                 if (band.Blank && !_state.PhysicalSchedule) continue;
-                target.Placements.Add(new(band, target.Cursor, 0, Height(band), -2)); target.Cursor += band.Section.UnderlayFollowingSections ? 0 : Space(band);
+                // A first-page header printed below a report header observes its variable assignments; on a later page the header
+                // prints first, also above a band continued from the page before.
+                target.Placements.Add(new(band, target.Cursor, 0, Height(band), -2) { PrintSequence = target.HasBody && physical == 1 ? sequence : -2 });
+                target.Cursor += band.Section.UnderlayFollowingSections ? 0 : Space(band);
             }
             target.HasHeaders = true;
             if (!target.HasBody) target.BodyStart = target.Cursor;
@@ -1600,7 +2575,8 @@ public sealed partial class ReportLayoutSession
                 target.Cursor += reserved;
             }
         }
-        Band Expand(Band source, int measurementOffset, int? objectPage = null, int? printableWidth = null)
+        // furniture: the page whose header or footer prints the band (its number, page count and physical page).
+        Band Expand(Band source, int measurementOffset, int? objectPage = null, int? printableWidth = null, (int Number, int Count, int Physical)? furniture = null)
         {
             _paginationCancellationToken.ThrowIfCancellationRequested();
             source = ApplyPrintedItems(source, 0, false);
@@ -1615,16 +2591,30 @@ public sealed partial class ReportLayoutSession
             var growth = new List<(int Bottom, int Amount, int Left, int Right, bool NativeGrid)>();
             var ordered = true;
             for (var index = 1; index < source.Items.Count && ordered; index++) ordered = source.Items[index - 1].Element.TopTwips <= source.Items[index].Element.TopTwips;
-            foreach (var item in ordered ? source.Items : (IEnumerable<Item>)source.Items.OrderBy(i => i.Element.TopTwips))
+            foreach (var sourceItem in ordered ? source.Items : (IEnumerable<Item>)source.Items.OrderBy(i => i.Element.TopTwips))
             {
+                var item = (sourceItem.Owner ?? source.Owner ?? this).ResolveDeferredSubreport(sourceItem);
                 if (item.Element.IsSuppressed) { items.Add(item); continue; }
                 var shift = 0;
                 foreach (var g in growth)
                     if (g.Bottom <= item.Element.TopTwips && (source.Section.RelativePositions || g.Left < item.Element.LeftTwips + item.Element.WidthTwips && item.Element.LeftTwips < g.Right))
                         shift = Math.Max(shift, g.Amount);
                 var top = item.Element.TopTwips + shift;
+                if (item.Element is { Kind: "Line", HeightTwips: 0, UseCrystalScreenMetrics: true } rule && !SpanningLine(item))
+                {
+                    // A horizontal rule below a growing text field follows the text, even when
+                    // the section does not move other fields relative to each other.
+                    if (!source.Section.RelativePositions)
+                        top = Math.Max(top, rule.TopTwips + TextGrowthAbove(items, rule.TopTwips, rule.LeftTwips, rule.LeftTwips + rule.WidthTwips));
+                    // A rule authored on the bottom edge paints inside the band. Charging another
+                    // device pixel for it on every detail creates gaps and shifts the totals.
+                    if (rule.TopTwips == source.Section.HeightTwips && top >= 15)
+                        top -= Math.Max(15, (rule.Visual.LineWidthTwips.GetValueOrDefault() + 1) / 2);
+                }
                 if (item.Analysis?.Table is { } table)
                 {
+                    if (item.Element.Kind == "CrossTab" && table.NativeCrossTab is not null && item.Analysis.Rows.Count == 0)
+                        continue;
                     // Crystal clips a cross-tab that runs past the printable edge; never ask for panes
                     // narrower than the pager's minimum, which would fail the whole report.
                     var pageRoom = (printableWidth ?? size.ContentWidthTwips) - item.Element.LeftTwips;
@@ -1693,7 +2683,7 @@ public sealed partial class ReportLayoutSession
                                     element.Visual.TopLine = element.Visual.BottomLine = element.Visual.LeftLine = element.Visual.RightLine = "NoLine";
                                 }
                             }
-                            var rowItem = item with { Element = element, Analysis = null, HorizontalPane = horizontal ? fragment.Pane : 0, Table = fragment with { RegionId = item.Element.Id + "-" + item.Row }, Measurement = -1,
+                            var rowItem = item with { Element = element, Analysis = null, PrintGrid = fragmentIndex == 0 && fragment.Pane == 0 ? table.PrintCellFormulas : null, HorizontalPane = horizontal ? fragment.Pane : 0, Table = fragment with { RegionId = item.Element.Id + "-" + item.Row }, Measurement = -1,
                                 Html = ReportObjectRenderer.Encode(string.Join(" ", fragment.Cells)) };
                             items.Add(rowItem);
                             if (fragment.ContinuationHeaders.Count > 0)
@@ -1723,6 +2713,11 @@ public sealed partial class ReportLayoutSession
                                 start + headerSection.HeightTwips + pane.Rows[0].HeightTwips, item.Analysis.Definition.RepeatHeaders, headerPeers));
                         }
                     }
+                    // Crystal's stacked native grid includes a point below its closing hairline
+                    // in the flow extent. The cells and their border stay at their authored coordinates.
+                    if (table.NativeCrossTab is { StackedRowGroups: true, Appearance: { } appearance }
+                        && appearance.Stroke(14).Width == 0 && regionCursor > top)
+                        regionCursor += 20;
                     growth.Add((item.Element.TopTwips + item.Element.HeightTwips,
                         Math.Max(0, regionCursor - item.Element.TopTwips - item.Element.HeightTwips), item.Element.LeftTwips, item.Element.LeftTwips + width, table.NativeCrossTab is not null));
                     continue;
@@ -1771,10 +2766,12 @@ public sealed partial class ReportLayoutSession
                 var active = new Dictionary<Band, (int Start, Band Header)>();
                 foreach (var original in child._bands)
                 {
-                    var context = inlineContexts?.GetValueOrDefault(original) ?? (Page: 1, Count: ExpectedCount(0));
+                    // A page header or footer subreport prints on that page; a body subreport's bands where the last pass placed them.
+                    var context = furniture is { } host ? (Page: host.Number, host.Count) : inlineContexts?.GetValueOrDefault(original) ?? (Page: 1, Count: ExpectedCount(0));
                     if (context.Page == 0) context = (1, ExpectedCount(0));
                     var childWidth = Math.Min(item.Element.WidthTwips, (printableWidth ?? size.ContentWidthTwips) - item.Element.LeftTwips);
-                    var nested = Expand(ForPage(original, context.Page, context.Count, objectPage: objectPage), measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth);
+                    var nested = Expand(ForPage(original, context.Page, context.Count, physicalPage: furniture?.Physical ?? 0, objectPage: objectPage, furniture: furniture is not null),
+                        measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth, furniture);
                     if (nested.Suppressed) { inlineSections.Add(new(cursor, cursor, original, nested.Section)); continue; }
                     if (nested.Section.SuppressIfBlank && IsBlank(nested)) { inlineSections.Add(new(cursor, cursor, original, nested.Section, true)); continue; }
                     // A no-grow subreport only prints child bands that fit its authored box.
@@ -1796,11 +2793,13 @@ public sealed partial class ReportLayoutSession
                     { var header = active[previous]; inlineHeaders.Add(new(header.Start, cursor, header.Header)); active.Remove(previous); }
                     foreach (var repeat in original.Repeats.Where(r => !active.ContainsKey(r)))
                     {
-                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth);
+                        var header = Expand(repeat, measurementOffset + item.ChildMeasurementOffset, objectPage, childWidth, furniture);
                         active[repeat] = (cursor, header with { Items = header.Items.Select(i => Shift(i, item.Element.LeftTwips, 0, item.Element.WidthTwips)).ToList() });
                     }
                     var nestedArea = child._layout.Areas.GetValueOrDefault(original.Section.Id);
-                    if ((nested.Section.NewPageBefore || nestedArea?.NewPageBefore == true) && cursor > 0) forcedBreaks.Add(cursor);
+                    // A child starts a fresh report even when its object is inset in the parent.
+                    // New Page Before on its first visible band must not split that inset off.
+                    if ((nested.Section.NewPageBefore || nestedArea?.NewPageBefore == true) && cursor > top) forcedBreaks.Add(cursor);
                     breaks.Add(cursor);
                     items.AddRange(nested.Items.Select(i => Shift(i with { Html = i.Html.Replace(child._pageToken, _pageToken, StringComparison.Ordinal).Replace(child._countToken, _countToken, StringComparison.Ordinal) }, item.Element.LeftTwips, cursor, item.Element.WidthTwips)));
                     breaks.AddRange(nested.Breaks?.Select(b => cursor + b) ?? []);
@@ -1810,7 +2809,7 @@ public sealed partial class ReportLayoutSession
                         h.KeepThrough == 0 ? 0 : cursor + h.KeepThrough, h.Repeat, h.HorizontalPeers)) ?? []);
                     inlineSections.AddRange(nested.InlineSections?.Select(s => s with { Start = cursor + s.Start, End = cursor + s.End }) ?? []);
                     var end = cursor + Height(nested);
-                    inlineSections.Add(new(cursor, end, original, nested.Section));
+                    inlineSections.Add(new(cursor, end, original, nested.Section, FirstVisible: cursor == top));
                     extent = Math.Max(extent, end);
                     if (!nested.Section.UnderlayFollowingSections) cursor = end;
                     var conditionalAfter = child.Conditions(child._layout.SectionConditions, original.Section.Id, true)
@@ -1822,7 +2821,11 @@ public sealed partial class ReportLayoutSession
                 foreach (var header in active.Values) inlineHeaders.Add(new(header.Start, cursor, header.Header));
                 if (childFrame is not null)
                     childFrame.HeightTwips = Math.Max(item.Element.HeightTwips, extent - top);
-                growth.Add((item.Element.TopTwips + item.Element.HeightTwips, Math.Max(0, extent - item.Element.TopTwips - item.Element.HeightTwips),
+                // A grown subreport ends its band at its frame, painted outside the content edges (sample "36d Subreports": every
+                // employee band ends 40 twips under the child bands, the frame's one-point gutter and line).
+                var frameOutset = childFrame is not null && item.Element.UseCrystalScreenMetrics && extent - top > item.Element.HeightTwips
+                    ? FrameOutset(childFrame.Visual.BottomLine, childFrame.Visual.LineWidthTwips) : 0;
+                growth.Add((item.Element.TopTwips + item.Element.HeightTwips, Math.Max(0, extent + frameOutset - item.Element.TopTwips - item.Element.HeightTwips),
                     item.Element.LeftTwips, item.Element.LeftTwips + item.Element.WidthTwips, item.Element.UseCrystalScreenMetrics));
             }
             var grown = 0;
@@ -1862,19 +2865,45 @@ public sealed partial class ReportLayoutSession
             element.LeftTwips += left; element.TopTwips += top;
             return item with { Element = element, NarrowedByFrame = item.NarrowedByFrame || element.WidthTwips < item.Element.WidthTwips };
         }
+        int TextGrowthAbove(IEnumerable<Item> items, int y, int left = int.MinValue, int right = int.MaxValue)
+        {
+            var growth = 0;
+            foreach (var item in items)
+            {
+                var e = item.Element;
+                if (!e.IsSuppressed && e.CanGrow && e.Kind is "Field" or "Text"
+                    && e.TopTwips + e.HeightTwips <= y && e.LeftTwips < right && e.LeftTwips + e.WidthTwips > left)
+                    growth = Math.Max(growth, ItemHeight(item) - e.HeightTwips);
+            }
+            return growth;
+        }
+
         bool SpanningLine(Item item) => item.Owner == this && item.Element.LineEndSection.Length > 0;
         int Height(Band band)
         {
             if (band.Suppressed) return 0;
+            return Math.Max(band.Section.HeightTwips, ContentBottom(band));
+        }
+        // Empty trailing space in a transparent underlay paints nothing on a continuation page.
+        // The designed height still controls foreground flow and the matching footer.
+        int UnderlayInkHeight(Band band) => band.Section.BackgroundColor == "transparent" && !band.Items.Any(SpanningLine)
+            ? ContentBottom(band) : Height(band);
+        int SuppressedBottom(Band band) => band.Items.Where(item => item.Element.IsSuppressed && !SpanningLine(item))
+            .Select(item => Math.Min(Height(band), item.Element.TopTwips + 15)).DefaultIfEmpty(0).Max();
+        int ContentBottom(Band band)
+        {
             var bottom = 0;
             foreach (var item in band.Items)
                 if (!item.Element.IsSuppressed && !SpanningLine(item)) bottom = Math.Max(bottom, item.Element.TopTwips + Math.Max(15, ItemHeight(item)));
-            return Math.Max(band.Section.HeightTwips, bottom);
+            return bottom;
         }
         int ItemHeight(Item item)
         {
             if (item.Element.IsSuppressed) return 0;
             if (!item.Element.CanGrow || item.Element.HasRotatedText) return item.Element.HeightTwips;
+            // An inline subreport that prints no records (its query failed) keeps its designed height, as when its section was laid out.
+            if (item.Element.Kind == "Subreport" && item.Child is null && !(item.Owner ?? this)._layout.OnDemandSubreports.ContainsKey(item.Element.Id))
+                return item.Element.HeightTwips;
             var metric = TextMetrics(item);
             if (metric is not null && item.Element.CanGrow) return Math.Max(item.Element.HeightTwips, metric.Height);
             if (!item.Element.CanGrow || item.Measurement == -1) return item.Element.HeightTwips;

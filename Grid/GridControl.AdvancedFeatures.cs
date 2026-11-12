@@ -212,7 +212,7 @@ public partial class GridControl<TValue>
             // not leave a filtered header indicator or disable fast paths.
             _columnAdvancedFilters.Remove(field);
         }
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
 

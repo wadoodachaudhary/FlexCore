@@ -6,7 +6,7 @@ namespace Fx.ControlKit.Reports;
 
 /// <summary>Native DateTime composition: the system default date and time, or the authored date and time components
 /// (the authored Gregorian date, the Windows short or long date, and the authored time components).
-/// Weekday and era components, other calendars and conditional properties remain explicitly unsupported.</summary>
+/// Weekday enclosures, other calendars and conditional properties remain explicitly unsupported.</summary>
 public sealed record ReportNativeDateTimeFormat(bool SystemDefaultFormatting, int WindowsDateDefault, int Order, string Separator,
     bool SuppressIfDuplicate = false, bool HasConditionalFormatting = false, string NativeArchive = "",
     ReportNativeDateComponents? DateComponents = null, ReportNativeTimeComponents? TimeComponents = null)
@@ -60,7 +60,9 @@ public sealed record ReportNativeDateTimeFormat(bool SystemDefaultFormatting, in
 
 /// <summary>The saved date-component properties: the order, the year (0 = two digits, 1 = four digits, 2 = omitted), month
 /// (0 = number, 1 = two digits, 2 = abbreviated name, 3 = full name, 4 = omitted) and day (0 = number, 1 = two digits, 2 = omitted)
-/// styles and the four separators. Only the Gregorian calendar without weekday or era components is rendered.</summary>
+/// styles and the four separators, and the weekday (0 = abbreviated, 1 = full, 2 = omitted) with its separator and position
+/// (0 = leading, 1 = trailing). Only the Gregorian calendar is rendered, whose dates carry no era text whatever the saved era style;
+/// weekday enclosures are unsupported.</summary>
 public sealed record ReportNativeDateComponents(int DateOrder, int YearType, int MonthType, int DayType,
     int DayOfWeekType, int EraType, int CalendarType, string ZeroSeparator, string FirstSeparator,
     string SecondSeparator, string ThirdSeparator, string DayOfWeekSeparator, int DayOfWeekPosition, int DayOfWeekEnclosure)
@@ -68,7 +70,9 @@ public sealed record ReportNativeDateComponents(int DateOrder, int YearType, int
     internal string? UnsupportedReason => CalendarType != 1 ? "the custom date calendar is unsupported"
         : DateOrder is < 0 or > 2 ? "the custom date order is unsupported"
         : YearType is < 0 or > 2 || MonthType is < 0 or > 4 || DayType is < 0 or > 2 ? "the custom date component styles are unsupported"
-        : DayOfWeekType != 2 || EraType != 2 ? "custom dates with weekday or era components are not implemented" : null;
+        : EraType is < 0 or > 2 ? "the custom date era style is unsupported"
+        : DayOfWeekType is < 0 or > 2 || DayOfWeekPosition is not (0 or 1) ? "the custom date weekday style is unsupported"
+        : DayOfWeekType != 2 && DayOfWeekEnclosure != 0 ? "custom date weekday enclosures are not implemented" : null;
 
     internal string Format(DateTime value, CultureInfo culture)
     {
@@ -90,6 +94,12 @@ public sealed record ReportNativeDateComponents(int DateOrder, int YearType, int
         var text = new StringBuilder(ZeroSeparator);
         for (var i = 0; i < parts.Length; i++)
             if (parts[i] is { } part) text.Append(part).Append(separators[i]);
+        // The weekday (0 = abbreviated, 1 = full name) leads or trails the date with its own separator ("Monday, 13 September, 2004").
+        if (DayOfWeekType != 2)
+        {
+            var weekday = DayOfWeekType == 0 ? culture.DateTimeFormat.GetAbbreviatedDayName(value.DayOfWeek) : culture.DateTimeFormat.GetDayName(value.DayOfWeek);
+            return DayOfWeekPosition == 0 ? weekday + DayOfWeekSeparator + text : text + DayOfWeekSeparator + weekday;
+        }
         return text.ToString();
     }
 

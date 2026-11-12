@@ -512,7 +512,7 @@
     {
         _gridRows = 1; _gridCols = 1;
         var cell0 = string.IsNullOrEmpty(url) ? null : new CellImg { Url = url };
-        SeedCellTitle(cell0, 0);   // e.g. "HomeFront" on a fresh capture
+        SeedCellTitle(cell0, 0);   // e.g. the app's name on a fresh capture
         _cells = new List<CellImg?> { cell0 };
         _cellW = _cellH = 0;   // re-derived from the image's natural size in OnAfterRenderAsync
         _ctxOpen = false;
