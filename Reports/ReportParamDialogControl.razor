@@ -120,6 +120,7 @@
                                                             RightHeader="Selected Values:"
                                                             KeySelector="@(i => i.Key)"
                                                             LabelSelector="@(i => i.Label)"
+                                                            ItemSelectable="@(i => CanSelectMultiValue(p, i.Key))"
                                                             VisibleRows="7"
                                                             Height="@DualListHeight"
                                                             BatchSize="@PromptBatchSize"
@@ -514,9 +515,9 @@
                     var selected = new List<ListItem>();
                     foreach (var v in values)
                     {
-                        // Authored blank keys are real choices and count toward a prompt batch.
-                        // Reopening must preserve the same array that the previous acceptance returned.
-                        if (v is null || (v.Length == 0 && !p.PickListIsAuthored)) continue;
+                        // A visible authored blank still occupies a batch slot, but only an
+                        // explicitly permitted empty string may re-enter the selected values.
+                        if (!CanSelectMultiValue(p, v)) continue;
                         var match = available.FirstOrDefault(i => string.Equals(i.Key, v, StringComparison.OrdinalIgnoreCase));
                         selected.Add(match ?? new ListItem(v, v));
                     }
@@ -764,8 +765,13 @@
     private IList<ListItem> GetMultiSelected(string name) =>
         _multiSelected.TryGetValue(name, out var v) ? v : new List<ListItem>();
 
+    private static bool CanSelectMultiValue(ReportParameter parameter, string? value) =>
+        value is not null && (value.Length > 0 || parameter.ParameterType == ReportParameterType.String && parameter.AllowEmptyString);
+
     private Task SetMultiSelected(string name, IList<ListItem> items)
     {
+        var parameter = _parameters.Single(p => p.Name == name);
+        items = items.Where(item => CanSelectMultiValue(parameter, item.Key)).ToList();
         if (_dependencies.ContainsKey(name))
         {
             if (!_readyLists.Contains(name)) return Task.CompletedTask;
@@ -835,7 +841,7 @@
             if (p.IsOptional || p.AllowRange) continue;
             if (p.AllowMultiple)
             {
-                if (GetMultiSelected(p.Name).Count == 0) missing.Add(p);
+                if (!GetMultiSelected(p.Name).Any(item => CanSelectMultiValue(p, item.Key))) missing.Add(p);
             }
             else
             {
@@ -876,6 +882,7 @@
                 // MultiValueParameterRewriter so each value becomes its own
                 // @Name_0 / @Name_1 / … placeholder in the SQL.
                 result[p.Name] = GetMultiSelected(p.Name)
+                    .Where(i => CanSelectMultiValue(p, i.Key))
                     .Select(i => i.Key)
                     .ToArray();
             }

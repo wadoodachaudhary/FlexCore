@@ -9,14 +9,14 @@ namespace Fx.ControlKit.Reports;
 ///
 /// <para>
 /// Implementations should be safe to call concurrently and tolerate
-/// missing rows by returning the default (zoom = 100).
+/// missing rows by returning the default (zoom = 100, 100%).
 /// </para>
 /// </summary>
 public interface IReportViewerSettings
 {
     /// <summary>
     /// Returns the last-saved zoom percentage for the current user, or
-    /// 100 when no value has been stored yet. Special values:
+    /// 100 (100%) when no value has been stored yet. Special values:
     /// <c>0</c> = "Fit Page", <c>-1</c> = "Fit Width".
     /// </summary>
     Task<int> GetZoomLevelAsync();
@@ -37,7 +37,7 @@ public interface IReportViewerSettings
 /// <summary>
 /// Default in-memory implementation registered when no host adapter is
 /// supplied. State lives for the duration of the circuit / process —
-/// zoom resets to 100 on next app restart. Plenty for FlexCore.Showcase
+/// zoom resets to Fit Width on next app restart. Plenty for FlexCore.Showcase
 /// and any consumer that doesn't care about persisting per-user state.
 /// </summary>
 public sealed class InMemoryReportViewerSettings : IReportViewerSettings

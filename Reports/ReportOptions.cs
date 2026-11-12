@@ -43,10 +43,11 @@ public class ReportOptions
 
     /// <summary>
     /// Maximum rows a report can return before the renderer aborts with a friendly error.
-    /// Prevents a badly-filtered report from locking up the UI with a million rows.
+    /// Defaults to one million rows, allowing large bulk reports while retaining
+    /// a finite safeguard against runaway result sets. Hosts can override this limit.
     /// 0 = unlimited.
     /// </summary>
-    public int MaxRowsPerReport { get; set; } = 100_000;
+    public int MaxRowsPerReport { get; set; } = 1_000_000;
 
     /// <summary>
     /// When true, drill-down-style reports also select <em>all</em> group-level columns

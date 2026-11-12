@@ -66,11 +66,27 @@
 }
 
 .fx-toolbar.fx-toolbar--no-captions ::deep .fx-toolbar-btn-label,
+.fx-toolbar.fx-toolbar--no-captions ::deep .fx-rpt-toolbar-label,
+.fx-toolbar.fx-toolbar--no-captions ::deep .rpt-toolbar-label,
+.fx-toolbar.fx-toolbar--no-captions ::deep .fx-split-button-label,
 .fx-toolbar.fx-toolbar--no-captions ::deep .tool-label,
 .fx-toolbar.fx-toolbar--no-captions ::deep span.tool-label,
 .fx-toolbar.fx-toolbar--no-captions ::deep .vpl-view-primary span.tool-label,
 .fx-toolbar.fx-toolbar--no-captions ::deep .vpl-tbar-btn span:not(.fx-toolbar-btn-icon) {
     display: none !important;
+}
+
+.fx-toolbar.fx-toolbar--no-captions ::deep .fx-split-button-main {
+    min-height: 28px !important;
+    height: 30px !important;
+    padding: 0.25rem 0.55rem !important;
+    gap: 0 !important;
+}
+
+.fx-toolbar.fx-toolbar--no-captions ::deep .fx-split-button-toggle {
+    min-height: 28px !important;
+    height: 30px !important;
+    padding: 0.25rem 0.45rem !important;
 }
 
 .fx-toolbar.fx-toolbar--no-captions ::deep .fx-toolbar-btn,
@@ -103,6 +119,109 @@
 .fx-toolbar.fx-toolbar--no-captions ::deep .vpl-tbar-sep,
 .fx-toolbar.fx-toolbar--no-captions ::deep .fx-toolbar-separator {
     height: 22px !important;
+}
+
+/* ── Glassy VB6 Grey Zoom +/- & Tree Icons ────────────────────── */
+.fx-toolbar ::deep .fx-rpt-zoom-glass {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(20px * var(--fx-zoom, 1));
+    height: calc(20px * var(--fx-zoom, 1));
+    border-radius: 5px;
+    background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 46%, #cbd5e1 52%, #b8c2cc 100%);
+    border: 1px solid #7a8694;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 2px rgba(71, 85, 105, 0.25), 0 1px 1px rgba(15, 23, 42, 0.12);
+    color: #2c353f;
+    flex-shrink: 0;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+.fx-toolbar ::deep .fx-rpt-zoom-glass::before {
+    content: "";
+    position: absolute;
+    top: 1px;
+    left: 1.5px;
+    right: 1.5px;
+    height: 46%;
+    border-radius: 3.5px 3.5px 50% 50% / 3.5px 3.5px 35% 35%;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.22) 100%);
+    pointer-events: none;
+}
+
+.fx-toolbar ::deep .fx-rpt-zoom-glass svg {
+    position: relative;
+    z-index: 1;
+    width: calc(14px * var(--fx-zoom, 1));
+    height: calc(14px * var(--fx-zoom, 1));
+    display: block;
+    filter: drop-shadow(0 1px 0 rgba(255, 255, 255, 0.75));
+}
+
+.fx-toolbar ::deep .fx-toolbar-btn:hover:not(:disabled) .fx-rpt-zoom-glass {
+    background: linear-gradient(180deg, #ffffff 0%, #edf2f7 46%, #d8e1eb 52%, #c3cdd8 100%);
+    border-color: #5c6877;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), inset 0 -1px 2px rgba(71, 85, 105, 0.3), 0 1px 2px rgba(15, 23, 42, 0.16);
+}
+
+.fx-toolbar ::deep .fx-rpt-tree-icon {
+    width: calc(18px * var(--fx-zoom, 1));
+    height: calc(18px * var(--fx-zoom, 1));
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+/* ── VB6 Greyish Split Button inside Toolbars (e.g. Export) ───── */
+.fx-toolbar ::deep .fx-split-button-main {
+    color: #212529;
+    background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 52%, #dee2e6 100%);
+    border: 1px solid #adb5bd;
+    border-radius: 4px 0 0 4px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    font-size: calc(12px * var(--fx-zoom, 1));
+    padding: 0.35rem 0.65rem;
+}
+
+.fx-toolbar ::deep .fx-split-button-main:hover:not(:disabled) {
+    background: linear-gradient(180deg, #eff2f5 0%, #dee2e6 52%, #ced4da 100%);
+    border-color: #868e96;
+}
+
+.fx-toolbar ::deep .fx-split-button-main:active:not(:disabled) {
+    background: #ced4da;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.fx-toolbar ::deep .fx-split-button-toggle {
+    color: #343a40;
+    background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 52%, #dee2e6 100%);
+    border: 1px solid #adb5bd;
+    border-left: 1px solid #b8c0c8;
+    border-radius: 0 4px 4px 0;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+    padding: 0.35rem 0.45rem;
+}
+
+.fx-toolbar ::deep .fx-split-button-toggle:hover:not(:disabled) {
+    background: linear-gradient(180deg, #eff2f5 0%, #dee2e6 52%, #ced4da 100%);
+    border-color: #868e96;
+}
+
+.fx-toolbar ::deep .fx-split-button-toggle:active:not(:disabled) {
+    background: #ced4da;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.fx-toolbar ::deep .fx-split-button-dropdown {
+    background: #f8f9fa;
+    border: 1px solid #adb5bd;
+    border-radius: 3px;
+}
+
+.fx-toolbar ::deep .fx-split-button-item:hover:not(:disabled) {
+    background-color: #dee2e6;
 }
 
 /* ── Toolbar Split Button & Dropdown Menu Button ──────────────── */

@@ -308,10 +308,11 @@ internal static class CrystalDeviceText
         return runs;
     }
 
-    // A subreport frame can be narrower than the field designed inside it. Match
-    // the screen device's integer advances when the last glyph reaches that edge;
-    // leave genuinely overlong strings clipped and leave the PDF font untouched.
-    internal static string PreviewInFixedFrame(ReportDesignerElement element, string html)
+    // A native fixed field may fit on Crystal's screen device but clip with the
+    // browser's fractional advances. Preserve its box and the gap to the next
+    // field; only compress preview ink that fits in screen metrics. A narrowed
+    // subreport frame retains its existing partial-last-glyph allowance.
+    internal static string PreviewSingleLine(ReportDesignerElement element, string html, bool narrowedByFrame)
     {
         if (!Enabled || !element.UseCrystalScreenMetrics || element.Kind != "Field" || element.CanGrow
             || ReportObjectRenderer.WrapText(element) || element.NativeNumericFormat is not null || element.NativeNumberFormat is not null
@@ -335,9 +336,11 @@ internal static class CrystalDeviceText
             if (last <= 0) return html;
             device += last; css += font.LinearAdvance(c) * cssEm;
         }
-        if (available <= 1 || css <= available || device - last >= available) return html;
+        if (available <= 1 || css <= available || (narrowedByFrame ? device - last >= available : device > available)) return html;
         var scale = Math.Min(device, available - .25) / css;
-        return $"<span data-fx-native-frame-text=\"true\" style=\"display:inline-block;transform-origin:left;transform:scaleX({ReportObjectRenderer.Number(scale)})\">{html}</span>";
+        // Text decorations do not propagate into an atomic inline box.
+        var decoration = element.Underline ? "text-decoration:underline;" + ReportObjectRenderer.NativeUnderline(element) : "";
+        return $"<span data-fx-native-frame-text=\"true\" style=\"display:inline-block;transform-origin:left;transform:scaleX({ReportObjectRenderer.Number(scale)});{decoration}\">{html}</span>";
     }
 
     internal static string? ClipDevicePrefix(string text, string family, double points, bool bold, bool italic,

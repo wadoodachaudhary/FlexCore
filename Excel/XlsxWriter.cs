@@ -45,12 +45,18 @@ public sealed class XlsxCell
     public string? NumberFormat { get; set; }
 
     public XlsxAlign Align { get; set; } = XlsxAlign.Left;
+
+    internal XlsxCell Copy() => (XlsxCell)MemberwiseClone();
 }
 
 /// <summary>A single worksheet: a grid of cells plus per-column widths.</summary>
 public sealed class XlsxSheet
 {
     public string Name { get; set; } = "Sheet1";
+
+    /// <summary>Keep text beyond Excel's cell limit inside the workbook, in linked continuation rows.</summary>
+    public bool PreserveOversizedText { get; set; }
+    internal Dictionary<string, string> InternalHyperlinks { get; } = new(StringComparer.Ordinal);
 
     /// <summary>Row-major cells. Ragged rows are allowed.</summary>
     public List<List<XlsxCell>> Rows { get; } = new();
@@ -78,9 +84,9 @@ public sealed class XlsxSheet
 /// deliberately NOT attempted here.
 ///
 /// Output is a normal OPC zip: [Content_Types].xml, the two rels parts, a
-/// workbook, one worksheet, a shared-string table and a style table.
+/// workbook, worksheets, a shared-string table and a style table.
 /// </summary>
-public static class XlsxWriter
+public static partial class XlsxWriter
 {
     // Excel serialises dates as days since 1899-12-30 (the "1900 system", including
     // its deliberate 1900 leap-year bug, which DateTime.ToOADate already reproduces).
@@ -100,29 +106,36 @@ public static class XlsxWriter
 
         var strings = new SharedStrings();
         var styles = new StyleTable();
+        var sheets = sheet.PreserveOversizedText ? PreserveLongText(sheet) : [sheet];
 
         // Resolve every cell to a (style index, rendered value) pair up front so the
         // style and shared-string tables are complete before either part is written.
-        var resolved = new List<List<ResolvedCell?>>(sheet.Rows.Count);
-        foreach (var row in sheet.Rows)
+        var resolved = new List<List<List<ResolvedCell?>>>();
+        foreach (var item in sheets)
         {
-            var line = new List<ResolvedCell?>(row.Count);
-            foreach (var cell in row)
-                line.Add(cell is null ? null : Resolve(cell, strings, styles));
-            resolved.Add(line);
+            var rows = new List<List<ResolvedCell?>>(item.Rows.Count);
+            foreach (var row in item.Rows)
+            {
+                var line = new List<ResolvedCell?>(row.Count);
+                foreach (var cell in row)
+                    line.Add(cell is null ? null : Resolve(cell, strings, styles));
+                rows.Add(line);
+            }
+            resolved.Add(rows);
         }
 
         // leaveOpen: callers pass their own stream (FilerControl hands us a file
         // stream it still owns) and must be free to keep using it afterwards.
         using var zip = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
 
-        WriteEntry(zip, "[Content_Types].xml", ContentTypes);
+        WriteEntry(zip, "[Content_Types].xml", BuildContentTypes(sheets.Count));
         WriteEntry(zip, "_rels/.rels", RootRels);
-        WriteEntry(zip, "xl/_rels/workbook.xml.rels", WorkbookRels);
-        WriteEntry(zip, "xl/workbook.xml", BuildWorkbook(sheet.Name));
+        WriteEntry(zip, "xl/_rels/workbook.xml.rels", BuildWorkbookRels(sheets.Count));
+        WriteEntry(zip, "xl/workbook.xml", BuildWorkbook(sheets));
         WriteEntry(zip, "xl/styles.xml", styles.ToXml());
         WriteEntry(zip, "xl/sharedStrings.xml", strings.ToXml());
-        WriteEntry(zip, "xl/worksheets/sheet1.xml", BuildSheet(sheet, resolved));
+        for (var index = 0; index < sheets.Count; index++)
+            WriteEntry(zip, $"xl/worksheets/sheet{index + 1}.xml", BuildSheet(sheets[index], resolved[index]));
     }
 
     private readonly record struct ResolvedCell(int StyleIndex, string? Type, string? Content, string? Formula);
@@ -270,7 +283,15 @@ public static class XlsxWriter
             }
             sb.Append("</row>");
         }
-        sb.Append("</sheetData></worksheet>");
+        sb.Append("</sheetData>");
+        if (sheet.InternalHyperlinks.Count > 0)
+        {
+            sb.Append("<hyperlinks>");
+            foreach (var (cell, target) in sheet.InternalHyperlinks)
+                sb.Append($"<hyperlink ref=\"{Escape(cell)}\" location=\"{Escape(target)}\"/>");
+            sb.Append("</hyperlinks>");
+        }
+        sb.Append("</worksheet>");
         return sb.ToString();
     }
 
@@ -374,6 +395,25 @@ public static class XlsxWriter
         stream.Write(bytes, 0, bytes.Length);
     }
 
+    private static string EscapeSpreadsheetText(string value)
+    {
+        // ST_Xstring: preserve CR/control characters and literal _xHHHH_ text through Excel's decoder.
+        var encoded = new StringBuilder(value.Length);
+        for (var i = 0; i < value.Length; i++)
+        {
+            var ch = value[i];
+            if (ch == '_' && i + 6 < value.Length && value[i + 1] == 'x' && value[i + 6] == '_'
+                && value.AsSpan(i + 2, 4).IndexOfAnyExcept("0123456789ABCDEFabcdef") < 0)
+                encoded.Append("_x005F_");
+            else if (char.IsHighSurrogate(ch) && i + 1 < value.Length && char.IsLowSurrogate(value[i + 1]))
+                encoded.Append(ch).Append(value[++i]);
+            else if (ch == '\r' || !XmlConvert.IsXmlChar(ch))
+                encoded.Append("_x").Append(((int)ch).ToString("X4", CultureInfo.InvariantCulture)).Append('_');
+            else encoded.Append(ch);
+        }
+        return Escape(encoded.ToString());
+    }
+
     private const string ContentTypes = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>
         """;
@@ -411,7 +451,7 @@ public static class XlsxWriter
             sb.Append(CultureInfo.InvariantCulture,
                 $"""<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{_total}" uniqueCount="{_values.Count}">""");
             foreach (var value in _values)
-                sb.Append("<si><t xml:space=\"preserve\">").Append(Escape(value)).Append("</t></si>");
+                sb.Append("<si><t xml:space=\"preserve\">").Append(EscapeSpreadsheetText(value)).Append("</t></si>");
             sb.Append("</sst>");
             return sb.ToString();
         }

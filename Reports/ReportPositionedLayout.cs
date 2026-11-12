@@ -2159,7 +2159,7 @@ public sealed partial class ReportLayoutSession
                         content = CrystalDeviceText.ExplicitLines(content, textLines);
                     }
                     else if (textMetric is null && element.UseCrystalScreenMetrics && !element.HasRotatedText && content.Length > 0) CrystalDeviceText.WidenSingleLine(element, content);
-                    if (item.NarrowedByFrame && !element.HasRotatedText) content = CrystalDeviceText.PreviewInFixedFrame(element, content);
+                    if (!element.HasRotatedText) content = CrystalDeviceText.PreviewSingleLine(element, content, item.NarrowedByFrame);
                     if (element.Visual.TightHorizontal && !element.HasRotatedText && element.Kind is "Field" or "Text" or "FieldHeading")
                         CrystalDeviceText.FitTightFrame(element, content, textLines);
                     var painted = new ReportPageObject(element, content, item.Analysis)
@@ -2766,6 +2766,9 @@ public sealed partial class ReportLayoutSession
                 var active = new Dictionary<Band, (int Start, Band Header)>();
                 foreach (var original in child._bands)
                 {
+                    // Crystal formats the first band that overflows a fixed frame, then stops.
+                    // Later records must not repeat shared-variable assignments in the parent.
+                    if (clipped) break;
                     // A page header or footer subreport prints on that page; a body subreport's bands where the last pass placed them.
                     var context = furniture is { } host ? (Page: host.Number, host.Count) : inlineContexts?.GetValueOrDefault(original) ?? (Page: 1, Count: ExpectedCount(0));
                     if (context.Page == 0) context = (1, ExpectedCount(0));
@@ -2775,8 +2778,8 @@ public sealed partial class ReportLayoutSession
                     if (nested.Suppressed) { inlineSections.Add(new(cursor, cursor, original, nested.Section)); continue; }
                     if (nested.Section.SuppressIfBlank && IsBlank(nested)) { inlineSections.Add(new(cursor, cursor, original, nested.Section, true)); continue; }
                     // A no-grow subreport only prints child bands that fit its authored box.
-                    // Omitted calculation fields must still update shared variables for the parent.
-                    if (clipped || cursor + Height(nested) > fixedBottom)
+                    // The first omitted band's calculation fields still run during formatting.
+                    if (cursor + Height(nested) > fixedBottom)
                     {
                         // On a fresh page Crystal can paint the start of the first overheight child
                         // band inside its fixed frame. It does not grow the parent or run formulas twice.

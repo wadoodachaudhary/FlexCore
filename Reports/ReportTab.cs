@@ -9,6 +9,7 @@ public class ReportTab
 {
     /// <summary>Title shown on the tab (e.g. "Main Report", "ANDAV01C01", "400 Drywall").</summary>
     public string Title { get; set; } = "";
+    internal string StatusMessage { get; set; } = "Ready";
     public ReportDesignerPage? PositionedPage { get; set; }
     /// <summary>Owned native execution snapshot used for group drill-down without rerunning the main query.</summary>
     public ReportLayoutSession? NativeSession { get; set; }

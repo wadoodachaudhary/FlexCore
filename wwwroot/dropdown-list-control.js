@@ -276,8 +276,9 @@ export function enableClientEditableDropdown(host, dotNetRef) {
     let config = readConfig();
     if (!config) return;
     let input, panel, options = [], open = false, active = -1, keyboard = false;
-    let draft = host.querySelector(".fx-dropdown-input")?.value ?? config.text;
-    let value = config.value, dirty = draft !== config.text, composing = false;
+    const initialDomValue = host.querySelector(".fx-dropdown-input")?.value;
+    let draft = config.enabled && initialDomValue !== undefined ? initialDomValue : config.text;
+    let value = config.value, dirty = config.enabled && draft !== config.text, composing = false;
     let sequence = config.ack, editVersion = 0, command = -1, optionsVersion = -1;
     let lastServerText = config.text, lastPointer = null, disposed = false;
     const listeners = [];

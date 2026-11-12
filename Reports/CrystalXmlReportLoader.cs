@@ -1149,6 +1149,7 @@ public partial class CrystalXmlReportLoader
                 DisplayName = rawName,
                 Prompt = prompt,
                 ParameterType = MapParameterType(valueKind),
+                IsInUse = isInUse,
                 Required = !promptIsOptional && isInUse,
                 IsOptional = nameSaysOptional,
                 // Crystal permits an empty string independently of optional/null values.

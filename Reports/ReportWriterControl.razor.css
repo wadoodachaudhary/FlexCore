@@ -438,6 +438,13 @@
 
 .fx-rpt-toolbar-label { font-size: calc(11px * var(--fx-zoom, 1)); }
 
+.fx-rpt-export-icon {
+    width: calc(15px * var(--fx-zoom, 1));
+    height: calc(15px * var(--fx-zoom, 1));
+    display: inline-block;
+    flex-shrink: 0;
+}
+
 .fx-rpt-viewer-container > ::deep .fx-toolbar,
 .fx-rpt-viewer-container > ::deep .fx-rpt-status-bar {
     flex-shrink: 0;
@@ -689,4 +696,15 @@
     .fx-report-positioned-print ::deep article { page:fx-positioned; }
     .fx-report-positioned-print ::deep article:last-child { break-after:auto !important; }
     .fx-report-runtime-diagnostics { display:none; }
+}
+
+/* Reserve scaled paper bounds, not scaled viewport bounds; scrollbars stay reachable at every zoom. */
+.fx-rpt-viewer-panel { scrollbar-gutter: stable; }
+.fx-rpt-viewer-panel > .fx-report-pages { align-self: stretch; flex: none; min-width: 0; }
+.fx-rpt-zoom-frame { flex: none; width: max-content; }
+.fx-rpt-zoom-frame[data-zoom-ready] { position: relative; overflow: hidden; }
+.fx-rpt-zoom-frame[data-zoom-ready] > .fx-report-page { position: absolute; top: 0; left: 0; transform-origin: top left; margin: 0; }
+@media print {
+    .fx-rpt-zoom-frame[data-zoom-ready] { width: auto !important; height: auto !important; overflow: visible; }
+    .fx-rpt-zoom-frame[data-zoom-ready] > .fx-report-page { position: static; transform: none !important; }
 }

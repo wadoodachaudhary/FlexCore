@@ -379,6 +379,8 @@
         {
             _isOpen = false;
             ResetDropdownGeometry();
+            if (Editable && !_clientDropdownRegistered && !_editableInputFocused && _editableText != EditableDisplayText)
+                ResetEditableDomText(EditableDisplayText, refocus: false);
             return;
         }
 

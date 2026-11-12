@@ -4,6 +4,8 @@
 <div class="fx-split-button-host @(Disabled ? "fx-split-button-disabled" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
     <button type="button"
             class="fx-split-button-main"
+            title="@ResolvedTitle"
+            aria-label="@ResolvedTitle"
             disabled="@Disabled"
             @onclick="HandleMainClick">
         @if (!string.IsNullOrEmpty(IconCss))
@@ -12,7 +14,7 @@
         }
         @if (!string.IsNullOrEmpty(Text))
         {
-            <span>@Text</span>
+            <span class="fx-split-button-label">@Text</span>
         }
         else
         {
@@ -21,6 +23,8 @@
     </button>
     <button type="button"
             class="fx-split-button-toggle"
+            title="@(string.IsNullOrWhiteSpace(ResolvedTitle) ? null : $"{ResolvedTitle} options")"
+            aria-label="@(string.IsNullOrWhiteSpace(ResolvedTitle) ? "More options" : $"{ResolvedTitle} options")"
             disabled="@Disabled"
             aria-haspopup="true"
             aria-expanded="@_menuOpen"
@@ -64,6 +68,8 @@
     [Parameter] public bool Disabled { get; set; } = false;
     [Parameter] public EventCallback OnClick { get; set; }
     [Parameter] public EventCallback<SplitButtonItem> OnItemClick { get; set; }
+
+    private string? ResolvedTitle => !string.IsNullOrWhiteSpace(Title) ? Title : Text;
 
     private bool _menuOpen = false;
 

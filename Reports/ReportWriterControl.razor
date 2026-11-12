@@ -65,7 +65,7 @@
         }
 
         @* ── Toolbar (FxControlKit ToolbarControl + ToolbarButtonControl) ──── *@
-        <ToolbarControl>
+        <ToolbarControl PreferenceKey="ReportWriter">
             @* Glyph content, not IconCss: hosts need not load an icon font (the bi/fa classes rendered blank). *@
             <div class="fx-rpt-nav">
                 <ToolbarButtonControl Disabled="@(CurrentPage <= 1)" OnClick="OnFirstPage" Title="First page"><span aria-hidden="true" style="font-size:calc(14px * var(--fx-zoom, 1));">⏮</span></ToolbarButtonControl>
@@ -78,39 +78,52 @@
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="OnClose">
-                <span style="font-size:calc(18px * var(--fx-zoom, 1));">✕</span>
-                <span class="fx-rpt-toolbar-label">Close</span>
+            <ToolbarButtonControl Vertical="true" Title="Close" OnClick="OnClose">
+                <span aria-hidden="true" style="font-size:calc(18px * var(--fx-zoom, 1));">✕</span>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">Close</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" Disabled="@IsLoading" OnClick="ChromeOnPrint">
-                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🖨️</span>
-                <span class="fx-rpt-toolbar-label">Print</span>
+            <ToolbarButtonControl Vertical="true" Title="Print" Disabled="@IsLoading" OnClick="ChromeOnPrint">
+                <span aria-hidden="true" style="font-size:calc(18px * var(--fx-zoom, 1));">🖨️</span>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">Print</span>
             </ToolbarButtonControl>
 
-            <SplitButtonControl Text="Export" IconCss="bi bi-download" Items="@ExportItems"
+            <SplitButtonControl Title="Export" Items="@ExportItems"
                 Disabled="@(IsLoading || ActiveTab?.Pages.Count is not > 0)" OnClick="ChromeOnPrint"
-                OnItemClick="item => ChromeOnExport(item.Value?.ToString() ?? string.Empty)" />
+                OnItemClick="item => ChromeOnExport(item.Value?.ToString() ?? string.Empty)">
+                <svg class="fx-rpt-export-icon" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M8 2.25V10.25M8 10.25L5.25 7.5M8 10.25L10.75 7.5M3 11.75V12.5C3 13.0523 3.44772 13.5 4 13.5H12C12.5523 13.5 13 13.0523 13 12.5V11.75" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">Export</span>
+            </SplitButtonControl>
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnRefresh">
-                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🔄</span>
-                <span class="fx-rpt-toolbar-label">Refresh</span>
+            <ToolbarButtonControl Vertical="true" Title="Refresh" OnClick="ChromeOnRefresh">
+                <span aria-hidden="true" style="font-size:calc(18px * var(--fx-zoom, 1));">🔄</span>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">Refresh</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
 
             <div class="fx-rpt-zoom-controls">
-                <ToolbarButtonControl OnClick="ChromeOnZoomOut">
-                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍−</span>
+                <ToolbarButtonControl Title="Zoom out" Disabled="@(PageCount == 0 || ZoomScale <= .25)" OnClick="ChromeOnZoomOut">
+                    <span class="fx-rpt-zoom-glass fx-rpt-zoom-glass--minus" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" fill="none">
+                            <path d="M4 8H12" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" />
+                        </svg>
+                    </span>
                 </ToolbarButtonControl>
-                <DropDownListControl TValue="int" TItem="ReportZoomChoice" DataSource="@ZoomChoices" TextFieldName="Text" ValueFieldName="Value"
-                    @bind-Value="ZoomLevel" @bind-Value:after="ChromeOnZoomChanged" Width="110px" AriaLabel="Zoom" />
-                <ToolbarButtonControl OnClick="ChromeOnZoomIn">
-                    <span style="font-size:calc(16px * var(--fx-zoom, 1));">🔍+</span>
+                <DropDownListControl @key="_zoomInputVersion" TValue="string" TItem="ReportZoomChoice" DataSource="@ZoomChoices" TextFieldName="Text" ValueFieldName="Text"
+                    Value="@ZoomText" ValueChanged="ChangeZoomTextAsync" Editable="true" Enabled="@(PageCount > 0)" Width="130px" AriaLabel="Report zoom" />
+                <ToolbarButtonControl Title="Zoom in" Disabled="@(PageCount == 0 || ZoomScale >= 4)" OnClick="ChromeOnZoomIn">
+                    <span class="fx-rpt-zoom-glass fx-rpt-zoom-glass--plus" aria-hidden="true">
+                        <svg viewBox="0 0 16 16" fill="none">
+                            <path d="M8 4V12M4 8H12" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" />
+                        </svg>
+                    </span>
                 </ToolbarButtonControl>
             </div>
 
@@ -126,16 +139,21 @@
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="ChromeOnEditParameters">
-                <span style="font-size:calc(18px * var(--fx-zoom, 1));">⚙️</span>
-                <span class="fx-rpt-toolbar-label">Parameters</span>
+            <ToolbarButtonControl Vertical="true" Title="Parameters" OnClick="ChromeOnEditParameters" Disabled="@(!CanEditParameters)">
+                <span aria-hidden="true" style="font-size:calc(18px * var(--fx-zoom, 1));">⚙️</span>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">Parameters</span>
             </ToolbarButtonControl>
 
             <ToolbarSeparatorControl />
 
-            <ToolbarButtonControl Vertical="true" OnClick="ToggleGroupTreePanel" Disabled="@(!CanShowGroupTree)">
-                <span style="font-size:calc(18px * var(--fx-zoom, 1));">🌳</span>
-                <span class="fx-rpt-toolbar-label">@(ShowGroupTree && CanShowGroupTree ? "Hide Tree" : "Show Tree")</span>
+            <ToolbarButtonControl Vertical="true" Title="@(ShowGroupTree && CanShowGroupTree ? "Hide Tree" : "Show Tree")" OnClick="ToggleGroupTreePanel" Disabled="@(!CanShowGroupTree)">
+                <svg class="fx-rpt-tree-icon" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+                    <rect x="2" y="2" width="5.5" height="4" rx="0.8" fill="#cbd5e1" stroke="#4b5563" stroke-width="1.2" />
+                    <path d="M4.75 6V14.25M4.75 9.5H8.75M4.75 14.25H8.75" stroke="#6b7280" stroke-width="1.2" stroke-linecap="round" />
+                    <rect x="8.75" y="7.5" width="7" height="3.75" rx="0.8" fill="#e5e7eb" stroke="#4b5563" stroke-width="1.2" />
+                    <rect x="8.75" y="12.35" width="7" height="3.75" rx="0.8" fill="#e5e7eb" stroke="#4b5563" stroke-width="1.2" />
+                </svg>
+                <span class="fx-toolbar-btn-label fx-rpt-toolbar-label">@(ShowGroupTree && CanShowGroupTree ? "Hide Tree" : "Show Tree")</span>
             </ToolbarButtonControl>
 
             @if (ShowTreeNavigationSelector)
@@ -180,7 +198,7 @@
             <div class="fx-rpt-workspace" data-tab-orientation="@TabsOrientation">
                 @RenderReportTabs()
                 @* The pane outlives a page turn (it holds the print copy); report-writer-control.js shows a new data-current-page from its top. *@
-                <div @key="ActiveTab" class="fx-rpt-viewer-panel" tabindex="0" data-current-page="@CurrentPage" style="transform: scale(@(ZoomScale)); transform-origin: top left;">
+                <div @key="ActiveTab" class="fx-rpt-viewer-panel" tabindex="0" data-current-page="@CurrentPage">
                     @RenderReportContent()
                 </div>
             </div>
@@ -191,7 +209,7 @@
         @* ── Status Bar ──────────────────────────────────────── *@
         <StatusBarControl CssClass="fx-rpt-status-bar">
             <span>@ShownStatus</span>
-            <span>@(ReportLoaded ? $"\u00a0Zoom: {(ZoomLevel > 0 ? ZoomLevel + "%" : ZoomLevel == 0 ? "Fit Page" : "Fit Width")}" : "")</span>
+            <span>@(ReportLoaded ? $"\u00a0Zoom: {ZoomStatus}" : "")</span>
         </StatusBarControl>
     </div>
 
@@ -387,7 +405,16 @@ else
 
     // Public-readable status message (status bar's left cell). Updated as
     // the user navigates / loads / cancels / errors.
-    public string StatusMessage { get; private set; } = "Ready";
+    private string _statusMessage = "Ready";
+    public string StatusMessage
+    {
+        get => ActiveTab?.StatusMessage ?? _statusMessage;
+        private set
+        {
+            _statusMessage = value;
+            if (ActiveTab is { } tab) tab.StatusMessage = value;
+        }
+    }
     public bool ReportLoaded { get; private set; }
 
     // Toolbar / panel toggles.
@@ -402,11 +429,6 @@ else
     // the chosen mode returns on a report that can drill.
     private string? NativeDrillDownUnavailable => ActiveTab?.NativeSession?.DrillDownUnsupportedReason;
     private TreeNavigationMode EffectiveTreeMode => ShowTreeNavigationSelector && NativeDrillDownUnavailable is null ? TreeMode : TreeNavigationMode.Group;
-
-    // Zoom (percent; 0 = Fit Page, -1 = Fit Width). Loaded from
-    // IReportViewerSettings on first render.
-    private int ZoomLevel = 100;
-    private double ZoomScale => ZoomLevel > 0 ? ZoomLevel / 100.0 : 1.0;
 
     // Search box state.
     private string SearchText = "";
@@ -438,7 +460,7 @@ else
 
     // True once OnAfterRenderAsync has loaded the persisted zoom level
     // from IReportViewerSettings. Prevents the value from snapping back
-    // to 100 if a render fires before the load completes.
+    // to its default if a render fires before the load completes.
     private bool _settingsLoaded;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -447,13 +469,23 @@ else
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
             // Load persisted zoom level from the host-supplied settings
-            // store. Falls back to 100 when the host hasn't registered
+            // store. Falls back to Fit Width when the host hasn't registered
             // an adapter (InMemoryReportViewerSettings default).
             if (!_settingsLoaded)
             {
                 try
                 {
-                    ZoomLevel = await ViewerSettings.GetZoomLevelAsync();
+                    var initialZoom = NormalizeZoom(await ViewerSettings.GetZoomLevelAsync());
+                    if (initialZoom != _defaultZoomLevel)
+                    {
+                        _defaultZoomLevel = initialZoom;
+                        if (CurrentZoom is { } zoom)
+                        {
+                            zoom.Level = initialZoom;
+                            zoom.Scale = initialZoom > 0 ? initialZoom / 100d : 1;
+                        }
+                        _zoomInputVersion++;
+                    }
                     if (await ViewerSettings.GetTabOrientationAsync() is { } orientation && Enum.IsDefined(orientation))
                         TabsOrientation = orientation;
                     if (await ViewerSettings.GetTabThemeAsync() is { } theme && Enum.IsDefined(theme))
@@ -461,8 +493,8 @@ else
                 }
                 catch (Exception ex)
                 {
-                    Logger.LogWarning(ex, "Failed to load zoom from IReportViewerSettings; using default 100");
-                    ZoomLevel = 100;
+                    Logger.LogWarning(ex, "Failed to load report viewer settings; using 100%");
+                    _defaultZoomLevel = 100;
                 }
                 _settingsLoaded = true;
                 await InvokeAsync(StateHasChanged);
@@ -483,6 +515,7 @@ else
             }
             catch { /* JS not ready yet — will retry on next render */ }
         }
+        await UpdateViewerZoomAsync();
         // A searched page shows its matches however the user reached it; its highlighted rendering is prepared
         // when the shown page changes, so the render reads a ready string.
         if (ActiveTab is { Search: not null } searched && searched.Pages.Count > 0)
@@ -519,6 +552,7 @@ else
         {
             if (_reportJsModule is not null)
             {
+                await _reportJsModule.InvokeVoidAsync("detachViewerZoom", _reportRootElement);
                 await _reportJsModule.InvokeVoidAsync("detachViewerNavigation", _reportRootElement);
                 await _reportJsModule.InvokeVoidAsync("detachDrillHandler", _reportRootElement);
                 await _reportJsModule.DisposeAsync();
@@ -1129,6 +1163,7 @@ else
     /// </summary>
     public async Task ShowCrystalReport(string rptFilePath, Dictionary<string, string> parameters)
     {
+        _parameterDefinition = null;
         IsLoading = true;
         ErrorMessage = null;
         ClearPdfPreview();
@@ -1190,6 +1225,7 @@ else
     /// <summary>Loads Crystal XML; positioned=true preserves band/object geometry instead of using table columns.</summary>
     public async Task ShowXmlReport(string xmlFilePath, Dictionary<string, object>? parameters = null, bool positioned = false)
     {
+        _parameterDefinition = null;
         if (_designerPreview is not null && !string.Equals(_designerPreview.XmlPath, xmlFilePath, StringComparison.Ordinal))
         {
             _designerPreview.Dispose();
@@ -1273,6 +1309,7 @@ else
     public async Task ShowSqlReport(ReportDefinition definition, Dictionary<string, object>? parameterValues = null,
         IReadOnlyDictionary<string, object>? formulaParameterValues = null)
     {
+        _parameterDefinition = null;
         CancelNativeLoad();
         _nativeLoad = new();
         var token = _nativeLoad.Token;
@@ -1424,6 +1461,7 @@ else
     /// </summary>
     public async Task ShowDataTableReport(string title, DataTable data, ReportOrientation orientation = ReportOrientation.Portrait)
     {
+        _parameterDefinition = null;
         IsLoading = true;
         ErrorMessage = null;
         ClearPdfPreview();
@@ -1483,6 +1521,7 @@ else
     /// <summary>Clears the current report.</summary>
     public void Clear()
     {
+        _parameterDefinition = null;
         CancelNativeLoad();
         IsLoading = false;
         ClearPdfPreview();
@@ -1490,6 +1529,7 @@ else
         ActiveTabIndex = 0;
         DropLeftPrintMark();
         ErrorMessage = null;
+        StatusMessage = "Ready";
         // Closing the Crystal engine is the host's responsibility — IReportExporter
         // doesn't expose a Close() because not all implementations need one.
         StateHasChanged();
@@ -1520,6 +1560,8 @@ else
     /// </summary>
     public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
     {
+        _parameterDefinition = null;
+        _parameterPromptOpen = false;
         StopPrint();
         ErrorMessage = null;
         ReportLoaded = false;
@@ -1580,6 +1622,8 @@ else
                 var definition = UsePositionedLayout ? XmlLoader.LoadPositioned(xmlPath) : _seedFieldFilters.Count > 0
                     ? XmlLoader.LoadWithFieldFilters(xmlPath, _seedFieldFilters)
                     : XmlLoader.Load(xmlPath);
+                var promptDefinition = new ParameterPromptDefinition(definition.Sql, definition.Parameters.ToArray());
+                _parameterDefinition = promptDefinition;
                 var typedParams = _seedParameters
                     .Where(p => !p.Key.StartsWith("Multi:", StringComparison.OrdinalIgnoreCase))
                     .ToDictionary(p => p.Key, p => (object)p.Value, StringComparer.OrdinalIgnoreCase);
@@ -1604,12 +1648,13 @@ else
                 // Resolve them afresh before prompting so saved RPT values cannot select another scope.
                 AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters, authoredDefaults: false);
                 var missingRequired = definition.Parameters
-                    .Where(p => (p.Required || PromptOptionalParameters)
+                    .Where(p => p.IsInUse && (p.Required || PromptOptionalParameters)
                         && !typedParams.ContainsKey(p.Name))
                     .ToList();
 
                 if (missingRequired.Count > 0 && _paramDialog != null)
                 {
+                    _parameterPromptOpen = true;
                     StatusMessage = "Waiting for parameter values...";
                     IsLoading = false;
                     await InvokeAsync(StateHasChanged);
@@ -1623,7 +1668,9 @@ else
                     foreach (var kv in _seedDefaults) initialValues[kv.Key] = kv.Value;
                     if (_lastPromptedValues != null)
                         foreach (var kv in _lastPromptedValues) initialValues[kv.Key] = kv.Value;
-                    var userValues = await _paramDialog.PromptAsync(title, missingRequired, initialValues, promptContext);
+                    Dictionary<string, object>? userValues;
+                    try { userValues = await _paramDialog.PromptAsync(title, missingRequired, initialValues, promptContext); }
+                    finally { _parameterPromptOpen = false; }
                     if (userValues == null)
                     {
                         StatusMessage = "Report cancelled.";
@@ -1687,6 +1734,7 @@ else
 
                 SetXmlSource(xmlPath);
                 await ShowSqlReport(definition, typedParams, formulaValues);
+                _parameterDefinition = promptDefinition;
                 ReportLoaded = string.IsNullOrEmpty(ErrorMessage);
                 StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (RDL)" : ErrorMessage!;
             }
@@ -1709,6 +1757,7 @@ else
         }
         finally
         {
+            _parameterPromptOpen = false;
             IsLoading = false;
             await InvokeAsync(StateHasChanged);
         }
@@ -1750,8 +1799,6 @@ else
         new("Excel data (.xlsx)", "bi bi-file-earmark-spreadsheet", "Xlsx", ActiveTab?.CreateDataExport is null),
         new("CSV data", "bi bi-filetype-csv", "Csv", ActiveTab?.CreateDataExport is null)
     ];
-    private sealed record ReportZoomChoice(int Value, string Text);
-    private static readonly ReportZoomChoice[] ZoomChoices = [new(25, "25%"), new(50, "50%"), new(75, "75%"), new(100, "100%"), new(125, "125%"), new(150, "150%"), new(200, "200%"), new(0, "Fit page"), new(-1, "Fit width")];
     // Each report/drill snapshot retains its own UI state. Weak keys release closed tabs;
     // identical anchor IDs in a different snapshot must not transfer selection or focus.
     private readonly ConditionalWeakTable<List<FxGroupNode>, ReportGroupTreeState> _groupTreeViews = new();
@@ -1821,43 +1868,18 @@ else
         // parameters (passing _seedParameters itself lets ShowReportAsync's
         // clear-then-copy empty it) so the user can run the report with
         // different values. Do not "fix" this by passing a copy.
+        _defaultZoomLevel = ZoomLevel;
         await ShowReportAsync(ReportFilePath, _seedParameters);
     }
 
     private async Task ChromeOnEditParameters()
     {
-        if (string.IsNullOrEmpty(ReportFilePath)) return;
+        if (!CanEditParameters) return;
         // Re-run with no pre-seeded values — the dialog re-opens with
         // the user's last selections (we cached them in _lastPromptedValues).
         _seedParameters.Clear();
         _seedDefaults.Clear();
         await ShowReportAsync(ReportFilePath, null);
-    }
-
-    private async Task ChromeOnZoomChanged()
-    {
-        await ViewerSettings.SetZoomLevelAsync(ZoomLevel);
-    }
-
-    // Zoom steps used by the +/- toolbar buttons. Special values
-    // 0 (Fit Page) and -1 (Fit Width) are handled by ChromeOnZoomIn /
-    // ChromeOnZoomOut treating them as 100% for stepping purposes.
-    private static readonly int[] ZoomSteps = new[] { 25, 50, 75, 100, 125, 150, 200 };
-
-    private async Task ChromeOnZoomIn()
-    {
-        var cur = ZoomLevel > 0 ? ZoomLevel : 100;
-        var next = ZoomSteps.FirstOrDefault(s => s > cur);
-        ZoomLevel = next == 0 ? 200 : next;
-        await ChromeOnZoomChanged();
-    }
-
-    private async Task ChromeOnZoomOut()
-    {
-        var cur = ZoomLevel > 0 ? ZoomLevel : 100;
-        var prev = ZoomSteps.LastOrDefault(s => s < cur);
-        ZoomLevel = prev == 0 ? 25 : prev;
-        await ChromeOnZoomChanged();
     }
 
     private async Task ChromeOnSearchKeyDown(KeyboardEventArgs e)
@@ -3670,22 +3692,24 @@ else
             var printing = PrintCopyShown;
             var printReady = PrintCopyReady;
             <div class="fx-report-pages @(printReady ? (ActiveTab.PositionedPage is null ? "fx-report-printing fx-print-only" : "fx-report-printing") : null)">
-                <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
-                    @{ var shownPage = Math.Clamp(ActiveTab.CurrentPage, 1, ActiveTab.Pages.Count);
-                       var searched = ActiveTab.Search is not null && ActiveTab.SearchHighlightHtml is not null && ActiveTab.SearchHighlightPage == shownPage; }
-                    @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
-                    {
-                        <ReportPageControl Page="@ActiveTab.PageSnapshots[shownPage - 1]" Highlight="@(searched ? ActiveTab.SearchHighlight : null)"
-                            OnDrillDown="@(NativeDrillDownUnavailable is null ? EventCallback.Factory.Create<string>(this, OnNativeObjectDrill) : default)" />
-                    }
-                    else if (searched)
-                    {
-                        @((MarkupString)ActiveTab.SearchHighlightHtml!)
-                    }
-                    else
-                    {
-                        @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
-                    }
+                <div class="fx-rpt-zoom-frame">
+                    <div class="fx-report-page @(ActiveTab.PositionedPage is not null ? "positioned" : ActiveTab.Orientation == ReportOrientation.Landscape ? "landscape" : "portrait")">
+                        @{ var shownPage = Math.Clamp(ActiveTab.CurrentPage, 1, ActiveTab.Pages.Count);
+                           var searched = ActiveTab.Search is not null && ActiveTab.SearchHighlightHtml is not null && ActiveTab.SearchHighlightPage == shownPage; }
+                        @if (ActiveTab.PageSnapshots.Count == ActiveTab.Pages.Count)
+                        {
+                            <ReportPageControl Page="@ActiveTab.PageSnapshots[shownPage - 1]" Highlight="@(searched ? ActiveTab.SearchHighlight : null)"
+                                OnDrillDown="@(NativeDrillDownUnavailable is null ? EventCallback.Factory.Create<string>(this, OnNativeObjectDrill) : default)" />
+                        }
+                        else if (searched)
+                        {
+                            @((MarkupString)ActiveTab.SearchHighlightHtml!)
+                        }
+                        else
+                        {
+                            @((MarkupString)ActiveTab.Pages[Math.Min(Math.Max(ActiveTab.CurrentPage, 1), ActiveTab.Pages.Count) - 1])
+                        }
+                    </div>
                 </div>
             </div>
             @if (ActiveTab.PositionedPage is { } pageSize)

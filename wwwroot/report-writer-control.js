@@ -334,3 +334,85 @@ export function clearGroupHighlight(root) {
 
     previous.forEach(el => el.classList.remove("fx-rpt-group-active"));
 }
+
+// Only DOM measurement/painting lives here. The component owns the selected mode and tab identity.
+// A sized frame accounts for the transformed paper in scroll layout; the viewport/toolbar never scale.
+const zoomBindings = new WeakMap();
+export function updateViewerZoom(root, dotNetRef, token, level) {
+    if (!root) return;
+    let binding = zoomBindings.get(root);
+    if (!binding) {
+        const win = getDocument(root).defaultView || window;
+        binding = { win, frame: null, pane: null, paper: null, raf: 0, scale: 1, paintedToken: null, reported: null };
+        binding.schedule = () => {
+            if (!binding.raf) binding.raf = win.requestAnimationFrame(() => {
+                binding.raf = 0;
+                paintViewerZoom(root, binding);
+            });
+        };
+        binding.resize = new win.ResizeObserver(binding.schedule);
+        binding.mutations = new win.MutationObserver(binding.schedule);
+        binding.mutations.observe(root, { childList: true, subtree: true });
+        zoomBindings.set(root, binding);
+    }
+    Object.assign(binding, { dotNetRef, token, level });
+    binding.schedule();
+}
+
+function paintViewerZoom(root, state) {
+    const pane = root.querySelector('.fx-rpt-viewer-panel');
+    const frame = pane?.querySelector('.fx-rpt-zoom-frame');
+    const paper = frame?.querySelector('.fx-report-page');
+    if (!pane || !frame || !paper) return;
+    if (state.pane !== pane || state.paper !== paper) {
+        state.resize.disconnect();
+        state.resize.observe(pane);
+        state.resize.observe(paper);
+        // Runtime diagnostics above the paper consume real viewport space too.
+        for (const sibling of pane.children) if (sibling !== frame.parentElement) state.resize.observe(sibling);
+        Object.assign(state, { pane, frame, paper, paintedToken: null, reported: null });
+    }
+    if (!pane.clientWidth || !pane.clientHeight || !paper.offsetWidth || !paper.offsetHeight) return;
+    const css = state.win.getComputedStyle(pane), pagesCss = state.win.getComputedStyle(frame.parentElement);
+    const px = (style, name) => parseFloat(style[name]) || 0;
+    const horizontal = px(css, 'paddingLeft') + px(css, 'paddingRight') + px(pagesCss, 'paddingLeft') + px(pagesCss, 'paddingRight');
+    const vertical = px(css, 'paddingTop') + px(css, 'paddingBottom') + px(pagesCss, 'paddingTop') + px(pagesCss, 'paddingBottom');
+    const siblings = [...pane.children].filter(e => e !== frame.parentElement).reduce((sum, e) => sum + e.offsetHeight, 0);
+    const width = Math.max(1, pane.clientWidth - horizontal - 1);
+    const height = Math.max(1, pane.clientHeight - vertical - siblings - 1);
+    const scale = state.level > 0 ? state.level / 100 : state.level === 0
+        ? Math.min(width / paper.offsetWidth, height / paper.offsetHeight) : width / paper.offsetWidth;
+    const bounds = pane.getBoundingClientRect(), previous = paper.getBoundingClientRect();
+    // Keep the same document point under the viewport centre when zoom changes within a page.
+    const preserve = state.paintedToken === state.token;
+    const cx = bounds.left + pane.clientLeft + pane.clientWidth / 2;
+    const cy = bounds.top + pane.clientTop + pane.clientHeight / 2;
+    const x = (cx - previous.left) / state.scale, y = (cy - previous.top) / state.scale;
+    frame.style.width = `${Math.ceil(paper.offsetWidth * scale)}px`;
+    frame.style.height = `${Math.ceil(paper.offsetHeight * scale)}px`;
+    frame.dataset.zoomReady = 'true';
+    paper.style.transform = `scale(${scale})`;
+    if (preserve && Math.abs(scale - state.scale) > .00001) {
+        const current = paper.getBoundingClientRect();
+        pane.scrollLeft += current.left + x * scale - cx;
+        pane.scrollTop += current.top + y * scale - cy;
+    }
+    state.scale = scale;
+    state.paintedToken = state.token;
+    const reported = `${state.token}:${state.level}:${scale.toFixed(5)}`;
+    if (state.reported !== reported) {
+        state.reported = reported;
+        state.dotNetRef.invokeMethodAsync('OnViewerZoomMeasured', state.token, state.level, scale).catch(() => {});
+    }
+}
+
+export function detachViewerZoom(root) {
+    const state = zoomBindings.get(root);
+    if (!state) return;
+    state.resize.disconnect();
+    state.mutations.disconnect();
+    state.win.cancelAnimationFrame(state.raf);
+    if (state.frame) { state.frame.style.width = ''; state.frame.style.height = ''; delete state.frame.dataset.zoomReady; }
+    if (state.paper) state.paper.style.transform = '';
+    zoomBindings.delete(root);
+}

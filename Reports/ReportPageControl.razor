@@ -24,7 +24,6 @@
                     <div data-object="@item.Element.Name" data-fx-native-overprint="@(overprint ? "true" : null)" aria-hidden="@(overprint ? "true" : null)"
                          class="@(target is null ? null : "fx-report-drill-object")" data-drill-group="@target?.GroupId"
                          role="@(target is null ? null : "link")" tabindex="@(target is null ? (int?)null : 0)"
-                         title="@(target is null ? null : $"Drill down: {target.Label}")"
                          @onclick="ClickHandler(target)" @onkeydown="KeyHandler(target)"
                          style="@(ReportObjectRenderer.Style(item.Element, true, Page.Size.MarginLeftTwips + band.LeftTwips, Page.Size.MarginTopTwips + band.TopTwips) + (overprint ? "visibility:hidden;" : ""))">
                         @if (marked is not null)

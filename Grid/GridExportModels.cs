@@ -175,6 +175,8 @@ public sealed class GridExportTable
     public string Title { get; set; } = "Export";
     public string SheetName { get; set; } = "Export";
     public bool IncludeHeaderRow { get; set; } = true;
+    /// <summary>XLSX only: preserve oversized text in linked continuation rows on extra sheets.</summary>
+    public bool PreserveOversizedText { get; set; }
     public List<GridExportColumn> Columns { get; } = new();
     public List<GridExportRow> Rows { get; } = new();
     public HashSet<int> HighlightColumnIndexes { get; } = new();
@@ -282,7 +284,7 @@ public static class GridExporter
         // previous ClosedXML implementation — bold shaded header, thin cell
         // borders, highlight fill, number formats, alignment, column widths —
         // without ClosedXML or its DocumentFormat.OpenXml chain.
-        var sheet = new XlsxSheet { Name = XlsxWriter.SanitizeSheetName(table.SheetName) };
+        var sheet = new XlsxSheet { Name = XlsxWriter.SanitizeSheetName(table.SheetName), PreserveOversizedText = table.PreserveOversizedText };
         var formulaFields = BuildFormulaFieldMap(table.Columns);
         var rowIndex = 1;
 

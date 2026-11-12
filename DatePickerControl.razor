@@ -18,22 +18,47 @@
          @ondblclick:stopPropagation="true"
          @onkeydown:stopPropagation="true">
         <div class="@InputGroupClass">
-            <input type="text"
-                   class="fx-datepicker-input"
-                   @ref="_inputElement"
-                   value="@(CellHost is null ? _inputText : _hostDomText)"
-                   data-fx-host-typing="@(CellHost is null ? null : "1")"
-                   @oninput="OnInputTextChange"
-                   @onfocus="HandleInputFocus"
-                   @onblur="OnInputBlur"
-                   @onkeydown="OnInputKeyDown"
-                   @ondblclick="OnInputDoubleClick"
-                   tabindex="@(CellHost is null ? null : -1)"
-                   placeholder="@ResolvedPlaceholder"
-                   aria-label="@AriaLabel"
-                   aria-expanded="@(_isOpen ? "true" : "false")"
-                   aria-invalid="@(_validationMessage != null ? "true" : null)"
-                   disabled="@(!Enabled)" />
+            @if (CellHost is null)
+            {
+                @* Bound to the typed text, as TextBoxControl's input is: the renderer then knows the browser
+                   already holds the text each input event reported and never sends it back, so a reply that
+                   arrives while the user is still typing cannot put older text over newer text. *@
+                <input type="text"
+                       class="fx-datepicker-input"
+                       @ref="_inputElement"
+                       @bind:event="oninput"
+                       @bind:get="_inputText"
+                       @bind:set="OnInputTextSet"
+                       @onfocus="HandleInputFocus"
+                       @onblur="OnInputBlur"
+                       @onkeydown="OnInputKeyDown"
+                       @ondblclick="OnInputDoubleClick"
+                       placeholder="@ResolvedPlaceholder"
+                       aria-label="@AriaLabel"
+                       aria-expanded="@(_isOpen ? "true" : "false")"
+                       aria-invalid="@(_validationMessage != null ? "true" : null)"
+                       disabled="@(!Enabled)" />
+            }
+            else
+            {
+                @* Under a cell host the rendered text stays the mount text; changes reach the input by script (_hostDomText). *@
+                <input type="text"
+                       class="fx-datepicker-input"
+                       @ref="_inputElement"
+                       value="@_hostDomText"
+                       data-fx-host-typing="1"
+                       @oninput="OnInputTextChange"
+                       @onfocus="HandleInputFocus"
+                       @onblur="OnInputBlur"
+                       @onkeydown="OnInputKeyDown"
+                       @ondblclick="OnInputDoubleClick"
+                       tabindex="-1"
+                       placeholder="@ResolvedPlaceholder"
+                       aria-label="@AriaLabel"
+                       aria-expanded="@(_isOpen ? "true" : "false")"
+                       aria-invalid="@(_validationMessage != null ? "true" : null)"
+                       disabled="@(!Enabled)" />
+            }
             @if (ShowTriggerButton)
             {
                 <button type="button"
@@ -640,6 +665,9 @@
     {
         _expanded = !_expanded;
     }
+
+    // The bound input's setter: typed text follows the one rule below, with or without a cell host.
+    private Task OnInputTextSet(string? text) => OnInputTextChange(new ChangeEventArgs { Value = text });
 
     private async Task OnInputTextChange(ChangeEventArgs e)
     {

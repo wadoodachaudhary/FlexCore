@@ -160,6 +160,10 @@
     /// <summary>Function returning the unique key.  Wins over ValueField if both are set.</summary>
     [Parameter] public Func<TItem, string>? KeySelector { get; set; }
 
+    /// <summary>Optional choice eligibility. Ineligible items stay visible and keep their place in a batch,
+    /// but cannot be added by row selection, double-click or either move-right action. Null permits every item.</summary>
+    [Parameter] public Func<TItem, bool>? ItemSelectable { get; set; }
+
     /// <summary>Header text of the left (Available) pane: the column caption that carries the search and sort.</summary>
     [Parameter] public string? LeftHeader { get; set; } = "Available";
 
@@ -237,6 +241,8 @@
     {
         _leftCaptionSlot = builder => RenderCaption(builder, LeftCaption);
         _rightCaptionSlot = builder => RenderCaption(builder, RightCaption);
+        _availableEvents.RowSelecting = EventCallback.Factory.Create<RowSelectEventArgs<MultiSelectDualListRow>>(this,
+            args => { if (args.Data is { } row && !CanSelect(row)) args.Cancel = true; });
         _availableEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnAvailableDoubleClick);
         _selectedEvents.OnRecordDoubleClick = EventCallback.Factory.Create<CellClickEventArgs<MultiSelectDualListRow>>(this, OnSelectedDoubleClick);
     }
@@ -279,6 +285,8 @@
     private MultiSelectDualListRow ToRow(TItem item) => new() { Key = ResolveKey(item), Label = ResolveLabel(item), Item = item };
 
     private static TItem ItemOf(MultiSelectDualListRow row) => (TItem)row.Item!;
+
+    private bool CanSelect(MultiSelectDualListRow row) => ItemSelectable?.Invoke(ItemOf(row)) ?? true;
 
     private string ResolveKey(TItem item)
     {
@@ -341,7 +349,7 @@
         if (moving.Count == 0) return;
         // An item already selected is not added twice (the Available pane keeps every row in Crystal mode).
         var selectedKeys = new HashSet<string>(_selectedRows.Select(r => r.Key), StringComparer.OrdinalIgnoreCase);
-        var added = moving.Where(r => selectedKeys.Add(r.Key)).ToList();
+        var added = moving.Where(r => CanSelect(r) && selectedKeys.Add(r.Key)).ToList();
         if (added.Count == 0)
         {
             if (_availableGrid != null) await _availableGrid.ClearSelectionAsync();

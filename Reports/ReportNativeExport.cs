@@ -105,13 +105,52 @@ public static class ReportNativeExport
         }
         if (format is not (ReportNativeExportFormat.Csv or ReportNativeExportFormat.Xlsx)) throw new NotSupportedException("Unknown native report export format.");
         var data = tab.CreateDataExport?.Invoke() ?? throw new InvalidOperationException("This report tab has no data export snapshot.");
-        if (format == ReportNativeExportFormat.Xlsx) return GridExporter.Export(data, GridExportFormat.Xlsx, name + ".xlsx");
+        if (format == ReportNativeExportFormat.Xlsx) return GridExporter.Export(ReadableSpreadsheet(data), GridExportFormat.Xlsx, name + ".xlsx");
         // CSV has no typed cells. Prefix formula-like text without changing the native XLSX values.
         var csv = new GridExportTable { Title = data.Title, SheetName = data.SheetName, IncludeHeaderRow = data.IncludeHeaderRow };
         foreach (var column in data.Columns) csv.Columns.Add(new(SafeText(column.Header)));
         foreach (var row in data.Rows) csv.Rows.Add(new(row.Values.Select((value, index) => value is string text &&
             (index >= row.XlsxValues.Count || row.XlsxValues[index] is string) ? SafeText(text) : value)));
         return GridExporter.ExportWithEncoding(csv, GridExportFormat.Csv, GridDelimitedTextEncoding.Utf8WithBom, name + ".csv");
+    }
+
+    // Paper frames may deliberately clip a value; data columns must not inherit that clipping.
+    // Size from display text, not an XLSX shared-string index or a date's numeric serial.
+    private static GridExportTable ReadableSpreadsheet(GridExportTable source)
+    {
+        var result = new GridExportTable { Title = source.Title, SheetName = source.SheetName, IncludeHeaderRow = source.IncludeHeaderRow, PreserveOversizedText = true };
+        for (var index = 0; index < source.Columns.Count; index++)
+        {
+            var column = source.Columns[index];
+            var characters = source.IncludeHeaderRow ? LineLength(column.Header) : 0;
+            foreach (var row in source.Rows)
+            {
+                var display = index < row.Values.Count ? row.Values[index] : index < row.XlsxValues.Count ? row.XlsxValues[index] : null;
+                characters = Math.Max(characters, LineLength(Convert.ToString(display, CultureInfo.CurrentCulture)));
+                if (characters >= 80) break;
+            }
+            var authored = column.Width is double width && double.IsFinite(width) && width > 0 ? width : 0;
+            // Excel's standard character-width approximation, with padding and a bounded memo column.
+            var pixels = Math.Clamp(Math.Max(authored, (characters + 2) * 7d + 5), 73, 565);
+            result.Columns.Add(new(column.Header, column.Format, column.TextAlign, pixels, column.PrintCellIcon)
+            { Field = column.Field, Formula = column.Formula });
+        }
+        result.Rows.AddRange(source.Rows);
+        result.HighlightColumnIndexes.UnionWith(source.HighlightColumnIndexes);
+        return result;
+    }
+
+    private static int LineLength(string? text)
+    {
+        var longest = 0;
+        var current = 0;
+        foreach (var character in text ?? "")
+        {
+            current = character is '\r' or '\n' ? 0 : current + (character == '\t' ? 4 : 1);
+            longest = Math.Max(longest, current);
+            if (longest >= 80) return 80;
+        }
+        return longest;
     }
 
     public static GridExportTable TabularSnapshot(string title, DataTable data, IReadOnlyList<ReportColumn> columns)
