@@ -490,15 +490,24 @@
     border-radius: 4px;
 }
 
+/* The splitter fills the content area; the tree fills its pane, whose width the splitter bar sets. */
+.fx-rpt-content-area ::deep .fx-rpt-tree-split {
+    flex: 1 1 auto;
+}
+.fx-rpt-content-area ::deep .fx-rpt-tree-hidden > .fx-splitter-primary,
+.fx-rpt-content-area ::deep .fx-rpt-tree-hidden > .fx-splitter-bar {
+    display: none;
+}
+@media print {
+    .fx-rpt-content-area ::deep .fx-rpt-tree-split > .fx-splitter-bar { display: none; }
+}
+
 .fx-rpt-group-tree {
-    width: 250px;
-    min-width: 150px;
-    max-width: 400px;
-    border-right: 2px solid #dee2e6;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     background: #fff;
     padding: 8px;
-    resize: horizontal;
 }
 /* Use the shared compact plus/minus tree and dotted connectors; report icons use a grey palette. */
 .fx-rpt-group-tree ::deep .fx-rpt-crystal-tree {

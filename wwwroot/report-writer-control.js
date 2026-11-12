@@ -98,7 +98,7 @@ export function detachDrillHandler(root) {
 // scroll the pane natively; only when the pane is already at its edge does the next step turn the page, one
 // .NET call per turned page. Ctrl+Home / Ctrl+End go to the first / last page. The keys reach the visible
 // viewer from the pane, from its toolbar and tab strip, from the MDI tab and from the page itself (nothing
-// focused); keys typed into a field, a list, a grid, a tree or a dialog stay there. A key turns the page at
+// focused); keys typed into a field, a list, a grid, a tree, a splitter bar or a dialog stay there. A key turns the page at
 // once. The wheel movement that reached the edge, and its tail, stay on the page; a fresh movement at the
 // edge turns it, and the wheel rests for 600 ms after a turn, so a trackpad's momentum does not run through
 // the report and the notches that turned the page do not scroll the new one away from its top.
@@ -109,7 +109,7 @@ const keyRouters = new WeakMap();
 
 const paneOf = (target) => target instanceof Element ? target.closest(".fx-rpt-viewer-panel") : null;
 const ownsKeys = (target) => target instanceof Element && !!target.closest(
-    "input, textarea, select, [contenteditable=true], [role=listbox], [role=combobox], [role=grid], [role=tree], [role=menu], [role=dialog], .fx-dialog, .fx-grid, .fx-treeview, .fx-treegrid, .fx-dropdown-list, .fx-context-menu");
+    "input, textarea, select, [contenteditable=true], [role=listbox], [role=combobox], [role=grid], [role=tree], [role=menu], [role=dialog], [role=separator], .fx-dialog, .fx-grid, .fx-treeview, .fx-treegrid, .fx-dropdown-list, .fx-context-menu");
 const isShown = (element) => !!(element.getClientRects && element.getClientRects().length);
 
 // The viewer a key is for. A key pressed in a viewer (its pane, toolbar or tab strip) is that viewer's. A key pressed

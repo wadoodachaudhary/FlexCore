@@ -151,6 +151,10 @@
 
         @* ── Content Area — group tree + bare renderer ────────────────── *@
         <div class="fx-rpt-content-area">
+            @* The tree is on a slider panel (ReportWriterControl.TreePanel.cs); the page pane keeps its DOM when the tree hides. *@
+            <SplitterControl CssClass="@GroupTreeSplitCss" @bind-PrimarySize="_groupTreeWidth" DefaultPrimarySize="DefaultGroupTreeWidth"
+                MinPrimarySize="MinGroupTreeWidth" MaxPrimary="@MaxGroupTreeShare" MinSecondary="@MinPagePaneWidth">
+            <PrimaryContent>
             @if (ShowGroupTree && CanShowGroupTree)
             {
                 <div class="fx-rpt-group-tree">
@@ -170,6 +174,8 @@
                     }
                 </div>
             }
+            </PrimaryContent>
+            <SecondaryContent>
 
             <div class="fx-rpt-workspace" data-tab-orientation="@TabsOrientation">
                 @RenderReportTabs()
@@ -178,6 +184,8 @@
                     @RenderReportContent()
                 </div>
             </div>
+            </SecondaryContent>
+            </SplitterControl>
         </div>
 
         @* ── Status Bar ──────────────────────────────────────── *@
