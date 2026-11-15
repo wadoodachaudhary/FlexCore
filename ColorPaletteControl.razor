@@ -5,7 +5,7 @@
     {
         var index=i;var color=Colors[i];
         <ButtonControl @ref="_buttons[index]" CssClass="@($"fx-palette-swatch {(string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)?"selected":"")}")" Style="@($"background:{color}")" Disabled="@(!Enabled)"
-                       TabIndex="@(index==_cursor?0:-1)" role="option" aria-selected="@string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)" aria-label="@color" Title="@color"
+                       TabIndex="@(index==_cursor?0:-1)" role="option" aria-selected="@(string.Equals(Value,color,StringComparison.OrdinalIgnoreCase) ? "true" : "false")" aria-label="@color" Title="@color"
                        OnClick="()=>SelectAsync(color)" @onkeydown="e=>KeyAsync(e,index)">
             @if(TileTemplate!=null){@TileTemplate(color)}else{<span aria-hidden="true">@(string.Equals(Value,color,StringComparison.OrdinalIgnoreCase)?"✓":" ")</span>}
         </ButtonControl>

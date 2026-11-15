@@ -75,7 +75,7 @@ else
                     tabindex="-1"
                     aria-label="@PasswordToggleLabel"
                     title="@PasswordToggleLabel"
-                    aria-pressed="@_showPassword"
+                    aria-pressed="@(_showPassword ? "true" : "false")"
                     disabled="@(!Enabled || !CanRevealPassword)"
                     @onclick="TogglePasswordVisibility"
                     @onclick:stopPropagation="true"

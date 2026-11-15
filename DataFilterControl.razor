@@ -8,10 +8,10 @@
     RenderFragment RenderGroup(FilterGroup group, FilterGroup? parentGroup) => @<div @key="group" class="fx-filter-group">
         <div class="fx-filter-actions">
             <ButtonControl CssClass="@(group.LogicalOperator == LogicalFilterOperator.And ? "fx-filter-selected" : null)"
-                           aria-pressed="@(group.LogicalOperator == LogicalFilterOperator.And)"
+                           aria-pressed="@(group.LogicalOperator == LogicalFilterOperator.And ? "true" : "false")"
                            OnClick="() => SetGroupOperator(group, LogicalFilterOperator.And)">AND</ButtonControl>
             <ButtonControl CssClass="@(group.LogicalOperator == LogicalFilterOperator.Or ? "fx-filter-selected" : null)"
-                           aria-pressed="@(group.LogicalOperator == LogicalFilterOperator.Or)"
+                           aria-pressed="@(group.LogicalOperator == LogicalFilterOperator.Or ? "true" : "false")"
                            OnClick="() => SetGroupOperator(group, LogicalFilterOperator.Or)">OR</ButtonControl>
             <ButtonControl Disabled="@(Properties.Count == 0)" OnClick="() => AddCondition(group)">+ Condition</ButtonControl>
             <ButtonControl Disabled="@(Properties.Count == 0)" OnClick="() => AddSubGroup(group)">+ Group</ButtonControl>

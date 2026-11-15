@@ -1,24 +1,53 @@
 @namespace Fx.ControlKit
 
-@* A button inside a RibbonGroup. *@
+@* A button inside a RibbonGroup. With DropDownContent it opens a panel beneath itself instead of acting on its own. *@
 
-<button class="fx-ribbon-button @(Large ? "fx-ribbon-button-large" : "") @(Disabled ? "disabled" : "") @CssClass"
-        type="button"
-        disabled="@Disabled"
-        title="@(string.IsNullOrWhiteSpace(Tooltip) ? Text : Tooltip)"
-        @onclick="OnClick">
-    @if (!string.IsNullOrWhiteSpace(Icon))
-    {
-        <span class="fx-ribbon-button-icon">@Icon</span>
-    }
-    <span class="fx-ribbon-button-text">@Text</span>
-</button>
+@if (DropDownContent is null)
+{
+    <button class="@ButtonClass"
+            type="button"
+            disabled="@IsDisabled"
+            aria-pressed="@PressedAttribute"
+            title="@(string.IsNullOrWhiteSpace(Tooltip) ? Text : Tooltip)"
+            @onclick="OnClick">
+        @if (!string.IsNullOrWhiteSpace(Icon))
+        {
+            <span class="fx-ribbon-button-icon">@Icon</span>
+        }
+        <span class="fx-ribbon-button-text">@Text</span>
+    </button>
+}
+else
+{
+    <span class="fx-ribbon-dd-host">
+        <button class="@ButtonClass"
+                type="button"
+                disabled="@IsDisabled"
+                aria-haspopup="true"
+                aria-expanded="@(_open ? "true" : "false")"
+                title="@(string.IsNullOrWhiteSpace(Tooltip) ? Text : Tooltip)"
+                @onclick="ToggleDropDownAsync">
+            @if (!string.IsNullOrWhiteSpace(Icon))
+            {
+                <span class="fx-ribbon-button-icon">@Icon</span>
+            }
+            <span class="fx-ribbon-button-text">@Text<span class="fx-ribbon-dd-caret" aria-hidden="true">▾</span></span>
+        </button>
+        @if (_open && !IsDisabled)
+        {
+            <button type="button" class="fx-ribbon-dd-backdrop" tabindex="-1" aria-label="Close" @onclick="CloseDropDown"></button>
+            <div class="fx-ribbon-dd-panel" @onclick:stopPropagation="true">
+                @DropDownContent
+            </div>
+        }
+    </span>
+}
 
 @code {
     /// <summary>Visible label.</summary>
     [Parameter] public string Text { get; set; } = "";
 
-    /// <summary>Emoji/icon or HTML markup for the glyph (rendered above the text when Large).</summary>
+    /// <summary>Glyph shown with the label (above it when Large): an emoji or a few characters. It is printed as text, so markup and icon-font class names are not rendered.</summary>
     [Parameter] public string Icon { get; set; } = "";
 
     /// <summary>Hover tooltip (defaults to <see cref="Text"/>).</summary>
@@ -30,9 +59,43 @@
     /// <summary>Disable the button.</summary>
     [Parameter] public bool Disabled { get; set; }
 
+    /// <summary>Makes the button a toggle: true draws it pressed, false not pressed, and either sets <c>aria-pressed</c>. Null (the default) is a plain button. The page keeps the state and changes it in <see cref="OnClick"/>.</summary>
+    [Parameter] public bool? Pressed { get; set; }
+
+    /// <summary>When set, a click opens this content in a panel under the button; a click outside closes it.</summary>
+    [Parameter] public RenderFragment? DropDownContent { get; set; }
+
     /// <summary>Optional extra CSS classes.</summary>
     [Parameter] public string CssClass { get; set; } = "";
 
-    /// <summary>Fires when the button is clicked.</summary>
+    /// <summary>Fires when the button is clicked. With <see cref="DropDownContent"/> it fires before the panel opens or closes.</summary>
     [Parameter] public EventCallback OnClick { get; set; }
+
+    [CascadingParameter(Name = "FxRibbonGroupDisabled")] private bool GroupDisabled { get; set; }
+
+    private bool _open;
+    private bool IsDisabled => Disabled || GroupDisabled;
+    private string? PressedAttribute => Pressed is null ? null : Pressed.Value ? "true" : "false";
+    private string ButtonClass =>
+        $"fx-ribbon-button {(Large ? "fx-ribbon-button-large" : "")} {(IsDisabled ? "disabled" : "")} {(Pressed == true ? "fx-ribbon-button-pressed" : "")} {CssClass}";
+
+    protected override void OnParametersSet()
+    {
+        if (IsDisabled) { _open = false; }
+    }
+
+    private async Task ToggleDropDownAsync()
+    {
+        if (IsDisabled) return;
+        if (OnClick.HasDelegate) { await OnClick.InvokeAsync(); }
+        _open = !_open;
+    }
+
+    /// <summary>Closes the panel, for example after an entry in it is picked. Capture the button with <c>@ref</c>.</summary>
+    public void CloseDropDown()
+    {
+        if (!_open) return;
+        _open = false;
+        StateHasChanged();
+    }
 }

@@ -1,3 +1,5 @@
+/* Every color and the corner radius is a variable (--fx-split-btn-*), defined in wwwroot/flexkit-themes.css with the same values
+   as the fallbacks here, so a theme can change them. */
 .fx-split-button-host {
     display: inline-flex;
     position: relative;
@@ -12,11 +14,11 @@
     padding: 0.4rem 0.8rem;
     font-size: 0.875rem;
     font-weight: 500;
-    color: #ffffff;
-    background-color: #2563eb;
-    border: 1px solid #1d4ed8;
-    border-top-left-radius: 6px;
-    border-bottom-left-radius: 6px;
+    color: var(--fx-split-btn-color, #ffffff);
+    background-color: var(--fx-split-btn-bg, #2563eb);
+    border: 1px solid var(--fx-split-btn-border-color, #1d4ed8);
+    border-top-left-radius: var(--fx-split-btn-radius, 6px);
+    border-bottom-left-radius: var(--fx-split-btn-radius, 6px);
     border-top-right-radius: 0;
     border-bottom-right-radius: 0;
     cursor: pointer;
@@ -24,7 +26,7 @@
 }
 
 .fx-split-button-main:hover:not(:disabled) {
-    background-color: #1d4ed8;
+    background-color: var(--fx-split-btn-hover-bg, #1d4ed8);
 }
 
 .fx-split-button-toggle {
@@ -32,12 +34,12 @@
     align-items: center;
     justify-content: center;
     padding: 0.4rem 0.55rem;
-    color: #ffffff;
-    background-color: #2563eb;
-    border: 1px solid #1d4ed8;
-    border-left: 1px solid rgba(255, 255, 255, 0.25);
-    border-top-right-radius: 6px;
-    border-bottom-right-radius: 6px;
+    color: var(--fx-split-btn-color, #ffffff);
+    background-color: var(--fx-split-btn-bg, #2563eb);
+    border: 1px solid var(--fx-split-btn-border-color, #1d4ed8);
+    border-left: 1px solid var(--fx-split-btn-divider-color, rgba(255, 255, 255, 0.25));
+    border-top-right-radius: var(--fx-split-btn-radius, 6px);
+    border-bottom-right-radius: var(--fx-split-btn-radius, 6px);
     border-top-left-radius: 0;
     border-bottom-left-radius: 0;
     cursor: pointer;
@@ -45,7 +47,7 @@
 }
 
 .fx-split-button-toggle:hover:not(:disabled) {
-    background-color: #1d4ed8;
+    background-color: var(--fx-split-btn-hover-bg, #1d4ed8);
 }
 
 .fx-split-button-backdrop {
@@ -62,9 +64,9 @@
     position: absolute;
     top: calc(100% + 4px);
     right: 0;
-    background: #ffffff;
-    border: 1px solid #e2e8f0;
-    border-radius: 6px;
+    background: var(--fx-split-btn-menu-bg, #ffffff);
+    border: 1px solid var(--fx-split-btn-menu-border-color, #e2e8f0);
+    border-radius: var(--fx-split-btn-radius, 6px);
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
     min-width: 150px;
     z-index: 1001;
@@ -81,7 +83,7 @@
     border: none;
     background: transparent;
     font-size: 0.85rem;
-    color: #1e293b;
+    color: var(--fx-split-btn-menu-color, #1e293b);
     text-align: left;
     width: 100%;
     cursor: pointer;
@@ -89,7 +91,7 @@
 }
 
 .fx-split-button-item:hover:not(:disabled) {
-    background-color: #f1f5f9;
+    background-color: var(--fx-split-btn-menu-hover-bg, #f1f5f9);
 }
 
 .fx-split-button-item.disabled {

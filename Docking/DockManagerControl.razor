@@ -5,7 +5,7 @@
         @if(_layout.AutoHidden.Count>0)
         {
             <div class="fx-dock-auto-hidden" aria-label="Unpinned panes">
-                @foreach(var key in _layout.AutoHidden){<ButtonControl Disabled="@(!Enabled)" OnClick="()=>ToggleDrawer(key)" aria-expanded="@(_drawer==key)">@Panel(key).Title</ButtonControl>}
+                @foreach(var key in _layout.AutoHidden){<ButtonControl Disabled="@(!Enabled)" OnClick="()=>ToggleDrawer(key)" aria-expanded="@(_drawer==key ? "true" : "false")">@Panel(key).Title</ButtonControl>}
             </div>
         }
         <DockNodeView Node="@_layout.Root" />

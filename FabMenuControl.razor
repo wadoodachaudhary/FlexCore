@@ -4,7 +4,7 @@
 <div class="fx-fab-host @(_open ? "fx-fab-open" : "") @CssClass" style="@Style" @attributes="AdditionalAttributes">
     @if (_open)
     {
-        <div class="fx-fab-backdrop" @onclick="Toggle"></div>
+        <div class="fx-fab-backdrop" @onclick="Close"></div>
         <div class="fx-fab-actions">
             @if (Items != null)
             {
@@ -39,7 +39,7 @@
             class="fx-fab-trigger @(Disabled ? "disabled" : "")"
             disabled="@Disabled"
             title="@Title"
-            aria-expanded="@_open"
+            aria-expanded="@(_open ? "true" : "false")"
             @onclick="Toggle">
         <span class="fx-fab-trigger-icon">
             @if (!string.IsNullOrEmpty(IconCss))
@@ -64,11 +64,20 @@
 
     private bool _open = false;
 
+    // A menu left open when Disabled turns true would be stuck: the trigger no longer toggles. Close it.
+    protected override void OnParametersSet()
+    {
+        if (Disabled) _open = false;
+    }
+
     private void Toggle()
     {
         if (Disabled) return;
         _open = !_open;
     }
+
+    // The backdrop always closes, whatever Disabled says.
+    private void Close() => _open = false;
 
     private async Task HandleItemClick(FabMenuItem item)
     {

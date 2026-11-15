@@ -2299,7 +2299,7 @@
                         <div @key="capturedRow.Field"
                              tabindex="-1"
                              role="option"
-                             aria-selected="@(row.Field == _chooseColumnsSelectedField)"
+                             aria-selected="@(row.Field == _chooseColumnsSelectedField ? "true" : "false")"
                              @ref="_chooseColumnsRowRefs[capturedRow.Field]"
                              class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">

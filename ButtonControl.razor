@@ -38,7 +38,7 @@ else
                 tabindex="@TabIndex"
                 style="@Style"
                 aria-haspopup="true"
-                aria-expanded="@_ddOpen"
+                aria-expanded="@(_ddOpen ? "true" : "false")"
                 @onclick="HandleDropdownClick"
                 @onclick:stopPropagation="StopPropagation"
                 @onmousedown:preventDefault="PreventMouseDownDefault">
