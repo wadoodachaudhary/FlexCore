@@ -22,7 +22,12 @@ public sealed class SchedulerEvent : IValidatableObject
  public string? RecurrenceRule {get;set;}
  public List<DateTime> ExcludedStarts {get;set;}=[];
  public string? SeriesId {get;set;}
- public SchedulerEvent Clone()=>new(){Id=Id,Title=Title,Start=Start,End=End,AllDay=AllDay,TimeZoneId=TimeZoneId,ResourceId=ResourceId,Description=Description,RecurrenceRule=RecurrenceRule,ExcludedStarts=ExcludedStarts.ToList(),SeriesId=SeriesId};
+ /// <summary>Optional CSS color for this appointment, such as <c>#0f766e</c>: its edge and a light tint in the day, week, month and
+ /// timeline views (all-day entries included) and a dot in Agenda. Only a real CSS color is applied (hex of 3, 4, 6 or 8 digits,
+ /// rgb()/hsl() with numbers, or a named color); anything else is ignored. Null keeps the default look, in which only timed
+ /// appointments take their resource's <see cref="SchedulerResource.Color"/>, on the edge.</summary>
+ public string? Color {get;set;}
+ public SchedulerEvent Clone()=>new(){Id=Id,Title=Title,Start=Start,End=End,AllDay=AllDay,TimeZoneId=TimeZoneId,ResourceId=ResourceId,Description=Description,RecurrenceRule=RecurrenceRule,ExcludedStarts=ExcludedStarts.ToList(),SeriesId=SeriesId,Color=Color};
  public IEnumerable<ValidationResult> Validate(ValidationContext context)
  {
   if(End<=Start)yield return new("End must follow start.",[nameof(End)]);
