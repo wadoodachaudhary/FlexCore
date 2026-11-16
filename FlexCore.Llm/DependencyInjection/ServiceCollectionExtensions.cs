@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
 
         foreach (var key in ProviderKeys.All)
         {
+            if (string.Equals(key, ProviderKeys.Local, StringComparison.OrdinalIgnoreCase)) continue;
             services.AddHttpClient(LlmProviderBase.HttpClientName(key))
                 .ConfigureHttpClient(client => client.Timeout = Timeout.InfiniteTimeSpan);
         }
@@ -95,6 +96,10 @@ public static class ServiceCollectionExtensions
                 compatibleKey, sp.GetRequiredService<IHttpClientFactory>(), sp.GetRequiredService<ICredentialResolver>(), sp.GetService<ITokenProvider>(),
                 sp.GetServices<ILlmRequestAuthenticator>(), sp.GetService<ILogger<OpenAiCompatibleChatProvider>>())));
         }
+
+        // In-process transformer provider running without Ollama or external daemons
+        services.AddSingleton<ILlmProvider>(sp => new LocalTransformerProvider(
+            sp.GetService<ILogger<LocalTransformerProvider>>()));
 
         services.TryAddSingleton<ILlmClient>(sp => new LlmClient(
             sp.GetServices<ILlmProvider>(),

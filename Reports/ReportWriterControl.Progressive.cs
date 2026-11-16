@@ -56,7 +56,7 @@ public partial class ReportWriterControl
     private void SetPrintNote(ReportTab tab, string? note)
     {
         tab.PrintNote = note;
-        tab.PrintNoteOver = note is null ? null : StatusMessage;
+        tab.PrintNoteOver = note is null ? null : tab.StatusMessage;
     }
 
     // A refreshed or re-prompted report ends a print in progress and drops a kept copy.
@@ -343,7 +343,8 @@ public partial class ReportWriterControl
     public Task<bool> CompletePaginationAsync() => EnsureNativePagesAsync(0);
 
     /// <summary>Loads through a requested page, or the complete report when page is zero; the status line shows
-    /// <paramref name="status"/> meanwhile, or what is being loaded.</summary>
+    /// <paramref name="status"/> meanwhile, or what is being loaded. Both it and the outcome are the status of the tab
+    /// being paginated, which keeps them if the user shows another tab meanwhile; a page error is the viewer's.</summary>
     private async Task<bool> EnsureNativePagesAsync(int page, string? status = null)
     {
         var tab = ActiveTab;
@@ -356,7 +357,7 @@ public partial class ReportWriterControl
         var token = _nativeLoad?.Token ?? CancellationToken.None;
         IsLoading = true;
         ErrorMessage = null;
-        StatusMessage = status ?? (page == 0 ? "Completing report..." : $"Loading page {page}...");
+        SetStatus(tab, status ?? (page == 0 ? "Completing report..." : $"Loading page {page}..."));
         await InvokeAsync(StateHasChanged);
         try
         {
@@ -368,9 +369,10 @@ public partial class ReportWriterControl
             tab.Pages = result.Pages;
             tab.PageSnapshots = result.Snapshots;
             tab.Tree = result.Tree;
+            if (_groupTreeViews.TryGetValue(tab, out var tree)) tree.UpdatePages(tab.Tree);
             tab.IsPaginationComplete = result.IsComplete;
             tab.RuntimeDiagnostics = tab.RuntimeDiagnostics.Concat(result.Diagnostics).Distinct().ToList();
-            StatusMessage = result.IsComplete ? $"Report complete: {result.Pages.Count} pages." : $"Ready: {result.Pages.Count} pages available.";
+            SetStatus(tab, result.IsComplete ? $"Report complete: {result.Pages.Count} pages." : $"Ready: {result.Pages.Count} pages available.");
             OnRenderComplete?.Invoke();
             // The pages stay with the report, but what waited on them (Print, an export) does not act on a report a
             // refresh is replacing.
@@ -382,8 +384,9 @@ public partial class ReportWriterControl
             if (version == _nativeNavigationVersion)
             {
                 Logger.LogWarning(error, "Report page retrieval failed");
+                // The error is shown in place of the tabs, whichever is shown: so is its status.
                 ErrorMessage = "Report page error: " + error.Message;
-                StatusMessage = ErrorMessage;
+                SetViewerStatus(tab, ErrorMessage);
             }
             return false;
         }
@@ -442,7 +445,7 @@ internal sealed class ReportPrintCopy(ReportTab tab, Action<ReportPrintCopy> dro
 }
 
 /// <summary>Pages <see cref="Start"/> to <see cref="Start"/> + <see cref="Count"/> - 1 of a report's print copy.</summary>
-internal sealed class ReportPrintPart : ComponentBase, IDisposable
+internal sealed class ReportPrintPart : FlexKitControlBase, IDisposable
 {
     private bool _mounted;
     [Parameter] public ReportPrintCopy Copy { get; set; } = default!;

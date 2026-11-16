@@ -1,7 +1,7 @@
 @namespace Fx.ControlKit
 
 @{
-    RenderFragment wizardSurface = @<div class="@SurfaceCssClass" style="@SurfaceStyle">
+    RenderFragment wizardSurface = @<CascadingValue Value="@(GetOrCreateChildLocation("Wizard", () => CurrentStep.Title))" IsFixed="true"><div class="@SurfaceCssClass" style="@SurfaceStyle">
         @if (ShowHeader)
         {
         <section class="fx-wizard-header">
@@ -93,7 +93,7 @@
             }
             </section>
         }
-    </div>;
+    </div></CascadingValue>;
 }
 
 @if (Visible)
@@ -270,6 +270,7 @@
     private async Task SetStepIndexAsync(int index)
     {
         CurrentStepIndex = Math.Clamp(index, 0, Math.Max(0, Steps.Count - 1));
+        RecordControlAction("StepChanged", CurrentStep.Title, $"Step {CurrentStepIndex + 1}/{Steps.Count}");
         if (CurrentStepIndexChanged.HasDelegate)
             await CurrentStepIndexChanged.InvokeAsync(CurrentStepIndex);
     }
@@ -277,11 +278,15 @@
     private async Task FinishAsync()
     {
         if (CanFinish && FinishRequested.HasDelegate)
+        {
+            RecordControlAction("Finished", CurrentStep.Title);
             await FinishRequested.InvokeAsync();
+        }
     }
 
     private async Task CancelAsync()
     {
+        RecordControlAction("Cancelled", CurrentStep.Title);
         if (Cancelled.HasDelegate)
             await Cancelled.InvokeAsync();
 

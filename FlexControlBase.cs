@@ -7,7 +7,7 @@ namespace Fx.ControlKit;
 /// across all controls: CSS class, inline style, visibility, enabled state,
 /// DOM id, and unmatched attribute capture.
 /// </summary>
-public abstract class FlexControlBase : ComponentBase
+public abstract class FlexControlBase : FlexKitControlBase
 {
     /// <summary>Additional CSS classes appended after the control's base class.</summary>
     [Parameter] public string? CssClass { get; set; }
@@ -27,18 +27,23 @@ public abstract class FlexControlBase : ComponentBase
     /// <summary>Common descriptive title for tooltips, captions, exports, and host-specific labels.</summary>
     [Parameter] public string? Title { get; set; }
 
-    /// <summary>Application-defined metadata associated with the control.</summary>
-    [Parameter] public string? Tag { get; set; }
-
     /// <summary>Application-defined data payload or serialized value associated with the control.</summary>
     [Parameter] public string? Data { get; set; }
 
     /// <summary>Optional logical FlexKit parent control.</summary>
     [Parameter] public FlexControlBase? Parent { get; set; }
 
+    protected override FlexKitControlBase? ResolveExplicitParent() => Parent ?? LogicalParent;
+
     /// <summary>Captures any unmatched HTML attributes passed to the component.</summary>
     [Parameter(CaptureUnmatchedValues = true)]
     public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Id) ? Id!.Trim()
+        : !string.IsNullOrWhiteSpace(Title) ? Title!.Trim()
+        : null;
 
     /// <summary>
     /// Override in subclasses to define the root CSS class (e.g. "fx-button").

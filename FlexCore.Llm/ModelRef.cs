@@ -17,11 +17,12 @@ public static class ProviderKeys
     public const string Groq = "groq";
     public const string XAi = "xai";
     public const string Mistral = "mistral";
+    public const string Local = "local";
 
     public static readonly IReadOnlyList<string> All = new[]
     {
         OpenAi, AzureOpenAi, AzureFoundry, Anthropic, Gemini, Ollama, OllamaCloud,
-        HuggingFace, Groq, XAi, Mistral
+        HuggingFace, Groq, XAi, Mistral, Local
     };
 
     // Spellings other apps (GhostWriter, Mutarjim) already use for the same
@@ -45,6 +46,13 @@ public static class ProviderKeys
         ["hugging-face"] = HuggingFace,
         ["cloud-ollama"] = OllamaCloud,
         ["ollama-cloud"] = OllamaCloud,
+        ["transformer"] = Local,
+        ["inprocess"] = Local,
+        ["native"] = Local,
+        ["builtin"] = Local,
+        ["flexkit"] = Local,
+        ["flexkitllm"] = Local,
+        ["flexcorellm"] = Local
     };
 
     /// <summary>Canonical key for <paramref name="key"/>, or null when it is not a known provider or alias.</summary>

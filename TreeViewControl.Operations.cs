@@ -135,15 +135,22 @@ public partial class TreeViewControl
         await SelectedNodeChanged.InvokeAsync(node); await PublishSelectionAsync();
         _revealId = node.Id; await InvokeAsync(StateHasChanged);
     }
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : AriaLabel;
+
     private async Task HandleNodeClick(TreeNode node, MouseEventArgs e)
     {
         if (node.IsDisabled) return;
         if (ToggleOnNodeClick && node.HasChildren && !e.CtrlKey && !e.MetaKey && !e.ShiftKey) await SetExpandedAsync(node.Id, !node.IsExpanded);
-        await SelectAsync(node, e.CtrlKey || e.MetaKey, e.ShiftKey); await OnNodeClick.InvokeAsync(node);
+        await SelectAsync(node, e.CtrlKey || e.MetaKey, e.ShiftKey);
+        RecordControlAction("NodeSelected", node.Text, node.Id);
+        await OnNodeClick.InvokeAsync(node);
     }
     private async Task HandleNodeDoubleClick(TreeNode node)
     {
         if (node.IsDisabled) return;
+        RecordControlAction("NodeDoubleClicked", node.Text, node.Id);
+        if (ToggleOnNodeDoubleClick && node.HasChildren) await SetExpandedAsync(node.Id, !node.IsExpanded);
         await OnNodeDoubleClick.InvokeAsync(node);
         if (AllowEditing) await BeginEditAsync(node.Id);
     }
@@ -158,7 +165,9 @@ public partial class TreeViewControl
     public async Task SetCheckedAsync(string id, bool value)
     {
         var node = Find(id); if (node is null || node.IsDisabled) return;
-        TreeViewData.SetChecked(Roots, node, value, AutoCheck); _focusId = id; _revealId = id; await PublishChecksAsync(); await InvokeAsync(StateHasChanged);
+        TreeViewData.SetChecked(Roots, node, value, AutoCheck); _focusId = id; _revealId = id;
+        RecordControlAction("NodeChecked", $"{node.Text}={(value ? "true" : "false")}", node.Id);
+        await PublishChecksAsync(); await InvokeAsync(StateHasChanged);
     }
     public async Task CheckAllAsync(bool value = true)
     {
@@ -194,7 +203,10 @@ public partial class TreeViewControl
             finally { _loading.Remove(id); if (!_disposed) await InvokeAsync(StateHasChanged); }
         }
         expanded = _expansionIntent.GetValueOrDefault(id, expanded);
+        var wasExpanded = node.IsExpanded;
         node.IsExpanded = expanded;
+        if (wasExpanded != expanded)
+            RecordControlAction(expanded ? "NodeExpanded" : "NodeCollapsed", node.Text, node.Id);
         if (expanded) await OnNodeExpand.InvokeAsync(node);
         Reindex(); await PublishExpansionAsync(); await PublishChecksAsync(); await NodesChanged.InvokeAsync(Roots); await InvokeAsync(StateHasChanged);
     }
@@ -243,6 +255,7 @@ public partial class TreeViewControl
             await NodeEditCommitting.InvokeAsync(args);
             if (args.Cancel || args.Error is not null) { if (args.Error is not null) await FailAsync(args.Error); return; }
             node.Text = args.Text; _editingId = null; _error = null; Reindex(); _revealId = node.Id;
+            RecordControlAction("NodeRenamed", args.Text, node.Id);
             await NodeEdited.InvokeAsync(args); await NodesChanged.InvokeAsync(Roots); await InvokeAsync(StateHasChanged);
         }
         finally { _editingBusy = false; }

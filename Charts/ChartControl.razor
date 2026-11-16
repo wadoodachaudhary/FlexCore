@@ -31,19 +31,19 @@
     {
         var drawing = PrintedCategoryBarChart.Draw(Type, _effectiveSeries, Title ?? "",
             PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
-            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.RightCategoryLegend);
+            EffectiveShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.RightCategoryLegend);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else if (ThreeDimensional)
     {
         var drawing = PrintedBarChart3D.Draw(Type, _effectiveSeries, Title ?? "",
             PrintWidthPoints > 0 ? PrintWidthPoints : 600, PrintHeightPoints > 0 ? PrintHeightPoints : 300,
-            ShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.PerspectiveStyle);
+            EffectiveShowLegend, ColorPalette, XAxis, YAxis, ShowAxisLabels, ReportPlot?.PerspectiveStyle);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else if (PrintedStageImage)
     {
-        var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, ShowLegend, EffectivePalette, PrintReportGroupChart, XAxis);
+        var drawing = PrintedStageChart.Draw(Type, _effectiveSeries, Title ?? "", PrintWidthPoints, PrintHeightPoints, EffectiveShowLegend, EffectivePalette, PrintReportGroupChart, XAxis);
         <img alt="@Title" src="@drawing.ToDataUrl()" style="display:block;width:100%;height:@Height;" />
     }
     else
@@ -152,6 +152,9 @@
                 case ChartType.Sunburst:
                     @RenderSunburst()
                     break;
+                case ChartType.Treemap:
+                    @RenderTreemap()
+                    break;
                 case ChartType.Radar:
                     @RenderRadar()
                     break;
@@ -233,7 +236,7 @@
                 </div>
             }
 
-            @if (ShowLegend && _effectiveSeries.Count > 1)
+            @if (EffectiveShowLegend && _effectiveSeries.Count > 1)
             {
                 <div class="fx-chart-legend">
                     @for (var i = 0; i < _effectiveSeries.Count; i++)
@@ -373,6 +376,12 @@
     /// <summary>KPI trend indicator (e.g. "+12%", "-5%", "up", "down").</summary>
     [Parameter] public string? KpiTrend { get; set; }
 
+    /// <summary>Optional 2x2 quadrant reference overlay rendered on Scatter and Bubble charts.</summary>
+    [Parameter] public ChartQuadrantOverlay? Quadrant { get; set; }
+
+    /// <summary>Optional shorthand to show or hide the legend; overrides <see cref="Legend"/>.Visible when set.</summary>
+    [Parameter] public bool? ShowLegend { get; set; }
+
     // Tooltips (2026-10-31): a card follows the pointer over bars, slices, points, cells and flows; no script, Blazor events only.
     // Hover handlers attach only when ShowTooltips or PointHover is on: a chart with ShowTooltips=false makes no hover round trips.
     /// <summary>Shows a card when the pointer is over a shape. Off, the shapes keep their native &lt;title&gt; text instead.</summary>
@@ -406,8 +415,8 @@
     private bool UseLegacyMode =>
         Series == null && (Bars != null || DataSource != null);
 
-    private bool ShowLegend =>
-        Legend?.Visible ?? true;
+    private bool EffectiveShowLegend =>
+        ShowLegend ?? Legend?.Visible ?? true;
 
     private string RootStyle
     {
@@ -1205,12 +1214,134 @@
 
     #endregion
 
+    #region Render — Treemap
+
+    private sealed record TreemapTile(int SeriesIndex, int PointIndex, ChartDataPoint Point, double X, double Y, double W, double H, string Color, double SharePercent);
+
+    private RenderFragment RenderTreemap() => __builder =>
+    {
+        if (_effectiveSeries.Count == 0) return;
+        var raw = new List<(int SIdx, int PIdx, ChartDataPoint Pt, double Val)>();
+        for (int si = 0; si < _effectiveSeries.Count; si++)
+        {
+            var pts = _effectiveSeries[si].DataPoints;
+            for (int pi = 0; pi < pts.Count; pi++)
+            {
+                var v = Math.Abs(pts[pi].Value);
+                if (!pts[pi].IsEmpty && v > 0)
+                    raw.Add((si, pi, pts[pi], v));
+            }
+        }
+        if (raw.Count == 0) return;
+
+        raw.Sort((a, b) => b.Val.CompareTo(a.Val));
+        double total = raw.Sum(r => r.Val);
+        if (total <= 0) total = 1;
+
+        const double svgW = 600, svgH = 320;
+        const double pad = 4;
+        var tiles = new List<TreemapTile>(raw.Count);
+        LayoutTreemapSliceDice(raw, 0, raw.Count, pad, pad, svgW - pad * 2, svgH - pad * 2, total, tiles);
+
+        <svg viewBox="0 0 @F0(svgW) @F0(svgH)" preserveAspectRatio="xMidYMid meet"
+             style="height:@(Height ?? "320px"); width:100%;" xmlns="http://www.w3.org/2000/svg">
+            @foreach (var t in tiles)
+            {
+                var tile = t;
+                double cx = tile.X + tile.W / 2;
+                double cy = tile.Y + tile.H / 2;
+                var catLabel = !string.IsNullOrWhiteSpace(tile.Point.Category)
+                    ? $"{tile.Point.Category}: {tile.Point.Label}"
+                    : tile.Point.Label;
+                var fields = new[]
+                {
+                    Fld("Value", tile.Point.Value),
+                    new ChartTooltipField("Share", $"{F1(tile.SharePercent)}%")
+                };
+                <g class="@PtClass"
+                   @onmouseover="Hover(e => TipEnter(e, MakeCtx(tile.SeriesIndex, tile.PointIndex, tile.Color, catLabel, tile.Point.Value, tile.SharePercent, fields, tile.Point.Label), cx, cy, svgW, svgH))"
+                   @onmouseout="HoverOut">
+                    <rect x="@F(tile.X + 1.5)" y="@F(tile.Y + 1.5)"
+                          width="@F(Math.Max(2, tile.W - 3))" height="@F(Math.Max(2, tile.H - 3))"
+                          rx="3" fill="@tile.Color" fill-opacity="0.88" stroke="#ffffff" stroke-width="1.5">
+                        @if (!ShowTooltips)
+                        {
+                            <title>@catLabel: @F1(tile.Point.Value) (@F1(tile.SharePercent)%)</title>
+                        }
+                    </rect>
+                    @if (tile.W >= 46 && tile.H >= 24)
+                    {
+                        int maxChars = Math.Max(4, (int)(tile.W / 6.8));
+                        @SvgText(F(tile.X + 7), F(tile.Y + 16), Truncate(tile.Point.Label, maxChars), anchor: "start", fontSize: "11", fill: "#ffffff", fontWeight: "600")
+                        @if (tile.H >= 38)
+                        {
+                            @SvgText(F(tile.X + 7), F(tile.Y + 30), $"{F0(tile.Point.Value)} ({F1(tile.SharePercent)}%)", anchor: "start", fontSize: "9.5", fill: "rgba(255,255,255,0.88)")
+                        }
+                    }
+                </g>
+            }
+        </svg>
+    };
+
+    private void LayoutTreemapSliceDice(
+        List<(int SIdx, int PIdx, ChartDataPoint Pt, double Val)> items,
+        int start,
+        int count,
+        double x,
+        double y,
+        double w,
+        double h,
+        double grandTotal,
+        List<TreemapTile> output)
+    {
+        if (count <= 0 || w <= 0 || h <= 0) return;
+        if (count == 1)
+        {
+            var item = items[start];
+            string color = !string.IsNullOrEmpty(item.Pt.Color)
+                ? item.Pt.Color!
+                : GetPointColor(item.Pt, item.SIdx, start);
+            output.Add(new TreemapTile(item.SIdx, item.PIdx, item.Pt, x, y, w, h, color, item.Val / grandTotal * 100.0));
+            return;
+        }
+
+        double sum = 0;
+        for (int i = start; i < start + count; i++) sum += items[i].Val;
+        if (sum <= 0) return;
+
+        double half = sum / 2.0;
+        double acc = 0;
+        int split = 1;
+        for (int i = 0; i < count - 1; i++)
+        {
+            acc += items[start + i].Val;
+            split = i + 1;
+            if (acc >= half) break;
+        }
+
+        double ratio = Math.Clamp(acc / sum, 0.08, 0.92);
+        if (w >= h)
+        {
+            double w1 = w * ratio;
+            LayoutTreemapSliceDice(items, start, split, x, y, w1, h, grandTotal, output);
+            LayoutTreemapSliceDice(items, start + split, count - split, x + w1, y, w - w1, h, grandTotal, output);
+        }
+        else
+        {
+            double h1 = h * ratio;
+            LayoutTreemapSliceDice(items, start, split, x, y, w, h1, grandTotal, output);
+            LayoutTreemapSliceDice(items, start + split, count - split, x, y + h1, w, h - h1, grandTotal, output);
+        }
+    }
+
+    #endregion
+
     #region Render — Scatter / Bubble
 
     private RenderFragment RenderScatterBubble() => __builder =>
     {
         const double svgW = 600, svgH = 300;
-        const double padL = 60, padR = 20, padT = 20, padB = 40;
+        const double padL = 60, padR = 24, padT = 22, padB = 42;
         double plotW = svgW - padL - padR;
         double plotH = svgH - padT - padB;
 
@@ -1227,10 +1358,24 @@
             return v;
         }).ToList();
         if (xValues.Count > 0) { xMin = xValues.Min(); xMax = xValues.Max(); }
+        if (XAxis?.Min is { } xm0) xMin = Math.Min(xMin, xm0);
+        if (XAxis?.Max is { } xm1) xMax = Math.Max(xMax, xm1);
+        if (Quadrant is not null)
+        {
+            xMin = Math.Min(xMin, Quadrant.ReferenceX * 0.5);
+            xMax = Math.Max(xMax, Quadrant.ReferenceX * 1.35);
+        }
         if (Math.Abs(xMax - xMin) < 0.001) { xMin -= 1; xMax += 1; }
 
         yMin = allPoints.Min(p => p.Value);
         yMax = allPoints.Max(p => p.Value);
+        if (YAxis?.Min is { } ym0) yMin = Math.Min(yMin, ym0);
+        if (YAxis?.Max is { } ym1) yMax = Math.Max(yMax, ym1);
+        if (Quadrant is not null)
+        {
+            yMin = Math.Min(yMin, Quadrant.ReferenceY * 0.5);
+            yMax = Math.Max(yMax, Quadrant.ReferenceY * 1.35);
+        }
         if (Math.Abs(yMax - yMin) < 0.001) { yMin -= 1; yMax += 1; }
 
         double bubbleMax = Type == ChartType.Bubble
@@ -1249,31 +1394,85 @@
                 @SvgText(F(padL - 8), F(y + 4), F0(tick), anchor: "end", fontSize: "10", fill: "#6b7280")
             }
 
+            @{ var xTicks = GetTicks(xMin, xMax, 5); }
+            @foreach (var xTick in xTicks)
+            {
+                double tx = padL + (xTick - xMin) / (xMax - xMin) * plotW;
+                @SvgText(F(tx), F(padT + plotH + 15), F0(xTick), anchor: "middle", fontSize: "10", fill: "#6b7280")
+            }
+
+            @if (Quadrant is not null)
+            {
+                double qx = padL + Math.Clamp((Quadrant.ReferenceX - xMin) / (xMax - xMin), 0.08, 0.92) * plotW;
+                double qy = padT + plotH - Math.Clamp((Quadrant.ReferenceY - yMin) / (yMax - yMin), 0.08, 0.92) * plotH;
+                <line x1="@F(qx)" y1="@F(padT)" x2="@F(qx)" y2="@F(padT + plotH)"
+                      stroke="@Quadrant.LineColor" stroke-width="1.25" stroke-dasharray="5,4" />
+                <line x1="@F(padL)" y1="@F(qy)" x2="@F(svgW - padR)" y2="@F(qy)"
+                      stroke="@Quadrant.LineColor" stroke-width="1.25" stroke-dasharray="5,4" />
+                @if (!string.IsNullOrEmpty(Quadrant.TopLeftLabel))
+                {
+                    @SvgText(F(padL + 6), F(padT + 13), Quadrant.TopLeftLabel, anchor: "start", fontSize: "9.5", fill: Quadrant.LabelColor, fontWeight: "600")
+                }
+                @if (!string.IsNullOrEmpty(Quadrant.TopRightLabel))
+                {
+                    @SvgText(F(svgW - padR - 6), F(padT + 13), Quadrant.TopRightLabel, anchor: "end", fontSize: "9.5", fill: Quadrant.LabelColor, fontWeight: "600")
+                }
+                @if (!string.IsNullOrEmpty(Quadrant.BottomLeftLabel))
+                {
+                    @SvgText(F(padL + 6), F(padT + plotH - 6), Quadrant.BottomLeftLabel, anchor: "start", fontSize: "9.5", fill: Quadrant.LabelColor, fontWeight: "600")
+                }
+                @if (!string.IsNullOrEmpty(Quadrant.BottomRightLabel))
+                {
+                    @SvgText(F(svgW - padR - 6), F(padT + plotH - 6), Quadrant.BottomRightLabel, anchor: "end", fontSize: "9.5", fill: Quadrant.LabelColor, fontWeight: "600")
+                }
+            }
+
             <line x1="@F(padL)" y1="@F(padT + plotH)" x2="@F(svgW - padR)" y2="@F(padT + plotH)"
                   stroke="#9ca3af" stroke-width="1" />
             <line x1="@F(padL)" y1="@F(padT)" x2="@F(padL)" y2="@F(padT + plotH)"
                   stroke="#9ca3af" stroke-width="1" />
 
+            @if (!string.IsNullOrEmpty(YAxis?.Title))
+            {
+                @SvgText("14", F(padT + plotH / 2), YAxis!.Title!, anchor: "middle", fontSize: "10.5", fill: "#6b7280",
+                    transform: $"rotate(-90, 14, {F(padT + plotH / 2)})")
+            }
+            @if (!string.IsNullOrEmpty(XAxis?.Title))
+            {
+                @SvgText(F(padL + plotW / 2), F(svgH - 5), XAxis!.Title!, anchor: "middle", fontSize: "10.5", fill: "#6b7280")
+            }
+
             @for (int si = 0; si < series.Count; si++)
             {
-                string color = GetSeriesColor(si);
+                string seriesColor = GetSeriesColor(si);
                 for (int pi = 0; pi < series[si].DataPoints.Count; pi++)
                 {
                     var pt = series[si].DataPoints[pi];
+                    if (pt.IsEmpty) continue;
                     var sIdx = si; var pIdx = pi;
+                    string color = !string.IsNullOrEmpty(pt.Color) ? pt.Color! : seriesColor;
                     double.TryParse(pt.Label, NumberStyles.Any, CultureInfo.InvariantCulture, out var xVal);
                     double px = padL + (xVal - xMin) / (xMax - xMin) * plotW;
                     double py = padT + plotH - (pt.Value - yMin) / (yMax - yMin) * plotH;
                     double r = Type == ChartType.Bubble && pt.Value2.HasValue
-                        ? 4 + (Math.Max(0, pt.Value2.Value) / Math.Max(double.Epsilon, bubbleMax)) * 20
+                        ? 4 + (Math.Max(0, pt.Value2.Value) / Math.Max(double.Epsilon, bubbleMax)) * 18
                         : 5;
+                    string itemTitle = !string.IsNullOrWhiteSpace(pt.Category)
+                        ? pt.Category!
+                        : (string.IsNullOrEmpty(series[sIdx].Name) ? pt.Label : series[sIdx].Name);
+                    string xTitle = string.IsNullOrEmpty(XAxis?.Title) ? "X" : XAxis!.Title!;
+                    string yTitle = string.IsNullOrEmpty(YAxis?.Title) ? "Y" : YAxis!.Title!;
                     var scatterFields = Type == ChartType.Bubble && pt.Value2.HasValue
-                        ? new[] { Fld("X", xVal), Fld("Y", pt.Value), Fld("Size", pt.Value2.Value) }
-                        : new[] { Fld("X", xVal), Fld("Y", pt.Value) };
-                    <circle class="@PtClass" cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.7" stroke="@color"
-                            @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, color, string.IsNullOrEmpty(series[sIdx].Name) ? pt.Label : series[sIdx].Name, pt.Value, null, scatterFields, pt.Label), px, py, svgW, svgH))" @onmouseout="HoverOut">
-                        @if (!ShowTooltips) { <title>(@F1(xVal), @F1(pt.Value))</title> }
+                        ? new[] { Fld(xTitle, xVal), Fld(yTitle, pt.Value), Fld("Volume", pt.Value2.Value) }
+                        : new[] { Fld(xTitle, xVal), Fld(yTitle, pt.Value) };
+                    <circle class="@PtClass" cx="@F(px)" cy="@F(py)" r="@F(r)" fill="@color" fill-opacity="0.72" stroke="@color" stroke-width="1.25"
+                            @onmouseover="Hover(e => TipEnter(e, MakeCtx(sIdx, pIdx, color, itemTitle, pt.Value, null, scatterFields, itemTitle), px, py, svgW, svgH))" @onmouseout="HoverOut">
+                        @if (!ShowTooltips) { <title>@itemTitle: (@F1(xVal), @F1(pt.Value))</title> }
                     </circle>
+                    @if (Quadrant?.ShowPointCaptions == true && !string.IsNullOrWhiteSpace(pt.Category))
+                    {
+                        @SvgText(F(px), F(Math.Max(padT + 10, py - r - 3)), Truncate(pt.Category!, 14), anchor: "middle", fontSize: "9", fill: Quadrant.LabelColor)
+                    }
                 }
             }
         </svg>
@@ -2077,25 +2276,50 @@
     private RenderFragment RenderSankey() => __builder =>
     {
         if (_effectiveSeries.Count == 0 || _effectiveSeries[0].DataPoints.Count == 0) return;
-        var pts = _effectiveSeries[0].DataPoints;
+        var pts = _effectiveSeries[0].DataPoints.Where(p => p.Value > 0).ToList();
+        if (pts.Count == 0) return;
 
         double svgW = 650, svgH = 340;
-        double padL = 80, padR = 80, padT = 30, padB = 30;
+        double padL = 110, padR = 110, padT = 24, padB = 24;
         double plotW = svgW - padL - padR;
         double plotH = svgH - padT - padB;
+        double nodeW = 16;
+        double nodeGap = 10;
 
-        var sources = pts.Select(p => p.Source).Distinct().ToList();
-        var targets = pts.Select(p => p.Destination).Where(d => !string.IsNullOrEmpty(d)).Distinct().ToList();
-        if (targets.Count == 0) targets = new List<string> { "Target" };
+        var srcTotals = pts
+            .GroupBy(p => string.IsNullOrEmpty(p.Source) ? "Source" : p.Source, StringComparer.Ordinal)
+            .Select(g => (Name: g.Key, Total: g.Sum(x => x.Value)))
+            .ToList();
+        var tgtTotals = pts
+            .GroupBy(p => string.IsNullOrEmpty(p.Destination) ? "Target" : p.Destination, StringComparer.Ordinal)
+            .Select(g => (Name: g.Key, Total: g.Sum(x => x.Value)))
+            .ToList();
 
         double totalFlow = pts.Sum(p => p.Value);
         if (totalFlow <= 0) totalFlow = 1;
 
-        double srcY = padT;
-        double tgtY = padT;
-        double nodeW = 16;
+        double srcAvailH = Math.Max(40, plotH - Math.Max(0, srcTotals.Count - 1) * nodeGap);
+        double tgtAvailH = Math.Max(40, plotH - Math.Max(0, tgtTotals.Count - 1) * nodeGap);
+        double scale = Math.Min(srcAvailH, tgtAvailH) / totalFlow;
 
-        // source nodes: the series Color or ColorPalette[0]; target nodes: ColorPalette[1]; each falls back to its fixed blue
+        var srcBox = new Dictionary<string, (double Y, double H, double Cursor)>(StringComparer.Ordinal);
+        double curSrcY = padT;
+        foreach (var s in srcTotals)
+        {
+            double h = Math.Max(6, s.Total * scale);
+            srcBox[s.Name] = (curSrcY, h, curSrcY);
+            curSrcY += h + nodeGap;
+        }
+
+        var tgtBox = new Dictionary<string, (double Y, double H, double Cursor)>(StringComparer.Ordinal);
+        double curTgtY = padT;
+        foreach (var t in tgtTotals)
+        {
+            double h = Math.Max(6, t.Total * scale);
+            tgtBox[t.Name] = (curTgtY, h, curTgtY);
+            curTgtY += h + nodeGap;
+        }
+
         var srcColor = ThemedSeriesColor("#2563eb");
         var tgtColor = PaletteOr(1, "#0284c7");
         bool themed = ColorPalette is { Length: > 0 } || (_effectiveSeries.Count > 0 && !string.IsNullOrEmpty(_effectiveSeries[0].Color));
@@ -2107,36 +2331,44 @@
             {
                 var pt = pts[pi];
                 var pIdx = pi;
-                double flowH = Math.Max(8, (pt.Value / totalFlow) * (plotH * 0.8));
+                var sName = string.IsNullOrEmpty(pt.Source) ? "Source" : pt.Source;
+                var tName = string.IsNullOrEmpty(pt.Destination) ? "Target" : pt.Destination;
+                var sb = srcBox[sName];
+                var tb = tgtBox[tName];
+
+                double flowH = Math.Max(3, pt.Value * scale);
                 double x1 = padL + nodeW;
                 double x2 = padL + plotW - nodeW;
-                double y1 = srcY;
-                double y2 = tgtY;
+                double y1 = sb.Cursor;
+                double y2 = tb.Cursor;
+                srcBox[sName] = (sb.Y, sb.H, sb.Cursor + flowH);
+                tgtBox[tName] = (tb.Y, tb.H, tb.Cursor + flowH);
 
                 double cp1X = x1 + (x2 - x1) * 0.5;
                 double cp2X = x2 - (x2 - x1) * 0.5;
 
-                // a point's Color paints its ribbon; otherwise a themed chart's ribbons take the source colour, an unthemed one the light blue
                 var flowFill = !string.IsNullOrEmpty(pt.Color) ? pt.Color! : themed ? srcColor : "#60a5fa";
                 var flowStroke = !string.IsNullOrEmpty(pt.Color) ? pt.Color! : themed ? srcColor : "#3b82f6";
 
-                <!-- Smooth Flow Ribbon -->
                 <path d="M @F(x1) @F(y1) C @F(cp1X) @F(y1), @F(cp2X) @F(y2), @F(x2) @F(y2) L @F(x2) @F(y2 + flowH) C @F(cp2X) @F(y2 + flowH), @F(cp1X) @F(y1 + flowH), @F(x1) @F(y1 + flowH) Z"
                       fill="@flowFill" fill-opacity="0.45" stroke="@flowStroke" stroke-width="0.5" class="@PtClass"
-                      @onmouseover='Hover(e => TipEnter(e, MakeCtx(0, pIdx, flowFill, $"{pt.Source} → {pt.Destination}", pt.Value, null, new[] { Fld("Flow", pt.Value) }, pt.Source), (x1 + x2) / 2, (y1 + y2) / 2, svgW, svgH))' @onmouseout="HoverOut">
-                    @if (!ShowTooltips) { <title>@pt.Source → @pt.Destination: @pt.Value</title> }
+                      @onmouseover='Hover(e => TipEnter(e, MakeCtx(0, pIdx, flowFill, $"{sName} → {tName}", pt.Value, pt.Value / totalFlow * 100.0, new[] { Fld("Flow", pt.Value) }, sName), (x1 + x2) / 2, (y1 + y2 + flowH) / 2, svgW, svgH))' @onmouseout="HoverOut">
+                    @if (!ShowTooltips) { <title>@sName → @tName: @pt.Value</title> }
                 </path>
+            }
 
-                <!-- Source Node -->
-                <rect x="@F(padL)" y="@F(srcY)" width="@F(nodeW)" height="@F(flowH)" fill="@srcColor" rx="2" />
-                @SvgText(F(padL - 8), F(srcY + flowH / 2 + 4), pt.Source, anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
+            @foreach (var s in srcTotals)
+            {
+                var sb = srcBox[s.Name];
+                <rect x="@F(padL)" y="@F(sb.Y)" width="@F(nodeW)" height="@F(sb.H)" fill="@srcColor" rx="2" />
+                @SvgText(F(padL - 8), F(sb.Y + sb.H / 2 + 4), Truncate(s.Name, 16), anchor: "end", fontSize: "11", fill: "#1e293b", fontWeight: "600")
+            }
 
-                <!-- Target Node -->
-                <rect x="@F(padL + plotW - nodeW)" y="@F(tgtY)" width="@F(nodeW)" height="@F(flowH)" fill="@tgtColor" rx="2" />
-                @SvgText(F(padL + plotW + 8), F(tgtY + flowH / 2 + 4), pt.Destination, anchor: "start", fontSize: "11", fill: "#1e293b", fontWeight: "600")
-
-                srcY += flowH + 10;
-                tgtY += flowH + 10;
+            @foreach (var t in tgtTotals)
+            {
+                var tb = tgtBox[t.Name];
+                <rect x="@F(padL + plotW - nodeW)" y="@F(tb.Y)" width="@F(nodeW)" height="@F(tb.H)" fill="@tgtColor" rx="2" />
+                @SvgText(F(padL + plotW + 8), F(tb.Y + tb.H / 2 + 4), Truncate(t.Name, 16), anchor: "start", fontSize: "11", fill: "#1e293b", fontWeight: "600")
             }
         </svg>
     };

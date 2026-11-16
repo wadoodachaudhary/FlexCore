@@ -157,11 +157,17 @@
         catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim() : AriaLabel;
+
     private async Task SelectTab(int idx)
     {
         if (idx < 0 || idx >= Items.Count || Items[idx].Disabled) return;
+        var changed = SelectedIndex != idx;
         SelectedIndex = idx;
         _reveal = true;
+        if (changed)
+            RecordControlAction("TabSelected", Items[idx].Text, $"Index={idx}");
         if (SelectedIndexChanged.HasDelegate) await SelectedIndexChanged.InvokeAsync(idx);
     }
 
@@ -179,6 +185,7 @@
     private async Task CloseTab(int idx)
     {
         if (idx < 0 || idx >= Items.Count || Items[idx].Disabled || !Items[idx].Closable) return;
+        RecordControlAction("TabClosed", Items[idx].Text, $"Index={idx}");
         if (OnTabClose.HasDelegate) await OnTabClose.InvokeAsync(idx);
     }
 

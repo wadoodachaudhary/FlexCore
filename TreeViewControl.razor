@@ -40,10 +40,11 @@
         else
         {
             <span class="@GetArrowCss(info.Node)" role="@(info.Node.HasChildren ? "button" : null)" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
-                  aria-hidden="@(!info.Node.HasChildren ? "true" : null)" @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true"></span>
+                  aria-hidden="@(!info.Node.HasChildren ? "true" : null)" @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)"
+                  @onclick:stopPropagation="true" @ondblclick:stopPropagation="@ToggleOnNodeDoubleClick"></span>
             @if(ShowCheckboxes)
             {
-                <span class="fx-treeview-check" @onclick:stopPropagation="true"><CheckBoxControl Checked="@info.Node.IsChecked" Indeterminate="@info.Node.IsIndeterminate" Disabled="@info.Node.IsDisabled"
+                <span class="fx-treeview-check" @onclick:stopPropagation="true" @ondblclick:stopPropagation="@ToggleOnNodeDoubleClick"><CheckBoxControl Checked="@info.Node.IsChecked" Indeterminate="@info.Node.IsIndeterminate" Disabled="@info.Node.IsDisabled"
                     CheckedChanged="v=>SetCheckedAsync(info.Node.Id,v)" TabIndex="-1" StopClickPropagation="true" StopKeyDownPropagation="true" /></span>
             }
             @if(ShowIcons&&!string.IsNullOrEmpty(GetRenderedIconCss(info.Node))){<span class="@GetRenderedIconCss(info.Node)" aria-hidden="true"></span>}
@@ -97,7 +98,7 @@
         @if(info.Node.HasChildren)
         {
             <span class="fx-treeview-outline-chevron" role="button" aria-label="@(DisplayExpanded(info.Node) ? "Collapse "+info.Node.Text : "Expand "+info.Node.Text)"
-                  @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true">
+                  @onclick="()=>SetExpandedAsync(info.Node.Id,!info.Node.IsExpanded)" @onclick:stopPropagation="true" @ondblclick:stopPropagation="@ToggleOnNodeDoubleClick">
                 <SvgIconControl Name="@(DisplayExpanded(info.Node) ? "chevron-up" : "chevron-down")" Size="18px" />
             </span>
         }

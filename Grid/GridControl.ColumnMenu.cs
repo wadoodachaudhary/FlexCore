@@ -79,6 +79,7 @@ public partial class GridControl<TValue>
             RemoveSortPriority(column.Field);
 
         ResetToFirstPage();
+        LogGridAction("Sorted", $"{column.Field} {(direction?.ToString() ?? "Cleared")}", column.Field);
         if (EventsRef?.Sorted.HasDelegate == true)
         {
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs

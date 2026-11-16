@@ -2,7 +2,7 @@
 
    Mirrors the VB6 / Crystal "Enter Parameter Values" dialog. The title bar carries the
    report's name, centred, with "Enter Parameter Values" small and grey beside it. For
-   each required parameter it renders a panel containing:
+   each required parameter (and each optional one the caller includes) it renders a panel containing:
 
      - left:  the prompt text (e.g. "Enter Job:")
      - right: a secondary label with the parameter's display name
@@ -123,8 +123,7 @@
                                                             ItemSelectable="@(i => CanSelectMultiValue(p, i.Key))"
                                                             VisibleRows="7"
                                                             Height="@DualListHeight"
-                                                            BatchSize="@PromptBatchSize"
-                                                            KeepAvailableItems="true" />
+                                                            BatchSize="@PromptBatchSize" />
 
                                 @if (HasCustomEntryRow(p))
                                 {
@@ -147,9 +146,9 @@
                                 @* Crystal default-values dropdown — shows description,
                                    sets value behind it. Same as before. *@
                                 <DropDownListControl TValue="string" TItem="ListItem" CssClass="fx-param-single-input"
-                                    DataSource="@defaults.Select(choice => new ListItem(choice.Value, ChoiceLabel(p, choice)))"
-                                    ValueFieldName="Key" TextFieldName="Label" Value="@_values.GetValueOrDefault(p.Name)"
-                                    ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name"
+                                    DataSource="@AuthoredChoices(p)"
+                                    ValueFieldName="Key" TextFieldName="Label" Value="@AuthoredChoiceValue(p)"
+                                    ValueChanged="value => SetPickListValue(p.Name, value)" AriaLabel="@p.Name"
                                     Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight" />
                                 @if (p.AllowCustomCurrentValues)
                                 {
@@ -177,8 +176,8 @@
                             }
                             else if (p.ParameterType == ReportParameterType.Boolean)
                             {
-                                <DropDownListControl TValue="string" TItem="string" CssClass="fx-param-single-input" DataSource="@(new[] { "True", "False" })"
-                                    Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
+                                <DropDownListControl TValue="string" TItem="string" CssClass="fx-param-single-input" DataSource="@BooleanChoices(p)"
+                                    Value="@BooleanValue(p)" ValueChanged="value => SetValue(p.Name, value is null or NoBooleanChoice ? string.Empty : value)" AriaLabel="@p.Name" />
                             }
                             else
                             {
@@ -197,6 +196,19 @@
                                 }
                             }
                         </div>
+                        </ChildContent>
+                    </PanelControl>
+                }
+                @foreach (var field in _readOnlyValues)
+                {
+                    <PanelControl Bordered="false" CssClass="fx-param-panel" Grow="0 0 auto" role="group" aria-label="@field.Key">
+                        <Header>
+                            <div class="fx-param-panel-header">@field.Key (read-only)</div>
+                        </Header>
+                        <ChildContent>
+                            <div class="fx-param-panel-body">
+                                <TextBoxControl CssClass="fx-param-single-input" Width="@ScalarWidth" aria-label="@field.Key" Value="@field.Value" readonly="readonly" />
+                            </div>
                         </ChildContent>
                     </PanelControl>
                 }
@@ -227,6 +239,7 @@
     private bool _visible;
     private string _title = "";
     private List<ReportParameter> _parameters = new();
+    private IReadOnlyList<KeyValuePair<string, string>> _readOnlyValues = [];
     private Dictionary<string, string> _values = new();
     private Dictionary<string, List<ReportRangeValue>> _ranges = new();
     private Dictionary<string, IReadOnlyList<PickListItem>> _pickLists = new();
@@ -236,7 +249,32 @@
     private string PickListValue(ReportParameter p)
     {
         var value = _values.GetValueOrDefault(p.Name) ?? "";
-        return value.Length == 0 && p.IsOptional ? NoValueChoice : value;
+        return value.Length == 0 && MayBeBlank(p) ? NoValueChoice : value;
+    }
+
+    /// <summary>An "(optional)" parameter, or an optional prompt the caller included: it may be left blank.</summary>
+    private static bool MayBeBlank(ReportParameter p) => p.IsOptional || !p.Required;
+
+    // An included optional True/False prompt keeps a "..." choice, so a picked value can be cleared again; a required
+    // one, "(optional)"-named or not, keeps the plain True/False list.
+    private const string NoBooleanChoice = "...";
+    private static string[] BooleanChoices(ReportParameter p) => p.Required ? ["True", "False"] : [NoBooleanChoice, "True", "False"];
+    private string? BooleanValue(ReportParameter p)
+    {
+        var value = _values.GetValueOrDefault(p.Name);
+        return !p.Required && string.IsNullOrEmpty(value) ? NoBooleanChoice : value;
+    }
+
+    // So does an included optional authored-values list; a required one stays as authored.
+    private static IEnumerable<ListItem> AuthoredChoices(ReportParameter p)
+    {
+        var choices = p.DefaultValues.Select(choice => new ListItem(choice.Value, ChoiceLabel(p, choice)));
+        return p.Required ? choices : choices.Prepend(new ListItem(NoValueChoice, "..."));
+    }
+    private string? AuthoredChoiceValue(ReportParameter p)
+    {
+        var value = _values.GetValueOrDefault(p.Name);
+        return !p.Required && string.IsNullOrEmpty(value) ? NoValueChoice : value;
     }
 
     private Task SetPickListValue(string name, string? value)
@@ -333,7 +371,7 @@
         {
             var lists = _parameters.Count(IsDualList);
             if (lists == 0) return "236px";
-            var around = DialogChromeHeight + lists * ListPanelHeight + (_parameters.Count - lists) * OtherPromptHeight
+            var around = DialogChromeHeight + lists * ListPanelHeight + (_parameters.Count - lists + _readOnlyValues.Count) * OtherPromptHeight
                 + _parameters.Count(HasCustomEntryRow) * CustomEntryRowHeight;
             return string.Create(System.Globalization.CultureInfo.InvariantCulture,
                 $"clamp(calc(136px * var(--fx-zoom, 1)), calc(({DialogMaxHeight} - {around}px * var(--fx-zoom, 1)) / {lists}), calc(236px * var(--fx-zoom, 1)))");
@@ -378,26 +416,51 @@
     /// the underlying input. Values for parameter names that aren't in the
     /// current prompt set are ignored.
     /// </para>
+    /// <para>Only required parameters are prompted; the overload taking <c>includeOptional</c> can add the optional ones.</para>
     /// </summary>
-    public async Task<Dictionary<string, object>?> PromptAsync(
+    public Task<Dictionary<string, object>?> PromptAsync(
         string title,
         List<ReportParameter> parameters,
         IReadOnlyDictionary<string, object>? initialValues = null,
         ReportPickListContext? context = null)
+        => PromptAsync(title, parameters, initialValues, context, includeOptional: false);
+
+    /// <summary>
+    /// As the four-argument overload; <paramref name="includeOptional"/> also prompts the in-use optional parameters
+    /// (<see cref="ReportParameter.Required"/> false). Such a prompt may be left blank (no text or only spaces, no
+    /// selection, or only unbounded ranges). A blank one has no value, as in Crystal: it comes back as
+    /// <see cref="DBNull.Value"/>, so <see cref="ReportWriterControl.ShowSqlReport"/> binds null rather than the
+    /// parameter's authored default, and an initial value of <see cref="DBNull.Value"/> reopens the prompt blank.
+    /// </summary>
+    public Task<Dictionary<string, object>?> PromptAsync(
+        string title,
+        List<ReportParameter> parameters,
+        IReadOnlyDictionary<string, object>? initialValues,
+        ReportPickListContext? context,
+        bool includeOptional)
+        => PromptWithReadOnlyValuesAsync(title, parameters, initialValues, context, includeOptional, []);
+
+    internal async Task<Dictionary<string, object>?> PromptWithReadOnlyValuesAsync(
+        string title,
+        List<ReportParameter> parameters,
+        IReadOnlyDictionary<string, object>? initialValues,
+        ReportPickListContext? context,
+        bool includeOptional,
+        IReadOnlyList<KeyValuePair<string, string>> readOnlyValues)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         StopLookups();
         _tcs?.TrySetResult(null);
         _visible = false;
         _title = title;
-        // Only prompt for parameters that are both "Required" and don't already have a default value.
-        _parameters = parameters.Where(p => p.Required).ToList();
-        if (_parameters.Count == 0)
+        _parameters = parameters.Where(p => p.Required || includeOptional && p.IsInUse).ToList();
+        _readOnlyValues = readOnlyValues;
+        if (_parameters.Count == 0 && _readOnlyValues.Count == 0)
             return new Dictionary<string, object>();
 
         _values = _parameters.ToDictionary(p => p.Name, p => NormalizeInitialValue(p, p.DefaultValue ?? ""));
         _ranges = _parameters.Where(p => p.AllowRange).ToDictionary(p => p.Name,
-            p => initialValues is not null && initialValues.TryGetValue(p.Name, out var value)
+            p => initialValues is not null && initialValues.TryGetValue(p.Name, out var value) && value is not DBNull
                 ? ReportRangeParameters.Ranges(value).Select(ReportRangeValue.From).ToList()
                 : new List<ReportRangeValue> { new(null, null) });
         _pickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
@@ -438,7 +501,7 @@
                     // An optional parameter keeps a "..." choice so a picked value can be cleared
                     // again (blank = no filter; Accept skips optional parameters). Its key is a
                     // sentinel, not "", for the same reason. PickListValue/SetPickListValue map it.
-                    _singlePickLists[p.Name] = p.IsOptional ? [new PickListItem(NoValueChoice, "..."), .. choices] : choices;
+                    _singlePickLists[p.Name] = MayBeBlank(p) ? [new PickListItem(NoValueChoice, "..."), .. choices] : choices;
                 }
             }
         }
@@ -709,7 +772,7 @@
         {
             // As for an independent list: an optional prompt keeps its "..." clear choice under the sentinel key, and a
             // required one starts with no selection rather than a blank item, which arrow keys could not move past.
-            _singlePickLists[parameter.Name] = parameter.IsOptional ? [new PickListItem(NoValueChoice, "..."), .. allowed] : allowed;
+            _singlePickLists[parameter.Name] = MayBeBlank(parameter) ? [new PickListItem(NoValueChoice, "..."), .. allowed] : allowed;
             _values[parameter.Name] = allowed.FirstOrDefault(choice => selected.Contains(choice.Value))?.Value ?? "";
         }
         _pendingChoices.Remove(parameter.Name);
@@ -838,7 +901,7 @@
         var missing = new List<ReportParameter>();
         foreach (var p in _parameters)
         {
-            if (p.IsOptional || p.AllowRange) continue;
+            if (MayBeBlank(p) || p.AllowRange) continue;
             if (p.AllowMultiple)
             {
                 if (!GetMultiSelected(p.Name).Any(item => CanSelectMultiValue(p, item.Key))) missing.Add(p);
@@ -864,6 +927,9 @@
             foreach (var p in _parameters.Where(p => p.AllowRange))
             {
                 var ranges = _ranges[p.Name].Select(value => value.ToRange(p.ParameterType)).ToArray();
+                // An optional prompt with no range, or only unbounded ones, was left blank. DBNull (no value) keeps the
+                // writer from binding the parameter's authored default in its place.
+                if (!p.Required && ranges.All(range => range.Start is null && range.End is null)) { result[p.Name] = DBNull.Value; continue; }
                 if (ranges.Length == 0 && !p.IsOptional) throw new InvalidDataException($"Choose a range for '{p.Name}'.");
                 result[p.Name] = p.AllowMultiple ? ranges : ranges.Single();
             }
@@ -881,15 +947,17 @@
                 // Multi-value → string[]. Callers route these through
                 // MultiValueParameterRewriter so each value becomes its own
                 // @Name_0 / @Name_1 / … placeholder in the SQL.
-                result[p.Name] = GetMultiSelected(p.Name)
+                var picked = GetMultiSelected(p.Name)
                     .Where(i => CanSelectMultiValue(p, i.Key))
                     .Select(i => i.Key)
                     .ToArray();
+                // A blank optional prompt has no value, as for ranges above.
+                result[p.Name] = picked.Length == 0 && !p.Required ? DBNull.Value : picked;
             }
             else
             {
                 var raw = _values.GetValueOrDefault(p.Name, "");
-                result[p.Name] = ConvertValue(raw, p.ParameterType);
+                result[p.Name] = !p.Required && string.IsNullOrWhiteSpace(raw) ? DBNull.Value : ConvertValue(raw, p.ParameterType);
             }
         }
 

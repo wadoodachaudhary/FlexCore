@@ -1,0 +1,260 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-adopt-root @ThemeClass">
+        @if (ProductSnapshot is null)
+        {
+            <div class="fx-tel-empty">No product telemetry loaded yet.</div>
+        }
+        else
+        {
+            <div class="fx-tel-scroll-pane">
+                <div class="fx-adopt-kpi-strip">
+                    <KpiSparkCardControl Label="Daily / Weekly Stickiness"
+                                         Tag="fx-adopt-kpi-stickiness"
+                                         ValueText="@($"{ProductSnapshot.Stickiness.DauOverWauPercent:0.0}%")"
+                                         SubText="@($"Avg DAU {ProductSnapshot.Stickiness.AverageDau:0.1} · Peak {ProductSnapshot.Stickiness.PeakDau} · WAU {ProductSnapshot.Stickiness.Wau}")"
+                                         TargetPercent="@ProductSnapshot.Stickiness.DauOverWauPercent"
+                                         SparklineValues="@ProductSnapshot.Stickiness.DailyActiveUsersSparkline"
+                                         AccentColor="@(IsVb ? "#0a246a" : "#38bdf8")" />
+
+                    <KpiSparkCardControl Label="Weekly / Monthly Habit"
+                                         Tag="fx-adopt-kpi-waumau"
+                                         ValueText="@($"{ProductSnapshot.Stickiness.WauOverMauPercent:0.0}%")"
+                                         SubText="@($"WAU {ProductSnapshot.Stickiness.Wau} of MAU {ProductSnapshot.Stickiness.Mau} active users")"
+                                         TargetPercent="@ProductSnapshot.Stickiness.WauOverMauPercent"
+                                         AccentColor="@(IsVb ? "#2e7d32" : "#10b981")" />
+
+                    <KpiSparkCardControl Label="Engagement Volume Trend"
+                                         Tag="fx-adopt-kpi-volume"
+                                         ValueText="@ProductSnapshot.WindowEvents.Count.ToString("N0")"
+                                         DeltaPercent="@ProductSnapshot.Stickiness.EventsDeltaPercent"
+                                         SparklineValues="@ProductSnapshot.Stickiness.DailyEventsSparkline"
+                                         SubText="@($"vs. prior {ProductSnapshot.TimeWindowLabel} window")"
+                                         AccentColor="@(IsVb ? "#3a6ea5" : "#a855f7")" />
+
+                    <KpiSparkCardControl Label="Core Driver Screens"
+                                         Tag="fx-adopt-kpi-core"
+                                         ValueText="@CoreDriverCount.ToString("N0")"
+                                         DeltaPercent="@ProductSnapshot.Stickiness.UsersDeltaPercent"
+                                         SubText="@($"{PowerNicheCount} Power Niche · {DormantCount} Dormant")"
+                                         AccentColor="@(IsVb ? "#8b5a00" : "#f59e0b")" />
+                </div>
+
+                <div class="fx-tel-charts-row fx-tel-charts-two">
+                    <CardControl Title="2×2 Feature Adoption Matrix (User Breadth % vs. Actions / User)" CssClass="fx-tel-card" Elevation="1">
+                        @if (BubbleSeries.Count > 0 && BubbleSeries[0].DataPoints.Count > 0)
+                        {
+                            <ChartControl Type="ChartType.Bubble"
+                                          Series="@BubbleSeries"
+                                          XAxis="@AdoptionXAxis"
+                                          YAxis="@AdoptionYAxis"
+                                          Quadrant="@QuadrantOverlay"
+                                          ShowLegend="false"
+                                          Height="270px" />
+                        }
+                        else
+                        {
+                            <div class="fx-tel-empty">Adoption matrix populates as users interact with screens and FlexKit controls.</div>
+                        }
+                    </CardControl>
+
+                    <CardControl Title="Interactive Hierarchy Drilldown (Module → Screen → Control)" CssClass="fx-tel-card" Elevation="1">
+                        <div class="fx-tel-panel-toolbar">
+                            <span class="fx-tel-panel-hint">Click wedges to drill down from Module into Screen and individual FlexKit controls</span>
+                            <div class="fx-tel-pill-group">
+                                <ButtonControl CssClass="@PillCss(_hierarchyView == "Treemap")" Tag="fx-adopt-treemap" OnClick='() => _hierarchyView = "Treemap"'>Treemap</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_hierarchyView == "Sunburst")" Tag="fx-adopt-sunburst" OnClick='() => _hierarchyView = "Sunburst"'>Sunburst</ButtonControl>
+                            </div>
+                        </div>
+
+                        @if (_hierarchyView == "Sunburst" && ProductSnapshot.HierarchySunburstRoot is not null)
+                        {
+                            <SunburstChartControl RootNode="@ProductSnapshot.HierarchySunburstRoot"
+                                                  EnableDrilldown="true"
+                                                  ShowBreadcrumb="true"
+                                                  Height="235px" />
+                        }
+                        else if (TreemapSeries.Count > 0 && TreemapSeries[0].DataPoints.Count > 0)
+                        {
+                            <ChartControl Type="ChartType.Treemap"
+                                          Series="@TreemapSeries"
+                                          ShowLegend="false"
+                                          Height="235px" />
+                        }
+                        else
+                        {
+                            <div class="fx-tel-empty">No active module/screen hierarchy recorded in @ProductSnapshot.TimeWindowLabel.</div>
+                        }
+                    </CardControl>
+                </div>
+
+                <CardControl Title="Feature Portfolio Classification" CssClass="fx-tel-card" Elevation="1">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(_quadFilter == "All")" Tag="fx-adopt-q-all" OnClick='() => _quadFilter = "All"'>All (@ProductSnapshot.AdoptionRows.Count)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_quadFilter == "Core")" Tag="fx-adopt-q-core" OnClick='() => _quadFilter = "Core"'>Core Drivers (@CoreDriverCount)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_quadFilter == "Niche")" Tag="fx-adopt-q-niche" OnClick='() => _quadFilter = "Niche"'>Power Niche (@PowerNicheCount)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_quadFilter == "Broad")" Tag="fx-adopt-q-broad" OnClick='() => _quadFilter = "Broad"'>Broad Utility (@BroadCount)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_quadFilter == "Dormant")" Tag="fx-adopt-q-dormant" OnClick='() => _quadFilter = "Dormant"'>Dormant / Unused (@DormantCount)</ButtonControl>
+                        </div>
+                    </div>
+
+                    <div style="height: 310px;">
+                        <GridControl TValue="FeatureAdoptionRow"
+                                     Tag="fx-grid-feature-adoption"
+                                     DataSource="@FilteredRows"
+                                     AllowSorting="true"
+                                     AllowFiltering="true"
+                                     AllowResizing="true"
+                                     EnableHover="true"
+                                     Height="100%"
+                                     WidthMode="GridWidthMode.FillAvailable">
+                            <GridColumnsBase>
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.ScreenTitle)" HeaderText="Screen / Feature" Width="230px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.Module)" HeaderText="Module" Width="155px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.QuadrantLabel)" HeaderText="Quadrant" Width="140px" AllowEditing="false">
+                                    <Template>
+                                        @{
+                                            var r = (FeatureAdoptionRow)context;
+                                        }
+                                        <BadgeControl Variant="@QuadrantBadge(r.Quadrant)" Size="BadgeSize.Small" Text="@r.QuadrantLabel" />
+                                    </Template>
+                                </GridColumn>
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.UniqueUsers)" HeaderText="Users" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.UserSharePercent)" HeaderText="User Share %" Width="110px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.ActionsPerUser)" HeaderText="Actions / User" Width="115px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.TotalActions)" HeaderText="Total Actions" Width="110px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.AvgDwellSeconds)" HeaderText="Avg Dwell (s)" Width="110px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FeatureAdoptionRow.PriorPeriodDeltaPercent)" HeaderText="vs. Prior %" Width="105px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                            </GridColumnsBase>
+                        </GridControl>
+                    </div>
+                </CardControl>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    private static readonly ChartAxis AdoptionXAxis = new() { Title = "User Adoption (%)", Min = 0, Max = 100 };
+    private static readonly ChartAxis AdoptionYAxis = new() { Title = "Actions / User", Min = 0 };
+
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private string _hierarchyView = "Treemap";
+    private string _quadFilter = "All";
+
+    private bool IsVb => Theme == TelemetryTheme.VBClassic;
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("FeatureAdoptionControl", () => "FeatureAdoption");
+    protected override string? ResolveControlIdentifier() => "FeatureAdoption";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private int CoreDriverCount => ProductSnapshot?.AdoptionRows.Count(r => r.Quadrant == FeatureAdoptionQuadrant.CoreDriver) ?? 0;
+    private int PowerNicheCount => ProductSnapshot?.AdoptionRows.Count(r => r.Quadrant == FeatureAdoptionQuadrant.PowerNiche) ?? 0;
+    private int BroadCount => ProductSnapshot?.AdoptionRows.Count(r => r.Quadrant == FeatureAdoptionQuadrant.BroadUtility) ?? 0;
+    private int DormantCount => ProductSnapshot?.AdoptionRows.Count(r => r.Quadrant == FeatureAdoptionQuadrant.Dormant) ?? 0;
+
+    private List<FeatureAdoptionRow> FilteredRows =>
+        (ProductSnapshot?.AdoptionRows ?? Array.Empty<FeatureAdoptionRow>())
+            .Where(r => _quadFilter switch
+            {
+                "Core" => r.Quadrant == FeatureAdoptionQuadrant.CoreDriver,
+                "Niche" => r.Quadrant == FeatureAdoptionQuadrant.PowerNiche,
+                "Broad" => r.Quadrant == FeatureAdoptionQuadrant.BroadUtility,
+                "Dormant" => r.Quadrant == FeatureAdoptionQuadrant.Dormant,
+                _ => true
+            })
+            .ToList();
+
+    private ChartQuadrantOverlay QuadrantOverlay => new()
+    {
+        ReferenceX = ProductSnapshot?.MedianUserSharePercent ?? 30,
+        ReferenceY = ProductSnapshot?.MedianActionsPerUser ?? 3,
+        LineColor = Theme == TelemetryTheme.GrafanaDark ? "#64748b" : "#94a3b8",
+        LabelColor = Theme == TelemetryTheme.GrafanaDark ? "#cbd5e1" : "#475569",
+        ShowPointCaptions = true
+    };
+
+    private List<ChartSeries> BubbleSeries
+    {
+        get
+        {
+            if (ProductSnapshot is null) return new();
+            var active = ProductSnapshot.AdoptionRows.Where(r => r.TotalActions > 0).Take(30).ToList();
+            if (active.Count == 0) return new();
+
+            var s = new ChartSeries("Features", ChartType.Bubble);
+            foreach (var r in active)
+            {
+                string c = r.Quadrant switch
+                {
+                    FeatureAdoptionQuadrant.CoreDriver => "#16a34a",
+                    FeatureAdoptionQuadrant.PowerNiche => "#2563eb",
+                    FeatureAdoptionQuadrant.BroadUtility => "#d97706",
+                    _ => "#94a3b8"
+                };
+                s.DataPoints.Add(new ChartDataPoint
+                {
+                    Label = r.UserSharePercent.ToString("0.#", CultureInfo.InvariantCulture),
+                    Value = r.ActionsPerUser,
+                    Value2 = r.TotalActions,
+                    Category = r.ScreenTitle,
+                    Color = c
+                });
+            }
+            return new List<ChartSeries> { s };
+        }
+    }
+
+    private List<ChartSeries> TreemapSeries =>
+        ProductSnapshot is null || ProductSnapshot.ModuleScreenTreemapPoints.Count == 0
+            ? new()
+            : new List<ChartSeries> { new("Module Hierarchy", ChartType.Treemap, ProductSnapshot.ModuleScreenTreemapPoints) };
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Screen,Module,Quadrant,UniqueUsers,UserSharePercent,ActionsPerUser,TotalActions,AvgDwellSeconds,PriorDeltaPercent");
+        foreach (var r in FilteredRows)
+        {
+            sb.AppendLine($"{Csv(r.ScreenTitle)},{Csv(r.Module)},{Csv(r.QuadrantLabel)},{r.UniqueUsers},{r.UserSharePercent.ToString("0.0", CultureInfo.InvariantCulture)},{r.ActionsPerUser.ToString("0.0", CultureInfo.InvariantCulture)},{r.TotalActions},{r.AvgDwellSeconds.ToString("0.0", CultureInfo.InvariantCulture)},{r.PriorPeriodDeltaPercent?.ToString("0.0", CultureInfo.InvariantCulture)}");
+        }
+        return ("feature-adoption", sb.ToString());
+    }
+
+    private static BadgeVariant QuadrantBadge(FeatureAdoptionQuadrant q) => q switch
+    {
+        FeatureAdoptionQuadrant.CoreDriver => BadgeVariant.Success,
+        FeatureAdoptionQuadrant.PowerNiche => BadgeVariant.Info,
+        FeatureAdoptionQuadrant.BroadUtility => BadgeVariant.Warning,
+        _ => BadgeVariant.Secondary
+    };
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

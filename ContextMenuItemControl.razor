@@ -60,6 +60,11 @@
             ? "fx-context-menu-item"
             : $"fx-context-menu-item {CssClass.Trim()}";
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Text) ? Text.Trim()
+        : Title;
+
     private async Task HandleClick()
     {
         if (Disabled)
@@ -67,6 +72,8 @@
 
         if (HasSubmenu && !OnClick.HasDelegate)
             return;
+
+        RecordControlAction("Clicked", Text, Shortcut);
 
         if (OnClick.HasDelegate)
             await OnClick.InvokeAsync();

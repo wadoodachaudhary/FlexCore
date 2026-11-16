@@ -9,6 +9,7 @@
 {
     <CascadingValue Value="@ContentFocusScope" IsFixed="true">
     <CascadingValue Value="@_defaultButtonScope" IsFixed="true">
+    <CascadingValue Value="@(GetOrCreateChildLocation("Dialog", () => Header ?? AriaLabel))" IsFixed="true">
     <div class="@OverlayCssClass"
          @onclick="HandleOverlayClick"
          @onmousedown="@(CloseOnOverlayClick ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleOverlayPress) : default)"
@@ -102,6 +103,7 @@
             </div>
         }
     </div>
+    </CascadingValue>
     </CascadingValue>
     </CascadingValue>
 }
@@ -797,8 +799,15 @@
         return clamped;
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Header) ? Header!.Trim()
+        : !string.IsNullOrWhiteSpace(AriaLabel) ? AriaLabel!.Trim()
+        : null;
+
     private async Task RequestClose()
     {
+        RecordControlAction("DialogClosed", Header ?? AriaLabel);
         if (OnClose.HasDelegate)
             await OnClose.InvokeAsync();
         if (Closed.HasDelegate)

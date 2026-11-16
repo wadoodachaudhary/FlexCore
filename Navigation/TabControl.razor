@@ -24,7 +24,9 @@
         <div class="fx-tab-content">
             @if (SelectedIndex >= 0 && SelectedIndex < _items.Count)
             {
-                @_items[SelectedIndex].RenderContent
+                <CascadingValue Value="@(GetOrCreateChildLocation("Tab", () => SelectedIndex >= 0 && SelectedIndex < _items.Count ? _items[SelectedIndex].HeaderText : null))" IsFixed="true">
+                    @_items[SelectedIndex].RenderContent
+                </CascadingValue>
             }
         </div>
         @ChildContent

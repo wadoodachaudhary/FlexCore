@@ -1,0 +1,13 @@
+.fx-adopt-root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.fx-adopt-kpi-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: 8px;
+    margin-bottom: 8px;
+}

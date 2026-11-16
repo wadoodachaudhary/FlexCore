@@ -605,7 +605,7 @@
 
 /* The pane takes the keyboard (PageUp/PageDown, Home/End) once clicked; the page itself is the focus cue. */
 .fx-rpt-viewer-panel:focus { outline: none; }
-.fx-rpt-viewer-panel:focus-visible { outline: 2px solid #6b8fc9; outline-offset: -2px; }
+.fx-rpt-viewer-panel:focus-visible { outline: 1px solid #d0d0d0; outline-offset: -1px; }
 
 /* The authored page keeps its physical height; it must not collapse the drill tabs. */
 .fx-rpt-viewer-panel ::deep .fx-tabstrip {

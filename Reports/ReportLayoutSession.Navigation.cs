@@ -179,18 +179,7 @@ public sealed partial class ReportLayoutSession
                 if (target.Placement is null) target = candidates.FirstOrDefault(item => item.Placement.Band.Section.Kind != "PageHeader");
                 // The id names the group's whole span of records, so part of a group never shares the group's id (and its drill tab).
                 var id = $"fx-native-group-{_navigationRoot}-{level}-{_navigationRows[_rows[first]]}-{_navigationRows[_rows[last - 1]]}";
-                object? name;
-                try
-                {
-                    if (Options(level)?.NameFormula is { } formula) RequireReadTime(formula, "Group navigation name");
-                    name = GroupNameValue(level, first);
-                }
-                catch (Exception error) when (error is InvalidDataException or NotSupportedException)
-                {
-                    _diagnostics.Add("Native group label: " + error.Message);
-                    name = GroupKey(level, first);
-                }
-                var label = Convert.ToString(name, CultureInfo.CurrentCulture) ?? "";
+                var label = Convert.ToString(GroupNameOrKey(level, first, "Group navigation name"), CultureInfo.CurrentCulture) ?? "";
                 var node = new FxGroupNode
                 {
                     Label = string.IsNullOrWhiteSpace(label) ? "(empty)" : label,
@@ -218,6 +207,30 @@ public sealed partial class ReportLayoutSession
             return nodes;
         }
         return (Level(rootLevel, 0, _rows.Length), anchors, targets);
+    }
+
+    // A group's name where no name field prints it (the group tree, a data export's context columns): a group-name formula that
+    // does not compile or fails, or that needs print-time state when readTimeUse names the use, names the group by its key.
+    private object? GroupNameOrKey(int level, int row, string? readTimeUse = null)
+    {
+        try
+        {
+            if (readTimeUse is not null && Options(level)?.NameFormula is { } formula) RequireReadTime(formula, readTimeUse);
+            return GroupNameValue(level, row);
+        }
+        catch (Exception error) when (error is InvalidDataException or NotSupportedException)
+        {
+            _diagnostics.Add("Native group label: " + error.Message);
+            // A specified or Others group's key is internal: the group's own name stands for it.
+            return GroupKey(level, row) switch
+            {
+                OthersKey others => others.Name,
+                SpecifiedKey specified when Options(level) is { } options => specified.Index < options.SpecifiedGroups.Count
+                    ? options.SpecifiedGroups[specified.Index].Name
+                    : options.UnspecifiedValues == "separateValues" ? specified.Value : options.OthersName,
+                var key => key
+            };
+        }
     }
 
     private string? OmittedDrillStateReason(int groupLevel) => _layout.ShowAllHeadersOnDrillDown == false && _layout.Document.Sections

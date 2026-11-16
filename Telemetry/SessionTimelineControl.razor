@@ -1,0 +1,156 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using Fx.ControlKit
+@using Fx.ControlKit.Logging
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-sreplay @ThemeClass">
+        @if (Trace is null)
+        {
+            <div class="fx-tel-empty">@EmptyMessage</div>
+        }
+        else
+        {
+            <div class="fx-sreplay-header">
+                <div class="fx-sreplay-meta">
+                    <span class="fx-sreplay-badge">Session: <strong>@ShortSession(Trace.Summary.SessionId)</strong></span>
+                    <span>User: <strong>@Trace.Summary.UserId</strong></span>
+                    @if (!string.IsNullOrWhiteSpace(Trace.Summary.Tenant))
+                    {
+                        <span>Tenant: <strong>@Trace.Summary.Tenant</strong></span>
+                    }
+                    <span>Window: <strong>@Trace.Summary.StartLocal.ToString("HH:mm:ss") – @Trace.Summary.EndLocal.ToString("HH:mm:ss")</strong> (@Trace.Summary.DurationMinutes.ToString("0.1", CultureInfo.InvariantCulture) min)</span>
+                    <span>Events: <strong>@Trace.Summary.EventCount</strong> · SQL: <strong>@Trace.Summary.SqlCount</strong></span>
+                    @if (Trace.Summary.FrictionCount > 0)
+                    {
+                        <BadgeControl Variant="BadgeVariant.Danger" Size="BadgeSize.Small" Text="@($"{Trace.Summary.FrictionCount} friction signal(s)")" />
+                    }
+                </div>
+
+                <div class="fx-tel-pill-group">
+                    <ButtonControl CssClass="@PillCss(_filter == "All")" Tag="fx-sreplay-all" OnClick='() => SetFilter("All")'>All (@Trace.Items.Count)</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_filter == "UI")" Tag="fx-sreplay-ui" OnClick='() => SetFilter("UI")'>UI Actions</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_filter == "SQL")" Tag="fx-sreplay-sql" OnClick='() => SetFilter("SQL")'>SQL</ButtonControl>
+                    <ButtonControl CssClass="@PillCss(_filter == "Friction")" Tag="fx-sreplay-friction" OnClick='() => SetFilter("Friction")'>Friction / Slow</ButtonControl>
+                </div>
+            </div>
+
+            @if (Trace.Items.Count > 1)
+            {
+                double totalSec = Math.Max(1.0, Trace.Items[^1].OffsetSeconds);
+                <div class="fx-sreplay-ruler" title="Chronological session ruler (red/amber pins mark UX friction or slow SQL)">
+                    @foreach (var item in Trace.Items)
+                    {
+                        double pct = Math.Clamp(item.OffsetSeconds / totalSec * 100.0, 0, 99.5);
+                        string pinCls = item.IsError ? "fx-sreplay-pin-err"
+                            : item.IsFriction ? "fx-sreplay-pin-warn"
+                            : item.EntryKind == "SqlQuery" ? "fx-sreplay-pin-sql"
+                            : "fx-sreplay-pin-ui";
+                        <span class="fx-sreplay-pin @pinCls"
+                              style="left:@(pct.ToString("0.##", CultureInfo.InvariantCulture))%;"
+                              title="@($"+{item.OffsetSeconds:0.1}s · {item.Title}")"></span>
+                    }
+                </div>
+            }
+
+            <div class="fx-sreplay-stream">
+                @foreach (var step in FilteredItems)
+                {
+                    string rowCls = step.IsError ? "fx-sreplay-step-err"
+                        : step.IsFriction ? "fx-sreplay-step-warn"
+                        : step.EntryKind == "SqlQuery" ? "fx-sreplay-step-sql"
+                        : "";
+                    <div class="fx-sreplay-step @rowCls">
+                        <div class="fx-sreplay-time">
+                            <span class="fx-sreplay-offset">+@(step.OffsetSeconds.ToString("0.1", CultureInfo.InvariantCulture))s</span>
+                            <span class="fx-sreplay-clock">@step.TimestampLocal.ToString("HH:mm:ss.fff")</span>
+                        </div>
+                        <div class="fx-sreplay-kind">
+                            <BadgeControl Variant="@ResolveBadge(step)" Size="BadgeSize.Small" Text="@step.EntryKind" />
+                        </div>
+                        <div class="fx-sreplay-content">
+                            <div class="fx-sreplay-title">
+                                @step.Title
+                                @if (!string.IsNullOrWhiteSpace(step.Tag))
+                                {
+                                    <span class="fx-sreplay-tag">[tag:@step.Tag]</span>
+                                }
+                                @if (step.IsSqlWrite)
+                                {
+                                    <span class="fx-sreplay-write">DB WRITE</span>
+                                }
+                            </div>
+                            @if (!string.IsNullOrWhiteSpace(step.Subtitle))
+                            {
+                                <div class="fx-sreplay-sub">@step.Subtitle</div>
+                            }
+                            @if (!string.IsNullOrWhiteSpace(step.Value))
+                            {
+                                <div class="fx-sreplay-val">Value: <code>@step.Value</code></div>
+                            }
+                        </div>
+                        <div class="fx-sreplay-dur">
+                            @if (step.ElapsedMs.HasValue)
+                            {
+                                <span class="@(step.ElapsedMs.Value >= 500 ? "fx-sreplay-slow" : "")">@step.ElapsedMs.Value.ToString("N0") ms</span>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public SessionReplayTrace? Trace { get; set; }
+    [Parameter] public string EmptyMessage { get; set; } = "Select a session or friction incident to inspect its chronological flight-recorder trail.";
+
+    private string _filter = "All";
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("SessionTimelineControl", () => "SessionReplay");
+    protected override string? ResolveControlIdentifier() => "SessionReplay";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private IEnumerable<SessionTimelineItem> FilteredItems =>
+        (Trace?.Items ?? Array.Empty<SessionTimelineItem>()).Where(i => _filter switch
+        {
+            "UI" => i.EntryKind != "SqlQuery",
+            "SQL" => i.EntryKind == "SqlQuery",
+            "Friction" => i.IsFriction || i.IsError,
+            _ => true
+        });
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private void SetFilter(string f)
+    {
+        _filter = f;
+        RecordControlAction("FilterChanged", f);
+    }
+
+    private static BadgeVariant ResolveBadge(SessionTimelineItem item)
+    {
+        if (item.IsError) return BadgeVariant.Danger;
+        if (item.IsFriction) return BadgeVariant.Warning;
+        if (item.EntryKind == "SqlQuery") return BadgeVariant.Info;
+        if (item.EntryKind == nameof(TelemetryEventKind.ButtonClick)) return BadgeVariant.Success;
+        return BadgeVariant.Secondary;
+    }
+
+    private static string ShortSession(string id) =>
+        string.IsNullOrWhiteSpace(id) ? "-" : (id.Length <= 14 ? id : id[..14] + "…");
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+}

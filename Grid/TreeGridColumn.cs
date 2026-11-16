@@ -80,8 +80,10 @@ public sealed class TreeGridCellEditContext : ICellEditorHost
 /// <summary>
 /// Defines a column in the TreeGridControl. Equivalent to SyncFusion's TreeGridColumn.
 /// </summary>
-public class TreeGridColumn : ComponentBase, IDisposable
+public class TreeGridColumn : FlexKitControlBase, IDisposable
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Field) ? Field : HeaderText;
     [CascadingParameter] internal ITreeGridControlOwner? Owner { get; set; }
 
     [Parameter] public string Field { get; set; } = "";

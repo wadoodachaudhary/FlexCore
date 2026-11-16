@@ -40,6 +40,12 @@
    after a long load checks it first rather than taking the keyboard from the
    page the user moved to.
 
+   Split-view activation: the host's one browser listener (browser-capabilities.js, mdiPanes) watches
+   presses in the panes in the capture phase, so a page's control may stop or cancel its own presses
+   freely. A document- or window-level capture listener must never stop pointerdown. A focusin that
+   bubbles out of the partner pane counts as its activation (the pane's @onfocusin sends it), so a
+   hosted page must never use @onfocusin:stopPropagation.
+
    Why the visible-pane CSS toggle instead of @if:
      @if would unmount inactive panes → kills grid state, edits, drafts.
      display:none keeps the Blazor component instance alive; Blazor
@@ -252,6 +258,7 @@
         </ContextMenuControl>
     }
     <div class="@(split ? (SplitMode == MdiSplitMode.Stacked ? "fx-mdi-panes fx-mdi-split fx-mdi-split-stacked" : "fx-mdi-panes fx-mdi-split fx-mdi-split-side") : "fx-mdi-panes")"
+         @ref="_panesElement"
          @attributes="PanesDragAttributes">
         @foreach (var w in Windows)
         {
@@ -284,9 +291,12 @@
                 <CascadingValue Name="IsActiveWindow"
                                 Value="@(BuildActiveTester(win))"
                                 IsFixed="true">
+                <CascadingValue Value="@(GetOrCreateWindowLocation(win))"
+                                IsFixed="true">
                     <MdiPane Window="win"
                              OnError="@(w => OnWindowError.InvokeAsync(w))"
                              OnCloseRequested="@(w => OnCloseRequested.InvokeAsync(w.Id))" />
+                </CascadingValue>
                 </CascadingValue>
                 </CascadingValue>
                 </CascadingValue>
@@ -339,10 +349,12 @@
     /// Split view: <see cref="MdiSplitMode.SideBySide"/> or <see cref="MdiSplitMode.Stacked"/> shows the active
     /// window and a partner in two equal panes (left / right or top / bottom); <see cref="MdiSplitMode.None"/>
     /// (the default) shows the active window alone. The partner is the window that was active before, else
-    /// the next tab. Clicking the partner's tab, or a mouse press or focus moving into its pane, makes it the
-    /// active window (raises <see cref="OnActivate"/>); activating any other tab shows it in the active pane. Both
-    /// panes stay where they are, and every page stays mounted whatever the mode. With one window, or with
-    /// no active window, the host shows what it shows without a split.
+    /// the next tab. Clicking the partner's tab, a press of any mouse button or a tap anywhere in its pane (on a
+    /// control that keeps its press to itself, such as a splitter bar, too), or focus moving into its pane makes it
+    /// the active window (raises <see cref="OnActivate"/>); a mouse press that leaves the keyboard in another window
+    /// gives it to the control the pressed window focused last (a tap only takes it from that window); activating
+    /// any other tab shows it in the active pane. Both panes stay where they are, and every page stays mounted
+    /// whatever the mode. With one window, or with no active window, the host shows what it shows without a split.
     /// </summary>
     [Parameter] public MdiSplitMode SplitMode { get; set; }
     [Parameter] public EventCallback<MdiSplitMode> SplitModeChanged { get; set; }
@@ -361,6 +373,11 @@
     }
 
     private ElementReference _tabViewport;
+    private ElementReference _panesElement;
+    private DotNetObjectReference<MdiHost>? _selfReference;
+    // Set once the browser watches presses in the panes (browser-capabilities.js mdiPanes). Until then, and for good when
+    // that module cannot load or lacks the watch (refused: not asked again), a mousedown reaching the partner pane activates it.
+    private bool _partnerPressesObserved, _partnerPressesRefused, _disposed;
     private BrowserInterop? _tabBrowser;
     private bool _tabObserverAttached, _orientationMenuVisible, _revealActiveTab;
     private double _orientationMenuX, _orientationMenuY;
@@ -380,6 +397,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_disposed) return;
         _tabBrowser ??= new(JS);
         try
         {
@@ -388,13 +406,38 @@
         }
         catch (Exception error) when (error is JSException or JSDisconnectedException or TaskCanceledException) { }
         _revealActiveTab = false;
+        // After the tab strip's watch, so a module that cannot load is not fetched again for the panes.
+        if (_tabObserverAttached && !_partnerPressesObserved && !_partnerPressesRefused && !_disposed)
+        {
+            try
+            {
+                _selfReference ??= DotNetObjectReference.Create(this);
+                _partnerPressesObserved = await _tabBrowser.InvokeAsync<bool>("mdiPanes", _panesElement, null, _selfReference);
+                _partnerPressesRefused = !_partnerPressesObserved;
+                // A partner pane rendered before the watch still carries its mousedown: render it without.
+                if (_partnerPressesObserved && IsSplitShown && !_disposed) StateHasChanged();
+            }
+            catch (JSException) { _partnerPressesRefused = true; }
+            catch (Exception error) when (error is JSDisconnectedException or TaskCanceledException or ObjectDisposedException) { }
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_tabBrowser is null) return;
-        await _tabBrowser.InvokeAsync<object?>("dispose", _tabViewport);
-        await _tabBrowser.DisposeAsync();
+        _disposed = true;
+        try
+        {
+            if (_tabBrowser is null) return;
+            // Both are sent before the first await. The render batch that removes the host's elements goes out after this
+            // method's synchronous part, and an element reference that reaches the browser after it arrives as null: the
+            // panes watch would then keep its document listeners, and with them the removed panes.
+            var tabStrip = _tabBrowser.InvokeAsync<object?>("dispose", _tabViewport);
+            var panes = _tabBrowser.InvokeAsync<object?>("dispose", _panesElement);
+            await tabStrip;
+            await panes;
+            await _tabBrowser.DisposeAsync();
+        }
+        finally { _selfReference?.Dispose(); }
     }
 
     /// <summary>When true (default), right-clicking a tab or clicking its icon opens the
@@ -558,13 +601,23 @@
         IsSplitShown && !string.Equals(id, ActiveWindowId, StringComparison.Ordinal)
         && (string.Equals(id, _splitFirstId, StringComparison.Ordinal) || string.Equals(id, _splitSecondId, StringComparison.Ordinal));
 
-    // Only the partner pane listens: a press or focus inside it makes its window the active one. The
-    // active pane carries no handler, so ordinary clicks in a page send nothing extra to the server.
-    private Dictionary<string, object>? PartnerPaneAttributes(string id, bool isPartner) => !isPartner ? null : new()
+    // Only the partner pane listens: a press or focus inside it makes its window the active one. The browser sees every
+    // press in the panes in the capture phase (browser-capabilities.js mdiPanes), before a control that keeps its press to
+    // itself can stop it, and reports one that no focusin reached the pane with (ActivatePartnerWindowAsync). Until that
+    // watch is attached, a mousedown reaching the pane does it. The active pane carries nothing, so ordinary clicks in a
+    // page send nothing extra to the server.
+    private Dictionary<string, object>? PartnerPaneAttributes(string id, bool isPartner)
     {
-        ["onmousedown"] = EventCallback.Factory.Create<MouseEventArgs>(this, () => ActivatePartnerAsync(id)),
-        ["onfocusin"] = EventCallback.Factory.Create<FocusEventArgs>(this, () => ActivatePartnerAsync(id)),
-    };
+        if (!isPartner) return null;
+        var attributes = new Dictionary<string, object>
+        {
+            ["data-fx-mdi-activate"] = id,
+            ["onfocusin"] = EventCallback.Factory.Create<FocusEventArgs>(this, () => ActivatePartnerAsync(id)),
+        };
+        if (!_partnerPressesObserved)
+            attributes["onmousedown"] = EventCallback.Factory.Create<MouseEventArgs>(this, () => ActivatePartnerAsync(id));
+        return attributes;
+    }
 
     private async Task ActivatePartnerAsync(string id)
     {
@@ -572,6 +625,15 @@
         if (OnActivate.HasDelegate)
             await OnActivate.InvokeAsync(id);
     }
+
+    /// <summary>A press in the partner pane of window <paramref name="id"/> that no focusin reported, from the browser
+    /// (browser-capabilities.js mdiPanes). An error is the component's, as one from an event handler would be.</summary>
+    [JSInvokable]
+    public Task ActivatePartnerWindowAsync(string id) => InvokeAsync(async () =>
+    {
+        try { await ActivatePartnerAsync(id); }
+        catch (Exception error) { await DispatchExceptionAsync(error); }
+    });
 
     private MdiWindow? TabSystemMenuWindow
         => string.IsNullOrWhiteSpace(_tabSystemMenuWindowId)
@@ -746,6 +808,8 @@
     {
         _tabSystemMenuVisible = false;
         if (string.Equals(id, ActiveWindowId, StringComparison.Ordinal)) return;
+        var win = Windows.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.Ordinal));
+        RecordControlAction("WindowActivated", win?.Title ?? id, win?.Route);
         if (OnActivate.HasDelegate)
             await OnActivate.InvokeAsync(id);
     }
@@ -753,6 +817,8 @@
     private async Task OnCloseClick(string id)
     {
         _tabSystemMenuVisible = false;
+        var win = Windows.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.Ordinal));
+        RecordControlAction("WindowCloseRequested", win?.Title ?? id, win?.Route);
         if (OnCloseRequested.HasDelegate)
             await OnCloseRequested.InvokeAsync(id);
     }
@@ -765,6 +831,7 @@
         var alreadyHome = ActiveWindowId == null
             || !Windows.Any(w => string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal));
         if (alreadyHome) return;
+        RecordControlAction("HomeSelected", "Home");
         if (OnHomeRequested.HasDelegate)
             await OnHomeRequested.InvokeAsync();
     }
@@ -1052,6 +1119,30 @@
     // Each pane can ask whether its window is the active one at the moment it asks. In split view the
     // partner page is visible, so a focus it sets after a long load would take the keyboard (and, through
     // the pane's focusin, the active window) from the page the user moved to; such a page checks this first.
+    private readonly Dictionary<string, Fx.ControlKit.Logging.FlexControlLocation> _windowLocations = new(StringComparer.Ordinal);
+
+    private Fx.ControlKit.Logging.FlexControlLocation GetOrCreateWindowLocation(MdiWindow w)
+    {
+        if (_windowLocations.Count > Windows.Count + 8)
+        {
+            var openIds = Windows.Select(win => win.Id).ToHashSet(StringComparer.Ordinal);
+            foreach (var stale in _windowLocations.Keys.Where(k => !openIds.Contains(k)).ToList())
+                _windowLocations.Remove(stale);
+        }
+
+        if (!_windowLocations.TryGetValue(w.Id, out var loc))
+        {
+            loc = new Fx.ControlKit.Logging.FlexControlLocation(
+                ParentLocation,
+                "Window",
+                () => w.Title,
+                () => w.Route,
+                isScreenRoot: true);
+            _windowLocations[w.Id] = loc;
+        }
+        return loc;
+    }
+
     private Func<bool> BuildActiveTester(MdiWindow w) => () =>
         string.Equals(w.Id, ActiveWindowId, StringComparison.Ordinal);
 }

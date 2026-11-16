@@ -8,25 +8,28 @@ public static partial class XlsxWriter
     private const int CellTextLimit = 32767;
     private const int SheetRowLimit = 1048576;
 
+    // The main sheet reads the caller's rows. Only a row holding oversized text is replaced, by a
+    // copy, so the caller's sheet is never edited.
     private static List<XlsxSheet> PreserveLongText(XlsxSheet source)
     {
-        var main = new XlsxSheet { Name = SanitizeSheetName(source.Name) };
+        var replaced = new ReplacedRows(source);
+        var main = new XlsxSheet { Name = SanitizeSheetName(source.Name), RowSource = replaced };
         foreach (var entry in source.ColumnWidths) main.ColumnWidths.Add(entry.Key, entry.Value);
         foreach (var entry in source.InternalHyperlinks) main.InternalHyperlinks.Add(entry.Key, entry.Value);
         var sheets = new List<XlsxSheet> { main };
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { main.Name };
         XlsxSheet? continuation = null;
-        for (var rowIndex = 0; rowIndex < source.Rows.Count; rowIndex++)
+        for (var rowIndex = 0; rowIndex < source.RowCount; rowIndex++)
         {
-            var row = main.AddRow();
-            for (var columnIndex = 0; columnIndex < source.Rows[rowIndex].Count; columnIndex++)
+            var sourceRow = source.RowAt(rowIndex);
+            List<XlsxCell>? row = null;
+            for (var columnIndex = 0; columnIndex < sourceRow.Count; columnIndex++)
             {
-                var cell = source.Rows[rowIndex][columnIndex];
+                var cell = sourceRow[columnIndex];
                 if (cell?.Value is not string text || text.Length <= CellTextLimit || !string.IsNullOrWhiteSpace(cell.Formula))
-                {
-                    row.Add(cell!);
                     continue;
-                }
+                // A row source may reuse its cells for the next row, so its row is copied cell by cell.
+                row ??= replaced.Rows[rowIndex] = source.RowSource is null ? new List<XlsxCell>(sourceRow) : sourceRow.ConvertAll(item => item?.Copy()!);
                 var parts = TextParts(text);
                 if (continuation is null || continuation.Rows.Count + parts.Count > SheetRowLimit)
                 {
@@ -60,10 +63,19 @@ public static partial class XlsxWriter
                 if (char.IsHighSurrogate(text[length - 1])) length--;
                 preview.Value = notice + text[..length];
                 preview.FontColorHex = "0563c1";
-                row.Add(preview);
+                row[columnIndex] = preview;
             }
         }
         return sheets;
+    }
+
+    private sealed class ReplacedRows(XlsxSheet source) : XlsxRowSource
+    {
+        public Dictionary<int, List<XlsxCell>> Rows { get; } = new();
+
+        public override int Count => source.RowCount;
+
+        public override List<XlsxCell> Row(int index) => Rows.Count > 0 && Rows.TryGetValue(index, out var row) ? row : source.RowAt(index);
     }
 
     private static List<string> TextParts(string value)

@@ -17,6 +17,31 @@ namespace Fx.ControlKit.Grid;
 
 public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDisposable
 {
+    protected override string? ResolveControlIdentifier()
+    {
+        if (!string.IsNullOrWhiteSpace(Tag))
+            return Tag.Trim();
+        if (!string.IsNullOrWhiteSpace(Id))
+            return Id.Trim();
+        if (!string.IsNullOrWhiteSpace(Title))
+            return Title.Trim();
+        if (!string.IsNullOrWhiteSpace(Data))
+            return Data.Trim();
+        return typeof(TValue).Name;
+    }
+
+    private void LogGridAction(string action, string? value = null, string? detail = null) =>
+        RecordControlAction(action, value, detail);
+
+    private void LogGridCellSave(string field, object? value, int targetCount = 1)
+    {
+        var isSensitive = field.Contains("Password", StringComparison.OrdinalIgnoreCase)
+                          || field.Contains("Secret", StringComparison.OrdinalIgnoreCase);
+        var formatted = isSensitive ? "[REDACTED]" : value?.ToString();
+        var detail = targetCount > 1 ? $"{field} ({targetCount} cells)" : field;
+        RecordControlAction("CellSaved", $"{field}={formatted}", detail);
+    }
+
     void IGridOwner.RegisterColumnsContainer(GridColumnsBase container)
     {
         var changed = !ReferenceEquals(_columnsContainer, container);
@@ -5579,6 +5604,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         }
 
         ResetToFirstPage();
+        LogGridAction("Sorted", $"{col.Field} {(state.SortDirection?.ToString() ?? "Cleared")}", col.Field);
 
         if (EventsRef?.Sorted.HasDelegate == true)
             await EventsRef.Sorted.InvokeAsync(new SortEventArgs { Field = col.Field, Direction = state.SortDirection ?? SortDirection.Ascending });
@@ -5619,6 +5645,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
         state.NumericFilterMax = null;
         state.UseNumericBoundsFilter = false;
         ResetToFirstPage();
+
+        if (finalizeUpdate)
+            LogGridAction("Filtered", string.IsNullOrWhiteSpace(value) ? $"{field}=(cleared)" : $"{field}={value}", field);
 
         if (finalizeUpdate && EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = value });
@@ -5898,6 +5927,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
 
         SearchText = text;
+        LogGridAction("Searched", string.IsNullOrWhiteSpace(text) ? "(cleared)" : text);
         ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
@@ -5959,6 +5989,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         var prev = _pageState.CurrentPage;
         _pageState.CurrentPage = page;
+        LogGridAction("PageChanged", $"Page {page}", $"From {prev}");
 
         if (EventsRef?.PageChanged.HasDelegate == true)
             await EventsRef.PageChanged.InvokeAsync(new PageChangeEventArgs { PreviousPage = prev, CurrentPage = page });
@@ -5987,6 +6018,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
     {
         _pageState.PageSize = size;
         _pageState.CurrentPage = 1;
+        LogGridAction("PageSizeChanged", size <= 0 ? "All" : $"{size}/page");
         ClearPassViewMemos();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
@@ -6638,6 +6670,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await InvokeAsync(StateHasChanged);
             return false;
         }
+
+        LogGridCellSave(col.Field, newValue);
 
         if (EventsRef?.OnCellSave.HasDelegate == true)
         {
@@ -7426,6 +7460,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task InvokeRecordDoubleClickAsync(TValue item, int rowIndex)
     {
+        LogGridAction("RowDoubleClicked", $"Row {rowIndex}");
         if (EventsRef?.OnRecordDoubleClick.HasDelegate == true)
             await EventsRef.OnRecordDoubleClick.InvokeAsync(new CellClickEventArgs<TValue> { Data = item, RowIndex = rowIndex });
     }
@@ -7494,6 +7529,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 await SelectRow(item, resolvedRowIndex);
             }
 
+            LogGridAction("RowDoubleClicked", $"Row {resolvedRowIndex}", col.Field);
             await EventsRef.OnRecordDoubleClick.InvokeAsync(new CellClickEventArgs<TValue>
             {
                 Data = item,
@@ -8720,6 +8756,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                 }
             }
 
+            LogGridAction("RowUpdated", $"Row {_editingRowIndex}");
             if (EventsRef?.RowUpdated.HasDelegate == true)
                 await EventsRef.RowUpdated.InvokeAsync(new RowEditEventArgs<TValue> { Data = _editItem, RowIndex = _editingRowIndex });
         }
@@ -8742,6 +8779,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     list.Add(_editItem);
             }
 
+            LogGridAction("RowCreated", "New row");
             if (EventsRef?.RowCreated.HasDelegate == true)
                 await EventsRef.RowCreated.InvokeAsync(new RowEditEventArgs<TValue> { Data = _editItem });
         }
@@ -8949,6 +8987,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             await InvokeAsync(StateHasChanged);
             return;
         }
+
+        LogGridCellSave(col.Field, newValue, targets.Count);
 
         await EnsureTrailingNewRowIfNeededAsync();
 
@@ -10059,6 +10099,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
                     });
                 }
             }
+
+            if (committedAnyCell)
+                LogGridCellSave(field, newValue, targets.Count);
 
             shouldEnsureTrailingNewRow = committedAnyCell;
         }
@@ -11670,6 +11713,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
     private async Task OnToolbarClick(string item)
     {
+        LogGridAction("ToolbarClicked", item);
         switch (item.ToLower())
         {
             case "add":
@@ -12848,7 +12892,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             if (committedAnyCell)
+            {
+                LogGridCellSave(field, newValue, targets.Count);
                 await EnsureTrailingNewRowIfNeededAsync();
+            }
         }
 
         _typeAheadBuffer = "";
@@ -12944,7 +12991,10 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             }
 
             if (committedAnyCell)
+            {
+                LogGridCellSave(col.Field, sourceValue, targets.Count);
                 await EnsureTrailingNewRowIfNeededAsync();
+            }
         }
 
         await FocusGridHostAsync();
@@ -14089,6 +14139,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             HeaderText = col.DisplayHeader
         });
         ResetToFirstPage();
+        LogGridAction("Grouped", colField, col.DisplayHeader);
 
         if (EventsRef?.Grouped.HasDelegate == true)
             await EventsRef.Grouped.InvokeAsync(new GroupEventArgs { Field = colField });
@@ -14107,6 +14158,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
 
         _groupDescriptors.RemoveAll(g => g.Field == colField);
         ResetToFirstPage();
+        LogGridAction("Ungrouped", colField);
 
         if (EventsRef?.Ungrouped.HasDelegate == true)
             await EventsRef.Ungrouped.InvokeAsync(new GroupEventArgs { Field = colField });
@@ -15129,6 +15181,7 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             return;
         }
 
+        LogGridAction("ColumnResized", $"{col.Field}={Math.Round(settled)}px", $"From {Math.Round(_resizeStartWidth)}px");
         if (EventsRef?.ColumnResized.HasDelegate == true)
         {
             await EventsRef.ColumnResized.InvokeAsync(new ResizeEventArgs
@@ -16570,6 +16623,9 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             ? _selectedCells.Count
             : _selectedItems.Count;
 
+        if (source != GridSelectionChangeSource.Programmatic && count > 0)
+            LogGridAction("SelectionChanged", $"{count} selected", source.ToString());
+
         if (EventsRef?.SelectionChanged.HasDelegate == true)
             await EventsRef.SelectionChanged.InvokeAsync(count);
 
@@ -16980,6 +17036,8 @@ public partial class GridControl<TValue> : FlexControlBase, IGridOwner, IAsyncDi
             fileName,
             pdfOptions);
         var saveResult = await GridExporter.SaveAsync(JsRuntime, result);
+        if (!string.Equals(saveResult, "cancelled", StringComparison.OrdinalIgnoreCase))
+            LogGridAction("Exported", format.ToString(), $"{table.Rows.Count} rows");
         if (showCompletionStatus)
             await ShowExportResultAsync(table.Rows.Count, saveResult);
     }

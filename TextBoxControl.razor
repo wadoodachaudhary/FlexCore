@@ -544,6 +544,52 @@ else
     public Task FlushClientBufferedValueAsync(bool requireCurrentValue) =>
         SynchronizeClientBufferedDomValueAsync(requireCurrentValue);
 
+    protected override string? ResolveControlIdentifier()
+    {
+        if (!string.IsNullOrWhiteSpace(Tag))
+            return Tag;
+        if (TryGetTextAttribute("id", out var id))
+            return id;
+        if (TryGetTextAttribute("aria-label", out var aria))
+            return aria;
+        if (TryGetTextAttribute("name", out var name))
+            return name;
+        if (!string.IsNullOrWhiteSpace(Placeholder))
+            return Placeholder;
+        return null;
+    }
+
+    private bool TryGetTextAttribute(string key, out string? value)
+    {
+        if (HtmlAttributes is not null && HtmlAttributes.TryGetValue(key, out var rawHtml) && rawHtml is not null)
+        {
+            var s = rawHtml.ToString();
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                value = s.Trim();
+                return true;
+            }
+        }
+        if (AdditionalAttributes is not null && AdditionalAttributes.TryGetValue(key, out var rawAdd) && rawAdd is not null)
+        {
+            var s = rawAdd.ToString();
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                value = s.Trim();
+                return true;
+            }
+        }
+        value = null;
+        return false;
+    }
+
+    private void LogCommittedText(string? val, string? detail = null)
+    {
+        if (CellHost is not null)
+            return;
+        RecordControlAction("ValueCommitted", IsPasswordInput ? "[REDACTED]" : val, detail ?? Placeholder);
+    }
+
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
         string? value,
@@ -570,6 +616,8 @@ else
                 // typed since. A new starting value takes a new @key.
                 _uncontrolledInitialized = true;
                 _suppressNextNativeInputRender = true;
+                if (!string.Equals(key, "Sync", StringComparison.Ordinal))
+                    LogCommittedText(committedValue, key);
                 InputValueChanged?.Invoke(committedValue);
                 if (ValueChanged.HasDelegate)
                     await ValueChanged.InvokeAsync(committedValue);
@@ -1087,6 +1135,7 @@ else
         _lastAgreedValue = Value;
         if (UsesBrowserOwnedValue)
             _uncontrolledValue = Value;
+        LogCommittedText(Value);
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
         NotifyNativeFieldChanged();

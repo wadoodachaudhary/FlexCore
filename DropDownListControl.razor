@@ -1031,6 +1031,19 @@
         return true;
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        FirstNonEmptyDropdownToken(Tag, AriaLabel, Placeholder);
+
+    private static string? FirstNonEmptyDropdownToken(params string?[] candidates)
+    {
+        foreach (var c in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(c))
+                return c.Trim();
+        }
+        return null;
+    }
+
     private async Task PublishEditableTextAsync(string text)
     {
         _editableText = text;
@@ -1040,6 +1053,9 @@
             return;
 
         Value = newValue;
+
+        if (CellHost is null)
+            RecordControlAction("SelectionChanged", text, AriaLabel ?? Placeholder);
 
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
@@ -1091,6 +1107,12 @@
         // notifications are skipped, so the UX of a re-pick is unchanged.
         if (!(SuppressUnchangedValueChange && unchanged))
         {
+            if (CellHost is null && !unchanged)
+            {
+                var display = GetFieldValue(item, TextFieldName);
+                RecordControlAction("SelectionChanged", !string.IsNullOrWhiteSpace(display) ? display : strVal, AriaLabel ?? Placeholder);
+            }
+
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(newValue);
 

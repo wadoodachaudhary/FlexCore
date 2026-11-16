@@ -38,10 +38,14 @@
     [Parameter] public bool StopKeyDownPropagation { get; set; }
     [Parameter] public bool PreventKeyDownDefault { get; set; }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim() : Label;
+
     private async Task OnCheckedChanged(ChangeEventArgs e)
     {
         var newVal = e.Value is bool b ? b : false;
         Checked = newVal;
+        RecordControlAction("CheckedChanged", newVal ? "true" : "false", Label);
         if (CheckedChanged.HasDelegate)
             await CheckedChanged.InvokeAsync(newVal);
     }

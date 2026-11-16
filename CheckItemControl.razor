@@ -25,12 +25,16 @@
     [Parameter] public EventCallback<bool> ValueChanged { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim() : Label;
+
     private async Task OnInputChanged(ChangeEventArgs e)
     {
         var newValue = e.Value is bool b && b;
         if (Value != newValue)
         {
             Value = newValue;
+            RecordControlAction("CheckedChanged", newValue ? "true" : "false", Label);
             await ValueChanged.InvokeAsync(newValue);
         }
 

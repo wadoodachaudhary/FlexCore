@@ -415,10 +415,12 @@ public partial class GridControl<TValue>
                 .ToList();
 
             await OnColumnsChosen.InvokeAsync(new ChooseColumnsResult { Columns = snapshot });
+            LogGridAction("ColumnsChosen", $"{snapshot.Count(c => c.Visible)}/{snapshot.Count} visible", col.Field);
             await SaveSnapshotSettingsAsync(snapshot);
         }
         else
         {
+            LogGridAction("ColumnsChosen", $"{col.Field}={(visible ? "Shown" : "Hidden")}", col.Field);
             await SaveGridSettingsAsync();
         }
 
@@ -989,6 +991,8 @@ public partial class GridControl<TValue>
             CommitCheckedFilterDraft(field, checkedDraft);
         if (IsCurrentFilterPopupField(field))
             _filterPopupApplyRejected = false;
+
+        LogGridAction("Filtered", string.IsNullOrWhiteSpace(text) ? $"{field}=(popup)" : $"{field}={text}", field);
 
         if (EventsRef?.Filtered.HasDelegate == true)
         {

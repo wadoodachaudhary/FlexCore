@@ -278,35 +278,67 @@ public static class GridExporter
         }
     }
 
-    private static byte[] BuildXlsx(GridExportTable table)
+    /// <summary>XLSX of a table whose rows are produced on demand. <paramref name="rowAt"/> is read in order once per
+    /// writer pass, must give the same row each time, and may return one reused row object.</summary>
+    internal static GridExportResult ExportXlsx(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt, string fileName) =>
+        new(BuildXlsx(table, rowCount, rowAt), EnsureExtension(fileName, DefaultExtension(GridExportFormat.Xlsx)), XlsxMime);
+
+    private static byte[] BuildXlsx(GridExportTable table) => BuildXlsx(table, table.Rows.Count, index => table.Rows[index]);
+
+    private static byte[] BuildXlsx(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt)
     {
         // Forwarded to FlexCore's native XlsxWriter. Same visual result as the
         // previous ClosedXML implementation — bold shaded header, thin cell
         // borders, highlight fill, number formats, alignment, column widths —
-        // without ClosedXML or its DocumentFormat.OpenXml chain.
-        var sheet = new XlsxSheet { Name = XlsxWriter.SanitizeSheetName(table.SheetName), PreserveOversizedText = table.PreserveOversizedText };
-        var formulaFields = BuildFormulaFieldMap(table.Columns);
-        var rowIndex = 1;
-
-        if (table.IncludeHeaderRow && table.Columns.Count > 0)
+        // without ClosedXML or its DocumentFormat.OpenXml chain. The writer reads
+        // the cells a row at a time (XlsxRows), so no whole-sheet cell model is built.
+        var sheet = new XlsxSheet
         {
-            var header = sheet.AddRow();
-            foreach (var column in table.Columns)
-            {
-                header.Add(new XlsxCell
-                {
-                    Value = column.Header,
-                    Bold = true,
-                    FillHex = "eeeeee",
-                    BorderHex = "a6a6a6"
-                });
-            }
-            rowIndex++;
+            Name = XlsxWriter.SanitizeSheetName(table.SheetName),
+            PreserveOversizedText = table.PreserveOversizedText,
+            RowSource = new XlsxRows(table, rowCount, rowAt)
+        };
+
+        // A column with no explicit width is left out of ColumnWidths so the writer
+        // sizes it from content, standing in for ClosedXML's AdjustToContents().
+        for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
+        {
+            if (table.Columns[colIndex].Width is double width)
+                sheet.ColumnWidths[colIndex] = ConvertPixelsToExcelColumnWidth(width);
         }
 
-        foreach (var row in table.Rows)
+        return XlsxWriter.Write(sheet);
+    }
+
+    /// <summary>The table's XLSX cells, built one row at a time into one reused row.</summary>
+    private sealed class XlsxRows(GridExportTable table, int rowCount, Func<int, GridExportRow> rowAt) : XlsxRowSource
+    {
+        private readonly IReadOnlyDictionary<string, int> _formulaFields = BuildFormulaFieldMap(table.Columns);
+        private readonly bool _header = table.IncludeHeaderRow && table.Columns.Count > 0;
+        private readonly List<XlsxCell> _row = new();
+        private readonly List<XlsxCell> _cells = new();
+
+        public override int Count => rowCount + (_header ? 1 : 0);
+
+        public override List<XlsxCell> Row(int index)
         {
-            var line = sheet.AddRow();
+            _row.Clear();
+            if (_header && index == 0)
+            {
+                foreach (var column in table.Columns)
+                {
+                    var header = NextCell();
+                    header.Value = column.Header;
+                    header.Bold = true;
+                    header.FillHex = "eeeeee";
+                    header.BorderHex = "a6a6a6";
+                }
+                return _row;
+            }
+
+            // Sheet row number of this record, for same-row formula references.
+            var rowIndex = index + 1;
+            var row = rowAt(_header ? index - 1 : index);
             for (var colIndex = 0; colIndex < Math.Max(table.Columns.Count, row.Values.Count); colIndex++)
             {
                 var value = colIndex < row.XlsxValues.Count
@@ -329,21 +361,19 @@ public static class GridExporter
                         ignoreBlack: false)
                     ?? (table.HighlightColumnIndexes.Contains(colIndex) ? "ffffc1" : null);
 
-                var cell = new XlsxCell
-                {
-                    Bold = bold,
-                    Italic = italic,
-                    Strikethrough = strikethrough,
-                    FontColorHex = foreColorHex,
-                    FillHex = backColorHex,
-                    BorderHex = "e6e6e6"
-                };
+                var cell = NextCell();
+                cell.Bold = bold;
+                cell.Italic = italic;
+                cell.Strikethrough = strikethrough;
+                cell.FontColorHex = foreColorHex;
+                cell.FillHex = backColorHex;
+                cell.BorderHex = "e6e6e6";
 
                 if (row.UseColumnFormulas
                     && colIndex < table.Columns.Count
                     && TryTranslateSameRowFormula(
                         table.Columns,
-                        formulaFields,
+                        _formulaFields,
                         colIndex,
                         rowIndex,
                         out var formula))
@@ -369,21 +399,20 @@ public static class GridExporter
                         _ => XlsxAlign.Left
                     };
                 }
-
-                line.Add(cell);
             }
-            rowIndex++;
+            return _row;
         }
 
-        // A column with no explicit width is left out of ColumnWidths so the writer
-        // sizes it from content, standing in for ClosedXML's AdjustToContents().
-        for (var colIndex = 0; colIndex < table.Columns.Count; colIndex++)
+        // The row's next cell, reset to a new cell's defaults.
+        private XlsxCell NextCell()
         {
-            if (table.Columns[colIndex].Width is double width)
-                sheet.ColumnWidths[colIndex] = ConvertPixelsToExcelColumnWidth(width);
+            if (_row.Count == _cells.Count)
+                _cells.Add(new XlsxCell());
+            var cell = _cells[_row.Count];
+            cell.Reset();
+            _row.Add(cell);
+            return cell;
         }
-
-        return XlsxWriter.Write(sheet);
     }
 
     private static string? NormalizeExportColorHex(string? hex, bool ignoreWhite, bool ignoreBlack)

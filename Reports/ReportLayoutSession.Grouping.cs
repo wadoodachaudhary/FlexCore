@@ -108,17 +108,27 @@ public sealed partial class ReportLayoutSession
     // ("1/8/2000"), a month (and the quarter and half year that start on one) as "1/2003", a year as "2003".
     private static string DefaultGroupDateFormat(int kind) => kind switch { 4 or 5 or 6 => "M/yyyy", 7 => "yyyy", _ => "d" };
 
+    // The same name as a spreadsheet date format: the regional short date spelled out, since a one-letter "d" reaches the
+    // spreadsheet as m/d/yyyy whatever the region; a pattern with more than day, month and year fields keeps "d".
+    private static string GroupDateExportFormat(int kind)
+    {
+        var format = DefaultGroupDateFormat(kind);
+        var pattern = CultureInfo.CurrentCulture.DateTimeFormat.ShortDatePattern;
+        return format == "d" && pattern.All(c => c is 'd' or 'M' or 'y' or '/' or '.' or '-' or ' ') ? pattern : format;
+    }
+
     // The period behind a date group's name and the group's condition kind, for a name field with its own date format
     // ("1/03"); no date when the group is named by a formula or a specified-group list, or is not a date group.
     private (DateTime? Date, int Kind) GroupPeriodDate(string reference, int row)
+        => _layout.GroupNames.TryGetValue(reference, out var condition) ? GroupPeriodDate(GroupLevel(condition), row) : default;
+
+    private (DateTime? Date, int Kind) GroupPeriodDate(int level, int row)
     {
-        if (!_layout.GroupNames.TryGetValue(reference, out var condition)) return default;
-        var level = GroupLevel(condition);
         if (level < 0 || row < 0 || row >= _rows.Length) return default;
         var options = Options(level);
         if (options?.NameFormula is not null || options is { NameFormulaError.Length: > 0 } || GroupKey(level, row) is SpecifiedKey or OthersKey) return default;
         var kind = options?.ConditionKind ?? 0;
-        return kind < DateConditionNames.Length && Period(Value(condition, row), options, options?.ShowLastDateInPeriod ?? false) is DateTime date ? (date, kind) : default;
+        return kind < DateConditionNames.Length && Period(Value(_layout.Document.Groups[level].Condition, row), options, options?.ShowLastDateInPeriod ?? false) is DateTime date ? ((DateTime?)date, kind) : default;
     }
 
     private readonly HashSet<int> _namingLevels = [];

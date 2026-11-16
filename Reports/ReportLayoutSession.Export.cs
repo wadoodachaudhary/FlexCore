@@ -18,16 +18,31 @@ public sealed partial class ReportLayoutSession
         if (columns.Any(e => DependsOn(e.Binding, false) || DependsOn(e.Binding, true)))
             throw new NotSupportedException("Data export cannot re-evaluate shared-state or page-dependent detail formulas. Export HTML for the rendered result.");
         var table = new GridExportTable { Title = _layout.Document.Title, SheetName = _layout.Document.Title };
-        foreach (var column in columns) table.Columns.Add(new(column.Name, column.FormatString, width: column.WidthTwips / 15d));
+        string[]? headers = null;
+        if (_layout.UseVisualExportHeaders)
+        {
+            columns = columns.OrderBy(e => e.LeftTwips).ToList();
+            var headings = _layout.Document.Sections.Where(s => s.Kind is "ReportHeader" or "PageHeader")
+                .SelectMany(s => s.Elements).Where(e => e.Kind == "FieldHeading" && !e.IsSuppressed)
+                .OrderBy(e => e.LeftTwips).ToArray();
+            if (headings.Length != columns.Count || headings.Select(e => e.SectionId).Distinct().Count() != 1)
+                throw new InvalidOperationException("Visual detail export requires one heading per field in a single header band.");
+            headers = headings.Select(e => e.Text).ToArray();
+        }
+        for (var i = 0; i < columns.Count; i++)
+        {
+            var column = columns[i];
+            table.Columns.Add(new(headers?[i] ?? column.Name, column.FormatString, width: column.WidthTwips / 15d));
+        }
         foreach (var row in details.GroupBy(b => b.Row))
         {
             var export = new GridExportRow();
+            export.XlsxValues.EnsureCapacity(columns.Count); export.XlsxFormats.EnsureCapacity(columns.Count); export.Values.EnsureCapacity(columns.Count);
             foreach (var column in columns)
             {
                 var visible = row.SelectMany(b => b.Items).Any(i => i.Element.Binding == column.Binding);
-                var value = visible ? Value(column.Binding, row.Key) : null;
-                export.XlsxValues.Add(value); export.XlsxFormats.Add(column.FormatString);
-                export.Values.Add(visible ? Format(column.Binding, row.Key, column.FormatString, column.NativeDateTimeFormat, column.NativeNumberFormat, column.NativeNumericFormat) : "");
+                var (text, value, format) = visible ? ExportCell(column, row.Key) : ("", null, column.FormatString);
+                export.XlsxValues.Add(value); export.XlsxFormats.Add(format); export.Values.Add(text);
             }
             table.Rows.Add(export);
         }
@@ -63,22 +78,39 @@ public sealed partial class ReportLayoutSession
             var export = new GridExportRow();
             for (var depth = 0; depth <= level; depth++)
             {
-                var value = GroupNameValue(depth, group.Key);
-                export.XlsxValues.Add(value); export.XlsxFormats.Add(null); export.Values.Add(value?.ToString() ?? "");
+                // Named as the group tree names it. A date group's name is text ("10/2026"); its cell holds the period's date in a
+                // format that reads the same, so it sorts and filters as a date. A group-name formula keeps its own value; CSV the text.
+                var value = GroupNameOrKey(depth, group.Key);
+                var (date, kind) = GroupPeriodDate(depth, group.Key);
+                export.XlsxValues.Add(date ?? value); export.XlsxFormats.Add(date is null ? null : GroupDateExportFormat(kind));
+                export.Values.Add(value?.ToString() ?? "");
             }
             var items = group.SelectMany(ExportItems).ToDictionary(i => i.Element.Id);
             foreach (var column in columns)
             {
-                object? value = null;
                 var present = items.TryGetValue(column.Id, out var item);
                 var element = item?.Element ?? column;
-                var text = present ? Format(element.Binding, item!.Row, element.FormatString, element.NativeDateTimeFormat,
-                    element.NativeNumberFormat, element.NativeNumericFormat, captured => value = captured) : "";
-                export.Values.Add(text); export.XlsxValues.Add(value); export.XlsxFormats.Add(element.FormatString);
+                var (text, value, format) = present ? ExportCell(element, item!.Row) : ("", null, element.FormatString);
+                export.Values.Add(text); export.XlsxValues.Add(value); export.XlsxFormats.Add(format);
             }
             table.Rows.Add(export);
         }
         return table;
+    }
+
+    // One exported field: its page's text (CSV) and its typed value and format (XLSX). A value its page prints as a formula error
+    // (a failing formula or group name) exports that text in both, rather than failing the export or leaving a blank cell.
+    private (string Text, object? Value, string? Format) ExportCell(ReportDesignerElement element, int row)
+    {
+        object? value = null;
+        var captured = false;
+        var text = Format(element.Binding, row, element.FormatString, element.NativeDateTimeFormat, element.NativeNumberFormat,
+            element.NativeNumericFormat, result => { value = result; captured = true; });
+        if (!captured) return (text, text, element.FormatString);
+        // A date group's name field with its own date components captures the period's date. Without a field format it reads
+        // as the group's name does ("1/2003", "2003"), never as a day its page does not print.
+        return value is DateTime && string.IsNullOrEmpty(element.FormatString) && GroupPeriodDate(element.Binding, row) is ({ }, var kind)
+            ? (text, value, GroupDateExportFormat(kind)) : (text, value, element.FormatString);
     }
 
     // Summary fields and group labels can indirectly read formulas too. Refuse print-state/page values rather

@@ -24,14 +24,20 @@
       <            Take the highlighted Selected rows out (double-click too)
       <<           Empty Selected
 
-    Crystal prompt mode (opt-in, used by the report parameter dialog):
+    Move or copy (both are available; the default moves):
+      default                     a value shuttles between the panes: adding takes it out
+                                  of Available, removing puts it back in its pool position.
+                                  The report parameter dialog uses this (owner 2026-11-13:
+                                  a standard dual list moves; Crystal's copy layout is not
+                                  matched there).
+      KeepAvailableItems          copy mode: the Available pane always lists the whole pool;
+                                  adding copies an item to Selected, an item already selected
+                                  is not added twice, and removing only takes it out of
+                                  Selected (Crystal's "Enter Parameter Values" layout).
       BatchSize > 0               the Available pane pages the pool BatchSize values at
-                                  a time (Crystal's "Enter Parameter Values" lists a
-                                  dynamic list of values 200 at a time) and >> adds only
-                                  the batch on screen, as Crystal's >> does.
-      KeepAvailableItems          the Available pane always lists the whole pool; adding
-                                  copies an item to Selected and removing only takes it
-                                  out of Selected (Crystal layout).
+                                  a time (Crystal lists a dynamic list of values 200 at a
+                                  time) and >> adds only the batch on screen, as Crystal's
+                                  >> does. Works in either mode.
 
     LeftCaption / RightCaption name what a pane lists (e.g. the report parameter) on its
     header line, after the pane's caption (LeftHeader / RightHeader) and its search icon.
@@ -193,10 +199,11 @@
     [Parameter] public int BatchSize { get; set; }
 
     /// <summary>
-    /// When true the Available pane always lists the whole pool (Crystal's prompt):
+    /// Copy mode. When true the Available pane always lists the whole pool (Crystal's prompt):
     /// adding puts a copy in Selected, an item already selected is not added twice,
     /// and removing only takes the item out of Selected. When false (the default)
-    /// items shuttle between the panes.
+    /// items move between the panes: adding takes a value out of Available and removing
+    /// puts it back where the pool lists it.
     /// </summary>
     [Parameter] public bool KeepAvailableItems { get; set; }
 
@@ -344,6 +351,12 @@
     private Task MoveAllLeft()
         => RemoveRowsAsync(_selectedRows.ToList());
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag :
+        !string.IsNullOrWhiteSpace(LeftCaption) ? LeftCaption :
+        !string.IsNullOrWhiteSpace(RightCaption) ? RightCaption :
+        RightHeader;
+
     private async Task AddRowsAsync(List<MultiSelectDualListRow> moving)
     {
         if (moving.Count == 0) return;
@@ -362,6 +375,7 @@
             _availableRows = _availableRows.Where(r => !addedKeys.Contains(r.Key)).ToList();
         }
         if (_availableGrid != null) await _availableGrid.ClearSelectionAsync();
+        RecordControlAction("SelectionChanged", $"{_selectedRows.Count} selected", $"Added {added.Count}");
         await NotifyChanged();
     }
 
@@ -372,8 +386,16 @@
         var removed = _selectedRows.Where(r => removedKeys.Contains(r.Key)).ToList();
         if (removed.Count == 0) return;
         _selectedRows = _selectedRows.Where(r => !removedKeys.Contains(r.Key)).ToList();
-        if (!KeepAvailableItems) _availableRows = [.. _availableRows, .. removed];
+        // Move mode: a value goes back to its place in the pool, not to the end of the list.
+        // A custom value (in Selected but not in the pool) is simply dropped.
+        if (!KeepAvailableItems)
+        {
+            var stillSelected = new HashSet<string>(_selectedRows.Select(r => r.Key), StringComparer.OrdinalIgnoreCase);
+            _availableRows = (Items ?? Enumerable.Empty<TItem>()).Select(ToRow)
+                .Where(r => !stillSelected.Contains(r.Key)).ToList();
+        }
         if (_selectedGrid != null) await _selectedGrid.ClearSelectionAsync();
+        RecordControlAction("SelectionChanged", $"{_selectedRows.Count} selected", $"Removed {removed.Count}");
         await NotifyChanged();
     }
 

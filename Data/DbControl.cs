@@ -910,6 +910,7 @@ public class DbControl
 
     private void LogSuccess(string operation, string sql, long elapsedMs, int? rowCount)
     {
+        Fx.ControlKit.Telemetry.FlexSqlRecorder.Statement(nameof(DbControl), sql, string.Empty, elapsedMs, rowCount);
         var threshold = Math.Max(0, LoggingOptions.SlowQueryThresholdMs);
         if (threshold <= 0 || elapsedMs < threshold) return;
 
@@ -929,6 +930,7 @@ public class DbControl
 
     private void LogError(string operation, string sql, long elapsedMs, Exception ex)
     {
+        Fx.ControlKit.Telemetry.FlexSqlRecorder.Statement(nameof(DbControl), sql, string.Empty, elapsedMs, null, ex);
         if (LoggingOptions.LogSqlText)
         {
             _logger.LogError(ex,

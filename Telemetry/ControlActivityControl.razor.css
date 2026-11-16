@@ -1,0 +1,11 @@
+.fx-ctl-root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+    min-height: 0;
+}
+
+.fx-ctl-compact-charts {
+    flex-shrink: 0;
+}

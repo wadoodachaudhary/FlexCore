@@ -1,0 +1,64 @@
+.fx-sql-root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+    min-height: 0;
+}
+
+.fx-sql-kpis {
+    grid-template-columns: repeat(4, minmax(170px, 1fr)) !important;
+    flex-shrink: 0;
+}
+
+.fx-sql-split {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.fx-sql-grid {
+    flex: 1 1 58%;
+    min-height: 180px;
+}
+
+.fx-sql-inspector {
+    flex: 0 0 auto;
+    max-height: 195px;
+}
+
+.fx-sql-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.fx-sql-pre {
+    margin: 0;
+    padding: 8px 10px;
+    max-height: 120px;
+    overflow: auto;
+    background: var(--fx-tel-code-bg, #ffffff);
+    color: var(--fx-tel-code-fg, #001b44);
+    border: 1px solid var(--fx-tel-code-border, #7f9db9);
+    font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* The statement list and its filter bar step aside for a rollup view (their own display rules outrank [hidden]). */
+.fx-sql-root [hidden] {
+    display: none !important;
+}
+
+.fx-sql-rollup {
+    flex: 1 1 auto;
+    min-height: 220px;
+}

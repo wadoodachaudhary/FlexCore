@@ -9,8 +9,11 @@ namespace Fx.ControlKit.Grid;
 /// TreeGridControl — hierarchical data grid with expand/collapse, parent/child mapping,
 /// typed filtering, sibling sorting, paging, export, and row selection.
 /// </summary>
-public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOwner
+public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase, ITreeGridControlOwner
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag.Trim() : typeof(TValue).Name;
+
     // ── Parameters ───────────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
@@ -1258,6 +1261,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
 
         node.IsExpanded = expanded && node.HasChildren;
+        RecordControlAction(node.IsExpanded ? "NodeExpanded" : "NodeCollapsed", node.Id?.ToString(), $"Level {node.Level}");
         if (node.IsExpanded && Expanded.HasDelegate)
             await Expanded.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
         StateHasChanged();
@@ -1275,6 +1279,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await ToggleNode(node);
 
         await SelectNodeAsync(node, visibleIndex);
+        if (mouse != null)
+            RecordControlAction("NodeSelected", node.Id?.ToString() ?? $"Row {visibleIndex}", $"Level {node.Level}");
         await FocusAsync();
         if (mouse != null && RowClicked.HasDelegate)
             await RowClicked.InvokeAsync(new TreeRowClickEventArgs<TValue>

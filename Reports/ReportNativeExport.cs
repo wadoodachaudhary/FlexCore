@@ -104,6 +104,7 @@ public static class ReportNativeExport
             return new(Encoding.UTF8.GetBytes(html), name + ".html", "text/html;charset=utf-8");
         }
         if (format is not (ReportNativeExportFormat.Csv or ReportNativeExportFormat.Xlsx)) throw new NotSupportedException("Unknown native report export format.");
+        if (format == ReportNativeExportFormat.Xlsx && tab.CreateDataExport?.Target is TabularData tabular) return tabular.Xlsx(name + ".xlsx");
         var data = tab.CreateDataExport?.Invoke() ?? throw new InvalidOperationException("This report tab has no data export snapshot.");
         if (format == ReportNativeExportFormat.Xlsx) return GridExporter.Export(ReadableSpreadsheet(data), GridExportFormat.Xlsx, name + ".xlsx");
         // CSV has no typed cells. Prefix formula-like text without changing the native XLSX values.
@@ -129,15 +130,19 @@ public static class ReportNativeExport
                 characters = Math.Max(characters, LineLength(Convert.ToString(display, CultureInfo.CurrentCulture)));
                 if (characters >= 80) break;
             }
-            var authored = column.Width is double width && double.IsFinite(width) && width > 0 ? width : 0;
-            // Excel's standard character-width approximation, with padding and a bounded memo column.
-            var pixels = Math.Clamp(Math.Max(authored, (characters + 2) * 7d + 5), 73, 565);
-            result.Columns.Add(new(column.Header, column.Format, column.TextAlign, pixels, column.PrintCellIcon)
+            result.Columns.Add(new(column.Header, column.Format, column.TextAlign, ReadablePixels(column.Width, characters), column.PrintCellIcon)
             { Field = column.Field, Formula = column.Formula });
         }
         result.Rows.AddRange(source.Rows);
         result.HighlightColumnIndexes.UnionWith(source.HighlightColumnIndexes);
         return result;
+    }
+
+    // Excel's standard character-width approximation, with padding and a bounded memo column.
+    private static double ReadablePixels(double? width, int characters)
+    {
+        var authored = width is double value && double.IsFinite(value) && value > 0 ? value : 0;
+        return Math.Clamp(Math.Max(authored, (characters + 2) * 7d + 5), 73, 565);
     }
 
     private static int LineLength(string? text)
@@ -156,30 +161,87 @@ public static class ReportNativeExport
     public static GridExportTable TabularSnapshot(string title, DataTable data, IReadOnlyList<ReportColumn> columns)
     {
         var table = new GridExportTable { Title = title, SheetName = title };
-        // On-demand subreport columns are links with no data; the viewer draws them as links, not values.
-        var visible = columns.Where(c => !c.Hidden && !c.IsSubreportObject).ToList();
+        var (visible, sources) = TabularColumns(data, columns);
         foreach (var column in visible) table.Columns.Add(new(column.HeaderText, column.Format, width: column.Width));
+        // Lists sized up front: a large export holds one of these rows per record until it is written.
+        table.Rows.EnsureCapacity(data.Rows.Count);
         foreach (DataRow row in data.Rows)
         {
             var export = new GridExportRow();
-            foreach (var column in visible)
+            export.XlsxValues.EnsureCapacity(visible.Count); export.XlsxFormats.EnsureCapacity(visible.Count); export.Values.EnsureCapacity(visible.Count);
+            for (var index = 0; index < visible.Count; index++)
             {
-                // A column the query did not return exports blank, as the viewer shows it.
-                var value = !data.Columns.Contains(column.Field) || row[column.Field] is DBNull ? null : row[column.Field];
-                export.XlsxValues.Add(value); export.XlsxFormats.Add(column.Format);
-                export.Values.Add(value is IFormattable f ? f.ToString(column.Format, CultureInfo.CurrentCulture) : value);
+                var value = TabularValue(row, sources[index]);
+                export.XlsxValues.Add(value); export.XlsxFormats.Add(visible[index].Format);
+                export.Values.Add(TabularDisplay(value, visible[index].Format));
             }
             table.Rows.Add(export);
         }
         return table;
     }
 
+    // On-demand subreport columns are links with no data; the viewer draws them as links, not values.
+    // A column the query did not return has no source and exports blank, as the viewer shows it.
+    private static (List<ReportColumn> Visible, DataColumn?[] Sources) TabularColumns(DataTable data, IReadOnlyList<ReportColumn> columns)
+    {
+        var visible = columns.Where(c => !c.Hidden && !c.IsSubreportObject).ToList();
+        return (visible, visible.Select(column => data.Columns.Contains(column.Field) ? data.Columns[column.Field] : null).ToArray());
+    }
+
+    private static object? TabularValue(DataRow row, DataColumn? source)
+    {
+        var value = source is null ? null : row[source];
+        return value is DBNull ? null : value;
+    }
+
+    private static object? TabularDisplay(object? value, string format) => value is IFormattable f ? f.ToString(format, CultureInfo.CurrentCulture) : value;
+
     public static Func<GridExportTable> CaptureData(string title, DataTable data, IReadOnlyList<ReportColumn> columns)
     {
-        var snapshot = data.Copy();
         var fields = columns.Select(column => new ReportColumn { Field = column.Field, HeaderText = column.HeaderText,
             Format = column.Format, Hidden = column.Hidden, Width = column.Width, IsSubreportObject = column.IsSubreportObject }).ToList();
-        return () => TabularSnapshot(title, snapshot, fields);
+        return new TabularData(title, data.Copy(), fields).Snapshot;
+    }
+
+    /// <summary>A tabular report's captured data. Its XLSX export reads the rows straight from the table, one at a time,
+    /// giving the same workbook as <see cref="ReadableSpreadsheet"/> over <see cref="Snapshot"/> without building it.</summary>
+    private sealed class TabularData(string title, DataTable data, List<ReportColumn> fields)
+    {
+        public GridExportTable Snapshot() => TabularSnapshot(title, data, fields);
+
+        public GridExportResult Xlsx(string fileName)
+        {
+            var (visible, sources) = TabularColumns(data, fields);
+            var rows = new DataRow[data.Rows.Count];
+            data.Rows.CopyTo(rows, 0);
+            var sheet = new GridExportTable { Title = title, SheetName = title, PreserveOversizedText = true };
+            for (var index = 0; index < visible.Count; index++)
+            {
+                var column = visible[index];
+                var characters = LineLength(column.HeaderText);
+                foreach (var row in rows)
+                {
+                    var display = TabularDisplay(TabularValue(row, sources[index]), column.Format);
+                    characters = Math.Max(characters, LineLength(Convert.ToString(display, CultureInfo.CurrentCulture)));
+                    if (characters >= 80) break;
+                }
+                sheet.Columns.Add(new(column.HeaderText, column.Format, TextAlign.Left, ReadablePixels(column.Width, characters)));
+            }
+
+            // One reused row. XLSX reads the typed values; display text is only for sizing and CSV.
+            var export = new GridExportRow();
+            return GridExporter.ExportXlsx(sheet, rows.Length, index =>
+            {
+                export.XlsxValues.Clear(); export.XlsxFormats.Clear(); export.Values.Clear();
+                for (var column = 0; column < visible.Count; column++)
+                {
+                    export.XlsxValues.Add(TabularValue(rows[index], sources[column]));
+                    export.XlsxFormats.Add(visible[column].Format);
+                    export.Values.Add(null);
+                }
+                return export;
+            }, fileName);
+        }
     }
 
     private static void RequireComplete(ReportTab tab)

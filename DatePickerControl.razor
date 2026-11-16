@@ -986,6 +986,13 @@
             .ToArray();
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag :
+        !string.IsNullOrWhiteSpace(Id) ? Id :
+        !string.IsNullOrWhiteSpace(AriaLabel) ? AriaLabel :
+        !string.IsNullOrWhiteSpace(Title) ? Title :
+        Placeholder;
+
     private async Task UpdateValue(DateTime? newValue)
     {
         _validationMessage = null;
@@ -1003,6 +1010,9 @@
         Value = newValue;
         _inputText = newValue.HasValue ? FormatDate(newValue.Value) : "";
         await PushDraftAsync();
+
+        if (changed && CellHost is null)
+            RecordControlAction("DateChanged", _inputText, AriaLabel ?? Placeholder);
 
         if (changed && ValueChanged.HasDelegate)
         {

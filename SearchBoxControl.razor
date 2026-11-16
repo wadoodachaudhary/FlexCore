@@ -124,15 +124,22 @@
         catch (TaskCanceledException) { }
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : Placeholder;
+
     private async Task CommitAsync(string? text)
     {
         _debounceCts?.Cancel();
         _debounceCts?.Dispose();
         _debounceCts = null;
 
+        var changed = !string.Equals(_lastCommittedValue, text, StringComparison.Ordinal);
         _currentValue = text;
         _lastCommittedValue = text;
         _isUserInputActive = false;
+
+        if (changed || OnSearch.HasDelegate)
+            RecordControlAction("Searched", text, Placeholder);
 
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(text);

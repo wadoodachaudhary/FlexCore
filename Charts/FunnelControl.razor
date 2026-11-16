@@ -1,0 +1,178 @@
+@namespace Fx.ControlKit.Charts
+@inherits Fx.ControlKit.FlexControlBase
+@using System.Globalization
+
+<div class="fx-funnel @CssClass" style="@ResolvedStyle" @attributes="AdditionalAttributes">
+    @if (!string.IsNullOrWhiteSpace(Title))
+    {
+        <div class="fx-funnel-header">
+            <span class="fx-funnel-title">@Title</span>
+            @if (Steps.Count >= 2 && BaselineCount > 0)
+            {
+                <span class="fx-funnel-overall-badge">
+                    End-to-End Conversion: <strong>@FormatPct(OverallEndRate)%</strong>
+                </span>
+            }
+        </div>
+    }
+
+    @if (Steps.Count == 0 || BaselineCount <= 0)
+    {
+        <div class="fx-funnel-empty">@EmptyMessage</div>
+    }
+    else
+    {
+        <div class="fx-funnel-steps">
+            @for (int i = 0; i < Steps.Count; i++)
+            {
+                var idx = i;
+                var step = Steps[idx];
+                double prevCount = idx == 0 ? BaselineCount : Math.Max(0, Steps[idx - 1].Count);
+                double count = Math.Max(0, step.Count);
+                double overallPct = BaselineCount > 0 ? Math.Clamp(count / BaselineCount * 100.0, 0, 100) : 0;
+                double stepPct = idx == 0 ? 100.0 : (prevCount > 0 ? Math.Clamp(count / prevCount * 100.0, 0, 100) : 0);
+                double dropCount = idx == 0 ? 0 : Math.Max(0, prevCount - count);
+                double dropPct = idx == 0 ? 0 : (prevCount > 0 ? Math.Clamp(dropCount / prevCount * 100.0, 0, 100) : 0);
+                string barColor = ResolveStepColor(step, idx);
+                bool isSelected = _selectedIndex == idx && !_selectedDropOff;
+                bool isDropSelected = _selectedIndex == idx && _selectedDropOff;
+
+                @if (idx > 0)
+                {
+                    <div class="fx-funnel-connector">
+                        <span class="fx-funnel-conv-pill" title="Step-over-step conversion from Step @idx to Step @(idx + 1)">
+                            ↓ @FormatPct(stepPct)% converted
+                        </span>
+                        @if (ShowStepDuration && step.MedianSecondsFromPrevious is > 0)
+                        {
+                            <span class="fx-funnel-time-pill" title="Median time between Step @idx and Step @(idx + 1)">
+                                ⏱ @FormatDuration(step.MedianSecondsFromPrevious.Value)
+                            </span>
+                        }
+                        @if (ShowDropOff && dropCount > 0)
+                        {
+                            <button type="button"
+                                    class="fx-funnel-drop-btn @(isDropSelected ? "fx-funnel-drop-active" : "")"
+                                    title="Inspect drop-off before @step.Label"
+                                    @onclick="() => HandleClickAsync(idx, step, overallPct, stepPct, dropCount, dropPct, isDropOff: true)">
+                                −@FormatCount(dropCount) @UnitLabel dropped (@FormatPct(dropPct)%)
+                            </button>
+                        }
+                    </div>
+                }
+
+                <div class="fx-funnel-row @(isSelected ? "fx-funnel-row-active" : "")"
+                     @onclick="() => HandleClickAsync(idx, step, overallPct, stepPct, dropCount, dropPct, isDropOff: false)">
+                    <div class="fx-funnel-step-meta">
+                        <span class="fx-funnel-step-num">@(idx + 1)</span>
+                        <div class="fx-funnel-step-labels">
+                            <div class="fx-funnel-step-name">@step.Label</div>
+                            @if (!string.IsNullOrWhiteSpace(step.Subtitle))
+                            {
+                                <div class="fx-funnel-step-sub">@step.Subtitle</div>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="fx-funnel-track">
+                        <div class="fx-funnel-fill"
+                             style="width:@(Math.Max(2.0, overallPct).ToString("0.##", CultureInfo.InvariantCulture))%; background:@barColor;">
+                        </div>
+                        @if (idx > 0 && ShowDropOff && dropCount > 0)
+                        {
+                            double dropTrackWidth = BaselineCount > 0 ? Math.Clamp(dropCount / BaselineCount * 100.0, 0, 100 - overallPct) : 0;
+                            if (dropTrackWidth > 0.5)
+                            {
+                                <div class="fx-funnel-drop-ghost"
+                                     style="width:@(dropTrackWidth.ToString("0.##", CultureInfo.InvariantCulture))%;"
+                                     title="Dropped at this step: @FormatCount(dropCount)"></div>
+                            }
+                        }
+                    </div>
+
+                    <div class="fx-funnel-metrics">
+                        <span class="fx-funnel-count">@FormatCount(count) <small>@UnitLabel</small></span>
+                        <span class="fx-funnel-pct">@FormatPct(overallPct)%</span>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly string[] DefaultPalette =
+    {
+        "#0a246a", "#1e40af", "#2563eb", "#0284c7", "#0d9488", "#16a34a"
+    };
+
+    [Parameter] public IReadOnlyList<FunnelStepItem> Steps { get; set; } = Array.Empty<FunnelStepItem>();
+    [Parameter] public bool ShowDropOff { get; set; } = true;
+    [Parameter] public bool ShowStepDuration { get; set; } = true;
+    [Parameter] public string UnitLabel { get; set; } = "users";
+    [Parameter] public string EmptyMessage { get; set; } = "Define at least two funnel steps with matching telemetry events to compute conversion.";
+    [Parameter] public string? AccentColor { get; set; }
+    [Parameter] public string[]? Palette { get; set; }
+    [Parameter] public EventCallback<FunnelStepClickArgs> OnStepSelected { get; set; }
+
+    private int _selectedIndex = -1;
+    private bool _selectedDropOff;
+
+    private double BaselineCount => Steps.Count > 0 ? Math.Max(0, Steps[0].Count) : 0;
+
+    private double OverallEndRate =>
+        Steps.Count > 0 && BaselineCount > 0
+            ? Math.Clamp(Math.Max(0, Steps[^1].Count) / BaselineCount * 100.0, 0, 100)
+            : 0;
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private string ResolveStepColor(FunnelStepItem step, int index)
+    {
+        if (!string.IsNullOrWhiteSpace(step.Color))
+            return step.Color!;
+        if (!string.IsNullOrWhiteSpace(AccentColor))
+            return AccentColor!;
+        var pal = Palette is { Length: > 0 } ? Palette : DefaultPalette;
+        return pal[index % pal.Length];
+    }
+
+    private async Task HandleClickAsync(
+        int index,
+        FunnelStepItem step,
+        double overallPct,
+        double stepPct,
+        double dropCount,
+        double dropPct,
+        bool isDropOff)
+    {
+        _selectedIndex = index;
+        _selectedDropOff = isDropOff;
+        RecordControlAction(isDropOff ? "DropOffSelected" : "StepSelected", step.Label, $"overall={FormatPct(overallPct)}%");
+        if (OnStepSelected.HasDelegate)
+        {
+            await OnStepSelected.InvokeAsync(new FunnelStepClickArgs(
+                index,
+                step,
+                overallPct,
+                stepPct,
+                dropCount,
+                dropPct,
+                isDropOff));
+        }
+    }
+
+    private static string FormatPct(double val) => val.ToString("0.0", CultureInfo.InvariantCulture);
+    private static string FormatCount(double val) => val.ToString("N0", CultureInfo.InvariantCulture);
+
+    private static string FormatDuration(double seconds)
+    {
+        if (seconds < 1) return "<1s";
+        if (seconds < 60) return $"{seconds:0}s";
+        if (seconds < 3600) return $"{(int)(seconds / 60)}m {(int)(seconds % 60)}s";
+        return $"{seconds / 3600.0:0.1}h";
+    }
+}

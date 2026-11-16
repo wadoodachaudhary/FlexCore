@@ -22,6 +22,11 @@
 
     [CascadingParameter] public MenuDropDownControl? ParentMenu { get; set; }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Text) ? Text.Trim()
+        : null;
+
     private async Task HandleClick()
     {
         if (Disabled)
@@ -29,6 +34,7 @@
             return;
         }
 
+        RecordControlAction("Clicked", Text, ParentMenu?.Label);
         ParentMenu?.RequestClose();
 
         if (OnClick.HasDelegate)

@@ -76,6 +76,7 @@
     private async Task HandleMainClick()
     {
         if (Disabled) return;
+        RecordControlAction("Clicked", ResolvedTitle);
         if (OnClick.HasDelegate)
         {
             await OnClick.InvokeAsync();
@@ -97,6 +98,7 @@
     {
         if (item.Disabled) return;
         _menuOpen = false;
+        RecordControlAction("ItemClicked", item.Text, ResolvedTitle);
         if (OnItemClick.HasDelegate)
         {
             await OnItemClick.InvokeAsync(item);

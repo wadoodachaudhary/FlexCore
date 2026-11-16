@@ -338,13 +338,13 @@ public static class ReportObjectRenderer
         var dpi = TextDpi(item);
         if (ReportFontCatalog.NativeLineHeightPixels(item.FontFamily, item.FontSize, true, item.Bold, item.Italic, dpi) is not { } pitch)
             return throughDescenders;
-        // The clip as the browser paints it: the frame's top is on a pixel, its bottom edge snaps to the nearest one and
-        // borders are drawn in whole pixels.
+        // Zoom can snap a fractional bottom edge either way. Fit the whole stroke inside the authored
+        // height before that snap, so it never relies on the browser rounding a partial row up.
         var top = BorderPixels(item.Visual.TopLine, item.Visual.LineWidthTwips);
         var bottom = BorderPixels(item.Visual.BottomLine, item.Visual.LineWidthTwips);
         var height = Math.Max(0, item.HeightTwips) / 15d;
         if (TextLineLimit(item) is > 0 and var lines) height = Math.Min(height, lines * pitch + top + bottom);
-        var inner = Math.Round(height, MidpointRounding.AwayFromZero) - Math.Floor(top) - Math.Floor(bottom);
+        var inner = height - Math.Floor(top) - Math.Floor(bottom);
         // The browser's baseline is the largest of its inline boxes' half leading plus rounded ascent (the face's
         // hhea metrics, which Arial, Times New Roman and Calibri share with their metric-compatible faces on every
         // platform), floored to a pixel when the frame's top is on one.
@@ -369,9 +369,9 @@ public static class ReportObjectRenderer
         // The browser's own underline: at least a pixel below the baseline, a tenth of the em thick.
         var thickness = Math.Max(1, Math.Floor(largest / 10));
         if (baseline + Math.Max(1, Math.Ceiling(largest / 20)) + thickness <= inner) return throughDescenders;
-        var offset = Math.Floor(inner - thickness - baseline);
-        return offset < 0 ? throughDescenders
-            : throughDescenders + $"text-underline-offset:{Number(offset)}px;text-decoration-thickness:{Number(thickness)}px;";
+        if (baseline >= inner) return throughDescenders;
+        var offset = Math.Max(0, Math.Floor(inner - thickness - baseline));
+        return throughDescenders + $"text-underline-offset:{Number(offset)}px;text-decoration-thickness:{Number(thickness)}px;";
     }
 
     internal static bool IsDuplicateNativeTextPaint(ReportPageObject? previous, ReportPageObject current, int originLeft, int originTop)

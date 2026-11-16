@@ -6,8 +6,10 @@ namespace Fx.ControlKit.Grid;
 /// Defines a column in the GridControl. Equivalent to SyncFusion's GridColumn.
 /// Configured as a child component of GridColumns.
 /// </summary>
-public class GridColumn : ComponentBase, IDisposable
+public class GridColumn : FlexKitControlBase, IDisposable
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Field) ? Field : HeaderText;
     [CascadingParameter] internal GridColumnsBase? Parent { get; set; }
 
     [Parameter] public string Field { get; set; } = "";

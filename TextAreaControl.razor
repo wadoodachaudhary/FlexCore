@@ -206,6 +206,17 @@ else
         }
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : Placeholder;
+
+    private void LogTextAreaCommit(string? val, string? detail = null)
+    {
+        var summary = string.IsNullOrEmpty(val)
+            ? "(empty)"
+            : $"({val.Length} chars) {SanitizeValue(val, 80)}";
+        RecordControlAction("ValueCommitted", summary, detail ?? Placeholder);
+    }
+
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
         string? value, string key, bool shiftKey, bool ctrlKey, bool altKey, bool metaKey)
@@ -220,6 +231,8 @@ else
                 committed = committed[..MaxLength.Value];
 
             Value = committed;
+            if (!string.Equals(key, "Sync", StringComparison.Ordinal))
+                LogTextAreaCommit(committed, key);
             // Only OnParametersSet initializes the browser-owned render seed.
             // A delayed blur must not repaint over typing resumed in the meantime.
             _suppressNextNativeInputRender = true;
@@ -467,6 +480,7 @@ else
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        LogTextAreaCommit(Value);
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }
@@ -552,6 +566,7 @@ else
             if (result.ValueChanged)
             {
                 Value = result.Value;
+                LogTextAreaCommit(Value, command);
                 if (ValueChanged.HasDelegate)
                     await ValueChanged.InvokeAsync(Value);
             }

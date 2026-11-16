@@ -13,6 +13,10 @@ namespace Fx.ControlKit.Reports;
 /// </summary>
 public class ReportOptions
 {
+    /// <summary>Flat reports with one row of field headings above their detail columns.
+    /// Their data exports use the printed captions and left-to-right order.</summary>
+    public HashSet<string> VisualDetailExports { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     /// <summary>Optional host policy for authored custom SQL. Throws before a designer preview, the designer's Validate SQL buttons or a viewer can execute it.</summary>
     public Action<string>? ValidateCustomSql { get; set; }
 

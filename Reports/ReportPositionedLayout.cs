@@ -37,6 +37,7 @@ public sealed class ReportPositionedLayout
     public ReportLayoutColumns? Columns { get; set; }
     /// <summary>The details area's limit counts a visible source row once across all its sections.</summary>
     public int VisibleRecordsPerPage { get; set; }
+    internal bool UseVisualExportHeaders { get; set; }
     internal List<string> Projections { get; } = [];
     // Stays with the layout when subreport query definitions are cloned with link filters.
     internal IReadOnlyList<string> SqlStringParameters { get; set; } = [];

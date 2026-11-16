@@ -309,6 +309,8 @@ public partial class GridControl<TValue>
         if (UsesItemsProvider)
             await ReloadItemsAsync();
 
+        LogGridAction("Filtered", string.IsNullOrWhiteSpace(normalized) ? $"{field}=(cleared)" : $"{field}={normalized}", field);
+
         if (EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = normalized });
 

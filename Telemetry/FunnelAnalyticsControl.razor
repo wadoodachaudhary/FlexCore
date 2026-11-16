@@ -1,0 +1,359 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-fna-root @ThemeClass">
+        @if (ProductSnapshot is null)
+        {
+            <div class="fx-tel-empty">No product telemetry loaded yet.</div>
+        }
+        else
+        {
+            <div class="fx-tel-scroll-pane">
+                <CardControl Title="Conversion Funnel Definition &amp; Interactive Step Builder" CssClass="fx-tel-card" Elevation="1">
+                    <div class="fx-fna-toolbar">
+                        <div class="fx-fna-field">
+                            <label class="fx-tel-filter-label">Preset Workflow</label>
+                            <DropDownListControl TValue="string" TItem="PresetOption"
+                                                 Tag="fx-fna-preset-picker"
+                                                 DataSource="@PresetOptions"
+                                                 Value="@_selectedPresetKey"
+                                                 ValueChanged="OnPresetSelected"
+                                                 ValueFieldName="@nameof(PresetOption.Key)"
+                                                 TextFieldName="@nameof(PresetOption.Label)"
+                                                 Width="290px"
+                                                 SuppressUnchangedValueChange="true" />
+                        </div>
+
+                        <div class="fx-fna-field">
+                            <label class="fx-tel-filter-label">Evaluation Scope</label>
+                            <div class="fx-tel-pill-group">
+                                <ButtonControl CssClass="@PillCss(_bySession)" Tag="fx-fna-scope-session" OnClick="() => SetScope(true)">Session-Scoped</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(!_bySession)" Tag="fx-fna-scope-user" OnClick="() => SetScope(false)">User-Scoped</ButtonControl>
+                            </div>
+                        </div>
+
+                        <div class="fx-fna-actions">
+                            <ButtonControl CssClass="fx-tel-pill" Tag="fx-fna-add-step" OnClick="AddStep" Disabled="@(_editableSteps.Count >= 6)">+ Add Step</ButtonControl>
+                            <ButtonControl CssClass="fx-tel-pill fx-tel-pill-active" Tag="fx-fna-evaluate" OnClick="RecalculateFunnel">Evaluate Funnel</ButtonControl>
+                        </div>
+                    </div>
+
+                    <div class="fx-fna-builder">
+                        @for (int i = 0; i < _editableSteps.Count; i++)
+                        {
+                            var idx = i;
+                            var st = _editableSteps[idx];
+                            <div class="fx-fna-step-editor">
+                                <span class="fx-fna-step-badge">Step @(idx + 1)</span>
+                                <TextBoxControl Value="@st.Label"
+                                                ValueChanged="v => UpdateStepLabel(idx, v)"
+                                                Placeholder="Step caption"
+                                                Width="185px" />
+                                <DropDownListControl TValue="TelemetryFunnelMatchKind" TItem="MatchKindOption"
+                                                     DataSource="@MatchKindOptions"
+                                                     Value="@st.MatchKind"
+                                                     ValueChanged="k => UpdateStepKind(idx, k)"
+                                                     ValueFieldName="@nameof(MatchKindOption.Kind)"
+                                                     TextFieldName="@nameof(MatchKindOption.Text)"
+                                                     Width="145px"
+                                                     SuppressUnchangedValueChange="true" />
+                                <TextBoxControl Value="@st.Pattern"
+                                                ValueChanged="v => UpdateStepPattern(idx, v)"
+                                                Placeholder="Pattern (use | for OR, e.g. Save|Submit)"
+                                                Width="240px" />
+                                @if (_editableSteps.Count > 2)
+                                {
+                                    <ButtonControl CssClass="fx-tel-pill" Tag="@($"fx-fna-rm-{idx}")" OnClick="() => RemoveStep(idx)">✕</ButtonControl>
+                                }
+                            </div>
+                        }
+                    </div>
+                </CardControl>
+
+                <div class="fx-tel-charts-row fx-tel-charts-two">
+                    <CardControl Title="@($"{ActiveReport.Name} ({ActiveReport.ScopeLabel})")" CssClass="fx-tel-card" Elevation="1">
+                        <FunnelControl Tag="fx-fna-visual"
+                                       Title="@($"{ActiveReport.TotalEntered:N0} entered → {ActiveReport.TotalCompleted:N0} completed")"
+                                       Steps="@ActiveReport.VisualSteps"
+                                       UnitLabel="@ActiveReport.ScopeLabel.ToLowerInvariant()"
+                                       Palette="@(IsVb ? VbFunnelPalette : GrafanaFunnelPalette)"
+                                       OnStepSelected="OnFunnelStepSelected" />
+                    </CardControl>
+
+                    <CardControl Title="Stage-by-Stage Conversion &amp; Velocity" CssClass="fx-tel-card" Elevation="1">
+                        <div style="height: 255px;">
+                            <GridControl TValue="ComputedFunnelStepRow"
+                                         Tag="fx-grid-funnel-steps"
+                                         DataSource="@ActiveReport.StepRows"
+                                         AllowSorting="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.StepNumber)" HeaderText="#" Width="48px" Type="ColumnType.Number" Format="N0" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.StepLabel)" HeaderText="Stage" Width="175px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.ConvertedActors)" HeaderText="Converted" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.StepRatePercent)" HeaderText="Step %" Width="80px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.OverallRatePercent)" HeaderText="Overall %" Width="85px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.DroppedActors)" HeaderText="Dropped" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ComputedFunnelStepRow.MedianSecondsFromPrev)" HeaderText="Med Sec" Width="85px" Type="ColumnType.Number" Format="0.1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    </CardControl>
+                </div>
+
+                <CardControl Title="@DropOffCardTitle" CssClass="fx-tel-card" Elevation="1">
+                    @if (_selectedDropStepFilter is not null)
+                    {
+                        <div class="fx-tel-subbar">
+                            <span>Filtered to drop-offs before <strong>@_selectedDropStepFilter</strong></span>
+                            <ButtonControl CssClass="fx-tel-pill" Tag="fx-fna-clear-drop-filter" OnClick="() => _selectedDropStepFilter = null">Show All Drop-Offs</ButtonControl>
+                        </div>
+                    }
+                    <div style="height: 240px;">
+                        <GridControl TValue="FunnelDropOffRow"
+                                     Tag="fx-grid-funnel-dropoffs"
+                                     DataSource="@FilteredDropOffs"
+                                     AllowSorting="true"
+                                     AllowFiltering="true"
+                                     AllowResizing="true"
+                                     EnableHover="true"
+                                     Height="100%"
+                                     WidthMode="GridWidthMode.FillAvailable">
+                            <GridColumnsBase>
+                                <GridColumn Field="@nameof(FunnelDropOffRow.UserId)" HeaderText="User" Width="135px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FunnelDropOffRow.DroppedBeforeStep)" HeaderText="Abandoned Before" Width="210px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FunnelDropOffRow.LastScreen)" HeaderText="Last Screen" Width="195px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FunnelDropOffRow.LastAction)" HeaderText="Last Control Action" Width="240px" AllowEditing="false" />
+                                <GridColumn Field="@nameof(FunnelDropOffRow.LastSeenLocal)" HeaderText="Timestamp" Width="150px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss" AllowEditing="false" />
+                            </GridColumnsBase>
+                        </GridControl>
+                    </div>
+                </CardControl>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    public sealed record PresetOption(string Key, string Label);
+    public sealed record MatchKindOption(TelemetryFunnelMatchKind Kind, string Text);
+
+    private static readonly string[] VbFunnelPalette = { "#0a246a", "#1e40af", "#3a6ea5", "#2e7d32", "#00695c", "#5d4037" };
+    private static readonly string[] GrafanaFunnelPalette = { "#38bdf8", "#3b82f6", "#8b5cf6", "#10b981", "#14b8a6", "#f59e0b" };
+
+    private static readonly List<MatchKindOption> MatchKindOptions = new()
+    {
+        new(TelemetryFunnelMatchKind.Screen, "Screen / Route"),
+        new(TelemetryFunnelMatchKind.Action, "Action Name"),
+        new(TelemetryFunnelMatchKind.Tag, "Control Tag"),
+        new(TelemetryFunnelMatchKind.ControlLocation, "Control / Location"),
+        new(TelemetryFunnelMatchKind.EventKind, "Event Kind")
+    };
+
+    private sealed class MutableStep
+    {
+        public string Label { get; set; } = string.Empty;
+        public TelemetryFunnelMatchKind MatchKind { get; set; }
+        public string Pattern { get; set; } = string.Empty;
+    }
+
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private string _selectedPresetKey = string.Empty;
+    private bool _bySession = true;
+    private readonly List<MutableStep> _editableSteps = new();
+    private ComputedFunnelReport? _customReport;
+    private FlexProductAnalyticsSnapshot? _lastSeededSnapshot;
+    private string? _selectedDropStepFilter;
+
+    private bool IsVb => Theme == TelemetryTheme.VBClassic;
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("FunnelAnalyticsControl", () => "FunnelAnalytics");
+    protected override string? ResolveControlIdentifier() => "FunnelAnalytics";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private ComputedFunnelReport ActiveReport => _customReport ?? ProductSnapshot?.DefaultFunnel ?? new ComputedFunnelReport();
+
+    private List<PresetOption> PresetOptions =>
+        (ProductSnapshot?.AvailableWorkflowPresets ?? Array.Empty<TelemetryWorkflowPreset>())
+            .Select(p => new PresetOption(p.Key, p.Name))
+            .ToList();
+
+    private List<FunnelDropOffRow> FilteredDropOffs =>
+        ActiveReport.DropOffRows
+            .Where(d => string.IsNullOrEmpty(_selectedDropStepFilter)
+                || string.Equals(d.DroppedBeforeStep, _selectedDropStepFilter, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    private string DropOffCardTitle =>
+        $"Funnel Abandonment Inspector ({FilteredDropOffs.Count:N0} abandoned {ActiveReport.ScopeLabel.ToLowerInvariant()})";
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (ProductSnapshot is not null && !ReferenceEquals(ProductSnapshot, _lastSeededSnapshot))
+        {
+            _lastSeededSnapshot = ProductSnapshot;
+            if (_editableSteps.Count == 0 && ProductSnapshot.AvailableWorkflowPresets.Count > 0)
+            {
+                LoadPreset(ProductSnapshot.AvailableWorkflowPresets[0]);
+            }
+            else if (_editableSteps.Count >= 2)
+            {
+                EvaluateCurrentSteps();
+            }
+        }
+    }
+
+    private void OnPresetSelected(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key) || ProductSnapshot is null) return;
+        var preset = ProductSnapshot.AvailableWorkflowPresets.FirstOrDefault(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase));
+        if (preset is not null)
+        {
+            LoadPreset(preset);
+            RecordControlAction("PresetSelected", preset.Name);
+        }
+    }
+
+    private void LoadPreset(TelemetryWorkflowPreset preset)
+    {
+        _selectedPresetKey = preset.Key;
+        _selectedDropStepFilter = null;
+        _editableSteps.Clear();
+        foreach (var s in preset.Steps)
+        {
+            _editableSteps.Add(new MutableStep
+            {
+                Label = s.Label,
+                MatchKind = s.MatchKind,
+                Pattern = s.Pattern
+            });
+        }
+        EvaluateCurrentSteps(preset.Name);
+    }
+
+    private void SetScope(bool bySession)
+    {
+        _bySession = bySession;
+        EvaluateCurrentSteps();
+        RecordControlAction("ScopeChanged", bySession ? "Session" : "User");
+    }
+
+    private void AddStep()
+    {
+        if (_editableSteps.Count >= 6) return;
+        int num = _editableSteps.Count + 1;
+        _editableSteps.Add(new MutableStep
+        {
+            Label = $"Step {num}",
+            MatchKind = TelemetryFunnelMatchKind.Action,
+            Pattern = "Clicked"
+        });
+    }
+
+    private void RemoveStep(int index)
+    {
+        if (_editableSteps.Count <= 2 || index < 0 || index >= _editableSteps.Count) return;
+        _editableSteps.RemoveAt(index);
+        EvaluateCurrentSteps();
+    }
+
+    private void UpdateStepLabel(int idx, string? val)
+    {
+        if (idx >= 0 && idx < _editableSteps.Count)
+            _editableSteps[idx].Label = val ?? string.Empty;
+    }
+
+    private void UpdateStepKind(int idx, TelemetryFunnelMatchKind kind)
+    {
+        if (idx >= 0 && idx < _editableSteps.Count)
+            _editableSteps[idx].MatchKind = kind;
+    }
+
+    private void UpdateStepPattern(int idx, string? val)
+    {
+        if (idx >= 0 && idx < _editableSteps.Count)
+            _editableSteps[idx].Pattern = val ?? string.Empty;
+    }
+
+    private void RecalculateFunnel()
+    {
+        _selectedDropStepFilter = null;
+        EvaluateCurrentSteps("Custom Interactive Funnel");
+        RecordControlAction("FunnelEvaluated", $"steps={_editableSteps.Count}");
+    }
+
+    private void EvaluateCurrentSteps(string? nameOverride = null)
+    {
+        if (ProductSnapshot is null || _editableSteps.Count < 2) return;
+        var specs = _editableSteps
+            .Where(s => !string.IsNullOrWhiteSpace(s.Pattern))
+            .Select(s => new TelemetryFunnelStepSpec(
+                string.IsNullOrWhiteSpace(s.Label) ? s.Pattern : s.Label,
+                s.MatchKind,
+                s.Pattern))
+            .ToList();
+        if (specs.Count < 2) return;
+
+        var catalog = Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider;
+        var presetName = nameOverride
+            ?? ProductSnapshot.AvailableWorkflowPresets.FirstOrDefault(p => p.Key == _selectedPresetKey)?.Name
+            ?? "Conversion Funnel";
+        _customReport = FlexProductAnalyticsEngine.EvaluateFunnel(
+            ProductSnapshot.WindowEvents,
+            specs,
+            _bySession,
+            presetName,
+            catalog);
+    }
+
+    private void OnFunnelStepSelected(FunnelStepClickArgs args)
+    {
+        if (args.IsDropOffClick)
+            _selectedDropStepFilter = args.Step.Label;
+        else
+            _selectedDropStepFilter = null;
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("StepNumber,Stage,MatchRule,Converted,StepPercent,OverallPercent,Dropped,DropOffPercent,MedianSeconds");
+        foreach (var r in ActiveReport.StepRows)
+        {
+            sb.AppendLine($"{r.StepNumber},{Csv(r.StepLabel)},{Csv(r.MatchRule)},{r.ConvertedActors},{r.StepRatePercent.ToString("0.0", CultureInfo.InvariantCulture)},{r.OverallRatePercent.ToString("0.0", CultureInfo.InvariantCulture)},{r.DroppedActors},{r.DropOffPercent.ToString("0.0", CultureInfo.InvariantCulture)},{r.MedianSecondsFromPrev.ToString("0.1", CultureInfo.InvariantCulture)}");
+        }
+        return ("conversion-funnel", sb.ToString());
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

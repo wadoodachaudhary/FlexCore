@@ -1,0 +1,125 @@
+.fx-log-root.fx-tel-theme-vb {
+    --fx-tel-bg: #ece9d8;
+    --fx-tel-surface: #f7f6f0;
+    --fx-tel-surface-alt: #e4e0ce;
+    --fx-tel-border: #aca899;
+    --fx-tel-border-dark: #716f64;
+    --fx-tel-border-light: #ffffff;
+    --fx-tel-text: #111111;
+    --fx-tel-muted: #4a4942;
+    --fx-tel-accent: #0a246a;
+    --fx-tel-select: #316ac5;
+    --fx-tel-code-bg: #ffffff;
+    --fx-tel-code-fg: #001b44;
+    --fx-tel-code-border: #7f9db9;
+    --fx-tel-font: Tahoma, "Segoe UI", sans-serif;
+}
+
+.fx-log-root.fx-tel-theme-grafana {
+    --fx-tel-bg: #0b0f19;
+    --fx-tel-surface: #111827;
+    --fx-tel-surface-alt: #172033;
+    --fx-tel-border: #1f2937;
+    --fx-tel-border-dark: #0f172a;
+    --fx-tel-border-light: #334155;
+    --fx-tel-text: #e2e8f0;
+    --fx-tel-muted: #94a3b8;
+    --fx-tel-accent: #38bdf8;
+    --fx-tel-select: #0284c7;
+    --fx-tel-code-bg: #070b14;
+    --fx-tel-code-fg: #7dd3fc;
+    --fx-tel-code-border: #1e293b;
+    --fx-tel-font: Inter, "Segoe UI", system-ui, sans-serif;
+}
+
+.fx-log-root.fx-tel-theme-light {
+    --fx-tel-bg: #f8fafc;
+    --fx-tel-surface: #ffffff;
+    --fx-tel-surface-alt: #f1f5f9;
+    --fx-tel-border: #cbd5e1;
+    --fx-tel-border-dark: #94a3b8;
+    --fx-tel-border-light: #ffffff;
+    --fx-tel-text: #0f172a;
+    --fx-tel-muted: #475569;
+    --fx-tel-accent: #2563eb;
+    --fx-tel-select: #2563eb;
+    --fx-tel-code-bg: #0f172a;
+    --fx-tel-code-fg: #e2e8f0;
+    --fx-tel-code-border: #334155;
+    --fx-tel-font: "Segoe UI", system-ui, sans-serif;
+}
+
+.fx-log-root {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    height: 100%;
+    min-height: 0;
+    background: var(--fx-tel-bg);
+    color: var(--fx-tel-text);
+    font-family: var(--fx-tel-font);
+    font-size: 12px;
+}
+
+.fx-log-toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fx-log-hist-card {
+    flex-shrink: 0;
+}
+
+.fx-log-split {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.fx-log-grid-pane {
+    flex: 1 1 56%;
+    min-height: 190px;
+}
+
+.fx-log-inspector {
+    flex: 0 0 auto;
+    max-height: 225px;
+    display: flex;
+    flex-direction: column;
+}
+
+.fx-log-inspector-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.fx-log-inspector-loc {
+    font-size: 11px;
+    color: var(--fx-tel-muted);
+    font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+}
+
+.fx-log-json-pre {
+    margin: 0;
+    padding: 8px 10px;
+    max-height: 145px;
+    overflow: auto;
+    background: var(--fx-tel-code-bg);
+    color: var(--fx-tel-code-fg);
+    border: 1px solid var(--fx-tel-code-border);
+    font-family: Consolas, "SFMono-Regular", Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: pre;
+}
+
+.fx-log-root.fx-tel-theme-vb .fx-log-json-pre {
+    box-shadow: inset 1px 1px 0 #808080, inset -1px -1px 0 #ffffff;
+}

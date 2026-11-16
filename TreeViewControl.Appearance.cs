@@ -14,6 +14,7 @@ public partial class TreeViewControl
     [Parameter] public bool ShowIcons { get; set; } = true;
     [Parameter] public bool AllowMultiSelect { get; set; }
     [Parameter] public bool ToggleOnNodeClick { get; set; } = true;
+    [Parameter] public bool ToggleOnNodeDoubleClick { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool UseVb6TreeStyle { get; set; }

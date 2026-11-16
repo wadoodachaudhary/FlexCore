@@ -33,7 +33,7 @@
 @implements IAsyncDisposable
 
 @inject CrystalXmlReportLoader XmlLoader
-@inject IReportDataExecutor db
+@inject IReportDataExecutor InjectedDataExecutor
 @inject IReportSessionContext SessionState
 @inject IJSRuntime JSRuntime
 @inject ILogger<ReportWriterControl> Logger
@@ -177,12 +177,13 @@
             {
                 <div class="fx-rpt-group-tree">
                     <strong style="font-size: calc(13px * var(--fx-zoom, 1)); display: block; margin-bottom: 8px;">Report Groups</strong>
-                    @if (GroupTree.Any())
+                    @if (ActiveTab is { Tree.Count: > 0 } groupTab)
                     {
-                        var tree = ViewerTree;
+                        var tree = _groupTreeViews.GetValue(groupTab, static tab => new(tab.Tree));
                         <TreeViewControl @key="tree" Nodes="@tree.Nodes" SelectedNode="@tree.SelectedNode"
                             SelectedNodeChanged="node => tree.SelectedNode = node" ExpandedNodeIdsChanged="ids => RememberGroupExpansion(tree, ids)"
                             UseVb6TreeStyle="true" FolderStyle="TreeFolderStyle.Grey" ShowIcons="true" CssClass="fx-rpt-crystal-tree" ToggleOnNodeClick="false"
+                            ToggleOnNodeDoubleClick="@(EffectiveTreeMode == TreeNavigationMode.Group)"
                             OnNodeActivated="node => node.Tag is FxGroupNode group ? OnGroupNodeClicked(group) : Task.CompletedTask"
                             OnNodeClick="node => node.Tag is FxGroupNode group ? OnGroupNodeClicked(group) : Task.CompletedTask" AriaLabel="Report groups" />
                     }
@@ -250,11 +251,22 @@ else
     /// </summary>
     [Parameter] public bool ShowChrome { get; set; } = true;
 
+    /// <summary>Runs this viewer's report queries instead of the registered <see cref="IReportDataExecutor"/>,
+    /// for a report whose records come from somewhere other than the host's database (see
+    /// <see cref="ReportDataSetExecutor"/>). Null uses the registered executor.</summary>
+    [Parameter] public IReportDataExecutor? DataExecutor { get; set; }
+    private IReportDataExecutor db => DataExecutor ?? InjectedDataExecutor;
+
     /// <summary>Offer a toolbar choice between navigating to a group and opening its drill-down tab.
     /// Off by default: tree clicks navigate to groups; drilling from report objects is unchanged.</summary>
     [Parameter] public bool ShowTreeNavigationSelector { get; set; }
     [Parameter] public TabOrientation TabsOrientation { get; set; } = TabOrientation.Vertical;
     [Parameter] public TabTheme TabsTheme { get; set; } = TabTheme.WindowsClassic;
+
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag.Trim() :
+        !string.IsNullOrWhiteSpace(ReportFilePath) ? Path.GetFileNameWithoutExtension(ReportFilePath) :
+        ActiveTab?.Title;
 
     private async Task ChangeTabThemeAsync(TabTheme theme)
     {
@@ -295,8 +307,13 @@ else
     /// <summary>Optional shared PDF viewer type. Set explicitly in trimmed hosts using the Documents package.</summary>
     [Parameter] public Type? PdfViewerComponentType { get; set; }
 
-    /// <summary>Include optional parameters when opening the parameter dialog.</summary>
+    /// <summary>Include in-use optional parameters in the parameter dialog: the initial prompt, Refresh and the
+    /// Parameters action all show them. One left blank has no value, as in Crystal: the query binds null, formulas see no
+    /// value, and the report's authored default does not take its place.</summary>
     [Parameter] public bool PromptOptionalParameters { get; set; }
+
+    /// <summary>Declared, in-use session parameters to display (never edit) on toolbar Refresh.</summary>
+    [Parameter] public IReadOnlyCollection<string> ReadOnlySessionParametersOnRefresh { get; set; } = [];
 
     /// <summary>
     /// Fires when the user clicks the toolbar's Close button. Hosts wire
@@ -403,17 +420,31 @@ else
     //  CHROME STATE — toolbar / status bar / group tree / param dialog
     // ════════════════════════════════════════════════════════════════════
 
-    // Public-readable status message (status bar's left cell). Updated as
-    // the user navigates / loads / cancels / errors.
+    // Public-readable status message (status bar's left cell): the shown tab's own status, or, while no tab is open (a
+    // load that replaced the tabs has not added one yet, or failed), the last status written. Updated as the user
+    // navigates / loads / cancels / errors.
     private string _statusMessage = "Ready";
     public string StatusMessage
     {
         get => ActiveTab?.StatusMessage ?? _statusMessage;
-        private set
-        {
-            _statusMessage = value;
-            if (ActiveTab is { } tab) tab.StatusMessage = value;
-        }
+        private set => SetStatus(ActiveTab, value);
+    }
+
+    // An operation that awaits (a page, Last page, an export, Print, a find, a drill-down) writes to the tab it started on:
+    // the tabs stay selectable while it runs, so the tab shown when it finishes may be another one. Every write is also
+    // the last status written, so an operation that ends on a tab the user left leaves no in-progress text behind it.
+    private void SetStatus(ReportTab? tab, string message)
+    {
+        if (tab is not null) tab.StatusMessage = message;
+        _statusMessage = message;
+    }
+
+    // A message for the whole viewer: a load that replaces every tab, or an error shown in place of the tabs
+    // (ErrorMessage hides them). It goes to the operation's tab and to the tab on screen now, if that is another one.
+    private void SetViewerStatus(ReportTab? tab, string message)
+    {
+        SetStatus(tab, message);
+        if (!ReferenceEquals(tab, ActiveTab)) SetStatus(ActiveTab, message);
     }
     public bool ReportLoaded { get; private set; }
 
@@ -465,6 +496,7 @@ else
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        LogRuntimeDiagnostics();
         if (firstRender)
         {
             _dotNetRef ??= DotNetObjectReference.Create(this);
@@ -812,6 +844,7 @@ else
             Tabs.Add(tab);
             ActiveTabIndex = Tabs.Count - 1;
             DropLeftPrintMark();
+            StatusMessage = $"Drill down: {node.Label}";
 
             Logger.LogInformation("Drill-down tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
         }
@@ -895,7 +928,7 @@ else
         catch (Exception error)
         {
             ErrorMessage = $"Subreport error: {error.Message}";
-            StatusMessage = ErrorMessage;
+            SetViewerStatus(source, ErrorMessage);
             Logger.LogWarning(error, "Native on-demand subreport failed");
         }
         finally
@@ -970,7 +1003,7 @@ else
     private void ReportNativeDrillDownFailure(ReportTab source, FxGroupNode node, string reason)
     {
         if (!source.RuntimeDiagnostics.Contains(reason, StringComparer.Ordinal)) source.RuntimeDiagnostics.Add(reason);
-        StatusMessage = $"Drill down: {node.Label} was not opened. {reason}";
+        SetStatus(source, $"Drill down: {node.Label} was not opened. {reason}");
     }
 
     /// <summary>
@@ -1013,6 +1046,9 @@ else
             return;
         }
 
+        // The tab it opens from shows the load meanwhile, and its own status again once the subreport has a tab.
+        var source = ActiveTab;
+        var sourceStatus = StatusMessage;
         IsLoading = true;
         StatusMessage = $"Loading subreport: {title}";
         await InvokeAsync(StateHasChanged);
@@ -1079,6 +1115,12 @@ else
             Tabs.Add(tab);
             ActiveTabIndex = Tabs.Count - 1;
             DropLeftPrintMark();
+            if (source is not null)
+            {
+                // Its status changed meanwhile, which ends a print note shown over the status it gets back.
+                SetPrintNote(source, null);
+                SetStatus(source, sourceStatus);
+            }
             StatusMessage = $"Subreport: {tab.Title}";
 
             Logger.LogInformation("Subreport tab opened ({Rows} rows, {Pages} pages)", dt.Rows.Count, tab.Pages.Count);
@@ -1087,7 +1129,7 @@ else
         {
             Logger.LogError(ex, "Subreport failed for {Title} at {XmlPath}", title, fullXmlPath);
             ErrorMessage = $"Subreport error: {ex.Message}";
-            StatusMessage = $"Subreport error: {ex.Message}";
+            SetViewerStatus(source, $"Subreport error: {ex.Message}");
         }
         finally
         {
@@ -1558,13 +1600,19 @@ else
     /// <paramref name="seedParameters"/>. Configured session parameters provide
     /// fallback defaults without hiding required authored prompts.
     /// </summary>
-    public async Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
+    public Task ShowReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters = null)
+        => RunReportAsync(file, seedParameters, isRefresh: false);
+
+    private async Task RunReportAsync(string file, IReadOnlyDictionary<string, string>? seedParameters, bool isRefresh)
     {
         _parameterDefinition = null;
         _parameterPromptOpen = false;
         StopPrint();
         ErrorMessage = null;
         ReportLoaded = false;
+        // The load replaces every tab: until ShowSqlReport does, its messages are the viewer's, on the tab it started on
+        // (null: none open) and on the tab shown when each is written.
+        var shown = ActiveTab;
         try
         {
             IsLoading = true;
@@ -1572,7 +1620,7 @@ else
             var previousFile = ReportFilePath;
             ReportFilePath = file;
             await OnPageTitleChanged.InvokeAsync(Path.GetFileNameWithoutExtension(file));
-            StatusMessage = $"Loading report: {file}";
+            SetViewerStatus(shown, $"Loading report: {file}");
             await InvokeAsync(StateHasChanged);
 
             // "Filter:Table.Field" seeds become ReportFieldFilters, not Crystal
@@ -1608,7 +1656,7 @@ else
             if (!file.EndsWith(".rpt", StringComparison.OrdinalIgnoreCase)
                 && !file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase))
             {
-                StatusMessage = $"Unsupported report extension: {file}";
+                SetViewerStatus(shown, $"Unsupported report extension: {file}");
                 return;
             }
 
@@ -1646,16 +1694,18 @@ else
 
                 // Configured session keys are supplied context, not editable report defaults.
                 // Resolve them afresh before prompting so saved RPT values cannot select another scope.
-                AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters, authoredDefaults: false);
+                List<KeyValuePair<string, string>>? readOnlyValues =
+                    isRefresh && ReadOnlySessionParametersOnRefresh.Count > 0 ? [] : null;
+                AutoInjectSessionParameters(typedParams, definition.Sql, definition.Parameters, authoredDefaults: false, readOnlyValues: readOnlyValues);
                 var missingRequired = definition.Parameters
                     .Where(p => p.IsInUse && (p.Required || PromptOptionalParameters)
                         && !typedParams.ContainsKey(p.Name))
                     .ToList();
 
-                if (missingRequired.Count > 0 && _paramDialog != null)
+                if ((missingRequired.Count > 0 || readOnlyValues is { Count: > 0 }) && _paramDialog != null)
                 {
                     _parameterPromptOpen = true;
-                    StatusMessage = "Waiting for parameter values...";
+                    SetViewerStatus(shown, "Waiting for parameter values...");
                     IsLoading = false;
                     await InvokeAsync(StateHasChanged);
 
@@ -1669,11 +1719,11 @@ else
                     if (_lastPromptedValues != null)
                         foreach (var kv in _lastPromptedValues) initialValues[kv.Key] = kv.Value;
                     Dictionary<string, object>? userValues;
-                    try { userValues = await _paramDialog.PromptAsync(title, missingRequired, initialValues, promptContext); }
+                    try { userValues = await _paramDialog.PromptWithReadOnlyValuesAsync(title, missingRequired, initialValues, promptContext, PromptOptionalParameters, readOnlyValues ?? []); }
                     finally { _parameterPromptOpen = false; }
                     if (userValues == null)
                     {
-                        StatusMessage = "Report cancelled.";
+                        SetViewerStatus(shown, "Report cancelled.");
                         return;
                     }
                     foreach (var kv in userValues)
@@ -1681,7 +1731,7 @@ else
 
                     IsLoading = true;
                     _loadGeneration++;
-                    StatusMessage = $"Loading report: {xmlPath}";
+                    SetViewerStatus(shown, $"Loading report: {xmlPath}");
                     await InvokeAsync(StateHasChanged);
                 }
 
@@ -1736,6 +1786,8 @@ else
                 await ShowSqlReport(definition, typedParams, formulaValues);
                 _parameterDefinition = promptDefinition;
                 ReportLoaded = string.IsNullOrEmpty(ErrorMessage);
+                if (ReportLoaded)
+                    RecordControlAction("ReportLoaded", Path.GetFileNameWithoutExtension(xmlPath), $"{PageCount} pages");
                 StatusMessage = ReportLoaded ? $"Print Preview - {Path.GetFileNameWithoutExtension(xmlPath)} (RDL)" : ErrorMessage!;
             }
             else
@@ -1746,13 +1798,13 @@ else
                 // report definition is absent.
                 var missingName = Path.GetFileName(file);
                 ErrorMessage = $"{missingName} not Found";
-                StatusMessage = $"{missingName} not Found";
+                SetViewerStatus(shown, $"{missingName} not Found");
             }
         }
         catch (Exception ex)
         {
             ErrorMessage = ex.Message;
-            StatusMessage = $"Error: {ex.Message}";
+            SetViewerStatus(shown, $"Error: {ex.Message}");
             Logger.LogError(ex, "ShowReportAsync failed for {File}", file);
         }
         finally
@@ -1783,11 +1835,18 @@ else
     private void JumpTo(int target)
     {
         var clamped = Math.Max(1, Math.Min(target, PageCount));
+        var prev = ActiveTab?.CurrentPage ?? 1;
         if (ActiveTab != null) ActiveTab.CurrentPage = clamped;
+        if (clamped != prev)
+            RecordControlAction("PageChanged", $"Page {clamped}/{PageCount}", ActiveTab?.Title);
         DropLeftPrintMark();
     }
 
-    private async Task ChromeOnPrint() => await Print();
+    private async Task ChromeOnPrint()
+    {
+        RecordControlAction("Printed", ActiveTab?.Title, $"{PageCount} pages");
+        await Print();
+    }
 
     // The normal PDF action retains legacy font sizing; Designer sizing is an explicit export.
     private IList<SplitButtonItem> ExportItems =>
@@ -1799,14 +1858,19 @@ else
         new("Excel data (.xlsx)", "bi bi-file-earmark-spreadsheet", "Xlsx", ActiveTab?.CreateDataExport is null),
         new("CSV data", "bi bi-filetype-csv", "Csv", ActiveTab?.CreateDataExport is null)
     ];
-    // Each report/drill snapshot retains its own UI state. Weak keys release closed tabs;
-    // identical anchor IDs in a different snapshot must not transfer selection or focus.
-    private readonly ConditionalWeakTable<List<FxGroupNode>, ReportGroupTreeState> _groupTreeViews = new();
-    private ReportGroupTreeState ViewerTree => _groupTreeViews.GetValue(GroupTree, static groups => new(groups));
+    // Keep the tree mounted as a tab paginates. Separate tabs may reuse the same anchor IDs.
+    private readonly ConditionalWeakTable<ReportTab, ReportGroupTreeState> _groupTreeViews = new();
     private sealed class ReportGroupTreeState(List<FxGroupNode> groups)
     {
-        public List<TreeNode> Nodes { get; } = groups.Select(MapGroupNode).ToList();
+        public List<TreeNode> Nodes { get; private set; } = groups.Select(MapGroupNode).ToList();
         public TreeNode? SelectedNode { get; set; }
+
+        public void UpdatePages(List<FxGroupNode> groups)
+        {
+            Nodes = groups.Select(MapGroupNode).ToList();
+            if (SelectedNode is { } previous)
+                SelectedNode = TreeViewData.Flatten(Nodes).FirstOrDefault(info => info.Node.Id == previous.Id)?.Node;
+        }
     }
     private static TreeNode MapGroupNode(FxGroupNode group) => new()
     {
@@ -1823,40 +1887,45 @@ else
 
     private async Task ChromeOnExport(string format)
     {
+        // The tab shown when Export is pressed is the one exported and the one whose status reports it, whichever tab is
+        // shown when the export ends.
+        var tab = ActiveTab;
         // Print reads the window it was pressed in before it completes the report, as the toolbar's does.
-        if (format == "Print") { if (await PrintAsync()) StatusMessage = "Print dialog requested."; return; }
+        if (format == "Print") { if (await PrintAsync()) SetStatus(tab, "Print dialog requested."); return; }
         // So does a PDF export, which falls back to Print; a refresh meanwhile ends that fallback.
         var pressedActive = IsActiveWindow?.Invoke() ?? true;
         var pressedStops = _printStops;
         if (!await EnsureNativePagesAsync(0)) return;
-        StatusMessage = $"Exporting as {format}...";
+        SetStatus(tab, $"Exporting as {format}...");
         await InvokeAsync(StateHasChanged);
         try
         {
-            if (ActiveTab is null) throw new InvalidOperationException("No report is loaded.");
+            if (tab is null) throw new InvalidOperationException("No report is loaded.");
             var pdfFontMode = format == "PdfDesigner" ? ReportPdfFontMode.Designer : ReportPdfFontMode.LegacyVb;
             if (!Enum.TryParse<ReportNativeExportFormat>(format == "PdfDesigner" ? "Pdf" : format, true, out var nativeFormat)) throw new NotSupportedException($"Export format '{format}' is unavailable.");
-            var fileName = string.IsNullOrEmpty(ReportFilePath) ? ActiveTab.Title : Path.GetFileNameWithoutExtension(ReportFilePath);
+            var fileName = string.IsNullOrEmpty(ReportFilePath) ? tab.Title : Path.GetFileNameWithoutExtension(ReportFilePath);
             if (pdfFontMode == ReportPdfFontMode.Designer) fileName += " - Designer";
-            var result = await ReportNativeExport.ExportAsync(ActiveTab, nativeFormat, pdfFontMode, fileName);
+            var result = await ReportNativeExport.ExportAsync(tab, nativeFormat, pdfFontMode, fileName);
             await using var module = await JSRuntime.InvokeAsync<IJSObjectReference>("import", $"./_content/{typeof(ReportWriterControl).Assembly.GetName().Name}/browser-capabilities.js");
             if (module is null) throw new InvalidOperationException("Browser download is unavailable.");
             using var stream = new MemoryStream(result.Bytes, writable: false);
             using var reference = new DotNetStreamReference(stream);
             await module.InvokeVoidAsync("invoke", "download", null, new { name = result.FileName, type = result.ContentType, stream = reference }, null);
-            StatusMessage = $"Downloaded {result.FileName}.";
+            RecordControlAction("Exported", format, result.FileName);
+            SetStatus(tab, $"Downloaded {result.FileName}.");
         }
         catch (NotSupportedException ex) when (string.Equals(format, "Pdf", StringComparison.OrdinalIgnoreCase))
         {
-            // Something on the pages the native PDF cannot write: the browser's print / save as PDF can.
+            // Something on the pages the native PDF cannot write: the browser's print / save as PDF can. Print prints
+            // the shown tab, so it opens instead only while the exported tab is still the one shown.
             Logger.LogWarning(ex, "Native PDF export unavailable; opening Print instead");
-            StatusMessage = $"PDF export is not available for this report ({ex.Message}).";
-            if (pressedStops == _printStops && await PrintPressedAsync(pressedActive))
-                StatusMessage = $"PDF export is not available for this report ({ex.Message}). Print opened instead.";
+            SetStatus(tab, $"PDF export is not available for this report ({ex.Message}).");
+            if (pressedStops == _printStops && ReferenceEquals(tab, ActiveTab) && await PrintPressedAsync(pressedActive))
+                SetStatus(tab, $"PDF export is not available for this report ({ex.Message}). Print opened instead.");
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Export failed: {ex.Message}";
+            SetStatus(tab, $"Export failed: {ex.Message}");
             Logger.LogError(ex, "Export {Format} failed", format);
         }
     }
@@ -1869,7 +1938,7 @@ else
         // clear-then-copy empty it) so the user can run the report with
         // different values. Do not "fix" this by passing a copy.
         _defaultZoomLevel = ZoomLevel;
-        await ShowReportAsync(ReportFilePath, _seedParameters);
+        await RunReportAsync(ReportFilePath, _seedParameters, isRefresh: true);
     }
 
     private async Task ChromeOnEditParameters()
@@ -1897,6 +1966,7 @@ else
         if (ActiveTab is not { } tab) return;
         if (string.IsNullOrWhiteSpace(SearchText)) { ClearSearch(); return; }
         var query = SearchText.Trim();
+        RecordControlAction("Searched", query, tab.Title);
         if (tab.Search is { } current && current.Query == query) { await MoveSearchAsync(1); return; }
         var version = ++_searchVersion;
         try
@@ -1910,7 +1980,7 @@ else
         {
             if (version != _searchVersion) return;
             tab.Search = null;
-            StatusMessage = "Search failed: " + error.Message;
+            SetStatus(tab, "Search failed: " + error.Message);
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -1926,7 +1996,7 @@ else
         catch (Exception error) when (error is InvalidDataException or InvalidOperationException)
         {
             if (version != _searchVersion) return;
-            StatusMessage = "Search failed: " + error.Message;
+            SetStatus(tab, "Search failed: " + error.Message);
             await InvokeAsync(StateHasChanged);
         }
     }
@@ -1937,6 +2007,15 @@ else
     {
         var search = tab.Search!;
         bool Superseded() => _disposed || version != _searchVersion || !ReferenceEquals(tab, ActiveTab) || !Tabs.Contains(tab);
+        // A find whose tab the user leaves stops there; the tab says so for when the user is back, unless a page error
+        // says why it stopped. Another find, a refresh, a closed tab or viewer owns the status otherwise.
+        bool Stopped()
+        {
+            if (!Superseded()) return false;
+            if (!_disposed && version == _searchVersion && Tabs.Contains(tab) && string.IsNullOrEmpty(ErrorMessage))
+                SetStatus(tab, SearchStatus(tab) + " The search stopped when another tab was shown; search again to continue.");
+            return true;
+        }
         await using var renderer = new ReportNativeExport.PageRenderer();
         async Task<string> Html(int number) => tab.PageSnapshots.Count == tab.Pages.Count
             ? await renderer.RenderAsync(tab.PageSnapshots[number - 1]) : tab.Pages[number - 1];
@@ -1967,43 +2046,45 @@ else
         }
 
         var found = await ScanAsync(page, direction > 0 ? tab.Pages.Count : 1, index);
-        if (Superseded()) return;
+        if (Stopped()) return;
         while (found is null && direction > 0 && !tab.IsPaginationComplete)
         {
-            if (IsLoading) { StatusMessage = SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."; await InvokeAsync(StateHasChanged); return; }
+            if (IsLoading) { SetStatus(tab, SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."); await InvokeAsync(StateHasChanged); return; }
             var before = tab.Pages.Count;
             var batch = Math.Min(10000, before + SearchBatchPages);
-            if (!await EnsureNativePagesAsync(batch, $"No match on the first {before} pages; paginating pages {before + 1}-{batch} to search them...") || Superseded()) return;
+            var paginated = await EnsureNativePagesAsync(batch, $"No match on the first {before} pages; paginating pages {before + 1}-{batch} to search them...");
+            if (Stopped() || !paginated) return;
             if (tab.Pages.Count == before) break;
             found = await ScanAsync(before + 1, tab.Pages.Count, -1);
-            if (Superseded()) return;
+            if (Stopped()) return;
         }
         var wrapped = false;
         if (found is null)
         {
             if (direction < 0 && !tab.IsPaginationComplete)
             {
-                if (IsLoading) { StatusMessage = SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."; await InvokeAsync(StateHasChanged); return; }
-                if (!await EnsureNativePagesAsync(0, "Paginating the rest of the report to search it from its end...") || Superseded()) return;
+                if (IsLoading) { SetStatus(tab, SearchStatus(tab) + " The rest of the report is still loading; search again once it is ready."); await InvokeAsync(StateHasChanged); return; }
+                var paginated = await EnsureNativePagesAsync(0, "Paginating the rest of the report to search it from its end...");
+                if (Stopped() || !paginated) return;
             }
             // From the other end of the report back to the starting page, whose every match counts again.
             wrapped = true;
             found = await ScanAsync(direction > 0 ? 1 : tab.Pages.Count, page, direction > 0 ? -1 : int.MaxValue);
-            if (Superseded()) return;
+            if (Stopped()) return;
         }
         if (found is not { } match)
         {
             tab.SearchMatchPage = 0; tab.SearchMatchIndex = -1;
             tab.SearchHighlightPage = 0; tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
-            StatusMessage = SearchStatus(tab);
+            SetStatus(tab, SearchStatus(tab));
             await InvokeAsync(StateHasChanged);
             return;
         }
         tab.SearchMatchPage = match.Page; tab.SearchMatchIndex = match.Index;
         ShowSearchHighlight(tab, search, match.Page, match.Html, match.Index);
         JumpTo(match.Page);
-        StatusMessage = (wrapped ? direction > 0 ? "Reached the end of the report; continued from its first page. " : "Reached the start of the report; continued from its last page. " : "")
-            + SearchStatus(tab);
+        SetStatus(tab, (wrapped ? direction > 0 ? "Reached the end of the report; continued from its first page. " : "Reached the start of the report; continued from its last page. " : "")
+            + SearchStatus(tab));
         await InvokeAsync(StateHasChanged);
         // Inside a click or key handler the render goes out at the first real yield; yield first, or the anchor scroll
         // reaches the browser before the new page and finds the old page's mark (hit ids repeat on every page).
@@ -2027,7 +2108,7 @@ else
         {
             // Called after a render: a page the highlight cannot mark is shown plain, and the status says why.
             tab.SearchHighlightHtml = null; tab.SearchHighlight = null;
-            StatusMessage = "Search failed: " + error.Message;
+            SetStatus(tab, "Search failed: " + error.Message);
         }
         return true;
     }
@@ -3532,7 +3613,8 @@ else
     /// without any report-specific code in the writer.
     /// </summary>
     private void AutoInjectSessionParameters(Dictionary<string, object> sqlParams, string sql,
-        IEnumerable<ReportParameter>? authoredParameters = null, bool authoredDefaults = true)
+        IEnumerable<ReportParameter>? authoredParameters = null, bool authoredDefaults = true,
+        List<KeyValuePair<string, string>>? readOnlyValues = null)
     {
         foreach (var name in Options.SessionAutoInjectParameters)
         {
@@ -3548,6 +3630,10 @@ else
                 sqlParams[name] = authored?.AllowMultiple == true
                     ? new[] { Convert.ToString(value, CultureInfo.InvariantCulture) ?? "" }
                     : value;
+                if (readOnlyValues is not null && value is not DBNull && authored is { IsInUse: true }
+                    && ReadOnlySessionParametersOnRefresh.Contains(authored.Name, StringComparer.OrdinalIgnoreCase))
+                    readOnlyValues.Add(new(string.IsNullOrWhiteSpace(authored.DisplayName) ? authored.Name : authored.DisplayName,
+                        Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""));
                 continue;
             }
             if (!authoredDefaults) continue;
@@ -3676,19 +3762,6 @@ else
         }
         else if (Tabs.Count > 0 && ActiveTab != null && ActiveTab.Pages.Count > 0)
         {
-            @if (ActiveTab.RuntimeDiagnostics.Count > 0)
-            {
-                <AccordionControl>
-                  <AccordionItemControl Title="@($"Runtime limitations ({ActiveTab.RuntimeDiagnostics.Count})")" InitiallyExpanded="true">
-                    <ul>
-                        @foreach (var diagnostic in ActiveTab.RuntimeDiagnostics)
-                        {
-                            <li>@diagnostic</li>
-                        }
-                    </ul>
-                  </AccordionItemControl>
-                </AccordionControl>
-            }
             var printing = PrintCopyShown;
             var printReady = PrintCopyReady;
             <div class="fx-report-pages @(printReady ? (ActiveTab.PositionedPage is null ? "fx-report-printing fx-print-only" : "fx-report-printing") : null)">

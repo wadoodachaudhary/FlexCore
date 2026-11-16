@@ -94,30 +94,37 @@ export function detachDrillHandler(root) {
     drillBindings.delete(host);
 }
 
-// Keyboard and wheel paging of the viewer, owned by the browser: PageUp/PageDown, Home/End and the wheel
-// scroll the pane natively; only when the pane is already at its edge does the next step turn the page, one
-// .NET call per turned page. Ctrl+Home / Ctrl+End go to the first / last page. The keys reach the visible
-// viewer from the pane, from its toolbar and tab strip, from the MDI tab and from the page itself (nothing
-// focused); keys typed into a field, a list, a grid, a tree, a splitter bar or a dialog stay there. A key turns the page at
-// once. The wheel movement that reached the edge, and its tail, stay on the page; a fresh movement at the
-// edge turns it, and the wheel rests for 600 ms after a turn, so a trackpad's momentum does not run through
-// the report and the notches that turned the page do not scroll the new one away from its top.
-// Several viewers can be shown at once (MDI split view): one keydown listener per document gives each key to one
-// viewer at most (viewerForKey).
+// Keyboard and wheel paging of the viewer, owned by the browser: PageUp/PageDown, Home/End and the wheel scroll the
+// pane natively; only when the pane is already at its edge does the next step turn the page, one .NET call per turned
+// page. Ctrl+Home / Ctrl+End go to the first / last page. The keys reach the visible viewer from the pane, from its
+// toolbar and tab strip, from the MDI tab and from the page itself (nothing focused); keys typed into a field, a list,
+// a grid, a tree or a dialog stay there, and a splitter bar keeps its arrows, Home and End (PageUp/PageDown on the
+// group tree's bar page that viewer). A key turns the page at once. The wheel movement that reached the edge, and its
+// tail, stay on the page; a fresh movement at the edge turns it, and the wheel rests for 600 ms after a turn, so a
+// trackpad's momentum does not run through the report and the notches that turned the page do not scroll the new one
+// away from its top.
+// Several viewers can be shown at once (MDI split view): one keydown listener per document gives each key to one viewer
+// at most (viewerForKey). A press on the group tree's splitter bar of a viewer in another window gives that viewer the
+// keyboard, and so its window (onPress).
 const navigationBindings = new WeakMap();
 const keyRouters = new WeakMap();
 
 const paneOf = (target) => target instanceof Element ? target.closest(".fx-rpt-viewer-panel") : null;
 const ownsKeys = (target) => target instanceof Element && !!target.closest(
-    "input, textarea, select, [contenteditable=true], [role=listbox], [role=combobox], [role=grid], [role=tree], [role=menu], [role=dialog], [role=separator], .fx-dialog, .fx-grid, .fx-treeview, .fx-treegrid, .fx-dropdown-list, .fx-context-menu");
+    "input, textarea, select, [contenteditable=true], [role=listbox], [role=combobox], [role=grid], [role=tree], [role=menu], [role=dialog], .fx-dialog, .fx-grid, .fx-treeview, .fx-treegrid, .fx-dropdown-list, .fx-context-menu");
+// A splitter bar keeps the keys that move it.
+const separatorKeys = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
 const isShown = (element) => !!(element.getClientRects && element.getClientRects().length);
 
 // The viewer a key is for. A key pressed in a viewer (its pane, toolbar or tab strip) is that viewer's. A key pressed
 // on the page itself (nothing focused), on an MDI tab or on another element that takes no focus belongs to the shown
 // viewer of the window it was pressed in: the MDI pane holding the target, else the active pane of a split view,
-// else the first shown viewer. Another focusable element keeps its own keys.
-function viewerForKey(doc, viewers, target) {
+// else the first shown viewer. Another focusable element keeps its own keys. A splitter bar keeps the keys that move
+// it; PageUp/PageDown on a viewer's own bar are that viewer's, and a bar outside every viewer keeps all its keys.
+function viewerForKey(doc, viewers, target, key) {
     if (ownsKeys(target)) return null;
+    const separator = target instanceof Element ? target.closest("[role=separator]") : null;
+    if (separator && separatorKeys.has(key)) return null;
     const shown = [];
     for (const viewer of viewers) if (isShown(viewer.host)) shown.push(viewer);
     // Document order, so the choice does not depend on which viewer attached first.
@@ -127,7 +134,7 @@ function viewerForKey(doc, viewers, target) {
         let holder = null;
         for (const viewer of shown) if (viewer.host.contains(element)) holder = viewer;
         if (holder) return holder;
-        if (paneOf(element)) return null;
+        if (separator || paneOf(element)) return null;
         const tab = element.closest(".fx-mdi-tab");
         if (!tab && element.hasAttribute("tabindex")) return null;
         const mdiPane = tab ? null : element.closest(".fx-mdi-pane");
@@ -144,7 +151,7 @@ function routeKeys(doc, binding) {
         const viewers = new Set();
         const onKeyDown = (event) => {
             if (event.defaultPrevented || event.altKey || event.metaKey) return;
-            const viewer = viewerForKey(doc, viewers, event.target);
+            const viewer = viewerForKey(doc, viewers, event.target, event.key);
             if (viewer) viewer.onKeyDown(event);
         };
         router = { viewers, onKeyDown };
@@ -262,14 +269,45 @@ export function attachViewerNavigation(root, dotNetRef) {
         if (turnPage(pane, direction > 0 ? "next" : "previous", direction < 0)) event.preventDefault();
     };
 
+    // The group tree's splitter bar keeps its press to itself and takes no focus from it (splitter-control.js). In an
+    // MDI split view a press on the bar of the window that is not the active one would leave that window inactive and
+    // the keyboard with the other report. This runs in the capture phase, before the bar starts its drag: the page pane
+    // takes the focus, so the next key is this viewer's at once, and the focusin activates the window the viewer is in.
+    // The focus moves only to another window (or from another viewer); within one window it stays where it was.
+    const onPress = (event) => {
+        if (event.button !== 0 || !event.isPrimary) return;
+        const bar = event.target instanceof Element
+            ? event.target.closest(".fx-rpt-content-area > .fx-splitter > .fx-splitter-bar") : null;
+        const pane = bar && host.contains(bar) ? host.querySelector(".fx-rpt-viewer-panel") : null;
+        if (!pane) return;
+        const focused = doc.activeElement && doc.activeElement !== doc.body ? doc.activeElement : null;
+        const inactive = !!host.closest(".fx-mdi-pane-partner");
+        if (focused && host.contains(focused)) {
+            // The window was made inactive while its viewer kept the focus (its partner's tab was clicked): a focusin
+            // makes it the active one again.
+            if (!inactive) return;
+            if (focused === pane) pane.blur();
+        } else {
+            const viewers = keyRouters.get(doc)?.viewers || [];
+            const otherViewer = focused
+                && [...viewers].some((viewer) => viewer.host !== host && viewer.host.contains(focused));
+            const otherWindow = focused && focused.closest(".fx-mdi-pane") !== host.closest(".fx-mdi-pane");
+            if (!inactive && !otherViewer && !otherWindow) return;
+        }
+        pane.focus({ preventScroll: true, focusVisible: false });
+    };
+
     // A page reached by the toolbar, the page box, a find, the group tree or the host is shown from its top (a key or
     // wheel turn back is left to its settle). An anchor scroll applies a pending page change first (showPages).
     const showFromTop = (records) => { for (const record of records) if (!turnToEnd()) record.target.scrollTop = 0; };
     const pages = new win.MutationObserver(showFromTop);
     pages.observe(host, { attributeFilter: ["data-current-page"], subtree: true });
-    const binding = { host, doc, onKeyDown, onWheel, pages, showPages: () => showFromTop(pages.takeRecords()) };
+    const binding = {
+        host, doc, onKeyDown, onWheel, onPress, pages, showPages: () => showFromTop(pages.takeRecords()),
+    };
     routeKeys(doc, binding);
     host.addEventListener("wheel", onWheel, { passive: false });
+    host.addEventListener("pointerdown", onPress, true);
     navigationBindings.set(host, binding);
 
     // A freshly opened report takes the keyboard when nothing else holds it.
@@ -283,6 +321,7 @@ export function detachViewerNavigation(root) {
     if (!binding) return;
     unrouteKeys(binding.doc, binding);
     host.removeEventListener("wheel", binding.onWheel);
+    host.removeEventListener("pointerdown", binding.onPress, true);
     binding.pages.disconnect();
     navigationBindings.delete(host);
 }

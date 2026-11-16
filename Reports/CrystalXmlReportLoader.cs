@@ -257,6 +257,7 @@ public partial class CrystalXmlReportLoader
         {
             definition.Parameters = parameters;
             definition.PositionedLayout = BuildPositionedLayout(positionedDesign, report, definition.RuntimeDiagnostics);
+            definition.PositionedLayout.UseVisualExportHeaders = _options.VisualDetailExports.Contains(definition.ReportId);
             var projections = definition.PositionedLayout.Projections;
             definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
                 : BuildSql(tables, tableLinks, PositionedBoundedSelectionSql(report, definition), PositionedOrderBySql(report, definition), projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,

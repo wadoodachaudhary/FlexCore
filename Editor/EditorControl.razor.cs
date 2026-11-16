@@ -25,7 +25,7 @@ namespace Fx.ControlKit.Editor;
 /// toolbars) and caret position via <see cref="GetCaretAsync"/> /
 /// <see cref="SetCaretAsync"/> (for host-driven persistence).
 /// </summary>
-public partial class EditorControl : ComponentBase, IAsyncDisposable
+public partial class EditorControl : Fx.ControlKit.FlexKitControlBase, IAsyncDisposable
 {
     [Inject] private IJSRuntime JS { get; set; } = default!;
 
