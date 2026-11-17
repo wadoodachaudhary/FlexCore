@@ -87,6 +87,21 @@ public static class TslvStreamReader
             cursor.Position);
     }
 
+    internal static byte[] DecodeChartDrawing(byte[] bytes, byte[] contents)
+    {
+        if (bytes.AsSpan().StartsWith("TIFFGRAPH"u8)) return bytes;
+        if (bytes.Length > 8 * 1024 * 1024) throw new InvalidDataException("Chart drawing exceeds the input limit.");
+        if (bytes.Length >= 2 && bytes[0] == 0x78 && (bytes[0] * 256 + bytes[1]) % 31 == 0)
+        {
+            try { return Inflate(bytes); }
+            catch (InvalidDataException) { /* An encrypted drawing can start with the same bytes. */ }
+        }
+        var header = ReadHeader(contents, 1792);
+        if (!header.Encrypted || header.InitializationVector.Length != 16)
+            throw new InvalidDataException("Unknown chart stream encoding.");
+        return DecryptAndInflate(bytes, DefaultKey, header.InitializationVector);
+    }
+
     public static QeDecodedStream DecodeQueryEngineStream(byte[] bytes)
     {
         var header = QueryEngineStreamHeader.Read(bytes);
@@ -555,6 +570,9 @@ public sealed class TslvArchiveReader
 
     internal bool LegacyValueLengths { get; init; }
 
+    /// <summary>Written by Crystal Reports 7 or earlier: a text run's font size is the GDI cell height, not the em.</summary>
+    internal bool LegacyCellHeights { get; set; }
+
     public TslvRecordHeader? CurrentRecord => _records.Count == 0 ? null : _records.Peek().Header;
 
     public int BytesLeftInRecord
@@ -654,7 +672,7 @@ public sealed class TslvArchiveReader
         {
             Position = Position, _simpleKey = _simpleKey, _enhancedStrings = _enhancedStrings,
             _readObjectIds = _readObjectIds, _readEnumsAsInt32 = _readEnumsAsInt32,
-            LegacyValueLengths = LegacyValueLengths
+            LegacyValueLengths = LegacyValueLengths, LegacyCellHeights = LegacyCellHeights
         };
         foreach (var frame in _records.Reverse()) copy._records.Push(frame);
         return copy;

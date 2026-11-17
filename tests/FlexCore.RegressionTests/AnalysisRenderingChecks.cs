@@ -1,4 +1,7 @@
 using System.Data;
+using System.Net;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Fx.ControlKit.Charts;
 using Fx.ControlKit.Reports;
@@ -74,15 +77,19 @@ internal static class AnalysisRenderingChecks
         table.Rows.Add(new DateTime(2026, 2, 2), 7m, 4, "West", "2024");
 
         var result = new ReportLayoutSession(layout, table).Paginate();
-        var html = string.Join("\n", result.Pages);
-        check(html.Contains("fx-chart", StringComparison.Ordinal) && html.Contains("<svg", StringComparison.Ordinal)
-            && html.Contains("preserveAspectRatio=\"xMidYMid meet\"", StringComparison.Ordinal)
-            && html.Contains("#2563eb", StringComparison.Ordinal) && !html.Contains("#2f6f9f", StringComparison.Ordinal),
+        var sync = string.Join("\n", result.Pages);
+        check(sync.Contains("Analytical report item", StringComparison.Ordinal),
+            "synchronous pagination defers chart and cross-tab markup to the component viewer");
+        var html = string.Join("\n", ReportNativeExport.RenderPagesAsync(result.Snapshots).GetAwaiter().GetResult());
+        var charts = DecodeEmbeddedSvg(html);
+        check(html.Contains("fx-chart", StringComparison.Ordinal) && html.Contains("data:image/svg", StringComparison.Ordinal)
+            && charts.Contains("<svg", StringComparison.Ordinal) && charts.Contains("#0060ff", StringComparison.Ordinal)
+            && !charts.Contains("#2f6f9f", StringComparison.Ordinal),
             "positioned chart SVG is ChartControl output");
-        check(html.Contains("1/1/2026", StringComparison.Ordinal) && html.Contains("2/1/2026", StringComparison.Ordinal)
-            && !html.Contains("1/5/2026", StringComparison.Ordinal), "monthly chart buckets dates into months");
-        check(html.Contains(">Share<") && html.Contains(">Amount<") && html.Contains(">Units<")
-            && html.Contains("stroke=\"white\"", StringComparison.Ordinal), "summary pie draws one slice per measure");
+        check(charts.Contains("1/2026", StringComparison.Ordinal) && charts.Contains("2/2026", StringComparison.Ordinal)
+            && !charts.Contains("1/5/2026", StringComparison.Ordinal), "monthly chart buckets dates into months");
+        check(charts.Contains(">Share<", StringComparison.Ordinal) && charts.Contains("#3a6598", StringComparison.Ordinal)
+            && charts.Contains("#efa252", StringComparison.Ordinal), "summary pie draws one slice per measure");
         var points = new ChartDataPoint[] { new("A", 2), new("B", 5) };
         var bar = ChartSvg.Markup(ChartType.Bar, [new("Amount", ChartType.Bar, points)]);
         var area = ChartSvg.Markup(ChartType.Area, [new("Amount", ChartType.Area, points)]);
@@ -135,5 +142,13 @@ internal static class AnalysisRenderingChecks
         check(faultResult.Diagnostics.Any(diagnostic => diagnostic.Contains("Division by zero", StringComparison.Ordinal))
             && string.Join("\n", faultResult.Pages).Contains("Formula error", StringComparison.Ordinal),
             "a while-printing formula fault is a field diagnostic instead of a pagination abort");
+    }
+
+    private static string DecodeEmbeddedSvg(string html)
+    {
+        var decoded = new StringBuilder();
+        foreach (Match match in Regex.Matches(html, @"data:image/svg(?:\+|&#x2B;)xml;base64,([^""]+)"))
+            decoded.Append(Encoding.UTF8.GetString(Convert.FromBase64String(WebUtility.HtmlDecode(match.Groups[1].Value))));
+        return decoded.ToString();
     }
 }

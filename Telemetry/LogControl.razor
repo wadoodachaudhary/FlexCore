@@ -1,0 +1,412 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@implements IAsyncDisposable
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+@using Microsoft.JSInterop
+
+@inject IServiceProvider Services
+@inject IJSRuntime JSRuntime
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-log-root @ThemeClass">
+        @if (EffectiveShowChrome)
+        {
+            <ToolbarControl CssClass="fx-tel-toolbar" ShowCaptions="true" ShowCaptionsToggle="false" Tag="fx-log-toolbar">
+                <ChildContent>
+                    <ToolbarButtonControl Label="Refresh Logs"
+                                          Title="Flush pending in-memory control actions and refresh log stream"
+                                          Tag="fx-log-refresh"
+                                          OnClick="RefreshStandaloneAsync" />
+                    <ToolbarButtonControl Label="Export CSV"
+                                          Title="Export filtered log rows to CSV"
+                                          Tag="fx-log-export-csv"
+                                          OnClick="() => ExportCsvAsync()" />
+                    <ToolbarButtonControl Label="Export CloudWatch NDJSON"
+                                          Title="Export single-line AWS CloudWatch / Loki NDJSON rows"
+                                          Tag="fx-log-export-cw"
+                                          OnClick="() => ExportStructuredAsync(clefFormat: false)" />
+                    <ToolbarButtonControl Label="Export Serilog CLEF"
+                                          Title="Export Serilog Compact Log Event Format (.clef) rows"
+                                          Tag="fx-log-export-clef"
+                                          OnClick="() => ExportStructuredAsync(clefFormat: true)" />
+                </ChildContent>
+                <TrailingContent>
+                    <div class="fx-log-toolbar-right">
+                        <TextBoxControl Value="@_standaloneSearch"
+                                        Tag="fx-log-search"
+                                        ValueChanged="OnStandaloneSearchChanged"
+                                        UpdateOnInput="true"
+                                        ClearableText="true"
+                                        Placeholder="Search location, tag, control, value..."
+                                        Width="220px" />
+                        <DropDownListControl TValue="TelemetryTheme" TItem="ThemeChoice"
+                                             Tag="fx-log-theme-picker"
+                                             DataSource="@ThemeChoices"
+                                             Value="@EffectiveTheme"
+                                             ValueChanged="OnThemeChangedAsync"
+                                             ValueFieldName="@nameof(ThemeChoice.Value)"
+                                             TextFieldName="@nameof(ThemeChoice.Label)"
+                                             Width="145px"
+                                             SuppressUnchangedValueChange="true" />
+                    </div>
+                </TrailingContent>
+            </ToolbarControl>
+        }
+
+        @if (ShowHistogram && ActiveSnapshot is not null)
+        {
+            <CardControl Title="@($"Log Stream Histogram — {FilteredRows.Count} matching events ({ActiveSnapshot.TimeWindowLabel})")"
+                         CssClass="fx-tel-card fx-log-hist-card"
+                         Elevation="1">
+                @if (HistogramSeries.Count > 0 && ActiveSnapshot.TotalEvents > 0)
+                {
+                    <ChartControl Type="ChartType.StackedBar"
+                                  Series="@HistogramSeries"
+                                  Height="110px" />
+                }
+                else
+                {
+                    <div class="fx-tel-empty fx-tel-empty-compact">No log lines recorded in @ActiveSnapshot.TimeWindowLabel.</div>
+                }
+            </CardControl>
+        }
+
+        <div class="fx-tel-subbar">
+            <div class="fx-tel-pill-group">
+                <span class="fx-tel-subbar-label">Log Stream:</span>
+                @foreach (var kindFilter in StreamKinds)
+                {
+                    var kf = kindFilter;
+                    <ButtonControl CssClass="@PillCss(_selectedKind == kf)"
+                                   Tag="@($"fx-log-kind-{kf}")"
+                                   OnClick="() => SelectKind(kf)">
+                        @kf
+                    </ButtonControl>
+                }
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(ActiveSnapshot?.StorageHint))
+            {
+                <span class="fx-tel-subbar-hint">@ActiveSnapshot!.StorageHint</span>
+            }
+        </div>
+
+        <div class="fx-log-split">
+            <div class="fx-tel-grid-host fx-log-grid-pane">
+                <GridControl TValue="FlexTelemetryEventRow"
+                             Tag="fx-log-stream-grid"
+                             DataSource="@FilteredRows"
+                             EventsRef="@_gridEvents"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.TimestampLocal)" HeaderText="@("@timestamp")" Width="158px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss.fff" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Level)" HeaderText="Level" Width="74px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var row = (FlexTelemetryEventRow)context;
+                                    var variant = string.Equals(row.Level, "ERROR", StringComparison.OrdinalIgnoreCase)
+                                        ? BadgeVariant.Danger
+                                        : BadgeVariant.Success;
+                                }
+                                <BadgeControl Variant="@variant" Size="BadgeSize.Small" Text="@row.Level" />
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.UserId)" HeaderText="User" Width="100px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Kind)" HeaderText="Stream" Width="120px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.ControlType)" HeaderText="ControlType" Width="145px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Action)" HeaderText="Action" Width="118px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Location)" HeaderText="Location Hierarchy" Width="265px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Control)" HeaderText="ControlId" Width="170px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Tag)" HeaderText="Tag" Width="115px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Value)" HeaderText="Value" Width="160px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.DurationSeconds)" HeaderText="Dwell (s)" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexTelemetryEventRow.Detail)" HeaderText="Detail" Width="195px" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+
+            @if (ShowInspector)
+            {
+                var inspected = SelectedOrLatestRow;
+                <CardControl Title="Standard Structured Log Row Inspector (CloudWatch Logs Insights &amp; Serilog CLEF)"
+                             CssClass="fx-tel-card fx-log-inspector"
+                             Elevation="1">
+                    @if (inspected is not null)
+                    {
+                        <div class="fx-log-inspector-header">
+                            <div class="fx-tel-badge-wrap">
+                                <BadgeControl Variant="BadgeVariant.Info" Size="BadgeSize.Small" Text="@inspected.ControlType" />
+                                <BadgeControl Variant="BadgeVariant.Primary" Size="BadgeSize.Small" Text="@inspected.Action" />
+                                @if (!string.IsNullOrEmpty(inspected.Tag))
+                                {
+                                    <BadgeControl Variant="BadgeVariant.Warning" Size="BadgeSize.Small" Text="@($"tag:{inspected.Tag}")" />
+                                }
+                                <span class="fx-log-inspector-loc">@inspected.Location</span>
+                            </div>
+                            <div class="fx-tel-pill-group">
+                                <ButtonControl CssClass="@PillCss(_inspectorFormat == "CloudWatch")"
+                                               Tag="fx-log-fmt-cw"
+                                               OnClick='() => SetInspectorFormat("CloudWatch")'>
+                                    AWS CloudWatch / Loki JSON
+                                </ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_inspectorFormat == "CLEF")"
+                                               Tag="fx-log-fmt-clef"
+                                               OnClick='() => SetInspectorFormat("CLEF")'>
+                                    Serilog CLEF JSON
+                                </ButtonControl>
+                            </div>
+                        </div>
+                        <pre class="fx-log-json-pre">@(_inspectorFormat == "CLEF" ? inspected.SerilogClefJsonIndented : inspected.CloudWatchJsonIndented)</pre>
+                    }
+                    else
+                    {
+                        <div class="fx-tel-empty fx-tel-empty-compact">Select any log line above to inspect its CloudWatch &amp; Serilog CLEF JSON payload.</div>
+                    }
+                </CardControl>
+            }
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    public sealed record ThemeChoice(TelemetryTheme Value, string Label);
+
+    private static readonly List<ThemeChoice> ThemeChoices = new()
+    {
+        new(TelemetryTheme.VBClassic, "Style: VB Classic"),
+        new(TelemetryTheme.GrafanaDark, "Style: Grafana Dark"),
+        new(TelemetryTheme.ModernLight, "Style: Modern Light")
+    };
+
+    private static readonly string[] StreamKinds =
+    {
+        "All", "ButtonClick", "GridOperation", "ControlChange", "MenuAction",
+        "ScreenOpen", "TaskLaunch", "ReportRun", "Session", "UnhandledError"
+    };
+
+    [Parameter] public string Title { get; set; } = "LogExplorer";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public EventCallback<TelemetryTheme> ThemeChanged { get; set; }
+    [Parameter] public FlexTelemetrySnapshot? Snapshot { get; set; }
+    [Parameter] public List<ChartSeries>? ExternalHistogramSeries { get; set; }
+    [Parameter] public bool? ShowChrome { get; set; }
+    [Parameter] public bool ShowHistogram { get; set; } = true;
+    [Parameter] public bool ShowInspector { get; set; } = true;
+    [Parameter] public int StandaloneDaysBack { get; set; } = 30;
+
+    private readonly GridControlEvents<FlexTelemetryEventRow> _gridEvents = new();
+    private BrowserInterop? _browserInterop;
+    private DefaultFlexTelemetryDataSource? _ownedFallbackSource;
+    private FlexTelemetrySnapshot? _standaloneSnapshot;
+    private List<ChartSeries> _standaloneHistogram = new();
+    private TelemetryTheme? _localThemeOverride;
+    private string _standaloneSearch = string.Empty;
+    private string _selectedKind = "All";
+    private string _inspectorFormat = "CloudWatch";
+    private FlexTelemetryEventRow? _selectedRow;
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("LogControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    private TelemetryTheme EffectiveTheme => _localThemeOverride ?? Theme;
+    private bool EffectiveShowChrome => ShowChrome ?? (Snapshot is null);
+    private FlexTelemetrySnapshot? ActiveSnapshot => Snapshot ?? _standaloneSnapshot;
+
+    private List<ChartSeries> HistogramSeries =>
+        ExternalHistogramSeries ?? _standaloneHistogram;
+
+    private string ThemeClass => EffectiveTheme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    public IReadOnlyList<FlexTelemetryEventRow> FilteredRows =>
+        (ActiveSnapshot?.RecentEvents ?? Array.Empty<FlexTelemetryEventRow>())
+            .Where(r => _selectedKind == "All" || string.Equals(r.Kind, _selectedKind, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+    private FlexTelemetryEventRow? SelectedOrLatestRow =>
+        _selectedRow ?? FilteredRows.FirstOrDefault();
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+        _gridEvents.RowSelected = EventCallback.Factory.Create<RowSelectEventArgs<FlexTelemetryEventRow>>(this, OnRowSelected);
+        if (Snapshot is null)
+        {
+            BuildStandaloneSnapshot();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (ThemeChanged.HasDelegate)
+            _localThemeOverride = null;
+
+        if (_selectedRow is not null && ActiveSnapshot is not null
+            && !ActiveSnapshot.RecentEvents.Any(r => r.TimestampUtc == _selectedRow.TimestampUtc && r.Action == _selectedRow.Action))
+        {
+            _selectedRow = null;
+        }
+    }
+
+    private void OnRowSelected(RowSelectEventArgs<FlexTelemetryEventRow> args)
+    {
+        if (args.Data is not null)
+        {
+            _selectedRow = args.Data;
+            RecordControlAction("LogRowInspected", $"{args.Data.ControlType}:{args.Data.Control}", args.Data.Action);
+        }
+    }
+
+    private void SelectKind(string kind)
+    {
+        _selectedKind = kind;
+        _selectedRow = null;
+        RecordControlAction("StreamFiltered", kind);
+    }
+
+    private void SetInspectorFormat(string fmt)
+    {
+        _inspectorFormat = fmt;
+        RecordControlAction("InspectorFormatChanged", fmt);
+    }
+
+    private async Task OnThemeChangedAsync(TelemetryTheme nextTheme)
+    {
+        _localThemeOverride = nextTheme;
+        RecordControlAction("ThemeChanged", nextTheme.ToString());
+        if (ThemeChanged.HasDelegate)
+            await ThemeChanged.InvokeAsync(nextTheme);
+    }
+
+    private void OnStandaloneSearchChanged(string? search)
+    {
+        _standaloneSearch = search ?? string.Empty;
+        BuildStandaloneSnapshot();
+    }
+
+    public async Task RefreshStandaloneAsync()
+    {
+        var ds = ResolveDataSource();
+        await ds.FlushAsync();
+        BuildStandaloneSnapshot();
+        RecordControlAction("Refreshed");
+    }
+
+    private void BuildStandaloneSnapshot()
+    {
+        var ds = ResolveDataSource();
+        _standaloneSnapshot = ds.BuildSnapshot(new FlexTelemetryQueryFilter
+        {
+            DaysBack = StandaloneDaysBack,
+            SearchText = _standaloneSearch
+        });
+
+        _standaloneHistogram.Clear();
+        var clicks = new ChartSeries("Control Clicks", ChartType.StackedBar, color: EffectiveTheme == TelemetryTheme.VBClassic ? "#0a246a" : "#10b981");
+        var grids = new ChartSeries("Grid Ops", ChartType.StackedBar, color: EffectiveTheme == TelemetryTheme.VBClassic ? "#3a6ea5" : "#a855f7");
+        var inputs = new ChartSeries("Input Commits", ChartType.StackedBar, color: EffectiveTheme == TelemetryTheme.VBClassic ? "#2e7d32" : "#f59e0b");
+        var opens = new ChartSeries("Screen Opens", ChartType.StackedBar, color: EffectiveTheme == TelemetryTheme.VBClassic ? "#8b5a00" : "#38bdf8");
+
+        foreach (var pt in _standaloneSnapshot.TimeSeriesBuckets)
+        {
+            clicks.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ButtonClicks));
+            grids.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.GridOperations));
+            inputs.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ControlChanges));
+            opens.DataPoints.Add(new ChartDataPoint(pt.BucketLabel, pt.ScreenOpens));
+        }
+        _standaloneHistogram.Add(clicks);
+        _standaloneHistogram.Add(grids);
+        _standaloneHistogram.Add(inputs);
+        _standaloneHistogram.Add(opens);
+    }
+
+    private ITelemetryDataSource ResolveDataSource()
+    {
+        if (Services.GetService(typeof(ITelemetryDataSource)) is ITelemetryDataSource registered)
+            return registered;
+
+        _ownedFallbackSource ??= new DefaultFlexTelemetryDataSource(
+            Services.GetService(typeof(IFlexControlLogSink)) as IFlexControlLogSink,
+            Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider);
+        return _ownedFallbackSource;
+    }
+
+    public async Task ExportStructuredAsync(bool clefFormat, string filePrefix = "flexkit")
+    {
+        var ds = Services.GetService(typeof(ITelemetryDataSource)) as ITelemetryDataSource;
+        if (ds is not null)
+            await ds.FlushAsync();
+
+        var rows = FilteredRows;
+        var sb = new StringBuilder(rows.Count * 240);
+        foreach (var r in rows)
+            sb.AppendLine(clefFormat ? r.SerilogClefJson : r.CloudWatchJson);
+
+        var ext = clefFormat ? "clef" : "ndjson";
+        var label = clefFormat ? "serilog" : "cloudwatch";
+        var fileName = $"{filePrefix}-{label}-logs-{DateTime.Now:yyyyMMdd-HHmm}.{ext}";
+        await DownloadBytesAsync(Encoding.UTF8.GetBytes(sb.ToString()), fileName, "application/x-ndjson");
+        RecordControlAction("ExportedLogs", label, $"rows={rows.Count}");
+    }
+
+    public async Task ExportCsvAsync(string filePrefix = "flexkit")
+    {
+        var rows = FilteredRows;
+        var sb = new StringBuilder(rows.Count * 180 + 160);
+        sb.AppendLine("Timestamp,Level,User,Division,Stream,ControlType,Action,Screen,Location,ControlId,Tag,Value,DwellSeconds,Detail");
+        foreach (var r in rows)
+        {
+            sb.AppendLine($"{Csv(r.TimestampLocal.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))},{Csv(r.Level)},{Csv(r.UserId)},{r.DivisionId},{Csv(r.Kind)},{Csv(r.ControlType)},{Csv(r.Action)},{Csv(r.Screen)},{Csv(r.Location)},{Csv(r.Control)},{Csv(r.Tag)},{Csv(r.Value)},{Csv(r.DurationSeconds?.ToString("0.0", CultureInfo.InvariantCulture))},{Csv(r.Detail)}");
+        }
+
+        var fileName = $"{filePrefix}-log-stream-{DateTime.Now:yyyyMMdd-HHmm}.csv";
+        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray();
+        await DownloadBytesAsync(bytes, fileName, "text/csv");
+        RecordControlAction("ExportedCsv", fileName, $"rows={rows.Count}");
+    }
+
+    private async Task DownloadBytesAsync(byte[] bytes, string fileName, string contentType)
+    {
+        if (Services.GetService(typeof(ITelemetryExportHandler)) is ITelemetryExportHandler handler)
+        {
+            await handler.ExportBytesAsync(bytes, fileName, contentType);
+            return;
+        }
+
+        _browserInterop ??= new BrowserInterop(JSRuntime);
+        await _browserInterop.InvokeAsync<object?>("download", null, new { bytes, name = fileName, type = contentType });
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _ownedFallbackSource?.Dispose();
+        if (_browserInterop is not null)
+            await _browserInterop.DisposeAsync();
+    }
+}

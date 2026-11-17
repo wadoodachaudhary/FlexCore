@@ -72,6 +72,9 @@
     private bool IsChecked(string o) => SelectedValues?.Contains(o) == true;
     private bool AllSelected => Options.Count > 0 && SelectedValues != null && Options.All(SelectedValues.Contains);
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : Placeholder;
+
     // Always hand back a FRESH list — a list mutated in place won't trip the binding's change detection
     // (the same reference-equality trap MultiSelectDualListControl documents).
     private async Task SetAsync(string o, bool on)
@@ -80,6 +83,7 @@
         if (on) { if (!list.Contains(o)) list.Add(o); }
         else list.Remove(o);
         SelectedValues = list;
+        RecordControlAction("SelectionChanged", $"{list.Count} selected", $"{(on ? "+" : "-")}{o}");
         await SelectedValuesChanged.InvokeAsync(list);
     }
 
@@ -88,6 +92,7 @@
         var on = (bool)(e.Value ?? false);
         var list = on ? new List<string>(Options) : new List<string>();
         SelectedValues = list;
+        RecordControlAction("SelectionChanged", on ? $"All ({list.Count})" : "Cleared", Placeholder);
         await SelectedValuesChanged.InvokeAsync(list);
     }
 

@@ -2,9 +2,9 @@
 
 @* A tab within a RibbonControl. Holds RibbonGroup children. *@
 
-@if (Parent != null && Parent.IsActive(this))
+@if (Parent != null && Visible && Parent.IsActive(this))
 {
-    <div class="fx-ribbon-tab-content">
+    <div class="fx-ribbon-tab-content" role="tabpanel" id="@Parent.PanelId(this)" aria-labelledby="@Parent.TabId(this)">
         @ChildContent
     </div>
 }
@@ -16,7 +16,23 @@
     /// <summary>Tab content — typically RibbonGroups.</summary>
     [Parameter] public RenderFragment? ChildContent { get; set; }
 
+    /// <summary>False takes the tab off the strip. If it was open, the first tab that can be opened takes over.</summary>
+    [Parameter] public bool Visible { get; set; } = true;
+
+    /// <summary>The tab stays on the strip and cannot be opened.</summary>
+    [Parameter] public bool Disabled { get; set; }
+
     [CascadingParameter] public RibbonControl? Parent { get; set; }
 
+    private (string Title, bool Visible, bool Disabled)? _seen;
+
     protected override void OnInitialized() => Parent?.RegisterTab(this);
+
+    protected override void OnParametersSet()
+    {
+        // The strip is drawn by the parent, which renders before this tab receives new values: tell it when they change.
+        var now = (Title, Visible, Disabled);
+        if (_seen is not null && _seen != now) { Parent?.TabChanged(); }
+        _seen = now;
+    }
 }

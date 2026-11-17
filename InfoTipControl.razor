@@ -1,0 +1,56 @@
+@namespace Fx.ControlKit
+@inherits FlexControlBase
+@using System.Globalization
+
+@* A passive information tip beside a viewport point (a pointer's clientX/clientY), in the classic
+   tooltip colours. It never takes the pointer, so the gesture underneath carries on. ShowAtAsync and
+   HideAsync render this control only, so a busy host page does not redraw to move or refresh it.
+   Every ShowAtAsync presents a new element, so CSS state such as a hover rule that dismissed the
+   previous tip starts afresh. *@
+@if (Visible && _shown)
+{
+    <div @key="_presentation" class="@ResolvedCssClass" id="@Id" role="tooltip" style="@PositionStyle" @attributes="AdditionalAttributes">
+        <svg class="fx-infotip-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+            <circle cx="8" cy="8" r="7.5" fill="#1f6fd1" />
+            <rect x="7" y="6.8" width="2" height="5.6" fill="#ffffff" />
+            <circle cx="8" cy="4.5" r="1.2" fill="#ffffff" />
+        </svg>
+        <div class="fx-infotip-content">@ChildContent</div>
+    </div>
+}
+
+@code {
+    /// <summary>Distance right of and below the point, in pixels.</summary>
+    [Parameter] public double Offset { get; set; } = 21;
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private bool _shown;
+    private long _presentation;
+    private double _x;
+    private double _y;
+
+    public bool IsShown => _shown;
+
+    protected override string? BaseCssClass => "fx-infotip";
+
+    /// <summary>Shows a new tip beside the viewport point with the current content.</summary>
+    public Task ShowAtAsync(double x, double y)
+    {
+        _x = x;
+        _y = y;
+        _shown = true;
+        _presentation++;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    public Task HideAsync()
+    {
+        if (!_shown) return Task.CompletedTask;
+        _shown = false;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private string PositionStyle => string.Create(CultureInfo.InvariantCulture,
+        $"--fx-infotip-x:{_x + Offset:0.##}px;--fx-infotip-y:{_y + Offset:0.##}px;{Style}");
+}

@@ -1,5 +1,11 @@
 /* ReportWriterControl - Report rendering styles (screen + print) */
 
+::deep .fx-rpt-native-anchor.fx-rpt-group-active {
+    background: rgba(255, 0, 0, 0.12);
+    outline: 1px solid #cc0000;
+    outline-offset: -1px;
+}
+
 .fx-report-container {
     width: 100%;
     height: 100%;
@@ -240,6 +246,14 @@
     vertical-align: top;
 }
 
+/* A no-grow field's inline cap counts its whole lines at text zoom 1. The text zoom enlarges the text but
+   not the px column widths, so each of the authored box's lines takes ceil(wrap x zoom) lines here. */
+@supports (max-height: calc(round(up, 1.5, 1) * 1lh)) {
+    ::deep .fx-rpt-fixed-field {
+        max-height: calc(var(--fx-nogrow-lines) * round(up, var(--fx-nogrow-wrap) * var(--fx-zoom, 1), 1) * 1lh) !important;
+    }
+}
+
 ::deep .fx-rpt-table tbody tr:hover {
     background: #f8f8f8;
 }
@@ -424,6 +438,18 @@
 
 .fx-rpt-toolbar-label { font-size: calc(11px * var(--fx-zoom, 1)); }
 
+.fx-rpt-export-icon {
+    width: calc(15px * var(--fx-zoom, 1));
+    height: calc(15px * var(--fx-zoom, 1));
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.fx-rpt-viewer-container > ::deep .fx-toolbar,
+.fx-rpt-viewer-container > ::deep .fx-rpt-status-bar {
+    flex-shrink: 0;
+}
+
 .fx-rpt-nav { display: flex; align-items: center; gap: 6px; font-size: calc(13px * var(--fx-zoom, 1)); }
 .fx-rpt-nav input {
     width: 60px;
@@ -464,58 +490,69 @@
 
 .fx-rpt-content-area {
     flex: 1;
+    min-height: 0;
     display: flex;
     overflow: hidden;
     border: 1px solid #dee2e6;
     border-radius: 4px;
 }
 
+/* The splitter fills the content area; the tree fills its pane, whose width the splitter bar sets. */
+.fx-rpt-content-area ::deep .fx-rpt-tree-split {
+    flex: 1 1 auto;
+}
+.fx-rpt-content-area ::deep .fx-rpt-tree-hidden > .fx-splitter-primary,
+.fx-rpt-content-area ::deep .fx-rpt-tree-hidden > .fx-splitter-bar {
+    display: none;
+}
+@media print {
+    .fx-rpt-content-area ::deep .fx-rpt-tree-split > .fx-splitter-bar { display: none; }
+}
+
 .fx-rpt-group-tree {
-    width: 250px;
-    min-width: 150px;
-    max-width: 400px;
-    border-right: 2px solid #dee2e6;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
-    background: #fafafa;
+    background: #fff;
     padding: 8px;
-    resize: horizontal;
 }
-.fx-rpt-group-tree ul { list-style: none; padding-left: 16px; margin: 0; }
-.fx-rpt-group-tree > ul { padding-left: 0; }
-.fx-rpt-group-tree li { padding: 2px 0; }
-
-.fx-rpt-tree-node {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 6px;
-    border-radius: 3px;
-    font-size: calc(13px * var(--fx-zoom, 1));
-    user-select: none;
+/* Use the shared compact plus/minus tree and dotted connectors; report icons use a grey palette. */
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree {
+    border: 0;
+    border-radius: 0;
+    --fx-tree-bg: #fff;
 }
-.fx-rpt-tree-node:hover { background-color: #e8f0fe; }
-
-.fx-rpt-tree-toggle {
-    width: 16px;
-    text-align: center;
-    font-size: calc(10px * var(--fx-zoom, 1));
-    color: #666;
-    cursor: pointer;
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon::before,
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon::after {
+    border-color: #777;
+    background: #fff;
 }
-.fx-rpt-tree-toggle.leaf { cursor: default; }
-
-.fx-rpt-tree-label {
-    cursor: pointer;
-    padding: 2px 6px;
-    border-radius: 3px;
+.fx-rpt-group-tree ::deep .fx-rpt-crystal-tree.fx-treeview-vb6 .fx-treeview-folder-icon.open::after {
+    left: 1px;
+    transform: skewX(-12deg);
 }
-/* Persistent "this is the node you last clicked" indicator. Stronger
-   than the :hover rule so the user can still see it after the mouse
-   moves away. Updated in OnGroupNodeClicked → _selectedTreeNode. */
-.fx-rpt-tree-label.selected {
-    background-color: #cce5ff;
-    color: #084298;
-    font-weight: 600;
+.fx-rpt-group-tree ::deep .fx-rpt-tree-document-icon {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 13px;
+    width: 13px;
+    height: 14px;
+    margin-right: 4px;
+    box-sizing: border-box;
+    border: 1px solid #777;
+    background: #fff;
+}
+.fx-rpt-group-tree ::deep .fx-rpt-tree-document-icon::before {
+    content: "";
+    position: absolute;
+    top: -1px;
+    right: -1px;
+    width: 4px;
+    height: 4px;
+    box-sizing: border-box;
+    border-left: 1px solid #777;
+    border-bottom: 1px solid #777;
+    background: #e8e8e8;
 }
 
 .fx-rpt-tree-mode {
@@ -533,19 +570,46 @@
 .fx-rpt-tree-mode-radio { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
 .fx-rpt-tree-mode-radio input[type=radio] { margin: 0; cursor: pointer; }
 
-/* flex-direction:column so the inner .fx-report-tab-bar (drill-down
-   tabs) stacks ABOVE .fx-report-pages instead of squeezing both into
-   side-by-side vertical pillars. align-items:center keeps the page
-   horizontally centered as before. */
+.fx-rpt-workspace {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.fx-rpt-workspace[data-tab-orientation="Vertical"] {
+    flex-direction: row;
+}
+
+.fx-rpt-workspace > ::deep .fx-tabstrip {
+    flex-shrink: 0;
+}
+
+.fx-rpt-workspace[data-tab-orientation="Vertical"] > ::deep .fx-tabstrip {
+    flex: 0 0 min(220px, 35%);
+}
+
 .fx-rpt-viewer-panel {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     overflow: auto;
     background: #e0e0e0;
     display: flex;
     flex-direction: column;
     align-items: safe center;
     padding: 16px;
+}
+
+/* The pane takes the keyboard (PageUp/PageDown, Home/End) once clicked; the page itself is the focus cue. */
+.fx-rpt-viewer-panel:focus { outline: none; }
+.fx-rpt-viewer-panel:focus-visible { outline: 1px solid #d0d0d0; outline-offset: -1px; }
+
+/* The authored page keeps its physical height; it must not collapse the drill tabs. */
+.fx-rpt-viewer-panel ::deep .fx-tabstrip {
+    flex-shrink: 0;
 }
 
 .fx-rpt-status-bar {
@@ -612,9 +676,35 @@
 .fx-report-page.positioned { padding:0; width:max-content; min-height:0; }
 .fx-report-positioned-print { display:none; }
 @media print {
-    .fx-report-page.positioned { display:none; }
-    .fx-report-positioned-print { display:block; }
+    .fx-rpt-workspace { display: block; overflow: visible; }
+    .fx-rpt-workspace > ::deep .fx-tabstrip { display: none; }
+    /* Print prints its copy of every page once the dialog is requested; otherwise (the browser's own print, also while
+       Print prepares the copy) the shown page prints alone, at its authored place and size. Print prints its marked
+       pages alone (PrintOnlyStyles): no pane inset, zoom or border. */
+    .fx-report-printing .fx-report-page.positioned { display:none; }
+    .fx-report-page.positioned ::deep article { page:fx-positioned; break-after:auto !important; }
+    .fx-report-page.positioned ::deep mark { background:none !important; color:inherit !important; outline:none !important; }
+    .fx-report-page.positioned ::deep .fx-report-drill-object { outline:none !important; }
+    .fx-report-page.positioned ::deep .fx-rpt-native-anchor { background:none !important; outline:none !important; }
+    /* The viewer's zoom is for the screen only, as in Crystal's viewer: every print is at the report's own size. */
+    .fx-rpt-viewer-panel { outline:none !important; transform:none !important; }
+    /* The browser's own print of a positioned report's shown page has no pane padding, zoom or border either: the page
+       prints at its authored place and size. A classic report's page keeps the pane's inset. */
+    .fx-rpt-viewer-panel:has(.fx-report-page.positioned):not(:has(.fx-report-printing)) { padding:0 !important; transform:none !important; }
+    .fx-rpt-content-area:has(.fx-report-page.positioned):not(:has(.fx-report-printing)) { border:none !important; }
+    .fx-report-positioned-print.fx-report-print-ready { display:block; }
     .fx-report-positioned-print ::deep article { page:fx-positioned; }
     .fx-report-positioned-print ::deep article:last-child { break-after:auto !important; }
     .fx-report-runtime-diagnostics { display:none; }
+}
+
+/* Reserve scaled paper bounds, not scaled viewport bounds; scrollbars stay reachable at every zoom. */
+.fx-rpt-viewer-panel { scrollbar-gutter: stable; }
+.fx-rpt-viewer-panel > .fx-report-pages { align-self: stretch; flex: none; min-width: 0; }
+.fx-rpt-zoom-frame { flex: none; width: max-content; }
+.fx-rpt-zoom-frame[data-zoom-ready] { position: relative; overflow: hidden; }
+.fx-rpt-zoom-frame[data-zoom-ready] > .fx-report-page { position: absolute; top: 0; left: 0; transform-origin: top left; margin: 0; }
+@media print {
+    .fx-rpt-zoom-frame[data-zoom-ready] { width: auto !important; height: auto !important; overflow: visible; }
+    .fx-rpt-zoom-frame[data-zoom-ready] > .fx-report-page { position: static; transform: none !important; }
 }

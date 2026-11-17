@@ -1,6 +1,8 @@
 # Live program preview
 
-FlexCore can run a program on the server and show it in the browser. Pointer and keyboard events in the preview are delivered to that process. The picture is a capture of its real window, not a screenshot taken in advance and not a mock of the UI.
+The preview host, converter shell, snippet sandbox, and artifact viewers are the `FlexCore.Migration` project (`FlexCore.Migration/FlexCore.Migration.csproj`). Namespaces are unchanged (`Fx.ControlKit.Preview`, `Fx.ControlKit.Conversion`, `Fx.ControlKit.Artifacts`). Scripts are served as `_content/FlexCore.Migration/program-preview.js` and `_content/FlexCore.Migration/converter-shell.js`.
+
+FlexCore.Migration can run a program on the server and show it in the browser. Pointer and keyboard events in the preview are delivered to that process. The picture is a capture of its real window, not a screenshot taken in advance and not a mock of the UI.
 
 The host decides which command is launched. The browser only receives a session id and an unguessable token.
 

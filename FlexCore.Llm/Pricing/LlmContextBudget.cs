@@ -110,6 +110,7 @@ public sealed class LlmContextBudget : ILlmContextBudget
         [ProviderKeys.HuggingFace]  = new("huggingface:default",   64_000, 4_000),
         [ProviderKeys.Ollama]       = new("ollama:default",        24_000, 3_000),
         [ProviderKeys.OllamaCloud]  = new("ollamacloud:default",   24_000, 3_000),
+        [ProviderKeys.Local]        = new("local:default",          2_048,   512),
     };
 
     private static readonly string[] OrderedPrefixes = BudgetsByPrefix.Keys

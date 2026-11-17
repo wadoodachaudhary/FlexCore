@@ -8,10 +8,20 @@ Three packages:
 | Package | Namespace | What the host uses |
 | --- | --- | --- |
 | FlexCore | `Fx.ControlKit.Shell` | Sidebar, home, tool menu |
-| FlexCore | `Fx.ControlKit.Preview` | Snippet sandbox and `ProgramLaunch` |
-| FlexCore | `Fx.ControlKit.Conversion` | The existing `ConverterShell` |
+| FlexCore.Migration | `Fx.ControlKit.Preview` | Snippet sandbox and `ProgramLaunch` |
+| FlexCore.Migration | `Fx.ControlKit.Conversion` | The existing `ConverterShell` |
+| FlexCore.Migration | `Fx.ControlKit.Migration` | Legacy intake and Web Forms conversion |
 | FlexCore.Llm | `Fx.ControlKit.Llm.CodeTools` | Tool service, prompts, offline diagrams |
 | FlexCore.CodeTools | `Fx.ControlKit.CodeTools` | Blazor pages for the tools |
+
+Namespaces did not change when preview, the converter shell, and artifact viewers moved into `FlexCore.Migration`. Reference that project next to FlexCore:
+
+```xml
+<ProjectReference Include="..\FlexCore\FlexCore.csproj" />
+<ProjectReference Include="..\FlexCore\FlexCore.Migration\FlexCore.Migration.csproj" />
+<ProjectReference Include="..\FlexCore\FlexCore.Llm\FlexCore.Llm.csproj" />
+<ProjectReference Include="..\FlexCore\FlexCore.CodeTools\FlexCore.CodeTools.csproj" />
+```
 
 ## Shell
 

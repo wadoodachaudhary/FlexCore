@@ -10,14 +10,19 @@ internal static class ReportObjectCapabilities
             || string.Equals(kind, "Chart", StringComparison.OrdinalIgnoreCase)) return "Chart";
         if (string.Equals(elementName, "CrossTabObject", StringComparison.OrdinalIgnoreCase)
             || string.Equals(kind, "CrossTab", StringComparison.OrdinalIgnoreCase)) return "CrossTab";
+        if (string.Equals(elementName, "MapObject", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(kind, "Map", StringComparison.OrdinalIgnoreCase)) return "Map";
         return null;
     }
 
     internal static string Diagnostic(string report, string section, string name, string kind, bool positioned, XElement? source = null)
-        => $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: {kind} objects are not implemented. "
+        => kind == "Map"
+            ? $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: geographic map artwork is unavailable. "
+                + (positioned ? "The visible map reserves its authored space." : "Tabular output omits the map.")
+            : $"[CRYSTAL_UNSUPPORTED_OBJECT] {report}/{section}/{name}: {kind} objects are not implemented. "
             + (positioned ? "Positioned output uses an unsupported-object placeholder when visible; suppression still applies. "
                 : "Tabular output omits this object. ")
-            + "Source metadata is retained in the report XML; chart data/series and cross-tab grouping/cells are not evaluated."
+            + "Source metadata is retained in the report RDL; chart data/series and cross-tab grouping/cells are not evaluated."
             + ((string?)source?.Element("NativeCrystalSource")?.Attribute("MetadataDiagnostic") is { Length: > 0 } warning
                 ? " Native source: " + warning : "");
 
@@ -26,7 +31,7 @@ internal static class ReportObjectCapabilities
         foreach (var section in report.Element("ReportDefinition")?.Elements("Areas").Elements("Area").Elements("Sections").Elements("Section") ?? [])
         foreach (var obj in section.Elements("ReportObjects").Elements())
             if (UnsupportedCrystalKind((string?)obj.Attribute("Kind"), obj.Name.LocalName) is { } kind
-                && (!positioned || ReportAnalysisDefinition.Read(obj)?.Validate(kind) is not null || obj.Element("FlexKitAnalysis") is null))
+                && (!positioned || ReportAnalysisDefinition.Read(obj)?.Validate(kind) is not null || obj.Element("FlexKitAnalysis") is null && obj.Element("FlexKitChartMarker") is null))
                 yield return Diagnostic((string?)report.Attribute("Name") ?? "Report", (string?)section.Attribute("Name") ?? "Section",
                     (string?)obj.Attribute("Name") ?? obj.Name.LocalName, kind, positioned, obj);
     }

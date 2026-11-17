@@ -89,6 +89,7 @@ public partial class GridControl<TValue>
                 InvalidateBlazorServerOptimizationCaches();
                 ClearTransientSelectionState(clearRows: false);
                 ClearKeyboardRangeSelectionAnchor();
+                LogGridAction("RowDeleted", $"Row {record.RowIndex}");
                 if (EventsRef?.RowDeleted.HasDelegate == true)
                     await EventsRef.RowDeleted.InvokeAsync(new RowEditEventArgs<TValue>
                     { Data = record.Item, RowIndex = record.RowIndex });

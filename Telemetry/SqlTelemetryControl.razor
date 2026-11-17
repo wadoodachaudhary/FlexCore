@@ -1,0 +1,302 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-sql-root @ThemeClass">
+        <div class="fx-tel-kpi-grid fx-sql-kpis">
+            <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-cyan" Elevation="1">
+                <div class="fx-tel-kpi-label">Captured SQL Queries</div>
+                <div class="fx-tel-kpi-value">@FilteredQueries.Count.ToString("N0")</div>
+                <div class="fx-tel-kpi-sub">@(_excludePolls ? "Background badge polls hidden" : "Including background polls")</div>
+            </CardControl>
+
+            <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-amber" Elevation="1">
+                <div class="fx-tel-kpi-label">Slow Queries (&ge; 500 ms)</div>
+                <div class="fx-tel-kpi-value">@SlowCount.ToString("N0")</div>
+                <div class="fx-tel-kpi-sub">Max: @MaxElapsedMs.ToString("N0") ms · Avg: @AvgElapsedMs.ToString("0.0") ms</div>
+            </CardControl>
+
+            <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-amber" Elevation="1">
+                <div class="fx-tel-kpi-label">Contention (last 24 h)</div>
+                <div class="fx-tel-kpi-value @(_contention.Deadlocks + _contention.LockTimeouts > 0 ? "fx-tel-val-warn" : "")">@((_contention.Deadlocks + _contention.LockTimeouts).ToString("N0"))</div>
+                <div class="fx-tel-kpi-sub">@_contention.Deadlocks.ToString("N0") deadlocks · @_contention.LockTimeouts.ToString("N0") lock timeouts · @_contention.CommandTimeouts.ToString("N0") command timeouts · @_contention.ConnectionFailures.ToString("N0") connection failures</div>
+            </CardControl>
+
+            <CardControl CssClass="fx-tel-card fx-tel-kpi-card fx-tel-accent-rose" Elevation="1">
+                <div class="fx-tel-kpi-label">Failed SQL Statements</div>
+                <div class="fx-tel-kpi-value @(ErrorCount > 0 ? "fx-tel-val-warn" : "")">@ErrorCount.ToString("N0")</div>
+                <div class="fx-tel-kpi-sub">Captured identically for live explorer &amp; ticket .md attachments</div>
+            </CardControl>
+        </div>
+
+        <div class="fx-tel-subbar">
+            <div class="fx-tel-pill-group">
+                <span class="fx-tel-subbar-label">View:</span>
+                <ButtonControl CssClass="@PillCss(_view == "Statements")" Tag="fx-sql-view-statements" OnClick='() => SetView("Statements")'>Statements</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_view == "Table")" Tag="fx-sql-view-table" OnClick='() => SetView("Table")'>By Table</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_view == "Screen")" Tag="fx-sql-view-screen" OnClick='() => SetView("Screen")'>By Screen</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_view == "User")" Tag="fx-sql-view-user" OnClick='() => SetView("User")'>By User</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_view == "Hour")" Tag="fx-sql-view-hour" OnClick='() => SetView("Hour")'>By Hour</ButtonControl>
+            </div>
+        </div>
+
+        @if (_view != "Statements")
+        {
+            <div class="fx-tel-grid-host fx-sql-grid fx-sql-rollup">
+                <GridControl TValue="FlexSqlRollupSummary"
+                             Tag="fx-sql-rollup-grid"
+                             DataSource="@_summary"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Name)" HeaderText="@SummaryHeader" Width="260px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Calls)" HeaderText="Calls" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Reads)" HeaderText="Reads" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Writes)" HeaderText="Writes" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Users)" HeaderText="Users" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Screens)" HeaderText="Screens" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.AverageMs)" HeaderText="Avg ms" Width="85px" Type="ColumnType.Number" Format="N1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.MaxMs)" HeaderText="Max ms" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.TotalMs)" HeaderText="Total ms" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Errors)" HeaderText="Errors" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.Deadlocks)" HeaderText="Deadlocks" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.LockTimeouts)" HeaderText="Lock Timeouts" Width="115px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.CommandTimeouts)" HeaderText="Timeouts" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlRollupSummary.ConnectionFailures)" HeaderText="Connection Failures" Width="145px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+        }
+
+        <div class="fx-tel-subbar" hidden="@(_view != "Statements")">
+            <div class="fx-tel-pill-group">
+                <span class="fx-tel-subbar-label">Filter:</span>
+                <ButtonControl CssClass="@PillCss(_statusFilter == "All")" Tag="fx-sql-all" OnClick='() => _statusFilter = "All"'>All (@BaseQueries.Count)</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_statusFilter == "Slow")" Tag="fx-sql-slow" OnClick='() => _statusFilter = "Slow"'>Slow &ge; 500ms (@SlowCount)</ButtonControl>
+                <ButtonControl CssClass="@PillCss(_statusFilter == "Errors")" Tag="fx-sql-errors" OnClick='() => _statusFilter = "Errors"'>Errors (@ErrorCount)</ButtonControl>
+            </div>
+
+            <div class="fx-tel-pill-group">
+                <ButtonControl CssClass="@PillCss(_excludePolls)"
+                               Tag="fx-sql-exclude-polls"
+                               OnClick="ToggleExcludePolls">
+                    @(_excludePolls ? "✓ Hide Background Polls" : "Show Background Polls")
+                </ButtonControl>
+            </div>
+        </div>
+
+        <div class="fx-sql-split" hidden="@(_view != "Statements")">
+            <div class="fx-tel-grid-host fx-sql-grid">
+                <GridControl TValue="FlexSqlTelemetryEntry"
+                             Tag="fx-sql-history-grid"
+                             DataSource="@FilteredQueries"
+                             EventsRef="@_gridEvents"
+                             AllowSorting="true"
+                             AllowFiltering="true"
+                             AllowResizing="true"
+                             AllowSelection="true"
+                             EnableHover="true"
+                             Height="100%"
+                             WidthMode="GridWidthMode.FillAvailable">
+                    <GridColumnsBase>
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Timestamp)" HeaderText="Timestamp" Width="155px" Type="ColumnType.Date" Format="yyyy-MM-dd HH:mm:ss.fff" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.StatusLabel)" HeaderText="Status" Width="85px" AllowEditing="false">
+                            <Template>
+                                @{
+                                    var q = (FlexSqlTelemetryEntry)context;
+                                    var v = q.HasError ? BadgeVariant.Danger : (q.ElapsedMs >= 500 ? BadgeVariant.Warning : BadgeVariant.Success);
+                                }
+                                <BadgeControl Variant="@v" Size="BadgeSize.Small" Text="@q.StatusLabel" />
+                            </Template>
+                        </GridColumn>
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.ElapsedMs)" HeaderText="Elapsed (ms)" Width="105px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.RowCount)" HeaderText="Rows" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.UserId)" HeaderText="User" Width="100px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Screen)" HeaderText="Screen" Width="150px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.StatementKind)" HeaderText="Kind" Width="95px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Tables)" HeaderText="Tables" Width="200px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.SqlPreview)" HeaderText="SQL Statement" Width="390px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Parameters)" HeaderText="Parameters" Width="220px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.ErrorClass)" HeaderText="Error Class" Width="125px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.ErrorMessage)" HeaderText="Error" Width="180px" AllowEditing="false" />
+                        <GridColumn Field="@nameof(FlexSqlTelemetryEntry.Source)" HeaderText="Source" Width="150px" AllowEditing="false" />
+                    </GridColumnsBase>
+                </GridControl>
+            </div>
+
+            @{
+                var inspected = _selectedQuery ?? FilteredQueries.FirstOrDefault();
+            }
+            <CardControl Title="SQL Statement &amp; Parameter Inspector" CssClass="fx-tel-card fx-sql-inspector" Elevation="1">
+                @if (inspected is not null)
+                {
+                    <div class="fx-sql-meta">
+                        <BadgeControl Variant="@(inspected.HasError ? BadgeVariant.Danger : BadgeVariant.Info)"
+                                      Size="BadgeSize.Small"
+                                      Text="@($"{inspected.ElapsedMs} ms")" />
+                        <span>Rows: <strong>@(inspected.RowCount?.ToString("N0") ?? "—")</strong></span>
+                        @if (!string.IsNullOrWhiteSpace(inspected.Parameters))
+                        {
+                            <span>· Params: <code>@FlexDiagnosticSnapshotService.RedactSqlParameters(inspected.Parameters)</code></span>
+                        }
+                        @if (!string.IsNullOrWhiteSpace(inspected.ErrorMessage))
+                        {
+                            <span class="fx-tel-val-warn">· Error: @inspected.ErrorMessage</span>
+                        }
+                    </div>
+                    <pre class="fx-sql-pre">@inspected.Sql</pre>
+                }
+                else
+                {
+                    <div class="fx-tel-empty fx-tel-empty-compact">No SQL statements recorded in the active telemetry buffer.</div>
+                }
+            </CardControl>
+        </div>
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public string Title { get; set; } = "SqlTelemetry";
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public string? Tenant { get; set; }
+    [Parameter] public string? SearchText { get; set; }
+    [Parameter] public int RefreshVersion { get; set; }
+
+    private readonly GridControlEvents<FlexSqlTelemetryEntry> _gridEvents = new();
+    private List<FlexSqlTelemetryEntry> _loaded = new();
+    private bool _excludePolls = true;
+    private string _statusFilter = "All";
+    private FlexSqlTelemetryEntry? _selectedQuery;
+    private string _view = "Statements";
+    private List<FlexSqlRollupSummary> _summary = new();
+    private FlexSqlRollupSummary _contention = new();
+
+    private string SummaryHeader => _view switch { "Table" => "Table or Procedure", "Screen" => "Screen", "User" => "User", _ => "Hour" };
+
+    private void SetView(string view)
+    {
+        _view = view;
+        ReloadQueries();
+        RecordControlAction("SqlViewChanged", view);
+    }
+
+    private void ReloadRollup()
+    {
+        _summary = new();
+        _contention = new();
+        if (Services.GetService(typeof(FlexSqlTelemetryStore)) is not FlexSqlTelemetryStore store)
+            return;
+        var rows = store.Rollup.Snapshot(tenant: Tenant);
+        _contention = FlexSqlRollupSummary.Total(rows.Where(r => r.Table.Length == 0 && r.HourUtc >= DateTime.UtcNow.AddHours(-24)));
+        if (_view != "Statements")
+            _summary = FlexSqlRollupSummary.Group(rows, _view);
+    }
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("SqlTelemetryControl", () => Title);
+    protected override string? ResolveControlIdentifier() => Title;
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private IReadOnlyList<FlexSqlTelemetryEntry> BaseQueries =>
+        string.IsNullOrWhiteSpace(SearchText)
+            ? _loaded
+            : _loaded.Where(q =>
+                q.Sql.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || q.Parameters.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || q.Screen.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || q.UserId.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrEmpty(q.ErrorMessage) && q.ErrorMessage.Contains(SearchText, StringComparison.OrdinalIgnoreCase)))
+              .ToList();
+
+    public IReadOnlyList<FlexSqlTelemetryEntry> FilteredQueries =>
+        BaseQueries.Where(q => _statusFilter switch
+        {
+            "Slow" => q.ElapsedMs >= 500,
+            "Errors" => q.HasError,
+            _ => true
+        }).ToList();
+
+    private int SlowCount => BaseQueries.Count(q => q.ElapsedMs >= 500);
+    private int ErrorCount => BaseQueries.Count(q => q.HasError);
+    private long MaxElapsedMs => BaseQueries.Count == 0 ? 0 : BaseQueries.Max(q => q.ElapsedMs);
+    private double AvgElapsedMs => BaseQueries.Count == 0 ? 0 : BaseQueries.Average(q => q.ElapsedMs);
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+        _gridEvents.RowSelected = EventCallback.Factory.Create<RowSelectEventArgs<FlexSqlTelemetryEntry>>(this, args =>
+        {
+            if (args.Data is not null)
+                _selectedQuery = args.Data;
+        });
+        ReloadQueries();
+    }
+
+    protected override void OnParametersSet()
+    {
+        ReloadQueries();
+    }
+
+    public void ReloadQueries()
+    {
+        if (Services.GetService(typeof(IFlexSqlTelemetryProvider)) is IFlexSqlTelemetryProvider provider)
+        {
+            _loaded = provider.GetRecentQueries(
+                sessionId: null,
+                tenant: Tenant,
+                excludeBackgroundPolls: _excludePolls,
+                maxCount: 350).ToList();
+        }
+        else
+        {
+            _loaded.Clear();
+        }
+        ReloadRollup();
+    }
+
+    private void ToggleExcludePolls()
+    {
+        _excludePolls = !_excludePolls;
+        ReloadQueries();
+        RecordControlAction("BackgroundPollFilterToggled", _excludePolls.ToString());
+    }
+
+    public string BuildCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Timestamp,Status,ElapsedMs,Rows,User,Screen,Sql,Parameters,Error");
+        foreach (var q in FilteredQueries)
+        {
+            sb.AppendLine($"{Csv(q.Timestamp.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture))},{Csv(q.StatusLabel)},{q.ElapsedMs},{q.RowCount},{Csv(q.UserId)},{Csv(q.Screen)},{Csv(q.Sql)},{Csv(FlexDiagnosticSnapshotService.RedactSqlParameters(q.Parameters))},{Csv(q.ErrorMessage)}");
+        }
+        return sb.ToString();
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+        if (value.Contains(',') || value.Contains('"') || value.Contains('\n') || value.Contains('\r'))
+            return "\"" + value.Replace("\"", "\"\"") + "\"";
+        return value;
+    }
+}

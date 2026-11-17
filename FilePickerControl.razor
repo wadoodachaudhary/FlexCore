@@ -201,9 +201,20 @@
         !string.IsNullOrWhiteSpace(ConfirmLabel) ? ConfirmLabel! :
         SelectionMode == FileBrowserSelectionMode.Files ? "Open" : "Select";
 
+    protected override string? ResolveControlIdentifier() =>
+        FirstNonBlank(Tag, Id, Label, Title, DialogHeader);
+
     private async Task HandleChange(InputFileChangeEventArgs e)
     {
-        if (Enabled && OnChange.HasDelegate)
+        if (!Enabled)
+            return;
+
+        var summary = e.FileCount == 1
+            ? e.File.Name
+            : $"{e.FileCount} files";
+        RecordControlAction("FileSelected", summary, Accept);
+
+        if (OnChange.HasDelegate)
             await OnChange.InvokeAsync(e);
     }
 
@@ -267,6 +278,8 @@
         SelectedPath = _pendingSelectedPath;
         Value = _pendingSelectedPath;
         _browserDialogVisible = false;
+
+        RecordControlAction("FileSelected", Path.GetFileName(_pendingSelectedPath), ResolvedDialogHeader);
 
         if (SelectedPathChanged.HasDelegate)
             await SelectedPathChanged.InvokeAsync(_pendingSelectedPath);

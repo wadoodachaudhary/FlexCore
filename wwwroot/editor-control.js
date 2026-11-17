@@ -1640,7 +1640,7 @@
             el.__fxEditorLitePaste = true;
             el.addEventListener("paste", function (event) {
                 if (!event.clipboardData) return;
-                // HHM-145: if the clipboard holds an image (e.g. a screenshot), embed it as a data-URL <img>
+                // If the clipboard holds an image (e.g. a screenshot), embed it as a data-URL <img>
                 // instead of dropping it. Checked before the text/html path so a copied image isn't lost.
                 var items = event.clipboardData.items || [];
                 for (var i = 0; i < items.length; i++) {

@@ -75,7 +75,7 @@ else
                     tabindex="-1"
                     aria-label="@PasswordToggleLabel"
                     title="@PasswordToggleLabel"
-                    aria-pressed="@_showPassword"
+                    aria-pressed="@(_showPassword ? "true" : "false")"
                     disabled="@(!Enabled || !CanRevealPassword)"
                     @onclick="TogglePasswordVisibility"
                     @onclick:stopPropagation="true"
@@ -101,7 +101,7 @@ else
             }
         </div>
     }
-    else if (ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
+    else if (!ClearableText && ValueExpression is not null && !UpdateOnInput && !OnKeyDown.HasDelegate && InputValueChanged is null && !AutoFocus && !SelectOnFocus && !ReplaceOnFirstInput && !SelectAllOnDoubleClick && !UseClassicContextMenu
              && TypingBehavior != TextBoxTypingBehavior.ClientBuffered)
     {
         <InputText class="@ResolvedCssClass"
@@ -120,7 +120,7 @@ else
            "..." picker paths). The per-character cost is removed by
            TypingKeysStayLocal instead, which drops only printable/Backspace/Delete
            at the DOM level and leaves shortcut keys free to bubble. *@
-        <input class="@ResolvedCssClass"
+        RenderFragment editor = @<input class="@ResolvedCssClass"
                @bind:event="oninput"
                @bind:get="EffectiveValue"
                @bind:set="OnNativeInput"
@@ -136,7 +136,21 @@ else
                @onmousedown:stopPropagation="true"
                @onkeydown="@KeyDownDispatch"
                @onkeydown:stopPropagation="@KeyDownStopsPropagation"
-               @attributes="MergedAttributes" />
+               @attributes="MergedAttributes" />;
+        @if (ClearableText)
+        {
+            <span class="fx-textbox-clear-host" style="@HostWidthStyle">
+                @editor
+                <button type="button" class="fx-textbox-clear" aria-label="Clear text" title="Clear text" tabindex="-1"
+                        data-commit-on-clear="@(!UpdateOnInput ? "true" : null)" @ref="_clearButton"
+                        @onmousedown:preventDefault="true" @onclick="ClearTextFallbackAsync"
+                        @onclick:stopPropagation="true">×</button>
+            </span>
+        }
+        else
+        {
+            @editor
+        }
     }
 }
 
@@ -248,6 +262,8 @@ else
     /// Before this existed the attribute fell through to the &lt;input&gt; as an HTML
     /// <c>width</c> attribute, which browsers honour only for type=image.</summary>
     [Parameter] public string? Width { get; set; }
+    /// <summary>Offer an inline clear button on editable, single-line text fields. Off by default.</summary>
+    [Parameter] public bool ShowClearButton { get; set; }
     [Parameter] public bool Multiline { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
@@ -468,19 +484,23 @@ else
         CellHost?.EndEdit();
     }
 
-    private async Task SynchronizeClientBufferedDomValueAsync()
+    private async Task SynchronizeClientBufferedDomValueAsync(bool requireCurrentValue = false)
     {
-        if (EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
+        if (_disposed || EffectiveTypingBehavior != TextBoxTypingBehavior.ClientBuffered)
             return;
 
         var module = await GetControlJsModuleAsync();
-        if (module == null)
+        if (module == null && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current textbox value.");
+        if (module == null || _disposed)
             return;
 
         try
         {
             var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
-            var committedValue = value ?? string.Empty;
+            if (value is null)
+                return;
+            var committedValue = value;
             // Characters the host relayed before the browser listener attached are
             // not in the DOM yet (they are appended after enableClientBufferedTyping
             // returns): a commit key that arrives first must still carry them. The
@@ -507,7 +527,7 @@ else
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(committedValue);
         }
-        catch
+        catch when (!requireCurrentValue)
         {
             // The editor may have unmounted while a navigation key was in flight.
         }
@@ -518,6 +538,57 @@ else
 
     /// <summary>Publish the current browser draft before a form confirms without waiting for blur.</summary>
     public Task FlushClientBufferedValueAsync() => SynchronizeClientBufferedDomValueAsync();
+
+    /// <summary>Publish the current browser draft before a form confirms without waiting for blur.
+    /// Set requireCurrentValue to prevent a failed read from silently using an older value.</summary>
+    public Task FlushClientBufferedValueAsync(bool requireCurrentValue) =>
+        SynchronizeClientBufferedDomValueAsync(requireCurrentValue);
+
+    protected override string? ResolveControlIdentifier()
+    {
+        if (!string.IsNullOrWhiteSpace(Tag))
+            return Tag;
+        if (TryGetTextAttribute("id", out var id))
+            return id;
+        if (TryGetTextAttribute("aria-label", out var aria))
+            return aria;
+        if (TryGetTextAttribute("name", out var name))
+            return name;
+        if (!string.IsNullOrWhiteSpace(Placeholder))
+            return Placeholder;
+        return null;
+    }
+
+    private bool TryGetTextAttribute(string key, out string? value)
+    {
+        if (HtmlAttributes is not null && HtmlAttributes.TryGetValue(key, out var rawHtml) && rawHtml is not null)
+        {
+            var s = rawHtml.ToString();
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                value = s.Trim();
+                return true;
+            }
+        }
+        if (AdditionalAttributes is not null && AdditionalAttributes.TryGetValue(key, out var rawAdd) && rawAdd is not null)
+        {
+            var s = rawAdd.ToString();
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                value = s.Trim();
+                return true;
+            }
+        }
+        value = null;
+        return false;
+    }
+
+    private void LogCommittedText(string? val, string? detail = null)
+    {
+        if (CellHost is not null)
+            return;
+        RecordControlAction("ValueCommitted", IsPasswordInput ? "[REDACTED]" : val, detail ?? Placeholder);
+    }
 
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
@@ -545,6 +616,8 @@ else
                 // typed since. A new starting value takes a new @key.
                 _uncontrolledInitialized = true;
                 _suppressNextNativeInputRender = true;
+                if (!string.Equals(key, "Sync", StringComparison.Ordinal))
+                    LogCommittedText(committedValue, key);
                 InputValueChanged?.Invoke(committedValue);
                 if (ValueChanged.HasDelegate)
                     await ValueChanged.InvokeAsync(committedValue);
@@ -586,6 +659,8 @@ else
     }
 
     private ElementReference _inputElement;
+    private ElementReference _clearButton;
+    private string? _boundClearButtonId;
     private ElementReference _passwordRevealElement;
     private ElementReference _passwordRevealInput;
     private bool _passwordRevealAttached;
@@ -764,7 +839,8 @@ else
             && (EffectiveAutoFocus || ReplaceOnFirstInput || TypingKeysStayLocal
                 || (MaxLength is > 0 && OnPasteTruncated.HasDelegate));
         _passwordInputRecreated = false;
-        if (!needsFirstRenderSetup && !clientBindingChanged && !passwordBindingChanged)
+        var bindClear = ClearableText && _boundClearButtonId != _clearButton.Id;
+        if (!needsFirstRenderSetup && !clientBindingChanged && !passwordBindingChanged && !bindClear)
             return;
 
         var module = await GetControlJsModuleAsync();
@@ -773,6 +849,17 @@ else
         // would fault the renderer.
         if (module == null || _disposed)
             return;
+
+        if (bindClear)
+        {
+            try
+            {
+                var button = _clearButton;
+                await module.InvokeVoidAsync("bindClearButton", button);
+                _boundClearButtonId = button.Id;
+            }
+            catch { /* The button still has its Blazor fallback. */ }
+        }
 
         if (passwordBindingChanged)
         {
@@ -910,6 +997,25 @@ else
     private string? HostWidthStyle =>
         string.IsNullOrWhiteSpace(Width) ? null : $"width:{Width};";
 
+    private bool ClearableText => ShowClearButton && IsPlainText(MergedAttributes);
+
+    private bool IsPlainText(IReadOnlyDictionary<string, object> attributes) =>
+        !Multiline && !IsPasswordInput && (!attributes.TryGetValue("type", out var t)
+            || string.Equals(t?.ToString(), "text", StringComparison.OrdinalIgnoreCase));
+
+    private async Task ClearTextFallbackAsync()
+    {
+        var attrs = MergedAttributes;
+        if (!ClearableText || !Enabled || IsFlagSet("readonly") || IsFlagSet("disabled")) return;
+        await OnNativeInput(string.Empty);
+        if (!UpdateOnInput) await OnNativeValueChanged(new ChangeEventArgs { Value = string.Empty });
+        // The fallback (unlike the DOM listener) needs a render to write the empty value.
+        _suppressNextNativeInputRender = false;
+        await _inputElement.FocusAsync(preventScroll: true);
+
+        bool IsFlagSet(string key) => attrs.TryGetValue(key, out var flag) && flag is not (null or false);
+    }
+
     private IReadOnlyDictionary<string, object> MergedAttributes
     {
         get
@@ -960,10 +1066,14 @@ else
             if (CellHost is not null)
                 merged["data-fx-host-typing"] = "1";
 
+            var clearable = ShowClearButton && IsPlainText(merged);
+            // :placeholder-shown reflects the live DOM value, including edits made before a server render.
+            if (clearable && !merged.ContainsKey("placeholder"))
+                merged["placeholder"] = " ";
             if (!string.IsNullOrWhiteSpace(Width))
             {
                 // Password boxes size the wrapper (HostWidthStyle) and the input fills it.
-                var width = IsPasswordInput ? "100%" : Width;
+                var width = IsPasswordInput || clearable ? "100%" : Width;
                 var existing = merged.TryGetValue("style", out var st) ? st?.ToString()?.Trim() : null;
                 merged["style"] = string.IsNullOrEmpty(existing)
                     ? $"width:{width};"
@@ -1025,6 +1135,7 @@ else
         _lastAgreedValue = Value;
         if (UsesBrowserOwnedValue)
             _uncontrolledValue = Value;
+        LogCommittedText(Value);
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
         NotifyNativeFieldChanged();

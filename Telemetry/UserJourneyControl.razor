@@ -1,0 +1,225 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-uj-root @ThemeClass">
+        @if (ProductSnapshot is null)
+        {
+            <div class="fx-tel-empty">No product telemetry loaded yet.</div>
+        }
+        else
+        {
+            <div class="fx-tel-scroll-pane">
+                <CardControl Title="Multi-Stage User Journey Path Explorer" CssClass="fx-tel-card" Elevation="1">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(!_reverseMode)" Tag="fx-uj-forward" OnClick="() => SetDirection(false)">Forward Paths (Start From)</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_reverseMode)" Tag="fx-uj-reverse" OnClick="() => SetDirection(true)">Reverse Paths (Leading Up To)</ButtonControl>
+                        </div>
+
+                        <div class="fx-uj-picker">
+                            <span class="fx-tel-subbar-label">@(_reverseMode ? "Target Screen:" : "Anchor Screen:")</span>
+                            <DropDownListControl TValue="string" TItem="ScreenOption"
+                                                 Tag="fx-uj-anchor-screen"
+                                                 DataSource="@AnchorScreenOptions"
+                                                 Value="@_anchorScreen"
+                                                 ValueChanged="OnAnchorChanged"
+                                                 ValueFieldName="@nameof(ScreenOption.Value)"
+                                                 TextFieldName="@nameof(ScreenOption.Text)"
+                                                 Width="230px"
+                                                 SuppressUnchangedValueChange="true" />
+                        </div>
+
+                        @if (_anchorScreen != "All")
+                        {
+                            <ButtonControl CssClass="fx-tel-pill" Tag="fx-uj-reset-anchor" OnClick='() => OnAnchorChanged("All")'>Reset Anchor</ButtonControl>
+                        }
+                    </div>
+
+                    <PathFlowControl Tag="fx-uj-pathflow"
+                                     Nodes="@ActiveJourneys.Nodes"
+                                     Links="@ActiveJourneys.Links"
+                                     StageTitles="@ActiveJourneys.StageTitles"
+                                     Palette="@(IsVb ? VbFlowPalette : GrafanaFlowPalette)"
+                                     Height="330px"
+                                     OnNodeSelected="OnFlowNodeClicked" />
+                </CardControl>
+
+                <div class="fx-tel-charts-row fx-tel-charts-two">
+                    <CardControl Title="@($"Ping-Pong Workflow Loops ({ActiveJourneys.PingPongLoops.Count} pairs)")" CssClass="fx-tel-card" Elevation="1">
+                        <div class="fx-tel-panel-toolbar">
+                            <span class="fx-tel-panel-hint">Detects rapid A → B → A → B screen switching within 3 minutes — indicating split workflows or missing fields</span>
+                        </div>
+                        <div style="height: 245px;">
+                            <GridControl TValue="PingPongLoopRow"
+                                         Tag="fx-grid-pingpong-loops"
+                                         DataSource="@ActiveJourneys.PingPongLoops"
+                                         AllowSorting="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(PingPongLoopRow.ScreenA)" HeaderText="Screen A" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(PingPongLoopRow.ScreenB)" HeaderText="Screen B" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(PingPongLoopRow.LoopCount)" HeaderText="Loops" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(PingPongLoopRow.AffectedUsers)" HeaderText="Users" Width="70px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(PingPongLoopRow.AvgLoopDurationSeconds)" HeaderText="Avg Cycle (s)" Width="105px" Type="ColumnType.Number" Format="0.1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    </CardControl>
+
+                    <CardControl Title="Top Screen-to-Screen Transitions" CssClass="fx-tel-card" Elevation="1">
+                        <div style="height: 270px;">
+                            <GridControl TValue="UserTransitionRow"
+                                         Tag="fx-grid-screen-transitions"
+                                         DataSource="@ActiveJourneys.TopTransitions"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(UserTransitionRow.FromScreen)" HeaderText="From Screen" Width="175px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserTransitionRow.ToScreen)" HeaderText="To Screen" Width="175px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserTransitionRow.TransitionCount)" HeaderText="Transitions" Width="95px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserTransitionRow.UniqueUsers)" HeaderText="Users" Width="70px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserTransitionRow.MedianTransitionSeconds)" HeaderText="Med Dwell (s)" Width="105px" Type="ColumnType.Number" Format="0.1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    </CardControl>
+                </div>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    public sealed record ScreenOption(string Value, string Text);
+
+    private static readonly string[] VbFlowPalette = { "#0a246a", "#3a6ea5", "#2e7d32", "#00695c", "#8b5a00", "#4b0082" };
+    private static readonly string[] GrafanaFlowPalette = { "#38bdf8", "#3b82f6", "#10b981", "#a855f7", "#f59e0b", "#14b8a6" };
+
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private bool _reverseMode;
+    private string _anchorScreen = "All";
+    private UserJourneyReport? _customJourney;
+    private FlexProductAnalyticsSnapshot? _lastSnapshot;
+
+    private bool IsVb => Theme == TelemetryTheme.VBClassic;
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("UserJourneyControl", () => "UserJourneys");
+    protected override string? ResolveControlIdentifier() => "UserJourneys";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private UserJourneyReport ActiveJourneys => _customJourney ?? ProductSnapshot?.Journeys ?? new UserJourneyReport();
+
+    private List<ScreenOption> AnchorScreenOptions
+    {
+        get
+        {
+            var list = new List<ScreenOption> { new("All", _reverseMode ? "All Exit Screens" : "All Entry Screens") };
+            if (ProductSnapshot is not null)
+            {
+                foreach (var s in ProductSnapshot.Journeys.AvailableScreens)
+                    list.Add(new ScreenOption(s, s));
+            }
+            return list;
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (ProductSnapshot is not null && !ReferenceEquals(ProductSnapshot, _lastSnapshot))
+        {
+            _lastSnapshot = ProductSnapshot;
+            if (_reverseMode || _anchorScreen != "All")
+                RebuildCustomJourney();
+            else
+                _customJourney = null;
+        }
+    }
+
+    private void SetDirection(bool reverse)
+    {
+        _reverseMode = reverse;
+        RebuildCustomJourney();
+        RecordControlAction("DirectionChanged", reverse ? "Reverse" : "Forward");
+    }
+
+    private void OnAnchorChanged(string? screen)
+    {
+        _anchorScreen = string.IsNullOrWhiteSpace(screen) ? "All" : screen;
+        RebuildCustomJourney();
+        RecordControlAction("AnchorScreenChanged", _anchorScreen);
+    }
+
+    private void OnFlowNodeClicked(PathFlowNode node)
+    {
+        if (!node.IsDropOff && !string.Equals(node.Label, "Other Screens", StringComparison.Ordinal))
+        {
+            _anchorScreen = node.Label;
+            RebuildCustomJourney();
+        }
+    }
+
+    private void RebuildCustomJourney()
+    {
+        if (ProductSnapshot is null) return;
+        if (!_reverseMode && _anchorScreen == "All")
+        {
+            _customJourney = null;
+            return;
+        }
+        var catalog = Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider;
+        _customJourney = FlexProductAnalyticsEngine.BuildUserJourneys(
+            ProductSnapshot.WindowEvents,
+            catalog,
+            _anchorScreen == "All" ? null : _anchorScreen,
+            _reverseMode,
+            maxStages: 4,
+            topBranchesPerStage: 6);
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("FromScreen,ToScreen,Transitions,UniqueSessions,UniqueUsers,MedianSeconds");
+        foreach (var t in ActiveJourneys.TopTransitions)
+        {
+            sb.AppendLine($"{Csv(t.FromScreen)},{Csv(t.ToScreen)},{t.TransitionCount},{t.UniqueSessions},{t.UniqueUsers},{t.MedianTransitionSeconds.ToString("0.1", CultureInfo.InvariantCulture)}");
+        }
+        return ("user-journeys", sb.ToString());
+    }
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

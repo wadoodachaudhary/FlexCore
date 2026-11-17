@@ -11,7 +11,7 @@ namespace Fx.ControlKit.Editor;
 /// text, Markdown/Jira-friendly text, Atlassian Document Format JSON, RTF, and
 /// an HTML document that opens cleanly in Word/LibreOffice.
 /// </summary>
-public partial class EditorLiteControl : ComponentBase, IAsyncDisposable
+public partial class EditorLiteControl : Fx.ControlKit.FlexKitControlBase, IAsyncDisposable
 {
     [Inject] private IJSRuntime JS { get; set; } = default!;
 

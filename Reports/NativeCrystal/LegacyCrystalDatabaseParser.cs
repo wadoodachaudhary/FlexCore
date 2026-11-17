@@ -110,8 +110,9 @@ internal static class LegacyCrystalDatabaseParser
                     // Its target is an index ordinal, not a field ordinal or pointer.
                     var targetIndex = value.Length == 32 ? BinaryPrimitives.ReadInt32LittleEndian(value.Slice(2, 4)) : -1;
                     var targetFields = targetIndex >= 0 && targetIndex < indexes[target].Count ? indexes[target][targetIndex] : [];
+                    var kind = value.Length == 32 ? U16(value, 28) : -1;
                     if (sourceFieldCount > 0 && sourceFields.Count == sourceFieldCount && targetFields.Count == sourceFieldCount &&
-                        targetFields.All(i => i >= 0 && i < target.Fields.Count) && value.Length == 32 && U16(value, 28) is 3 or 4)
+                        targetFields.All(i => i >= 0 && i < target.Fields.Count) && kind is 3 or 4 or 9)
                     {
                         for (var i = 0; i < sourceFieldCount; i++)
                         {
@@ -120,7 +121,8 @@ internal static class LegacyCrystalDatabaseParser
                             model.Links.Add(new()
                             {
                                 ObjectId = nextId++, FromField = from, ToField = target.Fields[targetFields[i]],
-                                LinkOperator = 1, JoinType = U16(value, 28) == 4 ? 2 : 1
+                                // Legacy link kind 9 compares the source to the target using >=.
+                                LinkOperator = kind == 9 ? 128 : 1, JoinType = kind == 4 ? 2 : 1
                             });
                         }
                     }

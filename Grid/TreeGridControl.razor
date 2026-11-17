@@ -12,9 +12,9 @@
      data-fx-grid-tab-edge="@(IsPropertyGrid ? PropertyGridTabEdge : null)"
      @onkeydown="HandleKeyDown"
      @onfocus="HandleRootFocusAsync"
-     @onmousemove="HandleColumnResizeMove"
-     @onmouseup="EndColumnResize"
-     @onmouseleave="EndColumnResize">
+     @onmousemove="@(_isColumnResizing ? ResizeMoveCallback : default)"
+     @onmouseup="ResizeEndCallback"
+     @onmouseleave="ResizeEndCallback">
 
     @if (ShowEditToolbar && (EditSettingsRef is not null || AllowRowDragAndDrop))
     {
@@ -322,7 +322,7 @@
                         aria-expanded="@(node.HasChildren ? DisplayExpanded(node) ? "true" : "false" : null)"
                         tabindex="-1"
                         @ref="node.RowElement"
-                        @onclick="() => HandleRowClick(node, currentIdx)"
+                        @onclick="e => HandleRowClick(node, currentIdx, e)"
                         @ondblclick="() => HandleRowDoubleClick(node, currentIdx)"
                         @oncontextmenu="() => HandleRowContextMenu(node, currentIdx)">
 
@@ -549,6 +549,20 @@
                             colIdx++;
                         }
                     </tr>
+                    @if (node.IsExpanded && HasRowDetails(node.Data))
+                    {
+                        var detailKey = (node.Id, "details");
+                        <tr @key="detailKey" class="fx-treegrid-details-row" role="presentation">
+                            <td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))"
+                                class="fx-treegrid-details-cell" role="presentation"
+                                @onclick:stopPropagation="true" @ondblclick:stopPropagation="true"
+                                @oncontextmenu:stopPropagation="true" @onkeydown:stopPropagation="true">
+                                <div class="fx-treegrid-details-content" role="group">
+                                    @(RowDetailsTemplate!(node.Data))
+                                </div>
+                            </td>
+                        </tr>
+                    }
                     @if (_activeEdit?.Id.Equals(node.Id) == true && !_editDialog)
                     {
                         <tr class="fx-treegrid-edit-actions"><td colspan="@(VisibleColumns.Count + (ShowCheckboxes ? 1 : 0))" @onkeydown:stopPropagation="true">
@@ -580,6 +594,8 @@
     @if (ShowLegacyScrollBar)
     {
         <div class="fx-legacy-vscroll@(_legacyScrollable ? "" : " fx-legacy-vscroll-empty")"
+             @onmouseenter="LegacyBarEnterCallback"
+             @onmouseup="EndLegacyThumbDrag"
              @oncontextmenu="HandleLegacyScrollBarContextMenu"
              @oncontextmenu:preventDefault="true"
              @oncontextmenu:stopPropagation="true">
@@ -590,13 +606,16 @@
                 <div class="fx-legacy-vscroll-thumb"
                      style="top:@(_legacyThumbTopPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;height:@(_legacyThumbHeightPct.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture))%;"
                      @onmousedown="HandleLegacyThumbMouseDown"
-                     @onmousedown:stopPropagation="true"></div>
+                     @onmousedown:stopPropagation="true"
+                     @onmouseup="EndLegacyThumbDrag"></div>
             </div>
             <button type="button" class="fx-legacy-vscroll-btn fx-legacy-vscroll-down" tabindex="-1"
                     @onclick="@(() => ScrollByLineAsync(1))">▼</button>
         </div>
 
-        @* Keeps the drag alive when the pointer leaves the 16px bar. *@
+        @* Keeps the drag alive when the pointer leaves the 16px bar. A press released
+           before the veil existed (a quick click on the thumb) is caught by the thumb's
+           and the bar's own mouseup, and a move with no button held ends it as well. *@
         @if (_legacyThumbDragging)
         {
             <div class="fx-legacy-vscroll-dragveil"

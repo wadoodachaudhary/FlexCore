@@ -36,6 +36,22 @@
     margin-left: 30px;
 }
 
+/* Expanded forms are not compact data cells and must grow to their content. */
+.fx-treegrid-details-cell {
+    height: auto;
+    padding: 8px;
+    white-space: normal;
+    vertical-align: top;
+    background: #f0f0f0;
+    border-bottom: 1px solid #c8c8c8;
+}
+
+.fx-treegrid-details-content {
+    min-width: 0;
+    -webkit-user-select: text;
+    user-select: text;
+}
+
 .fx-treegrid-toolbar {
     display: flex;
     align-items: center;
@@ -259,7 +275,7 @@
 /* NOTE: the tree ROOT and .fx-treegrid-content deliberately KEEP their
    normal overflow while a popup is open — flipping the scroll container to
    overflow:visible removed its scrollbar and reflowed (shifted) the whole
-   grid on every open/close (HHM-946). Editor popups therefore render within
+   grid on every open/close. Editor popups therefore render within
    the content area's bounds; only the CELL and ROW clip/stacking are lifted. */
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-dropdown-host),
 .fx-treegrid ::deep .fx-treegrid-cell:has(.fx-datepicker-host),

@@ -23,7 +23,7 @@
     @if(_history.Count>1)
     {
         <div class="fx-ai-prompt-history" aria-label="Response history">
-            @foreach(var result in _history){<ButtonControl Disabled="@IsBusy" OnClick="()=>SelectResultAsync(result)" aria-pressed="@ReferenceEquals(result,_active)">@result.CreatedAt.ToLocalTime().ToString("t") — @Preview(result.Prompt)</ButtonControl>}
+            @foreach(var result in _history){<ButtonControl Disabled="@IsBusy" OnClick="()=>SelectResultAsync(result)" aria-pressed="@(ReferenceEquals(result,_active) ? "true" : "false")">@result.CreatedAt.ToLocalTime().ToString("t") — @Preview(result.Prompt)</ButtonControl>}
         </div>
     }
     @FooterContent

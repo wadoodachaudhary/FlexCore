@@ -1,7 +1,8 @@
 @* ReportParamDialogControl — modal prompt for Crystal Reports parameter values.
 
-   Mirrors the VB6 / Crystal "Enter Parameter Values" dialog. For each required
-   parameter it renders a panel containing:
+   Mirrors the VB6 / Crystal "Enter Parameter Values" dialog. The title bar carries the
+   report's name, centred, with "Enter Parameter Values" small and grey beside it. For
+   each required parameter (and each optional one the caller includes) it renders a panel containing:
 
      - left:  the prompt text (e.g. "Enter Job:")
      - right: a secondary label with the parameter's display name
@@ -27,40 +28,71 @@
    Usage:
      <ReportParamDialogControl @ref="paramDialog" />
      ...
-     var values = await paramDialog.PromptAsync(reportTitle, definition.Parameters);
+     var values = await paramDialog.PromptAsync(reportName, definition.Parameters);
      if (values == null) return; // user cancelled
 *@
 
 @namespace Fx.ControlKit.Reports
 
 @using Fx.ControlKit
+@implements IDisposable
 
 @if (_visible)
 {
-    <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" OnClose="Cancel">
+  <div class="fx-param-dialog-host">
+    <DialogControl Visible="true" Header="Enter Parameter Values" Width="min(900px, 94vw)" CssClass="fx-param-dialog" OnClose="Cancel" OnEnter="Accept">
+        <HeaderContent>
+            @if (string.IsNullOrWhiteSpace(_title))
+            {
+                @("Enter Parameter Values")
+            }
+            else
+            {
+                <span class="fx-param-heading">
+                    <span class="fx-param-heading-label">Enter Parameter Values</span>
+                    <span class="fx-param-heading-title" title="@_title">@_title</span>
+                    <span aria-hidden="true"></span>
+                </span>
+            }
+        </HeaderContent>
         <ChildContent>
             <div class="fx-param-body">
-                @if (!string.IsNullOrWhiteSpace(_title))
-                {
-                    <div class="fx-param-title">@_title</div>
-                }
                 @foreach (var p in _parameters)
                 {
                     var pickList = _pickLists.TryGetValue(p.Name, out var list) ? list : null;
                     var defaults = p.DefaultValues;
-                    var hasDefaults = defaults.Count > 0;
-                    var hasMultiSource = p.AllowMultiple && (hasDefaults || (pickList != null && pickList.Count > 0));
-                    <div class="fx-param-panel">
-                        <div class="fx-param-panel-header">
-                            <span class="fx-param-prompt-text">
-                                @(!string.IsNullOrEmpty(p.Prompt) ? p.Prompt : p.Name)
-                            </span>
-                            <span class="fx-param-secondary-label">
-                                @(!string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name)
-                            </span>
-                        </div>
+                    var isDependent = _dependencies.ContainsKey(p.Name);
+                    var hasDefaults = !isDependent && defaults.Count > 0;
+                    var promptText = PromptText(p);
+                    var secondaryLabel = SecondaryLabel(p);
+                    var isDualList = IsDualList(p);
+                    <PanelControl Bordered="false" CssClass="@($"fx-param-panel{(isDualList ? " fx-param-panel-list" : "")}")" Grow="0 0 auto" role="group" aria-label="@secondaryLabel">
+                        <Header>
+                            <div class="fx-param-panel-header">
+                                <span class="fx-param-prompt-text">@promptText</span>
+                                <span class="fx-param-secondary-label">@secondaryLabel</span>
+                            </div>
+                        </Header>
+                        <ChildContent>
                         <div class="fx-param-panel-body">
-                            @if (p.AllowMultiple)
+                            @if (p.AllowRange)
+                            {
+                                @for (var index = 0; index < _ranges[p.Name].Count; index++)
+                                {
+                                    var rangeIndex = index;
+                                    <ReportRangeControl Type="@p.ParameterType" Value="@_ranges[p.Name][index]"
+                                        ValueChanged="value => _ranges[p.Name][rangeIndex] = value" />
+                                    @if (p.AllowMultiple)
+                                    {
+                                        <ButtonControl Title="Remove range" OnClick="() => _ranges[p.Name].RemoveAt(rangeIndex)">Remove range</ButtonControl>
+                                    }
+                                }
+                                @if (p.AllowMultiple)
+                                {
+                                    <ButtonControl Disabled="@(_ranges[p.Name].Count >= 100)" OnClick="() => _ranges[p.Name].Add(new(null, null))">Add range</ButtonControl>
+                                }
+                            }
+                            else if (p.AllowMultiple)
                             {
                                 @* ── Dual-list-box ─────────────────────────
                                    Crystal renders multi-value parameters as an
@@ -73,7 +105,14 @@
                                    "Enter a Value" input below can populate
                                    it for AllowCustomCurrentValues=True
                                    parameters. *@
-                                <MultiSelectDualListControl TItem="ListItem"
+                                @* Crystal's prompt lists the values in batches (200 by
+                                   default), keeps every value listed under Available and
+                                   adds only the batch on screen with >>, so the same clicks
+                                   submit the same values in both applications. < and <<
+                                   take values out of Selected. The lists share the dialog's height
+                                   so every prompt shows without scrolling. *@
+                                <div class="fx-param-dual-group">
+                                <MultiSelectDualListControl TItem="ListItem" CssClass="fx-param-dual-list"
                                                             Items="@GetMultiAvailable(p.Name)"
                                                             SelectedItems="@GetMultiSelected(p.Name)"
                                                             SelectedItemsChanged="@(items => SetMultiSelected(p.Name, items))"
@@ -81,77 +120,110 @@
                                                             RightHeader="Selected Values:"
                                                             KeySelector="@(i => i.Key)"
                                                             LabelSelector="@(i => i.Label)"
+                                                            ItemSelectable="@(i => CanSelectMultiValue(p, i.Key))"
                                                             VisibleRows="7"
-                                                            Height="180px" />
+                                                            Height="@DualListHeight"
+                                                            BatchSize="@PromptBatchSize" />
 
-                                @if (p.AllowCustomCurrentValues || !hasMultiSource)
+                                @if (HasCustomEntryRow(p))
                                 {
-                                    @* "Enter a Value" custom-entry row — mirrors
-                                       the Crystal dialog's inline text input +
-                                       > button for adding ad-hoc values to the
-                                       Selected pane. *@
-                                    <div class="fx-param-custom-row">
+                                    @* Crystal places the label above an input matching the
+                                       Available pane; the add button shares the arrow column. *@
+                                    <div class="fx-param-custom-row" data-fx-enter-owner>
                                         <label class="fx-param-value-label">Enter a Value:</label>
-                                        <TextBoxControl CssClass="fx-param-value-input" Value="@_customDrafts.GetValueOrDefault(p.Name)"
+                                        <TextBoxControl ShowClearButton="true" CssClass="fx-param-value-input" Width="100%" aria-label="@($"Enter a value for {secondaryLabel}")" Value="@_customDrafts.GetValueOrDefault(p.Name)"
                                                         ValueChanged="value => _customDrafts[p.Name] = value ?? string.Empty" UpdateOnInput="true"
                                                         OnKeyDown="e => OnCustomKeyDown(e, p.Name)" />
-                                        <ButtonControl Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">&gt;</ButtonControl>
+                                        <ButtonControl CssClass="fx-param-custom-add" BareStyle="true" Title="Add selected value" OnClick="() => AddCustomValue(p.Name)">
+                                            <SvgIconControl Name="chevron-right" Size="14px" StrokeWidth="2.2" />
+                                        </ButtonControl>
                                     </div>
                                 }
+                                </div>
                             }
                             else if (hasDefaults && defaults.Count >= 2)
                             {
                                 @* Crystal default-values dropdown — shows description,
                                    sets value behind it. Same as before. *@
-                                <DropDownListControl TValue="string" TItem="ListItem"
-                                    DataSource="@defaults.Select(choice => new ListItem(choice.Value, string.IsNullOrWhiteSpace(choice.Description) ? choice.Value : choice.Description))"
-                                    ValueFieldName="Key" TextFieldName="Label" Value="@_values.GetValueOrDefault(p.Name)"
-                                    ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
+                                <DropDownListControl TValue="string" TItem="ListItem" CssClass="fx-param-single-input"
+                                    DataSource="@AuthoredChoices(p)"
+                                    ValueFieldName="Key" TextFieldName="Label" Value="@AuthoredChoiceValue(p)"
+                                    ValueChanged="value => SetPickListValue(p.Name, value)" AriaLabel="@p.Name"
+                                    Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight" />
                                 @if (p.AllowCustomCurrentValues)
                                 {
                                     <label class="fx-param-value-label">Enter a Value:</label>
-                                    <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
+                                    <TextBoxControl CssClass="fx-param-single-input" Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
                                 }
                             }
-                            else if (pickList != null && pickList.Count > 0)
+                            else if (isDependent || (pickList != null && pickList.Count > 0))
                             {
-                                <DropDownListControl TValue="string" TItem="PickListItem" DataSource="@_singlePickLists[p.Name]"
+                                <DropDownListControl TValue="string" TItem="PickListItem" CssClass="fx-param-single-input" DataSource="@_singlePickLists.GetValueOrDefault(p.Name)"
                                     ValueFieldName="Value" TextFieldName="Display" Value="@PickListValue(p)"
-                                    ValueChanged="value => SetPickListValue(p.Name, value)" AllowFiltering="true" AriaLabel="@p.Name" />
+                                    ValueChanged="value => SetPickListValue(p.Name, value)" AllowFiltering="true" AriaLabel="@p.Name"
+                                    Width="@PickListWidth" PanelMaxHeight="@PickListPanelHeight"
+                                    Enabled="@(!isDependent || _readyLists.Contains(p.Name))" />
                             }
                             else if (p.ParameterType == ReportParameterType.Integer || p.ParameterType == ReportParameterType.Decimal)
                             {
-                                <NumericTextBoxControl TValue="decimal?" Value="@ParseNumberValue(_values.GetValueOrDefault(p.Name))"
+                                <NumericTextBoxControl TValue="decimal?" CssClass="fx-param-single-input" Format="0.############################" Value="@ParseNumberValue(_values.GetValueOrDefault(p.Name))"
                                     ValueChanged="value => SetValue(p.Name, value?.ToString(System.Globalization.CultureInfo.CurrentCulture) ?? string.Empty)" />
                             }
                             else if (p.ParameterType == ReportParameterType.Date)
                             {
-                                <DatePickerControl Value="@ParseDateValue(_values.GetValueOrDefault(p.Name))"
+                                <DatePickerControl CssClass="fx-param-scalar fx-param-single-input" AriaLabel="@p.Name" Value="@ParseDateValue(_values.GetValueOrDefault(p.Name))"
                                                    ValueChanged="@(v => SetValue(p.Name, v.HasValue ? v.Value.ToString("yyyy-MM-dd") : ""))" />
                             }
                             else if (p.ParameterType == ReportParameterType.Boolean)
                             {
-                                <DropDownListControl TValue="string" TItem="string" DataSource="@(new[] { "True", "False" })"
-                                    Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" AriaLabel="@p.Name" />
+                                <DropDownListControl TValue="string" TItem="string" CssClass="fx-param-single-input" DataSource="@BooleanChoices(p)"
+                                    Value="@BooleanValue(p)" ValueChanged="value => SetValue(p.Name, value is null or NoBooleanChoice ? string.Empty : value)" AriaLabel="@p.Name" />
                             }
                             else
                             {
-                                <TextBoxControl Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
+                                <TextBoxControl CssClass="fx-param-single-input" Width="@ScalarWidth" aria-label="@p.Name" Value="@_values.GetValueOrDefault(p.Name)" ValueChanged="value => SetValue(p.Name, value ?? string.Empty)" />
+                            }
+                            @if (isDependent)
+                            {
+                                @if (_listErrors.TryGetValue(p.Name, out var listError))
+                                {
+                                    <div class="fx-param-error" role="alert">@listError</div>
+                                    <ButtonControl OnClick="() => RetryDependentChoices(p.Name)">Retry</ButtonControl>
+                                }
+                                else if (!_readyLists.Contains(p.Name))
+                                {
+                                    <div role="status" aria-live="polite">@DependentStatus(p.Name)</div>
+                                }
                             }
                         </div>
-                    </div>
+                        </ChildContent>
+                    </PanelControl>
+                }
+                @foreach (var field in _readOnlyValues)
+                {
+                    <PanelControl Bordered="false" CssClass="fx-param-panel" Grow="0 0 auto" role="group" aria-label="@field.Key">
+                        <Header>
+                            <div class="fx-param-panel-header">@field.Key (read-only)</div>
+                        </Header>
+                        <ChildContent>
+                            <div class="fx-param-panel-body">
+                                <TextBoxControl CssClass="fx-param-single-input" Width="@ScalarWidth" aria-label="@field.Key" Value="@field.Value" readonly="readonly" />
+                            </div>
+                        </ChildContent>
+                    </PanelControl>
                 }
                 @if (!string.IsNullOrEmpty(_error))
                 {
-                    <div class="fx-param-error">@_error</div>
+                    <div class="fx-param-error" role="alert">@_error</div>
                 }
             </div>
         </ChildContent>
         <FooterContent>
-            <ButtonControl CssClass="fx-button-primary" OnClick="Accept">OK</ButtonControl>
+            <ButtonControl CssClass="fx-button-primary" OnClick="Accept" Disabled="@ChoicesUnavailable">OK</ButtonControl>
             <ButtonControl OnClick="Cancel">Cancel</ButtonControl>
         </FooterContent>
     </DialogControl>
+  </div>
 }
 
 @code {
@@ -167,7 +239,9 @@
     private bool _visible;
     private string _title = "";
     private List<ReportParameter> _parameters = new();
+    private IReadOnlyList<KeyValuePair<string, string>> _readOnlyValues = [];
     private Dictionary<string, string> _values = new();
+    private Dictionary<string, List<ReportRangeValue>> _ranges = new();
     private Dictionary<string, IReadOnlyList<PickListItem>> _pickLists = new();
     private Dictionary<string, IReadOnlyList<PickListItem>> _singlePickLists = new();
     private const string NoValueChoice = "fx-param-no-value";
@@ -175,10 +249,35 @@
     private string PickListValue(ReportParameter p)
     {
         var value = _values.GetValueOrDefault(p.Name) ?? "";
-        return value.Length == 0 && p.IsOptional ? NoValueChoice : value;
+        return value.Length == 0 && MayBeBlank(p) ? NoValueChoice : value;
     }
 
-    private void SetPickListValue(string name, string? value)
+    /// <summary>An "(optional)" parameter, or an optional prompt the caller included: it may be left blank.</summary>
+    private static bool MayBeBlank(ReportParameter p) => p.IsOptional || !p.Required;
+
+    // An included optional True/False prompt keeps a "..." choice, so a picked value can be cleared again; a required
+    // one, "(optional)"-named or not, keeps the plain True/False list.
+    private const string NoBooleanChoice = "...";
+    private static string[] BooleanChoices(ReportParameter p) => p.Required ? ["True", "False"] : [NoBooleanChoice, "True", "False"];
+    private string? BooleanValue(ReportParameter p)
+    {
+        var value = _values.GetValueOrDefault(p.Name);
+        return !p.Required && string.IsNullOrEmpty(value) ? NoBooleanChoice : value;
+    }
+
+    // So does an included optional authored-values list; a required one stays as authored.
+    private static IEnumerable<ListItem> AuthoredChoices(ReportParameter p)
+    {
+        var choices = p.DefaultValues.Select(choice => new ListItem(choice.Value, ChoiceLabel(p, choice)));
+        return p.Required ? choices : choices.Prepend(new ListItem(NoValueChoice, "..."));
+    }
+    private string? AuthoredChoiceValue(ReportParameter p)
+    {
+        var value = _values.GetValueOrDefault(p.Name);
+        return !p.Required && string.IsNullOrEmpty(value) ? NoValueChoice : value;
+    }
+
+    private Task SetPickListValue(string name, string? value)
         => SetValue(name, value is null or NoValueChoice ? string.Empty : value);
 
     // Per-parameter dual-list state. Each multi-value parameter gets its
@@ -190,6 +289,15 @@
     private readonly Dictionary<string, IList<ListItem>> _multiSelected =
         new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// How many values a multi-value prompt lists per batch under Available Values.
+    /// Crystal's "Enter Parameter Values" dialog lists a dynamic list of values 200 at
+    /// a time and its &gt;&gt; adds only the loaded batch (SAP's default batch size), so
+    /// 200 keeps a prompt answered with "&gt;&gt;" identical in both applications. 0 lists
+    /// every value at once.
+    /// </summary>
+    [Parameter] public int PromptBatchSize { get; set; } = 200;
+
     // Per-parameter "Enter a Value:" draft state for AllowCustomCurrentValues
     // / no-source multi-value parameters. The custom value is committed to
     // the Selected list when the user clicks the > button or presses Enter.
@@ -198,10 +306,100 @@
 
     private string? _error;
     private TaskCompletionSource<Dictionary<string, object>?>? _tcs;
+    private ReportPickListContext? _pickListContext;
+    private IReportDependentPickListProvider? _dependentProvider;
+    private readonly Dictionary<string, IReadOnlyList<string>> _dependencies = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<ReportParameter> _dependencyOrder = [];
+    private readonly Dictionary<string, string[]> _pendingChoices = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _readyLists = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _loadingLists = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _listErrors = new(StringComparer.OrdinalIgnoreCase);
+    private CancellationTokenSource? _lookupCancellation;
+    private long _lookupVersion;
+    private bool _lookupActive;
+    private bool _dependencySetupFailed;
+    private bool _disposed;
+    private bool ChoicesUnavailable => _lookupActive || _dependencySetupFailed || _listErrors.Count > 0;
+
+    private static string PromptText(ReportParameter p)
+    {
+        var prompt = string.IsNullOrWhiteSpace(p.Prompt) ? SecondaryLabel(p) : p.Prompt;
+        return prompt.Equals(p.Name, StringComparison.OrdinalIgnoreCase)
+            || prompt.Equals(SecondaryLabel(p), StringComparison.OrdinalIgnoreCase)
+                ? $"Enter {prompt}:" : prompt;
+    }
+
+    private static string SecondaryLabel(ReportParameter p) => !string.IsNullOrWhiteSpace(p.DisplayName) ? p.DisplayName : p.Name;
+
+    /// <summary>A multi-value prompt without ranges: an Available/Selected pair.</summary>
+    private static bool IsDualList(ReportParameter p) => p.AllowMultiple && !p.AllowRange;
+
+    /// <summary>The "Enter a Value:" row under a pair: custom values allowed, or no list to pick from.</summary>
+    private bool HasCustomEntryRow(ReportParameter p)
+    {
+        if (!IsDualList(p) || _dependencies.ContainsKey(p.Name)) return false;
+        var hasPickList = _pickLists.TryGetValue(p.Name, out var list) && list is { Count: > 0 };
+        return p.AllowCustomCurrentValues || (p.DefaultValues.Count == 0 && !hasPickList);
+    }
+
+    // Heights (px at text zoom 1, measured in Chrome) of what surrounds the lists: the title bar, footer and body
+    // padding; a list panel's padding, rule, margin and count line; one other prompt; an "Enter a Value:" row.
+    // Rounded up, so fractional pixels never leave a 1-4px scrollbar on a dialog that fits.
+    private const int DialogChromeHeight = 106;
+    private const int ListPanelHeight = 70;
+    private const int OtherPromptHeight = 82;
+    private const int CustomEntryRowHeight = 58;
+
+    /// <summary>The dialog's height limit (also set in the .razor.css): 90% of the window, and never over 1200px.</summary>
+    private const string DialogMaxHeight = "min(90vh, calc(1200px * var(--fx-zoom, 1)))";
+    // Crystal's "Enter Parameter Values" gives a value list a wide combo whose list drops well below it. The window ends
+    // at its prompts, with no room kept under them: an open list escapes the window's clipping instead (.razor.css).
+    private const string PickListWidth = "min(100%, calc(440px * var(--fx-zoom, 1)))";
+    private const string ScalarWidth = "min(100%, calc(320px * var(--fx-zoom, 1)))";
+    private const int PickListPanelHeight = 320;
+
+    /// <summary>
+    /// Height of each Available/Selected pair, for any number of pairs and other prompts. The pairs share what
+    /// the title bar, footer and other prompts leave of <see cref="DialogMaxHeight"/>, between 136px and the
+    /// former fixed 236px each. So every prompt shows without scrolling while it fits (three pairs fit a
+    /// 720px-tall window, five a 1060px one); beyond that, or past 1200px, the lists keep 136px and the dialog
+    /// body scrolls.
+    /// </summary>
+    private string DualListHeight
+    {
+        get
+        {
+            var lists = _parameters.Count(IsDualList);
+            if (lists == 0) return "236px";
+            var around = DialogChromeHeight + lists * ListPanelHeight + (_parameters.Count - lists + _readOnlyValues.Count) * OtherPromptHeight
+                + _parameters.Count(HasCustomEntryRow) * CustomEntryRowHeight;
+            return string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                $"clamp(calc(136px * var(--fx-zoom, 1)), calc(({DialogMaxHeight} - {around}px * var(--fx-zoom, 1)) / {lists}), calc(236px * var(--fx-zoom, 1)))");
+        }
+    }
 
     /// <summary>Internal record used as the TItem for the dual-list-box.
     /// Stable key + display label.</summary>
     public sealed record ListItem(string Key, string Label);
+
+    private static string ChoiceLabel(ReportParameter parameter, ReportParameterChoice choice)
+    {
+        if (parameter.ParameterType != ReportParameterType.Boolean || !bool.TryParse(choice.Value, out var value))
+            return string.IsNullOrWhiteSpace(choice.Description) ? choice.Value : choice.Description;
+        var text = value ? bool.TrueString : bool.FalseString;
+        return string.IsNullOrWhiteSpace(choice.Description) || choice.Description.Equals(choice.Value, StringComparison.OrdinalIgnoreCase)
+            ? text : $"{text} - {choice.Description}";
+    }
+
+    private static string NormalizeInitialValue(ReportParameter parameter, string value)
+    {
+        // The authored-choice dropdown compares string keys exactly. Typed Boolean values
+        // and saved current values may use different casing from those original keys.
+        if (parameter.ParameterType == ReportParameterType.Boolean && parameter.DefaultValues.Count >= 2
+            && bool.TryParse(value, out var flag))
+            return parameter.DefaultValues.FirstOrDefault(choice => bool.TryParse(choice.Value, out var candidate) && candidate == flag)?.Value ?? value;
+        return value;
+    }
 
     /// <summary>
     /// Shows the dialog, waits for user input, and returns a parameter-value
@@ -218,39 +416,92 @@
     /// the underlying input. Values for parameter names that aren't in the
     /// current prompt set are ignored.
     /// </para>
+    /// <para>Only required parameters are prompted; the overload taking <c>includeOptional</c> can add the optional ones.</para>
     /// </summary>
-    public async Task<Dictionary<string, object>?> PromptAsync(
+    public Task<Dictionary<string, object>?> PromptAsync(
         string title,
         List<ReportParameter> parameters,
-        IReadOnlyDictionary<string, object>? initialValues = null)
+        IReadOnlyDictionary<string, object>? initialValues = null,
+        ReportPickListContext? context = null)
+        => PromptAsync(title, parameters, initialValues, context, includeOptional: false);
+
+    /// <summary>
+    /// As the four-argument overload; <paramref name="includeOptional"/> also prompts the in-use optional parameters
+    /// (<see cref="ReportParameter.Required"/> false). Such a prompt may be left blank (no text or only spaces, no
+    /// selection, or only unbounded ranges). A blank one has no value, as in Crystal: it comes back as
+    /// <see cref="DBNull.Value"/>, so <see cref="ReportWriterControl.ShowSqlReport"/> binds null rather than the
+    /// parameter's authored default, and an initial value of <see cref="DBNull.Value"/> reopens the prompt blank.
+    /// </summary>
+    public Task<Dictionary<string, object>?> PromptAsync(
+        string title,
+        List<ReportParameter> parameters,
+        IReadOnlyDictionary<string, object>? initialValues,
+        ReportPickListContext? context,
+        bool includeOptional)
+        => PromptWithReadOnlyValuesAsync(title, parameters, initialValues, context, includeOptional, []);
+
+    internal async Task<Dictionary<string, object>?> PromptWithReadOnlyValuesAsync(
+        string title,
+        List<ReportParameter> parameters,
+        IReadOnlyDictionary<string, object>? initialValues,
+        ReportPickListContext? context,
+        bool includeOptional,
+        IReadOnlyList<KeyValuePair<string, string>> readOnlyValues)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        StopLookups();
+        _tcs?.TrySetResult(null);
+        _visible = false;
         _title = title;
-        // Only prompt for parameters that are both "Required" and don't already have a default value.
-        _parameters = parameters.Where(p => p.Required).ToList();
-        if (_parameters.Count == 0)
+        _parameters = parameters.Where(p => p.Required || includeOptional && p.IsInUse).ToList();
+        _readOnlyValues = readOnlyValues;
+        if (_parameters.Count == 0 && _readOnlyValues.Count == 0)
             return new Dictionary<string, object>();
 
-        _values = _parameters.ToDictionary(p => p.Name, p => p.DefaultValue ?? "");
+        _values = _parameters.ToDictionary(p => p.Name, p => NormalizeInitialValue(p, p.DefaultValue ?? ""));
+        _ranges = _parameters.Where(p => p.AllowRange).ToDictionary(p => p.Name,
+            p => initialValues is not null && initialValues.TryGetValue(p.Name, out var value) && value is not DBNull
+                ? ReportRangeParameters.Ranges(value).Select(ReportRangeValue.From).ToList()
+                : new List<ReportRangeValue> { new(null, null) });
         _pickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
         _singlePickLists = new Dictionary<string, IReadOnlyList<PickListItem>>();
-        if (PickLists != null)
+        _multiAvailable.Clear();
+        _multiSelected.Clear();
+        _customDrafts.Clear();
+        _dependencies.Clear();
+        _dependencyOrder.Clear();
+        _pendingChoices.Clear();
+        _readyLists.Clear();
+        _loadingLists.Clear();
+        _listErrors.Clear();
+        _dependencySetupFailed = false;
+        _error = null;
+        _pickListContext = SnapshotContext(context ?? new(title, parameters.ToArray(), new Dictionary<string, object>()));
+        var provider = PickLists;
+        _dependentProvider = provider as IReportDependentPickListProvider;
+        ConfigureDependencies();
+        if (provider != null && !_dependencySetupFailed)
         {
             foreach (var p in _parameters)
             {
+                if (_dependencies.ContainsKey(p.Name)) continue;
                 // Prefer the ReportParameter overload — the provider can
                 // run the loader's auto-derived PickListSql (sourced from
                 // the Crystal XML's RecordSelectionFormula binding) so
                 // picklists work for any parameter that filters on a
                 // table.field, with no host-side per-parameter mapping.
-                var list = PickLists.GetPickList(p);
-                if (list != null && list.Count > 0)
+                var list = provider.GetPickList(p);
+                // A single-value drop-down leaves out blank values (an authored list keeps them for the
+                // dual list below): the drop-down treats "" as no selection, so a blank item could not be
+                // chosen and would trap arrow-key movement on itself.
+                var choices = p.AllowMultiple ? list : list?.Where(item => !string.IsNullOrEmpty(item.Value)).ToArray();
+                if (list != null && choices?.Count > 0)
                 {
                     _pickLists[p.Name] = list;
                     // An optional parameter keeps a "..." choice so a picked value can be cleared
                     // again (blank = no filter; Accept skips optional parameters). Its key is a
-                    // sentinel, not "": the drop-down treats "" as no selection, which would trap
-                    // arrow-key movement on this item. PickListValue/SetPickListValue map it.
-                    _singlePickLists[p.Name] = p.IsOptional ? [new PickListItem(NoValueChoice, "..."), .. list] : list;
+                    // sentinel, not "", for the same reason. PickListValue/SetPickListValue map it.
+                    _singlePickLists[p.Name] = MayBeBlank(p) ? [new PickListItem(NoValueChoice, "..."), .. choices] : choices;
                 }
             }
         }
@@ -262,13 +513,10 @@
         // renders empty — the "Enter a Value" custom-entry row below it
         // (visible when AllowCustomCurrentValues=true) lets the user
         // populate the Selected pane by typing.
-        _multiAvailable.Clear();
-        _multiSelected.Clear();
-        _customDrafts.Clear();
         foreach (var p in _parameters.Where(p => p.AllowMultiple))
         {
             var available = new List<ListItem>();
-            if (p.DefaultValues.Count > 0)
+            if (!_dependencies.ContainsKey(p.Name) && p.DefaultValues.Count > 0)
             {
                 foreach (var choice in p.DefaultValues)
                 {
@@ -282,7 +530,9 @@
             {
                 foreach (var item in list)
                 {
-                    if (string.IsNullOrEmpty(item.Value)) continue;
+                    // A list authored in the report keeps its blank value: Crystal lists it
+                    // (a blank line, or "- description") and it counts toward the batch of 200.
+                    if (string.IsNullOrEmpty(item.Value) && !p.PickListIsAuthored) continue;
                     available.Add(new ListItem(item.Value, item.Display ?? item.Value));
                 }
             }
@@ -298,7 +548,17 @@
         {
             foreach (var p in _parameters)
             {
-                if (!initialValues.TryGetValue(p.Name, out var raw) || raw is null) continue;
+                if (p.AllowRange || !initialValues.TryGetValue(p.Name, out var raw) || raw is null) continue;
+
+                if (_dependencies.ContainsKey(p.Name))
+                {
+                    _pendingChoices[p.Name] = raw switch
+                    {
+                        IEnumerable<string> values => values.Where(value => !string.IsNullOrEmpty(value)).ToArray(),
+                        _ => [NormalizeInitialValue(p, Convert.ToString(raw, System.Globalization.CultureInfo.CurrentCulture) ?? "")]
+                    };
+                    continue;
+                }
 
                 if (p.AllowMultiple)
                 {
@@ -318,7 +578,9 @@
                     var selected = new List<ListItem>();
                     foreach (var v in values)
                     {
-                        if (string.IsNullOrEmpty(v)) continue;
+                        // A visible authored blank still occupies a batch slot, but only an
+                        // explicitly permitted empty string may re-enter the selected values.
+                        if (!CanSelectMultiValue(p, v)) continue;
                         var match = available.FirstOrDefault(i => string.Equals(i.Key, v, StringComparison.OrdinalIgnoreCase));
                         selected.Add(match ?? new ListItem(v, v));
                     }
@@ -329,22 +591,233 @@
                     // Scalar — stringify so the underlying typed input shows
                     // the prior value. Date is formatted as ISO so DatePickerControl
                     // parses it back via ParseDateValue.
-                    _values[p.Name] = raw switch
+                    _values[p.Name] = NormalizeInitialValue(p, raw switch
                     {
                         DateTime dt => dt.ToString("yyyy-MM-dd"),
                         bool b      => b ? "True" : "False",
                         IFormattable f => f.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
                         _ => raw.ToString() ?? ""
-                    };
+                    });
                 }
             }
         }
 
-        _error = null;
+        foreach (var p in _parameters.Where(p => _dependencies.ContainsKey(p.Name)))
+            _values[p.Name] = ""; // Authoritative choices never inherit an unchecked authored default.
         _visible = true;
-        _tcs = new TaskCompletionSource<Dictionary<string, object>?>();
+        var completion = new TaskCompletionSource<Dictionary<string, object>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _tcs = completion;
         StateHasChanged();
-        return await _tcs.Task;
+        // A cancelled/replaced prompt completes immediately even when a provider ignores cancellation.
+        // Refresh catches lookup failures and checks its generation before publishing any state.
+        if (!_dependencySetupFailed) _ = RefreshDependentChoices();
+        return await completion.Task;
+    }
+
+    private static ReportPickListContext SnapshotContext(ReportPickListContext context)
+        => new(context.ReportName, Array.AsReadOnly(context.Parameters.ToArray()),
+            new System.Collections.ObjectModel.ReadOnlyDictionary<string, object>(context.Values.ToDictionary(
+                pair => pair.Key, pair => pair.Value is string[] values ? (object)values.ToArray() : pair.Value,
+                StringComparer.OrdinalIgnoreCase)));
+
+    private ReportPickListContext CurrentContext()
+    {
+        var values = _pickListContext!.Values.ToDictionary(pair => pair.Key,
+            pair => pair.Value is string[] array ? (object)array.ToArray() : pair.Value, StringComparer.OrdinalIgnoreCase);
+        foreach (var parameter in _parameters)
+        {
+            if (parameter.AllowMultiple)
+                values[parameter.Name] = GetMultiSelected(parameter.Name).Select(item => item.Key).ToArray();
+            else if (!string.IsNullOrWhiteSpace(_values.GetValueOrDefault(parameter.Name)))
+                values[parameter.Name] = ConvertValue(_values[parameter.Name], parameter.ParameterType);
+            else
+                values.Remove(parameter.Name);
+        }
+        return SnapshotContext(_pickListContext with { Values = values });
+    }
+
+    private void ConfigureDependencies()
+    {
+        if (_dependentProvider is null) return;
+        try
+        {
+            var context = CurrentContext();
+            foreach (var parameter in _parameters)
+            {
+                var parents = _dependentProvider.GetDependencies(parameter, context);
+                if (parents is null) continue;
+                if (parents.Any(parent => string.IsNullOrWhiteSpace(parent)
+                    || !_pickListContext!.Parameters.Any(item => item.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))
+                        && !_pickListContext.Values.ContainsKey(parent)))
+                    throw new InvalidDataException("Unknown parameter dependency.");
+                _dependencies[parameter.Name] = parents.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
+            var pending = _parameters.Where(parameter => _dependencies.ContainsKey(parameter.Name)).ToList();
+            while (pending.Count > 0)
+            {
+                var next = pending.FirstOrDefault(parameter => _dependencies[parameter.Name].All(parent =>
+                    !pending.Any(candidate => candidate.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))));
+                if (next is null) throw new InvalidDataException("Cyclic parameter dependencies.");
+                _dependencyOrder.Add(next);
+                pending.Remove(next);
+            }
+        }
+        catch (Exception)
+        {
+            _dependencySetupFailed = true;
+            _error = "Parameter choices could not be configured. Close the dialog and try again.";
+        }
+    }
+
+    private bool ParentsSelected(string name)
+    {
+        var values = CurrentContext().Values;
+        return _dependencies[name].All(parent => values.TryGetValue(parent, out var value) && HasSelection(value));
+    }
+
+    private static bool HasSelection(object? value) => value switch
+    {
+        string text => !string.IsNullOrWhiteSpace(text),
+        IEnumerable<string> list => list.Any(item => !string.IsNullOrWhiteSpace(item)),
+        null or DBNull => false,
+        _ => true
+    };
+
+    private string DependentStatus(string name) => _loadingLists.Contains(name)
+        ? "Loading choices..."
+        : "Select " + string.Join(" and ", _dependencies[name].Select(parent =>
+            _pickListContext!.Parameters.FirstOrDefault(parameter => parameter.Name.Equals(parent, StringComparison.OrdinalIgnoreCase))
+                is { } parameter && !string.IsNullOrWhiteSpace(parameter.DisplayName) ? parameter.DisplayName : parent)) + " first.";
+
+    private bool CurrentLookup(long version, CancellationToken token)
+        => !_disposed && _visible && version == _lookupVersion && !token.IsCancellationRequested;
+
+    private void StopLookups()
+    {
+        _lookupVersion++;
+        _lookupCancellation?.Cancel();
+        _lookupCancellation?.Dispose();
+        _lookupCancellation = null;
+        _lookupActive = false;
+    }
+
+    private async Task RefreshDependentChoices()
+    {
+        if (_dependentProvider is null || _dependencyOrder.Count == 0 || !_visible || _dependencySetupFailed) return;
+        StopLookups();
+        var version = _lookupVersion;
+        var cancellation = new CancellationTokenSource();
+        _lookupCancellation = cancellation;
+        var token = cancellation.Token;
+        var provider = _dependentProvider;
+        _lookupActive = true;
+        _loadingLists.Clear();
+        StateHasChanged();
+        try
+        {
+            foreach (var parameter in _dependencyOrder.ToArray())
+            {
+                if (!CurrentLookup(version, token)) return;
+                var name = parameter.Name;
+                if (_readyLists.Contains(name) || _listErrors.ContainsKey(name) || !ParentsSelected(name)) continue;
+                _loadingLists.Add(name);
+                StateHasChanged();
+                try
+                {
+                    var choices = await provider.GetPickListAsync(parameter, CurrentContext(), token);
+                    if (!CurrentLookup(version, token)) return;
+                    ApplyDependentChoices(parameter, choices ?? throw new InvalidDataException("No choice result."));
+                    _readyLists.Add(name);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
+                catch (Exception)
+                {
+                    if (!CurrentLookup(version, token)) return;
+                    _listErrors[name] = "Could not load choices. Please retry.";
+                }
+                finally
+                {
+                    if (CurrentLookup(version, token))
+                    {
+                        _loadingLists.Remove(name);
+                        StateHasChanged();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (CurrentLookup(version, token))
+            {
+                _lookupActive = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void ApplyDependentChoices(ReportParameter parameter, IReadOnlyList<PickListItem> choices)
+    {
+        var allowed = choices.Where(choice => !string.IsNullOrEmpty(choice.Value))
+            .DistinctBy(choice => choice.Value, StringComparer.OrdinalIgnoreCase).ToArray();
+        var names = _pendingChoices.GetValueOrDefault(parameter.Name) ?? [];
+        var selected = names.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _pickLists[parameter.Name] = allowed;
+        if (parameter.AllowMultiple)
+        {
+            var items = allowed.Select(choice => new ListItem(choice.Value, choice.Display)).ToList();
+            _multiAvailable[parameter.Name] = items;
+            _multiSelected[parameter.Name] = items.Where(item => selected.Contains(item.Key)).ToList();
+        }
+        else
+        {
+            // As for an independent list: an optional prompt keeps its "..." clear choice under the sentinel key, and a
+            // required one starts with no selection rather than a blank item, which arrow keys could not move past.
+            _singlePickLists[parameter.Name] = MayBeBlank(parameter) ? [new PickListItem(NoValueChoice, "..."), .. allowed] : allowed;
+            _values[parameter.Name] = allowed.FirstOrDefault(choice => selected.Contains(choice.Value))?.Value ?? "";
+        }
+        _pendingChoices.Remove(parameter.Name);
+    }
+
+    private void InvalidateDependentChoices(string parent, bool includeParent = false)
+    {
+        var values = CurrentContext().Values;
+        var preserveCandidates = includeParent || values.TryGetValue(parent, out var value) && HasSelection(value);
+        var changed = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { parent };
+        foreach (var parameter in _dependencyOrder)
+        {
+            var name = parameter.Name;
+            if (!(includeParent && name.Equals(parent, StringComparison.OrdinalIgnoreCase))
+                && !_dependencies[name].Any(changed.Contains)) continue;
+            changed.Add(name);
+            // Remove stale visible choices immediately; candidates live privately until the new allowed list validates them.
+            if (!preserveCandidates)
+                _pendingChoices[name] = [];
+            else if (!_pendingChoices.ContainsKey(name))
+                _pendingChoices[name] = parameter.AllowMultiple
+                    ? GetMultiSelected(name).Select(item => item.Key).ToArray()
+                    : [_values.GetValueOrDefault(name) ?? ""];
+            _multiAvailable[name] = [];
+            _multiSelected[name] = new List<ListItem>();
+            _singlePickLists[name] = [];
+            _pickLists[name] = [];
+            _values[name] = "";
+            _readyLists.Remove(name);
+            _listErrors.Remove(name);
+        }
+    }
+
+    private Task RetryDependentChoices(string name)
+    {
+        InvalidateDependentChoices(name, includeParent: true);
+        return RefreshDependentChoices();
+    }
+
+    private Task SelectionChanged(string name)
+    {
+        _error = null;
+        if (!_dependencies.Values.Any(parents => parents.Contains(name, StringComparer.OrdinalIgnoreCase))) return Task.CompletedTask;
+        InvalidateDependentChoices(name);
+        return RefreshDependentChoices();
     }
 
     // ── Multi-select helpers ─────────────────────────────────────────
@@ -355,16 +828,26 @@
     private IList<ListItem> GetMultiSelected(string name) =>
         _multiSelected.TryGetValue(name, out var v) ? v : new List<ListItem>();
 
-    private void SetMultiSelected(string name, IList<ListItem> items)
+    private static bool CanSelectMultiValue(ReportParameter parameter, string? value) =>
+        value is not null && (value.Length > 0 || parameter.ParameterType == ReportParameterType.String && parameter.AllowEmptyString);
+
+    private Task SetMultiSelected(string name, IList<ListItem> items)
     {
-        _multiSelected[name] = items;
-        // No StateHasChanged needed — the dual-list-box already drives a
-        // render when it mutates the bound list, and the only other
-        // observer (the OK-button enabled state) doesn't yet exist.
+        var parameter = _parameters.Single(p => p.Name == name);
+        items = items.Where(item => CanSelectMultiValue(parameter, item.Key)).ToList();
+        if (_dependencies.ContainsKey(name))
+        {
+            if (!_readyLists.Contains(name)) return Task.CompletedTask;
+            var selected = items.Select(item => item.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _multiSelected[name] = GetMultiAvailable(name).Where(item => selected.Contains(item.Key)).ToList();
+        }
+        else _multiSelected[name] = items.ToList();
+        return SelectionChanged(name);
     }
 
-    private void AddCustomValue(string name)
+    private async Task AddCustomValue(string name)
     {
+        if (_dependencies.ContainsKey(name)) return;
         if (!_customDrafts.TryGetValue(name, out var raw)) return;
         var trimmed = (raw ?? "").Trim();
         if (string.IsNullOrEmpty(trimmed)) return;
@@ -387,64 +870,99 @@
         _multiSelected[name] = updated;
         _customDrafts[name] = "";
         StateHasChanged();
+        await SelectionChanged(name);
     }
 
-    private void OnCustomKeyDown(KeyboardEventArgs e, string name)
+    private Task OnCustomKeyDown(KeyboardEventArgs e, string name)
     {
-        if (e.Key == "Enter") AddCustomValue(name);
+        return e.Key is "Enter" or "NumpadEnter" && !e.Repeat && !e.CtrlKey && !e.AltKey && !e.MetaKey && !e.ShiftKey
+            ? AddCustomValue(name) : Task.CompletedTask;
     }
 
-    private void SetValue(string name, string value)
+    private Task SetValue(string name, string value)
     {
+        if (_dependencies.ContainsKey(name))
+        {
+            if (!_readyLists.Contains(name)) return Task.CompletedTask;
+            if (!string.IsNullOrEmpty(value) && !(_pickLists.GetValueOrDefault(name) ?? [])
+                .Any(choice => choice.Value.Equals(value, StringComparison.OrdinalIgnoreCase))) return Task.CompletedTask;
+        }
         _values[name] = value;
+        return SelectionChanged(name);
     }
 
     // ── Accept / Cancel ──────────────────────────────────────────────
 
     private void Accept()
     {
-        // Validate — required (non-optional) params must be filled in.
+        if (ChoicesUnavailable) return;
+        // An empty free-text string is a value when the report permits it.
+        // A missing date, number or list selection still needs user input.
         var missing = new List<ReportParameter>();
         foreach (var p in _parameters)
         {
-            if (p.IsOptional) continue;
+            if (MayBeBlank(p) || p.AllowRange) continue;
             if (p.AllowMultiple)
             {
-                if (GetMultiSelected(p.Name).Count == 0) missing.Add(p);
+                if (!GetMultiSelected(p.Name).Any(item => CanSelectMultiValue(p, item.Key))) missing.Add(p);
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(_values.GetValueOrDefault(p.Name))) missing.Add(p);
+                var acceptsEmptyText = p.AllowEmptyString && p.ParameterType == ReportParameterType.String
+                    && (p.DefaultValues.Count >= 2 ? p.AllowCustomCurrentValues
+                        : !_dependencies.ContainsKey(p.Name) && !_singlePickLists.ContainsKey(p.Name));
+                if (!acceptsEmptyText && string.IsNullOrWhiteSpace(_values.GetValueOrDefault(p.Name))) missing.Add(p);
             }
         }
         if (missing.Count > 0)
         {
-            _error = "Please provide: " + string.Join(", ",
-                missing.Select(p => string.IsNullOrWhiteSpace(p.DisplayName) ? p.Name : p.DisplayName));
+            _error = "Please Provide Value for: " + string.Join(", ", missing.Select(SecondaryLabel));
             StateHasChanged();
             return;
         }
 
         var result = new Dictionary<string, object>();
+        try
+        {
+            foreach (var p in _parameters.Where(p => p.AllowRange))
+            {
+                var ranges = _ranges[p.Name].Select(value => value.ToRange(p.ParameterType)).ToArray();
+                // An optional prompt with no range, or only unbounded ones, was left blank. DBNull (no value) keeps the
+                // writer from binding the parameter's authored default in its place.
+                if (!p.Required && ranges.All(range => range.Start is null && range.End is null)) { result[p.Name] = DBNull.Value; continue; }
+                if (ranges.Length == 0 && !p.IsOptional) throw new InvalidDataException($"Choose a range for '{p.Name}'.");
+                result[p.Name] = p.AllowMultiple ? ranges : ranges.Single();
+            }
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException or InvalidDataException or InvalidOperationException)
+        {
+            _error = ex.Message;
+            return;
+        }
         foreach (var p in _parameters)
         {
+            if (p.AllowRange) continue;
             if (p.AllowMultiple)
             {
                 // Multi-value → string[]. Callers route these through
                 // MultiValueParameterRewriter so each value becomes its own
                 // @Name_0 / @Name_1 / … placeholder in the SQL.
-                result[p.Name] = GetMultiSelected(p.Name)
+                var picked = GetMultiSelected(p.Name)
+                    .Where(i => CanSelectMultiValue(p, i.Key))
                     .Select(i => i.Key)
                     .ToArray();
+                // A blank optional prompt has no value, as for ranges above.
+                result[p.Name] = picked.Length == 0 && !p.Required ? DBNull.Value : picked;
             }
             else
             {
                 var raw = _values.GetValueOrDefault(p.Name, "");
-                result[p.Name] = ConvertValue(raw, p.ParameterType);
+                result[p.Name] = !p.Required && string.IsNullOrWhiteSpace(raw) ? DBNull.Value : ConvertValue(raw, p.ParameterType);
             }
         }
 
         _visible = false;
+        StopLookups();
         _tcs?.TrySetResult(result);
         StateHasChanged();
     }
@@ -452,8 +970,17 @@
     private void Cancel()
     {
         _visible = false;
+        StopLookups();
         _tcs?.TrySetResult(null);
         StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _visible = false;
+        StopLookups();
+        _tcs?.TrySetResult(null);
     }
 
     // Parse the ISO date string held in _values back to DateTime? for the

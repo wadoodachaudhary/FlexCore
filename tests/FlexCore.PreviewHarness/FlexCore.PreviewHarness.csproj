@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\FlexCore.csproj" />
+    <ProjectReference Include="..\..\FlexCore.Migration\FlexCore.Migration.csproj" />
     <Content Include="..\FlexCore.RegressionTests\Fixtures\Preview\*.py" CopyToOutputDirectory="PreserveNewest" Link="Fixtures\Preview\%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

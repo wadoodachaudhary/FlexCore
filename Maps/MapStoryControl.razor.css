@@ -1,0 +1,9 @@
+.fx-map-story{max-width:100%;background:#f7f5f2;border:1px solid #e4ded2;border-radius:10px;padding:10px 12px 12px}
+.fx-map-story-nav{display:flex;align-items:center;gap:12px;min-height:32px;margin-bottom:4px}
+.fx-map-story-nav nav{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px}
+.fx-map-story-crumb{background:none;border:0;padding:0;color:#1f4e79;font:inherit;cursor:pointer;text-decoration:underline}
+.fx-map-story-crumb.current{color:#1a1a1a;font-weight:700;text-decoration:none}
+.fx-map-story-sep{color:#6d675c}
+.fx-map-story-stage{animation:fx-map-story-in 380ms ease}
+@keyframes fx-map-story-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.fx-map-story-stage{animation:none}}

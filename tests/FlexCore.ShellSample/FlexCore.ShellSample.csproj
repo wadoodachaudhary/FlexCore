@@ -8,6 +8,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\FlexCore.csproj" />
     <ProjectReference Include="..\..\FlexCore.Llm\FlexCore.Llm.csproj" />
+    <ProjectReference Include="..\..\FlexCore.Migration\FlexCore.Migration.csproj" />
     <ProjectReference Include="..\..\FlexCore.CodeTools\FlexCore.CodeTools.csproj" />
   </ItemGroup>
 </Project>

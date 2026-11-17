@@ -35,6 +35,12 @@
 }
 
 .fx-alert-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 24px;
+    width: 24px;
+    height: 24px;
     background: transparent;
     border: 0;
     font-size: 1.25rem;
@@ -49,6 +55,12 @@
 
 .fx-alert-close:hover {
     opacity: 1;
+}
+
+.fx-alert-close:focus-visible {
+    opacity: 1;
+    outline: 2px solid currentColor;
+    outline-offset: 1px;
 }
 
 .fx-alert-info {

@@ -93,6 +93,11 @@ public static class ModelCatalog
         // Ollama — cloud-proxied tags served by the local daemon via ollama.com
         M(ProviderKeys.Ollama, "deepseek-v4-pro:cloud", "DeepSeek V4 Pro (cloud)", 64_000, 8_192, Text | LlmCapabilities.Reasoning),
         M(ProviderKeys.Ollama, "gemma4:31b-cloud", "Gemma 4 31B (cloud)", 128_000, 8_192, Text | LlmCapabilities.Vision),
+
+        // Local in-process Transformers (without Ollama)
+        M(ProviderKeys.Local, "local-gpt2-small", "Local In-Process GPT-2 Small (124M)", 1_024, 512, Text),
+        M(ProviderKeys.Local, "local-gpt2-medium", "Local In-Process GPT-2 Medium (355M)", 1_024, 512, Text),
+        M(ProviderKeys.Local, "smalltestmodel", "Local In-Process Small Test Model", 256, 256, Text),
     };
 
     private static readonly Dictionary<string, string> Defaults = new(StringComparer.OrdinalIgnoreCase)
@@ -105,6 +110,7 @@ public static class ModelCatalog
         [ProviderKeys.Mistral] = "mistral-large-latest",
         [ProviderKeys.HuggingFace] = "Qwen/Qwen3-32B:nscale",
         [ProviderKeys.Ollama] = "deepseek-v4-pro:cloud",
+        [ProviderKeys.Local] = "local-gpt2-small",
     };
 
     // The model an Ollama family name stands for when no tag is given — the

@@ -144,6 +144,8 @@ public partial class DropDownListControl<TValue, TItem>
                     Value = newValue;
                     if (!unchanged || (pick && !SuppressUnchangedValueChange))
                     {
+                        if (CellHost is null && !unchanged)
+                            RecordControlAction("SelectionChanged", !string.IsNullOrWhiteSpace(action.Text) ? action.Text : text, AriaLabel ?? Placeholder);
                         await ValueChanged.InvokeAsync(newValue);
                         await ValueChange.InvokeAsync(new ChangeEventArgs<TValue, TItem> { Value = newValue, ItemData = item! });
                     }

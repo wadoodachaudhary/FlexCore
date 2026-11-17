@@ -10,17 +10,30 @@ public sealed partial class ReportLayoutSession
         public DateTime PrintTime { get; init; } = DateTime.Now;
         public Dictionary<string, object?> Shared { get; } = new(StringComparer.OrdinalIgnoreCase);
         public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, DataTable Data, DataTable Filtered)> Queries { get; } = [];
+        /// <summary>Accepts a subreport query failure in place of the subreport's records; null accepts none and the run fails.</summary>
+        public Func<Exception, bool>? TolerateSubreportQueryError { get; init; }
+        /// <summary>Subreport queries that failed with an accepted error, keyed as <see cref="Queries"/>, so none is sent twice.
+        /// A drill view shares its run's list.</summary>
+        public List<(ReportDefinition Definition, Dictionary<string, object> Parameters, List<(string Alias, object? Value)> Filters, string Message)> FailedQueries { get; init; } = [];
+        /// <summary>The subreport objects of this run that printed an error in place of their records.</summary>
+        public List<ReportSubreportError> SubreportErrors { get; } = [];
         public int Instances { get; set; }
         public int QueryRows { get; set; }
         public bool HasPageConditions { get; set; }
         public bool HasGrowingText { get; set; }
         public Dictionary<string, Func<int, int, bool, string>> PageValues { get; } = new();
+        /// <summary>Page tokens that resolve to markup built from the page's value, not to encoded text.</summary>
+        public Dictionary<string, Func<int, int, bool, string>> PageMarkup { get; } = new();
         public bool PhysicalSchedule { get; set; }
+        /// <summary>The variables of the run's reports, worked out at the run's first page break that needs them.</summary>
+        public RunVariables? Variables { get; set; }
         public List<ReportLayoutSession> Sessions { get; } = [];
         public Dictionary<PrintItemKey, Item> PrintedItems { get; set; } = new();
         public Dictionary<PrintBandKey, bool> PrintedVisibility { get; set; } = new();
         public Dictionary<PrintBandKey, PrintSectionFormat> PrintedSections { get; set; } = new();
         public List<HashSet<PrintBandKey>> BlankHistory { get; } = [];
+        /// <summary>The states the page replays of one pagination left, to tell a cycle from a layout still settling.</summary>
+        public HashSet<(long, long, int)> ReplayStates { get; } = [];
         public Dictionary<(ReportLayoutSession Owner, string Section, int Occurrence), bool> PrintedBlank { get; set; } = new();
     }
     private readonly RuntimeState _state;
@@ -34,13 +47,26 @@ public sealed partial class ReportLayoutSession
     private object? _formulaPages;
     private bool _repeatedHeader;
     private readonly Dictionary<(string Id, int Row), (bool Area, bool Section, bool AreaHidden, bool SectionHidden)> _suppression = new();
+    private readonly Dictionary<(string Element, int Row), VariableSnapshot> _onDemandVariables = new();
 
+    private void CaptureOnDemandVariables(Band band)
+    {
+        VariableSnapshot? snapshot = null;
+        foreach (var item in band.Items)
+            if (_layout.OnDemandSubreports.ContainsKey(item.Element.Id))
+                _onDemandVariables[(item.Element.Id, item.Row)] = snapshot ??= CaptureVariables();
+    }
+
+    private Func<string, CrystalValueType?>? _referenceTypeDelegate;
+    private Func<string, int>? _groupingLevelDelegate;
+    private Func<string, object?>? _documentPropertyDelegate;
     private CrystalFormulaContext Context(int row, object? page = null, object? count = null, string? currentField = null) => new()
     {
-        Resolve = reference => Value(reference, row), ReferenceType = ReferenceType,
+        Resolve = reference => Value(reference, row), ReferenceType = _referenceTypeDelegate ??= ReferenceType,
         Aggregate = (op, field, group) => IsParameter(field)
             ? throw new NotSupportedException($"{op} ({field}): a parameter is summarized as an array or range value, not through the record summary context.")
             : Summary(new(SummaryOperation(op), field, group), row),
+        WeightedAverage = (field, weight, group) => Summary(new("Weighted Average", field, group) { WeightField = weight }, row),
         ConditionalAggregate = (op, field, group, condition) => Summary(new(SummaryOperation(op), field, group) { GroupLevel = ConditionLevel(group, condition) }, row),
         GroupName = (field, condition) => GroupNameValue(condition is null ? GroupLevel(field) : ConditionLevel(field, condition), row),
         Relative = (field, offset) => row + offset >= 0 && row + offset < _rows.Length ? Value(field, row + offset) : null,
@@ -48,14 +74,27 @@ public sealed partial class ReportLayoutSession
         SharedVariables = _state.Shared, GlobalVariables = _globals, Now = _printTime,
         RecordIndex = row, RecordCount = _rows.Length, PageNumber = page ?? _formulaPage ?? 1, TotalPageCount = count ?? _formulaPages ?? 1,
         InRepeatedGroupHeader = _repeatedHeader, GroupNumber = () => GroupNumber(row),
-        GroupingLevel = field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
+        DrillDownGroupLevel = _drillDownGroupLevel,
+        GroupingLevel = _groupingLevelDelegate ??= field => _layout.Document.Groups.FindIndex(g => g.Condition.Trim().Equals(field.Trim(), StringComparison.OrdinalIgnoreCase)) + 1,
         HierarchicalChildren = level => HierarchicalChildren(level, row),
-        DocumentProperty = name => name switch
+        DocumentProperty = _documentPropertyDelegate ??= name => name switch
         {
             "reporttitle" => ReportTitle, "reportcomments" => _layout.Document.Comments, "fileauthor" => _layout.Document.Author,
+            "filename" => FilePathAndName, "filecreationdate" => FileCreationTime.Date,
+            "modificationdate" => ModificationTime.Date, "modificationtime" => ModificationTime.TimeOfDay,
             _ => throw new NotSupportedException($"Document property '{name}' is not available to this report run.")
         }
     };
+
+    // Crystal's file properties: the report's own path, else the document's, and the time stamps saved with it. Crystal prints the
+    // property set's creation stamp (rewritten by its designer on every save) as the modification date; a document saved without
+    // stamps reads its file's, and one that has no file prints the print time.
+    private string FilePathAndName => _layout.Document.ReportFilePath is { Length: > 0 } path ? path
+        : _layout.Document.SourcePath is { Length: > 0 } source ? source : _layout.Document.SourceName;
+    private DateTime FileCreationTime => (_layout.Document.Created ?? _layout.Document.LastSaved)?.ToLocalTime() ?? SourceFileTime(File.GetCreationTime) ?? _printTime;
+    private DateTime ModificationTime => (_layout.Document.Created ?? _layout.Document.LastSaved)?.ToLocalTime() ?? SourceFileTime(File.GetLastWriteTime) ?? _printTime;
+    private DateTime? SourceFileTime(Func<string, DateTime> read)
+        => _layout.Document.SourcePath is { Length: > 0 } path && File.Exists(path) ? read(path) : null;
 
     // Crystal's ReportTitle is the saved summary title, blank when none was saved; the document title falls back to other text for display.
     private string ReportTitle => _layout.Document.SourceDocument?.Root is not { } root ? _layout.Document.Title
@@ -130,7 +169,7 @@ public sealed partial class ReportLayoutSession
         if (_layout.RecordSelection is { } selection)
         {
             RequireReadTime(selection, "Record selection");
-            _rows = _rows.Where((_, index) => CrystalFormula.Boolean(selection.Evaluate(Context(index)))).ToArray();
+            _rows = _rows.Where((_, index) => CrystalFormula.Boolean(selection.EvaluateRecordSelection(Context(index)))).ToArray();
             ClearValues();
         }
         if (_linkSelections.Count > 0)
@@ -151,7 +190,7 @@ public sealed partial class ReportLayoutSession
         var keys = _rows.Select((data, index) => (Data: data, Index: index, Keys: sort.Select(s => s.Key(index)).ToArray())).ToArray();
         Array.Sort(keys, (left, right) =>
         {
-            for (var i = 0; i < sort.Length; i++) { var order = CrystalFormula.Compare(left.Keys[i], right.Keys[i]); if (order != 0) return sort[i].Descending ? -order : order; }
+            for (var i = 0; i < sort.Length; i++) { var order = CompareSortValues(left.Keys[i], right.Keys[i]); if (order != 0) return sort[i].Descending ? -order : order; }
             return left.Index.CompareTo(right.Index);
         });
         _rows = keys.Select(k => k.Data).ToArray(); ClearValues();
@@ -173,32 +212,78 @@ public sealed partial class ReportLayoutSession
         if (formula.RequiresPrintPass || RequiredTime(formula) == CrystalEvaluationTime.WhilePrintingRecords)
             throw new NotSupportedException(name + " cannot depend on print-time formulas.");
     }
+    // A formula whose only print-time need is a group or report summary of read-time values (no variable, page or record
+    // context) is known for every record once they are read: Crystal groups a cross-tab by such a formula.
+    private bool SummaryBound(CrystalFormula formula, HashSet<string>? visiting = null)
+    {
+        if (formula.RequiresPrintPass || formula.UsesPageContext || formula.UsesSharedVariables || formula.UsesRecordContext
+            || formula.UsesPersistentVariables || formula.UsesGroupNumber || formula.EvaluationTime is CrystalEvaluationTime.WhilePrintingRecords) return false;
+        visiting ??= new(StringComparer.OrdinalIgnoreCase);
+        foreach (var dependency in formula.References)
+        {
+            if (!visiting.Add(dependency)) continue;
+            if (_layout.Formulas.TryGetValue(dependency, out var nested)) { if (!SummaryBound(nested, visiting)) return false; }
+            else if (EvaluationTime(dependency) == CrystalEvaluationTime.WhilePrintingRecords) return false;
+        }
+        return true;
+    }
     private void ClearValues() { _bandFormulaCache.Clear(); _groupRanges.Clear(); _groupStarts.Clear(); _summaryCache.Clear(); _runningValues.Clear(); }
 
-    private string DeferredPageValue(string reference, int row, string format)
+    private string DeferredPageValue(string reference, int row, string format, ReportNativeDateTimeFormat? nativeDateTime, ReportNativeNumberFormat? nativeNumber, ReportNativeNumericFormat? nativeNumeric)
     {
         if (NeedsPrintState(reference)) throw new NotSupportedException("Page formulas cannot mutate shared/global variables during pagination.");
         var token = Guid.NewGuid().ToString("N") + "-formula";
         _state.PageValues[token] = (page, count, repeated) =>
         {
             var previousPage = _formulaPage; var previousCount = _formulaPages; var previousRepeat = _repeatedHeader;
-            try { _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated; return Format(reference, row, format); }
+            try { _formulaPage = page; _formulaPages = count; _repeatedHeader = repeated; return Format(reference, row, format, nativeDateTime, nativeNumber, nativeNumeric); }
             finally { _formulaPage = previousPage; _formulaPages = previousCount; _repeatedHeader = previousRepeat; }
         };
         return token;
     }
+    // A page value whose markup depends on the value itself (a chart marker is placed by its text width): the token
+    // stands for the whole markup and resolves to the markup built from that page's value.
+    private string DeferredPageMarkup(string reference, int row, Func<string, string> markup)
+    {
+        var token = DeferredPageValue(reference, row, "", null, null, null);
+        var value = _state.PageValues[token];
+        _state.PageValues.Remove(token);
+        _state.PageMarkup[token] = (page, count, repeated) => markup(value(page, count, repeated));
+        return token;
+    }
     private string ResolvePageValues(string html, int page, int count, bool repeated = false)
     {
+        // Every deferred token ends in "-formula". Ordinary object text cannot
+        // contain one without that marker, so avoid scanning all row variants.
+        // Possible tokens retain the existing ordered replacement semantics.
+        if (_state.PageValues.Count == 0 && _state.PageMarkup.Count == 0 || !html.Contains("-formula", StringComparison.Ordinal)) return html;
+        foreach (var entry in _state.PageMarkup)
+            if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, entry.Value(page, count, repeated), StringComparison.Ordinal);
         foreach (var entry in _state.PageValues)
             if (html.Contains(entry.Key, StringComparison.Ordinal)) html = html.Replace(entry.Key, ReportObjectRenderer.Encode(entry.Value(page, count, repeated)), StringComparison.Ordinal);
         return html;
     }
 
     private bool UsesPage(CrystalFormula formula) => formula.UsesPageContext || formula.References.Any(r => DependsOn(r, true));
+    private static readonly KeyValuePair<string, CrystalFormula>[] NoConditions = [];
+    // The layout's conditional formulas do not change while the session lives; each (table, id, page dependence) list is built once.
+    private readonly Dictionary<(Dictionary<string, Dictionary<string, CrystalFormula>> Table, string Id, bool PageOnly), KeyValuePair<string, CrystalFormula>[]> _conditionLists = new();
+    private KeyValuePair<string, CrystalFormula>[] ConditionList(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id, bool pageOnly)
+    {
+        if (!table.TryGetValue(id, out var conditions) || conditions.Count == 0) return NoConditions;
+        var key = (table, id, pageOnly);
+        if (!_conditionLists.TryGetValue(key, out var list))
+            _conditionLists[key] = list = conditions.Where(c => UsesPage(c.Value) == pageOnly).ToArray();
+        return list;
+    }
     private IEnumerable<KeyValuePair<string, CrystalFormula>> Conditions(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id, bool pageOnly) =>
-        (table.GetValueOrDefault(id) ?? []).Where(c => UsesPage(c.Value) == pageOnly);
-    private bool PageSuppresses(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id) =>
-        Conditions(table, id, true).Any(c => c.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase));
+        ConditionList(table, id, pageOnly);
+    private bool PageSuppresses(Dictionary<string, Dictionary<string, CrystalFormula>> table, string id)
+    {
+        foreach (var condition in ConditionList(table, id, true))
+            if (condition.Key.Equals("EnableSuppress", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
     private object? ConditionValue(CrystalFormula formula, int row, bool pageOnly, string? currentField = null)
     {
         if (formula.EvaluationTime is { } requested && requested < RequiredTime(formula))
@@ -209,7 +294,10 @@ public sealed partial class ReportLayoutSession
             throw new NotSupportedException("Page header/footer formatting cannot assign persistent variables during speculative measurement.");
         if (pageOnly && !_replayingPrint && NeedsPrintState(formula))
             throw new NotSupportedException("Page-dependent formatting cannot mutate shared/global variables.");
-        return formula.Evaluate(Context(row, currentField: currentField));
+        var value = formula.Evaluate(Context(row, currentField: currentField), out var stopped);
+        // A condition that stopped at a null value may have set some of the variables it assigns and not the rest (Furnish).
+        if (stopped && formula.WritesPersistentVariables) _state.Sessions[0]._assignmentFailures++;
+        return value;
     }
     private static ReportDesignerSection CopySection(ReportDesignerSection source) => new()
         {
@@ -220,8 +308,18 @@ public sealed partial class ReportLayoutSession
             ResetPageNumberAfter = source.ResetPageNumberAfter,
             KeepTogether = source.KeepTogether, BackgroundColor = source.BackgroundColor, Elements = source.Elements
         };
-    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null)
+    // `only` evaluates that one conditional property and leaves the suppression state alone; `skip` leaves one property as the source has it.
+    // `allowShared` lets a page-only evaluation hand back the source itself when the copy would equal it field for field
+    // (no page-dependent conditions, and the stored suppression states already applied); the caller must not mutate it.
+    private ReportDesignerSection ApplySectionConditions(ReportDesignerSection source, int row, bool pageOnly = false, bool? endingOnly = null, string? only = null, string? skip = null,
+        bool allowShared = false)
     {
+        if (allowShared && pageOnly && endingOnly is null && only is null && skip is null
+            && ConditionList(_layout.AreaConditions, source.Id, true).Length == 0 && ConditionList(_layout.SectionConditions, source.Id, true).Length == 0)
+        {
+            var stored = _suppression.GetValueOrDefault((source.Id, row));
+            if (source.IsSuppressed == (stored.Area || stored.Section) && source.HideForDrillDown == (stored.AreaHidden || stored.SectionHidden)) return source;
+        }
         var section = CopySection(source);
         var states = pageOnly ? _suppression.GetValueOrDefault((source.Id, row)) :
             (Area: !PageSuppresses(_layout.AreaConditions, source.Id) && !MutableCondition(_layout.AreaConditions, source.Id, "EnableSuppress") && _layout.Areas.GetValueOrDefault(source.Id)?.Suppressed == true,
@@ -233,6 +331,8 @@ public sealed partial class ReportLayoutSession
         {
             var condition = entry.Condition;
             if (endingOnly is { } ending && EndingProperty(condition.Key) != ending) continue;
+            if (only is not null && !condition.Key.Equals(only, StringComparison.OrdinalIgnoreCase)
+                || skip is not null && condition.Key.Equals(skip, StringComparison.OrdinalIgnoreCase)) continue;
             // Until the first physical replay records page formats, page-only conditions use the tentative page number.
             if (_physicalPageSchedule && !_replayingPrint && (NeedsPrintState(condition.Value)
                 || UsesPage(condition.Value) && (_state.PrintedVisibility.Count > 0 || _state.PrintedSections.Count > 0))) continue;
@@ -248,11 +348,11 @@ public sealed partial class ReportLayoutSession
                 case "enablesuppressifblank": section.SuppressIfBlank = CrystalFormula.Boolean(value); break;
                 case "enableprintatbottomofpage": section.PrintAtBottomOfPage = CrystalFormula.Boolean(value); break;
                 case "enableunderlayfollowingsections" or "enableunderlaysection": section.UnderlayFollowingSections = CrystalFormula.Boolean(value); break;
-                case "backgroundcolor": section.BackgroundColor = FormulaColor(value); break;
+                case "backgroundcolor": section.BackgroundColor = value is null or DBNull ? source.BackgroundColor : FormulaColor(value); break;
                 default: _diagnostics.Add($"{section.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
         }
-        if (endingOnly != true)
+        if (endingOnly != true && only is null)
         {
             section.IsSuppressed = states.Area || states.Section;
             section.HideForDrillDown = states.AreaHidden || states.SectionHidden;
@@ -263,6 +363,9 @@ public sealed partial class ReportLayoutSession
 
     private ReportDesignerElement ApplyObjectConditions(ReportDesignerElement source, int row, bool pageOnly = false)
     {
+        // Without page-dependent conditions a page-only evaluation copies the object unchanged (no indent, no highlight
+        // rule): the source itself serves, and nothing downstream mutates an item's element in place (each site clones first).
+        if (pageOnly && ConditionList(_layout.ObjectConditions, source.Id, true).Length == 0) return source;
         var element = source.CloneFor(source.SectionId, source.Name);
         element.Id = source.Id; element.SourceKey = source.SourceKey;
         element.LeftTwips = source.LeftTwips + (pageOnly ? 0 : HierarchicalIndent(source.SectionId, row)); element.TopTwips = source.TopTwips;
@@ -270,6 +373,18 @@ public sealed partial class ReportLayoutSession
         foreach (var condition in Conditions(_layout.ObjectConditions, source.Id, pageOnly))
         {
             if (_physicalPageSchedule && !_replayingPrint && NeedsPrintState(condition.Value)) continue;
+            if (condition.Key.StartsWith("TextRun:", StringComparison.Ordinal))
+            {
+                var parts = condition.Key.Split(':', 3);
+                var index = int.Parse(parts[1], CultureInfo.InvariantCulture);
+                // DisplayString can replace the complete rich text object.
+                if (index < element.Visual.Runs.Count)
+                {
+                    var run = element.Visual.Runs[index];
+                    ApplyTextRunCondition(run, parts[2], ConditionValue(condition.Value, row, pageOnly, run.Binding), element.Name);
+                }
+                continue;
+            }
             var value = ConditionValue(condition.Value, row, pageOnly, source.Binding);
             var fontCondition = condition.Key.ToLowerInvariant() is "color" or "fontcolor" or "bold" or "enablebold" or "italic" or "enableitalic" or "underline" or "enableunderline" or "size" or "fontsize" or "name" or "fontname" or "style";
             switch (condition.Key.ToLowerInvariant())
@@ -289,13 +404,22 @@ public sealed partial class ReportLayoutSession
                     element.Bold = style.Contains("bold", StringComparison.OrdinalIgnoreCase);
                     element.Italic = style.Contains("italic", StringComparison.OrdinalIgnoreCase);
                     break;
+                case "textrotation":
+                    var angle = CrystalFormula.Number(value);
+                    if (angle is 0 or 90 or 270) element.TextRotation = (int)angle;
+                    else _diagnostics.Add($"{element.Name}: unsupported text rotation '{angle}'.");
+                    break;
                 case "horizontalalignment": element.HorizontalAlignment = value?.ToString() ?? "Left"; break;
                 case "bordercolor": element.Visual.BorderColor = FormulaColor(value); break;
+                case "hasdropshadow": element.Visual.HasDropShadow = CrystalFormula.Boolean(value); break;
+                case "linewidth": element.Visual.LineWidthTwips = Math.Max(0, (int)CrystalFormula.Number(value)); break;
                 case "leftlinestyle": element.Visual.LeftLine = FormulaLine(value); break;
                 case "rightlinestyle": element.Visual.RightLine = FormulaLine(value); break;
                 case "toplinestyle": element.Visual.TopLine = FormulaLine(value); break;
                 case "bottomlinestyle": element.Visual.BottomLine = FormulaLine(value); break;
                 case "displaystring": element.Kind = "Text"; element.Text = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; element.Visual.Runs.Clear(); break;
+                case "ondemandcaption": element.Text = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; break;
+                case "subreportpreviewtabtext": element.SubreportTabText = Convert.ToString(value, CultureInfo.CurrentCulture) ?? ""; break;
                 default: _diagnostics.Add($"{element.Name}: conditional property '{condition.Key}' is not implemented."); break;
             }
             if (fontCondition)
@@ -339,47 +463,79 @@ public sealed partial class ReportLayoutSession
         return element;
     }
 
-    private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null)
+    // furniture: the band prints inside the page header or footer of physicalPage (a subreport's section there).
+    private Band ForPage(Band source, int page, int count, bool repeated = false, int physicalPage = 0, int? objectPage = null, bool furniture = false)
     {
-        source = ApplyPrintedItems(source, physicalPage, repeated);
+        if (source.EvaluationOnly) return source;
+        source = ApplyPrintedItems(source, physicalPage, repeated || furniture);
         var sectionOwner = source.Owner ?? this;
         var previousPage = sectionOwner._formulaPage; var previousCount = sectionOwner._formulaPages; var previousRepeat = sectionOwner._repeatedHeader;
+        // Box the page numbers once per band, not once per object.
+        object pageBox = page, countBox = count, objectPageBox = objectPage is { } explicitPage ? explicitPage : pageBox;
+        var pageText = page.ToString(CultureInfo.InvariantCulture);
+        var countText = count.ToString(CultureInfo.InvariantCulture);
         try
         {
-            sectionOwner._formulaPage = page; sectionOwner._formulaPages = count; sectionOwner._repeatedHeader = repeated;
-            var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true);
-            var occurrence = repeated || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
-            if (_state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format)) format.Apply(section);
-            var items = new List<Item>();
+            sectionOwner._formulaPage = pageBox; sectionOwner._formulaPages = countBox; sectionOwner._repeatedHeader = repeated;
+            var occurrence = repeated || furniture || source.Section.Kind is "PageHeader" or "PageFooter" ? physicalPage : 0;
+            var hasFormat = _state.PrintedSections.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var format);
+            var section = sectionOwner.ApplySectionConditions(source.Section, source.Row, true, allowShared: !hasFormat);
+            if (hasFormat) format!.Apply(section);
+            var items = new List<Item>(source.Items.Count);
             foreach (var item in source.Items)
             {
                 var owner = item.Owner ?? this;
                 var oldPage = owner._formulaPage; var oldCount = owner._formulaPages; var oldRepeat = owner._repeatedHeader;
                 try
                 {
-                    owner._formulaPage = objectPage ?? page; owner._formulaPages = count; owner._repeatedHeader = repeated;
+                    owner._formulaPage = objectPageBox; owner._formulaPages = countBox; owner._repeatedHeader = repeated;
                     var element = owner.ApplyObjectConditions(item.Element, item.Row, true);
                     var resized = element.CanGrow != item.Element.CanGrow || element.FontSize != item.Element.FontSize || element.FontFamily != item.Element.FontFamily;
                     if (resized && _textMetrics is null) _diagnostics.Add($"{element.Name}: page-dependent font/CanGrow uses approximate font measurement.");
-                    var richChanged = element.Visual.Runs.Count > 0 && owner.Conditions(owner._layout.ObjectConditions, element.Id, true).Any();
+                    var richChanged = element.Visual.Runs.Count > 0 && owner.ConditionList(owner._layout.ObjectConditions, element.Id, true).Length > 0;
+                    var replacesText = owner.ConditionList(owner._layout.ObjectConditions, element.Id, true)
+                        .Any(c => c.Key.Equals("DisplayString", StringComparison.OrdinalIgnoreCase));
                     var template = item.TemplateHtml ?? item.Html;
+                    var duplicateValue = item.DuplicateValue;
                     var html = richChanged && owner._physicalPageSchedule && element.Visual.Runs.Count > 0
                         ? RestylePrintedRuns(template, element)
-                        : richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
-                            ? ReportObjectRenderer.Content(element, reference => owner.Format(reference, item.Row, element.FormatString)) : template;
-                    html = ResolvePageValues(html.Replace(_pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(_countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(owner._pageToken, page.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal)
-                        .Replace(owner._countToken, count.ToString(CultureInfo.InvariantCulture), StringComparison.Ordinal), page, count, repeated);
-                    items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement });
+                        : replacesText || richChanged || element.Text != item.Element.Text || element.Kind != item.Element.Kind
+                            ? owner.CaptureFieldContent(element, item.Row).Html : template;
+                    if (SuppressesDuplicates(element) && owner.DependsOn(element.Binding, true) && !owner._physicalPageSchedule)
+                        (html, duplicateValue) = owner.CaptureFieldContent(element, item.Row);
+                    html = html.Replace(_pageToken, pageText, StringComparison.Ordinal).Replace(_countToken, countText, StringComparison.Ordinal);
+                    if (!ReferenceEquals(owner, this))
+                        html = html.Replace(owner._pageToken, pageText, StringComparison.Ordinal).Replace(owner._countToken, countText, StringComparison.Ordinal);
+                    html = ResolvePageValues(html, page, count, repeated);
+                    items.Add(item with { Element = element, Html = html, TemplateHtml = template, Measurement = resized || html != item.Html ? -2 : item.Measurement, DuplicateValue = duplicateValue });
                 }
                 finally { owner._formulaPage = oldPage; owner._formulaPages = oldCount; owner._repeatedHeader = oldRepeat; }
             }
             var hidden = _state.PrintedVisibility.TryGetValue(new(sectionOwner, source.Section.Id, source.Row, occurrence), out var visible) && !visible;
-            return source with { Section = section, Items = items, Suppressed = !Visible(section) || hidden, RepeatedHeader = repeated };
+            return source with { Section = section, Items = items, Suppressed = !sectionOwner.Visible(section) || hidden, RepeatedHeader = repeated };
         }
         finally { sectionOwner._formulaPage = previousPage; sectionOwner._formulaPages = previousCount; sectionOwner._repeatedHeader = previousRepeat; }
     }
+    private void ApplyTextRunCondition(ReportTextRun run, string property, object? value, string objectName)
+    {
+        switch (property.ToLowerInvariant())
+        {
+            case "color": case "fontcolor": run.Color = FormulaColor(value); break;
+            case "bold": case "enablebold": run.Bold = CrystalFormula.Boolean(value); break;
+            case "italic": case "enableitalic": run.Italic = CrystalFormula.Boolean(value); break;
+            case "underline": case "enableunderline": run.Underline = CrystalFormula.Boolean(value); break;
+            case "size": case "fontsize": run.FontSize = Math.Clamp(CrystalFormula.Number(value), 1, 300); break;
+            case "name": case "fontname": run.FontFamily = value?.ToString() ?? "Arial"; break;
+            case "style":
+                var style = value is string text ? text : (int)CrystalFormula.Number(value) switch
+                { 0 => "Regular", 1 => "Bold", 2 => "Italic", 3 => "BoldItalic", _ => throw new NotSupportedException("Unknown conditional font style.") };
+                run.Bold = style.Contains("bold", StringComparison.OrdinalIgnoreCase);
+                run.Italic = style.Contains("italic", StringComparison.OrdinalIgnoreCase);
+                break;
+            default: _diagnostics.Add($"{objectName}: text-run conditional property '{property}' is not implemented."); break;
+        }
+    }
+
     private static string FormulaColor(object? value)
     {
         if (value is string color) return ReportObjectRenderer.Color(color, "#000000");
@@ -393,6 +549,30 @@ public sealed partial class ReportLayoutSession
     private sealed record SubreportLinkState(ReportLayoutSession Owner, string Section, int Row, string Element, List<ReportLayoutParameterLink> Links, object?[] Values);
     private SubreportLinkState? _link;
     private static object?[]? Multiple(object? value) => value is string or byte[] or null or DBNull || value is not System.Collections.IEnumerable items ? null : items.Cast<object?>().ToArray();
+    // SQL binds a parameter by its identifier name ("Pm-Orders.Number" binds as @PmOrdersNumber; formulas keep the Crystal name).
+    // A multi-value entry cannot bind as one value: "= @Name" becomes IN (@Name_0, ...) on a copy of the query, one value binds as
+    // itself and no value binds NULL (nothing matches, as in Crystal).
+    private static (ReportDefinition Query, Dictionary<string, object> Bound) SqlQuery(ReportDefinition query, IReadOnlyDictionary<string, object> parameters)
+    {
+        query.PositionedSqlSelection?.ValidateUnexpandedLists(parameters);
+        var scalars = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+        var lists = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in parameters)
+        {
+            var name = new string(key.Where(character => char.IsLetterOrDigit(character) || character == '_').ToArray());
+            if (name.Length == 0) continue;
+            var items = Multiple(value)?.Where(item => item is not (null or DBNull)).ToArray();
+            if (items is null) scalars[name] = value;
+            else if (items.Length == 0) scalars[name] = DBNull.Value;
+            else if (items.Length == 1) scalars[name] = items[0]!;
+            else lists[name] = items.Select(item => Convert.ToString(item, CultureInfo.InvariantCulture) ?? "").ToArray();
+        }
+        if (lists.Count == 0) return (query, scalars);
+        var copy = new ReportDefinition { Sql = query.Sql, Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters.ToList(),
+            FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout, PositionedSqlSelection = query.PositionedSqlSelection?.Clone(),
+            PositionedIntegerSelection = query.CopyIntegerSelectionForSql(query.Sql), PositionedTextSelection = query.CopyTextSelectionForSql(query.Sql) };
+        return (copy, MultiValueParameterRewriter.Apply(copy, lists, scalars));
+    }
     // Equality under CrystalFormula.Compare; same-kind text, number and date values use a set instead of a scan.
     private static Func<object?, bool> LinkMatcher(object? expected)
     {
@@ -416,13 +596,59 @@ public sealed partial class ReportLayoutSession
     private bool Resolvable(string reference) => reference.Trim() is var name && (_layout.Formulas.ContainsKey(name) || _layout.FormulaErrors.ContainsKey(name) || _layout.RunningTotals.ContainsKey(name)
         || _layout.GroupNames.ContainsKey(name) || _layout.Bindings.ContainsKey(name) || _layout.Summaries.ContainsKey(name) || IsParameter(name) || IsSpecial(name));
 
-    private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row)
+    /// <summary>Subreport objects whose query failed with an accepted error, by element id, with the error's message.</summary>
+    private readonly Dictionary<string, string> _subreportErrors = new(StringComparer.Ordinal);
+
+    private static bool SameSubreportQuery(ReportDefinition definition, Dictionary<string, object> parameters, List<(string Alias, object? Value)> filters,
+        ReportDefinition otherDefinition, Dictionary<string, object> otherParameters, List<(string Alias, object? Value)> otherFilters) =>
+        ReferenceEquals(definition, otherDefinition) && filters.SequenceEqual(otherFilters)
+        && parameters.Count == otherParameters.Count && parameters.All(p => otherParameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value));
+
+    /// <summary>The subreport object prints <paramref name="message"/> in place of its records (ReportPositionedLayout.CreateBand);
+    /// the run lists it once per object in its diagnostics and its <see cref="ReportLayoutResult.SubreportErrors"/>.</summary>
+    private ReportLayoutSession? SubreportQueryFailed(ReportDesignerElement element, string message)
+    {
+        if (_subreportErrors.TryAdd(element.Id, message))
+            _diagnostics.Add($"{element.Name}: subreport '{element.SubreportName}' did not run: {message}");
+        if (!_state.SubreportErrors.Any(error => error.ElementId == element.Id && error.Message == message))
+            _state.SubreportErrors.Add(new(element.Id, element.Name, element.SubreportName, message));
+        return null;
+    }
+
+    /// <summary>What a subreport object whose query failed prints in place of its records, or null.</summary>
+    private string? SubreportErrorHtml(ReportDesignerElement element) => _subreportErrors.TryGetValue(element.Id, out var message)
+        ? "<span class=\"fx-report-subreport-error\" style=\"color:#b00020;font-style:italic\">[Subreport error: " + System.Net.WebUtility.HtmlEncode(message) + "]</span>"
+        : null;
+
+    // How deep inline subreports nest below the report that prints them: a session at this depth prints none.
+    private const int MaxSubreportDepth = 8;
+
+    // run: the subreport's records and parameters, already read for this row.
+    private ReportLayoutSession? CreateInlineSubreport(ReportDesignerElement element, int row, bool initializePrintContext = false, SubreportRun? run = null)
     {
         if (!_layout.Subreports.TryGetValue(element.Id, out var subreport))
         { _diagnostics.Add($"{element.Name}: subreport is on-demand or its definition is unavailable."); return null; }
         if (_executeSubreport is null)
         { _diagnostics.Add($"{element.Name}: an inline subreport data executor is required."); return null; }
-        if (_depth >= 8 || ++_state.Instances > 10000) throw new InvalidDataException("Inline subreport instance/nesting limit exceeded.");
+        if (_depth >= MaxSubreportDepth || ++_state.Instances > 10000) throw new InvalidDataException("Inline subreport instance/nesting limit exceeded.");
+        run ??= ResolveSubreportRun(element, subreport, row);
+        if (run is null) return null;
+        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport, _state, _depth + 1, this, run.Selections,
+            initializePrintContext: initializePrintContext)
+            { _link = new(this, element.SectionId, row, element.Name, subreport.Links, run.Values) };
+        if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
+            _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
+        foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);
+        return child;
+    }
+
+    private sealed record SubreportRun(DataTable Data, Dictionary<string, object> Parameters, List<(string Field, object? Value)> Selections, object?[] Values);
+
+    /// <summary>Binds the subreport's links for <paramref name="row"/> and reads its records (one query per distinct link values);
+    /// null when the host accepted the query's failure, which the object then prints.</summary>
+    private SubreportRun? ResolveSubreportRun(ReportDesignerElement element, ReportLayoutSubreport subreport, int row)
+    {
+        if (_executeSubreport is null) throw new InvalidOperationException($"{element.Name}: a subreport data executor is required.");
         var parameters = new Dictionary<string, object>(_parameters, StringComparer.OrdinalIgnoreCase);
         foreach (var parameter in subreport.Definition.Parameters)
             if (!parameters.ContainsKey(parameter.Name) && !string.IsNullOrEmpty(parameter.DefaultValue)) parameters[parameter.Name] = parameter.DefaultValue;
@@ -444,14 +670,15 @@ public sealed partial class ReportLayoutSession
             else if (childLayout.Formulas.ContainsKey(link.ChildField)) selections.Add((link.ChildField, value));
             else throw new InvalidDataException($"{element.Name}: subreport link '{link.MainField}' -> '{{?{link.Parameter}}}' selects on '{link.ChildField}', which is not a field or formula of subreport '{element.SubreportName}'.");
         }
-        var cached = _state.Queries.FirstOrDefault(q => ReferenceEquals(q.Definition, subreport.Definition) &&
-            q.Filters.SequenceEqual(filters) &&
-            q.Parameters.Count == parameters.Count && q.Parameters.All(p => parameters.TryGetValue(p.Key, out var value) && Equals(p.Value, value)));
+        var cached = _state.Queries.FirstOrDefault(q => SameSubreportQuery(q.Definition, q.Parameters, q.Filters, subreport.Definition, parameters, filters));
         var (data, filtered) = (cached.Data, cached.Filtered);
         if (data is null)
         {
-            var query = subreport.Definition;
-            var bound = new Dictionary<string, object>(parameters, StringComparer.OrdinalIgnoreCase);
+            // A failure the run accepted is not sent again: page furniture prepared for every row, repeated
+            // instances and drill views of the run print the same error.
+            var failed = _state.FailedQueries.FirstOrDefault(q => SameSubreportQuery(q.Definition, q.Parameters, q.Filters, subreport.Definition, parameters, filters));
+            if (failed.Message is not null) { SubreportQueryFailed(element, failed.Message); return null; }
+            var (query, bound) = SqlQuery(subreport.Definition, parameters);
             if (filters.Count > 0)
             {
                 var predicates = new List<string>();
@@ -471,10 +698,21 @@ public sealed partial class ReportLayoutSession
                     else { bound[key] = filters[index].Value ?? DBNull.Value; predicates.Add(column + " = @" + key); }
                 }
                 if (bound.Count > 2100) throw new InvalidDataException($"{element.Name}: the subreport query would bind {bound.Count} SQL parameters; SQL Server accepts at most 2,100.");
-                query = new ReportDefinition { Sql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates),
-                    Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout };
+                var wrappedSql = "SELECT * FROM (" + query.Sql + ") AS [__fxInline] WHERE " + string.Join(" AND ", predicates);
+                query = new ReportDefinition { Sql = wrappedSql,
+                    Title = query.Title, ReportId = query.ReportId, Parameters = query.Parameters, FixedParameters = query.FixedParameters, PositionedLayout = query.PositionedLayout,
+                    PositionedSqlSelection = query.PositionedSqlSelection?.Clone(), PositionedIntegerSelection = query.CopyIntegerSelectionForSql(wrappedSql),
+                    PositionedTextSelection = query.CopyTextSelectionForSql(wrappedSql) };
             }
-            data = _executeSubreport(query, bound);
+            try { data = _executeSubreport(query, bound); }
+            catch (Exception error) when (error is not OperationCanceledException && _state.TolerateSubreportQueryError?.Invoke(error) == true)
+            {
+                // The host accepts this failure (TolerateSubreportQueryError): the main report still prints and
+                // the subreport object shows the reason. Every other failure, and every failure without the
+                // option, ends the run as before.
+                _state.FailedQueries.Add((subreport.Definition, parameters, filters, error.Message));
+                SubreportQueryFailed(element, error.Message); return null;
+            }
             if (data.Rows.Count > 100000) throw new InvalidDataException("Subreport exceeds the 100,000-row limit.");
             _state.QueryRows += data.Rows.Count;
             if (_state.QueryRows > 250000) throw new InvalidDataException("Inline subreport queries exceed the 250,000-row combined limit.");
@@ -486,11 +724,39 @@ public sealed partial class ReportLayoutSession
                 if (matches.All(f => f.Match(candidate[f.Alias]))) filtered.ImportRow(candidate);
             _state.Queries.Add((subreport.Definition, parameters, filters, data, filtered));
         }
-        var child = new ReportLayoutSession(subreport.Definition.PositionedLayout!, filtered, parameters, _executeSubreport, _state, _depth + 1, this, selections)
-            { _link = new(this, element.SectionId, row, element.Name, subreport.Links, values) };
-        if (child._layout.Document.Sections.Any(s => s.ResetPageNumberAfter) || child._layout.Areas.Values.Any(a => a.ResetPageNumberAfter))
-            _diagnostics.Add(element.Name + ": inline subreport page-number resets cannot reset the parent report's physical pagination.");
-        foreach (var diagnostic in subreport.Definition.RuntimeDiagnostics.Concat(child._diagnostics)) _diagnostics.Add(element.Name + ": " + diagnostic);
-        return child;
+        return new(filtered, parameters, selections, values);
+    }
+
+    /// <summary>Runs the on-demand subreport printed by the object <paramref name="elementId"/>, for the record of <paramref name="row"/>
+    /// named in its caption's payload, as a report of its own: its links bind as for an inline subreport, with this run's parameters.</summary>
+    public ReportLayoutSession CreateOnDemandSubreport(string elementId, int row)
+    {
+        var element = _layout.Document.Elements.FirstOrDefault(e => e.Id == elementId && e.Kind == "Subreport")
+            ?? throw new InvalidOperationException("The on-demand subreport does not belong to this report run.");
+        if (!_layout.OnDemandSubreports.TryGetValue(elementId, out var subreport))
+            throw new InvalidOperationException($"{element.Name}: the on-demand subreport definition is unavailable.");
+        if (_executeSubreport is null) throw new InvalidOperationException($"{element.Name}: a subreport data executor is required.");
+        if (row < 0 || row >= _rows.Length) throw new ArgumentOutOfRangeException(nameof(row));
+        var saved = CaptureVariables();
+        var cache = new Dictionary<(string Name, int Row), object?>(_bandFormulaCache);
+        try
+        {
+            // Use the clicked occurrence, not the final row's variables. A child owns its copy so
+            // opening it cannot overwrite another drill tab or the parent report's print state.
+            RestoreVariables(_onDemandVariables.GetValueOrDefault((elementId, row)) ?? _rowAfter.GetValueOrDefault(row) ?? saved);
+            _bandFormulaCache.Clear();
+            var run = ResolveSubreportRun(element, subreport, row)
+                ?? throw new InvalidDataException(_subreportErrors.GetValueOrDefault(element.Id) ?? $"{element.Name}: the subreport query failed.");
+            var state = new RuntimeState { PrintTime = _printTime, TolerateSubreportQueryError = _state.TolerateSubreportQueryError, FailedQueries = _state.FailedQueries };
+            foreach (var value in _state.Shared) state.Shared.Add(value.Key, value.Value);
+            return new ReportLayoutSession(subreport.Definition.PositionedLayout!, run.Data, run.Parameters, _executeSubreport,
+                state, 0, null, run.Selections);
+        }
+        finally
+        {
+            RestoreVariables(saved);
+            _bandFormulaCache.Clear();
+            foreach (var value in cache) _bandFormulaCache.Add(value.Key, value.Value);
+        }
     }
 }

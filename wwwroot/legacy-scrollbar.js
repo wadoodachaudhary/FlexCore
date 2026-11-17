@@ -52,6 +52,36 @@ export function readElementRect(el) {
     return [r.left, r.top, r.width, r.height];
 }
 
+const legacyViewportObservers = new WeakMap();
+
+/**
+ * The scroller's visible size can change with no server event (a CSS resize grip, the
+ * browser window), and then nothing re-reads the DOM-drawn thumb. Once a size change has
+ * settled the server is asked to re-read it; it renders only if the thumb moved.
+ * @param {Element} scroller the scrolling element
+ * @param {object} dotNetRef the TreeGrid (SyncLegacyScrollBarFromBrowserAsync)
+ */
+export function observeLegacyScrollViewport(scroller, dotNetRef) {
+    if (!scroller || !dotNetRef || legacyViewportObservers.has(scroller)) return;
+    let width = scroller.clientWidth, height = scroller.clientHeight, timer = 0;
+    const observer = new ResizeObserver(() => {
+        // Hidden (an inactive MDI tab is display:none): nothing to read now; re-read on return.
+        if (scroller.getClientRects().length === 0) { clearTimeout(timer); width = height = -1; return; }
+        if (scroller.clientWidth === width && scroller.clientHeight === height) return;
+        width = scroller.clientWidth; height = scroller.clientHeight;
+        clearTimeout(timer);
+        timer = setTimeout(() => dotNetRef.invokeMethodAsync("SyncLegacyScrollBarFromBrowserAsync").catch(() => { }), 150);
+    });
+    observer.observe(scroller);
+    legacyViewportObservers.set(scroller, { observer, cancel: () => clearTimeout(timer) });
+}
+
+export function unobserveLegacyScrollViewport(scroller) {
+    const state = scroller && legacyViewportObservers.get(scroller);
+    if (!state) return;
+    state.cancel(); state.observer.disconnect(); legacyViewportObservers.delete(scroller);
+}
+
 const keyboardNavigationRoots = new WeakSet();
 
 /**

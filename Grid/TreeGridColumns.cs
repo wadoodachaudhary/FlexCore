@@ -7,7 +7,7 @@ namespace Fx.ControlKit.Grid;
 /// Container for TreeGridColumn definitions. Children are rendered hidden and register
 /// themselves with the parent TreeGridControl via CascadingParameter.
 /// </summary>
-public class TreeGridColumns : ComponentBase
+public class TreeGridColumns : FlexKitControlBase
 {
     [Parameter] public RenderFragment? ChildContent { get; set; }
 

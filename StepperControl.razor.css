@@ -1,0 +1,11 @@
+/* The current step is drawn filled, in the accent color, so it stands out from the other step buttons. Both colors are
+   variables: --fx-stepper-current-bg falls back to --fx-accent. The rule also covers hover and pressed, which the button's own
+   rules would otherwise repaint. */
+.fx-stepper ::deep .fx-button.fx-step-current,
+.fx-stepper ::deep .fx-button.fx-step-current:hover:not(:disabled),
+.fx-stepper ::deep .fx-button.fx-step-current:active:not(:disabled) {
+    background: var(--fx-stepper-current-bg, var(--fx-accent, #1c6ebf));
+    border-color: var(--fx-stepper-current-bg, var(--fx-accent, #1c6ebf));
+    color: var(--fx-stepper-current-color, #ffffff);
+    font-weight: 600;
+}

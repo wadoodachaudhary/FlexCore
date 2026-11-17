@@ -22,7 +22,7 @@
                     else
                     {
                         var selected=IsSelected(date);var disabled=IsDisabled(date);
-                        <div role="gridcell" aria-selected="@selected" class="fx-calendar-cell @(date.Month!=_display.Month?"outside":"") @(selected?"selected":"") @(date==DateTime.Today?"today":"")">
+                        <div role="gridcell" aria-selected="@(selected ? "true" : "false")" class="fx-calendar-cell @(date.Month!=_display.Month?"outside":"") @(selected?"selected":"") @(date==DateTime.Today?"today":"")">
                             <ButtonControl @ref="_buttons[date]" Disabled="@disabled" TabIndex="@(date==_focus?0:-1)" OnClick="()=>SelectAsync(date)"
                                            aria-label="@date.ToString("D",Culture)" @onkeydown="e=>KeyAsync(e,date)">
                                 @if(DayTemplate!=null){@DayTemplate(new(date,selected,disabled,date.Month==_display.Month))}else{@date.Day}

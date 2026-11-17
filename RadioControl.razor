@@ -31,10 +31,16 @@
 
     private bool IsChecked => EqualityComparer<TValue>.Default.Equals(Value, SelectedValue);
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Label) ? Label!.Trim()
+        : Name;
+
     private async Task OnChange(ChangeEventArgs e)
     {
         if (Disabled) return;
         SelectedValue = Value;
+        RecordControlAction("SelectionChanged", !string.IsNullOrWhiteSpace(Label) ? Label : Value?.ToString(), Name);
         if (SelectedValueChanged.HasDelegate)
             await SelectedValueChanged.InvokeAsync(Value);
     }

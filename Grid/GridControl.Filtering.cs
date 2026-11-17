@@ -302,12 +302,14 @@ public partial class GridControl<TValue>
             _simpleColumnFilters[field] = normalized;
 
         _filterRowDrafts[field] = normalized;
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
 
         if (UsesItemsProvider)
             await ReloadItemsAsync();
+
+        LogGridAction("Filtered", string.IsNullOrWhiteSpace(normalized) ? $"{field}=(cleared)" : $"{field}={normalized}", field);
 
         if (EventsRef?.Filtered.HasDelegate == true)
             await EventsRef.Filtered.InvokeAsync(new FilterEventArgs { Field = field, Value = normalized });
@@ -329,7 +331,7 @@ public partial class GridControl<TValue>
         _filterRowOperators.Remove(field);
         _simpleColumnFilters.Remove(field);
         ReseedFilterRowBox(field);
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         ClearPassViewMemos();
         InvalidateBlazorServerOptimizationCaches();
         if (UsesItemsProvider)

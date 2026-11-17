@@ -34,7 +34,10 @@ public partial class TreeViewControl
     private List<TreeNode> Roots => Nodes ??= [];
     private List<TreeNodeInfo> _all = [], _visible = [];
     private HashSet<string> _filteredParentIds = new(StringComparer.Ordinal);
-    private bool DisplayExpanded(TreeNode node) => string.IsNullOrWhiteSpace(FilterText) ? node.IsExpanded : _filteredParentIds.Contains(node.Id);
+    private string? _searchText, _lastSearchParam;
+    /// <summary>FilterText wins when set; otherwise the built-in search box text applies.</summary>
+    private string? ActiveFilter => !string.IsNullOrWhiteSpace(FilterText) ? FilterText : _searchText;
+    private bool DisplayExpanded(TreeNode node) => string.IsNullOrWhiteSpace(ActiveFilter) ? node.IsExpanded : _filteredParentIds.Contains(node.Id);
     private readonly Dictionary<string, bool> _expansionIntent = new(StringComparer.Ordinal);
     private readonly HashSet<string> _loading = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource _lifetime = new();
@@ -52,6 +55,7 @@ public partial class TreeViewControl
     protected override void OnParametersSet()
     {
         if (!float.IsFinite(ItemSize) || ItemSize < 20) throw new ArgumentException("Tree ItemSize must be at least 20 pixels.");
+        if (!string.Equals(SearchText, _lastSearchParam, StringComparison.Ordinal)) { _lastSearchParam = SearchText; _searchText = SearchText; }
         if (!ReferenceEquals(_lastRoots, Roots))
         {
             _lastRoots = Roots;
@@ -93,13 +97,14 @@ public partial class TreeViewControl
         TreeViewData.RefreshChecks(Roots, AutoCheck);
         var included = new HashSet<string>(StringComparer.Ordinal);
         var index = _all.ToDictionary(n => n.Node.Id, StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(FilterText))
-            foreach (var info in _all.Where(n => n.Node.Text.Contains(FilterText, StringComparison.CurrentCultureIgnoreCase)))
+        var filter = ActiveFilter;
+        if (!string.IsNullOrWhiteSpace(filter))
+            foreach (var info in _all.Where(n => n.Node.Text.Contains(filter, StringComparison.CurrentCultureIgnoreCase)))
                 for (var ancestor = info; ancestor is not null; ancestor = ancestor.Parent is null ? null : index[ancestor.Parent.Id]) included.Add(ancestor.Node.Id);
         _visible = []; var hiddenDepth = int.MaxValue;
         foreach (var info in _all)
         {
-            if (!string.IsNullOrWhiteSpace(FilterText)) { if (included.Contains(info.Node.Id)) _visible.Add(info); continue; }
+            if (!string.IsNullOrWhiteSpace(filter)) { if (included.Contains(info.Node.Id)) _visible.Add(info); continue; }
             if (info.Level > hiddenDepth) continue;
             hiddenDepth = info.Node.IsExpanded ? int.MaxValue : info.Level; _visible.Add(info);
         }
@@ -130,15 +135,22 @@ public partial class TreeViewControl
         await SelectedNodeChanged.InvokeAsync(node); await PublishSelectionAsync();
         _revealId = node.Id; await InvokeAsync(StateHasChanged);
     }
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : AriaLabel;
+
     private async Task HandleNodeClick(TreeNode node, MouseEventArgs e)
     {
         if (node.IsDisabled) return;
         if (ToggleOnNodeClick && node.HasChildren && !e.CtrlKey && !e.MetaKey && !e.ShiftKey) await SetExpandedAsync(node.Id, !node.IsExpanded);
-        await SelectAsync(node, e.CtrlKey || e.MetaKey, e.ShiftKey); await OnNodeClick.InvokeAsync(node);
+        await SelectAsync(node, e.CtrlKey || e.MetaKey, e.ShiftKey);
+        RecordControlAction("NodeSelected", node.Text, node.Id);
+        await OnNodeClick.InvokeAsync(node);
     }
     private async Task HandleNodeDoubleClick(TreeNode node)
     {
         if (node.IsDisabled) return;
+        RecordControlAction("NodeDoubleClicked", node.Text, node.Id);
+        if (ToggleOnNodeDoubleClick && node.HasChildren) await SetExpandedAsync(node.Id, !node.IsExpanded);
         await OnNodeDoubleClick.InvokeAsync(node);
         if (AllowEditing) await BeginEditAsync(node.Id);
     }
@@ -153,7 +165,9 @@ public partial class TreeViewControl
     public async Task SetCheckedAsync(string id, bool value)
     {
         var node = Find(id); if (node is null || node.IsDisabled) return;
-        TreeViewData.SetChecked(Roots, node, value, AutoCheck); _focusId = id; _revealId = id; await PublishChecksAsync(); await InvokeAsync(StateHasChanged);
+        TreeViewData.SetChecked(Roots, node, value, AutoCheck); _focusId = id; _revealId = id;
+        RecordControlAction("NodeChecked", $"{node.Text}={(value ? "true" : "false")}", node.Id);
+        await PublishChecksAsync(); await InvokeAsync(StateHasChanged);
     }
     public async Task CheckAllAsync(bool value = true)
     {
@@ -189,7 +203,10 @@ public partial class TreeViewControl
             finally { _loading.Remove(id); if (!_disposed) await InvokeAsync(StateHasChanged); }
         }
         expanded = _expansionIntent.GetValueOrDefault(id, expanded);
+        var wasExpanded = node.IsExpanded;
         node.IsExpanded = expanded;
+        if (wasExpanded != expanded)
+            RecordControlAction(expanded ? "NodeExpanded" : "NodeCollapsed", node.Text, node.Id);
         if (expanded) await OnNodeExpand.InvokeAsync(node);
         Reindex(); await PublishExpansionAsync(); await PublishChecksAsync(); await NodesChanged.InvokeAsync(Roots); await InvokeAsync(StateHasChanged);
     }
@@ -211,7 +228,7 @@ public partial class TreeViewControl
     public async Task EnsureVisibleAsync(string id)
     {
         var info = _all.FirstOrDefault(n => n.Node.Id == id) ?? throw new ArgumentException("Unknown tree node.");
-        if (!string.IsNullOrWhiteSpace(FilterText) && !_visible.Any(n => n.Node.Id == id))
+        if (!string.IsNullOrWhiteSpace(ActiveFilter) && !_visible.Any(n => n.Node.Id == id))
             throw new InvalidOperationException("Clear the tree filter before revealing this node.");
         for (var parent = info.Parent; parent is not null; parent = _all.First(n => n.Node == parent).Parent) parent.IsExpanded = true;
         Reindex(); _focusId = id; _revealId = id; await PublishExpansionAsync(); await InvokeAsync(StateHasChanged);
@@ -219,7 +236,7 @@ public partial class TreeViewControl
     public async Task BeginEditAsync(string id)
     {
         if (!AllowEditing || Find(id) is not { } node || node.IsDisabled) return;
-        if (!string.IsNullOrWhiteSpace(FilterText) && !_visible.Any(n => n.Node.Id == id))
+        if (!string.IsNullOrWhiteSpace(ActiveFilter) && !_visible.Any(n => n.Node.Id == id))
         {
             await FailAsync("Clear the tree filter before editing this node.");
             return;
@@ -238,6 +255,7 @@ public partial class TreeViewControl
             await NodeEditCommitting.InvokeAsync(args);
             if (args.Cancel || args.Error is not null) { if (args.Error is not null) await FailAsync(args.Error); return; }
             node.Text = args.Text; _editingId = null; _error = null; Reindex(); _revealId = node.Id;
+            RecordControlAction("NodeRenamed", args.Text, node.Id);
             await NodeEdited.InvokeAsync(args); await NodesChanged.InvokeAsync(Roots); await InvokeAsync(StateHasChanged);
         }
         finally { _editingBusy = false; }
@@ -308,7 +326,7 @@ public partial class TreeViewControl
         {
             _revealId = null;
             await _browser.InvokeAsync<object?>("treeReveal", _host, new { id, index = _visible.FindIndex(n => n.Node.Id == id), itemSize = ItemSize, virtualized = EnableVirtualization });
-            if (_editingId is null) await _host.FocusAsync(preventScroll: true);
+            if (FocusOnSelection && _editingId is null) await _host.FocusAsync(preventScroll: true);
         }
     }
     public async ValueTask DisposeAsync()

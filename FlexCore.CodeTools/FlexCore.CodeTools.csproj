@@ -29,5 +29,6 @@
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
     <ProjectReference Include="..\FlexCore.csproj" />
     <ProjectReference Include="..\FlexCore.Llm\FlexCore.Llm.csproj" />
+    <ProjectReference Include="..\FlexCore.Migration\FlexCore.Migration.csproj" />
   </ItemGroup>
 </Project>

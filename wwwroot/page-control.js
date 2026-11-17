@@ -357,11 +357,11 @@ function resolveZoomDirection(event) {
     const key = event.key;
     const code = event.code;
     // Ctrl+= (the unshifted key under the +) zooms in as well, so the app owns both
-    // directions of the chord the browser would otherwise take (HHM-1028).
+    // directions of the chord the browser would otherwise take.
     if (key === "+" || key === "Add" || code === "NumpadAdd"
         || (key === "=" && code === "Equal")) return "in";
     if (key === "-" || key === "Subtract" || code === "NumpadSubtract" || code === "Minus") return "out";
-    // Ctrl+0 returns to the default zoom (HHM-1028). The browser resets ITS zoom on
+    // Ctrl+0 returns to the default zoom. The browser resets ITS zoom on
     // the same chord, and that is wanted too: the key is not consumed for "reset".
     if (key === "0") return "reset";
     return null;

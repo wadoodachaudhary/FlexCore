@@ -4,8 +4,27 @@ namespace Fx.ControlKit.Reports.NativeCrystal;
 /// without the stamp, or with an older one, came from an earlier converter: a host that keeps converted XML should convert the RPT again.</summary>
 public static class CrystalReportXmlVersion
 {
-    public const int Current = 2;
+    // Reports authored with no printer are marked (FlexKitNoPrinter) and lay out at screen metrics.
+    // A label-only chart (a cheque's VOID stamp) carries its FlexKitChartMarker.
+    // Version 34 preserves ordered field-link comparisons and dual-axis line charts.
+    // Version 44 retains geographic map objects and their section occupancy.
+    // Version 45 records nested row subtotals and vertically arranged summaries.
+    // Version 46 retains legacy section conditions, inequality links, tight field borders and saved chart legend visibility.
+    // Version 47 preserves the drawing frame of group bar charts and the cell height of legacy Times text runs (replaced by 53).
+    // Version 48 preserves the details area's new-page-after-visible-records setting.
+    // Version 49 retains multiple doughnuts, depth areas and ranked chart categories.
+    // Version 50 keeps saved record-selection lines, cross-tab column subtotal captions, charts on percentage summaries and file dates.
+    // Version 51 preserves the named remainder of a ranked cross-tab row group.
+    // Version 52 retains the individual series gradient of a stacked bar in a multi-chart report.
+    // Version 53 reads a text run's size as the cell height in every archive written by Crystal 7, twips size or not.
+    // Version 54 retains the projection and frame of a perspective pie with a side legend.
+    // Version 55 honors the report's ToDate option on database date-time field formats.
+    // Version 56 retains the viewer, wall thickness, pan and riser spacing for spatial columns.
+    // Version 57 retains the projection, solid walls and axis captions for 3D surfaces.
+    public const int Current = 57;
     public const string Attribute = "FlexKitXmlVersion";
+    /// <summary>The first version that writes the main report's <c>ReportOptions/@ShowAllHeadersOnDrillDown</c>.</summary>
+    internal const int DrillHeaderOption = 5;
 
     /// <summary>The converter version stamped on a report XML file, or 0 when it has none (an earlier FlexKit conversion or another exporter).</summary>
     public static int Stored(string xmlPath)
@@ -79,6 +98,15 @@ public sealed class CrystalReportCore
 
     public bool EnableSaveSummariesWithReport { get; set; } = true;
 
+    public bool ShowAllHeadersOnDrillDown { get; set; }
+
+    public bool ConvertDatabaseNullToDefault { get; set; }
+
+    public bool EnableSelectDistinctRecords { get; set; }
+
+    /// <summary>The authored fixed report date, when enabled; null uses the run's clock.</summary>
+    public DateTime? FixedPrintDate { get; set; }
+
     public int LeftMargin { get; set; } = 360;
 
     public int RightMargin { get; set; } = 360;
@@ -100,6 +128,9 @@ public sealed class CrystalReportCore
     public string PrinterDuplex { get; set; } = "Simplex";
 
     public string PrinterName { get; set; } = "";
+
+    /// <summary>The report was authored with "No Printer": Crystal lays its text out on the 96-dpi screen device.</summary>
+    public bool NoPrinter { get; set; }
 }
 
 public sealed class CrystalDatabaseModel
@@ -220,6 +251,8 @@ public sealed class CrystalTableLinkModel
 
 public sealed class CrystalDataDefinitionModel
 {
+    internal bool ConvertDatabaseDateTimeToDate { get; set; }
+
     internal List<string> ParseWarnings { get; } = [];
 
     public CrystalReportDefinitionModel ReportDefinition { get; } = new();
@@ -327,6 +360,8 @@ public sealed class CrystalGroupModel
 
     /// <summary>Date-period groups are named by the last date of the period instead of the first (showLastDateInPeriod).</summary>
     public bool ShowLastDateInPeriod { get; set; }
+    public bool SuppressSubtotal { get; set; }
+    public bool SuppressLabel { get; set; }
 
     /// <summary>Specified-order named groups (ValueRangeList), in print order: the group name and its Crystal selection expression.</summary>
     public List<(string Name, string Expression)> SpecifiedGroups { get; } = [];
@@ -384,6 +419,11 @@ public sealed class CrystalParameterFieldModel
 
     public bool AllowNull { get; set; }
 
+    /// <summary>Authored numeric bounds; for string parameters these are character counts.</summary>
+    public double? MinimumValue { get; set; }
+    public double? MaximumValue { get; set; }
+    public string EditMask { get; set; } = "";
+
     public bool HasPromptMetadata { get; set; }
 
     public bool HasBrowseField { get; set; }
@@ -393,6 +433,9 @@ public sealed class CrystalParameterFieldModel
     public List<CrystalParameterDefaultValueModel> InitialValues { get; } = [];
 
     public List<CrystalParameterDefaultValueModel> CurrentValues { get; } = [];
+
+    /// <summary>Crystal's authored list of values for this prompt (the PromptManager LOV source); null when the prompt has none.</summary>
+    public CrystalParameterPickListModel? PickList { get; set; }
 
     public string FormulaName => "{?" + Name + "}";
 }
@@ -404,8 +447,30 @@ public sealed class CrystalParameterDefaultValueModel
     public string Description { get; set; } = "";
 }
 
+/// <summary>
+/// The list Crystal's own "Enter Parameter Values" dialog offers for a prompt: the values of
+/// <see cref="ValueField"/> in <see cref="Table"/>, optionally described by
+/// <see cref="DescriptionField"/> and sorted per <see cref="Sort"/>. Crystal applies no other filter.
+/// </summary>
+public sealed class CrystalParameterPickListModel
+{
+    public string Table { get; set; } = "";
+
+    public string ValueField { get; set; } = "";
+
+    public string? DescriptionField { get; set; }
+
+    /// <summary>The prompt's SortingType: "Ascending", "Descending" or "NoSort".</summary>
+    public string Sort { get; set; } = "Ascending";
+}
+
 public sealed class CrystalSummaryFieldModel
 {
+    public int? PercentSummaryIndex { get; set; }
+    public int SummaryType { get; set; }
+    public int? SummaryTypeIndex { get; set; }
+
+    public string WeightField { get; set; } = "";
     public string Name { get; set; } = "";
 
     public int ValueType { get; set; }
@@ -481,6 +546,7 @@ public sealed class CrystalReportAreaModel
     public bool EnableRepeatGroupHeader { get; set; } = true;
 
     public bool EnableKeepGroupTogether { get; set; }
+    public int GroupsPerPage { get; set; }
 
     public CrystalSectionFormatModel Format { get; set; } = new() { EnableKeepTogether = false };
 
@@ -502,10 +568,12 @@ public sealed class CrystalReportSectionModel
 
 public sealed class CrystalSectionFormatModel
 {
+    public CrystalColorModel BackgroundColor { get; set; } = CrystalColorModel.TransparentWhite();
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public bool EnableKeepTogether { get; set; } = true;
 
     public bool EnableNewPageAfter { get; set; }
+    public int RecordsPerPage { get; set; }
 
     public bool EnableNewPageBefore { get; set; }
 
@@ -541,9 +609,25 @@ public sealed class CrystalUnsupportedObjectSource
 
 public sealed class CrystalReportObjectModel
 {
+    internal int? GraphDrawingId { get; set; }
+    internal bool HiddenGaugeLegend { get; set; }
+    internal int? PerspectivePieDrawingId { get; set; }
+    internal int? GridLinkId { get; set; }
+    public int LineEndSection { get; set; } = -1;
+    public int LineEndTop { get; set; }
+    public bool SuppressIfDuplicate { get; set; }
+    public bool SuppressEmbeddedFieldBlankLines { get; set; }
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    public ReportNativeNumberFormat? NativeNumberFormat { get; set; }
+    internal ReportNativeNumberFormat? NativeCurrencyFormat { get; set; }
+    public ReportNativeNumericFormat? NativeNumericFormat { get; set; }
+    internal List<ReportNativeNumericFormat> NativeNumericCandidates { get; } = [];
     public ReportAnalysisDefinition? Analysis { get; set; }
     public string AnalysisDiagnostic { get; set; } = "";
     public CrystalUnsupportedObjectSource? UnsupportedSource { get; set; }
+    /// <summary>The chart's category field, kept when its bindings are refused, for a label-only chart.</summary>
+    internal string ChartCategoryField { get; set; } = "";
+    public ReportChartMarker? ChartMarker { get; set; }
 
     public int PictureStorageIndex { get; set; } = -1;
     public int PictureAspect { get; set; } = 1;
@@ -566,6 +650,8 @@ public sealed class CrystalReportObjectModel
     public int Height { get; set; }
 
     public int MaxNumberOfLines { get; set; }
+    public bool InterpretHtml { get; set; }
+    public bool InterpretRtf { get; set; }
 
     public string Text { get; set; } = "";
 
@@ -600,6 +686,7 @@ public sealed class CrystalObjectFormatModel
     internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string CssClass { get; set; } = "";
+    public int TextRotation { get; set; }
 
     public bool EnableCanGrow { get; set; }
 
@@ -614,11 +701,13 @@ public sealed class CrystalObjectFormatModel
 
 public sealed class CrystalBorderModel
 {
+    public int LineWidthTwips { get => LineWidth ?? 15; set => LineWidth = value; }
     internal List<(string Property, string Name, int Type, int Index)> ConditionReferences { get; } = [];
     public Dictionary<string, string> ConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
     public string BottomLineStyle { get; set; } = "NoLine";
 
     public bool HasDropShadow { get; set; }
+    public bool EnableTightHorizontal { get; set; }
 
     public string LeftLineStyle { get; set; } = "NoLine";
 
@@ -626,12 +715,24 @@ public sealed class CrystalBorderModel
 
     public string TopLineStyle { get; set; } = "NoLine";
 
+    /// <summary>Saved stroke width in twips; zero denotes a device hairline, null means absent metadata.</summary>
+    public int? LineWidth { get; set; }
+
     public CrystalColorModel BackgroundColor { get; set; } = CrystalColorModel.TransparentWhite();
 
     public CrystalColorModel BorderColor { get; set; } = CrystalColorModel.Black();
 }
 
-public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color);
+public sealed record CrystalTextRunModel(string Text, string Binding, string FontFamily, double Size, bool Bold, bool Italic, bool Underline, string Color)
+{
+    public int CharacterSpacingTwips { get; init; }
+    internal List<(string Property, string Name, int Type, int Index)> FontConditionReferences { get; } = [];
+    public Dictionary<string, string> FontConditionFormulas { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The date/time format authored on a field embedded in a text object, once resolved against the field's type.</summary>
+    public ReportNativeDateTimeFormat? NativeDateTimeFormat { get; set; }
+    /// <summary>The numeric formats authored on a field embedded in a text object, currency first, resolved by the field's type where the text prints.</summary>
+    internal List<ReportNativeNumericFormat> NativeNumericCandidates { get; } = [];
+}
 
 public sealed class CrystalFontModel
 {

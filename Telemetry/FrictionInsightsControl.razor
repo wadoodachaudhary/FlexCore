@@ -1,0 +1,288 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+@inject IServiceProvider Services
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-fric-root @ThemeClass">
+        @if (ProductSnapshot is null)
+        {
+            <div class="fx-tel-empty">No product telemetry loaded yet.</div>
+        }
+        else
+        {
+            <div class="fx-tel-scroll-pane">
+                <div class="fx-fric-kpi-strip">
+                    <KpiSparkCardControl Label="Click-to-SQL Apdex"
+                                         Tag="fx-fric-apdex"
+                                         ValueText="@ProductSnapshot.OverallApdexScore.ToString("0.00", CultureInfo.InvariantCulture)"
+                                         TargetPercent="@(ProductSnapshot.OverallApdexScore * 100.0)"
+                                         SubText="Satisfied ≤400ms · Tolerating ≤1.6s"
+                                         AccentColor="@(ProductSnapshot.OverallApdexScore >= 0.85 ? "#16a34a" : "#d97706")" />
+
+                    <KpiSparkCardControl Label="Rage Click Bursts"
+                                         Tag="fx-fric-rage"
+                                         ValueText="@ProductSnapshot.RageClickCount.ToString("N0")"
+                                         SubText="≥3 clicks on identical control within 2s"
+                                         AccentColor="#dc2626" />
+
+                    <KpiSparkCardControl Label="Abandoned Forms / Edits"
+                                         Tag="fx-fric-abandon"
+                                         ValueText="@ProductSnapshot.AbandonedFormCount.ToString("N0")"
+                                         SubText="≥2 field edits exited with 0 saves/writes"
+                                         AccentColor="#d97706" />
+
+                    <KpiSparkCardControl Label="Slow / Failed Interactions"
+                                         Tag="fx-fric-slow"
+                                         ValueText="@ProductSnapshot.SlowInteractionCount.ToString("N0")"
+                                         SubText="@($"{ProductSnapshot.FilterThrashCount} grid filter thrash bursts")"
+                                         AccentColor="#7c3aed" />
+                </div>
+
+                <CardControl Title="UX Friction, Responsiveness &amp; Session Inspector" CssClass="fx-tel-card" Elevation="1">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(_subView == "Incidents")" Tag="fx-fric-tab-inc" OnClick='() => _subView = "Incidents"'>
+                                Friction Incidents (@FilteredIncidents.Count)
+                            </ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_subView == "Apdex")" Tag="fx-fric-tab-apdex" OnClick='() => _subView = "Apdex"'>
+                                Control Click-to-SQL Apdex (@ProductSnapshot.ControlApdexRows.Count)
+                            </ButtonControl>
+                            <ButtonControl CssClass="@PillCss(_subView == "Sessions")" Tag="fx-fric-tab-sessions" OnClick='() => _subView = "Sessions"'>
+                                User Sessions (@ProductSnapshot.Sessions.Count)
+                            </ButtonControl>
+                        </div>
+
+                        @if (_subView == "Incidents")
+                        {
+                            <div class="fx-tel-pill-group">
+                                <ButtonControl CssClass="@PillCss(_kindFilter == "All")" Tag="fx-fric-k-all" OnClick='() => _kindFilter = "All"'>All</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_kindFilter == "Rage")" Tag="fx-fric-k-rage" OnClick='() => _kindFilter = "Rage"'>Rage Clicks</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_kindFilter == "Abandon")" Tag="fx-fric-k-abandon" OnClick='() => _kindFilter = "Abandon"'>Abandoned</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_kindFilter == "Thrash")" Tag="fx-fric-k-thrash" OnClick='() => _kindFilter = "Thrash"'>Filter Thrash</ButtonControl>
+                                <ButtonControl CssClass="@PillCss(_kindFilter == "Slow")" Tag="fx-fric-k-slow" OnClick='() => _kindFilter = "Slow"'>Slow / SQL</ButtonControl>
+                            </div>
+                        }
+                    </div>
+
+                    <div style="height: 250px;">
+                        @if (_subView == "Incidents")
+                        {
+                            <GridControl TValue="UxFrictionIncident"
+                                         Tag="fx-grid-friction-incidents"
+                                         DataSource="@FilteredIncidents"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(UxFrictionIncident.TimestampLocal)" HeaderText="Timestamp" Width="140px" Type="ColumnType.Date" Format="MM-dd HH:mm:ss" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UxFrictionIncident.KindLabel)" HeaderText="Signal" Width="135px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (UxFrictionIncident)context;
+                                            }
+                                            <BadgeControl Variant="@IncidentBadge(r.Kind)" Size="BadgeSize.Small" Text="@r.KindLabel" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UxFrictionIncident.UserId)" HeaderText="User" Width="115px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UxFrictionIncident.Screen)" HeaderText="Screen" Width="165px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UxFrictionIncident.Summary)" HeaderText="Diagnostic Summary" Width="310px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UxFrictionIncident.SessionId)" HeaderText="Replay" Width="105px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (UxFrictionIncident)context;
+                                            }
+                                            @if (!string.IsNullOrWhiteSpace(r.SessionId))
+                                            {
+                                                <ButtonControl CssClass="fx-tel-pill" Tag="fx-fric-replay-btn" OnClick="() => SelectSessionForReplay(r.SessionId)">Replay</ButtonControl>
+                                            }
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                        else if (_subView == "Apdex")
+                        {
+                            <GridControl TValue="ControlApdexRow"
+                                         Tag="fx-grid-control-apdex"
+                                         DataSource="@ProductSnapshot.ControlApdexRows"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(ControlApdexRow.Screen)" HeaderText="Screen" Width="170px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.Control)" HeaderText="Control" Width="165px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.Action)" HeaderText="Action" Width="110px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.ApdexScore)" HeaderText="Apdex" Width="80px" Type="ColumnType.Number" Format="0.00" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.AvgMs)" HeaderText="Avg ms" Width="85px" Type="ColumnType.Number" Format="0.0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.P95Ms)" HeaderText="P95 ms" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.SampleCount)" HeaderText="Samples" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.CorrelatedSqlCount)" HeaderText="SQL Calls" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(ControlApdexRow.CorrelatedSqlWrites)" HeaderText="SQL Writes" Width="90px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                        else
+                        {
+                            <GridControl TValue="SessionSummaryRow"
+                                         Tag="fx-grid-sessions"
+                                         DataSource="@ProductSnapshot.Sessions"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(SessionSummaryRow.UserId)" HeaderText="User" Width="120px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.StartLocal)" HeaderText="Started" Width="135px" Type="ColumnType.Date" Format="MM-dd HH:mm:ss" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.DurationMinutes)" HeaderText="Min" Width="68px" Type="ColumnType.Number" Format="0.1" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.EventCount)" HeaderText="Events" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.SqlCount)" HeaderText="SQL" Width="65px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.FrictionCount)" HeaderText="Friction" Width="75px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.EntryScreen)" HeaderText="Entry Screen" Width="165px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.ExitScreen)" HeaderText="Exit Screen" Width="165px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(SessionSummaryRow.SessionId)" HeaderText="Timeline" Width="100px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (SessionSummaryRow)context;
+                                            }
+                                            <ButtonControl CssClass="fx-tel-pill" Tag="fx-sess-open-replay" OnClick="() => SelectSessionForReplay(r.SessionId)">Inspect</ButtonControl>
+                                        </Template>
+                                    </GridColumn>
+                                </GridColumnsBase>
+                            </GridControl>
+                        }
+                    </div>
+                </CardControl>
+
+                <CardControl Title="Session Flight-Recorder Timeline (UI Controls + SQL + Friction)" CssClass="fx-tel-card" Elevation="1">
+                    <SessionTimelineControl Theme="@Theme"
+                                            Tag="fx-fric-session-timeline"
+                                            Trace="@ActiveReplayTrace" />
+                </CardControl>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private string _subView = "Incidents";
+    private string _kindFilter = "All";
+    private string? _selectedSessionId;
+    private SessionReplayTrace? _activeTrace;
+    private FlexProductAnalyticsSnapshot? _lastSnapshot;
+
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("FrictionInsightsControl", () => "FrictionInsights");
+    protected override string? ResolveControlIdentifier() => "FrictionInsights";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private List<UxFrictionIncident> FilteredIncidents =>
+        (ProductSnapshot?.FrictionIncidents ?? Array.Empty<UxFrictionIncident>())
+            .Where(i => _kindFilter switch
+            {
+                "Rage" => i.Kind == UxFrictionKind.RageClick,
+                "Abandon" => i.Kind == UxFrictionKind.AbandonedForm,
+                "Thrash" => i.Kind == UxFrictionKind.FilterThrash,
+                "Slow" => i.Kind is UxFrictionKind.SlowInteraction or UxFrictionKind.SqlFailure or UxFrictionKind.UnhandledError,
+                _ => true
+            })
+            .ToList();
+
+    private SessionReplayTrace? ActiveReplayTrace => _activeTrace;
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (ProductSnapshot is not null && !ReferenceEquals(ProductSnapshot, _lastSnapshot))
+        {
+            _lastSnapshot = ProductSnapshot;
+            if (string.IsNullOrWhiteSpace(_selectedSessionId) || !ProductSnapshot.Sessions.Any(s => s.SessionId == _selectedSessionId))
+            {
+                _selectedSessionId = ProductSnapshot.Sessions.FirstOrDefault()?.SessionId;
+            }
+            RebuildTrace();
+        }
+    }
+
+    public void SelectSessionForReplay(string sessionId)
+    {
+        _selectedSessionId = sessionId;
+        RebuildTrace();
+        RecordControlAction("SessionReplayed", sessionId);
+    }
+
+    private void RebuildTrace()
+    {
+        if (ProductSnapshot is null || string.IsNullOrWhiteSpace(_selectedSessionId))
+        {
+            _activeTrace = null;
+            return;
+        }
+
+        var catalog = Services.GetService(typeof(ITelemetryCatalogProvider)) as ITelemetryCatalogProvider;
+        _activeTrace = FlexProductAnalyticsEngine.BuildSessionReplay(
+            _selectedSessionId,
+            ProductSnapshot.WindowEvents,
+            ProductSnapshot.WindowSqlEntries,
+            ProductSnapshot.FrictionIncidents,
+            catalog);
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        if (_subView == "Apdex")
+        {
+            sb.AppendLine("Screen,Control,Action,ApdexScore,AvgMs,P95Ms,Samples,SqlCalls,SqlWrites");
+            foreach (var r in ProductSnapshot?.ControlApdexRows ?? Array.Empty<ControlApdexRow>())
+                sb.AppendLine($"{Csv(r.Screen)},{Csv(r.Control)},{Csv(r.Action)},{r.ApdexScore.ToString("0.00", CultureInfo.InvariantCulture)},{r.AvgMs.ToString("0.0", CultureInfo.InvariantCulture)},{r.P95Ms.ToString("0", CultureInfo.InvariantCulture)},{r.SampleCount},{r.CorrelatedSqlCount},{r.CorrelatedSqlWrites}");
+            return ("control-apdex", sb.ToString());
+        }
+
+        sb.AppendLine("Timestamp,Kind,Severity,User,Screen,Location,Summary,LatencyMs");
+        foreach (var f in FilteredIncidents)
+            sb.AppendLine($"{Csv(f.TimestampLocal.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture))},{Csv(f.KindLabel)},{Csv(f.Severity)},{Csv(f.UserId)},{Csv(f.Screen)},{Csv(f.Location)},{Csv(f.Summary)},{f.LatencyMs}");
+        return ("ux-friction", sb.ToString());
+    }
+
+    private static BadgeVariant IncidentBadge(UxFrictionKind kind) => kind switch
+    {
+        UxFrictionKind.RageClick or UxFrictionKind.SqlFailure or UxFrictionKind.UnhandledError => BadgeVariant.Danger,
+        UxFrictionKind.AbandonedForm or UxFrictionKind.SlowInteraction => BadgeVariant.Warning,
+        _ => BadgeVariant.Info
+    };
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

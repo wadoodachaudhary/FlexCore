@@ -13,14 +13,18 @@ else if (Snapshot is null)
 }
 else if (Element.Kind == "Chart")
 {
-    <ChartControl Type="Snapshot.Definition.ChartType" Title="@Snapshot.Definition.Title" Series="_series"
-        Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false"
-        Width="100%" Height="@($"{Math.Max(1, Element.HeightTwips / 15 - 64)}px")" />
+    <ChartControl Type="Snapshot.Definition.ChartType" ReportPlot="Snapshot.Definition" ThreeDimensional="Snapshot.Definition.ChartThreeDimensional" CategoryLegend="Snapshot.Definition.ChartCategoryLegend" Title="@Snapshot.Definition.Title" Series="_series"
+        Legend="@(new ChartLegend { Visible = Snapshot.Definition.ShowLegend })" Animate="false" ShowTooltips="false"
+        ColorBarsByCategory="PrintBars" ColorPalette="@(Snapshot.Definition.PiePalette ?? (PrintBars && !Snapshot.Definition.ChartThreeDimensional && !Snapshot.Definition.ChartCategoryLegend ? ReportAnalysisGraphic.CrystalBarPalette : null))"
+        PrintReportGroupChart="Snapshot.Definition.ReportGroupChart" PrintWidthPoints="@(PrintBars ? Element.WidthTwips / 20d : 0)" PrintHeightPoints="@(PrintBars ? Element.HeightTwips / 20d : 0)"
+        Width="100%" Height="@($"{Math.Max(1, Element.HeightTwips / 15 - (PrintBars ? 0 : 64))}px")" />
 }
-else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0)
+else if (Element.Kind == "CrossTab" && Snapshot.Definition.Cells.Count == 0 && Snapshot.Definition.NativeCrossTab is null && Snapshot.Definition.CalculatedMembers.Count == 0
+    && !PrintsPercentages(Snapshot.Definition))
 {
     <PivotControl TValue="Dictionary<string, object>" DataSource="_pivotRows" RowFields="Snapshot.Definition.RowFields"
         ColumnFields="Snapshot.Definition.ColumnFields" ValueFields="_pivotMeasures" FieldLabels="_labels"
+        GroupValueSelector="_grouping.Value"
         ShowGrandTotals="Snapshot.Definition.ShowTotals" ShowSubTotals="Snapshot.Definition.ShowTotals"
         SortDescriptors="@(Snapshot.Definition.DescendingFields.Select(field => new PivotSortDescriptor(field, SortDirection.Descending)).ToArray())"
         Interactive="false" AllowSorting="false" Height="@($"{Math.Max(1, Element.HeightTwips / 15)}px")" />
@@ -38,12 +42,14 @@ else if (Element.Kind is "Table" or "CrossTab")
 @code {
     [Parameter, EditorRequired] public ReportDesignerElement Element { get; set; } = new();
     [Parameter] public ReportAnalysisSnapshot? Snapshot { get; set; }
+    private bool PrintBars => Snapshot?.Definition.ChartType == ChartType.StackedBar100 || Snapshot?.Definition.HasFixedSeriesBarAxis == true || Snapshot?.Definition.SpatialStyle is not null || Snapshot?.Definition.ChartCategoryLegend == true || Snapshot?.Definition.ChartThreeDimensional == true || (Element.UseCrystalScreenMetrics && Snapshot?.Definition.ChartType == ChartType.Bar) || Snapshot?.Definition.ChartType is ChartType.Line or ChartType.Surface or ChartType.Ohlc or ChartType.HorizontalBar or ChartType.Area or ChartType.Pie or ChartType.Donut or ChartType.Radar or ChartType.Funnel or ChartType.Gauge or ChartType.Scatter or ChartType.Bubble;
     private string? _error;
     private List<ChartSeries> _series = [];
     private List<Dictionary<string, object>> _pivotRows = [];
     private List<PivotValueConfig> _pivotMeasures = [];
     private Dictionary<string, string> _labels = [];
     private IReadOnlyList<ReportTableFragment> _tablePreview = [];
+    private ReportAnalysisGrouping _grouping = new(new(), []);
 
     protected override void OnParametersSet()
     {
@@ -57,15 +63,18 @@ else if (Element.Kind is "Table" or "CrossTab")
                 _series = ReportAnalysisGraphic.Series(Snapshot);
                 return;
             }
-            else if (Element.Kind == "Table" || definition.Cells.Count > 0)
+            else if (Element.Kind == "Table" || definition.Cells.Count > 0 || definition.NativeCrossTab is not null || definition.CalculatedMembers.Count > 0
+                || PrintsPercentages(definition))
             {
-                var pane = (Snapshot.Table ?? ReportTabularData.Create(Element, Snapshot))
-                    .PaginateColumns(Math.Max(ReportTabularData.MinimumPaneWidthTwips, Element.WidthTwips), Element.FontSize, definition.RowHeightTwips).FirstOrDefault();
+                var table = Snapshot.Table ?? ReportTabularData.Create(Element, Snapshot);
+                var width = definition.NativeCrossTab is null ? Element.WidthTwips : table.Columns.Sum(column => column.WidthTwips);
+                var pane = table.PaginateColumns(Math.Max(ReportTabularData.MinimumPaneWidthTwips, width), Element.FontSize, definition.RowHeightTwips).FirstOrDefault();
                 _tablePreview = pane is null ? [] : pane.Headers.Concat(pane.Rows).ToArray();
             }
             else
             {
-                _pivotRows = Snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)).ToList();
+                _grouping = new(definition, Snapshot.Rows.Select(row => new Dictionary<string, object>(row, StringComparer.OrdinalIgnoreCase)));
+                _pivotRows = _grouping.Rows;
                 _pivotMeasures = []; _labels = [];
                 for (var index = 0; index < definition.Measures.Count; index++)
                 {
@@ -75,13 +84,13 @@ else if (Element.Kind is "Table" or "CrossTab")
                     if (measure.Aggregate == ReportAggregateType.Count)
                         foreach (var row in _pivotRows) row[field] = Value(row, measure.Field) is null or DBNull ? 0 : 1;
                     _pivotMeasures.Add(new() { Field = field, Label = measure.Caption.Length == 0 ? measure.Field : measure.Caption,
-                        ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median
+                        ValueAggregator = measure.Aggregate is ReportAggregateType.DistinctCount or ReportAggregateType.Median or ReportAggregateType.Min or ReportAggregateType.Max
                             ? values => ReportValueFormatting.ExtendedAggregate(values, measure.Aggregate) : null,
                         Aggregation = measure.Aggregate switch { ReportAggregateType.Average => AggregateType.Average,
                             ReportAggregateType.Min => AggregateType.Min, ReportAggregateType.Max => AggregateType.Max, _ => AggregateType.Sum }, Format = measure.Format });
                     _labels[field] = measure.Caption.Length == 0 ? measure.Field : measure.Caption;
                 }
-                var columnKeys = _pivotRows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => Value(row, field)))).Distinct().Take(257).Count();
+                var columnKeys = _pivotRows.Select(row => System.Text.Json.JsonSerializer.Serialize(definition.ColumnFields.Select(field => _grouping.Value(row, field)))).Distinct().Take(257).Count();
                 if (columnKeys > 256) throw new InvalidDataException("Cross-tab exceeds 256 column groups.");
             }
         }
@@ -90,4 +99,6 @@ else if (Element.Kind is "Table" or "CrossTab")
     }
 
     private static object? Value(Dictionary<string, object> row, string field) => row.GetValueOrDefault(field);
+    // The live pivot shows raw summaries; a percentage summary previews as the printed table.
+    private static bool PrintsPercentages(ReportAnalysisDefinition definition) => definition.Measures.Any(measure => measure.PercentOfColumnTotal is not null);
 }

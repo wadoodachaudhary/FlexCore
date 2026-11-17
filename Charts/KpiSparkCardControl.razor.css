@@ -1,0 +1,86 @@
+.fx-kpi-spark {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 5px;
+    padding: 9px 11px;
+    background: var(--fx-tel-card-bg, #ffffff);
+    border: 1px solid var(--fx-tel-border, #d4d0c8);
+    border-top: 3px solid #0a246a;
+    border-radius: 3px;
+    color: var(--fx-tel-text, #1e293b);
+    font-family: var(--fx-tel-font, Tahoma, "Segoe UI", sans-serif);
+}
+
+.fx-kpi-spark-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.fx-kpi-spark-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fx-tel-muted, #64748b);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.fx-kpi-spark-delta {
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 2px;
+    white-space: nowrap;
+}
+
+.fx-kpi-delta-good {
+    color: #15803d;
+    background: rgba(22, 163, 74, 0.12);
+}
+
+.fx-kpi-delta-bad {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.12);
+}
+
+.fx-kpi-delta-flat {
+    color: var(--fx-tel-muted, #64748b);
+    background: var(--fx-tel-subbar-bg, #f1f5f9);
+}
+
+.fx-kpi-spark-mid {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.fx-kpi-spark-val {
+    font-size: 20px;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.fx-kpi-spark-svg {
+    width: 88px;
+    height: 26px;
+    flex-shrink: 0;
+}
+
+.fx-kpi-spark-target {
+    height: 4px;
+    background: var(--fx-tel-subbar-bg, #e2e8f0);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fx-kpi-spark-target-fill {
+    height: 100%;
+}
+
+.fx-kpi-spark-sub {
+    font-size: 10.5px;
+    color: var(--fx-tel-muted, #64748b);
+}

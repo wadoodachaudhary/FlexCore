@@ -5,8 +5,10 @@ namespace Fx.ControlKit.Reports;
 public sealed partial class CrystalFormula
 {
     private static readonly HashSet<string> PrintStateNames = new(("whileprintingrecords whilereadingrecords beforereadingrecords evaluateafter pagenumber totalpagecount pagenofm " +
-        "recordnumber groupnumber onfirstrecord onlastrecord drilldowngrouplevel inrepeatedgroupheader currentfieldvalue previous next previousvalue nextvalue previousisnull nextisnull " +
-        "groupinglevel counthierarchicalchildren").Split(' '), StringComparer.OrdinalIgnoreCase);
+        "recordnumber groupnumber onfirstrecord onlastrecord drilldowngrouplevel inrepeatedgroupheader currentfieldvalue defaultattribute previous next previousvalue nextvalue previousisnull nextisnull " +
+        "groupinglevel counthierarchicalchildren currentrowindex currentcolumnindex currentsummaryindex " +
+        "gridvalueat gridrowcolumnvalue gridlabelat getrowpathindexof getcolumnpathindexof getrowgroupindexof getcolumngroupindexof " +
+        "getindexof gettotalvaluefor getnumrows getnumcolumns getnumsummaries getnumrowgroups getnumcolumngroups").Split(' '), StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The part of a Crystal static type that decides Date against DateTime comparisons.</summary>
     private enum DateKind : byte { Unknown, Neutral, Other, Time, Date, DateTime }

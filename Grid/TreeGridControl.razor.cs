@@ -9,12 +9,24 @@ namespace Fx.ControlKit.Grid;
 /// TreeGridControl — hierarchical data grid with expand/collapse, parent/child mapping,
 /// typed filtering, sibling sorting, paging, export, and row selection.
 /// </summary>
-public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOwner
+public partial class TreeGridControl<TValue> : Fx.ControlKit.FlexKitControlBase, ITreeGridControlOwner
 {
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag.Trim() : typeof(TValue).Name;
+
     // ── Parameters ───────────────────────────────────────────────────────
 
     [Parameter] public IEnumerable<TValue>? DataSource { get; set; }
     [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    /// <summary>Optional form/content below an expanded node, spanning all columns.
+    /// Detail controls keep their own keyboard and mouse events; the outline's
+    /// expand/collapse and selection behavior is unchanged for other rows.</summary>
+    [Parameter] public RenderFragment<TValue>? RowDetailsTemplate { get; set; }
+    [Parameter] public Func<TValue, bool>? RowDetailsPredicate { get; set; }
+
+    private bool HasRowDetails(TValue item) =>
+        RowDetailsTemplate != null && (RowDetailsPredicate?.Invoke(item) ?? true);
 
     /// <summary>Property name of the unique ID field (e.g. "NodeID").</summary>
     [Parameter] public string IdMapping { get; set; } = "";
@@ -27,6 +39,10 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     /// <summary>Start with all nodes collapsed.</summary>
     [Parameter] public bool EnableCollapseAll { get; set; }
+
+    /// <summary>Optional initial expansion for each new node. Existing expansion
+    /// still follows PreserveExpansionOnDataChange when the data is refreshed.</summary>
+    [Parameter] public Func<TValue, bool>? InitialExpansionPredicate { get; set; }
 
     /// <summary>When false a new DataSource renders every node at its initial state
     /// (collapsed when EnableCollapseAll) instead of inheriting the previous tree's
@@ -224,12 +240,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
 
     // Events
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowSelected { get; set; }
+    /// <summary>Pointer click after selection/focus, separate from keyboard or programmatic selection.</summary>
+    [Parameter] public EventCallback<TreeRowClickEventArgs<TValue>> RowClicked { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDeselected { get; set; }
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowDoubleClicked { get; set; }
     /// <summary>Fires when a row is right-clicked, AFTER the row has been selected —
     /// VB6 VSFlexGrid BeforeMouseDown parity (.Row = .MouseRow), so a context menu
-    /// opened by an ancestor's @oncontextmenu acts on the row under the cursor
-    /// (HHM-88, owner-authorized 2026-07-29). Purely additive: when no delegate is
+    /// opened by an ancestor's @oncontextmenu acts on the row under the cursor.
+    /// Purely additive: when no delegate is
     /// attached, right-click behavior is unchanged. The event does not stop
     /// propagation; the browser contextmenu event still bubbles to page handlers.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowRightClicked { get; set; }
@@ -238,6 +256,9 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// back to <see cref="RowDoubleClicked"/> so mouse and keyboard activation can
     /// share the same host handler.</summary>
     [Parameter] public EventCallback<TreeRowSelectEventArgs<TValue>> RowActivated { get; set; }
+    /// <summary>Keep keyboard focus on the tree after Enter. Disable when the
+    /// activation handler transfers focus to an editor.</summary>
+    [Parameter] public bool RetainFocusOnActivation { get; set; } = true;
     /// <summary>Fires for every keydown reaching the tree grid, BEFORE the built-in
     /// tree navigation runs — the host-form hook for form-specific keys (VB6
     /// gData_KeyDown parity, e.g. Delete clearing a cell value). Purely additive:
@@ -285,6 +306,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private TreeGridColumn? _resizingColumn;
     private double _resizeStartX;
     private double _resizeStartWidth;
+    // The root's pointer handlers render only when they change a width. Mousemove is
+    // bound only while a column is being resized; release and leave stay bound, so a
+    // release that arrives before that binding still ends the resize.
+    private EventCallback<MouseEventArgs>? _resizeMoveCallback;
+    private EventCallback<MouseEventArgs> ResizeMoveCallback =>
+        _resizeMoveCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(HandleColumnResizeMove);
+    private EventCallback<MouseEventArgs>? _resizeEndCallback;
+    private EventCallback<MouseEventArgs> ResizeEndCallback =>
+        _resizeEndCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(EndColumnResize);
     private string? _openToolbarMenuKey;
 
     // ── Column Registration ─────────────────────────────────────────────
@@ -298,6 +328,13 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     public void RemoveColumn(TreeGridColumn column)
     {
         _columns.Remove(column);
+    }
+
+    // Raised while this render's columns take their new parameters: draw once more with them.
+    void ITreeGridControlOwner.ColumnParametersChanged(TreeGridColumn column)
+    {
+        if (!_disposed)
+            StateHasChanged();
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -335,6 +372,17 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
                 await treeScrollModule.InvokeVoidAsync(
                     "enableTreeKeyboardNavigation", _treeGridElement, _scrollViewportElement, _selfRef);
                 _treeKeyboardNavigationEnabled = true;
+            }
+            catch { }
+        }
+
+        if (ShowLegacyScrollBar && !_legacyViewportObserved && !_disposed && treeScrollModule is not null)
+        {
+            try
+            {
+                _selfRef ??= DotNetObjectReference.Create(this);
+                await treeScrollModule.InvokeVoidAsync("observeLegacyScrollViewport", _scrollViewportElement, _selfRef);
+                _legacyViewportObserved = true;
             }
             catch { }
         }
@@ -454,6 +502,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task SyncLegacyScrollBarAsync()
     {
         var m = await ReadLegacyMetricsAsync();
+        // A hidden list (an inactive MDI tab is display:none) measures nothing: keep the bar as shown.
+        if (m is { Height: <= 0, Client: <= 0 }) return;
 
         var scrollable = _legacyScrollable;
         var top = _legacyThumbTopPct;
@@ -488,6 +538,19 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     }
 
     private Task HandleLegacyScroll() => ShowLegacyScrollBar ? SyncLegacyScrollBarAsync() : Task.CompletedTask;
+
+    // The list's visible size changed with no server event (a CSS resize grip, the window).
+    private bool _legacyViewportObserved;
+
+    [JSInvokable]
+    public Task SyncLegacyScrollBarFromBrowserAsync() =>
+        ShowLegacyScrollBar && !_disposed ? SyncLegacyScrollBarAsync() : Task.CompletedTask;
+
+    // Nothing re-renders the tree when only the page's size changes, so the bar re-reads
+    // the list's overflow when the pointer reaches it; it renders only if the thumb moved.
+    private EventCallback<MouseEventArgs>? _legacyBarEnterCallback;
+    private EventCallback<MouseEventArgs> LegacyBarEnterCallback =>
+        _legacyBarEnterCallback ??= NonRenderingEventHandler.Create<MouseEventArgs>(_ => SyncLegacyScrollBarAsync());
 
     private async Task SetLegacyScrollTopAsync(double top)
     {
@@ -573,7 +636,11 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     /// <summary>Clicking the track above/below the thumb pages, as in Windows.</summary>
     private async Task HandleLegacyTrackMouseDown(MouseEventArgs e)
     {
-        if (e.Button != 0 || !_legacyScrollable) return;
+        if (e.Button != 0) return;
+        // The list may have started to overflow since the bar last looked.
+        if (!_legacyScrollable)
+            await SyncLegacyScrollBarAsync();
+        if (!_legacyScrollable) return;
         var ratio = await LegacyTrackRatioAsync(e.ClientY) * 100;
         await ScrollByPageAsync(ratio < _legacyThumbTopPct ? -1 : 1);
     }
@@ -581,16 +648,23 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
     private async Task HandleLegacyThumbMouseDown(MouseEventArgs e)
     {
         if (e.Button != 0 || !_legacyScrollable) return;
-        var m = await ReadLegacyMetricsAsync();
-        if (m is null) return;
-        _legacyDragStartClientY = e.ClientY;
-        _legacyDragStartScrollTop = m.Value.Top;
+        // Armed before the metrics read: a release that reaches the server while the read
+        // is in flight (a quick click on the thumb) clears the armed state, and nothing
+        // re-arms it afterwards. Arming after the read left the veil up with no button
+        // held — the next pointer move dragged the list and the next click fed the veil.
         _legacyThumbDragging = true;
+        _legacyDragStartClientY = e.ClientY;
+        var m = await ReadLegacyMetricsAsync();
+        if (m is null) { _legacyThumbDragging = false; return; }
+        _legacyDragStartScrollTop = m.Value.Top;
     }
 
     private async Task HandleLegacyThumbDragMove(MouseEventArgs e)
     {
         if (!_legacyThumbDragging) return;
+        // A move with the primary button up is not a drag: the release happened where no
+        // handler of ours could see it (before the veil existed, or outside the page).
+        if ((e.Buttons & 1) == 0) { _legacyThumbDragging = false; return; }
         var m = await ReadLegacyMetricsAsync();
         if (m is null) return;
 
@@ -1037,14 +1111,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             {
                 var (item, id) = children[index];
                 var hasChildren = (childrenMap.ContainsKey(id) && childrenMap[id].Count > 0)
-                    || MayHaveUnloadedChildren(item, id);
+                    || MayHaveUnloadedChildren(item, id) || HasRowDetails(item);
                 var isLastSibling = index == children.Count - 1;
                 nextNodes.Add(new TreeNode<TValue>
                 {
                     Data = item,
                     Level = level,
                     HasChildren = hasChildren,
-                    IsExpanded = !EnableCollapseAll,
+                    IsExpanded = InitialExpansionPredicate?.Invoke(item) ?? !EnableCollapseAll,
                     Id = id,
                     ParentId = parentKey,
                     IsLastSibling = isLastSibling,
@@ -1064,14 +1138,14 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         {
             var root = roots[index];
             var hasChildren = (root.Id != null && childrenMap.ContainsKey(root.Id) && childrenMap[root.Id].Count > 0)
-                || (root.Id is not null && MayHaveUnloadedChildren(root.Item, root.Id));
+                || (root.Id is not null && MayHaveUnloadedChildren(root.Item, root.Id)) || HasRowDetails(root.Item);
             var isLastSibling = index == roots.Count - 1;
             nextNodes.Add(new TreeNode<TValue>
             {
                 Data = root.Item,
                 Level = 0,
                 HasChildren = hasChildren,
-                IsExpanded = !EnableCollapseAll,
+                IsExpanded = InitialExpansionPredicate?.Invoke(root.Item) ?? !EnableCollapseAll,
                 Id = root.Id,
                 ParentId = root.ParentId,
                 IsLastSibling = isLastSibling,
@@ -1135,11 +1209,20 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         await SelectNodeAsync(node, visibleIndex);
     }
 
+    private readonly HashSet<object> _collapsingNodes = new();
+    private readonly Dictionary<object, bool> _collapseOverride = new();
+
     private async Task SetNodeExpandedAsync(TreeNode<TValue> node, bool expanded)
     {
         if (node.Id is null || !node.HasChildren) return;
         var id = node.Id;
         _expansionIntent[id] = expanded;
+        if (_collapsingNodes.Contains(id))
+        {
+            _collapseOverride[id] = expanded;
+            node.IsExpanded = expanded && node.HasChildren;
+            return;
+        }
         if (IsLoading(node)) return;
         if (expanded && NeedsChildLoad(node))
         {
@@ -1148,15 +1231,43 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             expanded = _expansionIntent.GetValueOrDefault(id, true);
         }
         else if (node.IsExpanded == expanded) return;
+
+        // Keep the node and its RowDetailsTemplate mounted while Collapsed runs so
+        // detail editors can flush their live DOM drafts before unmounting.
+        if (!expanded && node.IsExpanded)
+        {
+            if (Collapsed.HasDelegate)
+            {
+                _collapsingNodes.Add(id);
+                _collapseOverride.Remove(id);
+                try
+                {
+                    await Collapsed.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
+                }
+                finally
+                {
+                    _collapsingNodes.Remove(id);
+                }
+                node = _flatNodes.FirstOrDefault(n => Equals(n.Id, id)) ?? node;
+                if (_collapseOverride.TryGetValue(id, out var overrideExpanded))
+                {
+                    _collapseOverride.Remove(id);
+                    expanded = overrideExpanded;
+                }
+            }
+            node.IsExpanded = expanded && node.HasChildren;
+            StateHasChanged();
+            return;
+        }
+
         node.IsExpanded = expanded && node.HasChildren;
+        RecordControlAction(node.IsExpanded ? "NodeExpanded" : "NodeCollapsed", node.Id?.ToString(), $"Level {node.Level}");
         if (node.IsExpanded && Expanded.HasDelegate)
             await Expanded.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
-        else if (!node.IsExpanded && Collapsed.HasDelegate)
-            await Collapsed.InvokeAsync(new TreeNodeEventArgs<TValue> { Data = node.Data, Level = node.Level });
         StateHasChanged();
     }
 
-    private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex)
+    private async Task HandleRowClick(TreeNode<TValue> node, int visibleIndex, MouseEventArgs? mouse = null)
     {
         if (_activeEdit is not null && !await FinishActiveEditorAsync()) return;
         node = _flatNodes.FirstOrDefault(n => Equals(n.Id, node.Id)) ?? node;
@@ -1168,7 +1279,15 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
             await ToggleNode(node);
 
         await SelectNodeAsync(node, visibleIndex);
+        if (mouse != null)
+            RecordControlAction("NodeSelected", node.Id?.ToString() ?? $"Row {visibleIndex}", $"Level {node.Level}");
         await FocusAsync();
+        if (mouse != null && RowClicked.HasDelegate)
+            await RowClicked.InvokeAsync(new TreeRowClickEventArgs<TValue>
+            {
+                Data = node.Data, RowIndex = visibleIndex, Level = node.Level,
+                HasChildren = node.HasChildren, IsExpanded = node.IsExpanded, MouseEvent = mouse
+            });
     }
 
     // ── In-cell editing (CellEditTemplate columns): the cell editor host ──────
@@ -1844,7 +1963,8 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         }
 
         var node = visible[selectedIndex];
-        _pendingTreeFocus = true;
+        _pendingTreeFocus = RetainFocusOnActivation;
+        if (!RetainFocusOnActivation) _pendingKeyboardFocusNode = null;
         if (RowActivated.HasDelegate)
             await RowActivated.InvokeAsync(CreateRowEventArgs(node, selectedIndex));
         else if (RowDoubleClicked.HasDelegate)
@@ -2192,7 +2312,7 @@ public partial class TreeGridControl<TValue> : ComponentBase, ITreeGridControlOw
         if (!AllowResizing || !column.AllowResizing)
             return;
 
-        if (_gripClicks.Register(GetColumnKey(column), DateTime.UtcNow) && AllowColumnAutoFit)
+        if (_gripClicks.Register(GetColumnKey(column), DateTime.UtcNow, e.Detail) && AllowColumnAutoFit)
         {
             _isColumnResizing = false;
             _resizingColumn = null;
@@ -2572,6 +2692,11 @@ public class TreeNode<TValue>
     public bool IsLastSibling { get; set; }
     public IReadOnlyList<bool> AncestorLineContinuations { get; set; } = Array.Empty<bool>();
     public ElementReference RowElement { get; set; }
+}
+
+public class TreeRowClickEventArgs<TValue> : TreeRowSelectEventArgs<TValue>
+{
+    public MouseEventArgs MouseEvent { get; set; } = new();
 }
 
 public class TreeRowSelectEventArgs<TValue>

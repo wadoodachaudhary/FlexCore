@@ -1,0 +1,12 @@
+.fx-uj-root {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+}
+
+.fx-uj-picker {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}

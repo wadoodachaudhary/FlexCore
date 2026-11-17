@@ -16,6 +16,7 @@
                   value="@EffectiveValue"
                   rows="@(Rows ?? 4)"
                   wrap="@WrapMode"
+                  spellcheck="@(SpellCheck?.ToString().ToLowerInvariant())"
                   placeholder="@Placeholder"
                   maxlength="@MaxLength"
                   disabled="@(!Enabled)"
@@ -46,6 +47,7 @@ else
               value="@EffectiveValue"
               rows="@(Rows ?? 4)"
               wrap="@WrapMode"
+              spellcheck="@(SpellCheck?.ToString().ToLowerInvariant())"
               placeholder="@Placeholder"
               maxlength="@MaxLength"
               disabled="@(!Enabled)"
@@ -157,6 +159,7 @@ else
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? MaxLength { get; set; }
     [Parameter] public int? Rows { get; set; }
+    [Parameter] public bool? SpellCheck { get; set; }
     /// <summary>Controls which native textarea scrollbars are available.</summary>
     [Parameter] public TextAreaScrollBars ScrollBars { get; set; } = TextAreaScrollBars.Auto;
     /// <summary>Enables the classic VB6-style dedicated vertical scrollbar with disabled/enabled states.</summary>
@@ -203,6 +206,17 @@ else
         }
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : Placeholder;
+
+    private void LogTextAreaCommit(string? val, string? detail = null)
+    {
+        var summary = string.IsNullOrEmpty(val)
+            ? "(empty)"
+            : $"({val.Length} chars) {SanitizeValue(val, 80)}";
+        RecordControlAction("ValueCommitted", summary, detail ?? Placeholder);
+    }
+
     [JSInvokable]
     public Task CommitClientBufferedTypingAsync(
         string? value, string key, bool shiftKey, bool ctrlKey, bool altKey, bool metaKey)
@@ -217,8 +231,10 @@ else
                 committed = committed[..MaxLength.Value];
 
             Value = committed;
-            _uncontrolledRenderedText = committed;
-            _uncontrolledInitialized = true;
+            if (!string.Equals(key, "Sync", StringComparison.Ordinal))
+                LogTextAreaCommit(committed, key);
+            // Only OnParametersSet initializes the browser-owned render seed.
+            // A delayed blur must not repaint over typing resumed in the meantime.
             _suppressNextNativeInputRender = true;
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(committed);
@@ -234,6 +250,66 @@ else
     [Parameter] public bool SelectAllOnDoubleClick { get; set; }
     [Parameter] public bool UseClassicContextMenu { get; set; }
     [Parameter] public TextContextMenuItems ContextMenuItems { get; set; } = TextContextMenuItems.Legacy;
+
+    /// <summary>Focus this editor without changing its caret or selection.</summary>
+    public ValueTask FocusAsync() => _inputElement.FocusAsync();
+
+    /// <summary>Read the current browser draft before a host command, without waiting for blur.</summary>
+    public Task FlushClientBufferedValueAsync() => FlushClientBufferedValueAsync(requireCurrentValue: false);
+
+    /// <summary>Require a successful browser read before a save; false retains best-effort blur behavior.</summary>
+    public async Task FlushClientBufferedValueAsync(bool requireCurrentValue)
+    {
+        if (_disposed && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current multiline text value.");
+        if (_disposed || !IsDomOwned) return;
+        var module = await GetControlJsModuleAsync();
+        if ((module is null || _disposed) && requireCurrentValue)
+            throw new InvalidOperationException("Unable to read the current multiline text value.");
+        if (module is null || _disposed) return;
+        try
+        {
+            var value = await module.InvokeAsync<string?>("getTextValue", _inputElement);
+            if (value is null && requireCurrentValue)
+                throw new InvalidOperationException("Unable to read the current multiline text value.");
+            if (value is null) return;
+            await PublishBrowserValueAsync(value);
+        }
+        catch when (!requireCurrentValue && _disposed)
+        {
+            // The editor unmounted while the flush was in flight. Any other failed read
+            // still surfaces, so a save never treats a lost browser draft as clean.
+        }
+    }
+
+    /// <summary>Replace the selection (or insert at the caret) with the complete text.
+    /// Returns false if MaxLength would be exceeded; no partial token is inserted.</summary>
+    public async Task<bool> InsertTextAsync(string text)
+    {
+        if (!Enabled || string.IsNullOrEmpty(text)) return false;
+        var module = await GetControlJsModuleAsync()
+            ?? throw new InvalidOperationException("The text editor is not available.");
+        var result = await module.InvokeAsync<TextInsertionResult>("insertTextAtSelection", _inputElement, text);
+        if (!result.Accepted) return false;
+        await PublishBrowserValueAsync(result.Value);
+        return true;
+    }
+
+    private async Task PublishBrowserValueAsync(string value)
+    {
+        Value = value;
+        if (!ValueChanged.HasDelegate) return;
+        // The DOM already contains this draft. Keep the browser-owned render seed
+        // unchanged so the host's re-render cannot repaint over subsequent typing.
+        _suppressNextNativeInputRender = true;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    private sealed class TextInsertionResult
+    {
+        public bool Accepted { get; set; }
+        public string Value { get; set; } = "";
+    }
 
     /// <summary>Bind only events that have observable behavior. A bound Blazor
     /// event crosses the SignalR circuit even when its handler is a no-op.
@@ -404,6 +480,7 @@ else
     private async Task OnNativeValueChanged(ChangeEventArgs e)
     {
         Value = e.Value?.ToString();
+        LogTextAreaCommit(Value);
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(Value);
     }
@@ -489,6 +566,7 @@ else
             if (result.ValueChanged)
             {
                 Value = result.Value;
+                LogTextAreaCommit(Value, command);
                 if (ValueChanged.HasDelegate)
                     await ValueChanged.InvokeAsync(Value);
             }
@@ -512,8 +590,11 @@ else
         }
     }
 
+    private bool _disposed;
+
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         if (_clientBufferAttached && _controlJsModule != null)
         {
             try { await _controlJsModule.InvokeVoidAsync("disableClientBufferedTyping", _inputElement); }

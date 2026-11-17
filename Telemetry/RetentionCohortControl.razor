@@ -1,0 +1,182 @@
+@namespace Fx.ControlKit.Telemetry
+@inherits Fx.ControlKit.FlexKitControlBase
+@using System.Globalization
+@using System.Text
+@using Fx.ControlKit
+@using Fx.ControlKit.Charts
+@using Fx.ControlKit.Grid
+@using Fx.ControlKit.Logging
+
+<CascadingValue Value="@ChildLocation" IsFixed="true">
+    <div class="fx-ret-root @ThemeClass">
+        @if (ProductSnapshot is null)
+        {
+            <div class="fx-tel-empty">No product telemetry loaded yet.</div>
+        }
+        else
+        {
+            <div class="fx-tel-scroll-pane">
+                <CardControl Title="@($"User Retention Cohort Matrix ({ActiveReport.Granularity})")" CssClass="fx-tel-card" Elevation="1">
+                    <div class="fx-tel-subbar">
+                        <div class="fx-tel-pill-group">
+                            <ButtonControl CssClass="@PillCss(_weekly)" Tag="fx-ret-weekly" OnClick="() => SetGranularity(true)">Weekly Cohorts</ButtonControl>
+                            <ButtonControl CssClass="@PillCss(!_weekly)" Tag="fx-ret-daily" OnClick="() => SetGranularity(false)">Daily Cohorts</ButtonControl>
+                        </div>
+                        <span class="fx-tel-panel-hint">Each row groups users by their first active period and tracks the % returning in subsequent periods</span>
+                    </div>
+
+                    <CohortMatrixControl Tag="fx-ret-cohort-matrix"
+                                         Rows="@ActiveReport.CohortRows"
+                                         PeriodHeaders="@ActiveReport.PeriodHeaders"
+                                         BaseRgb="@(IsVb ? "10, 36, 106" : (Theme == TelemetryTheme.GrafanaDark ? "56, 189, 248" : "37, 99, 235"))" />
+                </CardControl>
+
+                <div class="fx-tel-charts-row fx-tel-charts-two">
+                    <CardControl Title="User Lifecycle Breakdown (New · Retained · Resurrected · Dormant)" CssClass="fx-tel-card" Elevation="1">
+                        @if (LifecycleSeries.Count > 0 && LifecycleSeries[0].DataPoints.Count > 0)
+                        {
+                            <ChartControl Type="ChartType.StackedBar"
+                                          Series="@LifecycleSeries"
+                                          Height="245px" />
+                        }
+                        else
+                        {
+                            <div class="fx-tel-empty">User lifecycle bars populate once activity spans at least one period.</div>
+                        }
+                    </CardControl>
+
+                    <CardControl Title="User Engagement Segments (Champions · Regulars · Occasional · Dormant)" CssClass="fx-tel-card" Elevation="1">
+                        <div style="height: 255px;">
+                            <GridControl TValue="UserEngagementSegmentRow"
+                                         Tag="fx-grid-user-segments"
+                                         DataSource="@ActiveReport.UserSegments"
+                                         AllowSorting="true"
+                                         AllowFiltering="true"
+                                         AllowResizing="true"
+                                         EnableHover="true"
+                                         Height="100%"
+                                         WidthMode="GridWidthMode.FillAvailable">
+                                <GridColumnsBase>
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.UserId)" HeaderText="User" Width="135px" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.Segment)" HeaderText="Segment" Width="140px" AllowEditing="false">
+                                        <Template>
+                                            @{
+                                                var r = (UserEngagementSegmentRow)context;
+                                            }
+                                            <BadgeControl Variant="@SegmentBadge(r.Segment)" Size="BadgeSize.Small" Text="@r.Segment" />
+                                        </Template>
+                                    </GridColumn>
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.ActiveDays)" HeaderText="Days" Width="68px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.DistinctScreens)" HeaderText="Screens" Width="80px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.TotalActions)" HeaderText="Actions" Width="85px" Type="ColumnType.Number" Format="N0" TextAlign="TextAlign.Right" AllowEditing="false" />
+                                    <GridColumn Field="@nameof(UserEngagementSegmentRow.TopModule)" HeaderText="Primary Module" Width="150px" AllowEditing="false" />
+                                </GridColumnsBase>
+                            </GridControl>
+                        </div>
+                    </CardControl>
+                </div>
+            </div>
+        }
+    </div>
+</CascadingValue>
+
+@code {
+    [Parameter] public TelemetryTheme Theme { get; set; } = TelemetryTheme.VBClassic;
+    [Parameter] public FlexProductAnalyticsSnapshot? ProductSnapshot { get; set; }
+
+    private bool _weekly = true;
+
+    private bool IsVb => Theme == TelemetryTheme.VBClassic;
+    private FlexControlLocation ChildLocation => GetOrCreateChildLocation("RetentionCohortControl", () => "RetentionCohorts");
+    protected override string? ResolveControlIdentifier() => "RetentionCohorts";
+
+    private string ThemeClass => Theme switch
+    {
+        TelemetryTheme.GrafanaDark => "fx-tel-theme-grafana",
+        TelemetryTheme.ModernLight => "fx-tel-theme-light",
+        _ => "fx-tel-theme-vb"
+    };
+
+    private CohortRetentionReport ActiveReport =>
+        ProductSnapshot is null
+            ? new CohortRetentionReport()
+            : (_weekly && ProductSnapshot.WeeklyCohorts.CohortRows.Count > 0
+                ? ProductSnapshot.WeeklyCohorts
+                : (_weekly ? ProductSnapshot.WeeklyCohorts : ProductSnapshot.DailyCohorts));
+
+    private List<ChartSeries> LifecycleSeries
+    {
+        get
+        {
+            var buckets = ActiveReport.LifecycleBuckets;
+            if (buckets.Count == 0) return new();
+
+            var sNew = new ChartSeries("New", ChartType.StackedBar, color: "#2563eb");
+            var sRet = new ChartSeries("Retained", ChartType.StackedBar, color: "#16a34a");
+            var sRes = new ChartSeries("Resurrected", ChartType.StackedBar, color: "#8b5cf6");
+            var sDor = new ChartSeries("Dormant", ChartType.StackedBar, color: "#f59e0b");
+
+            foreach (var b in buckets)
+            {
+                sNew.DataPoints.Add(new ChartDataPoint(b.PeriodLabel, b.NewUsers));
+                sRet.DataPoints.Add(new ChartDataPoint(b.PeriodLabel, b.RetainedUsers));
+                sRes.DataPoints.Add(new ChartDataPoint(b.PeriodLabel, b.ResurrectedUsers));
+                sDor.DataPoints.Add(new ChartDataPoint(b.PeriodLabel, b.DormantUsers));
+            }
+            return new List<ChartSeries> { sNew, sRet, sRes, sDor };
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private void SetGranularity(bool weekly)
+    {
+        _weekly = weekly;
+        RecordControlAction("GranularityChanged", weekly ? "Weekly" : "Daily");
+    }
+
+    public (string Suffix, string CsvContent) BuildCurrentCsv()
+    {
+        var sb = new StringBuilder();
+        var headers = ActiveReport.PeriodHeaders;
+        sb.Append("Cohort,CohortSize");
+        foreach (var h in headers)
+            sb.Append(',').Append(Csv(h));
+        sb.AppendLine();
+
+        foreach (var row in ActiveReport.CohortRows)
+        {
+            sb.Append(Csv(row.CohortLabel)).Append(',').Append(row.CohortSize);
+            for (int i = 0; i < headers.Count; i++)
+            {
+                sb.Append(',');
+                if (i < row.ActiveCounts.Count && row.CohortSize > 0)
+                {
+                    double pct = row.ActiveCounts[i] * 100.0 / row.CohortSize;
+                    sb.Append(pct.ToString("0.1", CultureInfo.InvariantCulture)).Append('%');
+                }
+            }
+            sb.AppendLine();
+        }
+        return ("retention-cohorts", sb.ToString());
+    }
+
+    private static BadgeVariant SegmentBadge(string seg) => seg switch
+    {
+        "Champion" => BadgeVariant.Success,
+        "Regular" => BadgeVariant.Info,
+        "Occasional" => BadgeVariant.Secondary,
+        _ => BadgeVariant.Warning
+    };
+
+    private static string PillCss(bool active) => active ? "fx-tel-pill fx-tel-pill-active" : "fx-tel-pill";
+
+    private static string Csv(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return string.Empty;
+        return v.Contains(',') || v.Contains('"') ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
+    }
+}

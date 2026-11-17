@@ -19,6 +19,7 @@
      data-fx-allow-selection="@(AllowSelection ? "true" : "false")"
      data-fx-selection-mode="@(SelectionSettingsRef?.Mode == SelectionMode.Cell ? "cell" : "row")"
      data-fx-active-cell="@(ShowActiveCell ? null : "hidden")"
+     data-fx-active-cell-scroll="@(_pendingActiveCellScrollIntoView ? "true" : "false")"
      data-fx-pointer-paint-ack="@_pointerPaintAcknowledgedGeneration"
      data-fx-custom-keyboard-shortcuts="@CustomKeyboardShortcutDomValue"
      data-fx-column-virtualization="@ColumnVirtualizationDomState"
@@ -30,6 +31,7 @@
      @oncontextmenu:preventDefault="@GridContextMenuPreventDefault"
      @oncontextmenu:stopPropagation="@StopContextMenuPropagation"
      @onmousedown="HandleGridHostMouseDown"
+     @onmousemove="@(_resizingCol != null && !_columnResizeDragged ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleGridResizeMove) : default)"
      @onmouseup="@NonRenderingGridMouseUp">
 
     @if (!string.IsNullOrWhiteSpace(_exportStatusMessage))
@@ -128,7 +130,7 @@
                 }
                 @if (HasAnyActiveFilter)
                 {
-                    @* HHM-871 follow-up: one-click clear of every active column /
+                    @* One-click clear of every active column /
                        expression filter — first icon of the group bar, rendered
                        only while a filter is applied. *@
                     <button class="fx-group-expand-collapse-btn fx-clear-all-filters-btn"
@@ -764,6 +766,7 @@
                                 scope="col"
                                 aria-colindex="@GetColumnAriaIndex(columnSlot.ColumnIndex)"
                                 aria-sort="@GetColumnAriaSort(state)"
+                                @onmousedown="NonRenderingHeaderMouseDown"
                                 @onclick="e => HandleHeaderClickAsync(e, col)"
                                 @oncontextmenu="@(e => OpenHeaderContextMenu(e, capturedField))"
                                 @oncontextmenu:preventDefault="true"
@@ -793,7 +796,7 @@
 
                                 @if (HasActiveColumnFilter(capturedField))
                                 {
-                                    @* HHM-871: the passive "filter applied" dot is now a
+                                    @* The passive "filter applied" dot is now a
                                        click-to-clear badge — one click removes the column's
                                        filter without opening the popup. *@
                                     <span class="fx-filter-clear"
@@ -819,6 +822,11 @@
                                     </span>
                                 }
 
+                                @if (col.HeaderSuffixTemplate != null)
+                                {
+                                    @col.HeaderSuffixTemplate
+                                }
+
                                 @if (ShowColumnMenuButton && (EnableHeaderContextMenu || ShowColumnMenu))
                                 {
                                     <ButtonControl BareStyle="true" CssClass="fx-column-menu-button"
@@ -836,6 +844,7 @@
                                           @onmousedown="e => StartResize(col, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
+                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(col)"
                                           @ondblclick:preventDefault="true"
@@ -853,6 +862,7 @@
                                           @onmousedown="e => StartResize(capturedPrev, e)"
                                           @onmousedown:preventDefault="true"
                                           @onmousedown:stopPropagation="true"
+                                          @onmouseup="e => EndGridResizeFromBrowserAsync(e.ClientX, e.ClientY)"
                                           @onclick:stopPropagation="true"
                                           @ondblclick="() => HandleResizeHandleDoubleClickAsync(capturedPrev)"
                                           @ondblclick:preventDefault="true"
@@ -1818,8 +1828,8 @@
         </div>
     }
 
-    @* ── Resize Overlay (captures mousemove/mouseup during resize) ─ *@
-    @if (_resizingCol != null || _resizingRowIndex >= 0)
+    @* A stationary grip press must leave the divider hittable for the second click. *@
+    @if ((_resizingCol != null && _columnResizeDragged) || _resizingRowIndex >= 0)
     {
         <div class="fx-resize-overlay @(_resizingRowIndex >= 0 ? "fx-row-resize-overlay" : "")"
              @onmousemove="HandleGridResizeMove"
@@ -2011,6 +2021,7 @@
                     Insert a column...
                 </button>
                 <button type="button" class="fx-grid-header-context-item"
+                        disabled="@(CurrentHeaderColumn?.AllowRenaming != true)"
                         @onclick="HeaderMenuStartRename">
                     <span class="fx-grid-header-context-check"></span>
                     Rename this column...
@@ -2288,7 +2299,7 @@
                         <div @key="capturedRow.Field"
                              tabindex="-1"
                              role="option"
-                             aria-selected="@(row.Field == _chooseColumnsSelectedField)"
+                             aria-selected="@(row.Field == _chooseColumnsSelectedField ? "true" : "false")"
                              @ref="_chooseColumnsRowRefs[capturedRow.Field]"
                              class="fx-choose-columns-row @(row.Field == _chooseColumnsSelectedField ? "selected" : "")"
                              @onclick="() => ChooseColumnsSelect(capturedRow.Field)">

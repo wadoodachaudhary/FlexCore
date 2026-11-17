@@ -82,7 +82,7 @@ public partial class GridControl<TValue>
             _expressionFilterText = expression;
             _expressionFilterDraft = expression;
             _expressionFilterError = null;
-            _pageState.CurrentPage = 1;
+            ResetToFirstPage();
             applied = true;
         }
         catch (Exception ex)
@@ -101,7 +101,7 @@ public partial class GridControl<TValue>
     private async Task ClearExpressionFilterAsync()
     {
         ClearExpressionFilterState();
-        _pageState.CurrentPage = 1;
+        ResetToFirstPage();
         if (UsesItemsProvider)
             await ReloadItemsAsync();
         await InvokeAsync(StateHasChanged);

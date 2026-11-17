@@ -34,6 +34,27 @@ public partial class TreeGridControl<TValue>
     public bool HasPendingChanges => _editSessions.Count > 0 || _deletedRows.Count > 0;
     public EditContext? CurrentEditContext => _activeEdit?.Context;
     public IReadOnlyList<TValue> GetCurrentRecords() => LoadedRecords.ToArray();
+
+    /// <summary>Applies a host-persisted label change without rebuilding, re-sorting, selecting,
+    /// or expanding the tree. The field must be a writable string, not an ID mapping.
+    /// The host owns validation/persistence; no edit or data-change events are raised.
+    /// Returns false when the record is no longer loaded or is being edited/deleted.</summary>
+    public async Task<bool> RenameNodeAsync(object id, string field, string text)
+    {
+        if (typeof(TValue).IsValueType)
+            throw new InvalidOperationException("Renaming requires reference-type records.");
+        var property = typeof(TValue).GetProperty(field);
+        if (field == IdMapping || field == ParentIdMapping || property?.PropertyType != typeof(string)
+            || property.SetMethod?.IsPublic != true || property.GetIndexParameters().Length != 0)
+            throw new ArgumentException("Rename must target a writable string label, not an ID or parent ID.", nameof(field));
+        if (_disposed || _mutationBusy || _editSessions.ContainsKey(id) || _deletedRows.Contains(id)) return false;
+        var node = _flatNodes.FirstOrDefault(n => Equals(n.Id, id));
+        if (node is null) return false;
+        property.SetValue(node.Data, text);
+        await InvokeAsync(StateHasChanged);
+        return true;
+    }
+
     private IEnumerable<TValue> LoadedRecords => (_localRecords ?? DataSource ?? []).Concat(_loadedChildren.Values.SelectMany(c => c));
     private IEnumerable<TValue> PreviewRecords => IncludeAddedRows(LoadedRecords.Where(r => !_deletedRows.Contains(RecordId(r))));
     private IEnumerable<TValue> IncludeAddedRows(IEnumerable<TValue> existing)

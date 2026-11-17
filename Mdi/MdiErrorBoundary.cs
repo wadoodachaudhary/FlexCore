@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using Fx.ControlKit.Logging;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 
@@ -18,11 +19,26 @@ namespace Fx.ControlKit.Mdi;
 /// </summary>
 public class MdiErrorBoundary : ErrorBoundary
 {
+    [Parameter] public string? Tag { get; set; }
+
+    public FlexControlLog Log { get; } = new();
+
     /// <summary>Raised after an exception is caught (and after the base logger runs).</summary>
     [Parameter] public EventCallback<Exception> OnError { get; set; }
 
     protected override async Task OnErrorAsync(Exception exception)
     {
+        Log.Append(new FlexControlLogRecord
+        {
+            Level = "ERROR",
+            ControlType = nameof(MdiErrorBoundary),
+            ControlId = string.IsNullOrWhiteSpace(Tag) ? nameof(MdiErrorBoundary) : Tag.Trim(),
+            Tag = Tag,
+            Action = "UnhandledException",
+            Value = exception.GetType().Name,
+            Detail = exception.Message
+        });
+
         // Preserve the default logging behaviour.
         await base.OnErrorAsync(exception);
 

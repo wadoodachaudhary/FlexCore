@@ -2363,3 +2363,85 @@
 }
 .fx-rd-section-actions label { display:flex; align-items:center; gap:4px; font-size:12px; }
 .fx-rd-validation-error { color:#a52222; white-space:normal; overflow-wrap:anywhere; }
+
+/* ── Studio shell: Looker Studio's frame and light theme over the same designer. The classic Crystal shell above is unchanged. ── */
+.fx-rd.fx-rd-studio {
+    background: #f8f9fa;
+    border: 0;
+    min-height: 560px;
+    color: #202124;
+    font-family: "Google Sans", Roboto, "Segoe UI", Arial, sans-serif;
+    font-size: calc(13px * var(--fx-zoom, 1));
+}
+.fx-rd-studio-bar { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 16px; background: #fff; border-bottom: 1px solid #dadce0; flex: 0 0 auto; }
+.fx-rd-studio-bar ::deep .fx-rd-studio-title { flex: 0 1 auto; min-width: 0; }
+.fx-rd-studio-bar ::deep .fx-rd-studio-title input { font-size: calc(18px * var(--fx-zoom, 1)); font-weight: 400; color: #202124; min-width: 240px; width: 34vw; max-width: 520px; padding: 4px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; }
+.fx-rd-studio-bar ::deep .fx-rd-studio-title input:hover { border-color: #dadce0; }
+.fx-rd-studio-bar ::deep .fx-rd-studio-title input:focus { border-color: #1a73e8; outline: none; box-shadow: none; }
+.fx-rd-studio-state { color: #5f6368; font-size: calc(12px * var(--fx-zoom, 1)); white-space: nowrap; }
+.fx-rd-studio-state.dirty { color: #b06000; }
+.fx-rd-studio-spacer { flex: 1 1 auto; }
+.fx-rd-studio-tools { display: flex; align-items: center; gap: 2px; height: 44px; padding: 0 12px; background: #fff; border-bottom: 1px solid #dadce0; flex: 0 0 auto; overflow-x: auto; }
+.fx-rd-studio-divider { width: 1px; height: 24px; background: #dadce0; margin: 0 6px; flex: 0 0 auto; }
+.fx-rd-studio-tools ::deep .fx-rd-studio-menu button, .fx-rd-studio-tools ::deep .fx-rd-studio-text-btn, .fx-rd-studio-bar ::deep .fx-rd-studio-text-btn { height: 32px; padding: 0 12px; border: 0; border-radius: 4px; background: transparent; color: #3c4043; font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.fx-rd-studio-tools ::deep .fx-rd-studio-menu button:hover, .fx-rd-studio-tools ::deep .fx-rd-studio-text-btn:hover { background: #f1f3f4; }
+.fx-rd-studio-tools ::deep .fx-rd-studio-text-btn.selected, .fx-rd-studio-tools ::deep .fx-rd-studio-text-btn[aria-pressed="true"] { color: #1a73e8; background: #e8f0fe; }
+.fx-rd-studio-tools ::deep .fx-rd-tool-host { display: inline-flex; }
+.fx-rd-studio-tools ::deep .fx-rd-icon-btn, .fx-rd-studio-style ::deep .fx-rd-icon-btn { border-radius: 4px; }
+.fx-rd-studio-tools ::deep .fx-rd-icon-btn:hover, .fx-rd-studio-style ::deep .fx-rd-icon-btn:hover { background: #f1f3f4; }
+.fx-rd-studio-shell { display: grid; grid-template-columns: 224px minmax(360px, 1fr) 328px; flex: 1 1 auto; min-height: 0; }
+.fx-rd-studio-shell.outline-collapsed { grid-template-columns: 40px minmax(360px, 1fr) 328px; }
+.fx-rd-studio-outline, .fx-rd-studio-panels { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: #fff; }
+.fx-rd-studio-outline { border-right: 1px solid #dadce0; }
+.fx-rd-studio-panels { border-left: 1px solid #dadce0; }
+.fx-rd-studio-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 0 8px 0 12px; font-weight: 500; color: #202124; border-bottom: 1px solid #e8eaed; flex: 0 0 auto; }
+.fx-rd-studio-panel-header > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-rd-studio-outline ::deep .fx-rd-studio-collapse { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: #5f6368; font-size: 18px; cursor: pointer; }
+.fx-rd-studio-outline ::deep .fx-rd-studio-collapse:hover { background: #f1f3f4; }
+.fx-rd-studio-stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #e8eaed; }
+.fx-rd-studio-stage ::deep .fx-rd-canvas { background: #e8eaed; padding: 16px 24px 32px; }
+.fx-rd-studio-stage ::deep .fx-rd-canvas .fx-grid.fx-rd-canvas-grid { font-family: inherit; }
+.fx-rd-studio-stage ::deep .fx-rd-canvas-tools { background: #e8eaed; }
+.fx-rd-studio-view { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: #fff; }
+.fx-rd-studio-properties { flex: 0 0 auto; max-height: 56%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid #dadce0; }
+.fx-rd-studio-data { flex: 1 1 auto; min-height: 120px; display: flex; flex-direction: column; }
+.fx-rd-studio-panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px 8px 8px; }
+.fx-rd-studio-properties ::deep .fx-rd-studio-tabs { flex: 0 0 auto; padding: 0 8px; border-bottom: 1px solid #e8eaed; }
+.fx-rd-studio-properties ::deep .fx-rd-studio-tabs .fx-tabstrip-tab { text-transform: uppercase; letter-spacing: .04em; font-size: calc(12px * var(--fx-zoom, 1)); font-weight: 500; color: #5f6368; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+.fx-rd-studio-properties ::deep .fx-rd-studio-tabs .fx-tabstrip-tab.active, .fx-rd-studio-properties ::deep .fx-rd-studio-tabs .fx-tabstrip-tab[aria-selected="true"] { color: #1a73e8; border-bottom-color: #1a73e8; }
+.fx-rd-studio-panels ::deep .fx-rd-property-card { margin: 4px 0 10px; padding: 0; background: transparent; border: 0; box-shadow: none; }
+.fx-rd-studio-panels ::deep .fx-rd-property-card h3 { margin: 8px 0 4px; font-size: calc(11px * var(--fx-zoom, 1)); font-weight: 500; letter-spacing: .04em; text-transform: uppercase; color: #5f6368; }
+.fx-rd-studio-panels ::deep .fx-rd-property-card label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 3px 0; color: #3c4043; }
+.fx-rd-studio-panels ::deep .fx-rd-property-card label > :last-child { flex: 0 1 62%; min-width: 0; }
+.fx-rd-studio-style { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+.fx-rd-studio-field-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #3c4043; }
+.fx-rd-studio-field-row > :last-child { flex: 0 1 62%; min-width: 0; }
+.fx-rd-studio-style-row { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px 0; border-top: 1px solid #f1f3f4; }
+.fx-rd-studio-search { padding: 8px 12px 4px; }
+.fx-rd-studio-search ::deep input { width: 100%; box-sizing: border-box; border: 1px solid #dadce0; border-radius: 4px; padding: 6px 10px; font: inherit; }
+.fx-rd-studio-fields { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 4px; }
+.fx-rd-studio-tree { border: 0; background: transparent; }
+.fx-rd-studio-outline ::deep .fx-rd-studio-tree, .fx-rd-studio-fields ::deep .fx-rd-studio-tree { height: 100%; }
+.fx-rd-studio-field { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.fx-rd-studio-field-name, .fx-rd-studio-node { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fx-rd-studio-chip { display: inline-block; min-width: 34px; padding: 0 5px; box-sizing: border-box; border-radius: 3px; font-size: 10px; font-weight: 700; line-height: 18px; letter-spacing: .02em; text-align: center; color: #fff; }
+.fx-rd-studio-chip.dim { background: #188038; }
+.fx-rd-studio-chip.met { background: #1a73e8; }
+.fx-rd-studio-panel-footer { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; border-top: 1px solid #e8eaed; flex: 0 0 auto; }
+.fx-rd-studio-panel-footer ::deep .fx-rd-studio-link-btn { border: 0; background: transparent; color: #1a73e8; font: inherit; font-weight: 500; padding: 6px 8px; border-radius: 4px; cursor: pointer; }
+.fx-rd-studio-panel-footer ::deep .fx-rd-studio-link-btn:hover { background: #e8f0fe; }
+.fx-rd-studio-panel-footer ::deep .fx-rd-studio-link-btn:disabled { color: #9aa0a6; background: transparent; cursor: default; }
+@media (max-width: 1100px) {
+    .fx-rd-studio-shell, .fx-rd-studio-shell.outline-collapsed { grid-template-columns: 40px minmax(280px, 1fr) 280px; }
+}
+@media (max-width: 700px) {
+    /* A phone shows the canvas alone; the outline and panels return at tablet width. */
+    .fx-rd-studio-shell, .fx-rd-studio-shell.outline-collapsed { grid-template-columns: minmax(0, 1fr); }
+    .fx-rd-studio-outline, .fx-rd-studio-panels { display: none; }
+    /* The title bar wraps on a phone (title, state, then the host's actions) instead of running past the edge. */
+    .fx-rd-studio-bar { flex-wrap: wrap; height: auto; min-height: 56px; padding: 8px 12px; row-gap: 6px; }
+    .fx-rd-studio-bar ::deep .fx-rd-studio-title input { min-width: 120px; width: 40vw; }
+}
+/* The Properties panel header already names the selection; the accordion's own caption is redundant in the Studio shell. */
+.fx-rd-studio-panels ::deep .fx-accordion-header { display: none; }
+.fx-rd-studio-panels ::deep .fx-accordion-body, .fx-rd-studio-panels ::deep .fx-rd-properties-content { padding: 0; }

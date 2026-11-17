@@ -48,6 +48,29 @@ internal static class ReportValueFormatting
     {
         var values = source.Where(value => value is not null and not DBNull).ToArray();
         if (operation == ReportAggregateType.DistinctCount) return values.Distinct().Count();
+        if (operation is ReportAggregateType.Min or ReportAggregateType.Max)
+        {
+            if (values.Length == 0) return "";
+            var numeric = new List<decimal>(values.Length);
+            foreach (var value in values)
+            {
+                if (value is DateTime or DateOnly or TimeOnly or TimeSpan || !decimal.TryParse(Convert.ToString(value, CultureInfo.InvariantCulture),
+                    NumberStyles.Float, CultureInfo.InvariantCulture, out var number)) break;
+                numeric.Add(number);
+            }
+            if (numeric.Count == values.Length) return operation == ReportAggregateType.Min ? numeric.Min() : numeric.Max();
+            var result = values[0]!;
+            foreach (var value in values.Skip(1))
+            {
+                int comparison;
+                if (value is IComparable comparable && value.GetType() == result.GetType()) comparison = comparable.CompareTo(result);
+                else if (value is IConvertible && result is IConvertible)
+                    comparison = Convert.ToDecimal(value, CultureInfo.InvariantCulture).CompareTo(Convert.ToDecimal(result, CultureInfo.InvariantCulture));
+                else throw new InvalidDataException("Cross-tab minimum/maximum values have incompatible types.");
+                if (operation == ReportAggregateType.Min ? comparison < 0 : comparison > 0) result = value!;
+            }
+            return result;
+        }
         var numbers = new List<decimal>();
         foreach (var value in values)
         {

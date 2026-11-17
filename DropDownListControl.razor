@@ -12,6 +12,7 @@
    semantics: Escape on an open list never fires the form's Cancel button. *@
 <div class="@HostCssClass" style="@HostStyle"
      @ref="_hostRef"
+     data-fx-panel-max="@(PanelMaxHeight == 180 ? null : PanelMaxHeight.ToString(CultureInfo.InvariantCulture))"
      data-fx-editable-dropdown="@(Editable ? ClientDropdownConfiguration : null)"
      data-fx-key-scope="@(_isOpen ? "" : null)"
      @onclick:stopPropagation="true"
@@ -51,7 +52,7 @@
                 tabindex="@EffectiveTabIndex"
                 aria-label="@AriaLabel"
                 aria-haspopup="listbox"
-                aria-expanded="@_isOpen"
+                aria-expanded="@(_isOpen ? "true" : "false")"
                 @onmousedown="HandleButtonMouseDown"
                 @onclick="HandleButtonClick"
                 @onkeydown="HandleButtonKeyDown"
@@ -79,13 +80,12 @@
 
     @if ((_isOpen || Editable) && Enabled)
     {
-        @* Hosted, non-editable: the options are focused programmatically, so a press
-           on the panel (its scrollbar) must not move focus to the nearest focusable
-           ancestor — that is outside the cell host, and the focus-leave watcher would
-           close the list and commit the highlighted option. A form list and the
-           editable input keep their own contracts. *@
+        @* A press on the panel (its scrollbar) must not move focus: the browser would
+           hand it to the nearest focusable ancestor (a cell host, a tree, a dialog),
+           and the focus-leave watcher would close the list and commit the highlighted
+           option. Clicks on the options still select. *@
         @* title="": a popup opened inside a grid cell must not show the row's tooltip (GridControl.RowTooltipSelector). *@
-        <div @key="@(Editable ? 0 : _openGeneration)" @ref="_panelRef" class="fx-dropdown-panel @(Editable ? "fx-dropdown-buffered-panel" : null) @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@(Editable && !_isOpen ? null : PanelStyle)" role="listbox" id="@_listId" title="" tabindex="@(Editable ? -1 : (int?)null)" @onmousedown:preventDefault="@(Editable || CellHost is not null)" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
+        <div @key="@(Editable ? 0 : _openGeneration)" @ref="_panelRef" class="fx-dropdown-panel @(Editable ? "fx-dropdown-buffered-panel" : null) @(PanelFitContentWidth ? "fx-dropdown-panel-fit" : "")" style="@(Editable && !_isOpen ? null : PanelStyle)" role="listbox" id="@_listId" title="" tabindex="@(Editable ? -1 : (int?)null)" @onmousedown:preventDefault="true" @onclick:stopPropagation="true" @onkeydown:stopPropagation="true">
             @if (DataSource != null)
             {
                 var items = Editable ? _clientItems : DataSource.ToList();
@@ -105,12 +105,12 @@
                             data-fx-option-value="@(Editable ? val : null)"
                             data-fx-option-text="@(Editable ? txt : null)"
                             tabindex="@(Editable ? -1 : (int?)null)"
-                            aria-selected="@isSelected"
+                            aria-selected="@(isSelected ? "true" : "false")"
                             @ref="_optionRefs[optionIndex]"
                             @onkeydown="e => HandleOptionKeyDown(e, val, item)"
                             @onkeydown:preventDefault="true"
                             @onkeydown:stopPropagation="true"
-                            @onmouseover="() => SetHighlightedIndex(optionIndex)"
+                            @onmouseover="@(_hoverFallback ? EventCallback.Factory.Create<MouseEventArgs>(this, () => OnListHovered(optionIndex)) : default)"
                             @onclick="() => SelectItemAsync(val, item)">
                         @if (ItemTemplate != null) { @ItemTemplate(item) } else { @txt }
                     </button>
@@ -132,6 +132,8 @@
     /// <summary>Accessible name for the dropdown's focusable input or button.</summary>
     [Parameter] public string? AriaLabel { get; set; }
     [Parameter] public string? Width { get; set; }
+    /// <summary>Tallest open list in CSS pixels before it scrolls (180 by default); the space visible around the host still clamps it.</summary>
+    [Parameter] public int PanelMaxHeight { get; set; } = 180;
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public bool Enabled { get; set; } = true;
     [Parameter] public int? TabIndex { get; set; }
@@ -268,7 +270,7 @@
         get
         {
             var parts = new List<string>();
-            // HHM-866 issue 3 — the panel used to paint at the CELL's width and only
+            // The panel used to paint at the CELL's width and only
             // reach its real width after measureDropdown's interop round trip (a
             // NETWORK hop on Blazor Server), so QA saw it "open shortened, then
             // expand". Fit-content hosts now get their width from CSS
@@ -377,6 +379,8 @@
         {
             _isOpen = false;
             ResetDropdownGeometry();
+            if (Editable && !_clientDropdownRegistered && !_editableInputFocused && _editableText != EditableDisplayText)
+                ResetEditableDomText(EditableDisplayText, refocus: false);
             return;
         }
 
@@ -574,6 +578,11 @@
     // highlight move. Focus is never pulled back.
     private DotNetObjectReference<DropDownListControl<TValue, TItem>>? _selfRef;
     private bool _focusLeaveWatched;
+    // A hosted list's pointer watcher (page lists end theirs with the opening watcher).
+    private bool _listHoverWatched;
+    // The browser module could not be loaded or could not prepare the list: the options
+    // report the pointer themselves, as every list did before the browser took it over.
+    private bool _hoverFallback;
 
     [JSInvokable]
     public async Task OnListFocusLeftAsync()
@@ -1022,6 +1031,19 @@
         return true;
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        FirstNonEmptyDropdownToken(Tag, AriaLabel, Placeholder);
+
+    private static string? FirstNonEmptyDropdownToken(params string?[] candidates)
+    {
+        foreach (var c in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(c))
+                return c.Trim();
+        }
+        return null;
+    }
+
     private async Task PublishEditableTextAsync(string text)
     {
         _editableText = text;
@@ -1031,6 +1053,9 @@
             return;
 
         Value = newValue;
+
+        if (CellHost is null)
+            RecordControlAction("SelectionChanged", text, AriaLabel ?? Placeholder);
 
         if (ValueChanged.HasDelegate)
             await ValueChanged.InvokeAsync(newValue);
@@ -1082,6 +1107,12 @@
         // notifications are skipped, so the UX of a re-pick is unchanged.
         if (!(SuppressUnchangedValueChange && unchanged))
         {
+            if (CellHost is null && !unchanged)
+            {
+                var display = GetFieldValue(item, TextFieldName);
+                RecordControlAction("SelectionChanged", !string.IsNullOrWhiteSpace(display) ? display : strVal, AriaLabel ?? Placeholder);
+            }
+
             if (ValueChanged.HasDelegate)
                 await ValueChanged.InvokeAsync(newValue);
 
@@ -1248,6 +1279,7 @@
                 if (!_isOpen || generation != _openGeneration) return;
                 if (module == null)
                 {
+                    _hoverFallback = !Editable;
                     await RevealPanelAsync();
                     return;
                 }
@@ -1263,7 +1295,16 @@
                         _hostRef, panelRef, Editable, _selfRef);
                 }
                 else
-                    geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, 180, 8);
+                {
+                    geometry = await module.InvokeAsync<DropdownGeometry>("measureDropdown", _hostRef, PanelMaxHeight, 8);
+                    // Hosted lists skip prepareDropdown, which watches a page list's pointer.
+                    if (!Editable)
+                    {
+                        _selfRef ??= DotNetObjectReference.Create(this);
+                        _listHoverWatched = true;
+                        await module.InvokeVoidAsync("watchListHover", _hostRef, panelRef, _selfRef);
+                    }
+                }
                 if (!_isOpen || generation != _openGeneration) return;
                 if (geometry is null)
                 {
@@ -1304,6 +1345,7 @@
             {
                 if (!_isOpen || generation != _openGeneration) return;
                 if (CellHost is null) _focusLeaveWatched = false;   // the watcher may not be registered
+                _hoverFallback = !Editable;
                 ResetDropdownGeometry();
                 await RevealPanelAsync();
                 return;
@@ -1409,6 +1451,11 @@
 
         try
         {
+            // The hover watcher listens on the document, so it is released first: a cell host's
+            // list can leave the DOM in the render batch that follows the first call, and a later
+            // call would reach the browser with no element to release it by.
+            if (_listHoverWatched)
+                await _dropdownJsModule.InvokeVoidAsync("unwatchListHover", _hostRef);
             if (_openingObserverRegistered || _clientDropdownRegistered)
                 await _dropdownJsModule.InvokeVoidAsync("unwatchDropdownOpening", _hostRef);
             if (_focusLeaveWatched)
@@ -1467,9 +1514,20 @@
     // :hover approximation can't do the "stays" part — when nothing is hovered the
     // stored highlight (seeded on the first/selected item) pops back, which reads
     // as "it auto-selected the top item".
-    private void SetHighlightedIndex(int index)
+    //
+    // The pointer's part is painted by the browser (dropdown-list-control.js
+    // watchListHover: data-fx-hover on the row, kept when the pointer leaves). The
+    // row index arrives here when the pointer rests, and always ahead of a key, a
+    // press or a focus change on the same connection — so Enter, Tab, the arrows
+    // and a focus leave act on the row the user sees. Nothing is rendered for it:
+    // a hover was one round trip plus a render of every option, which on a slow
+    // link showed the highlight walking the pointer's path row by row.
+    [JSInvokable]
+    public void OnListHovered(int index)
     {
-        if (_highlightedIndex == index)
+        if (!_isOpen || Editable || index < 0)
+            return;
+        if (DataSource is null || index >= DataSource.Count())
             return;
 
         _highlightedIndex = index;

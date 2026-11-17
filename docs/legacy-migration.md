@@ -1,6 +1,6 @@
 # Legacy project intake and Web Forms conversion
 
-FlexCore owns the reusable path from an uploaded legacy project archive to a Blazor app and a pair of preview launches. Mutarjim calls these types and does not reimplement them.
+`FlexCore.Migration` owns the reusable path from an uploaded legacy project archive to a Blazor app and a pair of preview launches. The namespace is still `Fx.ControlKit.Migration`. Mutarjim references `FlexCore.Migration/FlexCore.Migration.csproj` and does not reimplement these types.
 
 ## Intake
 

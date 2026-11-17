@@ -13,7 +13,7 @@
             title="@Title"
             tabindex="@TabIndex"
             style="@Style"
-            @onclick="OnClick"
+            @onclick="HandleButtonClickAsync"
             @onclick:stopPropagation="StopPropagation"
             @onmousedown:preventDefault="PreventMouseDownDefault">
         @if (!string.IsNullOrWhiteSpace(IconCss))
@@ -38,7 +38,7 @@ else
                 tabindex="@TabIndex"
                 style="@Style"
                 aria-haspopup="true"
-                aria-expanded="@_ddOpen"
+                aria-expanded="@(_ddOpen ? "true" : "false")"
                 @onclick="HandleDropdownClick"
                 @onclick:stopPropagation="StopPropagation"
                 @onmousedown:preventDefault="PreventMouseDownDefault">
@@ -132,9 +132,35 @@ else
         catch { /* best-effort */ }
     }
 
+    protected override string? ResolveControlIdentifier()
+    {
+        if (!string.IsNullOrWhiteSpace(Tag)) return Tag!.Trim();
+        if (!string.IsNullOrWhiteSpace(Title)) return Title!.Trim();
+        if (AdditionalAttributes is not null)
+        {
+            foreach (var attr in new[] { "aria-label", "id", "name", "data-label" })
+            {
+                if (AdditionalAttributes.TryGetValue(attr, out var v) && v is not null && !string.IsNullOrWhiteSpace(v.ToString()))
+                    return v.ToString()!.Trim();
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(IconCss)) return IconCss!.Trim();
+        if (!string.IsNullOrWhiteSpace(CssClass)) return CssClass!.Trim();
+        return ButtonType == "submit" ? "Submit" : null;
+    }
+
+    private async Task HandleButtonClickAsync(MouseEventArgs e)
+    {
+        if (Disabled) return;
+        RecordControlAction("Clicked", ResolveControlIdentifier());
+        if (OnClick.HasDelegate)
+            await OnClick.InvokeAsync(e);
+    }
+
     private async Task HandleDropdownClick(MouseEventArgs e)
     {
         if (Disabled) return;
+        RecordControlAction("DropDownToggled", !_ddOpen ? "Open" : "Closed", ResolveControlIdentifier());
         if (OnClick.HasDelegate)
             await OnClick.InvokeAsync(e);   // still fire OnClick so hosts can react
         _ddOpen = !_ddOpen;

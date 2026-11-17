@@ -14,6 +14,9 @@
     <!-- FlexCore.CodeTools is the Blazor layer on FlexCore.Llm. It references
          this project; keeping its sources out of the glob avoids a cycle. -->
     <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.CodeTools/**</DefaultItemExcludes>
+    <!-- FlexCore.Migration holds the migration tooling (converter shell, program preview, artifact viewers,
+         legacy intake, Crystal samples pack); it is never packed with FlexCore. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);FlexCore.Migration/**</DefaultItemExcludes>
     <!-- Namespace and CSS prefix are unchanged from FlexCore — only the
          project / assembly / package name changes here. Source code stays
          under Fx.ControlKit.* so consumer code does not need any edits. -->
@@ -21,11 +24,11 @@
     <AssemblyName>FlexCore</AssemblyName>
     <!-- NuGet metadata -->
     <PackageId>FlexCore</PackageId>
-    <Version>0.2.48</Version>
+    <Version>0.2.50</Version>
     <Authors>FlexCore Contributors</Authors>
     <Company>FlexCore Contributors</Company>
     <Product>FlexCore</Product>
-    <Description>Enterprise Blazor component suite for .NET — built 100% in C# and SVG, with no npm packages, no webpack pipeline, and no JavaScript interop bottlenecks. The data grid virtualizes tens of thousands of rows at 60 FPS with frozen columns, hierarchical tree grids, multi-column sorting, typed filtering, inline/dialog/batch editing, aggregate footers and native ClosedXML Excel export. Also includes charts, diagrams, a Crystal-compatible report writer, scheduler, pivot, MDI layout and 60+ further controls. Host-agnostic: every external dependency is a clean C# interface, so you wire your own EF Core, Dapper or SQL Server data layer. Designed for VB6 / WinForms / ActiveX modernizations that need desktop-grade behaviour on the web.</Description>
+    <Description>Enterprise Blazor component suite for .NET — built 100% in C# and SVG, with no npm packages, no webpack pipeline, and no JavaScript interop bottlenecks. The data grid virtualizes tens of thousands of rows at 60 FPS with frozen columns, hierarchical tree grids, multi-column sorting, typed filtering, inline/dialog/batch editing, aggregate footers and native Excel export. Also includes charts, diagrams, a Crystal-compatible report writer, scheduler, pivot, MDI layout and 60+ further controls. Host-agnostic: every external dependency is a clean C# interface, so you wire your own EF Core, Dapper or SQL Server data layer. Designed for VB6 / WinForms / ActiveX modernizations that need desktop-grade behaviour on the web.</Description>
     <PackageTags>blazor;controls;grid;treegrid;reports;charts;ribbon;toolbar;dialog;notification;diagram;dotnet;razor</PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
@@ -45,13 +48,16 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
     <EmbeddedResource Include="Charts/ChartControl.razor.css" LogicalName="Fx.Reports.ChartStyles" />
     <EmbeddedResource Include="Grid/PivotControl.razor.css" LogicalName="Fx.Reports.PivotStyles" />
-    <!-- Corpus pack. Copied next to this assembly and into NuGet consumers at the same relative path.
-         CrystalSampleDatabase.Path is that location. Session packs named samples.db stay beside a translation. -->
-    <None Update="Reports\CrystalSamples\CrystalSamples.db"
-          CopyToOutputDirectory="PreserveNewest"
-          Pack="true"
-          PackagePath="contentFiles\any\any\Reports\CrystalSamples\CrystalSamples.db"
-          PackageCopyToOutput="true" />
+    <EmbeddedResource Include="wwwroot/maps/geo/countries.geojson" LogicalName="Fx.ControlKit.maps.countries.geojson" />
+    <EmbeddedResource Include="wwwroot/maps/geo/regions.geojson" LogicalName="Fx.ControlKit.maps.regions.geojson" />
+    <EmbeddedResource Include="wwwroot/maps/stories/unemployment.json" LogicalName="Fx.ControlKit.maps.unemployment.json" />
+    <EmbeddedResource Include="Reports/Fonts/*.woff2" LogicalName="Fx.Reports.Fonts.%(Filename)%(Extension)" />
+    <None Update="Reports/Fonts/OFL.txt" Pack="true" PackagePath="licenses/Carlito" />
+    <EmbeddedResource Include="Grid/PdfFonts/*.ttf" LogicalName="Fx.PdfFonts.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Grid/PdfFonts/OFL.txt" LogicalName="Fx.PdfFonts.OFL.txt" />
+    <None Update="Grid/PdfFonts/OFL.txt" Pack="true" PackagePath="licenses/Liberation-Fonts.txt" />
+    <!-- Font hash manifests document the embedded fonts; nothing reads them at run time, so they stay out of the package. -->
+    <Content Update="Grid/PdfFonts/*.json" Pack="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -65,6 +71,7 @@
          BrowserInterop) — granting that is preferable to widening FlexCore's
          public API just to accommodate the split. -->
     <InternalsVisibleTo Include="FlexCore.Documents" />
+    <InternalsVisibleTo Include="FlexCore.Migration" />
     <InternalsVisibleTo Include="FlexCore.RegressionTests" />
   </ItemGroup>
 
@@ -73,8 +80,6 @@
     <PackageReference Include="ZXing.Net" Version="0.16.11" />
     <PackageReference Include="AngleSharp" Version="1.8.1" />
     <PackageReference Include="Microsoft.AspNetCore.Components.Web" Version="10.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.12" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 

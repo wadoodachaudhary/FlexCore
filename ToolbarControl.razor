@@ -2,6 +2,7 @@
 @inject IServiceProvider Services
 
 <CascadingValue Value="this" IsFixed="false">
+<CascadingValue Value="@(GetOrCreateChildLocation("Toolbar", () => PreferenceKey))" IsFixed="true">
     <div class="@ResolvedCssClass" role="@Role">
         <div class="fx-toolbar-items">
             @ChildContent
@@ -23,6 +24,7 @@
             </div>
         }
     </div>
+</CascadingValue>
 </CascadingValue>
 
 @code {
@@ -57,10 +59,16 @@
         }
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(PreferenceKey) ? PreferenceKey!.Trim()
+        : null;
+
     private async Task HandleCaptionsToggle(ChangeEventArgs e)
     {
         var isChecked = e.Value is bool b ? b : (e.Value?.ToString()?.Equals("true", StringComparison.OrdinalIgnoreCase) == true);
         _internalShowCaptions = isChecked;
+        RecordControlAction("CaptionsToggled", isChecked ? "true" : "false", CaptionsToggleLabel);
         SavePreference(isChecked);
         if (ShowCaptionsChanged.HasDelegate)
         {

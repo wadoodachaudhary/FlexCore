@@ -163,6 +163,9 @@
 
     }
 
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag : Placeholder;
+
     private async Task<bool> OnValueChanged(ChangeEventArgs e)
     {
         var strVal = NormalizeInput(e.Value?.ToString() ?? "");
@@ -214,6 +217,8 @@
         var args = new NumericChangeEventArgs<TValue> { Value = newValue };
         if (ValueChange.HasDelegate)
             await ValueChange.InvokeAsync(args);
+        if (!args.Cancel)
+            RecordControlAction("ValueCommitted", FormattedValue, Placeholder);
         return !args.Cancel;
     }
 

@@ -3,7 +3,7 @@
 @using Microsoft.AspNetCore.Components
 @using Microsoft.AspNetCore.Components.Web
 
-<div class="fx-sunburst-container @CssClass" style="@ContainerStyle" @onmousemove="HandleMouseMove" @onmouseleave="HandleMouseLeave">
+<div class="fx-sunburst-container @CssClass" style="@ContainerStyle" @onmousemove="MoveHandler" @onmouseleave="Gated(HandleMouseLeave)">
     @if (!string.IsNullOrEmpty(Title))
     {
         <div class="fx-sunburst-title">@Title</div>
@@ -54,8 +54,8 @@
                           class="fx-sunburst-slice @(isHovered ? "hovered" : "") @(isHighlighted ? "highlighted" : "") @(isDimmed ? "dimmed" : "")"
                           style="cursor: @(arc.Node.Children.Count > 0 ? "pointer" : "default");"
                           filter="@(isHovered || isHighlighted ? "url(#sunburstGlow)" : null)"
-                          @onmouseover="() => HandleArcMouseOver(arc)"
-                          @onmouseout="() => HandleArcMouseOut(arc)"
+                          @onmouseover="Gated(() => HandleArcMouseOver(arc))"
+                          @onmouseout="Gated(() => HandleArcMouseOut(arc))"
                           @onclick="() => HandleArcClick(arc)" />
                 }
             </g>
@@ -97,8 +97,8 @@
                         fill="@CenterCircleFill"
                         class="fx-sunburst-center-circle @(_currentRoot != RootNode ? "drilldown-active" : "")"
                         filter="url(#sunburstGlow)"
-                        @onmouseover="HandleCenterMouseOver"
-                        @onmouseout="HandleCenterMouseOut" />
+                        @onmouseover="Gated(HandleCenterMouseOver)"
+                        @onmouseout="Gated(HandleCenterMouseOut)" />
 
                 <!-- Center Text -->
                 <text x="@Cx"
@@ -141,7 +141,7 @@
         </svg>
 
         <!-- Floating Tooltip Card (faithful to article & screenshot) -->
-        @if (_hoveredArc != null)
+        @if (ShowTooltips && _hoveredArc != null)
         {
             var node = _hoveredArc.Node;
             var totalCases = node.TotalValue;
@@ -210,10 +210,18 @@
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public EventCallback<SunburstNode> OnNodeClick { get; set; }
     [Parameter] public EventCallback<SunburstNode?> OnNodeHover { get; set; }
+    // Hover gating: off, with no OnNodeHover, the arcs, hub and container bind no hover or pointer-move handler; clicks still drill down.
+    /// <summary>Shows the hover card. Off, hovering does nothing unless OnNodeHover is set.</summary>
+    [Parameter] public bool ShowTooltips { get; set; } = true;
 
     private SunburstNode? _currentRoot;
     private SunburstArc? _hoveredArc;
     private bool _isCenterHovered;
+    private bool _hoverWanted = true;
+    private EventCallback<MouseEventArgs> Gated(Action handler) =>
+        _hoverWanted ? EventCallback.Factory.Create<MouseEventArgs>(this, handler) : default;
+    private EventCallback<MouseEventArgs> MoveHandler =>
+        ShowTooltips ? EventCallback.Factory.Create<MouseEventArgs>(this, HandleMouseMove) : default;
     private List<SunburstArc> _arcs = new();
 
     private const double ViewBoxSize = 700.0;
@@ -255,6 +263,8 @@
 
     protected override void OnParametersSet()
     {
+        _hoverWanted = ShowTooltips || OnNodeHover.HasDelegate;
+        if (!_hoverWanted) { _hoveredArc = null; _isCenterHovered = false; }
         if (_currentRoot == null || (_currentRoot != RootNode && !IsDescendant(RootNode, _currentRoot)))
         {
             _currentRoot = RootNode;

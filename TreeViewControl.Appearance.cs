@@ -14,12 +14,27 @@ public partial class TreeViewControl
     [Parameter] public bool ShowIcons { get; set; } = true;
     [Parameter] public bool AllowMultiSelect { get; set; }
     [Parameter] public bool ToggleOnNodeClick { get; set; } = true;
+    [Parameter] public bool ToggleOnNodeDoubleClick { get; set; }
     [Parameter] public string? CssClass { get; set; }
     [Parameter] public string? Height { get; set; }
     [Parameter] public bool UseVb6TreeStyle { get; set; }
     [Parameter] public TreeFolderStyle FolderStyle { get; set; } = TreeFolderStyle.Yellow;
     [Parameter] public int TreeIndentPixels { get; set; } = 16;
     [Parameter] public int TabIndex { get; set; } = 0;
+    /// <summary>Return keyboard focus to the tree after a selection/reveal. Disable when the host must preserve the user's current input focus.</summary>
+    [Parameter] public bool FocusOnSelection { get; set; } = true;
+    /// <summary>Standard (default) or Outline (status circles, connector line, secondary line, badge, right chevron).</summary>
+    [Parameter] public TreeViewDisplayMode DisplayMode { get; set; } = TreeViewDisplayMode.Standard;
+    /// <summary>Shows a search box above the tree that filters nodes by text (combined with <c>FilterText</c>).</summary>
+    [Parameter] public bool ShowSearchBox { get; set; }
+    [Parameter] public string SearchPlaceholder { get; set; } = "Search";
+    /// <summary>Text typed in the built-in search box (two-way bindable).</summary>
+    [Parameter] public string? SearchText { get; set; }
+    [Parameter] public EventCallback<string?> SearchTextChanged { get; set; }
+    /// <summary>Shown under the search box when the filter matches nothing (only with <c>ShowSearchBox</c>).</summary>
+    [Parameter] public string EmptyFilterText { get; set; } = "No matches";
+
+    private bool IsOutline => DisplayMode == TreeViewDisplayMode.Outline;
 
     private bool IsVb6TreeStyle => UseVb6TreeStyle || HasCssClass("fx-treeview-vb6");
     private string? RootStyle => Height != null ? $"height:{Height};overflow:auto;" : null;
@@ -29,6 +44,8 @@ public partial class TreeViewControl
         get
         {
             var classes = new List<string> { "fx-treeview" };
+            if (IsOutline)
+                classes.Add("fx-treeview-outline");
 
             if (IsVb6TreeStyle)
             {
@@ -67,6 +84,8 @@ public partial class TreeViewControl
 
     private string GetNodeStyle(int level)
     {
+        if (IsOutline)
+            return $"--tree-depth:{level};--tree-indent:{Math.Max(0, TreeIndentPixels)}px;";
         if (!IsVb6TreeStyle)
             return $"padding-left:{level * 20}px;";
 
@@ -105,6 +124,35 @@ public partial class TreeViewControl
         if (DisplayExpanded(node) && !string.IsNullOrEmpty(node.ExpandedIconCss))
             return node.ExpandedIconCss;
         return node.IconCss ?? "";
+    }
+
+    private string GetOutlineCss(TreeNodeInfo info)
+    {
+        if (!IsOutline)
+            return "";
+        var css = info.Node.HasChildren ? " fx-treeview-group" : " fx-treeview-item";
+        css += " fx-treeview-status-" + info.Node.Status.ToString().ToLowerInvariant();
+        if (info.Node.HasChildren && DisplayExpanded(info.Node))
+            css += " fx-treeview-group-open";
+        if (info.Position == 1)
+            css += " fx-treeview-first";
+        if (info.Position == info.SetSize)
+            css += " fx-treeview-last";
+        return css;
+    }
+
+    private static string GetStatusCss(TreeNode node, bool group) =>
+        (group ? "fx-treeview-status-circle" : "fx-treeview-status-dot") + " fx-treeview-mark-" + node.Status.ToString().ToLowerInvariant();
+
+    private Dictionary<string, object> SearchBoxAttributes => new() { ["aria-label"] = SearchPlaceholder, ["type"] = "search" };
+
+    private static bool IsNamedIcon(string? icon) => icon is not null && FlexIcons.Paths.ContainsKey(icon);
+
+    private async Task OnSearchInput(string? value)
+    {
+        _searchText = value;
+        Reindex();
+        await SearchTextChanged.InvokeAsync(value);
     }
 
     private string GetFolderStyleCss() => FolderStyle switch

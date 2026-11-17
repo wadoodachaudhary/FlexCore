@@ -1,0 +1,81 @@
+@namespace Fx.ControlKit.Charts
+@inherits Fx.ControlKit.FlexControlBase
+@using System.Globalization
+
+<div class="fx-kpi-spark @CssClass" style="border-top-color:@AccentColor; @ResolvedStyle" @attributes="AdditionalAttributes">
+    <div class="fx-kpi-spark-top">
+        <span class="fx-kpi-spark-label">@Label</span>
+        @if (DeltaPercent.HasValue)
+        {
+            var d = DeltaPercent.Value;
+            bool isPositive = d > 0.05;
+            bool isNegative = d < -0.05;
+            bool isGood = InvertDeltaColors ? isNegative : isPositive;
+            bool isBad = InvertDeltaColors ? isPositive : isNegative;
+            string cls = isGood ? "fx-kpi-delta-good" : (isBad ? "fx-kpi-delta-bad" : "fx-kpi-delta-flat");
+            string arrow = isPositive ? "▲ +" : (isNegative ? "▼ " : "— ");
+            <span class="fx-kpi-spark-delta @cls" title="Change vs. prior period">
+                @arrow@(d.ToString("0.0", CultureInfo.InvariantCulture))%
+            </span>
+        }
+    </div>
+
+    <div class="fx-kpi-spark-mid">
+        <div class="fx-kpi-spark-val">@ValueText</div>
+        @if (SparklineValues is { Count: >= 2 })
+        {
+            <svg class="fx-kpi-spark-svg" viewBox="0 0 96 28" preserveAspectRatio="none" aria-hidden="true">
+                <polygon points="@BuildAreaPoints(SparklineValues)" fill="@AccentColor" fill-opacity="0.16" />
+                <polyline points="@BuildLinePoints(SparklineValues)" fill="none" stroke="@AccentColor" stroke-width="1.75" />
+            </svg>
+        }
+    </div>
+
+    @if (TargetPercent.HasValue)
+    {
+        var pct = Math.Clamp(TargetPercent.Value, 0, 100);
+        <div class="fx-kpi-spark-target" title="Progress: @(pct.ToString("0.0", CultureInfo.InvariantCulture))%">
+            <div class="fx-kpi-spark-target-fill" style="width:@(pct.ToString("0.##", CultureInfo.InvariantCulture))%; background:@AccentColor;"></div>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(SubText))
+    {
+        <div class="fx-kpi-spark-sub">@SubText</div>
+    }
+</div>
+
+@code {
+    [Parameter] public string Label { get; set; } = string.Empty;
+    [Parameter] public string ValueText { get; set; } = "0";
+    [Parameter] public string? SubText { get; set; }
+    [Parameter] public double? DeltaPercent { get; set; }
+    [Parameter] public bool InvertDeltaColors { get; set; }
+    [Parameter] public IReadOnlyList<double>? SparklineValues { get; set; }
+    [Parameter] public double? TargetPercent { get; set; }
+    [Parameter] public string AccentColor { get; set; } = "#0a246a";
+
+    protected override void OnInitialized()
+    {
+        RegisterControlPresence();
+    }
+
+    private static string BuildLinePoints(IReadOnlyList<double> pts)
+    {
+        double min = pts.Min();
+        double max = pts.Max();
+        if (Math.Abs(max - min) < 0.0001) { min -= 1; max += 1; }
+
+        var coords = new string[pts.Count];
+        for (int i = 0; i < pts.Count; i++)
+        {
+            double x = pts.Count > 1 ? 2.0 + (92.0 * i / (pts.Count - 1)) : 48.0;
+            double y = 25.0 - ((pts[i] - min) / (max - min) * 22.0);
+            coords[i] = $"{x.ToString("0.#", CultureInfo.InvariantCulture)},{y.ToString("0.#", CultureInfo.InvariantCulture)}";
+        }
+        return string.Join(" ", coords);
+    }
+
+    private static string BuildAreaPoints(IReadOnlyList<double> pts) =>
+        $"2,27 {BuildLinePoints(pts)} 94,27";
+}

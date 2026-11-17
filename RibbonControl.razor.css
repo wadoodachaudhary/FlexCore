@@ -7,6 +7,8 @@
 
 .fx-ribbon-tabs {
     display: flex;
+    flex-wrap: wrap;            /* a strip wider than the ribbon wraps to a second line */
+    align-items: flex-end;
     gap: 2px;
     background: linear-gradient(to bottom, #e8e8e8, #d8d8d8);
     padding: 2px 8px 0 8px;
@@ -14,6 +16,9 @@
 }
 
 .fx-ribbon-tab-btn {
+    margin: 0;
+    background: transparent;
+    font-family: inherit;
     padding: 6px 16px;
     cursor: pointer;
     border: 1px solid transparent;
@@ -24,8 +29,44 @@
     color: #333;
 }
 
-.fx-ribbon-tab-btn:hover {
+.fx-ribbon-tab-btn:hover:not(:disabled):not(.active) {
     background: #e0e0e0;
+}
+
+.fx-ribbon-tab-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.fx-ribbon-tab-btn:focus-visible,
+.fx-ribbon-collapse:focus-visible {
+    outline: 2px solid var(--fx-accent, #2563eb);
+    outline-offset: -2px;
+}
+
+/* the hide and show button at the end of the strip (Collapsible) */
+.fx-ribbon-collapse {
+    margin: 0 0 2px auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 5px;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    background: transparent;
+    color: #555;
+    cursor: pointer;
+}
+
+.fx-ribbon-collapse:hover {
+    background: #e0e0e0;
+}
+
+.fx-ribbon-collapsed .fx-ribbon-collapse svg {
+    transform: rotate(180deg);
+}
+
+.fx-ribbon-collapsed .fx-ribbon-body {
+    display: none;
 }
 
 .fx-ribbon-tab-btn.active {
@@ -41,8 +82,10 @@
 
 ::deep .fx-ribbon-tab-content {
     display: flex;
+    flex-wrap: wrap;            /* groups that do not fit move to the next line */
+    row-gap: 6px;
     padding: 6px 4px;
-    gap: 0;
+    column-gap: 0;
     align-items: stretch;
 }
 
@@ -115,4 +158,52 @@
 
 ::deep .fx-ribbon-button:not(.fx-ribbon-button-large) {
     flex-direction: row;
+}
+
+::deep .fx-ribbon-button:focus-visible {
+    outline: 2px solid var(--fx-accent, #2563eb);
+    outline-offset: -2px;
+}
+
+/* a toggle that is on (Pressed) */
+::deep .fx-ribbon-button-pressed,
+::deep .fx-ribbon-button-pressed:hover:not(.disabled) {
+    background: var(--fx-ribbon-pressed-bg, #dbe7fb);
+    border-color: var(--fx-ribbon-pressed-border-color, #9db8e8);
+}
+
+/* a button with DropDownContent: the panel hangs under it, a transparent layer closes it on a click outside */
+::deep .fx-ribbon-dd-host {
+    position: relative;
+    display: inline-flex;
+}
+
+::deep .fx-ribbon-dd-caret {
+    margin-left: 3px;
+    font-size: 0.8em;
+}
+
+::deep .fx-ribbon-dd-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+    cursor: default;
+}
+
+::deep .fx-ribbon-dd-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 1001;
+    margin-top: 2px;
+    min-width: 150px;
+    padding: 4px 0;
+    background: #ffffff;
+    border: 1px solid #c0c0c0;
+    border-radius: 3px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }

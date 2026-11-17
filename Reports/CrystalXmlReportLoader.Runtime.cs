@@ -17,7 +17,7 @@ public partial class CrystalXmlReportLoader
             foreach (var element in design.Elements.Where(e => e.Kind == "Subreport"))
             {
                 var source = design.SourceObjects.GetValueOrDefault(element.SourceKey);
-                if (Flag(source, "EnableOnDemand")) continue;
+                var onDemand = Flag(source, "EnableOnDemand");
                 var child = report.Elements("SubReports").Elements("Report").FirstOrDefault(r =>
                     string.Equals((string?)r.Attribute("Name"), element.SubreportName, StringComparison.OrdinalIgnoreCase));
                 var childPath = path;
@@ -38,12 +38,12 @@ public partial class CrystalXmlReportLoader
                             if ((File.GetAttributes(check) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("Subreport package cannot contain symbolic links.");
                             check = Path.GetDirectoryName(check)!;
                         }
-                        child = XDocument.Load(childPath).Root;
+                        child = XDocument.Load(childPath, LoadOptions.PreserveWhitespace).Root;
                     }
                 }
                 if (child is null)
                 {
-                    definition.RuntimeDiagnostics.Add($"{element.Name}: inline subreport definition '{element.SubreportName}' is missing.");
+                    definition.RuntimeDiagnostics.Add($"{element.Name}: {(onDemand ? "on-demand" : "inline")} subreport definition '{element.SubreportName}' is missing.");
                     continue;
                 }
                 var links = child.Elements("SubReportLinks").Elements("SubReportLink").Select(link =>
@@ -54,37 +54,135 @@ public partial class CrystalXmlReportLoader
                         var field = ResolveSubreportLinkField(child, parsed);
                         childReference = "{" + field.Table + "." + field.Field + "}";
                     }
-                    return new ReportLayoutParameterLink((string?)link.Attribute("LinkedParameterName") ?? "",
+                    return new ReportLayoutParameterLink(LinkParameterName((string?)link.Attribute("LinkedParameterName")),
                         (string?)link.Attribute("MainReportFieldName") ?? "", childReference);
                 }).ToList();
+                // Embedded Crystal subreports omit print settings and use their containing report's paper.
+                // Work on a copy: converted XML and explicitly authored child settings remain unchanged.
+                if (child.Element("PrintOptions") is null && report.Element("PrintOptions") is { } printOptions)
+                {
+                    child = new XElement(child);
+                    child.Add(new XElement(printOptions));
+                }
                 var childDefinition = LoadPositionedSource(child, childPath, ancestry, depth + 1);
-                definition.PositionedLayout!.Subreports[element.Id] = new(childDefinition, links);
+                // An on-demand subreport prints its caption and runs only when the reader opens it, never inline.
+                (onDemand ? definition.PositionedLayout!.OnDemandSubreports : definition.PositionedLayout!.Subreports)[element.Id] = new(childDefinition, links);
                 foreach (var link in links)
                 {
                     AddProjection(definition.PositionedLayout, link.MainField);
                     AddProjection(childDefinition.PositionedLayout!, link.ChildField);
                 }
-                RefreshSql(childDefinition, child);
+                RefreshSql(childDefinition, child, orderRows: false);
             }
-            RefreshSql(definition, report);
+            // Only the main query is ordered: a subreport's query runs inside a derived table, where ORDER BY is not allowed.
+            RefreshSql(definition, report, orderRows: depth == 0);
             return definition;
         }
         finally { ancestry.Remove(identity); }
     }
 
-    private void RefreshSql(ReportDefinition definition, XElement report)
+    // SDK exports wrap linked parameter names in {?...}; native exports use the bare name.
+    // Both formula evaluation and subreport binding resolve the same bare Crystal name.
+    private static string LinkParameterName(string? name)
+    {
+        name = (name ?? "").Trim();
+        return name.StartsWith("{?", StringComparison.Ordinal) && name.EndsWith('}') ? name[2..^1].Trim() : name;
+    }
+
+    private void RefreshSql(ReportDefinition definition, XElement report, bool orderRows)
     {
         report = new XElement(report);
         report.Elements("SubReports").Remove();
         var tables = ParseTables(report);
-        var projections = definition.PositionedLayout!.Projections;
+        var layout = definition.PositionedLayout!;
+        // Linked SDK exports can list fields belonging to the parent report.
+        // Only project columns owned by this query's tables.
+        var known = tables.Select(t => t.Alias).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var (reference, alias) in layout.Bindings.ToList())
+        {
+            if (ParseCrystalFieldRef(reference) is not { } field || known.Contains(field.Table)) continue;
+            layout.Bindings.Remove(reference);
+            layout.Projections.RemoveAll(p => p.EndsWith(" AS [" + alias.Replace("]", "]]", StringComparison.Ordinal) + "]", StringComparison.Ordinal));
+        }
+        var projections = layout.Projections;
+        var links = ParseTableLinks(report);
+        var usedTables = layout.Bindings.Keys.Select(ParseCrystalFieldRef).Where(field => field.HasValue)
+            .Select(field => field!.Value.Table).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Unknown/legacy enforcement retains authored joins. A known non-enforced
+        // unused leaf is not a Crystal query input, even if its join could multiply rows.
+        if (usedTables.Count > 0)
+        {
+            PruneUnusedJoinLeaves(tables, links, usedTables);
+            usedTables.UnionWith(links.SelectMany(link => link.Source.Concat(link.Destination)).Select(field => field.Table));
+            tables.RemoveAll(table => !usedTables.Contains(table.Alias));
+        }
+        // Formula SQL is limited to proven scalar or bounded date/string AST shapes.
+        // All shapes retain their full runtime selection; the
+        // session separately preserves parameterized subreport field-link filters.
+        // Do not fall back to the broader legacy regex formula-to-SQL translator.
         definition.Sql = tables.Count == 0 ? "SELECT 1 AS [__fxStaticReport]"
-            : BuildSql(tables, ParseTableLinks(report), "", "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections);
+            : BuildSql(tables, links, PositionedBoundedSelectionSql(report, definition), orderRows ? PositionedOrderBySql(report, definition) : "", projections.Count == 0 ? ["1 AS [__fxStaticReport]"] : projections,
+                useDistinct: Flag(report.Element("ReportOptions"), "EnableSelectDistinctRecords"));
+        if (definition.PositionedIntegerSelection is { } integers)
+            definition.PositionedIntegerSelection = integers.WithTemplate(definition.Sql);
+        if (definition.PositionedTextSelection is { } texts) definition.PositionedTextSelection = texts.WithTemplate(definition.Sql);
+    }
+
+    private static void PruneUnusedJoinLeaves(List<TableInfo> tables, List<TableLinkInfo> links, HashSet<string> usedTables)
+    {
+        bool removed;
+        do
+        {
+            removed = false;
+            foreach (var table in tables.Where(t => !usedTables.Contains(t.Alias)).ToArray())
+            {
+                var incident = links.Where(l => l.Source.Concat(l.Destination)
+                    .Any(f => f.Table.Equals(table.Alias, StringComparison.OrdinalIgnoreCase))).ToArray();
+                if (incident.Length == 0 || incident.Any(l => l.EnforceJoin != "NotEnforced")) continue;
+                var neighbors = incident.SelectMany(l => l.Source.Concat(l.Destination)).Select(f => f.Table)
+                    .Where(alias => !alias.Equals(table.Alias, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                // Keep bridge tables and cycles; removing either could change a required relationship.
+                if (neighbors != 1) continue;
+                tables.Remove(table);
+                foreach (var link in incident) links.Remove(link);
+                removed = true;
+            }
+        } while (removed);
+    }
+
+    /// <summary>The authored ShowAllHeadersOnDrillDown option. XML without it takes Crystal's default for a new report (false):
+    /// a report designer document, or XML without the converter stamp. A stamped conversion from a converter that did not yet
+    /// write the option has an RPT to convert again, so its option stays unknown (null) and native drill-down says so.</summary>
+    private static bool? DrillHeaderOption(XElement report)
+    {
+        if (bool.TryParse((string?)report.Element("ReportOptions")?.Attribute("ShowAllHeadersOnDrillDown"), out var showAllHeaders))
+            return showAllHeaders;
+        if (report.Element("FlexKitReportDesigner") is not null
+            || report.Attribute(Fx.ControlKit.Reports.NativeCrystal.CrystalReportXmlVersion.Attribute) is not { } stamp)
+            return false;
+        // An unreadable stamp counts as version 0, as CrystalReportXmlVersion.Stored reads it.
+        var version = int.TryParse(stamp.Value, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+        return version < Fx.ControlKit.Reports.NativeCrystal.CrystalReportXmlVersion.DrillHeaderOption ? null : false;
+    }
+
+    private static DateTime? FixedPrintDate(XElement report)
+    {
+        var saved = (string?)report.Element("ReportOptions")?.Attribute("FixedPrintDate");
+        if (saved is null) return null;
+        if (DateTime.TryParseExact(saved, "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var date)) return date;
+        throw new InvalidDataException("The report's fixed print date must use yyyy-MM-dd.");
     }
 
     private static ReportPositionedLayout BuildPositionedLayout(ReportDesignerDocument document, XElement report, List<string> diagnostics)
     {
-        var layout = new ReportPositionedLayout { Document = document };
+        var layout = new ReportPositionedLayout
+        {
+            Document = document, ShowAllHeadersOnDrillDown = DrillHeaderOption(report),
+            ConvertDatabaseNullToDefault = Flag(report.Element("ReportOptions"), "ConvertDBNullToDefault"),
+            FixedPrintDate = FixedPrintDate(report)
+        };
         var functions = CompileCustomFunctions(report, diagnostics);
         foreach (var field in document.Fields.Where(f => f.IsFormula))
         {
@@ -107,7 +205,7 @@ public partial class CrystalXmlReportLoader
             var refs = Regex.Matches(name, @"\{[^}]+\}");
             var group = refs.Count > 1 ? refs[1].Value : "";
             layout.Summaries[name] = new((string?)summary.Attribute("Operation") ?? "Sum", (string?)summary.Attribute("SummarizedField") ?? "", group)
-            { AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
+            { PercentOfGroup = (int?)summary.Attribute("PercentOfGroup"), WeightField = (string?)summary.Attribute("WeightField") ?? "", AcrossHierarchy = (string?)summary.Attribute("HierarchicalSummaryType") == "AcrossHierarchy", GroupLevel = SummaryGroupLevel(document, kinds, name, group, legacy, diagnostics) };
         }
         ReadGroupRuntime(document, layout, data, functions, diagnostics, kinds, legacy);
         foreach (var running in data?.Descendants("RunningTotalFieldDefinition") ?? [])
@@ -135,17 +233,38 @@ public partial class CrystalXmlReportLoader
             // (its saved default is often "on"; a subreport does not break its page for it), and page furniture keeps its place whatever its
             // keep-together and print-at-bottom flags say.
             var body = section.Kind is not ("PageHeader" or "PageFooter");
+            if (section.Kind == "Detail")
+                layout.VisibleRecordsPerPage = (int?)format?.Attribute("NewPageAfterNVisibleRecords") ?? 0;
             if (section.Kind == "Detail" && layout.Columns is null && format?.Element("DetailAreaFormat") is { } multiple && Flag(multiple, "EnableMultipleColumnFormatting"))
                 layout.Columns = ReadColumns(multiple);
             layout.Areas[section.Id] = new(Flag(format, "EnableSuppress"), Flag(repeat, "EnableRepeatGroupHeader"),
                 section.Kind is not ("ReportHeader" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.FirstOrDefault(), xml) && Flag(format, "EnableNewPageBefore"),
                 section.Kind is not ("ReportFooter" or "PageHeader" or "PageFooter") && ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableNewPageAfter"), Flag(format, "EnableHideForDrillDown"),
                 ReferenceEquals(sections.LastOrDefault(), xml) && Flag(format, "EnableResetPageNumberAfter"), Flag(repeat, "EnableKeepGroupTogether"),
-                body && Flag(format, "EnableKeepTogether"), body && Flag(format, "EnablePrintAtBottomOfPage"));
+                body && Flag(format, "EnableKeepTogether"), body && Flag(format, "EnablePrintAtBottomOfPage"))
+            {
+                VisibleInstanceLimit = section.Kind == "GroupHeader" && ReferenceEquals(sections.FirstOrDefault(), xml)
+                    ? int.TryParse((string?)repeat?.Attribute("VisibleGroupNumberPerPage"), out var groupsPerPage) ? groupsPerPage : 0
+                    : section.Kind == "Detail" ? (int?)xml.Element("SectionFormat")?.Attribute("NewPageAfterNVisibleRecords") ?? 0 : 0
+            };
             layout.SectionConditions[section.Id] = ReadConditions(xml.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))
                 .Concat(xml.Elements("SectionFormat").Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas"))), diagnostics, functions);
             layout.AreaConditions[section.Id] = ReadConditions((area?.Elements().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? [])
                 .Concat(format?.Descendants().Where(e => e.Name.LocalName.Contains("ConditionFormulas")) ?? []), diagnostics, functions);
+            // Area breaks apply at the boundary of the entire area, not between its subsections.
+            var areaConditions = layout.AreaConditions[section.Id];
+            if (!ReferenceEquals(sections.FirstOrDefault(), xml)) areaConditions.Remove("EnableNewPageBefore");
+            if (!ReferenceEquals(sections.LastOrDefault(), xml))
+            {
+                areaConditions.Remove("EnableNewPageAfter");
+                areaConditions.Remove("EnableResetPageNumberAfter");
+            }
+            if (areaConditions.ContainsKey("EnableNewPageAfter"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { NewPageAfter = false };
+            if (areaConditions.ContainsKey("EnableNewPageBefore"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { NewPageBefore = false };
+            if (section.Kind == "ReportFooter" && Flag(format, "EnableNewPageAfter"))
+                layout.Areas[section.Id] = layout.Areas[section.Id] with { ReserveFinalFooter = true };
             foreach (var element in section.Elements)
                 if (document.SourceObjects.TryGetValue(element.SourceKey, out var objectXml))
                 {
@@ -154,13 +273,22 @@ public partial class CrystalXmlReportLoader
                     var containers = ReportObjectCapabilities.UnsupportedCrystalKind(element.Kind) is null
                         ? objectXml.Descendants()
                         : objectXml.Elements().Concat(objectXml.Elements().Where(e => e.Name.LocalName is "ObjectFormat" or "Border" or "Font").Descendants());
-                    layout.ObjectConditions[element.Id] = ReadConditions(containers.Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")), diagnostics, functions);
+                    var conditions = ReadConditions(containers.Where(e => e.Name.LocalName.EndsWith("ConditionFormulas")
+                        && !e.Ancestors("Run").Any()), diagnostics, functions);
+                    // Run formulas participate in the same dependency/page scheduling as object
+                    // formulas, but must never change the surrounding literal text.
+                    foreach (var (run, index) in element.Visual.Runs.Select((run, index) => (run, index)))
+                        foreach (var condition in ReadConditions([new XElement("FontColorConditionFormulas",
+                            run.FontConditionFormulas.Select(c => new XAttribute(c.Key, c.Value)))], diagnostics, functions))
+                            conditions[$"TextRun:{index}:{condition.Key}"] = condition.Value;
+                    layout.ObjectConditions[element.Id] = conditions;
                 }
         }
         var references = document.Elements.SelectMany(e => e.Visual.Runs.Select(r => r.Binding).Prepend(e.Kind == "Field" ? e.Binding : "").Append(e.HighlightRule.FieldName))
             .Concat(document.Elements.SelectMany(e => e.Analysis?.References ?? []))
+            .Concat(document.Elements.Select(e => e.ChartMarker?.Binding ?? ""))
             .Concat(document.Groups.SelectMany(g => new[] { g.Condition, g.ParentIdField, g.InstanceIdField })).Concat(document.Sorts.Select(s => s.Field.Reference))
-            .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).Select(s => s.Field))
+            .Concat(layout.Summaries.Values.Concat(layout.RunningTotals.Values).SelectMany(s => new[] { s.Field, s.WeightField }).Where(field => field.Length > 0))
             .Concat(layout.RunningTotals.Values.SelectMany(t => new[] { t.Evaluation, t.Reset }).SelectMany(c => (c.Formula?.References ?? []).Prepend(c.Field)))
             .Concat(layout.RecordSelection?.References ?? []).Concat(layout.GroupSelection?.References ?? [])
             .Concat(layout.GroupOptions.Values.SelectMany(o => o.SpecifiedGroups).SelectMany(g => g.Selection.References))
@@ -334,6 +462,7 @@ public partial class CrystalXmlReportLoader
         if (seen.Count > 2048) throw new InvalidDataException("Formula dependency limit exceeded.");
         if (layout.Formulas.TryGetValue(reference, out var formula))
         { foreach (var dependency in formula.References) AddProjection(layout, dependency, seen); return; }
+        if (reference.StartsWith("{?", StringComparison.Ordinal)) return;
         if (layout.Bindings.ContainsKey(reference) || ParseCrystalFieldRef(reference) is not { } field) return;
         var alias = field.Table + "_" + field.Field;
         var suffix = layout.Bindings.Count;

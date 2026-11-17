@@ -1,6 +1,6 @@
 // Fx.ControlKit.Mdi.MdiWindow — descriptor for one open child window inside
 // an <see cref="MdiHost"/> tab strip. The host doesn't own routing decisions;
-// the consumer (FMain in HomeFront, FApp in a future client, …) builds the
+// the consumer (the app's main form) builds the
 // list, hands it to MdiHost, and reacts to OnActivate / OnCloseRequested
 // callbacks.
 //
@@ -65,6 +65,11 @@ public sealed class MdiWindow
     /// <summary>Optional tab icon (any URL or data-URI, host-agnostic; null = text-only
     /// tab). Legacy MDI child forms carry a 16px form icon next to the caption.</summary>
     public string? IconUrl { get; }
+
+    /// <summary>True when the user has pinned this tab in the tab strip. Pinned tabs stay grouped
+    /// on the left and are skipped by bulk close commands (Close Other Tabs, Close All Tabs,
+    /// Close Unmodified Tabs, Close Tabs to the Left/Right).</summary>
+    public bool IsPinned { get; set; }
 
     public MdiWindow(
         string id,

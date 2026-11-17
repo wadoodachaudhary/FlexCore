@@ -109,6 +109,10 @@ public class ChartAxis
     public string? Format { get; set; }
     public bool ShowGridLines { get; set; } = true;
     public int? TickCount { get; set; }
+    /// <summary>Omit category captions which would overlap; all data points remain plotted.</summary>
+    public bool AutoSkipLabels { get; set; } = true;
+    /// <summary>Minimum gap between visible category captions, in SVG units or print points.</summary>
+    public double MinimumLabelGap { get; set; } = 4;
 }
 
 public class ChartLegend
@@ -118,3 +122,31 @@ public class ChartLegend
 }
 
 public enum LegendPosition { Top, Bottom, Left, Right }
+
+/// <summary>One row of the default tooltip card: a name and an already formatted value.</summary>
+public sealed record ChartTooltipField(string Name, string Value);
+
+/// <summary>
+/// What the hover tooltip knows about the shape under the pointer (2026-10-31): the point and its series, the colour drawn, the
+/// label and value, the share of the whole for part-to-whole types, and the rows the default card shows. ChartControl hands it
+/// to TooltipFormatter, TooltipTemplate and PointHover.
+/// </summary>
+public sealed class ChartTooltipContext
+{
+    public ChartType Type { get; init; }
+    public ChartSeries Series { get; init; } = new();
+    public int SeriesIndex { get; init; }
+    public ChartDataPoint Point { get; init; } = new();
+    public int PointIndex { get; init; }
+    /// <summary>First line of the default card: the category, slice or item label.</summary>
+    public string Title { get; init; } = "";
+    public string Label { get; init; } = "";
+    public double Value { get; init; }
+    /// <summary>Fill colour of the hovered shape, shown as the swatch.</summary>
+    public string Color { get; init; } = "";
+    /// <summary>Share of the total in percent for pie, donut, funnel and pyramid; null elsewhere.</summary>
+    public double? Percentage { get; init; }
+    public string? SeriesName => string.IsNullOrEmpty(Series.Name) ? null : Series.Name;
+    /// <summary>The rows the default card shows for this shape, already formatted.</summary>
+    public IReadOnlyList<ChartTooltipField> Fields { get; init; } = Array.Empty<ChartTooltipField>();
+}

@@ -6,7 +6,7 @@
         aria-label="@ResolvedAriaLabel"
         aria-pressed="@AriaPressed"
         disabled="@Disabled"
-        @onclick="OnClick">
+        @onclick="HandleClickAsync">
     @if (!string.IsNullOrWhiteSpace(IconSrc))
     {
         <img class="fx-toolbar-btn-icon" src="@IconSrc" alt="@IconAlt" />
@@ -79,4 +79,19 @@
         null;
 
     private string? ResolvedAriaLabel => ResolvedTitle;
+
+    protected override string? ResolveControlIdentifier() =>
+        !string.IsNullOrWhiteSpace(Tag) ? Tag!.Trim()
+        : !string.IsNullOrWhiteSpace(Label) ? Label.Trim()
+        : !string.IsNullOrWhiteSpace(Title) ? Title.Trim()
+        : !string.IsNullOrWhiteSpace(IconAlt) ? IconAlt.Trim()
+        : null;
+
+    private async Task HandleClickAsync()
+    {
+        if (Disabled) return;
+        RecordControlAction("Clicked", !string.IsNullOrWhiteSpace(Label) ? Label : ResolvedTitle);
+        if (OnClick.HasDelegate)
+            await OnClick.InvokeAsync();
+    }
 }
